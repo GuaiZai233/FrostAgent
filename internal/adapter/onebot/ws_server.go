@@ -88,7 +88,7 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent) {
 		} else if event.MessageType == "private" {
 			log.Printf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message))
 			action := model.OneBotAction{
-				Action: "send_group_msg",
+				Action: "send_private_msg",
 				Params: map[string]interface{}{
 					"user_id": event.UserID,
 					//"message":  replyText,
