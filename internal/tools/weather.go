@@ -1,13 +1,12 @@
 package tools
 
 import (
-	"FrostAgent/internal/agent"
 	"encoding/json"
 	"fmt"
 )
 
-func GetWeatherTool() agent.Tool {
-	return agent.Tool{
+func GetWeatherTool() Tool {
+	return Tool{
 		Name:        "get_weather",
 		Description: "获取指定城市的天气信息",
 		//json schema

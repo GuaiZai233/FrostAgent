@@ -4,19 +4,13 @@ import (
 	"fmt"
 
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/tools"
 )
-
-type Tool struct {
-	Name        string
-	Description string
-	Parameters  any
-	Execute     func(args string) (string, error)
-}
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
 	MaxIterations int
-	ToolRegistry  map[string]Tool
+	ToolRegistry  map[string]tools.Tool
 	LLMClient     *llm.Client // API 客户端
 	BaseURL       string      // API 地址
 	APIKey        string      // API 密钥
@@ -24,7 +18,7 @@ type Engine struct {
 }
 
 // NewEngine 工厂函数，组装新的引擎
-func NewEngine(maxIterations int, registry map[string]Tool) *Engine {
+func NewEngine(maxIterations int, registry map[string]tools.Tool) *Engine {
 	return &Engine{
 		MaxIterations: maxIterations,
 		ToolRegistry:  registry,
