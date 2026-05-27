@@ -90,7 +90,7 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent) {
 			action := model.OneBotAction{
 				Action: "send_group_msg",
 				Params: map[string]interface{}{
-					"group_id": event.GroupID,
+					"user_id": event.UserID,
 					//"message":  replyText,
 				},
 				Echo: "echo_private_001",
