@@ -1,98 +1,89 @@
 # FrostAgent
-> "半落秋水染清霜。" ——秦观《鹧鸪天》
 
-一个 AI Agent 编排 + API 中间件服务，基于 Golang。
+An AI Agent orchestration + API middleware service built with Golang.
+
+[English](README.md) | [中文](README_zh_CN.md)
 
 [![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
-## 提示
+## Notice
 
-项目仍处于早期阶段，供个人研究使用。欢迎大佬们 PR 并指导！
+This project is still in early stages and is intended for personal research use. We welcome PRs and guidance from everyone!
 
-## 快速开始
+## Quick Start
 
-### 1. 构建项目
+### 1. Build the Project
 
 ```bash
 go build -o frostagent.exe
 ```
 
-### 2. 配置环境变量
+### 2. Configure Environment Variables
 
-创建 `.env` 文件或在系统环境变量中设置：
+Create a `.env` file or set system environment variables:
 
 ```bash
-# 上游 API 端点 (比如: 阿里云通义千问)
+# Upstream API endpoint (e.g., Alibaba Cloud Tongyi Qianwen)
 set UPSTREAM_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 
-# 上游 API 密钥
+# Upstream API key
 set UPSTREAM_API_KEY=sk-your-api-key-here
 
-# 中间件监听地址 (默认: :8080)
+# Middleware listening address (default: :8080)
 set LISTEN_ADDR=:8080
 ```
 
-### 3. 启动服务
+### 3. Start the Service
 
 ```bash
 go run ./cmd/app
 ```
 
-## API 使用
+## API Usage
 
-### 健康检查
+### Health Check
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-响应：
+Response:
 ```json
 {"status":"ok"}
 ```
 
-### 聊天完成接口
+### Chat Completion Endpoint
 
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://localhost:8080/agent/query \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3-coder-flash",
-    "messages": [
-      {
-        "role": "system",
-        "content": "你是一个有用的助手。"
-      },
-      {
-        "role": "user",
-        "content": "用一句话解释一下什么是 Go 语言？"
-      }
-    ]
+    "input": "Tell me about the weather in Beijing."
   }'
 ```
 
-## 自定义上游服务
+## Custom Upstream Service
 
-FrostAgent 可以代理到任何 OpenAI 兼容的 API 端点，修改环境变量即可切换上游服务。
+FrostAgent can proxy to any OpenAI-compatible API endpoint. Simply modify the environment variables to switch upstream services.
 
-## 路由列表
+## Routes
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查 |
-| POST | `/agent/query` | 聊天完成接口 |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| POST | `/agent/query` | Chat completion endpoint |
 
-## 环境变量
+## Environment Variables
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `UPSTREAM_ENDPOINT` | 上游 API 端点 URL | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` |
-| `UPSTREAM_API_KEY` | 上游 API 认证密钥 | `sk-a2f5bb65377f46379b32eab21cb0257a` |
-| `LISTEN_ADDR` | 中间件服务监听地址 | `:8080` |
+| Variable | Description | Default Value                                                        |
+|----------|-------------|----------------------------------------------------------------------|
+| `UPSTREAM_ENDPOINT` | Upstream API endpoint URL | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` |
+| `UPSTREAM_API_KEY` | Upstream API authentication key | `sk-xxx`                                                             |
+| `LISTEN_ADDR` | Middleware service listening address | `:8080`                                                              |
 
-## 许可证
+## License
 
 MPL-2.0 (see LICENSE file)
 
