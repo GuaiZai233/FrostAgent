@@ -15,7 +15,7 @@ import (
 )
 
 // 全局引擎实例
-var globalEngine *agent.Engine
+var GlobalEngine *agent.Engine
 
 func init() {
 	// 加载 .env 文件
@@ -34,7 +34,7 @@ func init() {
 	gameVersionTool := tools.GetGameVersionTool()
 	registry[gameVersionTool.Name] = gameVersionTool
 
-	globalEngine = &agent.Engine{
+	GlobalEngine = &agent.Engine{
 		MaxIterations: 5,
 		ToolRegistry:  registry,
 		LLMClient:     llmClient,
@@ -43,7 +43,10 @@ func init() {
 		ModelName:     "qwen3-coder-flash",
 	}
 
-	fmt.Println("【初始化】✓ 智能体引擎初始化完成")
+	// 设置 onebot 的引擎
+	//onebot.SetEngine(GlobalEngine)
+
+	//fmt.Println("【初始化】✓ 智能体引擎初始化完成")
 }
 
 func main() {
@@ -70,7 +73,7 @@ func main() {
 	}()
 
 	//reg reverse ws router
-	http.HandleFunc("/ws/frostagent", onebot.HandleWS)
+	http.HandleFunc("/ws/frostagent", onebot.HandleWS(GlobalEngine))
 
 	// start server
 	addr := os.Getenv("WS_LISTEN_ADDR")
@@ -80,6 +83,6 @@ func main() {
 
 	log.Printf("FrostAgent 服务已启动，监听 %s\n", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatalf("ws服务启动失败: %v\n", err)
+		log.Fatalf("ws服务启动失败: %v", err)
 	}
 }

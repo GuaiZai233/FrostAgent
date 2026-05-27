@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"FrostAgent/internal/agent"
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
 )
@@ -19,51 +20,55 @@ var upgrader = websocket.Upgrader{
 
 var writeMu sync.Mutex
 
-func HandleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("WebSocket 升级失败: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
-
-	for {
-		_, message, err := conn.ReadMessage()
+func HandleWS(engine *agent.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("读取消息失败: %v\n", err)
-			break
+			log.Printf("WebSocket 升级失败: %v\n", err)
+			return
 		}
+		// defer conn.Close() is handled below if needed, but it's okay here
 
-		// debug: print raw msg from llonebot
-		/*
-			log.Println("收到原始数据: ", string(message))
+		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				log.Printf("读取消息失败: %v\n", err)
+				conn.Close()
+				break
+			}
+
+			// debug: print raw msg from llonebot
+			/*
+				log.Println("收到原始数据: ", string(message))
+
+				var event model.OneBotEvent
+				if err := json.Unmarshal(message, &event); err != nil {
+					log.Println("解析事件失败:", err)
+					continue
+				}
+			*/
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
-				log.Println("解析事件失败:", err)
+				log.Printf("消息解析失败: %v\n", err)
 				continue
 			}
-		*/
-		var event model.OneBotEvent
-		if err := json.Unmarshal(message, &event); err != nil {
-			log.Printf("消息解析失败: %v\n", err)
-			continue
-		}
 
-		//filter heartbeat pkg
-		if event.MetaEventType == "heartbeat" {
-			continue
-		}
+			//filter heartbeat pkg
+			if event.MetaEventType == "heartbeat" {
+				continue
+			}
 
-		go processEvent(conn, event)
+			go processEvent(conn, event, engine)
+		}
 	}
+
 }
 
 // processEvent process particular event, and dispatch agent and middleware
 
-func processEvent(conn *websocket.Conn, event model.OneBotEvent) {
+func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.Engine) {
 	if event.PostType == "message" {
 		if event.MessageType == "group" {
 			log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
@@ -93,11 +98,19 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent) {
 
 		} else if event.MessageType == "private" {
 			log.Printf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message))
+
+			replyText := "系统出错，暂无法处理"
+			if engine != nil {
+				replyText = engine.Run(string(event.Message))
+			} else {
+				log.Println("警告：未设置处理消息的 engine")
+			}
+
 			action := model.OneBotAction{
 				Action: "send_private_msg",
 				Params: map[string]interface{}{
 					"user_id": event.UserID,
-					//"message":  replyText,
+					"message": replyText,
 				},
 				Echo: "echo_private_001",
 			}

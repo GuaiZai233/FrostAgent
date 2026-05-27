@@ -6,10 +6,6 @@ import (
 	"net/http"
 )
 
-func ReceiveRawMsgFromAdapter(msg string) {
-
-}
-
 // handleAgentQuery 处理智能体查询的接口
 func handleAgentQuery(c *gin.Context) {
 	var req AgentRequest
@@ -34,7 +30,7 @@ func handleAgentQuery(c *gin.Context) {
 	log.Printf("【收到用户输入】%s\n", req.Input)
 
 	// 执行智能体
-	result := globalEngine.Run(req.Input)
+	result := GlobalEngine.Run(req.Input)
 
 	c.JSON(http.StatusOK, AgentResponse{
 		Result: result,
