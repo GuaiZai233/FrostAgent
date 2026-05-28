@@ -73,13 +73,24 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.E
 		if event.MessageType == "group" {
 			log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
 
+			if !IsMentionedBot(event) {
+				return
+			}
+
+			replyText := "系统出错，暂无法处理"
+			if engine != nil {
+				replyText = engine.Run(string(event.Message))
+			} else {
+				log.Println("警告：未设置处理消息的 engine")
+			}
+
 			// 此处可接入 middleware 进行前置处理（如防刷屏限流）
 
 			action := model.OneBotAction{
 				Action: "send_group_msg",
 				Params: map[string]interface{}{
 					"group_id": event.GroupID,
-					//"message":  replyText,
+					"message":  replyText,
 				},
 				Echo: "echo_agent_req_001", // 可选字段，用于关联请求和响应，方便调试和日志追踪
 			}
