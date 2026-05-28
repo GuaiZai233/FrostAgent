@@ -73,10 +73,7 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.E
 		if event.MessageType == "group" {
 			log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
 
-			// 1. 此处可接入 middleware 进行前置处理（如防刷屏限流）
-			// 2. 此处可调用 internal/agent 进行大模型或工作流编排
-
-			//replyText := "收到消息: " + string(event.Message)
+			// 此处可接入 middleware 进行前置处理（如防刷屏限流）
 
 			action := model.OneBotAction{
 				Action: "send_group_msg",

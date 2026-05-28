@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/tools"
@@ -28,7 +29,9 @@ func NewEngine(maxIterations int, registry map[string]tools.Tool) *Engine {
 // Run 执行智能体的主循环
 func (e *Engine) Run(prompt string) string {
 	//初始化上下文
+	systemPrompt := os.Getenv("SYSTEM_PROMPT")
 	messages := []llm.ChatMessage{
+		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
 
