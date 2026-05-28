@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"FrostAgent/internal/agent"
@@ -19,6 +20,8 @@ var upgrader = websocket.Upgrader{
 }
 
 var writeMu sync.Mutex
+
+var event model.OneBotEvent
 
 func HandleWS(engine *agent.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +52,7 @@ func HandleWS(engine *agent.Engine) http.HandlerFunc {
 					continue
 				}
 			*/
-			var event model.OneBotEvent
+
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
 				continue
@@ -69,68 +72,46 @@ func HandleWS(engine *agent.Engine) http.HandlerFunc {
 // processEvent process particular event, and dispatch agent and middleware
 
 func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.Engine) {
-	if event.PostType == "message" {
-		if event.MessageType == "group" {
-			log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
+	if event.PostType != "message" {
+		return
+	}
 
-			if !IsMentionedBot(event) {
-				return
-			}
-
-			replyText := "系统出错，暂无法处理"
-			if engine != nil {
-				replyText = engine.Run(string(event.Message))
-			} else {
-				log.Println("警告：未设置处理消息的 engine")
-			}
-
-			// 此处可接入 middleware 进行前置处理（如防刷屏限流）
-
-			action := model.OneBotAction{
-				Action: "send_group_msg",
-				Params: map[string]interface{}{
-					"group_id": event.GroupID,
-					"message":  replyText,
-				},
-				Echo: "echo_agent_req_001", // 可选字段，用于关联请求和响应，方便调试和日志追踪
-			}
-
-			actionBytes, _ := json.Marshal(action)
-
-			writeMu.Lock()
-			err := conn.WriteMessage(websocket.TextMessage, actionBytes)
-			writeMu.Unlock()
-			if err != nil {
-				log.Printf("发送消息失败: %v\n", err)
-			}
-
-		} else if event.MessageType == "private" {
-			log.Printf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message))
-
-			replyText := "系统出错，暂无法处理"
-			if engine != nil {
-				replyText = engine.Run(string(event.Message))
-			} else {
-				log.Println("警告：未设置处理消息的 engine")
-			}
-
-			action := model.OneBotAction{
-				Action: "send_private_msg",
-				Params: map[string]interface{}{
-					"user_id": event.UserID,
-					"message": replyText,
-				},
-				Echo: "echo_private_001",
-			}
-
-			actionBytes, _ := json.Marshal(action)
-			writeMu.Lock()
-			err := conn.WriteMessage(websocket.TextMessage, actionBytes)
-			writeMu.Unlock()
-			if err != nil {
-				log.Printf("发送消息失败: %v\n", err)
-			}
-
+	if event.MessageType == "group" {
+		log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
+		if !IsMentionedBot(event) {
+			return
 		}
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn)
+
+	} else if event.MessageType == "private" {
+		log.Printf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message))
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn)
+	}
+}
+
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *agent.Engine, conn *websocket.Conn) {
+
+	replyText := "系统出错，暂无法处理"
+	if engine != nil {
+		replyText = engine.Run(string(event.Message))
+	} else {
+		log.Println("警告：未设置处理消息的 engine")
+	}
+
+	botAction := model.OneBotAction{
+		Action: action,
+		Params: map[string]interface{}{
+			type1:     id,
+			"message": replyText,
+		},
+		Echo: echo,
+	}
+
+	actionBytes, _ := json.Marshal(botAction)
+	writeMu.Lock()
+	err := conn.WriteMessage(websocket.TextMessage, actionBytes)
+	writeMu.Unlock()
+	if err != nil {
+		log.Printf("发送消息失败: %v\n", err)
 	}
 }
