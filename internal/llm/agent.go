@@ -1,10 +1,9 @@
-package agent
+package llm
 
 import (
 	"fmt"
 	"os"
 
-	"FrostAgent/internal/llm"
 	"FrostAgent/internal/tools"
 )
 
@@ -12,17 +11,17 @@ import (
 type Engine struct {
 	MaxIterations int
 	ToolRegistry  map[string]tools.Tool
-	LLMClient     *llm.Client // API 客户端
-	BaseURL       string      // API 地址
-	APIKey        string      // API 密钥
-	ModelName     string      // 模型名称
+	LLMClient     *Client // API 客户端
+	BaseURL       string  // API 地址
+	APIKey        string  // API 密钥
+	ModelName     string  // 模型名称
 }
 
 // Run 执行智能体的主循环
 func (e *Engine) Run(prompt string) string {
 	//初始化上下文
 	systemPrompt := os.Getenv("SYSTEM_PROMPT")
-	messages := []llm.ChatMessage{
+	messages := []ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
@@ -56,7 +55,8 @@ func (e *Engine) Run(prompt string) string {
 		//是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			fmt.Println("【智能体给出最终答案】")
-			return responseMsg.Content
+			contentStr, _ := responseMsg.Content.(string)
+			return contentStr
 		}
 
 		//发现有指令，开始干活
@@ -80,7 +80,7 @@ func (e *Engine) Run(prompt string) string {
 			fmt.Println("【工具执行结果】", toolResult)
 
 			//把结果包装成role=tool的消息，记录
-			toolMsg := llm.ChatMessage{
+			toolMsg := ChatMessage{
 				Role:       "tool",
 				Content:    toolResult,
 				ToolCallID: tc.ID, // 关联到调用ID，方便大模型理解

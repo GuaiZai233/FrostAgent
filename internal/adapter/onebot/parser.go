@@ -1,22 +1,18 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/model"
 	"encoding/json"
 	"strconv"
 )
-
-type MessageSegment struct {
-	Type string         `json:"type"`
-	Data map[string]any `json:"data"`
-}
 
 func IsMentionedBot(event model.OneBotEvent) bool {
 	if event.MessageType != "group" {
 		return false
 	}
 
-	var segments []MessageSegment
+	var segments []content.MessageSegment
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
 		return false
 	}

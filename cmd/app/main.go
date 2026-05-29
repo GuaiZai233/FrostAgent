@@ -2,7 +2,6 @@ package main
 
 import (
 	"FrostAgent/internal/adapter/onebot"
-	"FrostAgent/internal/agent"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -15,7 +14,7 @@ import (
 )
 
 // 全局引擎实例
-var GlobalEngine *agent.Engine
+var GlobalEngine *llm.Engine
 
 func init() {
 	// 加载 .env 文件
@@ -34,7 +33,7 @@ func init() {
 	gameVersionTool := tools.GetGameVersionTool()
 	registry[gameVersionTool.Name] = gameVersionTool
 
-	GlobalEngine = &agent.Engine{
+	GlobalEngine = &llm.Engine{
 		MaxIterations: 5,
 		ToolRegistry:  registry,
 		LLMClient:     llmClient,

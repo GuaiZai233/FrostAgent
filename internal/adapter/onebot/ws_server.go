@@ -1,13 +1,15 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/llm"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
-	"FrostAgent/internal/agent"
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
 )
@@ -21,9 +23,7 @@ var upgrader = websocket.Upgrader{
 
 var writeMu sync.Mutex
 
-var event model.OneBotEvent
-
-func HandleWS(engine *agent.Engine) http.HandlerFunc {
+func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -52,7 +52,7 @@ func HandleWS(engine *agent.Engine) http.HandlerFunc {
 					continue
 				}
 			*/
-
+			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
 				continue
@@ -71,7 +71,7 @@ func HandleWS(engine *agent.Engine) http.HandlerFunc {
 
 // processEvent process particular event, and dispatch agent and middleware
 
-func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.Engine) {
+func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
 		return
 	}
@@ -89,11 +89,22 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *agent.E
 	}
 }
 
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *agent.Engine, conn *websocket.Conn) {
-
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *websocket.Conn) {
+	// 解析消息段
+	var segments []content.MessageSegment
+	if err := json.Unmarshal(event.Message, &segments); err != nil {
+		log.Printf("解析消息段失败: %v\n", err)
+		segments = []content.MessageSegment{}
+	}
+	//init reply text
 	replyText := "系统出错，暂无法处理"
-	if engine != nil {
-		replyText = engine.Run(string(event.Message))
+
+	//containing img or not
+	if content.IsContainImage(segments) {
+		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+		replyText = engine.Run(extractUserText(segments, event) + " 【多模态模型解析】用户图片内容概括：" + imageDesc)
+	} else if engine != nil {
+		replyText = engine.Run(extractUserText(segments, event))
 	} else {
 		log.Println("警告：未设置处理消息的 engine")
 	}
@@ -114,4 +125,25 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err != nil {
 		log.Printf("发送消息失败: %v\n", err)
 	}
+}
+
+// extractUserText 从消息段中提取纯文本内容
+func extractUserText(segments []content.MessageSegment, event model.OneBotEvent) string {
+	var texts []string
+
+	for _, seg := range segments {
+		if seg.Type == "text" {
+			if text, ok := seg.Data["text"].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+	}
+
+	// 兜底：如果没有解析到文本，返回原始消息
+	if len(texts) == 0 {
+		return string(event.Message)
+	}
+
+	// 使用 strings.Join 拼接多个文本段
+	return strings.Join(texts, "")
 }
