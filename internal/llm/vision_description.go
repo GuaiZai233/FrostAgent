@@ -38,7 +38,7 @@ func CallVisionModel(client *Client, baseURL, apiKey, _, contentBlocks string) s
 
 	responseMsg, err := client.CallAPI(baseURL, apiKey, os.Getenv("VISUAL_MODEL_NAME"), messages, nil)
 	if err != nil {
-		log.Printf(err.Error())
+		log.Printf("%s", err.Error())
 		return err.Error()
 	}
 
