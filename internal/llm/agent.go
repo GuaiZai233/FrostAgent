@@ -17,19 +17,24 @@ const (
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	MaxIterations     int
-	ToolRegistry      map[string]tools.Tool
-	LLMClient         *Client // API 客户端
-	BaseURL           string  // API 地址
-	APIKey            string  // API 密钥
-	ModelName         string  // 模型名称
-	MaxContextMessages int   // 最大保留消息数（包含 system），0 使用默认值
-	MaxContextChars    int   // 近似上下文字符上限，0 使用默认值
+	MaxIterations      int
+	ToolRegistry       map[string]tools.Tool
+	LLMClient          *Client // API 客户端
+	BaseURL            string  // API 地址
+	APIKey             string  // API 密钥
+	ModelName          string  // 模型名称
+	MaxContextMessages int     // 最大保留消息数（包含 system），0 使用默认值
+	MaxContextChars    int     // 近似上下文字符上限，0 使用默认值
 }
 
 // Run 使用单条用户输入执行智能体，保留原有调用方式。
 func (e *Engine) Run(prompt string) string {
 	return e.RunMessages([]ChatMessage{{Role: "user", Content: prompt}})
+}
+
+// RunWithMessages 兼容分支早期命名，内部委托给 RunMessages。
+func (e *Engine) RunWithMessages(messages []ChatMessage) string {
+	return e.RunMessages(messages)
 }
 
 // RunMessages 使用调用方传入的消息历史执行智能体。
@@ -58,7 +63,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 		fmt.Printf("【第%d轮思考开始】\n", i+1)
 		messages = e.trimMessages(messages)
 
-		// 调用internal/llm 包向大模型发送http请求
+		// 调用internal/llm 包向大模型发送http请求，messages 中包含完整多轮上下文
 		responseMsg, err := e.LLMClient.CallAPI(e.BaseURL, e.APIKey, e.ModelName, messages, modelTools)
 		if err != nil {
 			return fmt.Sprintf("LLM掉线了: %v", err)
@@ -66,6 +71,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 
 		//记下回复
 		messages = append(messages, *responseMsg)
+		messages = e.trimMessages(messages)
 
 		//是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
@@ -101,10 +107,10 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			}
 			messages = append(messages, toolMsg)
 		}
+		messages = e.trimMessages(messages)
 		//循环进入下一轮
 	}
 	return "达到最大迭代次数，未能得出最终答案"
-
 }
 
 func (e *Engine) prepareMessages(messages []ChatMessage) []ChatMessage {
