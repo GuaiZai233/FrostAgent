@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -40,12 +42,26 @@ func init() {
 		BaseURL:       os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:        os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:     os.Getenv("MODEL_NAME"),
+		MaxContextMessages: envInt("MAX_CONTEXT_MESSAGES", 20),
+		MaxContextChars:    envInt("MAX_CONTEXT_CHARS", 24000),
 	}
 
 	// 设置 onebot 的引擎
 	//onebot.SetEngine(GlobalEngine)
 
 	//fmt.Println("【初始化】✓ 智能体引擎初始化完成")
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func main() {

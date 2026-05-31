@@ -64,6 +64,20 @@ curl -X POST http://localhost:8080/agent/query \
   }'
 ```
 
+Multi-context / chat history is also supported. `input` is optional when `messages` is provided; if both are provided, `input` is appended as the latest user message.
+
+```bash
+curl -X POST http://localhost:8080/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "My name is Frost."},
+      {"role": "assistant", "content": "Nice to meet you, Frost."},
+      {"role": "user", "content": "What is my name?"}
+    ]
+  }'
+```
+
 ## Custom Upstream Service
 
 FrostAgent can proxy to any OpenAI-compatible API endpoint. Simply modify the environment variables to switch upstream services.
@@ -82,6 +96,8 @@ FrostAgent can proxy to any OpenAI-compatible API endpoint. Simply modify the en
 | `UPSTREAM_ENDPOINT` | Upstream API endpoint URL | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` |
 | `UPSTREAM_API_KEY` | Upstream API authentication key | `sk-xxx`                                                             |
 | `LISTEN_ADDR` | Middleware service listening address | `:8080`                                                              |
+| `MAX_CONTEXT_MESSAGES` | Max messages kept in context, including system prompt | `20` |
+| `MAX_CONTEXT_CHARS` | Approximate max context characters before trimming | `24000` |
 
 ## License
 
