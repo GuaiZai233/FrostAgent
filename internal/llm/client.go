@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -87,12 +89,25 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 		}
 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API 请求失败，状态码: %d", resp.StatusCode)
+	// 打印响应状态码
+	fmt.Printf("【响应状态码】%d\n", resp.StatusCode)
+
+	// 读取完整的响应体
+	respBodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
+	// 打印完整的响应体
+	log.Printf("【完整响应体】\n%s\n", string(respBodyBytes))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API 请求失败，状态码: %d\n响应内容: %s", resp.StatusCode, string(respBodyBytes))
+	}
+
+	// 解析响应
 	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.Unmarshal(respBodyBytes, &chatResp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 
