@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func IsContainImage(segments []MessageSegment) bool {
@@ -69,13 +70,18 @@ func ProcessImage(segments []MessageSegment, client *llm.Client, baseURL, apiKey
 }
 
 func downloadAndToBase64(url string) (string, error) {
-	resp, err := http.Get(url)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("关闭图片响应体失败: %v\n", err)
+		}
+	}()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return "", fmt.Errorf("图片下载失败，状态码: %d", resp.StatusCode)
 	}
 

@@ -10,7 +10,7 @@ import (
 type AgentRequest struct {
 	// Input 保留兼容旧接口；Messages 用于多轮/多上下文对话。
 	Input    string            `json:"input"`
-	Messages []llm.ChatMessage `json:"messages"`
+	Messages []llm.ChatMessage `json:"messages,omitempty"`
 }
 
 // AgentResponse 返回的响应体

@@ -4,8 +4,10 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/llm"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +24,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var writeMu sync.Mutex
+var chatHistory = newMessageHistory(historyLimitFromEnv())
 
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +33,11 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			log.Printf("WebSocket 升级失败: %v\n", err)
 			return
 		}
+		defer func() {
+			if err := conn.Close(); err != nil {
+				log.Printf("关闭 WebSocket 连接失败: %v\n", err)
+			}
+		}()
 
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
@@ -37,7 +45,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("读取消息失败: %v\n", err)
-				conn.Close()
 				break
 			}
 
@@ -83,7 +90,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if engine == nil {
 		log.Println("警告：未设置处理消息的 engine")
 	} else {
-		replyText = engine.RunMessages(buildChatMessagesFromEvent(event, engine))
+		chatKey := historyKey(event)
+		incomingMessages := buildChatMessagesFromEvent(event, engine)
+		for _, msg := range incomingMessages {
+			chatHistory.Append(chatKey, msg)
+		}
+
+		messages := chatHistory.Messages(chatKey)
+		replyText = engine.RunMessages(messages)
+		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
 	}
 
 	botAction := model.OneBotAction{
@@ -119,6 +134,23 @@ func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []l
 	}
 
 	return messages
+}
+
+func historyKey(event model.OneBotEvent) string {
+	if event.MessageType == "group" {
+		return fmt.Sprintf("group:%d", event.GroupID)
+	}
+	return fmt.Sprintf("private:%d", event.UserID)
+}
+
+func historyLimitFromEnv() int {
+	limit := llm.DefaultMaxMessages
+	if value := strings.TrimSpace(os.Getenv("ONEBOT_CONTEXT_MESSAGES")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	return limit
 }
 
 // extractUserText 从消息段中提取纯文本内容
