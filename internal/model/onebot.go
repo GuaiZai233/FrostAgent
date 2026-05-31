@@ -10,6 +10,10 @@ type OneBotEvent struct {
 	GroupID       int64           `json:"group_id,omitempty"`
 	UserID        int64           `json:"user_id,omitempty"`
 	Message       json.RawMessage `json:"message,omitempty"`
+	// Messages is an optional extension used by FrostAgent adapters to pass
+	// continuous user message contexts in one event. Each item may be a OneBot
+	// message segment array or a plain string.
+	Messages json.RawMessage `json:"messages,omitempty"`
 }
 
 type OneBotAction struct {
