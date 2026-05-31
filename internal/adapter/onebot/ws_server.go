@@ -30,7 +30,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			log.Printf("WebSocket 升级失败: %v\n", err)
 			return
 		}
-		// defer conn.Close() is handled below if needed, but it's okay here
 
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
@@ -42,23 +41,13 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				break
 			}
 
-			// debug: print raw msg from llonebot
-			/*
-				log.Println("收到原始数据: ", string(message))
-
-				var event model.OneBotEvent
-				if err := json.Unmarshal(message, &event); err != nil {
-					log.Println("解析事件失败:", err)
-					continue
-				}
-			*/
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
 				continue
 			}
 
-			//filter heartbeat pkg
+			// filter heartbeat pkg
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
@@ -70,7 +59,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 }
 
 // processEvent process particular event, and dispatch agent and middleware
-
 func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
 		return
@@ -90,23 +78,12 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Eng
 }
 
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *websocket.Conn) {
-	// 解析消息段
-	var segments []content.MessageSegment
-	if err := json.Unmarshal(event.Message, &segments); err != nil {
-		log.Printf("解析消息段失败: %v\n", err)
-		segments = []content.MessageSegment{}
-	}
-	//init reply text
 	replyText := "系统出错，暂无法处理"
 
-	//containing img or not
-	if content.IsContainImage(segments) {
-		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-		replyText = engine.Run(extractUserText(segments, event) + " 【图片内容】：" + imageDesc)
-	} else if engine != nil {
-		replyText = engine.Run(extractUserText(segments, event))
-	} else {
+	if engine == nil {
 		log.Println("警告：未设置处理消息的 engine")
+	} else {
+		replyText = engine.RunMessages(buildChatMessagesFromEvent(event, engine))
 	}
 
 	botAction := model.OneBotAction{
@@ -127,8 +104,25 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 }
 
+func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {
+	raws := EventRawMessages(event)
+	messages := make([]llm.ChatMessage, 0, len(raws))
+
+	for _, raw := range raws {
+		segments := ParseMessageSegments(raw)
+		userText := extractUserText(segments, raw)
+		if content.IsContainImage(segments) {
+			imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+		}
+		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
+	}
+
+	return messages
+}
+
 // extractUserText 从消息段中提取纯文本内容
-func extractUserText(segments []content.MessageSegment, event model.OneBotEvent) string {
+func extractUserText(segments []content.MessageSegment, raw json.RawMessage) string {
 	var texts []string
 
 	for _, seg := range segments {
@@ -139,11 +133,13 @@ func extractUserText(segments []content.MessageSegment, event model.OneBotEvent)
 		}
 	}
 
-	// 兜底：如果没有解析到文本，返回原始消息
 	if len(texts) == 0 {
-		return string(event.Message)
+		var rawText string
+		if err := json.Unmarshal(raw, &rawText); err == nil {
+			return rawText
+		}
+		return string(raw)
 	}
 
-	// 使用 strings.Join 拼接多个文本段
-	return strings.Join(texts, "")
+	return strings.TrimSpace(strings.Join(texts, ""))
 }
