@@ -73,6 +73,10 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
+	// 打印完整的请求内容
+	fmt.Printf("【发送请求】POST %s\n", url)
+	fmt.Printf("【请求体】%s\n", string(jsonData))
+
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request failed: %v", err)
