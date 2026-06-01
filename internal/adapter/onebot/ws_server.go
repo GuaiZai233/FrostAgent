@@ -23,8 +23,24 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-var writeMu sync.Mutex
-var chatHistory = newMessageHistory(historyLimitFromEnv())
+type wsConnection struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+func newWSConnection(conn *websocket.Conn) *wsConnection {
+	return &wsConnection{conn: conn}
+}
+
+func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(messageType, data)
+}
+
+func (c *wsConnection) Close() error {
+	return c.conn.Close()
+}
 
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -39,12 +55,15 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			}
 		}()
 
+		wsConn := newWSConnection(conn)
+
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("读取消息失败: %v\n", err)
+				wsConn.Close()
 				break
 			}
 
@@ -59,14 +78,15 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				continue
 			}
 
-			go processEvent(conn, event, engine)
+			go processEvent(wsConn, event, engine)
 		}
 	}
 
 }
 
 // processEvent process particular event, and dispatch agent and middleware
-func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Engine) {
+
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
 		return
 	}
@@ -84,7 +104,14 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Eng
 	}
 }
 
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *websocket.Conn) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
+	// 解析消息段
+	var segments []content.MessageSegment
+	if err := json.Unmarshal(event.Message, &segments); err != nil {
+		log.Printf("解析消息段失败: %v\n", err)
+		segments = []content.MessageSegment{}
+	}
+	//init reply text
 	replyText := "系统出错，暂无法处理"
 
 	if engine == nil {
@@ -111,9 +138,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	actionBytes, _ := json.Marshal(botAction)
-	writeMu.Lock()
 	err := conn.WriteMessage(websocket.TextMessage, actionBytes)
-	writeMu.Unlock()
 	if err != nil {
 		log.Printf("发送消息失败: %v\n", err)
 	}
