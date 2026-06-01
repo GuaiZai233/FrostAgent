@@ -44,7 +44,7 @@ func normalizeRequestMessages(req AgentRequest) []llm.ChatMessage {
 	messages := make([]llm.ChatMessage, 0, len(req.Messages)+1)
 	for _, msg := range req.Messages {
 		msg.Role = strings.TrimSpace(msg.Role)
-		if msg.Role == "" || msg.Content == nil {
+		if msg.Role == "" || isBlankRequestContent(msg.Content) {
 			continue
 		}
 		messages = append(messages, msg)
@@ -54,6 +54,16 @@ func normalizeRequestMessages(req AgentRequest) []llm.ChatMessage {
 		messages = append(messages, llm.ChatMessage{Role: "user", Content: req.Input})
 	}
 	return messages
+}
+
+func isBlankRequestContent(content any) bool {
+	if content == nil {
+		return true
+	}
+	if text, ok := content.(string); ok {
+		return strings.TrimSpace(text) == ""
+	}
+	return false
 }
 
 // handleHealth 处理健康检查接口

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"FrostAgent/internal/tools"
 )
@@ -118,7 +119,7 @@ func (e *Engine) prepareMessages(messages []ChatMessage) []ChatMessage {
 	hasSystem := false
 	for _, msg := range messages {
 		msg.Role = strings.TrimSpace(msg.Role)
-		if msg.Role == "" || (msg.Content == nil && len(msg.ToolCalls) == 0) {
+		if msg.Role == "" || (isBlankContent(msg.Content) && len(msg.ToolCalls) == 0) {
 			continue
 		}
 		if msg.Role == "system" {
@@ -135,6 +136,16 @@ func (e *Engine) prepareMessages(messages []ChatMessage) []ChatMessage {
 	}
 
 	return e.trimMessages(prepared)
+}
+
+func isBlankContent(content any) bool {
+	if content == nil {
+		return true
+	}
+	if text, ok := content.(string); ok {
+		return strings.TrimSpace(text) == ""
+	}
+	return false
 }
 
 func (e *Engine) trimMessages(messages []ChatMessage) []ChatMessage {
@@ -212,9 +223,9 @@ func normalizeToolHistory(messages []ChatMessage) []ChatMessage {
 func estimateMessagesChars(messages []ChatMessage) int {
 	total := 0
 	for _, msg := range messages {
-		total += len(msg.Role) + len(msg.ToolCallID) + len(stringifyContent(msg.Content))
+		total += utf8.RuneCountInString(msg.Role) + utf8.RuneCountInString(msg.ToolCallID) + utf8.RuneCountInString(stringifyContent(msg.Content))
 		for _, tc := range msg.ToolCalls {
-			total += len(tc.ID) + len(tc.Type) + len(tc.Function.Name) + len(tc.Function.Arguments)
+			total += utf8.RuneCountInString(tc.ID) + utf8.RuneCountInString(tc.Type) + utf8.RuneCountInString(tc.Function.Name) + utf8.RuneCountInString(tc.Function.Arguments)
 		}
 	}
 	return total

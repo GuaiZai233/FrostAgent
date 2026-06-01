@@ -122,17 +122,36 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {
 	raws := EventRawMessages(event)
 	messages := make([]llm.ChatMessage, 0, len(raws))
+	var pendingImageSegments []content.MessageSegment
+
+	flushImages := func() {
+		if len(pendingImageSegments) == 0 {
+			return
+		}
+		imageDesc := content.ProcessImage(pendingImageSegments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+		userText := strings.TrimSpace(extractUserText(pendingImageSegments, nil) + " 【图片内容】：" + imageDesc)
+		if userText != "" {
+			messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
+		}
+		pendingImageSegments = nil
+	}
 
 	for _, raw := range raws {
 		segments := ParseMessageSegments(raw)
-		userText := extractUserText(segments, raw)
 		if content.IsContainImage(segments) {
-			imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			pendingImageSegments = append(pendingImageSegments, segments...)
+			continue
+		}
+
+		flushImages()
+		userText := strings.TrimSpace(extractUserText(segments, raw))
+		if userText == "" {
+			continue
 		}
 		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
 	}
 
+	flushImages()
 	return messages
 }
 
