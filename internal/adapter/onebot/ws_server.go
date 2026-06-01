@@ -42,16 +42,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				break
 			}
 
-			// debug: print raw msg from llonebot
-			/*
-				log.Println("收到原始数据: ", string(message))
-
-				var event model.OneBotEvent
-				if err := json.Unmarshal(message, &event); err != nil {
-					log.Println("解析事件失败:", err)
-					continue
-				}
-			*/
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
@@ -96,15 +86,24 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		log.Printf("解析消息段失败: %v\n", err)
 		segments = []content.MessageSegment{}
 	}
+
+	// 构建会话 ID：群聊按群隔离，私聊按用户隔离
+	var sessionID string
+	if event.MessageType == "group" {
+		sessionID = "group:" + strconv.FormatInt(event.GroupID, 10)
+	} else {
+		sessionID = "private:" + strconv.FormatInt(event.UserID, 10)
+	}
+
 	//init reply text
 	replyText := "系统出错，暂无法处理"
 
 	//containing img or not
 	if content.IsContainImage(segments) {
 		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-		replyText = engine.Run(extractUserText(segments, event) + " 【图片内容】：" + imageDesc)
+		replyText = engine.RunWithSession(sessionID, extractUserText(segments, event)+" 【图片内容】："+imageDesc)
 	} else if engine != nil {
-		replyText = engine.Run(extractUserText(segments, event))
+		replyText = engine.RunWithSession(sessionID, extractUserText(segments, event))
 	} else {
 		log.Println("警告：未设置处理消息的 engine")
 	}

@@ -34,12 +34,13 @@ func init() {
 	registry[gameVersionTool.Name] = gameVersionTool
 
 	GlobalEngine = &llm.Engine{
-		MaxIterations: 5,
-		ToolRegistry:  registry,
-		LLMClient:     llmClient,
-		BaseURL:       os.Getenv("UPSTREAM_ENDPOINT"),
-		APIKey:        os.Getenv("UPSTREAM_API_KEY"),
-		ModelName:     os.Getenv("MODEL_NAME"),
+		MaxIterations:  5,
+		ToolRegistry:   registry,
+		LLMClient:      llmClient,
+		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
+		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
+		ModelName:      os.Getenv("MODEL_NAME"),
+		SessionManager: llm.NewSessionManager(),
 	}
 
 	// 设置 onebot 的引擎
