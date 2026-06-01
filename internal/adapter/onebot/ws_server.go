@@ -23,6 +23,8 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+var chatHistory = newMessageHistory(historyLimitFromEnv())
+
 type wsConnection struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
