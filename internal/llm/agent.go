@@ -122,13 +122,13 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
 func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
-	max := e.SessionManager.MaxHistory
-	if len(messages) <= max+1 {
+	maxHistory := e.SessionManager.MaxHistory
+	if len(messages) <= maxHistory+1 {
 		return messages
 	}
 
 	// 始终保留第一条 system prompt
-	startIdx := len(messages) - max
+	startIdx := len(messages) - maxHistory
 
 	// 如果起始位置是一条 tool 消息，必须向前追溯到对应的 assistant 消息
 	// 否则 API 会报错：tool message must follow assistant message with tool_calls
