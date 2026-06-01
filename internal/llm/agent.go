@@ -30,6 +30,18 @@ func (e *Engine) Run(prompt string) string {
 	return result
 }
 
+// RunMessages 执行智能体的主循环（直接传入消息数组）
+func (e *Engine) RunMessages(messages []ChatMessage) string {
+	// 如果消息数组中没有 system 提示词，添加一个
+	if len(messages) == 0 || messages[0].Role != "system" {
+		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		messages = append([]ChatMessage{
+			{Role: "system", Content: systemPrompt},
+		}, messages...)
+	}
+	return e.runLoop(messages)
+}
+
 // RunWithSession 执行智能体的主循环（带会话上下文）
 func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	session := e.SessionManager.GetOrCreate(sessionID)
