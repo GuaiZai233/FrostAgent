@@ -1,9 +1,12 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
+	"FrostAgent/internal/llm"
 	"log"
 	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // handleAgentQuery 处理智能体查询的接口
@@ -19,22 +22,38 @@ func handleAgentQuery(c *gin.Context) {
 		return
 	}
 
-	// 检查输入是否为空
-	if req.Input == "" {
+	messages := normalizeRequestMessages(req)
+	if len(messages) == 0 {
 		c.JSON(http.StatusBadRequest, AgentResponse{
-			Error: "输入不能为空",
+			Error: "input 或 messages 不能为空",
 		})
 		return
 	}
 
-	log.Printf("【收到用户输入】%s\n", req.Input)
+	log.Printf("【收到用户请求】input长度=%d, messages=%d\n", len(req.Input), len(req.Messages))
 
 	// 执行智能体
-	result := GlobalEngine.Run(req.Input)
+	result := GlobalEngine.RunMessages(messages)
 
 	c.JSON(http.StatusOK, AgentResponse{
 		Result: result,
 	})
+}
+
+func normalizeRequestMessages(req AgentRequest) []llm.ChatMessage {
+	messages := make([]llm.ChatMessage, 0, len(req.Messages)+1)
+	for _, msg := range req.Messages {
+		msg.Role = strings.TrimSpace(msg.Role)
+		if msg.Role == "" || msg.Content == nil {
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	if strings.TrimSpace(req.Input) != "" {
+		messages = append(messages, llm.ChatMessage{Role: "user", Content: req.Input})
+	}
+	return messages
 }
 
 // handleHealth 处理健康检查接口

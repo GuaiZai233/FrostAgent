@@ -1,12 +1,16 @@
 package main
 
 import (
+	"FrostAgent/internal/llm"
+
 	"github.com/gin-gonic/gin"
 )
 
 // AgentRequest 接收的请求体
 type AgentRequest struct {
-	Input string `json:"input" binding:"required"`
+	// Input 保留兼容旧接口；Messages 用于多轮/多上下文对话。
+	Input    string            `json:"input"`
+	Messages []llm.ChatMessage `json:"messages,omitempty"`
 }
 
 // AgentResponse 返回的响应体

@@ -4,8 +4,10 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/llm"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,8 @@ var upgrader = websocket.Upgrader{
 		return true
 	},
 }
+
+var chatHistory = newMessageHistory(historyLimitFromEnv())
 
 type wsConnection struct {
 	conn    *websocket.Conn
@@ -47,7 +51,11 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			log.Printf("WebSocket 升级失败: %v\n", err)
 			return
 		}
-		// defer conn.Close() is handled below if needed, but it's okay here
+		defer func() {
+			if err := conn.Close(); err != nil {
+				log.Printf("关闭 WebSocket 连接失败: %v\n", err)
+			}
+		}()
 
 		wsConn := newWSConnection(conn)
 
@@ -61,23 +69,13 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				break
 			}
 
-			// debug: print raw msg from llonebot
-			/*
-				log.Println("收到原始数据: ", string(message))
-
-				var event model.OneBotEvent
-				if err := json.Unmarshal(message, &event); err != nil {
-					log.Println("解析事件失败:", err)
-					continue
-				}
-			*/
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
 				continue
 			}
 
-			//filter heartbeat pkg
+			// filter heartbeat pkg
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
@@ -118,14 +116,18 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	//init reply text
 	replyText := "系统出错，暂无法处理"
 
-	//containing img or not
-	if content.IsContainImage(segments) {
-		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-		replyText = engine.Run(extractUserText(segments, event) + " 【图片内容】：" + imageDesc)
-	} else if engine != nil {
-		replyText = engine.Run(extractUserText(segments, event))
-	} else {
+	if engine == nil {
 		log.Println("警告：未设置处理消息的 engine")
+	} else {
+		chatKey := historyKey(event)
+		incomingMessages := buildChatMessagesFromEvent(event, engine)
+		for _, msg := range incomingMessages {
+			chatHistory.Append(chatKey, msg)
+		}
+
+		messages := chatHistory.Messages(chatKey)
+		replyText = engine.RunMessages(messages)
+		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
 	}
 
 	botAction := model.OneBotAction{
@@ -144,8 +146,42 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 }
 
+func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {
+	raws := EventRawMessages(event)
+	messages := make([]llm.ChatMessage, 0, len(raws))
+
+	for _, raw := range raws {
+		segments := ParseMessageSegments(raw)
+		userText := extractUserText(segments, raw)
+		if content.IsContainImage(segments) {
+			imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+		}
+		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
+	}
+
+	return messages
+}
+
+func historyKey(event model.OneBotEvent) string {
+	if event.MessageType == "group" {
+		return fmt.Sprintf("group:%d", event.GroupID)
+	}
+	return fmt.Sprintf("private:%d", event.UserID)
+}
+
+func historyLimitFromEnv() int {
+	limit := llm.DefaultMaxMessages
+	if value := strings.TrimSpace(os.Getenv("ONEBOT_CONTEXT_MESSAGES")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	return limit
+}
+
 // extractUserText 从消息段中提取纯文本内容
-func extractUserText(segments []content.MessageSegment, event model.OneBotEvent) string {
+func extractUserText(segments []content.MessageSegment, raw json.RawMessage) string {
 	var texts []string
 
 	for _, seg := range segments {
@@ -156,11 +192,13 @@ func extractUserText(segments []content.MessageSegment, event model.OneBotEvent)
 		}
 	}
 
-	// 兜底：如果没有解析到文本，返回原始消息
 	if len(texts) == 0 {
-		return string(event.Message)
+		var rawText string
+		if err := json.Unmarshal(raw, &rawText); err == nil {
+			return rawText
+		}
+		return string(raw)
 	}
 
-	// 使用 strings.Join 拼接多个文本段
-	return strings.Join(texts, "")
+	return strings.TrimSpace(strings.Join(texts, ""))
 }
