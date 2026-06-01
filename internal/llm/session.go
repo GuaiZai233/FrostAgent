@@ -1,8 +1,6 @@
 package llm
 
 import (
-	"crypto/rand"
-	"fmt"
 	"sync"
 	"time"
 )
