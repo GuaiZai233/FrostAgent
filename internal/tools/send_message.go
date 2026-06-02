@@ -2,6 +2,21 @@ package tools
 
 import "fmt"
 
+// msg 定义大模型工具返回的单条消息结构
+type Msg struct {
+	Type          string `json:"type"`
+	Text          string `json:"text,omitempty"`
+	MentionUserID string `json:"mention_user_id,omitempty"`
+	Path          string `json:"path,omitempty"`
+	URL           string `json:"url,omitempty"`
+}
+
+// OneBotSegment 定义 OneBot v11 协议的标准消息段结构
+type OneBotSegment struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"` // Data 字段的内容是动态的，所以用 map
+}
+
 func SendMsgTool() Tool {
 	return Tool{
 		Name:        "send_message",
@@ -49,7 +64,42 @@ func SendMsgTool() Tool {
 		},
 
 		Execute: func(args string) (string, error) {
-			return fmt.Sprintf("消息已发送"), nil
+			return fmt.Sprintf(""), nil
 		},
 	}
+}
+
+func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
+	var oneBotChain []OneBotSegment
+
+	for _, Msg := range toolMessages {
+		switch Msg.Type {
+		case "plain":
+			oneBotChain = append(oneBotChain, OneBotSegment{
+				Type: "text",
+				Data: map[string]interface{}{"text": " " + Msg.Text},
+			})
+
+		case "mention_user":
+			oneBotChain = append(oneBotChain, OneBotSegment{
+				Type: "at",
+				Data: map[string]interface{}{"qq": Msg.MentionUserID},
+			})
+
+		case "image", "record", "video":
+			// 确定文件来源：URL 优先，如果有本地路径则拼接 file:// 前缀
+			fileData := Msg.URL
+			if Msg.Path != "" {
+				fileData = fmt.Sprintf("file://%s", Msg.Path)
+			}
+
+			// OneBot 协议中图片、语音、视频的 type 名称与工具定义的正好一致
+			oneBotChain = append(oneBotChain, OneBotSegment{
+				Type: Msg.Type,
+				Data: map[string]interface{}{"file": fileData},
+			})
+		}
+	}
+
+	return oneBotChain
 }

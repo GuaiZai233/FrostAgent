@@ -63,6 +63,12 @@ func (e *Engine) Run(prompt string) string {
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
 
+			// 特殊处理：如果是 send_message 工具，直接将其参数返回给上层（ws_server适配器）去发送富文本消息，终止循环
+			if tc.Function.Name == "send_message" {
+				fmt.Println("【拦截工具调用】发现 send_message 工具，直接将参数传递给适配器渲染")
+				return tc.Function.Arguments
+			}
+
 			var toolResult string
 
 			//从map中找到工具执行
@@ -90,5 +96,4 @@ func (e *Engine) Run(prompt string) string {
 		//循环进入下一轮
 	}
 	return "达到最大迭代次数，未能得出最终答案"
-
 }
