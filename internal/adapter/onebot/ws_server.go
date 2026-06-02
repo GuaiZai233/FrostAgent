@@ -130,11 +130,31 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
 	}
 
+	var messageData interface{} = replyText
+
+	// 对于群消息，构造带有 at 用户的结构化消息段
+	if event.MessageType == "group" {
+		messageData = []map[string]interface{}{
+			{
+				"type": "at",
+				"data": map[string]interface{}{
+					"qq": strconv.FormatInt(event.UserID, 10),
+				},
+			},
+			{
+				"type": "text",
+				"data": map[string]interface{}{
+					"text": " " + replyText, // 前面加个空格，避免和at连在一起
+				},
+			},
+		}
+	}
+
 	botAction := model.OneBotAction{
 		Action: action,
 		Params: map[string]interface{}{
 			type1:     id,
-			"message": replyText,
+			"message": messageData,
 		},
 		Echo: echo,
 	}
