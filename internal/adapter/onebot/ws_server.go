@@ -99,30 +99,50 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 }
 
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
-	// 1. Build the prompt string for the LLM
+	// 1. Extract user's visible message
 	var segments []content.MessageSegment
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
 		log.Printf("解析消息段失败: %v\n", err)
 		// Don't return, just work with an empty segment list
 	}
 
-	prompt := extractUserText(segments, event.Message)
+	userText := extractUserText(segments, event.Message)
 	if content.IsContainImage(segments) {
 		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-		prompt = prompt + " 【图片内容】：" + imageDesc
+		userText = userText + " 【图片内容】：" + imageDesc
 	}
 
-	// 2. Call the agent engine
+	// 2. Build the implicit context as a JSON string, replicating the OneBotEvent structure
+	contextMap := map[string]interface{}{
+		"self_id":    event.SelfID,
+		"post_type":  event.PostType,
+		"user_id":    event.UserID,
+		"message_id": event.MessageID,
+	}
+	if event.MetaEventType != "" {
+		contextMap["meta_event_type"] = event.MetaEventType
+	}
+	if event.MessageType != "" {
+		contextMap["message_type"] = event.MessageType
+	}
+	if event.GroupID != 0 {
+		contextMap["group_id"] = event.GroupID
+	}
+	contextBytes, _ := json.Marshal(contextMap)
+
+	// 3. Combine user text and context into the final prompt for the LLM
+	prompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
+
+	// 4. Call the agent engine
 	var replyText string
 	if engine != nil {
-		// Here we use the Run method which takes a simple string prompt
 		replyText = engine.Run(prompt)
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		log.Println("警告：未设置处理消息的 engine")
 	}
 
-	// 3. Prepare the final message for OneBot by parsing the engine's response
+	// 5. Prepare the final message for OneBot by parsing the engine's response
 	var finalMessage interface{}
 
 	var toolOutput struct {
@@ -152,7 +172,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	// 4. Build and send the final OneBot Action
+	// 6. Build and send the final OneBot Action
 	botAction := model.OneBotAction{
 		Action: action,
 		Params: map[string]interface{}{

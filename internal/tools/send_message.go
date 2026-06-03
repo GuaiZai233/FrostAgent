@@ -7,6 +7,7 @@ type Msg struct {
 	Type          string `json:"type"`
 	Text          string `json:"text,omitempty"`
 	MentionUserID string `json:"mention_user_id,omitempty"`
+	MessageID     string `json:"message_id,omitempty"`
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
 }
@@ -51,6 +52,10 @@ func SendMsgTool() Tool {
 								"type":        "string",
 								"description": "The identifier of the user to ping (used with `mention_user` type).",
 							},
+							"message_id": map[string]any{
+								"type":        "string",
+								"description": "The ID of the message to quote/reply to (required when type is `quote`).",
+							},
 						},
 						"required": []string{"type"},
 					},
@@ -84,6 +89,13 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: "at",
 				Data: map[string]interface{}{"qq": Msg.MentionUserID},
+			})
+
+		case "quote":
+			oneBotChain = append(oneBotChain, OneBotSegment{
+				Type: "reply",
+				// OneBot v11 协议中，引用的类型为 "reply"，参数字段为 "id"
+				Data: map[string]interface{}{"id": Msg.MessageID},
 			})
 
 		case "image", "record", "video":
