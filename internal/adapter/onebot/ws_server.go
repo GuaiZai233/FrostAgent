@@ -26,6 +26,7 @@ var upgrader = websocket.Upgrader{
 
 var chatHistory = newMessageHistory(historyLimitFromEnv())
 
+// wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
@@ -52,13 +53,8 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			log.Printf("WebSocket 升级失败: %v\n", err)
 			return
 		}
-		defer func() {
-			if err := conn.Close(); err != nil {
-				log.Printf("关闭 WebSocket 连接失败: %v\n", err)
-			}
-		}()
-
 		wsConn := newWSConnection(conn)
+		defer wsConn.Close()
 
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
@@ -66,7 +62,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("读取消息失败: %v\n", err)
-				wsConn.Close()
 				break
 			}
 
@@ -76,7 +71,6 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				continue
 			}
 
-			// filter heartbeat pkg
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
@@ -84,10 +78,7 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			go processEvent(wsConn, event, engine)
 		}
 	}
-
 }
-
-// processEvent process particular event, and dispatch agent and middleware
 
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
@@ -108,109 +99,71 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 }
 
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
-	// 解析消息段
+	// 1. Build the prompt string for the LLM
 	var segments []content.MessageSegment
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
 		log.Printf("解析消息段失败: %v\n", err)
-		segments = []content.MessageSegment{}
-	}
-	//init reply text
-	replyText := "系统出错，暂无法处理"
-
-	if engine == nil {
-		log.Println("警告：未设置处理消息的 engine")
-	} else {
-		chatKey := historyKey(event)
-		incomingMessages := buildChatMessagesFromEvent(event, engine)
-		for _, msg := range incomingMessages {
-			chatHistory.Append(chatKey, msg)
-		}
-
-		messages := chatHistory.Messages(chatKey)
-		replyText = engine.RunMessages(messages)
-		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
+		// Don't return, just work with an empty segment list
 	}
 
-	var messageData interface{} = replyText
-
-	// 对于群消息，构造带有 at 用户的结构化消息段
-	if event.MessageType == "group" {
-		messageData = []map[string]interface{}{
-			{
-				"type": "at",
-				"data": map[string]interface{}{
-					"qq": strconv.FormatInt(event.UserID, 10),
-				},
-			},
-			{
-				"type": "text",
-				"data": map[string]interface{}{
-					"text": " " + replyText, // 前面加个空格，避免和at连在一起
-				},
-			},
-		}
+	prompt := extractUserText(segments, event.Message)
+	if content.IsContainImage(segments) {
+		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+		prompt = prompt + " 【图片内容】：" + imageDesc
 	}
 
-	// 2. 调用大模型
-	replyText = "系统出错，暂无法处理" // 大模型调用失败时的默认回复
+	// 2. Call the agent engine
+	var replyText string
 	if engine != nil {
-		replyText = engine.Run(replyText_temp)
+		// Here we use the Run method which takes a simple string prompt
+		replyText = engine.Run(prompt)
+	} else {
+		replyText = "系统出错，引擎未初始化"
+		log.Println("警告：未设置处理消息的 engine")
 	}
 
-	// 3. 准备最终要发送给 OneBot 的消息 (可能是字符串，也可能是数组)
+	// 3. Prepare the final message for OneBot by parsing the engine's response
 	var finalMessage interface{}
 
-	// 尝试将 LLM 的返回解析为工具的 JSON 输出
 	var toolOutput struct {
 		Messages []tools.Msg `json:"messages"`
 	}
 
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
-		// A. 如果解析成功，说明是工具调用的结果，调用已有的工具函数将其转换为 OneBot 格式
+		// A. It's a tool call JSON
 		log.Printf("解析工具调用 JSON 成功，准备组装富文本消息")
-
-		// 调用 tools 包中的 BuildOneBotMessage 方法
 		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
-
 		if len(oneBotSegments) > 0 {
 			finalMessage = oneBotSegments
 		} else {
-			// 如果返回的 segments 是空，则退回纯文本
-			finalMessage = replyText
+			finalMessage = replyText // Fallback to raw text if conversion fails
 		}
 	} else {
-		// B. 如果解析失败，说明 LLM 返回的是纯文本
+		// B. It's plain text
 		if event.MessageType == "group" {
-			// 在群聊中，为纯文本回复自动加上 @
+			// Prepend @ in group chats
 			finalMessage = []map[string]interface{}{
-				{
-					"type": "at",
-					"data": map[string]interface{}{"qq": strconv.FormatInt(event.UserID, 10)},
-				},
-				{
-					"type": "text",
-					"data": map[string]interface{}{"text": " " + replyText},
-				},
+				{"type": "at", "data": map[string]interface{}{"qq": strconv.FormatInt(event.UserID, 10)}},
+				{"type": "text", "data": map[string]interface{}{"text": " " + replyText}},
 			}
 		} else {
-			// 私聊中，直接发送纯文本
+			// Just plain text for private messages
 			finalMessage = replyText
 		}
 	}
 
-	// 4. 构建并发送最终的 OneBot Action
+	// 4. Build and send the final OneBot Action
 	botAction := model.OneBotAction{
 		Action: action,
 		Params: map[string]interface{}{
 			type1:     id,
-			"message": messageData,
+			"message": finalMessage, // Use the processed finalMessage
 		},
 		Echo: echo,
 	}
 
 	actionBytes, _ := json.Marshal(botAction)
-	err := conn.WriteMessage(websocket.TextMessage, actionBytes)
-	if err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		log.Printf("发送消息失败: %v\n", err)
 	}
 }
