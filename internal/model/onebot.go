@@ -13,7 +13,8 @@ type OneBotEvent struct {
 	// Messages is an optional extension used by FrostAgent adapters to pass
 	// continuous user message contexts in one event. Each item may be a OneBot
 	// message segment array or a plain string.
-	Messages json.RawMessage `json:"messages,omitempty"`
+	Messages  json.RawMessage `json:"messages,omitempty"`
+	MessageID int32           `json:"message_id,omitempty"`
 }
 
 type OneBotAction struct {
