@@ -101,6 +101,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
+	segments = []content.MessageSegment{}
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
 		log.Printf("解析消息段失败: %v\n", err)
 		// Don't return, just work with an empty segment list
