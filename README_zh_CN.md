@@ -12,6 +12,11 @@
 
 项目仍处于早期阶段，供个人研究使用。欢迎大佬们 PR 并指导！
 
+## 与 ActionsCat 协同
+[ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
+
+在 ActionsCat 接入适配器后，您可以二者并行，智能体将发挥优秀的能力。
+
 ## 快速开始
 
 ### 1. 构建项目

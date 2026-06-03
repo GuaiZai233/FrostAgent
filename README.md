@@ -12,6 +12,11 @@ An AI Agent orchestration + API middleware service built with Golang.
 
 This project is still in early stages and is intended for personal research use. We welcome PRs and guidance from everyone!
 
+## Collaboration with ActionsCat
+[ActionsCat](https://github.com/actionscat/actionscat) supports the automation of static orchestration workflows.
+
+After integrating ActionsCat into the adapter, you can operate both simultaneously, and the agent will demonstrate its outstanding capabilities.
+
 ## Quick Start
 
 ### 1. Build the Project
