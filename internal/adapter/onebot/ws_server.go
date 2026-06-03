@@ -133,10 +133,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 3. Combine user text and context into the final prompt for the LLM
 	prompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
 
-	// 4. Call the agent engine
+	// 4. Call the agent engine with history
 	var replyText string
 	if engine != nil {
-		replyText = engine.Run(prompt)
+		chatKey := historyKey(event)
+
+		// 将用户的 prompt 加入历史记录
+		chatHistory.Append(chatKey, llm.ChatMessage{Role: "user", Content: prompt})
+
+		// 提取该会话的完整历史记录
+		messages := chatHistory.Messages(chatKey)
+
+		// 传递给大模型
+		replyText = engine.RunMessages(messages)
+
+		// 将大模型的回复也加入历史记录
+		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		log.Println("警告：未设置处理消息的 engine")
