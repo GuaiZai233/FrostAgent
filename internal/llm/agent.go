@@ -106,6 +106,12 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
 
+			// 特殊处理：如果是 send_message 工具，直接将其参数返回给上层（ws_server适配器）去发送富文本消息，终止循环
+			if tc.Function.Name == "send_message" {
+				fmt.Println("【拦截工具调用】发现 send_message 工具，直接将参数传递给适配器渲染")
+				return tc.Function.Arguments
+			}
+
 			var toolResult string
 			// 从 map 中找到工具执行
 			if tool, exists := e.ToolRegistry[tc.Function.Name]; exists {

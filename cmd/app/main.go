@@ -33,6 +33,9 @@ func init() {
 	gameVersionTool := tools.GetGameVersionTool()
 	registry[gameVersionTool.Name] = gameVersionTool
 
+	sendMsgTool := tools.SendMsgTool()
+	registry[sendMsgTool.Name] = sendMsgTool
+
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   registry,
