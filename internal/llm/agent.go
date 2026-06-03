@@ -3,30 +3,76 @@ package llm
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"FrostAgent/internal/tools"
 )
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	MaxIterations int
-	ToolRegistry  map[string]tools.Tool
-	LLMClient     *Client // API 客户端
-	BaseURL       string  // API 地址
-	APIKey        string  // API 密钥
-	ModelName     string  // 模型名称
+	MaxIterations  int
+	ToolRegistry   map[string]tools.Tool
+	LLMClient      *Client         // API 客户端
+	BaseURL        string          // API 地址
+	APIKey         string          // API 密钥
+	ModelName      string          // 模型名称
+	SessionManager *SessionManager // 会话上下文管理器
 }
 
-// Run 执行智能体的主循环
+// Run 执行智能体的主循环（单次无状态调用）
 func (e *Engine) Run(prompt string) string {
-	//初始化上下文
 	systemPrompt := os.Getenv("SYSTEM_PROMPT")
 	messages := []ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
+	result := e.runLoop(messages)
+	return result
+}
 
-	//转换工具注册表为大模型看得懂的形式
+// RunMessages 执行智能体的主循环（直接传入消息数组）
+func (e *Engine) RunMessages(messages []ChatMessage) string {
+	// 如果消息数组中没有 system 提示词，添加一个
+	if len(messages) == 0 || messages[0].Role != "system" {
+		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		messages = append([]ChatMessage{
+			{Role: "system", Content: systemPrompt},
+		}, messages...)
+	}
+	return e.runLoop(messages)
+}
+
+// RunWithSession 执行智能体的主循环（带会话上下文）
+func (e *Engine) RunWithSession(sessionID string, prompt string) string {
+	session := e.SessionManager.GetOrCreate(sessionID)
+
+	// 加锁保护会话内部状态
+	session.Lock()
+	defer session.Unlock()
+
+	// get history msg
+	messages := session.Messages
+
+	// if new session, add system prompt
+	if len(messages) == 0 {
+		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		messages = append(messages, ChatMessage{Role: "system", Content: systemPrompt})
+	}
+
+	// add user input
+	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
+
+	result := e.runLoop(messages)
+
+	// 修改后的 messages 写回
+	session.Messages = e.trimMessagesForSession(messages)
+	session.UpdatedAt = time.Now()
+
+	return result
+}
+
+// runLoop 核心循环逻辑
+func (e *Engine) runLoop(messages []ChatMessage) string {
 	var modelTools []any
 	for _, t := range e.ToolRegistry {
 		modelTools = append(modelTools, map[string]any{
@@ -39,27 +85,24 @@ func (e *Engine) Run(prompt string) string {
 		})
 	}
 
-	//主循环
+	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
 		fmt.Printf("【第%d轮思考开始】\n", i+1)
-
-		// 调用internal/llm 包向大模型发送http请求
+		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		responseMsg, err := e.LLMClient.CallAPI(e.BaseURL, e.APIKey, e.ModelName, messages, modelTools)
 		if err != nil {
 			return fmt.Sprintf("LLM掉线了: %v", err)
 		}
 
-		//记下回复
 		messages = append(messages, *responseMsg)
 
-		//是否给出最终答案
+		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			fmt.Println("【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
 			return contentStr
 		}
 
-		//发现有指令，开始干活
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
 
@@ -70,8 +113,7 @@ func (e *Engine) Run(prompt string) string {
 			}
 
 			var toolResult string
-
-			//从map中找到工具执行
+			// 从 map 中找到工具执行
 			if tool, exists := e.ToolRegistry[tc.Function.Name]; exists {
 				res, err := tool.Execute(tc.Function.Arguments)
 				if err != nil {
@@ -85,15 +127,35 @@ func (e *Engine) Run(prompt string) string {
 
 			fmt.Println("【工具执行结果】", toolResult)
 
-			//把结果包装成role=tool的消息，记录
 			toolMsg := ChatMessage{
 				Role:       "tool",
 				Content:    toolResult,
-				ToolCallID: tc.ID, // 关联到调用ID，方便大模型理解
+				ToolCallID: tc.ID,
 			}
 			messages = append(messages, toolMsg)
 		}
-		//循环进入下一轮
 	}
 	return "达到最大迭代次数，未能得出最终答案"
+}
+
+// trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
+func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
+	maxHistory := e.SessionManager.MaxHistory
+	if len(messages) <= maxHistory+1 {
+		return messages
+	}
+
+	// 始终保留第一条 system prompt
+	startIdx := len(messages) - maxHistory
+
+	// 如果起始位置是一条 tool 消息，必须向前追溯到对应的 assistant 消息
+	// 否则 API 会报错：tool message must follow assistant message with tool_calls
+	for startIdx > 1 && messages[startIdx].Role == "tool" {
+		startIdx--
+	}
+
+	trimmed := make([]ChatMessage, 0, len(messages)-startIdx+1)
+	trimmed = append(trimmed, messages[0])
+	trimmed = append(trimmed, messages[startIdx:]...)
+	return trimmed
 }

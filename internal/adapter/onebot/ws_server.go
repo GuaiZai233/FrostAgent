@@ -5,8 +5,10 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/tools"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +24,26 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-var writeMu sync.Mutex
+var chatHistory = newMessageHistory(historyLimitFromEnv())
+
+type wsConnection struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+func newWSConnection(conn *websocket.Conn) *wsConnection {
+	return &wsConnection{conn: conn}
+}
+
+func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(messageType, data)
+}
+
+func (c *wsConnection) Close() error {
+	return c.conn.Close()
+}
 
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +52,13 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			log.Printf("WebSocket 升级失败: %v\n", err)
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				log.Printf("关闭 WebSocket 连接失败: %v\n", err)
+			}
+		}()
+
+		wsConn := newWSConnection(conn)
 
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
 
@@ -39,31 +66,22 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("读取消息失败: %v\n", err)
+				wsConn.Close()
 				break
 			}
 
-			// debug: print raw msg from llonebot
-			/*
-				log.Println("收到原始数据: ", string(message))
-
-				var event model.OneBotEvent
-				if err := json.Unmarshal(message, &event); err != nil {
-					log.Println("解析事件失败:", err)
-					continue
-				}
-			*/
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
 				log.Printf("消息解析失败: %v\n", err)
 				continue
 			}
 
-			//filter heartbeat pkg
+			// filter heartbeat pkg
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
 
-			go processEvent(conn, event, engine)
+			go processEvent(wsConn, event, engine)
 		}
 	}
 
@@ -71,7 +89,7 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 
 // processEvent process particular event, and dispatch agent and middleware
 
-func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Engine) {
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
 		return
 	}
@@ -89,7 +107,7 @@ func processEvent(conn *websocket.Conn, event model.OneBotEvent, engine *llm.Eng
 	}
 }
 
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *websocket.Conn) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
 	// 解析消息段
 	var segments []content.MessageSegment
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
@@ -99,16 +117,38 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	//init reply text
 	replyText := "系统出错，暂无法处理"
 
-	// 1. 准备给大模型的输入
-	var replyText_temp string
-	if content.IsContainImage(segments) {
-		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
-		replyText_temp = extractUserText(segments, event) + " 【图片内容】：" + imageDesc
-	} else if engine != nil {
-		replyText_temp = extractUserText(segments, event)
-	} else {
+	if engine == nil {
 		log.Println("警告：未设置处理消息的 engine")
-		replyText_temp = "系统错误" // 设置默认值以防万一
+	} else {
+		chatKey := historyKey(event)
+		incomingMessages := buildChatMessagesFromEvent(event, engine)
+		for _, msg := range incomingMessages {
+			chatHistory.Append(chatKey, msg)
+		}
+
+		messages := chatHistory.Messages(chatKey)
+		replyText = engine.RunMessages(messages)
+		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
+	}
+
+	var messageData interface{} = replyText
+
+	// 对于群消息，构造带有 at 用户的结构化消息段
+	if event.MessageType == "group" {
+		messageData = []map[string]interface{}{
+			{
+				"type": "at",
+				"data": map[string]interface{}{
+					"qq": strconv.FormatInt(event.UserID, 10),
+				},
+			},
+			{
+				"type": "text",
+				"data": map[string]interface{}{
+					"text": " " + replyText, // 前面加个空格，避免和at连在一起
+				},
+			},
+		}
 	}
 
 	// 2. 调用大模型
@@ -163,21 +203,54 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		Action: action,
 		Params: map[string]interface{}{
 			type1:     id,
-			"message": finalMessage,
+			"message": messageData,
 		},
 		Echo: echo,
 	}
 
 	actionBytes, _ := json.Marshal(botAction)
-	writeMu.Lock()
-	defer writeMu.Unlock()
-	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+	err := conn.WriteMessage(websocket.TextMessage, actionBytes)
+	if err != nil {
 		log.Printf("发送消息失败: %v\n", err)
 	}
 }
 
+func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {
+	raws := EventRawMessages(event)
+	messages := make([]llm.ChatMessage, 0, len(raws))
+
+	for _, raw := range raws {
+		segments := ParseMessageSegments(raw)
+		userText := extractUserText(segments, raw)
+		if content.IsContainImage(segments) {
+			imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+		}
+		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
+	}
+
+	return messages
+}
+
+func historyKey(event model.OneBotEvent) string {
+	if event.MessageType == "group" {
+		return fmt.Sprintf("group:%d", event.GroupID)
+	}
+	return fmt.Sprintf("private:%d", event.UserID)
+}
+
+func historyLimitFromEnv() int {
+	limit := llm.DefaultMaxMessages
+	if value := strings.TrimSpace(os.Getenv("ONEBOT_CONTEXT_MESSAGES")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	return limit
+}
+
 // extractUserText 从消息段中提取纯文本内容
-func extractUserText(segments []content.MessageSegment, event model.OneBotEvent) string {
+func extractUserText(segments []content.MessageSegment, raw json.RawMessage) string {
 	var texts []string
 
 	for _, seg := range segments {
@@ -188,11 +261,13 @@ func extractUserText(segments []content.MessageSegment, event model.OneBotEvent)
 		}
 	}
 
-	// 兜底：如果没有解析到文本，返回原始消息
 	if len(texts) == 0 {
-		return string(event.Message)
+		var rawText string
+		if err := json.Unmarshal(raw, &rawText); err == nil {
+			return rawText
+		}
+		return string(raw)
 	}
 
-	// 使用 strings.Join 拼接多个文本段
-	return strings.Join(texts, "")
+	return strings.TrimSpace(strings.Join(texts, ""))
 }
