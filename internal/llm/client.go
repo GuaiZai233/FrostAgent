@@ -105,6 +105,7 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 
 	// 打印请求摘要，避免在日志中泄露完整上下文和密钥
 	fmt.Printf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d\n", url, model, len(messages), len(tools))
+	fmt.Printf("请求体：%s", string(jsonData))
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
