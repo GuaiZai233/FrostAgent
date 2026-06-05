@@ -246,27 +246,27 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage) str
 				texts = append(texts, text)
 			}
 		case "at":
-			texts = append(texts, fmt.Sprintf("[@%v]", seg.Data["qq"]))
+			texts = append(texts, fmt.Sprintf("[@%v] ", seg.Data["qq"]))
 		case "face":
-			texts = append(texts, fmt.Sprintf("[表情:%v]", seg.Data["id"]))
+			texts = append(texts, fmt.Sprintf("[表情:%v] ", seg.Data["id"]))
 		case "image":
-			texts = append(texts, "[图片]")
+			texts = append(texts, "[图片] ")
 		case "record":
-			texts = append(texts, "[语音]")
+			texts = append(texts, "[语音] ")
 		case "video":
-			texts = append(texts, "[视频]")
+			texts = append(texts, "[视频] ")
 		case "file":
 			name := seg.Data["name"]
 			if name == nil {
 				name = seg.Data["file"]
 			}
-			texts = append(texts, fmt.Sprintf("[文件:%v]", name))
+			texts = append(texts, fmt.Sprintf("[文件:%v] ", name))
 		case "reply":
-			texts = append(texts, fmt.Sprintf("[回复:%v]", seg.Data["id"]))
+			texts = append(texts, fmt.Sprintf("[回复:%v] ", seg.Data["id"]))
 		case "location":
-			texts = append(texts, fmt.Sprintf("[位置:%v,%v %v]", seg.Data["lat"], seg.Data["lon"], seg.Data["title"]))
+			texts = append(texts, fmt.Sprintf("[位置:%v,%v %v] ", seg.Data["lat"], seg.Data["lon"], seg.Data["title"]))
 		case "json", "xml":
-			texts = append(texts, fmt.Sprintf("[%s:%v]", seg.Type, seg.Data["data"]))
+			texts = append(texts, fmt.Sprintf("[%s:%v] ", seg.Type, seg.Data["data"]))
 		default:
 			bytes, err := json.Marshal(seg)
 			if err == nil {
@@ -283,5 +283,5 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage) str
 		return string(raw)
 	}
 
-	return strings.TrimSpace(strings.Join(texts, " "))
+	return strings.TrimSpace(strings.Join(texts, ""))
 }
