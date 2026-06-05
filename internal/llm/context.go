@@ -9,6 +9,8 @@ import (
 const DefaultMaxMessages = 20
 
 // TrimMessages 保留 system 消息，并裁剪最近 limit 条非 system 消息。
+// It keeps assistant tool_calls and their following tool messages together so
+// the OpenAI-compatible API never receives orphaned tool messages.
 func TrimMessages(messages []ChatMessage, limit int) []ChatMessage {
 	if limit <= 0 || len(messages) <= limit {
 		return messages
@@ -24,14 +26,34 @@ func TrimMessages(messages []ChatMessage, limit int) []ChatMessage {
 		}
 	}
 
-	if len(normalMessages) > limit {
-		normalMessages = normalMessages[len(normalMessages)-limit:]
+	if len(normalMessages) <= limit {
+		trimmed := append([]ChatMessage{}, systemMessages...)
+		return append(trimmed, normalMessages...)
 	}
 
-	trimmed := make([]ChatMessage, 0, len(systemMessages)+len(normalMessages))
+	start := len(normalMessages) - limit
+	start = adjustToolAwareStart(normalMessages, start)
+
+	trimmed := make([]ChatMessage, 0, len(systemMessages)+len(normalMessages)-start)
 	trimmed = append(trimmed, systemMessages...)
-	trimmed = append(trimmed, normalMessages...)
+	trimmed = append(trimmed, normalMessages[start:]...)
 	return trimmed
+}
+
+func adjustToolAwareStart(messages []ChatMessage, start int) int {
+	if start <= 0 || start >= len(messages) {
+		return start
+	}
+	// Do not start with a tool response; include its assistant tool_calls owner.
+	for start > 0 && messages[start].Role == "tool" {
+		start--
+	}
+	// If an assistant with tool_calls is kept, keep all immediately following
+	// tool responses even when this slightly exceeds the configured limit.
+	for start > 0 && messages[start-1].Role == "assistant" && len(messages[start-1].ToolCalls) > 0 {
+		start--
+	}
+	return start
 }
 
 // ApproxTokenCount 使用轻量级估算，便于后续按 token 裁剪。
