@@ -24,7 +24,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-var chatHistory = newMessageHistory(historyLimitFromEnv())
+// OneBot conversations use llm.SessionManager via Engine.RunWithSession.
 
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
@@ -137,19 +137,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 4. Call the agent engine with history
 	var replyText string
 	if engine != nil {
-		chatKey := historyKey(event)
-
-		// 将用户的 prompt 加入历史记录
-		chatHistory.Append(chatKey, llm.ChatMessage{Role: "user", Content: prompt})
-
-		// 提取该会话的完整历史记录
-		messages := chatHistory.Messages(chatKey)
-
-		// 传递给大模型
-		replyText = engine.RunMessages(messages)
-
-		// 将大模型的回复也加入历史记录
-		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
+		// 复用统一的 SessionManager，避免 OneBot 适配层维护第二套 History 架构。
+		replyText = engine.RunWithSession(historyKey(event), prompt)
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		log.Println("警告：未设置处理消息的 engine")
