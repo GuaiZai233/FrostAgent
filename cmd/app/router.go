@@ -2,6 +2,12 @@ package main
 
 import (
 	"FrostAgent/internal/llm"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,8 +27,10 @@ type AgentResponse struct {
 
 // setupRouter 设置和配置路由
 func setupRouter(engine *gin.Engine) {
-	// 添加 CORS 中间件
+	// 添加通用中间件
 	engine.Use(corsMiddleware())
+	engine.Use(authMiddleware())
+	engine.Use(rateLimitMiddleware())
 
 	// 注册路由
 	engine.GET("/health", handleHealth)
@@ -42,6 +50,68 @@ func corsMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+
+type rateBucket struct {
+	count int
+	reset time.Time
+}
+
+var (
+	rateLimitMu      sync.Mutex
+	rateLimitBuckets = map[string]rateBucket{}
+)
+
+func authMiddleware() gin.HandlerFunc {
+	token := strings.TrimSpace(os.Getenv("HTTP_API_TOKEN"))
+	return func(c *gin.Context) {
+		if c.Request.Method == http.MethodOptions || c.FullPath() == "/health" || token == "" {
+			c.Next()
+			return
+		}
+		provided := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		if provided == "" {
+			provided = strings.TrimSpace(c.GetHeader("X-API-Key"))
+		}
+		if provided != token {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, AgentResponse{Error: "unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func rateLimitMiddleware() gin.HandlerFunc {
+	limit := 60
+	window := time.Minute
+	return func(c *gin.Context) {
+		if c.Request.Method == http.MethodOptions || c.FullPath() == "/health" {
+			c.Next()
+			return
+		}
+		now := time.Now()
+		key := c.ClientIP()
+		rateLimitMu.Lock()
+		bucket := rateLimitBuckets[key]
+		if now.After(bucket.reset) {
+			bucket = rateBucket{reset: now.Add(window)}
+		}
+		bucket.count++
+		rateLimitBuckets[key] = bucket
+		allowed := bucket.count <= limit
+		retryAfter := int(time.Until(bucket.reset).Seconds())
+		rateLimitMu.Unlock()
+		if !allowed {
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, AgentResponse{Error: "rate limit exceeded"})
+			return
+		}
 		c.Next()
 	}
 }
