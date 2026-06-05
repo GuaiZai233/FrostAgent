@@ -240,9 +240,48 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage) str
 	var texts []string
 
 	for _, seg := range segments {
-		if seg.Type == "text" {
+		switch seg.Type {
+		case "text":
 			if text, ok := seg.Data["text"].(string); ok {
 				texts = append(texts, text)
+			}
+		case "at":
+			texts = append(texts, fmt.Sprintf("[@%v] ", seg.Data["qq"]))
+		case "face":
+			texts = append(texts, fmt.Sprintf("[表情:%v] ", seg.Data["id"]))
+		case "image":
+			texts = append(texts, "[图片] ")
+		case "record":
+			texts = append(texts, "[语音] ")
+		case "video":
+			texts = append(texts, "[视频] ")
+		case "file":
+			name := seg.Data["name"]
+			if name == nil {
+				name = seg.Data["file"]
+			}
+			texts = append(texts, fmt.Sprintf("[文件:%v] ", name))
+		case "reply":
+			texts = append(texts, fmt.Sprintf("[回复:%v] ", seg.Data["id"]))
+		case "location":
+			texts = append(texts, fmt.Sprintf("[位置:%v,%v %v] ", seg.Data["lat"], seg.Data["lon"], seg.Data["title"]))
+		case "json", "xml":
+			// 先尝试获取 data 字段
+			data := seg.Data["data"]
+			// 如果 data 是 map 或 slice，重新 marshal 成标准 JSON
+			if b, err := json.Marshal(data); err == nil {
+				texts = append(texts, fmt.Sprintf("[%s:%s]", seg.Type, string(b)))
+			} else if s, ok := data.(string); ok {
+				// 如果本来就是字符串，直接用
+				texts = append(texts, fmt.Sprintf("[%s:%s]", seg.Type, s))
+			}
+		default:
+			bytes, err := json.Marshal(seg)
+			if err == nil {
+				texts = append(texts, string(bytes))
+			} else {
+				texts = append(texts, "[未知消息段]")
+				log.Printf("Failed to marshal unknown segment: %v", err)
 			}
 		}
 	}
