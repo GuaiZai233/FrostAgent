@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
@@ -46,6 +47,12 @@ func (c *wsConnection) Close() error {
 	return c.conn.Close()
 }
 
+func (c *wsConnection) WriteControl(messageType int, data []byte, deadline time.Time) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteControl(messageType, data, deadline)
+}
+
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -57,6 +64,14 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 		defer wsConn.Close()
 
 		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
+
+		stopHeartbeat := startHeartbeat(wsConn)
+		defer stopHeartbeat()
+		conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+		conn.SetPongHandler(func(string) error {
+			conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+			return nil
+		})
 
 		for {
 			_, message, err := conn.ReadMessage()
@@ -78,6 +93,29 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			go processEvent(wsConn, event, engine)
 		}
 	}
+}
+
+
+
+func startHeartbeat(conn *wsConnection) func() {
+	stop := make(chan struct{})
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(10 * time.Second)
+				if err := conn.WriteControl(websocket.PingMessage, []byte("ping"), deadline); err != nil {
+					log.Printf("WebSocket 心跳发送失败: %v", err)
+					return
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() { close(stop) }
 }
 
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
