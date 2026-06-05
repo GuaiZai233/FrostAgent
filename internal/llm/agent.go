@@ -39,6 +39,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
 	}
+	messages = e.trimMessagesForSession(messages)
 	return e.runLoop(messages)
 }
 
@@ -140,7 +141,10 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
 func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
-	maxHistory := e.SessionManager.MaxHistory
+	maxHistory := DefaultMaxMessages
+	if e.SessionManager != nil && e.SessionManager.MaxHistory > 0 {
+		maxHistory = e.SessionManager.MaxHistory
+	}
 	if len(messages) <= maxHistory+1 {
 		return messages
 	}
