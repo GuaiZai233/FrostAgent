@@ -26,7 +26,7 @@ func (e *Engine) Run(prompt string) string {
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	result := e.runLoop(messages)
+	result, _ := e.runLoop(messages)
 	return result
 }
 
@@ -39,7 +39,8 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
 	}
-	return e.runLoop(messages)
+	result, _ := e.runLoop(messages)
+	return result
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
@@ -62,17 +63,17 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	// add user input
 	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
 
-	result := e.runLoop(messages)
+	result, updatedMessages := e.runLoop(messages)
 
-	// 修改后的 messages 写回
-	session.Messages = e.trimMessagesForSession(messages)
+	// 修改后的 messages 写回，包括 AI 回复和工具调用链
+	session.Messages = e.trimMessagesForSession(updatedMessages)
 	session.UpdatedAt = time.Now()
 
 	return result
 }
 
 // runLoop 核心循环逻辑
-func (e *Engine) runLoop(messages []ChatMessage) string {
+func (e *Engine) runLoop(messages []ChatMessage) (string, []ChatMessage) {
 	var modelTools []any
 	for _, t := range e.ToolRegistry {
 		modelTools = append(modelTools, map[string]any{
@@ -91,7 +92,7 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		responseMsg, err := e.LLMClient.CallAPI(e.BaseURL, e.APIKey, e.ModelName, messages, modelTools)
 		if err != nil {
-			return fmt.Sprintf("LLM掉线了: %v", err)
+			return fmt.Sprintf("LLM掉线了: %v", err), messages
 		}
 
 		messages = append(messages, *responseMsg)
@@ -100,7 +101,7 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 		if len(responseMsg.ToolCalls) == 0 {
 			fmt.Println("【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
-			return contentStr
+			return contentStr, messages
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
@@ -109,7 +110,7 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 			// 特殊处理：如果是 send_message 工具，直接将其参数返回给上层（ws_server适配器）去发送富文本消息，终止循环
 			if tc.Function.Name == "send_message" {
 				fmt.Println("【拦截工具调用】发现 send_message 工具，直接将参数传递给适配器渲染")
-				return tc.Function.Arguments
+				return tc.Function.Arguments, messages
 			}
 
 			var toolResult string
@@ -135,7 +136,7 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 			messages = append(messages, toolMsg)
 		}
 	}
-	return "达到最大迭代次数，未能得出最终答案"
+	return "达到最大迭代次数，未能得出最终答案", messages
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
