@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// openai 兼容协议结构体
+const DefaultHTTPTimeout = 120 * time.Second
 
+// ChatMessage represents a message in the chat conversation.
 type ChatMessage struct {
 	Role       string     `json:"role"`
 	Content    any        `json:"content"`
@@ -20,6 +21,7 @@ type ChatMessage struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
+// ToolCall represents a tool call made by the model.
 type ToolCall struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
@@ -29,12 +31,14 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
+// ChatRequest represents the request body for the chat completions API.
 type ChatRequest struct {
 	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
 	Tools    []any         `json:"tools,omitempty"`
 }
 
+// ChatResponse represents the response body from the chat completions API.
 type ChatResponse struct {
 	Choices []struct {
 		Message ChatMessage `json:"message"`
@@ -46,22 +50,19 @@ type ChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-//客户端核心实现
-
+// Client is the LLM client.
 type Client struct {
 	HTTPClient *http.Client
 }
 
+// NewClient creates a new LLM client with a default timeout.
 func NewClient() *Client {
 	return &Client{
-		HTTPClient: &http.Client{Timeout: 120 * time.Second},
+		HTTPClient: &http.Client{Timeout: DefaultHTTPTimeout},
 	}
 }
 
-// buildChatCompletionsURL 将 baseURL 规范化为 OpenAI 兼容 chat completions 地址。
-// 兼容两种配置：
-//   - https://example.com/compatible-mode
-//   - https://example.com/compatible-mode/v1/chat/completions
+// buildChatCompletionsURL normalizes the baseURL to an OpenAI-compatible chat completions address.
 func buildChatCompletionsURL(baseURL string) string {
 	baseURL = strings.TrimSpace(baseURL)
 	baseURL = strings.TrimRight(baseURL, "/")
@@ -74,8 +75,7 @@ func buildChatCompletionsURL(baseURL string) string {
 	return baseURL + "/v1/chat/completions"
 }
 
-//callapi 发送请求
-
+// CallAPI sends a request to the LLM API.
 func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, tools []any) (*ChatMessage, error) {
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("messages 不能为空")
@@ -92,7 +92,6 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 		return nil, fmt.Errorf("JSON 编码失败: %w", err)
 	}
 
-	//组装http请求
 	url := buildChatCompletionsURL(baseURL)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -103,24 +102,12 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	// 打印请求摘要，避免在日志中泄露完整上下文和密钥
-	fmt.Printf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d\n", url, model, len(messages), len(tools))
-	fmt.Printf("请求体：%s", string(jsonData))
-
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request failed: %v", err)
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("关闭响应体失败: %v\n", err)
-		}
-	}()
+	defer resp.Body.Close()
 
-	// 打印响应状态码
-	fmt.Printf("【响应状态码】%d\n", resp.StatusCode)
-
-	// 读取完整的响应体
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
@@ -128,13 +115,11 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("【API 错误响应】%s", string(respBodyBytes))
-		return nil, fmt.Errorf("API 请求失败，状态码: %d，响应内容: %s", resp.StatusCode, string(respBodyBytes))
+		return nil, fmt.Errorf("API 请求失败，状态码: %d", resp.StatusCode)
 	}
 
-	// 解析响应
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBodyBytes, &chatResp); err != nil {
-		log.Printf("【响应解析失败，原始响应】%s", string(respBodyBytes))
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 
@@ -146,6 +131,5 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 		return nil, fmt.Errorf("API 响应中没有 choices")
 	}
 
-	//返回大模型生成的单条消息
 	return &chatResp.Choices[0].Message, nil
 }
