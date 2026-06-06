@@ -37,6 +37,16 @@ func (s *SessionContext) Snapshot() []ChatMessage {
 			newMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
 			copy(newMsg.ToolCalls, msg.ToolCalls)
 		}
+		// Deep copy Content if it's a slice of MessagePart
+		if parts, ok := msg.Content.([]MessagePart); ok {
+			newParts := make([]MessagePart, len(parts))
+			copy(newParts, parts)
+			newMsg.Content = newParts
+		}
+		snapshot[i] = newMsg
+	}
+	return snapshot
+}
 		// Deep copy Content if it's a slice of MessagePart (OpenAI specific)
 		// Note: Content is 'any' in ChatMessage, we handle common slice types
 		snapshot[i] = newMsg
@@ -44,12 +54,29 @@ func (s *SessionContext) Snapshot() []ChatMessage {
 	return snapshot
 }
 
-// ReplaceMessages atomically replaces a session history.
+// ReplaceMessages atomically replaces a session history with deep copy.
 func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Messages = make([]ChatMessage, len(messages))
-	copy(s.Messages, messages)
+
+	newMessages := make([]ChatMessage, len(messages))
+	for i, msg := range messages {
+		newMsg := msg
+		// Deep copy ToolCalls
+		if len(msg.ToolCalls) > 0 {
+			newMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
+			copy(newMsg.ToolCalls, msg.ToolCalls)
+		}
+		// Deep copy Content if it's a slice of MessagePart
+		if parts, ok := msg.Content.([]MessagePart); ok {
+			newParts := make([]MessagePart, len(parts))
+			copy(newParts, parts)
+			newMsg.Content = newParts
+		}
+		newMessages[i] = newMsg
+	}
+
+	s.Messages = newMessages
 	s.UpdatedAt = time.Now()
 }
 
