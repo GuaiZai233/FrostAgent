@@ -48,14 +48,28 @@ type ChatResponse struct {
 
 //客户端核心实现
 
+const DefaultHTTPTimeout = 120 * time.Second
+
 type Client struct {
 	HTTPClient *http.Client
 }
 
 func NewClient() *Client {
 	return &Client{
-		HTTPClient: &http.Client{Timeout: 120 * time.Second},
+		HTTPClient: &http.Client{Timeout: DefaultHTTPTimeout},
 	}
+}
+
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient == nil {
+		c.HTTPClient = &http.Client{Timeout: DefaultHTTPTimeout}
+	}
+	if c.HTTPClient.Timeout == 0 {
+		clone := *c.HTTPClient
+		clone.Timeout = DefaultHTTPTimeout
+		c.HTTPClient = &clone
+	}
+	return c.HTTPClient
 }
 
 // buildChatCompletionsURL 将 baseURL 规范化为 OpenAI 兼容 chat completions 地址。
@@ -107,7 +121,7 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	fmt.Printf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d\n", url, model, len(messages), len(tools))
 	fmt.Printf("请求体：%s", string(jsonData))
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request failed: %v", err)
 	}
