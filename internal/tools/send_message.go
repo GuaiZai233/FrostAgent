@@ -1,6 +1,10 @@
 package tools
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // msg 定义大模型工具返回的单条消息结构
 type Msg struct {
@@ -69,7 +73,46 @@ func SendMsgTool() Tool {
 		},
 
 		Execute: func(args string) (string, error) {
-			return fmt.Sprintf(""), nil
+			var payload struct {
+				Messages []Msg  `json:"messages"`
+				Session  string `json:"session,omitempty"`
+			}
+
+			if err := json.Unmarshal([]byte(args), &payload); err != nil {
+				return "", fmt.Errorf("send_message 参数不是合法 JSON: %w", err)
+			}
+			if len(payload.Messages) == 0 {
+				return "", fmt.Errorf("send_message 至少需要一条 messages")
+			}
+
+			for i, msg := range payload.Messages {
+				switch msg.Type {
+				case "plain":
+					if strings.TrimSpace(msg.Text) == "" {
+						return "", fmt.Errorf("messages[%d].text 不能为空", i)
+					}
+				case "mention_user":
+					if strings.TrimSpace(msg.MentionUserID) == "" {
+						return "", fmt.Errorf("messages[%d].mention_user_id 不能为空", i)
+					}
+				case "quote":
+					if strings.TrimSpace(msg.MessageID) == "" {
+						return "", fmt.Errorf("messages[%d].message_id 不能为空", i)
+					}
+				case "image", "record", "video", "file":
+					if strings.TrimSpace(msg.Path) == "" && strings.TrimSpace(msg.URL) == "" {
+						return "", fmt.Errorf("messages[%d] 需要 path 或 url", i)
+					}
+				default:
+					return "", fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
+				}
+			}
+
+			normalized, err := json.Marshal(payload)
+			if err != nil {
+				return "", fmt.Errorf("send_message 参数序列化失败: %w", err)
+			}
+			return string(normalized), nil
 		},
 	}
 }
@@ -98,7 +141,7 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 				Data: map[string]interface{}{"id": Msg.MessageID},
 			})
 
-		case "image", "record", "video":
+		case "image", "record", "video", "file":
 			// 确定文件来源：URL 优先，如果有本地路径则拼接 file:// 前缀
 			fileData := Msg.URL
 			if Msg.Path != "" {
