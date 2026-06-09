@@ -31,7 +31,7 @@ Create a `.env` file or set system environment variables:
 
 ```bash
 # Upstream API endpoint (e.g., Alibaba Cloud Tongyi Qianwen)
-set UPSTREAM_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+set UPSTREAM_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 # Upstream API key
 set UPSTREAM_API_KEY=sk-your-api-key-here

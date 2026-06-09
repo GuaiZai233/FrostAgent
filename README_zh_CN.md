@@ -31,7 +31,7 @@ go build -o frostagent.exe
 
 ```bash
 # 上游 API 端点 (比如: 阿里云通义千问)
-set UPSTREAM_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+set UPSTREAM_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 # 上游 API 密钥
 set UPSTREAM_API_KEY=sk-your-api-key-here

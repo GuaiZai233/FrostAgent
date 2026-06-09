@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -72,20 +71,9 @@ func (c *Client) httpClient() *http.Client {
 	return c.HTTPClient
 }
 
-// buildChatCompletionsURL 将 baseURL 规范化为 OpenAI 兼容 chat completions 地址。
-// 兼容两种配置：
-//   - https://example.com/compatible-mode
-//   - https://example.com/compatible-mode/v1/chat/completions
+// buildChatCompletionsURL 不再拼接，直接返回用户提供的完整 URL。
 func buildChatCompletionsURL(baseURL string) string {
-	baseURL = strings.TrimSpace(baseURL)
-	baseURL = strings.TrimRight(baseURL, "/")
-	if strings.HasSuffix(baseURL, "/chat/completions") {
-		return baseURL
-	}
-	if strings.HasSuffix(baseURL, "/v1") {
-		return baseURL + "/chat/completions"
-	}
-	return baseURL + "/v1/chat/completions"
+	return baseURL + "/chat/completions"
 }
 
 //callapi 发送请求
@@ -107,7 +95,7 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	}
 
 	//组装http请求
-	url := buildChatCompletionsURL(baseURL)
+	url := buildChatCompletionsURL(baseURL) // Use the provided baseURL directly
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
