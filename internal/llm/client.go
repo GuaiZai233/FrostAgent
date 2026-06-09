@@ -119,7 +119,6 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 
 	// 打印请求摘要，避免在日志中泄露完整上下文和密钥
 	fmt.Printf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d\n", url, model, len(messages), len(tools))
-	fmt.Printf("请求体：%s", string(jsonData))
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -141,14 +140,14 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("【API 错误响应】%s", string(respBodyBytes))
-		return nil, fmt.Errorf("API 请求失败，状态码: %d，响应内容: %s", resp.StatusCode, string(respBodyBytes))
+		log.Printf("【API 错误响应】status=%d body_length=%d", resp.StatusCode, len(respBodyBytes))
+		return nil, fmt.Errorf("API 请求失败，状态码: %d，响应长度: %d", resp.StatusCode, len(respBodyBytes))
 	}
 
 	// 解析响应
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBodyBytes, &chatResp); err != nil {
-		log.Printf("【响应解析失败，原始响应】%s", string(respBodyBytes))
+		log.Printf("【响应解析失败】body_length=%d", len(respBodyBytes))
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 
