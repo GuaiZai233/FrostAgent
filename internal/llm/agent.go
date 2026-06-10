@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -17,7 +19,7 @@ type ToolExecutor interface {
 type Engine struct {
 	MaxIterations  int
 	ToolRegistry   map[string]ToolExecutor
-	LLMClient      *Client         // API 客户端
+	Provider       core.LLMProvider // LLM 供应商接口
 	BaseURL        string          // API 地址
 	APIKey         string          // API 密钥
 	ModelName      string          // 模型名称
@@ -94,7 +96,20 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 	for i := 0; i < e.MaxIterations; i++ {
 		fmt.Printf("【第%d轮思考开始】\n", i+1)
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
-		responseMsg, err := e.LLMClient.CallAPI(e.BaseURL, e.APIKey, e.ModelName, messages, modelTools)
+		chatReq := core.ChatRequest{
+			Model:    e.ModelName,
+			Messages: convertToCoreMessages(messages),
+		}
+		resp, err := e.Provider.Chat(context.Background(), chatReq)
+		if err != nil {
+			return fmt.Sprintf("LLM调用失败: %v", err)
+		}
+
+		// Map back to internal message for now to maintain compatibility
+		responseMsg := &ChatMessage{
+			Role:    string(resp.Message.Role),
+			Content: resp.Message.Content,
+		}
 		if err != nil {
 			return fmt.Sprintf("LLM掉线了: %v", err)
 		}
@@ -163,4 +178,16 @@ func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
 	trimmed = append(trimmed, messages[0])
 	trimmed = append(trimmed, messages[startIdx:]...)
 	return trimmed
+}
+
+// convertToCoreMessages converts internal ChatMessage to core.ChatMessage
+func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
+	res := make([]core.ChatMessage, len(msgs))
+	for i, m := range msgs {
+		res[i] = core.ChatMessage{
+			Role:    core.MessageRole(m.Role),
+			Content: m.Content,
+		}
+	}
+	return res
 }
