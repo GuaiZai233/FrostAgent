@@ -12,7 +12,7 @@ const SubAgentManagerPrompt = "你是子Agent的调度和管理工具。"
 func SubAgentTool(client *llm.Client) Tool {
 	return Tool{
 		name:        "use_subagent",
-		description: "调用子agent。有下面几个子agent可调用：【Coder】用于生成代码。",
+		description: "调用子agent。有下面几个子agent可调用：【Coder】用于生成代码。**在调用子agent之前，请使用send_message工具输出反馈，表示已指派子agent工作了。**",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
