@@ -43,7 +43,7 @@ func SubAgentTool(client *llm.Client) Tool {
 				// 有的参数没用，估计要改一下函数的签名
 				result := subagent.CallCoder(client, "", "", "", params.Content)
 				// 然后指派Coder执行Context
-				return fmt.Sprintf(result), nil
+				return result, nil
 			}
 			return "", nil
 		},
