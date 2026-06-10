@@ -24,10 +24,10 @@ type OneBotSegment struct {
 
 func SendMsgTool() Tool {
 	return Tool{
-		Name:        "send_message",
-		Description: "Delivers messages (plain, image, record, video, file, mention_user) to the user. Strictly use this for sending media or initiating proactive tasks; standard text replies must be output directly without invoking this tool.",
+		name:        "send_message",
+		description: "Delivers messages (plain, image, record, video, file, mention_user) to the user. Strictly use this for sending media or initiating proactive tasks; standard text replies must be output directly without invoking this tool.",
 		//json schema
-		Parameters: map[string]any{
+		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"messages": map[string]any{
@@ -72,7 +72,7 @@ func SendMsgTool() Tool {
 			"required": []string{"messages"},
 		},
 
-		Execute: func(args string) (string, error) {
+		execute: func(args string) (string, error) {
 			var payload struct {
 				Messages []Msg  `json:"messages"`
 				Session  string `json:"session,omitempty"`

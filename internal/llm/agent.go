@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"FrostAgent/internal/tools"
 )
+
+type ToolExecutor interface {
+	Name() string
+	Description() string
+	Parameters() map[string]any
+	Execute(args string) (string, error)
+}
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
 	MaxIterations  int
-	ToolRegistry   map[string]tools.Tool
+	ToolRegistry   map[string]ToolExecutor
 	LLMClient      *Client         // API 客户端
 	BaseURL        string          // API 地址
 	APIKey         string          // API 密钥
@@ -78,9 +83,9 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 		modelTools = append(modelTools, map[string]any{
 			"type": "function",
 			"function": map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"parameters":  t.Parameters,
+				"name":        t.Name(),
+				"description": t.Description(),
+				"parameters":  t.Parameters(),
 			},
 		})
 	}
