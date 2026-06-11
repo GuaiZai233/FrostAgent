@@ -150,7 +150,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	userText := extractUserText(segments, event.Message)
 	if content.IsContainImage(segments) {
-		imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+		imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
 		userText = userText + " 【图片内容】：" + imageDesc
 	}
 
@@ -255,7 +255,7 @@ func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []l
 		segments := ParseMessageSegments(raw)
 		userText := extractUserText(segments, raw)
 		if content.IsContainImage(segments) {
-			imageDesc := content.ProcessImage(segments, engine.LLMClient, engine.BaseURL, engine.APIKey, engine.ModelName)
+			imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
 			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 		}
 		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})

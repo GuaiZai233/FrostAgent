@@ -48,9 +48,9 @@ func init() {
 	}
 
 	GlobalEngine = &llm.Engine{
-		MaxIterations:  5,
-		ToolRegistry:   executorMap,
-		LLMClient:      llmClient,
+		MaxIterations: 5,
+		ToolRegistry:  executorMap,
+		//LLMClient:      llmClient,
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
