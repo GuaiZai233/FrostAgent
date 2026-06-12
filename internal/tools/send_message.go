@@ -25,7 +25,7 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "Delivers messages (plain, image, record, video, file, mention_user) to the user. Strictly use this for sending media or initiating proactive tasks; standard text replies must be output directly without invoking this tool.",
+		description: "**注意！在调用工具之前，请使用send_message工具输出反馈，表示自己要调用工具了。**Delivers messages (plain, image, record, video, file, mention_user) to the user. Strictly use this for sending media or initiating proactive tasks; standard text replies must be output directly without invoking this tool.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",

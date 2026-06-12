@@ -81,15 +81,12 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 
 // runLoop 核心循环逻辑
 func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
-	var modelTools []any
+	var modelTools []core.Tool
 	for _, t := range e.ToolRegistry {
-		modelTools = append(modelTools, map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        t.Name(),
-				"description": t.Description(),
-				"parameters":  t.Parameters(),
-			},
+		modelTools = append(modelTools, core.Tool{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
 		})
 	}
 
@@ -100,6 +97,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 		chatReq := core.ChatRequest{
 			Model:    e.ModelName,
 			Messages: convertToCoreMessages(messages),
+			Tools:    modelTools,
 		}
 		resp, err := e.Provider.Chat(context.Background(), chatReq)
 		if err != nil {
@@ -136,8 +134,6 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
-
-
 
 			var toolResult string
 			// 从 map 中找到工具执行
@@ -192,8 +188,9 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))
 	for i, m := range msgs {
 		coreMsg := core.ChatMessage{
-			Role:    core.MessageRole(m.Role),
-			Content: m.Content,
+			Role:       core.MessageRole(m.Role),
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))

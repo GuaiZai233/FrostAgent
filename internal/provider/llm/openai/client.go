@@ -21,10 +21,10 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string      `json:"role"`
-	Content    any         `json:"content"`
-	ToolCalls  []toolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    any        `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type toolCall struct {
@@ -69,20 +69,46 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		Model: req.Model,
 	}
 
-	for _, msg := range req.Messages {
-		openAIReq.Messages = append(openAIReq.Messages, chatMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
+	// Convert core.Tool to OpenAI function-call format
+	for _, t := range req.Tools {
+		openAIReq.Tools = append(openAIReq.Tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  t.Parameters,
+			},
 		})
 	}
 
-	// Note: Tool conversion logic would go here if needed
-	// For now, we keep it simple to match the current step goal
+	for _, msg := range req.Messages {
+		cm := chatMessage{
+			Role:       string(msg.Role),
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+		}
+		for _, tc := range msg.ToolCalls {
+			cm.ToolCalls = append(cm.ToolCalls, toolCall{
+				ID:   tc.ID,
+				Type: tc.Type,
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+		openAIReq.Messages = append(openAIReq.Messages, cm)
+	}
 
 	jsonData, err := json.Marshal(openAIReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	fmt.Printf("【LLM 请求体】%s\n", string(jsonData))
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
 	if err != nil {
@@ -109,8 +135,14 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	fmt.Printf("【LLM 响应体】%s\n", string(respBody))
+
 	var openAIResp chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
+	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -124,10 +156,21 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	// Map back to core response
 	choice := openAIResp.Choices[0].Message
+	coreMsg := core.ChatMessage{
+		Role:    core.MessageRole(choice.Role),
+		Content: choice.Content,
+	}
+	for _, tc := range choice.ToolCalls {
+		coreMsg.ToolCalls = append(coreMsg.ToolCalls, core.ToolCall{
+			ID:   tc.ID,
+			Type: tc.Type,
+			Function: core.ToolCallFunction{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		})
+	}
 	return &core.ChatResponse{
-		Message: core.ChatMessage{
-			Role:    core.MessageRole(choice.Role),
-			Content: choice.Content,
-		},
+		Message: coreMsg,
 	}, nil
 }
