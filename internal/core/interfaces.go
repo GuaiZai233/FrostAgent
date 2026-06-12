@@ -48,3 +48,15 @@ type ToolSpec struct {
 type AgentService interface {
 	Handle(ctx context.Context, input IncomingMessage) ([]OutgoingMessage, error)
 }
+
+// MessageAdapter 定义了不同平台（如 OneBot, Discord）发送消息的统一接口
+type MessageAdapter interface {
+	Send(ctx context.Context, msg OutgoingMessage) error
+	ID() string
+}
+
+// MessageDispatcher 负责将核心层生成的回复路由到正确的适配器进行发送
+type MessageDispatcher interface {
+	RegisterAdapter(adapter MessageAdapter)
+	Dispatch(ctx context.Context, platform string, msg OutgoingMessage) error
+}

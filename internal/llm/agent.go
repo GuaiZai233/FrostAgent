@@ -33,7 +33,7 @@ func (e *Engine) Run(prompt string) string {
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	result := e.runLoop(messages)
+	result := e.runLoop(context.Background(), messages)
 	return result
 }
 
@@ -46,7 +46,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
 	}
-	return e.runLoop(messages)
+	return e.runLoop(context.Background(), messages)
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
@@ -69,7 +69,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	// add user input
 	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
 
-	result := e.runLoop(messages)
+	result := e.runLoop(context.Background(), messages)
 
 	// 修改后的 messages 写回
 	session.Messages = e.trimMessagesForSession(messages)
@@ -79,7 +79,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 }
 
 // runLoop 核心循环逻辑
-func (e *Engine) runLoop(messages []ChatMessage) string {
+func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 	var modelTools []any
 	for _, t := range e.ToolRegistry {
 		modelTools = append(modelTools, map[string]any{
@@ -126,9 +126,26 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
 
-			// 特殊处理：如果是 send_message 工具，直接将其参数返回给上层（ws_server适配器）去发送富文本消息，终止循环
+			// 检查是否是发送消息类工具
 			if tc.Function.Name == "send_message" {
-				fmt.Println("【拦截工具调用】发现 send_message 工具，直接将参数传递给适配器渲染")
+				fmt.Println("【调度层工作】识别到发送消息请求，准备分发...")
+				if e.Dispatcher != nil {
+					// 这里的逻辑在后续步骤中会进一步完善，目前先将参数封装为 OutgoingMessage
+					// 注意：这里需要传入正确的 Platform 信息，暂时通过 Metadata 传递
+					outMsg := core.OutgoingMessage{
+						Content: tc.Function.Arguments,
+						Metadata: map[string]any{
+							"tool_call_id": tc.ID,
+						},
+					}
+					// 暂时从消息上下文中获取平台信息，默认为 onebot
+					platform := "onebot"
+					err := e.Dispatcher.Dispatch(ctx, platform, outMsg)
+					if err != nil {
+						fmt.Printf("消息分发失败: %v\n", err)
+					}
+				}
+				// 为了保持现有逻辑兼容，暂时仍然返回参数，但核心逻辑已开始向调度层迁移
 				return tc.Function.Arguments
 			}
 
