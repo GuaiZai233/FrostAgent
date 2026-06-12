@@ -1,22 +1,31 @@
 package llm
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"fmt"
 	"os"
 	"time"
-
-	"FrostAgent/internal/tools"
 )
+
+type ToolExecutor interface {
+	Name() string
+	Description() string
+	Parameters() map[string]any
+	Execute(args string) (string, error)
+}
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
 	MaxIterations  int
-	ToolRegistry   map[string]tools.Tool
-	LLMClient      *Client         // API 客户端
-	BaseURL        string          // API 地址
-	APIKey         string          // API 密钥
-	ModelName      string          // 模型名称
-	SessionManager *SessionManager // 会话上下文管理器
+	ToolRegistry   map[string]ToolExecutor
+	Provider       core.LLMProvider // LLM 供应商接口
+	BaseURL        string           // API 地址
+	APIKey         string           // API 密钥
+	ModelName      string           // 模型名称
+	SessionManager *SessionManager  // 会话上下文管理器
+	Dispatcher     core.MessageDispatcher
+	SendHook       func(toolResultJSON string) // 当 send_message 被调用时立即触发
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -26,7 +35,7 @@ func (e *Engine) Run(prompt string) string {
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	result := e.runLoop(messages)
+	result := e.runLoop(context.Background(), messages)
 	return result
 }
 
@@ -39,7 +48,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
 	}
-	return e.runLoop(messages)
+	return e.runLoop(context.Background(), messages)
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
@@ -51,7 +60,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	defer session.Unlock()
 
 	// get history msg
-	messages := session.Messages
+	messages := session.History
 
 	// if new session, add system prompt
 	if len(messages) == 0 {
@@ -62,26 +71,23 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	// add user input
 	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
 
-	result := e.runLoop(messages)
+	result := e.runLoop(context.Background(), messages)
 
 	// 修改后的 messages 写回
-	session.Messages = e.trimMessagesForSession(messages)
+	session.History = e.trimMessagesForSession(messages)
 	session.UpdatedAt = time.Now()
 
 	return result
 }
 
 // runLoop 核心循环逻辑
-func (e *Engine) runLoop(messages []ChatMessage) string {
-	var modelTools []any
+func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
+	var modelTools []core.Tool
 	for _, t := range e.ToolRegistry {
-		modelTools = append(modelTools, map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"parameters":  t.Parameters,
-			},
+		modelTools = append(modelTools, core.Tool{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
 		})
 	}
 
@@ -89,9 +95,33 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 	for i := 0; i < e.MaxIterations; i++ {
 		fmt.Printf("【第%d轮思考开始】\n", i+1)
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
-		responseMsg, err := e.LLMClient.CallAPI(e.BaseURL, e.APIKey, e.ModelName, messages, modelTools)
+		chatReq := core.ChatRequest{
+			Model:    e.ModelName,
+			Messages: convertToCoreMessages(messages),
+			Tools:    modelTools,
+		}
+		resp, err := e.Provider.Chat(context.Background(), chatReq)
 		if err != nil {
-			return fmt.Sprintf("LLM掉线了: %v", err)
+			return fmt.Sprintf("LLM调用失败: %v", err)
+		}
+
+		// Map back to internal message for now to maintain compatibility
+		responseMsg := &ChatMessage{
+			Role:    string(resp.Message.Role),
+			Content: resp.Message.Content,
+		}
+		if len(resp.Message.ToolCalls) > 0 {
+			responseMsg.ToolCalls = make([]ToolCall, len(resp.Message.ToolCalls))
+			for j, tc := range resp.Message.ToolCalls {
+				responseMsg.ToolCalls[j] = ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
 		}
 
 		messages = append(messages, *responseMsg)
@@ -105,12 +135,6 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
-
-			// 特殊处理：如果是 send_message 工具，直接将其参数返回给上层（ws_server适配器）去发送富文本消息，终止循环
-			if tc.Function.Name == "send_message" {
-				fmt.Println("【拦截工具调用】发现 send_message 工具，直接将参数传递给适配器渲染")
-				return tc.Function.Arguments
-			}
 
 			var toolResult string
 			// 从 map 中找到工具执行
@@ -126,6 +150,12 @@ func (e *Engine) runLoop(messages []ChatMessage) string {
 			}
 
 			fmt.Println("【工具执行结果】", toolResult)
+
+			// send_message 立即通过 SendHook 发送，并告知 LLM 发送成功
+			if tc.Function.Name == "send_message" && e.SendHook != nil {
+				e.SendHook(toolResult)
+				toolResult = "消息已发送"
+			}
 
 			toolMsg := ChatMessage{
 				Role:       "tool",
@@ -158,4 +188,31 @@ func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
 	trimmed = append(trimmed, messages[0])
 	trimmed = append(trimmed, messages[startIdx:]...)
 	return trimmed
+}
+
+// convertToCoreMessages converts internal ChatMessage to core.ChatMessage
+func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
+	res := make([]core.ChatMessage, len(msgs))
+	for i, m := range msgs {
+		coreMsg := core.ChatMessage{
+			Role:       core.MessageRole(m.Role),
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
+		}
+		if len(m.ToolCalls) > 0 {
+			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				coreMsg.ToolCalls[j] = core.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: core.ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
+		}
+		res[i] = coreMsg
+	}
+	return res
 }

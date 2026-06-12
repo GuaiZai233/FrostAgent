@@ -1,6 +1,7 @@
 package content
 
 import (
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"encoding/base64"
 	"encoding/json"
@@ -21,7 +22,7 @@ func IsContainImage(segments []MessageSegment) bool {
 	return false
 }
 
-func ProcessImage(segments []MessageSegment, client *llm.Client, baseURL, apiKey, modelName string) string {
+func ProcessImage(segments []MessageSegment, provider core.LLMProvider, baseURL, apiKey, modelName string) string {
 	var userTexts []string
 	var imageBase64List []string
 
@@ -64,7 +65,7 @@ func ProcessImage(segments []MessageSegment, client *llm.Client, baseURL, apiKey
 			log.Printf("序列化消息失败: %v\n", err)
 			return "无法读取图片"
 		}
-		return llm.CallVisionModel(client, baseURL, apiKey, modelName, string(jsonBytes))
+		return llm.CallVisionModel(provider, baseURL, apiKey, modelName, string(jsonBytes))
 	}
 	return combinedText
 }

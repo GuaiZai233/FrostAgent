@@ -7,10 +7,10 @@ import (
 
 func GetWeatherTool() Tool {
 	return Tool{
-		Name:        "get_weather",
-		Description: "获取指定城市的天气信息",
+		name:        "get_weather",
+		description: "获取指定城市的天气信息",
 		//json schema
-		Parameters: map[string]any{
+		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"city": map[string]any{
@@ -22,7 +22,7 @@ func GetWeatherTool() Tool {
 		},
 
 		//工具执行逻辑
-		Execute: func(args string) (string, error) {
+		execute: func(args string) (string, error) {
 			var params struct {
 				City string `json:"city"`
 			}

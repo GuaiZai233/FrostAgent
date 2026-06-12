@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"FrostAgent/internal/core"
 	"sync"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
 	ConversationID string
-	Messages       []ChatMessage
+	History        []ChatMessage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	mu             sync.Mutex // 保护单个会话的并发访问
@@ -29,8 +30,8 @@ func (s *SessionContext) Snapshot() []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snapshot := make([]ChatMessage, len(s.Messages))
-	for i, msg := range s.Messages {
+	snapshot := make([]ChatMessage, len(s.History))
+	for i, msg := range s.History {
 		newMsg := msg
 
 		// 1. 深拷贝 ToolCalls
@@ -84,7 +85,7 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 		newMessages[i] = newMsg
 	}
 
-	s.Messages = newMessages
+	s.History = newMessages
 	s.UpdatedAt = time.Now()
 }
 
@@ -126,7 +127,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 
 	session = &SessionContext{
 		ConversationID: sessionID,
-		Messages:       make([]ChatMessage, 0),
+		History:         make([]ChatMessage, 0),
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -155,4 +156,80 @@ func (sm *SessionManager) Cleanup() {
 			delete(sm.sessions, id)
 		}
 	}
+}
+
+// ── core.Session interface implementation ──
+
+// ID 返回会话的唯一标识符
+func (s *SessionContext) ID() string {
+	return s.ConversationID
+}
+
+// AddMessage 添加一条 core.ChatMessage 到会话历史
+func (s *SessionContext) AddMessage(msg core.ChatMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 转换 core.ChatMessage -> llm.ChatMessage
+	llmMsg := ChatMessage{
+		Role:    string(msg.Role),
+		Content: msg.Content,
+	}
+	if len(msg.ToolCalls) > 0 {
+		llmMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
+		for j, tc := range msg.ToolCalls {
+			llmMsg.ToolCalls[j] = ToolCall{
+				ID:   tc.ID,
+				Type: tc.Type,
+				Function: ToolCallFunction{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			}
+		}
+	}
+	s.History = append(s.History, llmMsg)
+	s.UpdatedAt = time.Now()
+}
+
+// Messages 以 core.ChatMessage 切片形式返回会话历史
+func (s *SessionContext) Messages() []core.ChatMessage {
+	s.mu.Lock() // 用写锁，因为 convertToCoreMessages 会读取整个切片
+	defer s.mu.Unlock()
+
+	return convertToCoreMessages(s.History)
+}
+
+// Clear 清空当前会话的所有消息
+func (s *SessionContext) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.History = nil
+	s.UpdatedAt = time.Now()
+}
+
+// ── core.SessionStore interface implementation ──
+
+// Get 获取指定会话，返回 core.Session 接口
+func (sm *SessionManager) Get(sessionID string) (core.Session, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	s, ok := sm.sessions[sessionID]
+	if !ok {
+		return nil, false
+	}
+	return s, true
+}
+
+// Create 创建一个新的会话并返回 core.Session 接口
+func (sm *SessionManager) Create(sessionID string) core.Session {
+	return sm.GetOrCreate(sessionID)
+}
+
+// Delete 删除指定会话
+func (sm *SessionManager) Delete(sessionID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	delete(sm.sessions, sessionID)
 }

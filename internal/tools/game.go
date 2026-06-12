@@ -7,10 +7,10 @@ import (
 
 func GetGameVersionTool() Tool {
 	return Tool{
-		Name:        "get_game_version",
-		Description: "获取游戏的版本信息",
+		name:        "get_game_version",
+		description: "获取游戏的版本信息",
 		//json schema
-		Parameters: map[string]any{
+		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"game": map[string]any{
@@ -22,7 +22,7 @@ func GetGameVersionTool() Tool {
 		},
 
 		//工具执行逻辑
-		Execute: func(args string) (string, error) {
+		execute: func(args string) (string, error) {
 			var params struct {
 				Game string `json:"game"`
 			}

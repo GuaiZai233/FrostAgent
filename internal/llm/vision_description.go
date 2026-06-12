@@ -1,13 +1,15 @@
 package llm
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
 	"strings"
 )
 
-func CallVisionModel(client *Client, baseURL, apiKey, _, contentBlocks string) string {
+func CallVisionModel(provider core.LLMProvider, baseURL, apiKey, _, contentBlocks string) string {
 	systemPrompt := "请用中文描述图片："
 
 	// 将传入的 JSON 字符串格式反序列化为真正的对象数组
@@ -29,32 +31,36 @@ func CallVisionModel(client *Client, baseURL, apiKey, _, contentBlocks string) s
 		parsedContent = blocks // 解析成功，使用对象数组
 	}
 
-	messages := []ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: parsedContent}, // 传入真正的数组结构
+	chatReq := core.ChatRequest{
+		Model: os.Getenv("VISUAL_MODEL_NAME"), // 从环境变量拿视觉模型名
+		Messages: []core.ChatMessage{
+			// 系统提示词：告诉模型它是来干嘛的
+			{Role: core.RoleSystem, Content: systemPrompt},
+			// 用户内容：这里就是你传入的包含文字和图片 Base64 的 parsedContent
+			{Role: core.RoleUser, Content: parsedContent},
+		},
 	}
 
 	log.Printf("即将传递消息给视觉模型")
 
-	responseMsg, err := client.CallAPI(baseURL, apiKey, os.Getenv("VISUAL_MODEL_NAME"), messages, nil)
+	// 调用 LLMProvider 接口
+	resp, err := provider.Chat(context.Background(), chatReq)
 	if err != nil {
-		log.Printf("%s", err.Error())
+		log.Printf("视觉模型调用失败: %v", err)
 		return err.Error()
 	}
 
-	log.Printf("调用视觉模型，responMsg：%s", responseMsg)
-
 	// 更加健壮地处理大模型的返回值，防止强转失败变成空字符串
 	var contentStr string
-	if str, ok := responseMsg.Content.(string); ok {
+	// 尝试把 Content 转成字符串（大部分模型返回的是纯文本）
+	if str, ok := resp.Message.Content.(string); ok {
 		contentStr = str
-	} else if responseMsg.Content != nil {
-		bytes, _ := json.Marshal(responseMsg.Content)
+	} else if resp.Message.Content != nil {
+		// 如果返回的是复杂的 ContentPart 数组，就序列化成 JSON 兜底
+		bytes, _ := json.Marshal(resp.Message.Content)
 		contentStr = string(bytes)
-		log.Printf("【警告】模型返回的 Content 不是纯文本，原始数据: %s", contentStr)
 	} else {
-		contentStr = "【视觉模型未返回任何描述内容】"
-		log.Printf("【警告】视觉模型返回了空响应，完整对象: %+v", responseMsg)
+		contentStr = "【视觉模型未返回内容】"
 	}
 
 	log.Printf("调用视觉模型，描述：%s", contentStr)

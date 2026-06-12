@@ -3,6 +3,7 @@ package main
 import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/tools"
 	"fmt"
 	"log"
@@ -26,20 +27,32 @@ func init() {
 
 	llmClient := llm.NewClient()
 
+	// 注册工具
 	registry := make(map[string]tools.Tool)
+	// 系统工具
+	sendMsgTool := tools.SendMsgTool()
+	registry[sendMsgTool.Name()] = sendMsgTool
+
+	subAgentTool := tools.SubAgentTool(llmClient)
+	registry[subAgentTool.Name()] = subAgentTool
+
+	// 附加工具
 	weatherTool := tools.GetWeatherTool()
-	registry[weatherTool.Name] = weatherTool
+	registry[weatherTool.Name()] = weatherTool
 
 	gameVersionTool := tools.GetGameVersionTool()
-	registry[gameVersionTool.Name] = gameVersionTool
+	registry[gameVersionTool.Name()] = gameVersionTool
 
-	sendMsgTool := tools.SendMsgTool()
-	registry[sendMsgTool.Name] = sendMsgTool
+	executorMap := make(map[string]llm.ToolExecutor)
+	for name, tool := range registry {
+		executorMap[name] = tool
+	}
 
 	GlobalEngine = &llm.Engine{
-		MaxIterations:  5,
-		ToolRegistry:   registry,
-		LLMClient:      llmClient,
+		MaxIterations: 5,
+		ToolRegistry:  executorMap,
+		Provider:      openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY")),
+		//LLMClient:      llmClient,
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
