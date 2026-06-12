@@ -10,7 +10,7 @@ func ToChatMessages(incoming *IncomingMessage) []ChatMessage {
 	var parts []ContentPart
 	if incoming.Content != "" {
 		parts = append(parts, ContentPart{
-			Type: ContentPartTypeText,
+			Type: string(ContentPartTypeText),
 			Text: incoming.Content,
 		})
 	}
@@ -18,7 +18,7 @@ func ToChatMessages(incoming *IncomingMessage) []ChatMessage {
 	for _, att := range incoming.Attachments {
 		if att.Type == AttachmentTypeImage {
 			parts = append(parts, ContentPart{
-				Type: ContentPartTypeImage,
+				Type: string(ContentPartTypeImage),
 				ImageURL: &ImageURL{
 					URL: att.URL,
 				},
