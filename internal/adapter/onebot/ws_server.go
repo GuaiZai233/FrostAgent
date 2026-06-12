@@ -186,8 +186,36 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// 获取带历史的消息快照（已深拷贝，线程安全）
 		messages := session.Snapshot()
 
+		// 设置 SendHook：send_message 调用时立即通过 OneBot 发送
+		engine.SendHook = func(toolResultJSON string) {
+			var toolOutput struct {
+				Messages []tools.Msg `json:"messages"`
+			}
+			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
+				log.Printf("SendHook: 解析 send_message 结果失败: %v", err)
+				return
+			}
+			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+			if len(oneBotSegments) == 0 {
+				return
+			}
+			botAction := model.OneBotAction{
+				Action: action,
+				Params: map[string]interface{}{
+					type1:     id,
+					"message": oneBotSegments,
+				},
+				Echo: echo,
+			}
+			actionBytes, _ := json.Marshal(botAction)
+			if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+				log.Printf("SendHook: 发送消息失败: %v", err)
+			}
+		}
+
 		// 传递给大模型（不在锁内调用，避免阻塞历史读写）
 		replyText = engine.RunMessages(messages)
+		engine.SendHook = nil
 
 		// 将大模型的回复也加入会话历史
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})

@@ -25,6 +25,7 @@ type Engine struct {
 	ModelName      string           // 模型名称
 	SessionManager *SessionManager  // 会话上下文管理器
 	Dispatcher     core.MessageDispatcher
+	SendHook       func(toolResultJSON string) // 当 send_message 被调用时立即触发
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -149,6 +150,12 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 			}
 
 			fmt.Println("【工具执行结果】", toolResult)
+
+			// send_message 立即通过 SendHook 发送，并告知 LLM 发送成功
+			if tc.Function.Name == "send_message" && e.SendHook != nil {
+				e.SendHook(toolResult)
+				toolResult = "消息已发送"
+			}
 
 			toolMsg := ChatMessage{
 				Role:       "tool",
