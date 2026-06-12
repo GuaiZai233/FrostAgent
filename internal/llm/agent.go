@@ -20,10 +20,11 @@ type Engine struct {
 	MaxIterations  int
 	ToolRegistry   map[string]ToolExecutor
 	Provider       core.LLMProvider // LLM 供应商接口
-	BaseURL        string          // API 地址
-	APIKey         string          // API 密钥
-	ModelName      string          // 模型名称
-	SessionManager *SessionManager // 会话上下文管理器
+	BaseURL        string           // API 地址
+	APIKey         string           // API 密钥
+	ModelName      string           // 模型名称
+	SessionManager *SessionManager  // 会话上下文管理器
+	Dispatcher     core.MessageDispatcher
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
