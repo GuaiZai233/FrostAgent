@@ -216,7 +216,6 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 			Role:    core.MessageRole(m.Role),
 			Content: m.Content,
 		}
-		// 深拷贝 ToolCalls，防止 Agent 在多轮对话中丢失工具调用记录
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {

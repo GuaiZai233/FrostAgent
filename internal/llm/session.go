@@ -167,8 +167,8 @@ func (s *SessionContext) ID() string {
 
 // AddMessage 添加一条 core.ChatMessage 到会话历史
 func (s *SessionContext) AddMessage(msg core.ChatMessage) {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
@@ -202,8 +202,8 @@ func (s *SessionContext) Messages() []core.ChatMessage {
 
 // Clear 清空当前会话的所有消息
 func (s *SessionContext) Clear() {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.History = nil
 	s.UpdatedAt = time.Now()
