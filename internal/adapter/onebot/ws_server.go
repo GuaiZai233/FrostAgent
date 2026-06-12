@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/tools"
 	"encoding/json"
@@ -64,8 +65,6 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	log.Printf("拒绝 WebSocket 连接：Origin %q 不在允许列表", origin)
 	return false
 }
-
-var chatHistory = newMessageHistory(historyLimitFromEnv())
 
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
@@ -178,19 +177,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 4. Call the agent engine with history
 	var replyText string
 	if engine != nil {
-		chatKey := historyKey(event)
+		sessionID := historyKey(event)
+		session := engine.SessionManager.GetOrCreate(sessionID)
 
-		// 将用户的 prompt 加入历史记录
-		chatHistory.Append(chatKey, llm.ChatMessage{Role: "user", Content: prompt})
+		// 将用户的 prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
+		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: prompt})
 
-		// 提取该会话的完整历史记录
-		messages := chatHistory.Messages(chatKey)
+		// 获取带历史的消息快照（已深拷贝，线程安全）
+		messages := session.Snapshot()
 
-		// 传递给大模型
+		// 传递给大模型（不在锁内调用，避免阻塞历史读写）
 		replyText = engine.RunMessages(messages)
 
-		// 将大模型的回复也加入历史记录
-		chatHistory.Append(chatKey, llm.ChatMessage{Role: "assistant", Content: replyText})
+		// 将大模型的回复也加入会话历史
+		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		log.Println("警告：未设置处理消息的 engine")
@@ -269,16 +269,6 @@ func historyKey(event model.OneBotEvent) string {
 		return fmt.Sprintf("group:%d", event.GroupID)
 	}
 	return fmt.Sprintf("private:%d", event.UserID)
-}
-
-func historyLimitFromEnv() int {
-	limit := llm.DefaultMaxMessages
-	if value := strings.TrimSpace(os.Getenv("ONEBOT_CONTEXT_MESSAGES")); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	return limit
 }
 
 // extractUserText 从消息段中提取纯文本内容
