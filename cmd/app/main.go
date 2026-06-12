@@ -3,6 +3,7 @@ package main
 import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/tools"
 	"fmt"
 	"log"
@@ -50,6 +51,7 @@ func init() {
 	GlobalEngine = &llm.Engine{
 		MaxIterations: 5,
 		ToolRegistry:  executorMap,
+		Provider:      openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY")),
 		//LLMClient:      llmClient,
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
