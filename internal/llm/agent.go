@@ -137,28 +137,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 		for _, tc := range responseMsg.ToolCalls {
 			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
 
-			// 检查是否是发送消息类工具
-			if tc.Function.Name == "send_message" {
-				fmt.Println("【调度层工作】识别到发送消息请求，准备分发...")
-				if e.Dispatcher != nil {
-					// 这里的逻辑在后续步骤中会进一步完善，目前先将参数封装为 OutgoingMessage
-					// 注意：这里需要传入正确的 Platform 信息，暂时通过 Metadata 传递
-					outMsg := core.OutgoingMessage{
-						Content: tc.Function.Arguments,
-						Metadata: map[string]any{
-							"tool_call_id": tc.ID,
-						},
-					}
-					// 暂时从消息上下文中获取平台信息，默认为 onebot
-					platform := "onebot"
-					err := e.Dispatcher.Dispatch(ctx, platform, outMsg)
-					if err != nil {
-						fmt.Printf("消息分发失败: %v\n", err)
-					}
-				}
-				// 为了保持现有逻辑兼容，暂时仍然返回参数，但核心逻辑已开始向调度层迁移
-				return tc.Function.Arguments
-			}
+
 
 			var toolResult string
 			// 从 map 中找到工具执行
