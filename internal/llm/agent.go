@@ -59,7 +59,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	defer session.Unlock()
 
 	// get history msg
-	messages := session.Messages
+	messages := session.History
 
 	// if new session, add system prompt
 	if len(messages) == 0 {
@@ -73,7 +73,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	result := e.runLoop(context.Background(), messages)
 
 	// 修改后的 messages 写回
-	session.Messages = e.trimMessagesForSession(messages)
+	session.History = e.trimMessagesForSession(messages)
 	session.UpdatedAt = time.Now()
 
 	return result
@@ -212,10 +212,24 @@ func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
 func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))
 	for i, m := range msgs {
-		res[i] = core.ChatMessage{
+		coreMsg := core.ChatMessage{
 			Role:    core.MessageRole(m.Role),
 			Content: m.Content,
 		}
+		if len(m.ToolCalls) > 0 {
+			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				coreMsg.ToolCalls[j] = core.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: core.ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
+		}
+		res[i] = coreMsg
 	}
 	return res
 }
