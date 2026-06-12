@@ -43,15 +43,7 @@ func CallVisionModel(provider core.LLMProvider, baseURL, apiKey, _, contentBlock
 
 	log.Printf("即将传递消息给视觉模型")
 
-	responseMsg, err := provider.Chat(context.Background(), chatReq)
-	if err != nil {
-		log.Printf("%s", err.Error())
-		return err.Error()
-	}
-
-	log.Printf("调用视觉模型，responMsg：%s", responseMsg)
-
-	// 这里的 provider 是 core.LLMProvider 接口
+	// 调用 LLMProvider 接口
 	resp, err := provider.Chat(context.Background(), chatReq)
 	if err != nil {
 		log.Printf("视觉模型调用失败: %v", err)

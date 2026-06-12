@@ -111,8 +111,18 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 			Role:    string(resp.Message.Role),
 			Content: resp.Message.Content,
 		}
-		if err != nil {
-			return fmt.Sprintf("LLM掉线了: %v", err)
+		if len(resp.Message.ToolCalls) > 0 {
+			responseMsg.ToolCalls = make([]ToolCall, len(resp.Message.ToolCalls))
+			for j, tc := range resp.Message.ToolCalls {
+				responseMsg.ToolCalls[j] = ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
 		}
 
 		messages = append(messages, *responseMsg)

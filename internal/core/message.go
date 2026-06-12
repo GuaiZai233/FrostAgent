@@ -11,6 +11,13 @@ const (
 	RoleTool      MessageRole = "tool"
 )
 
+type ContentPartType string
+
+const (
+	ContentPartTypeText  ContentPartType = "text"
+	ContentPartTypeImage ContentPartType = "image_url"
+)
+
 type AttachmentType string
 
 const (

@@ -2,61 +2,48 @@ package core
 
 import "context"
 
+// LLMProvider defines the interface for LLM API calls.
 type LLMProvider interface {
-	// Chat returns a pointer to ChatResponse to allow returning nil on error.
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 }
 
-type ChatRequest struct {
-	Model    string
-	Messages []ChatMessage
-	Tools    []ToolSpec
-}
-
-type ContentPartType string
-
-const (
-	ContentPartTypeText  ContentPartType = "text"
-	ContentPartTypeImage ContentPartType = "image"
-)
-
-type ImageURL struct {
-	URL string `json:"url"`
-}
-
-type ContentPart struct {
-	Type     ContentPartType `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ImageURL *ImageURL       `json:"image_url,omitempty"`
-}
-
-type ChatMessage struct {
-	Role    MessageRole `json:"role"`
-	Content any         `json:"content"` // Can be string or []ContentPart
-}
-
-type ChatResponse struct {
-	Message ChatMessage
-}
-
-type ToolSpec struct {
-	Name        string
-	Description string
-	Parameters  map[string]any
-}
-
+// AgentService defines the interface for agent message handling.
 type AgentService interface {
 	Handle(ctx context.Context, input IncomingMessage) ([]OutgoingMessage, error)
 }
 
-// MessageAdapter 定义了不同平台（如 OneBot, Discord）发送消息的统一接口
+// MessageAdapter defines the interface for platform-specific message sending.
 type MessageAdapter interface {
 	Send(ctx context.Context, msg OutgoingMessage) error
 	ID() string
 }
 
-// MessageDispatcher 负责将核心层生成的回复路由到正确的适配器进行发送
+// MessageDispatcher routes core-layer outputs to the correct adapter.
 type MessageDispatcher interface {
 	RegisterAdapter(adapter MessageAdapter)
 	Dispatch(ctx context.Context, platform string, msg OutgoingMessage) error
+}
+
+// ToolRegistry defines the interface for tool registration and lookup.
+type ToolRegistry interface {
+	Register(t Tool)
+	GetTool(name string) (Tool, bool)
+	GetExecutor(name string) (func(args string) (string, error), bool)
+	ListTools() []Tool
+	Execute(name, args string) (string, error)
+}
+
+// Session defines a single conversation session.
+type Session interface {
+	ID() string
+	AddMessage(msg ChatMessage)
+	Messages() []ChatMessage
+	Clear()
+}
+
+// SessionStore manages all active sessions.
+type SessionStore interface {
+	Get(sessionID string) (Session, bool)
+	Create(sessionID string) Session
+	Delete(sessionID string)
 }
