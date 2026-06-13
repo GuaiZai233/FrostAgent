@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+// Pagination is used for list requests.
+message Pagination {
+  int32 page_size = 1;
+  string page_token = 2;
+  int32 total = 3;
+}
+
+// ToolInfo describes a registered tool.
+message ToolInfo {
+  string name = 1;
+  string description = 2;
+}
+
+// SessionInfo describes an active session.
+message SessionInfo {
+  string session_id = 1;
+  string platform = 2;
+  int32 message_count = 3;
+  string created_at = 4;
+  string last_active = 5;
+}

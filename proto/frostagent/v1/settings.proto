@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+// SettingsService manages environment variable configuration.
+service SettingsService {
+  rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
+  rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
+  rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
+  rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse);
+  rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse);
+}
+
+message EnvVar {
+  string key = 1;
+  string value = 2;
+  bool is_secret = 3;
+}
+
+message ListEnvVarsRequest {}
+
+message ListEnvVarsResponse {
+  repeated EnvVar env_vars = 1;
+}
+
+message UpdateEnvVarRequest {
+  string key = 1;
+  string value = 2;
+  bool is_secret = 3;
+}
+
+message UpdateEnvVarResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteEnvVarRequest {
+  string key = 1;
+}
+
+message DeleteEnvVarResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetRawEnvFileRequest {}
+
+message GetRawEnvFileResponse {
+  string content = 1;
+}
+
+message UpdateRawEnvFileRequest {
+  string content = 1;
+}
+
+message UpdateRawEnvFileResponse {
+  bool success = 1;
+  string error = 2;
+}

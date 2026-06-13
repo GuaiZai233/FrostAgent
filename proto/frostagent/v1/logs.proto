@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+import "frostagent/v1/common.proto";
+
+// LogService provides log retrieval and streaming.
+service LogService {
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse);
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+}
+
+message LogEntry {
+  string id = 1;
+  string timestamp = 2;
+  LogLevel level = 3;
+  string source = 4;
+  string summary = 5;
+  bool has_detail = 6;
+  string request_body = 7;
+  string response_body = 8;
+}
+
+message ListLogsRequest {
+  Pagination pagination = 1;
+  LogLevel min_level = 2;
+  string source_filter = 3;
+}
+
+message ListLogsResponse {
+  repeated LogEntry entries = 1;
+  Pagination pagination = 2;
+}
+
+message StreamLogsRequest {
+  LogLevel min_level = 1;
+  string source_filter = 2;
+}
+
+message ClearLogsRequest {}
+
+message ClearLogsResponse {
+  bool success = 1;
+}
