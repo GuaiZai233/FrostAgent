@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
 )
 
 // OpenAI-compatible structures for API communication.
@@ -108,7 +109,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	fmt.Printf("【LLM 请求体】%s\n", string(jsonData))
+	logs.LLMRequest(string(jsonData))
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
 	if err != nil {
@@ -132,6 +133,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		logs.Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -139,7 +141,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	fmt.Printf("【LLM 响应体】%s\n", string(respBody))
+	logs.LLMResponse(string(respBody))
 
 	var openAIResp chatResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {

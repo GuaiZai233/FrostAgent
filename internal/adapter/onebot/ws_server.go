@@ -4,10 +4,10 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/tools"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,7 +48,7 @@ func checkWebSocketOrigin(r *http.Request) bool {
 
 	originURL, err := url.Parse(origin)
 	if err != nil || originURL.Host == "" {
-		log.Printf("拒绝 WebSocket 连接：非法 Origin %q", origin)
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("拒绝 WebSocket 连接：非法 Origin %q", origin))
 		return false
 	}
 
@@ -62,7 +62,7 @@ func checkWebSocketOrigin(r *http.Request) bool {
 		}
 	}
 
-	log.Printf("拒绝 WebSocket 连接：Origin %q 不在允许列表", origin)
+	logs.Error(logs.WEBSOCKET, fmt.Sprintf("拒绝 WebSocket 连接：Origin %q 不在允许列表", origin))
 	return false
 }
 
@@ -90,24 +90,24 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("WebSocket 升级失败: %v\n", err)
+			logs.Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
 			return
 		}
 		wsConn := newWSConnection(conn)
 		defer wsConn.Close()
 
-		log.Println("WebSocket 连接已建立: ", r.RemoteAddr)
+		logs.Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				log.Printf("读取消息失败: %v\n", err)
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
 				break
 			}
 
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
-				log.Printf("消息解析失败: %v\n", err)
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
 				continue
 			}
 
@@ -126,14 +126,14 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	}
 
 	if event.MessageType == "group" {
-		log.Printf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message))
+		logs.Info(logs.WEBSOCKET, fmt.Sprintf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message)))
 		if !IsMentionedBot(event) {
 			return
 		}
 		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn)
 
 	} else if event.MessageType == "private" {
-		log.Printf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message))
+		logs.Info(logs.WEBSOCKET, fmt.Sprintf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message)))
 		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn)
 	}
 }
@@ -143,7 +143,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	var segments []content.MessageSegment
 	segments = []content.MessageSegment{}
 	if err := json.Unmarshal(event.Message, &segments); err != nil {
-		log.Printf("解析消息段失败: %v\n", err)
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("解析消息段失败: %v", err))
 		// Don't return, just work with an empty segment list
 	}
 
@@ -192,7 +192,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				Messages []tools.Msg `json:"messages"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
-				log.Printf("SendHook: 解析 send_message 结果失败: %v", err)
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return
 			}
 			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
@@ -209,7 +209,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			actionBytes, _ := json.Marshal(botAction)
 			if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
-				log.Printf("SendHook: 发送消息失败: %v", err)
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 发送消息失败: %v", err))
 			}
 		}
 
@@ -221,7 +221,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
 	} else {
 		replyText = "系统出错，引擎未初始化"
-		log.Println("警告：未设置处理消息的 engine")
+		logs.Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
 	}
 
 	// 5. Prepare the final message for OneBot by parsing the engine's response
@@ -233,7 +233,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
-		log.Printf("解析工具调用 JSON 成功，准备组装富文本消息")
+		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
 		if len(oneBotSegments) > 0 {
 			finalMessage = oneBotSegments
@@ -271,7 +271,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
-		log.Printf("发送消息失败: %v\n", err)
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
 	}
 }
 
@@ -345,7 +345,7 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage) str
 				texts = append(texts, string(bytes))
 			} else {
 				texts = append(texts, "[未知消息段]")
-				log.Printf("Failed to marshal unknown segment: %v", err)
+				logs.Warn(logs.WEBSOCKET, fmt.Sprintf("Failed to marshal unknown segment: %v", err))
 			}
 		}
 	}

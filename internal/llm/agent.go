@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
 	"context"
 	"fmt"
 	"os"
@@ -93,7 +94,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
-		fmt.Printf("【第%d轮思考开始】\n", i+1)
+		logs.Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		chatReq := core.ChatRequest{
 			Model:    e.ModelName,
@@ -128,13 +129,13 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
-			fmt.Println("【智能体给出最终答案】")
+			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
 			return contentStr
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			fmt.Printf("【智能体调用工具】%s，参数: %s\n", tc.Function.Name, tc.Function.Arguments)
+			logs.Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
 
 			var toolResult string
 			// 从 map 中找到工具执行
@@ -149,7 +150,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 				toolResult = "工具未找到"
 			}
 
-			fmt.Println("【工具执行结果】", toolResult)
+			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
 
 			// send_message 立即通过 SendHook 发送，并告知 LLM 发送成功
 			if tc.Function.Name == "send_message" && e.SendHook != nil {

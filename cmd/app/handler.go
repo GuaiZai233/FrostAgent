@@ -2,7 +2,8 @@ package main
 
 import (
 	"FrostAgent/internal/llm"
-	"log"
+	"FrostAgent/internal/logs"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -15,7 +16,7 @@ func handleAgentQuery(c *gin.Context) {
 
 	// 绑定 JSON 请求体
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("请求绑定失败: %v\n", err)
+		logs.Error(logs.HTTP, fmt.Sprintf("请求绑定失败: %v", err))
 		c.JSON(http.StatusBadRequest, AgentResponse{
 			Error: "无效的请求: " + err.Error(),
 		})
@@ -30,7 +31,7 @@ func handleAgentQuery(c *gin.Context) {
 		return
 	}
 
-	log.Printf("【收到用户请求】input长度=%d, messages=%d\n", len(req.Input), len(req.Messages))
+	logs.Info(logs.HTTP, fmt.Sprintf("【收到用户请求】input长度=%d, messages=%d", len(req.Input), len(req.Messages)))
 
 	// 执行智能体
 	result := GlobalEngine.RunMessages(messages)

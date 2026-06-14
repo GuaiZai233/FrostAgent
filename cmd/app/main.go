@@ -3,10 +3,10 @@ package main
 import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/tools"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
@@ -20,10 +20,13 @@ var GlobalEngine *llm.Engine
 func init() {
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
-		log.Println("未找到 .env 文件，将使用默认配置")
+		fmt.Println("未找到 .env 文件，将使用默认配置")
 	}
 
-	fmt.Println("【初始化】正在初始化智能体引擎...")
+	// 初始化日志系统，缓冲区大小 5000
+	logs.Init(5000)
+
+	logs.Info(logs.SYSTEM, "正在初始化智能体引擎...")
 
 	llmClient := llm.NewClient()
 
@@ -62,7 +65,7 @@ func init() {
 	// 设置 onebot 的引擎
 	//onebot.SetEngine(GlobalEngine)
 
-	//fmt.Println("【初始化】✓ 智能体引擎初始化完成")
+	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
 }
 
 func main() {
@@ -78,13 +81,15 @@ func main() {
 		if listenAddr == "" {
 			listenAddr = ":8080"
 		}
-		fmt.Printf("\n🚀 FrostAgent 智能体服务已启动\n")
-		fmt.Printf("📍 监听地址: http://localhost%s\n", listenAddr)
-		fmt.Printf("📝 查询接口: POST http://localhost%s/agent/query\n", listenAddr)
-		fmt.Printf("✓ 健康检查: GET http://localhost%s/health\n\n", listenAddr)
+		
+		logs.Info(logs.SYSTEM, "🚀 FrostAgent 智能体服务已启动")
+		logs.Info(logs.SYSTEM, fmt.Sprintf("📍 监听地址: http://localhost%s", listenAddr))
+		logs.Info(logs.SYSTEM, fmt.Sprintf("📝 查询接口: POST http://localhost%s/agent/query", listenAddr))
+		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 健康检查: GET http://localhost%s/health", listenAddr))
 
 		if err := router.Run(listenAddr); err != nil {
-			log.Fatalf("服务器启动失败: %v", err)
+			logs.Error(logs.SYSTEM, fmt.Sprintf("服务器启动失败: %v", err))
+			os.Exit(1)
 		}
 	}()
 
@@ -97,8 +102,9 @@ func main() {
 		addr = "0.0.0.0:1234"
 	}
 
-	log.Printf("FrostAgent 服务已启动，监听 %s\n", addr)
+	logs.Info(logs.WEBSOCKET, fmt.Sprintf("FrostAgent 服务已启动，监听 %s", addr))
 	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatalf("ws服务启动失败: %v", err)
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("ws服务启动失败: %v", err))
+		os.Exit(1)
 	}
 }

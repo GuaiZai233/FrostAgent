@@ -1,11 +1,11 @@
 package llm
 
 import (
+	"FrostAgent/internal/logs"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 )
@@ -108,8 +108,8 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	}
 
 	// 打印请求摘要，避免在日志中泄露完整上下文和密钥
-	fmt.Printf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d\n", url, model, len(messages), len(tools))
-	fmt.Printf("请求体：%s", string(jsonData))
+	logs.Info(logs.HTTP, fmt.Sprintf("【发送请求】POST %s，模型: %s，消息数: %d，工具数: %d", url, model, len(messages), len(tools)))
+	logs.LLMRequest(string(jsonData))
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -117,12 +117,12 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("关闭响应体失败: %v\n", err)
+			logs.Error(logs.HTTP, fmt.Sprintf("关闭响应体失败: %v", err))
 		}
 	}()
 
 	// 打印响应状态码
-	fmt.Printf("【响应状态码】%d\n", resp.StatusCode)
+	logs.LLMResponse(fmt.Sprintf("【响应状态码】%d", resp.StatusCode))
 
 	// 读取完整的响应体
 	respBodyBytes, err := io.ReadAll(resp.Body)
@@ -131,14 +131,14 @@ func (c *Client) CallAPI(baseURL, apiKey, model string, messages []ChatMessage, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("【API 错误响应】%s", string(respBodyBytes))
+		logs.Error(logs.HTTP, fmt.Sprintf("【API 错误响应】%s", string(respBodyBytes)))
 		return nil, fmt.Errorf("API 请求失败，状态码: %d，响应内容: %s", resp.StatusCode, string(respBodyBytes))
 	}
 
 	// 解析响应
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBodyBytes, &chatResp); err != nil {
-		log.Printf("【响应解析失败，原始响应】%s", string(respBodyBytes))
+		logs.Error(logs.HTTP, fmt.Sprintf("【响应解析失败，原始响应】%s", string(respBodyBytes)))
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 
