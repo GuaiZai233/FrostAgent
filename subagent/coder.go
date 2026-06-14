@@ -2,8 +2,8 @@ package subagent
 
 import (
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"encoding/json"
-	"log"
 	"os"
 )
 
@@ -17,7 +17,7 @@ func CallCoder(client *llm.Client, baseURL, apiKey, _, contentBlocks string) str
 	}
 	responseMsg, err := client.CallAPI("https://dashscope.aliyuncs.com/compatible-mode/v1", os.Getenv("CODER_API_KEY"), "qwen-coder-plus", messages, nil)
 	if err != nil {
-		log.Printf("%s", err.Error())
+		logs.Error(logs.SYSTEM, err.Error())
 		return err.Error()
 	}
 

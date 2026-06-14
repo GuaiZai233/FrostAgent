@@ -3,11 +3,11 @@ package content
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -35,14 +35,14 @@ func ProcessImage(segments []MessageSegment, provider core.LLMProvider, baseURL,
 		} else if seg.Type == "image" {
 			url, ok := seg.Data["url"].(string)
 			if !ok || strings.TrimSpace(url) == "" {
-				log.Printf("图片消息缺少 url 字段: %+v", seg.Data)
+				logs.Warn(logs.WEBSOCKET, fmt.Sprintf("图片消息缺少 url 字段: %+v", seg.Data))
 				continue
 			}
 			// convert img to base64
 			if b64, err := downloadAndToBase64(url); err == nil {
 				imageBase64List = append(imageBase64List, b64)
 			} else {
-				log.Printf("下载图片失败: %v", err)
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("下载图片失败: %v", err))
 			}
 		}
 	}
@@ -62,7 +62,7 @@ func ProcessImage(segments []MessageSegment, provider core.LLMProvider, baseURL,
 		}
 		jsonBytes, err := json.Marshal(contentBlocks)
 		if err != nil {
-			log.Printf("序列化消息失败: %v\n", err)
+			logs.Error(logs.WEBSOCKET, fmt.Sprintf("序列化消息失败: %v", err))
 			return "无法读取图片"
 		}
 		return llm.CallVisionModel(provider, baseURL, apiKey, modelName, string(jsonBytes))
@@ -78,7 +78,7 @@ func downloadAndToBase64(url string) (string, error) {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("关闭图片响应体失败: %v\n", err)
+			logs.Warn(logs.WEBSOCKET, fmt.Sprintf("关闭图片响应体失败: %v", err))
 		}
 	}()
 
