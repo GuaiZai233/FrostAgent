@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+import "frostagent/v1/common.proto";
+
+// BotStatusService provides bot overview and session management.
+service BotStatusService {
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
+}
+
+message GetOverviewRequest {}
+
+message GetOverviewResponse {
+  string bot_name = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+  int64 total_messages_processed = 4;
+  int32 active_sessions = 5;
+  string current_model = 6;
+  string status = 7;
+  repeated ToolInfo tools = 8;
+}
+
+message GetSessionsRequest {
+  Pagination pagination = 1;
+}
+
+message GetSessionsResponse {
+  repeated SessionInfo sessions = 1;
+  Pagination pagination = 2;
+}

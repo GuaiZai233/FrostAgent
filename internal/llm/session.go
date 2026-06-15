@@ -233,3 +233,36 @@ func (sm *SessionManager) Delete(sessionID string) {
 	defer sm.mu.Unlock()
 	delete(sm.sessions, sessionID)
 }
+
+// Count returns the number of active sessions.
+func (sm *SessionManager) Count() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return len(sm.sessions)
+}
+
+// ListSessions returns a paginated slice of session contexts.
+func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	keys := make([]string, 0, len(sm.sessions))
+	for k := range sm.sessions {
+		keys = append(keys, k)
+	}
+
+	if offset >= len(keys) {
+		return nil
+	}
+
+	end := offset + limit
+	if end > len(keys) || limit <= 0 {
+		end = len(keys)
+	}
+
+	result := make([]*SessionContext, 0, end-offset)
+	for i := offset; i < end; i++ {
+		result = append(result, sm.sessions[keys[i]])
+	}
+	return result
+}

@@ -34,3 +34,6 @@ go.work.sum
 /bin/
 /build/
 /dist/
+
+# Generated proto code
+gen/
