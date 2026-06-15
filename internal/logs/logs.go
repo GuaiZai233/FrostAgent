@@ -33,10 +33,19 @@ type LogEntry struct {
 	Content   string    `json:"content"`
 }
 
+// subscriber receives broadcasted log entries.
+type subscriber struct {
+	ch     chan LogEntry
+	filter func(LogEntry) bool // nil = accept all
+}
+
 var (
-	buffer *ring.Ring
-	mu     sync.RWMutex
-	size   int
+	buffer      *ring.Ring
+	mu          sync.RWMutex
+	size        int
+	subscribers = make(map[int]*subscriber)
+	nextSubID   int
+	subMu       sync.Mutex
 )
 
 // Init 初始化日志系统，指定环形缓冲区大小
@@ -47,9 +56,9 @@ func Init(s int) {
 
 func log(level Level, category Category, content string, traceID string, direction string) {
 	mu.Lock()
-	defer mu.Unlock()
 
 	if buffer == nil {
+		mu.Unlock()
 		return
 	}
 
@@ -64,7 +73,11 @@ func log(level Level, category Category, content string, traceID string, directi
 
 	buffer.Value = entry
 	buffer = buffer.Next()
-	
+	mu.Unlock()
+
+	// 广播给 subscriber
+	broadcast(entry)
+
 	// 同时输出到控制台，方便调试
 	if level == ERROR {
 		fmt.Printf("[%s][%s][%s] %s\n", entry.Timestamp.Format("15:04:05"), level, category, content)
@@ -152,4 +165,46 @@ func Clear() {
 	mu.Lock()
 	defer mu.Unlock()
 	buffer = ring.New(size)
+}
+
+// Subscribe returns a channel that receives new log entries matching the filter.
+// filter may be nil to accept all entries. Returns a subscription ID for Unsubscribe.
+func Subscribe(filter func(LogEntry) bool) (int, <-chan LogEntry) {
+	subMu.Lock()
+	defer subMu.Unlock()
+
+	nextSubID++
+	sub := &subscriber{
+		ch:     make(chan LogEntry, 256),
+		filter: filter,
+	}
+	subscribers[nextSubID] = sub
+	return nextSubID, sub.ch
+}
+
+// Unsubscribe removes a subscription.
+func Unsubscribe(id int) {
+	subMu.Lock()
+	defer subMu.Unlock()
+
+	if sub, ok := subscribers[id]; ok {
+		close(sub.ch)
+		delete(subscribers, id)
+	}
+}
+
+// broadcast sends an entry to all matching subscribers.
+func broadcast(entry LogEntry) {
+	subMu.Lock()
+	defer subMu.Unlock()
+
+	for _, sub := range subscribers {
+		if sub.filter == nil || sub.filter(entry) {
+			select {
+			case sub.ch <- entry:
+			default:
+				// slow consumer, drop
+			}
+		}
+	}
 }
