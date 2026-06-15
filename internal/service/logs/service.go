@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	logspkg "FrostAgent/internal/logs"
+	"connectrpc.com/connect"
 )
 
 // Service implements frostagent.v1.LogServiceHandler.
@@ -32,10 +32,7 @@ func (s *Service) ListLogs(
 	sourceFilter := req.Msg.GetSourceFilter()
 	filtered := make([]logspkg.LogEntry, 0, len(entries))
 	for _, e := range entries {
-		if !levelPasses(e.Level, minLevel) {
-			continue
-		}
-		if sourceFilter != "" && string(e.Category) != sourceFilter {
+		if !matchesFilter(e, minLevel, sourceFilter) {
 			continue
 		}
 		filtered = append(filtered, e)
@@ -100,13 +97,7 @@ func (s *Service) StreamLogs(
 	sourceFilter := req.Msg.GetSourceFilter()
 
 	subID, ch := logspkg.Subscribe(func(e logspkg.LogEntry) bool {
-		if !levelPasses(e.Level, minLevel) {
-			return false
-		}
-		if sourceFilter != "" && string(e.Category) != sourceFilter {
-			return false
-		}
-		return true
+		return matchesFilter(e, minLevel, sourceFilter)
 	})
 	defer logspkg.Unsubscribe(subID)
 
@@ -167,4 +158,16 @@ func toProtoLevel(lvl logspkg.Level) v1.LogLevel {
 	default:
 		return v1.LogLevel_LOG_LEVEL_UNSPECIFIED
 	}
+}
+
+func matchesFilter(e logspkg.LogEntry, minLevel v1.LogLevel, sourceFilter string) bool {
+	// 1. 等级过滤
+	if !levelPasses(e.Level, minLevel) {
+		return false
+	}
+	// 2. 来源/分类过滤
+	if sourceFilter != "" && string(e.Category) != sourceFilter {
+		return false
+	}
+	return true
 }
