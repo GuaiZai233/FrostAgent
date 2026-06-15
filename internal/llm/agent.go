@@ -18,15 +18,18 @@ type ToolExecutor interface {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	MaxIterations  int
-	ToolRegistry   map[string]ToolExecutor
-	Provider       core.LLMProvider // LLM 供应商接口
-	BaseURL        string           // API 地址
-	APIKey         string           // API 密钥
-	ModelName      string           // 模型名称
-	SessionManager *SessionManager  // 会话上下文管理器
-	Dispatcher     core.MessageDispatcher
-	SendHook       func(toolResultJSON string) // 当 send_message 被调用时立即触发
+	MaxIterations          int
+	ToolRegistry           map[string]ToolExecutor
+	Provider               core.LLMProvider // LLM 供应商接口
+	BaseURL                string           // API 地址
+	APIKey                 string           // API 密钥
+	ModelName              string           // 模型名称
+	SessionManager         *SessionManager  // 会话上下文管理器
+	Dispatcher             core.MessageDispatcher
+	SendHook               func(toolResultJSON string) // 当 send_message 被调用时立即触发
+	StartedAt              time.Time                   // 引擎启动时间
+	Version                string                      // 版本号
+	TotalMessagesProcessed int64                       // 已处理消息总数（原子操作，非线程安全计数器）
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -94,6 +97,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
+		e.TotalMessagesProcessed++
 		logs.Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		chatReq := core.ChatRequest{
