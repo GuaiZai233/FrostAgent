@@ -1,0 +1,101 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  color: #18202f;
+}
+
+.app-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #d9e1ec;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 32px;
+}
+
+.status-card,
+.tools {
+  border-radius: 8px;
+}
+
+.status-card {
+  margin-bottom: 16px;
+}
+
+.status-card mat-card-content {
+  padding-top: 16px;
+}
+
+.warning {
+  border: 1px solid #f0b35b;
+  background: #fff8ed;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metrics mat-card {
+  min-height: 104px;
+  border-radius: 8px;
+}
+
+.metrics mat-card-title {
+  overflow-wrap: anywhere;
+}
+
+.tools mat-divider {
+  margin: 16px 0;
+}
+
+.tool-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tool-list mat-card {
+  min-height: 104px;
+}
+
+.tool-list p,
+.empty {
+  color: #516079;
+}
+
+@media (max-width: 760px) {
+  .app-toolbar {
+    align-items: stretch;
+    height: auto;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .shell {
+    width: min(100% - 24px, 1120px);
+    padding: 18px 0;
+  }
+
+  .metrics,
+  .tool-list {
+    grid-template-columns: 1fr;
+  }
+}

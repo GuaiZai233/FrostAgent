@@ -37,3 +37,10 @@ go.work.sum
 
 # Generated proto code
 gen/
+
+.angular
+.nx/cache
+.nx/workspace-data
+
+__screenshots__/
+node_modules

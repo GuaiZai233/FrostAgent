@@ -1,0 +1,29 @@
+{
+  "name": "workspace",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "root": "tools/workspace",
+  "sourceRoot": "tools/workspace",
+  "projectType": "application",
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": true,
+        "commands": ["pnpm nx run api:serve", "pnpm nx run web:serve"]
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["api"],
+          "target": "build"
+        }
+      ],
+      "options": {
+        "command": "echo Workspace build complete",
+        "cwd": "."
+      }
+    }
+  }
+}

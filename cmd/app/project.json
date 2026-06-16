@@ -1,0 +1,67 @@
+{
+  "name": "api",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "cmd/app",
+  "implicitDependencies": ["proto", "web"],
+  "targets": {
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go run ./cmd/app",
+        "cwd": "."
+      }
+    },
+    "serve-agent": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go run ./cmd/agent",
+        "cwd": "."
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["web"],
+          "target": "build"
+        },
+        {
+          "projects": ["proto"],
+          "target": "generate-go"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/bin"],
+      "options": {
+        "command": "go build ./...",
+        "cwd": "."
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["proto"],
+          "target": "generate-go"
+        }
+      ],
+      "options": {
+        "command": "go test ./...",
+        "cwd": "."
+      }
+    },
+    "vet": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["proto"],
+          "target": "generate-go"
+        }
+      ],
+      "options": {
+        "command": "go vet ./...",
+        "cwd": "."
+      }
+    }
+  }
+}
