@@ -16,4 +16,3 @@ plugins:
     opt:
       - allow_merge=true
       - merge_file_name=frostagent
-      - json_fields_for_proto_messages=true
