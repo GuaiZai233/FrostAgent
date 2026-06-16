@@ -1,15 +1,20 @@
 import {
   ApplicationConfig,
-  provideBrowserGlobalErrorListeners,
+  provideBrowserGlobalErrorListeners,inject,provideAppInitializer
 } from '@angular/core';
-import { provideAnimations } from '@angular/platform-browser/animations';
 import { provideRouter } from '@angular/router';
 import { appRoutes } from './app.routes';
+import { MatIconRegistry } from '@angular/material/icon'; 
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideAnimations(),
     provideBrowserGlobalErrorListeners(),
     provideRouter(appRoutes),
+    provideAppInitializer(() => {
+      const iconRegistry = inject(MatIconRegistry);
+      iconRegistry.setDefaultFontSetClass('material-symbols-rounded');
+    }),
+
   ],
+  
 };

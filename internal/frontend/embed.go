@@ -30,10 +30,14 @@ func Handler() http.Handler {
 
 		// SPA fallback: paths without a file extension → index.html
 		if !hasExtension(path) && path != "/" {
-			// Rewrite to "/" so FileServer serves index.html
+			// Keep localized Angular builds on their own index.html.
 			r2 := new(http.Request)
 			*r2 = *r
-			r2.URL.Path = "/"
+			if path == "/en" || strings.HasPrefix(path, "/en/") {
+				r2.URL.Path = "/en/"
+			} else {
+				r2.URL.Path = "/"
+			}
 			fileServer.ServeHTTP(w, r2)
 			return
 		}

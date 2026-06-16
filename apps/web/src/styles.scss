@@ -15,10 +15,17 @@ html {
 
 html,
 body {
+  
   min-height: 100%;
   margin: 0;
-}
 
-body {
-  background: #f6f8fb;
+
+
+.material-symbols-rounded {
+  font-variation-settings:
+  'FILL' 0,
+  'wght' 400,
+  'GRAD' -25,
+  'opsz' 24
+}
 }

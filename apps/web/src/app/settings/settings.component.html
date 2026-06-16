@@ -1,0 +1,160 @@
+<section class="page-shell">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow" i18n="@@settingsEyebrow">配置管理</p>
+      <h1 i18n="@@settingsTitle">系统设置</h1>
+    </div>
+    <button mat-stroked-button type="button" (click)="refresh()">
+      <mat-icon>refresh</mat-icon>
+      <span i18n="@@refresh">刷新</span>
+    </button>
+  </header>
+
+  @if (loading() || saving()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (error()) {
+    <mat-card class="state-card error-card">
+      <mat-card-content>{{ error() }}</mat-card-content>
+    </mat-card>
+  }
+
+  <mat-tab-group animationDuration="200ms">
+    <mat-tab label="环境变量" i18n-label="@@envVarsTab">
+      <section class="tab-panel">
+        <mat-card class="form-card">
+          <mat-card-header>
+            <mat-icon mat-card-avatar>add_circle</mat-icon>
+            <mat-card-title i18n="@@addEnvVar">新增环境变量</mat-card-title>
+          </mat-card-header>
+          <mat-card-content class="settings-form">
+            <mat-form-field appearance="outline">
+              <mat-label i18n="@@key">Key</mat-label>
+              <input matInput [ngModel]="newKey()" (ngModelChange)="newKey.set($event)" />
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label i18n="@@value">Value</mat-label>
+              <input matInput [ngModel]="newValue()" (ngModelChange)="newValue.set($event)" />
+            </mat-form-field>
+            <mat-checkbox
+              [ngModel]="newIsSecret()"
+              (ngModelChange)="newIsSecret.set($event)"
+            >
+              <span i18n="@@isSecret">敏感信息</span>
+            </mat-checkbox>
+            <button mat-flat-button type="button" (click)="addEnvVar()">
+              <mat-icon>save</mat-icon>
+              <span i18n="@@save">保存</span>
+            </button>
+          </mat-card-content>
+        </mat-card>
+
+        <mat-card class="table-card">
+          <table mat-table [dataSource]="envVars()">
+            <ng-container matColumnDef="key">
+              <th mat-header-cell *matHeaderCellDef i18n="@@key">Key</th>
+              <td mat-cell *matCellDef="let env">{{ env.key }}</td>
+            </ng-container>
+
+            <ng-container matColumnDef="value">
+              <th mat-header-cell *matHeaderCellDef i18n="@@value">Value</th>
+              <td mat-cell *matCellDef="let env">
+                @if (editingKey() === env.key) {
+                  <mat-form-field appearance="outline">
+                    <mat-label i18n="@@value">Value</mat-label>
+                    <input
+                      matInput
+                      [ngModel]="editingValue()"
+                      (ngModelChange)="editingValue.set($event)"
+                    />
+                  </mat-form-field>
+                } @else {
+                  <code>{{ displayValue(env) || '-' }}</code>
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="secret">
+              <th mat-header-cell *matHeaderCellDef i18n="@@isSecret">敏感信息</th>
+              <td mat-cell *matCellDef="let env">
+                @if (editingKey() === env.key) {
+                  <mat-checkbox
+                    [ngModel]="editingIsSecret()"
+                    (ngModelChange)="editingIsSecret.set($event)"
+                  >
+                    <span i18n="@@isSecret">敏感信息</span>
+                  </mat-checkbox>
+                } @else {
+                  <mat-icon>{{ env.isSecret ? 'lock' : 'lock_open' }}</mat-icon>
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="actions">
+              <th mat-header-cell *matHeaderCellDef i18n="@@actions">操作</th>
+              <td mat-cell *matCellDef="let env">
+                @if (editingKey() === env.key) {
+                  <button mat-icon-button type="button" (click)="saveEdit()" aria-label="Save">
+                    <mat-icon>check</mat-icon>
+                  </button>
+                  <button mat-icon-button type="button" (click)="cancelEdit()" aria-label="Cancel">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                } @else {
+                  @if (env.isSecret) {
+                    <button
+                      mat-icon-button
+                      type="button"
+                      (click)="toggleSecret(env.key)"
+                      aria-label="Toggle secret visibility"
+                    >
+                      <mat-icon>{{ isSecretVisible(env.key) ? 'visibility_off' : 'visibility' }}</mat-icon>
+                    </button>
+                  }
+                  <button mat-icon-button type="button" (click)="startEdit(env)" aria-label="Edit">
+                    <mat-icon>edit</mat-icon>
+                  </button>
+                  <button mat-icon-button type="button" (click)="deleteEnvVar(env.key)" aria-label="Delete">
+                    <mat-icon>delete</mat-icon>
+                  </button>
+                }
+              </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
+          </table>
+        </mat-card>
+      </section>
+    </mat-tab>
+
+    <mat-tab label="原始 .env" i18n-label="@@rawEnvTab">
+      <section class="tab-panel">
+        <mat-card class="raw-editor-card">
+          <mat-card-header>
+            <mat-icon mat-card-avatar>code</mat-icon>
+            <mat-card-title i18n="@@rawEnvEditor">原始 .env 编辑器</mat-card-title>
+          </mat-card-header>
+          <mat-card-content>
+            <mat-form-field appearance="outline" class="raw-editor">
+              <mat-label i18n="@@envFileContent">文件内容</mat-label>
+              <textarea
+                matInput
+                rows="18"
+                [ngModel]="rawContent()"
+                (ngModelChange)="rawContent.set($event)"
+              ></textarea>
+            </mat-form-field>
+          </mat-card-content>
+          <mat-card-actions align="end">
+            <button mat-flat-button type="button" (click)="saveRawEnvFile()">
+              <mat-icon>save</mat-icon>
+              <span i18n="@@saveRawEnv">保存 .env</span>
+            </button>
+          </mat-card-actions>
+        </mat-card>
+      </section>
+    </mat-tab>
+  </mat-tab-group>
+</section>
