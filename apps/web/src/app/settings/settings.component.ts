@@ -10,6 +10,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
+import {MatTooltipModule} from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { EditorComponent } from 'ngx-monaco-editor-v2';
 import type { EnvVar } from '@frostagent/proto';
@@ -25,6 +26,7 @@ import { maskSecret } from '../shared/dashboard-utils';
   imports: [
     FormsModule,
     MatButtonModule,
+    MatTooltipModule,
     MatCardModule,
     MatCheckboxModule,
     MatFormFieldModule,
@@ -56,9 +58,6 @@ export class SettingsComponent implements OnInit {
   readonly saving = signal(false);
   readonly error = signal('');
   readonly rawContent = signal('');
-  readonly newKey = signal('');
-  readonly newValue = signal('');
-  readonly newIsSecret = signal(false);
   readonly editingKey = signal('');
   readonly editingValue = signal('');
   readonly editingIsSecret = signal(false);
@@ -105,17 +104,6 @@ export class SettingsComponent implements OnInit {
       this.editingIsSecret(),
     );
     this.cancelEdit();
-  }
-
-  async addEnvVar(): Promise<void> {
-    await this.saveEnvVar(
-      this.newKey().trim(),
-      this.newValue(),
-      this.newIsSecret(),
-    );
-    this.newKey.set('');
-    this.newValue.set('');
-    this.newIsSecret.set(false);
   }
 
   async deleteEnvVar(key: string): Promise<void> {

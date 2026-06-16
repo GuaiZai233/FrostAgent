@@ -8,6 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTableModule } from '@angular/material/table';
 import type { SessionInfo } from '@frostagent/proto';
+import {MatTooltipModule} from '@angular/material/tooltip';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
   PageTokenStack,
@@ -19,6 +20,7 @@ import {
   selector: 'app-sessions',
   imports: [
     MatButtonModule,
+    MatTooltipModule,
     MatCardModule,
     MatFormFieldModule,
     MatIconModule,

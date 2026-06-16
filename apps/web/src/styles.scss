@@ -1,4 +1,5 @@
 @use '@angular/material' as mat;
+@use '@fairylights-studio/ngx-m3-button/styles';
 
 html {
   color-scheme: light dark;
@@ -12,6 +13,13 @@ html {
       density: 0,
     )
   );
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
 }
 
 html,

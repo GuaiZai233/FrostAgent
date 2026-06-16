@@ -1,5 +1,26 @@
-<mat-navigation-suite-scaffold
->
+<mat-navigation-suite-scaffold [state]="scaffoldState">
+  
+<ng-template matNavigationSuitePrimaryAction let-collapsed="collapsed">
+  @if (shouldShowFab()) {
+    <button
+      matFab
+      extended
+      [collapsed]="collapsed"
+      aria-label="Create document"
+      [matMenuTriggerFor]="addMenu"
+    >
+      <mat-icon>add</mat-icon>
+      新增...
+    </button>
+    <mat-menu #addMenu="matMenu">
+      <button mat-menu-item (click)="openAddEnvVarDialog()">
+
+        <span i18n="@@addEnvVar">环境变量</span>
+      </button>
+    </mat-menu>
+  }
+</ng-template>
+
   <mat-navigation-suite
     [alwaysShowItemLabel]="true"
     ariaLabel="FrostAgent"

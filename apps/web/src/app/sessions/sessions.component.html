@@ -1,9 +1,9 @@
 <section >
   <header >
-    <button mat-stroked-button type="button" (click)="refresh()">
+    <button matIconButton (click)="refresh()" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip">
       <mat-icon>refresh</mat-icon>
-      <span i18n="@@refresh">刷新</span>
     </button>
+
   </header>
 
   @if (loading()) {

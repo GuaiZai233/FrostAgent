@@ -1,9 +1,9 @@
 <section >
   <header >
-    <button mat-stroked-button type="button" (click)="refresh()">
+    <button matIconButton (click)="refresh()" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip">
       <mat-icon>refresh</mat-icon>
-      <span i18n="@@refresh">刷新</span>
     </button>
+
   </header>
 
   @if (loading() || saving()) {
@@ -20,40 +20,13 @@
     <mat-tab label="环境变量" i18n-label="@@envVarsTab">
       <section >
         <mat-card >
-          <mat-card-header>
-            <mat-icon mat-card-avatar>add_circle</mat-icon>
-            <mat-card-title i18n="@@addEnvVar">新增环境变量</mat-card-title>
-          </mat-card-header>
-          <mat-card-content >
-            <mat-form-field appearance="outline">
-              <mat-label i18n="@@key">Key</mat-label>
-              <input matInput [ngModel]="newKey()" (ngModelChange)="newKey.set($event)" />
-            </mat-form-field>
-            <mat-form-field appearance="outline">
-              <mat-label i18n="@@value">Value</mat-label>
-              <input matInput [ngModel]="newValue()" (ngModelChange)="newValue.set($event)" />
-            </mat-form-field>
-            <mat-checkbox
-              [ngModel]="newIsSecret()"
-              (ngModelChange)="newIsSecret.set($event)"
-            >
-              <span i18n="@@isSecret">敏感信息</span>
-            </mat-checkbox>
-            <button mat-flat-button type="button" (click)="addEnvVar()">
-              <mat-icon>save</mat-icon>
-              <span i18n="@@save">保存</span>
-            </button>
-          </mat-card-content>
-        </mat-card>
-
-        <mat-card >
           <table mat-table [dataSource]="envVars()">
             <ng-container matColumnDef="key">
               <th mat-header-cell *matHeaderCellDef i18n="@@key">Key</th>
               <td mat-cell *matCellDef="let env">
                 <div style="display: flex; align-items: center; gap: 4px;">
                   @if (env.isSecret) {
-                    <mat-icon style="font-size: 18px; width: 18px; height: 18px; margin-right: 4px;" i18n-title="@@isSecret" title="敏感信息">lock</mat-icon>
+                    <mat-icon style="font-size: 18px; width: 18px; height: 18px; margin-right: 4px;" i18n-title="@@isSecret" title="这是敏感信息">lock</mat-icon>
                   }
                   {{ env.key }}
                 </div>
@@ -78,7 +51,7 @@
                       [ngModel]="editingIsSecret()"
                       (ngModelChange)="editingIsSecret.set($event)"
                     >
-                      <span i18n="@@isSecret">敏感信息</span>
+                      <span i18n="@@isSecret">这是敏感信息</span>
                     </mat-checkbox>
                   </div>
                 } @else {

@@ -1,18 +1,15 @@
 <section >
-  <header >
-    <div >
-      <button mat-stroked-button type="button" (click)="refresh()">
-        <mat-icon>refresh</mat-icon>
-        <span i18n="@@refresh">刷新</span>
-      </button>
+  <header>
+    <button matIconButton (click)="refresh()" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip">
+      <mat-icon>refresh</mat-icon>
+    </button>
       <button mat-flat-button color="warn" type="button" (click)="clearLogs()">
         <mat-icon>delete_sweep</mat-icon>
         <span i18n="@@clearLogs">清理日志</span>
       </button>
-    </div>
   </header>
   <br />
-  <mat-card >
+  <mat-card appearance="outlined">
     <mat-card-content>
       <mat-form-field appearance="outline">
         <mat-label i18n="@@minLogLevel">最低级别</mat-label>
