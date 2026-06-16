@@ -11,3 +11,9 @@ plugins:
   - remote: buf.build/connectrpc/go
     out: gen/proto
     opt: paths=source_relative
+  - remote: buf.build/grpc-ecosystem/openapiv2
+    out: gen/openapi
+    opt:
+      - allow_merge=true
+      - merge_file_name=frostagent
+      - json_fields_for_proto_messages=true
