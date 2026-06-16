@@ -9,10 +9,18 @@ import "frostagent/v1/common.proto";
 // BotStatusService provides bot overview and session management.
 service BotStatusService {
   // GetOverview returns runtime status and capability metadata for the AI Agent middleware.
-  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse) {
+    option (google.api.http) = {
+      get: "/v1/bot/overview"
+    };
+  }
 
   // GetSessions lists active or recent agent interaction sessions.
-  rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
+  rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/bot/sessions"
+    };
+  }
 }
 
 // BotStatus describes the operational state of the bot.
