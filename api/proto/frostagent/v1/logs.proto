@@ -9,13 +9,25 @@ import "frostagent/v1/common.proto";
 // LogService provides log retrieval and streaming for monitoring agent activity.
 service LogService {
   // ListLogs retrieves a paginated list of historical logs.
-  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse) {
+    option (google.api.http) = {
+      get: "/v1/logs"
+    };
+  }
 
   // StreamLogs opens a server-side stream to receive real-time log entries.
-  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry) {
+    option (google.api.http) = {
+      get: "/v1/logs/stream"
+    };
+  }
 
   // ClearLogs deletes historical log entries from the database.
-  rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse);
+  rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse) {
+    option (google.api.http) = {
+      delete: "/v1/logs"
+    };
+  }
 }
 
 // LogLevel defines the severity of a log entry.

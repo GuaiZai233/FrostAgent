@@ -7,19 +7,42 @@ package frostagent.v1;
 // SettingsService manages environment variable configuration and raw .env file access.
 service SettingsService {
   // ListEnvVars retrieves all configured environment variables.
-  rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
+  rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse) {
+    option (google.api.http) = {
+      get: "/v1/settings/env"
+    };
+  }
 
   // UpdateEnvVar creates or updates a specific environment variable.
-  rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
+  rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse) {
+    option (google.api.http) = {
+      post: "/v1/settings/env"
+      body: "*"
+    };
+  }
 
   // DeleteEnvVar removes an environment variable from the configuration.
-  rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
+  rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse) {
+    option (google.api.http) = {
+      delete: "/v1/settings/env"
+      body: "*"
+    };
+  }
 
   // GetRawEnvFile retrieves the entire content of the .env file.
-  rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse);
+  rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse) {
+    option (google.api.http) = {
+      get: "/v1/settings/env/raw"
+    };
+  }
 
   // UpdateRawEnvFile overwrites the .env file with new content.
-  rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse);
+  rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse) {
+    option (google.api.http) = {
+      put: "/v1/settings/env/raw"
+      body: "*"
+    };
+  }
 }
 
 // EnvVar represents a single configuration key-pair.
