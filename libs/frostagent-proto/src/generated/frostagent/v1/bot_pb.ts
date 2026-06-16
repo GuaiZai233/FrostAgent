@@ -2,8 +2,8 @@
 // @generated from file frostagent/v1/bot.proto (package frostagent.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Pagination, SessionInfo, ToolInfo } from "./common_pb";
 import { file_frostagent_v1_common } from "./common_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/bot.proto.
  */
 export const file_frostagent_v1_bot: GenFile = /*@__PURE__*/
-  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi2gEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSDgoGc3RhdHVzGAcgASgJEiYKBXRvb2xzGAggAygLMhcuZnJvc3RhZ2VudC52MS5Ub29sSW5mbyJDChJHZXRTZXNzaW9uc1JlcXVlc3QSLQoKcGFnaW5hdGlvbhgBIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJyChNHZXRTZXNzaW9uc1Jlc3BvbnNlEiwKCHNlc3Npb25zGAEgAygLMhouZnJvc3RhZ2VudC52MS5TZXNzaW9uSW5mbxItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uMr4BChBCb3RTdGF0dXNTZXJ2aWNlElQKC0dldE92ZXJ2aWV3EiEuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldE92ZXJ2aWV3UmVzcG9uc2USVAoLR2V0U2Vzc2lvbnMSIS5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbnNSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
+  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi9AEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24qcgoJQm90U3RhdHVzEhoKFkJPVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIbChdCT1RfU1RBVFVTX0lOSVRJQUxJWklORxABEhYKEkJPVF9TVEFUVVNfUlVOTklORxACEhQKEEJPVF9TVEFUVVNfRVJST1IQAzK+AQoQQm90U3RhdHVzU2VydmljZRJUCgtHZXRPdmVydmlldxIhLmZyb3N0YWdlbnQudjEuR2V0T3ZlcnZpZXdSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1Jlc3BvbnNlElQKC0dldFNlc3Npb25zEiEuZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uc1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.GetOverviewRequest
@@ -62,9 +62,9 @@ export type GetOverviewResponse = Message<"frostagent.v1.GetOverviewResponse"> &
   currentModel: string;
 
   /**
-   * @generated from field: string status = 7;
+   * @generated from field: frostagent.v1.BotStatus status = 7;
    */
-  status: string;
+  status: BotStatus;
 
   /**
    * @generated from field: repeated frostagent.v1.ToolInfo tools = 8;
@@ -117,6 +117,37 @@ export type GetSessionsResponse = Message<"frostagent.v1.GetSessionsResponse"> &
  */
 export const GetSessionsResponseSchema: GenMessage<GetSessionsResponse> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_bot, 3);
+
+/**
+ * @generated from enum frostagent.v1.BotStatus
+ */
+export enum BotStatus {
+  /**
+   * @generated from enum value: BOT_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: BOT_STATUS_INITIALIZING = 1;
+   */
+  INITIALIZING = 1,
+
+  /**
+   * @generated from enum value: BOT_STATUS_RUNNING = 2;
+   */
+  RUNNING = 2,
+
+  /**
+   * @generated from enum value: BOT_STATUS_ERROR = 3;
+   */
+  ERROR = 3,
+}
+
+/**
+ * Describes the enum frostagent.v1.BotStatus.
+ */
+export const BotStatusSchema: GenEnum<BotStatus> = /*@__PURE__*/
+  enumDesc(file_frostagent_v1_bot, 0);
 
 /**
  * BotStatusService provides bot overview and session management.

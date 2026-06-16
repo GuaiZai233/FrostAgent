@@ -11,6 +11,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
 import { MatTabsModule } from '@angular/material/tabs';
+import { EditorComponent } from 'ngx-monaco-editor-v2';
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
@@ -32,6 +33,7 @@ import { maskSecret } from '../shared/dashboard-utils';
     MatProgressBarModule,
     MatTableModule,
     MatTabsModule,
+    EditorComponent,
   ],
   templateUrl: './settings.component.html',
 })
@@ -39,6 +41,14 @@ export class SettingsComponent implements OnInit {
   private readonly api = inject(FrostagentApiService);
   private readonly dialog = inject(MatDialog);
   private readonly snackBar = inject(MatSnackBar);
+
+  readonly editorOptions = {
+    theme: 'vs-light',
+    language: 'ini',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+  };
 
   readonly envVars = signal<EnvVar[]>([]);
   readonly visibleSecrets = signal(new Set<string>());
@@ -52,7 +62,7 @@ export class SettingsComponent implements OnInit {
   readonly editingKey = signal('');
   readonly editingValue = signal('');
   readonly editingIsSecret = signal(false);
-  readonly displayedColumns = ['key', 'value', 'secret', 'actions'];
+  readonly displayedColumns = ['key', 'value', 'actions'];
 
   ngOnInit(): void {
     void this.refresh();

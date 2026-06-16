@@ -1,8 +1,6 @@
-<section class="page-shell">
-  <header class="page-header">
-    <div>
-      <h1 i18n="@@overviewTitle">你吼👋！</h1>
-    </div>
+<section >
+  <header >
+
   </header>
 
   @if (loading()) {
@@ -10,72 +8,67 @@
   }
 
   @if (error()) {
-    <mat-card class="state-card error-card">
+    <mat-card >
       <mat-card-content>{{ error() }}</mat-card-content>
     </mat-card>
   }
 
   @if (overview(); as data) {
-    <section class="overview-hero">
+    <section>
       <div>
-        <p></p>
-        <h2>我叫 {{ data.botName || 'FrostAgent' }}，{{ formatStatus(data.status) }}</h2>
+        <h2>你好👋！我是 {{ data.botName || 'FrostAgent' }}</h2>
       </div>
       <mat-chip-set aria-label="Bot metadata">
-        <mat-chip>
-          <mat-icon matChipAvatar>deployed_code</mat-icon>
-          后端版本 {{ data.version || '-' }}
+        <mat-chip [ngClass]="{
+            'status-chip-running': data.status === BotStatus.RUNNING,
+            'status-chip-initializing': data.status === BotStatus.INITIALIZING,
+            'status-chip-error': data.status === BotStatus.ERROR
+          }">
+          <mat-icon matChipAvatar>sensors</mat-icon>
+          {{ formatStatus(data.status) }}
         </mat-chip>
         <mat-chip>
           <mat-icon matChipAvatar>acute</mat-icon>
           {{ formatUptime(data.uptimeSeconds) }}
         </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>deployed_code</mat-icon>
+          后端版本 {{ data.version || '-' }}
+        </mat-chip>
       </mat-chip-set>
     </section>
 
-    <section class="metric-grid">
-      <mat-card class="metric-card">
-        <mat-card-header>
-          <mat-icon mat-card-avatar>mark_chat_read</mat-icon>
-          <mat-card-title i18n="@@totalMessages">处理消息数</mat-card-title>
-        </mat-card-header>
-        <mat-card-content>{{ formatCount(data.totalMessagesProcessed) }}</mat-card-content>
-      </mat-card>
-
-      <mat-card class="metric-card">
-        <mat-card-header>
-          <mat-icon mat-card-avatar>forum</mat-icon>
-          <mat-card-title i18n="@@activeSessions">活跃会话</mat-card-title>
-        </mat-card-header>
-        <mat-card-content>{{ formatCount(data.activeSessions) }}</mat-card-content>
-      </mat-card>
-
-      <mat-card class="metric-card">
-        <mat-card-header>
-          <mat-icon mat-card-avatar>psychology</mat-icon>
-          <mat-card-title i18n="@@currentModel">当前模型</mat-card-title>
-        </mat-card-header>
-        <mat-card-content>{{ data.currentModel || '-' }}</mat-card-content>
-      </mat-card>
+    <section style="margin-top: 16px;">
+      <mat-chip-set aria-label="Bot statistics">
+        <mat-chip>
+          <mat-icon matChipAvatar>mark_chat_read</mat-icon>
+          <span i18n="@@totalMessages">处理消息</span> {{ formatCount(data.totalMessagesProcessed) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>forum</mat-icon>
+          <span i18n="@@activeSessions">活跃会话</span> {{ formatCount(data.activeSessions) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>psychology</mat-icon>
+          <span i18n="@@currentModel">当前模型</span> {{ data.currentModel || '-' }}
+        </mat-chip>
+      </mat-chip-set>
     </section>
 
-    <section class="section-block">
-      <div class="section-heading">
-        <h2 i18n="@@loadedTools">已加载工具</h2>
-        <span>{{ data.tools.length }}</span>
-      </div>
+    <section style="margin-top: 32px;">
+      <h2 i18n="@@loadedTools" style="margin-bottom: 16px;">我可以使用 {{ data.tools.length }} 个工具</h2>
 
-      <div class="tool-grid">
+      <div class="tools-container">
         @for (tool of data.tools; track tool.name) {
-          <mat-card class="tool-card">
+          <mat-card appearance="outlined">
             <mat-card-header>
               <mat-icon mat-card-avatar>construction</mat-icon>
               <mat-card-title>{{ tool.name }}</mat-card-title>
             </mat-card-header>
-            <mat-card-content>{{ tool.description || '-' }}</mat-card-content>
+            <mat-card-content>{{ tool.description || '' }}</mat-card-content>
           </mat-card>
         } @empty {
-          <mat-card class="state-card">
+          <mat-card appearance="outlined">
             <mat-card-content i18n="@@noTools">暂无已注册工具。</mat-card-content>
           </mat-card>
         }

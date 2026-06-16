@@ -1,46 +1,22 @@
-<section class="page-shell">
-  <header class="page-header">
-    <div>
-      <p class="eyebrow" i18n="@@sessionsEyebrow">会话追踪</p>
-      <h1 i18n="@@sessionsTitle">会话管理</h1>
-    </div>
+<section >
+  <header >
     <button mat-stroked-button type="button" (click)="refresh()">
       <mat-icon>refresh</mat-icon>
       <span i18n="@@refresh">刷新</span>
     </button>
   </header>
 
-  <mat-card class="toolbar-card">
-    <mat-card-content>
-      <mat-form-field appearance="outline">
-        <mat-label i18n="@@pageSize">每页数量</mat-label>
-        <mat-select
-          [value]="pageSize()"
-          (selectionChange)="changePageSize($event.value)"
-        >
-          <mat-option [value]="10">10</mat-option>
-          <mat-option [value]="20">20</mat-option>
-          <mat-option [value]="50">50</mat-option>
-        </mat-select>
-      </mat-form-field>
-
-      <span class="toolbar-spacer"></span>
-      <span class="muted" i18n="@@totalSessions">总会话</span>
-      <strong>{{ total() }}</strong>
-    </mat-card-content>
-  </mat-card>
-
   @if (loading()) {
     <mat-progress-bar mode="indeterminate" />
   }
 
   @if (error()) {
-    <mat-card class="state-card error-card">
+    <mat-card >
       <mat-card-content>{{ error() }}</mat-card-content>
     </mat-card>
   }
 
-  <mat-card class="table-card">
+  <mat-card >
     <table mat-table [dataSource]="sessions()">
       <ng-container matColumnDef="sessionId">
         <th mat-header-cell *matHeaderCellDef i18n="@@sessionId">会话 ID</th>
@@ -78,18 +54,17 @@
     </table>
 
     @if (!loading() && sessions().length === 0) {
-      <div class="empty-state" i18n="@@noSessions">暂无会话。</div>
+      <div  i18n="@@noSessions">暂无会话。</div>
     }
-  </mat-card>
 
-  <footer class="pager-row">
-    <button mat-button type="button" [disabled]="!canGoBack()" (click)="previousPage()">
-      <mat-icon>chevron_left</mat-icon>
-      <span i18n="@@previousPage">上一页</span>
-    </button>
-    <button mat-button type="button" [disabled]="!nextToken()" (click)="nextPage()">
-      <span i18n="@@nextPage">下一页</span>
-      <mat-icon>chevron_right</mat-icon>
-    </button>
-  </footer>
+    <mat-paginator
+      [length]="total()"
+      [pageSize]="pageSize()"
+      [pageIndex]="pageIndex()"
+      [pageSizeOptions]="[10, 20, 50, 100]"
+      (page)="handlePageEvent($event)"
+      aria-label="Select page"
+    >
+    </mat-paginator>
+  </mat-card>
 </section>

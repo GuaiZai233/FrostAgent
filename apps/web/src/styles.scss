@@ -1,6 +1,7 @@
 @use '@angular/material' as mat;
 
 html {
+  color-scheme: light dark;
   @include mat.theme(
     (
       color: (
@@ -15,11 +16,12 @@ html {
 
 html,
 body {
-  
+  background: var(--mat-sys-surface);
+  color: var(--mat-sys-on-surface);
+  @include mat.system-classes();
+
   min-height: 100%;
   margin: 0;
-
-
 
 .material-symbols-rounded {
   font-variation-settings:

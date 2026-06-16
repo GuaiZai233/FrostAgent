@@ -1,9 +1,5 @@
-<section class="page-shell">
-  <header class="page-header">
-    <div>
-      <p class="eyebrow" i18n="@@settingsEyebrow">配置管理</p>
-      <h1 i18n="@@settingsTitle">系统设置</h1>
-    </div>
+<section >
+  <header >
     <button mat-stroked-button type="button" (click)="refresh()">
       <mat-icon>refresh</mat-icon>
       <span i18n="@@refresh">刷新</span>
@@ -15,20 +11,20 @@
   }
 
   @if (error()) {
-    <mat-card class="state-card error-card">
+    <mat-card >
       <mat-card-content>{{ error() }}</mat-card-content>
     </mat-card>
   }
 
   <mat-tab-group animationDuration="200ms">
     <mat-tab label="环境变量" i18n-label="@@envVarsTab">
-      <section class="tab-panel">
-        <mat-card class="form-card">
+      <section >
+        <mat-card >
           <mat-card-header>
             <mat-icon mat-card-avatar>add_circle</mat-icon>
             <mat-card-title i18n="@@addEnvVar">新增环境变量</mat-card-title>
           </mat-card-header>
-          <mat-card-content class="settings-form">
+          <mat-card-content >
             <mat-form-field appearance="outline">
               <mat-label i18n="@@key">Key</mat-label>
               <input matInput [ngModel]="newKey()" (ngModelChange)="newKey.set($event)" />
@@ -50,43 +46,43 @@
           </mat-card-content>
         </mat-card>
 
-        <mat-card class="table-card">
+        <mat-card >
           <table mat-table [dataSource]="envVars()">
             <ng-container matColumnDef="key">
               <th mat-header-cell *matHeaderCellDef i18n="@@key">Key</th>
-              <td mat-cell *matCellDef="let env">{{ env.key }}</td>
+              <td mat-cell *matCellDef="let env">
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  @if (env.isSecret) {
+                    <mat-icon style="font-size: 18px; width: 18px; height: 18px; margin-right: 4px;" i18n-title="@@isSecret" title="敏感信息">lock</mat-icon>
+                  }
+                  {{ env.key }}
+                </div>
+              </td>
             </ng-container>
 
             <ng-container matColumnDef="value">
               <th mat-header-cell *matHeaderCellDef i18n="@@value">Value</th>
               <td mat-cell *matCellDef="let env">
                 @if (editingKey() === env.key) {
-                  <mat-form-field appearance="outline">
-                    <mat-label i18n="@@value">Value</mat-label>
-                    <input
-                      matInput
-                      [ngModel]="editingValue()"
-                      (ngModelChange)="editingValue.set($event)"
-                    />
-                  </mat-form-field>
+                  <div style="display: flex; flex-direction: column; padding: 12px 0;">
+                    <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                      <mat-label i18n="@@value">Value</mat-label>
+                      <input
+                        matInput
+                        [ngModel]="editingValue()"
+                        (ngModelChange)="editingValue.set($event)"
+                      />
+                    </mat-form-field>
+                    <mat-checkbox
+                      style="margin-top: 4px;"
+                      [ngModel]="editingIsSecret()"
+                      (ngModelChange)="editingIsSecret.set($event)"
+                    >
+                      <span i18n="@@isSecret">敏感信息</span>
+                    </mat-checkbox>
+                  </div>
                 } @else {
                   <code>{{ displayValue(env) || '-' }}</code>
-                }
-              </td>
-            </ng-container>
-
-            <ng-container matColumnDef="secret">
-              <th mat-header-cell *matHeaderCellDef i18n="@@isSecret">敏感信息</th>
-              <td mat-cell *matCellDef="let env">
-                @if (editingKey() === env.key) {
-                  <mat-checkbox
-                    [ngModel]="editingIsSecret()"
-                    (ngModelChange)="editingIsSecret.set($event)"
-                  >
-                    <span i18n="@@isSecret">敏感信息</span>
-                  </mat-checkbox>
-                } @else {
-                  <mat-icon>{{ env.isSecret ? 'lock' : 'lock_open' }}</mat-icon>
                 }
               </td>
             </ng-container>
@@ -130,22 +126,17 @@
     </mat-tab>
 
     <mat-tab label="原始 .env" i18n-label="@@rawEnvTab">
-      <section class="tab-panel">
-        <mat-card class="raw-editor-card">
-          <mat-card-header>
-            <mat-icon mat-card-avatar>code</mat-icon>
-            <mat-card-title i18n="@@rawEnvEditor">原始 .env 编辑器</mat-card-title>
-          </mat-card-header>
+      <section >
+        <mat-card >
           <mat-card-content>
-            <mat-form-field appearance="outline" class="raw-editor">
-              <mat-label i18n="@@envFileContent">文件内容</mat-label>
-              <textarea
-                matInput
-                rows="18"
+            <div style="height: 500px;overflow: hidden; margin-top: 16px;">
+              <ngx-monaco-editor
+                style="height: 100%"
+                [options]="editorOptions"
                 [ngModel]="rawContent()"
                 (ngModelChange)="rawContent.set($event)"
-              ></textarea>
-            </mat-form-field>
+              ></ngx-monaco-editor>
+            </div>
           </mat-card-content>
           <mat-card-actions align="end">
             <button mat-flat-button type="button" (click)="saveRawEnvFile()">

@@ -1,4 +1,4 @@
-import { LogLevel } from '@frostagent/proto';
+import { BotStatus, LogLevel } from '@frostagent/proto';
 
 export const logLevelOptions = [
   {
@@ -63,14 +63,16 @@ export function formatDateTime(value: string): string {
   }).format(date);
 }
 
-export function formatStatus(status: string): string {
-  switch (status.toLowerCase()) {
-    case 'running':
+export function formatStatus(status: BotStatus): string {
+  switch (status) {
+    case BotStatus.RUNNING:
       return $localize`:@@statusRunning:运行中`;
-    case 'initializing':
+    case BotStatus.INITIALIZING:
       return $localize`:@@statusInitializing:初始化中`;
+    case BotStatus.ERROR:
+      return $localize`:@@statusError:出现错误`;
     default:
-      return status || $localize`:@@statusUnknown:未知`;
+      return $localize`:@@statusUnknown:未知`;
   }
 }
 

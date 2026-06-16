@@ -3,6 +3,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
+import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTableModule } from '@angular/material/table';
@@ -21,6 +22,7 @@ import {
     MatCardModule,
     MatFormFieldModule,
     MatIconModule,
+    MatPaginatorModule,
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
@@ -37,6 +39,7 @@ export class SessionsComponent implements OnInit {
   readonly pageSize = signal(20);
   readonly nextToken = signal('');
   readonly total = signal(0);
+  readonly pageIndex = signal(0);
 
   readonly displayedColumns = [
     'sessionId',
@@ -52,26 +55,24 @@ export class SessionsComponent implements OnInit {
 
   async refresh(): Promise<void> {
     this.pageTokens.reset();
+    this.pageIndex.set(0);
     await this.loadCurrentPage();
   }
 
-  async changePageSize(value: number): Promise<void> {
-    this.pageSize.set(value);
-    await this.refresh();
-  }
+  async handlePageEvent(event: PageEvent): Promise<void> {
+    if (event.pageSize !== this.pageSize()) {
+      this.pageSize.set(event.pageSize);
+      await this.refresh();
+      return;
+    }
 
-  async nextPage(): Promise<void> {
-    this.pageTokens.push(this.nextToken());
+    if (event.pageIndex > this.pageIndex()) {
+      this.pageTokens.push(this.nextToken());
+    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageTokens.back();
+    }
+    this.pageIndex.set(event.pageIndex);
     await this.loadCurrentPage();
-  }
-
-  async previousPage(): Promise<void> {
-    this.pageTokens.back();
-    await this.loadCurrentPage();
-  }
-
-  canGoBack(): boolean {
-    return this.pageTokens.canGoBack();
   }
 
   formatDateTime(value: string): string {

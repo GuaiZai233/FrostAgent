@@ -35,22 +35,22 @@ export class App implements OnDestroy {
     {
       path: '/overview',
       icon: 'dashboard',
-      label: $localize`:@@navOverview:状态`,
+      label: $localize`:@@navOverview:软件状态`,
     },
     {
       path: '/sessions',
       icon: 'forum',
-      label: $localize`:@@navSessions:会话`,
+      label: $localize`:@@navSessions:会话管理`,
     },
     {
       path: '/logs',
       icon: 'terminal',
-      label: $localize`:@@navLogs:日志`,
+      label: $localize`:@@navLogs:程序日志`,
     },
     {
       path: '/settings',
       icon: 'settings',
-      label: $localize`:@@navSettings:设置`,
+      label: $localize`:@@navSettings:软件设置`,
     },
   ];
 

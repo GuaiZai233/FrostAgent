@@ -6,6 +6,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
+import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -33,6 +34,7 @@ import {
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
+    MatPaginatorModule,
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
@@ -57,6 +59,7 @@ export class LogsComponent implements OnDestroy {
   readonly pageSize = signal(50);
   readonly nextToken = signal('');
   readonly total = signal(0);
+  readonly pageIndex = signal(0);
   readonly logLevelOptions = logLevelOptions;
   readonly displayedColumns = ['timestamp', 'level', 'source', 'summary'];
 
@@ -70,6 +73,7 @@ export class LogsComponent implements OnDestroy {
 
   async refresh(): Promise<void> {
     this.pageTokens.reset();
+    this.pageIndex.set(0);
     await this.loadCurrentPage();
   }
 
@@ -78,24 +82,25 @@ export class LogsComponent implements OnDestroy {
     await this.refresh();
   }
 
-  async changePageSize(value: number): Promise<void> {
-    this.pageSize.set(value);
-    await this.refresh();
+  async handlePageEvent(event: PageEvent): Promise<void> {
+    if (event.pageSize !== this.pageSize()) {
+      this.pageSize.set(event.pageSize);
+      await this.refresh();
+      return;
+    }
+
+    if (event.pageIndex > this.pageIndex()) {
+      this.pageTokens.push(this.nextToken());
+    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageTokens.back();
+    }
+    this.pageIndex.set(event.pageIndex);
+    await this.loadCurrentPage();
   }
 
   async applySourceFilter(value: string): Promise<void> {
     this.sourceFilter.set(value.trim());
     await this.refresh();
-  }
-
-  async nextPage(): Promise<void> {
-    this.pageTokens.push(this.nextToken());
-    await this.loadCurrentPage();
-  }
-
-  async previousPage(): Promise<void> {
-    this.pageTokens.back();
-    await this.loadCurrentPage();
   }
 
   canGoBack(): boolean {

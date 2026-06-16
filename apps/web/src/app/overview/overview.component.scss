@@ -1,0 +1,52 @@
+:host {
+  display: block;
+  padding: 16px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+mat-card {
+  height: 100%;
+}
+
+.status-chip-running {
+  --mdc-chip-elevated-container-color: #e8f5e9;
+  --mdc-chip-label-text-color: #2e7d32;
+  --mdc-chip-with-leading-icon-leading-icon-color: #2e7d32;
+  background-color: #e8f5e9 !important;
+  color: #2e7d32 !important;
+
+  mat-icon {
+    color: #2e7d32 !important;
+  }
+}
+
+.status-chip-initializing {
+  --mdc-chip-elevated-container-color: #fff3e0;
+  --mdc-chip-label-text-color: #ef6c00;
+  --mdc-chip-with-leading-icon-leading-icon-color: #ef6c00;
+  background-color: #fff3e0 !important;
+  color: #ef6c00 !important;
+
+  mat-icon {
+    color: #ef6c00 !important;
+  }
+}
+
+.status-chip-error {
+  --mdc-chip-elevated-container-color: #ffebee;
+  --mdc-chip-label-text-color: #c62828;
+  --mdc-chip-with-leading-icon-leading-icon-color: #c62828;
+  background-color: #ffebee !important;
+  color: #c62828 !important;
+
+  mat-icon {
+    color: #c62828 !important;
+  }
+}
+
+.tools-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}

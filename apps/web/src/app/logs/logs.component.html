@@ -1,10 +1,6 @@
-<section class="page-shell logs-page">
-  <header class="page-header">
-    <div>
-      <p class="eyebrow" i18n="@@logsEyebrow">审计与调试</p>
-      <h1 i18n="@@logsTitle">日志中心</h1>
-    </div>
-    <div class="header-actions">
+<section >
+  <header >
+    <div >
       <button mat-stroked-button type="button" (click)="refresh()">
         <mat-icon>refresh</mat-icon>
         <span i18n="@@refresh">刷新</span>
@@ -15,8 +11,8 @@
       </button>
     </div>
   </header>
-
-  <mat-card class="toolbar-card">
+  <br />
+  <mat-card >
     <mat-card-content>
       <mat-form-field appearance="outline">
         <mat-label i18n="@@minLogLevel">最低级别</mat-label>
@@ -37,34 +33,25 @@
         />
       </mat-form-field>
 
-      <mat-form-field appearance="outline">
-        <mat-label i18n="@@pageSize">每页数量</mat-label>
-        <mat-select [value]="pageSize()" (selectionChange)="changePageSize($event.value)">
-          <mat-option [value]="25">25</mat-option>
-          <mat-option [value]="50">50</mat-option>
-          <mat-option [value]="100">100</mat-option>
-        </mat-select>
-      </mat-form-field>
-
       <button mat-stroked-button type="button" (click)="applySourceFilter(sourceInput.value)">
         <mat-icon>filter_alt</mat-icon>
         <span i18n="@@applyFilter">应用过滤</span>
       </button>
     </mat-card-content>
   </mat-card>
-
+  <br />
   @if (loading()) {
     <mat-progress-bar mode="indeterminate" />
   }
 
   @if (error()) {
-    <mat-card class="state-card error-card">
+    <mat-card >
       <mat-card-content>{{ error() }}</mat-card-content>
     </mat-card>
   }
 
-  <section class="logs-layout">
-    <mat-card class="table-card">
+  <section >
+    <mat-card >
       <table mat-table [dataSource]="entries()">
         <ng-container matColumnDef="timestamp">
           <th mat-header-cell *matHeaderCellDef i18n="@@timestamp">时间</th>
@@ -99,45 +86,42 @@
       </table>
 
       @if (!loading() && entries().length === 0) {
-        <div class="empty-state" i18n="@@noLogs">暂无日志。</div>
+        <div  i18n="@@noLogs">暂无日志。</div>
       }
-    </mat-card>
 
-    <mat-card class="detail-card">
+      <mat-paginator
+        [length]="total()"
+        [pageSize]="pageSize()"
+        [pageIndex]="pageIndex()"
+        [pageSizeOptions]="[25, 50, 100, 200]"
+        (page)="handlePageEvent($event)"
+        aria-label="Select page"
+      >
+      </mat-paginator>
+    </mat-card>
+  <br />
+    <mat-card >
       <mat-card-header>
         <mat-icon mat-card-avatar>receipt_long</mat-icon>
         <mat-card-title i18n="@@logDetail">日志详情</mat-card-title>
       </mat-card-header>
       <mat-card-content>
         @if (selectedEntry(); as entry) {
-          <dl class="detail-list">
+          <dl >
             <dt i18n="@@requestBody">请求体</dt>
             <dd><pre>{{ entry.requestBody || '-' }}</pre></dd>
             <dt i18n="@@responseBody">响应体</dt>
             <dd><pre>{{ entry.responseBody || '-' }}</pre></dd>
           </dl>
         } @else {
-          <p class="muted" i18n="@@selectLogPrompt">选择一条日志查看详情。</p>
+          <p  i18n="@@selectLogPrompt">选择一条日志查看详情。</p>
         }
       </mat-card-content>
     </mat-card>
   </section>
 
-  <footer class="pager-row">
-    <button mat-button type="button" [disabled]="!canGoBack()" (click)="previousPage()">
-      <mat-icon>chevron_left</mat-icon>
-      <span i18n="@@previousPage">上一页</span>
-    </button>
-    <span class="muted" i18n="@@totalLogs">总日志</span>
-    <strong>{{ total() }}</strong>
-    <button mat-button type="button" [disabled]="!nextToken()" (click)="nextPage()">
-      <span i18n="@@nextPage">下一页</span>
-      <mat-icon>chevron_right</mat-icon>
-    </button>
-  </footer>
-
-  <section class="section-block">
-    <div class="section-heading">
+  <section >
+    <div >
       <h2 i18n="@@liveLogs">实时日志流</h2>
       <button mat-flat-button type="button" (click)="toggleStream()">
         <mat-icon>{{ streaming() ? 'stop_circle' : 'play_circle' }}</mat-icon>
@@ -145,9 +129,9 @@
       </button>
     </div>
 
-    <div class="console-panel">
+    <div >
       @for (entry of streamEntries(); track entry.id) {
-        <div class="console-line">
+        <div >
           <span>{{ formatDateTime(entry.timestamp) }}</span>
           <strong [class]="'level-text-' + logLevelTone(entry.level)">
             {{ formatLogLevel(entry.level) }}
@@ -156,7 +140,7 @@
           <p>{{ entry.summary }}</p>
         </div>
       } @empty {
-        <p class="muted" i18n="@@noStreamLogs">实时流尚未收到日志。</p>
+        <p  i18n="@@noStreamLogs">实时流尚未收到日志。</p>
       }
     </div>
   </section>
