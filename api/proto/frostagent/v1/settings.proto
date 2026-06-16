@@ -24,8 +24,7 @@ service SettingsService {
   // DeleteEnvVar removes an environment variable from the configuration.
   rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse) {
     option (google.api.http) = {
-      delete: "/v1/settings/env"
-      body: "*"
+      delete: "/v1/settings/env/{key}"
     };
   }
 
