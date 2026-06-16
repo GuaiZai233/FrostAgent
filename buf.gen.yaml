@@ -4,6 +4,9 @@ managed:
   override:
     - file_option: go_package_prefix
       value: FrostAgent/gen/proto
+  disable:
+    - file_option: go_package_prefix
+      path: google/api
 plugins:
   - remote: buf.build/protocolbuffers/go
     out: gen/proto
