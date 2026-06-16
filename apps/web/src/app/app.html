@@ -1,101 +1,42 @@
-<mat-toolbar class="app-toolbar">
-  <div class="brand">
-    <mat-icon aria-hidden="true">ac_unit</mat-icon>
-    <span>FrostAgent</span>
-  </div>
-  <button mat-flat-button type="button" (click)="refresh()">
-    <mat-icon aria-hidden="true">refresh</mat-icon>
-    Refresh
-  </button>
-</mat-toolbar>
+<mat-navigation-suite-scaffold
+[navSuiteType]="null"
+[primaryActionAlignment]="'end'"
+>
+<mat-navigation-suite
+[alwaysShowItemLabel]="true"
+ariaLabel="Workspace"
 
-<main class="shell">
-  @let current = state(); @if (current.status === 'loading') {
-  <mat-card class="status-card">
-    <mat-card-header>
-      <mat-card-title>Loading agent status</mat-card-title>
-      <mat-card-subtitle>Connecting to FrostAgent</mat-card-subtitle>
-    </mat-card-header>
-    <mat-card-content>
-      <mat-progress-bar mode="indeterminate"></mat-progress-bar>
-    </mat-card-content>
-  </mat-card>
-  } @else if (current.status === 'error') {
-  <mat-card class="status-card warning">
-    <mat-card-header>
-      <mat-icon mat-card-avatar aria-hidden="true">cloud_off</mat-icon>
-      <mat-card-title>Start the API service to view live data</mat-card-title>
-      <mat-card-subtitle>Backend offline</mat-card-subtitle>
-    </mat-card-header>
-    <mat-card-content>
-      <p>{{ current.message }}</p>
-    </mat-card-content>
-  </mat-card>
-  } @else { @let overview = current.overview;
+>
 
-  <mat-card class="status-card">
-    <mat-card-header>
-      <mat-icon mat-card-avatar aria-hidden="true">memory</mat-icon>
-      <mat-card-title>{{ overview.botName || 'FrostAgent' }}</mat-card-title>
-      <mat-card-subtitle>Control panel</mat-card-subtitle>
-    </mat-card-header>
-    <mat-card-actions align="end">
-      <mat-chip-set aria-label="Agent status">
-        <mat-chip highlighted>{{ overview.status || 'unknown' }}</mat-chip>
-      </mat-chip-set>
-    </mat-card-actions>
-  </mat-card>
+  <mat-navigation-suite-item
+    [selected]="selectedIndex === 0"
+    [icon]="'dashboard'"
+    [label]="'Dashboard'"
+    (click)="selectedIndex = 0"
+  />
+  <mat-navigation-suite-item
+    [selected]="selectedIndex === 1"
+    [icon]="'task_alt'"
+    [label]="'Tasks'"
+    (click)="selectedIndex = 1"
+  />
+  <mat-navigation-suite-item
+    [selected]="selectedIndex === 2"
+    [icon]="'analytics'"
+    [label]="'Reports'"
+    (click)="selectedIndex = 2"
+  />
+  <mat-navigation-suite-item
+    [selected]="selectedIndex === 3"
+    [icon]="'admin_panel_settings'"
+    [label]="'Admin'"
+    (click)="selectedIndex = 3"
+  />
 
-  <section class="metrics" aria-label="Runtime metrics">
-    <mat-card>
-      <mat-card-subtitle>Version</mat-card-subtitle>
-      <mat-card-title>{{ overview.version || '0.1.0' }}</mat-card-title>
-    </mat-card>
-    <mat-card>
-      <mat-card-subtitle>Model</mat-card-subtitle>
-      <mat-card-title>{{ overview.currentModel || 'not set' }}</mat-card-title>
-    </mat-card>
-    <mat-card>
-      <mat-card-subtitle>Active sessions</mat-card-subtitle>
-      <mat-card-title>
-        {{ formatCount(overview.activeSessions) }}
-      </mat-card-title>
-    </mat-card>
-    <mat-card>
-      <mat-card-subtitle>Messages</mat-card-subtitle>
-      <mat-card-title>
-        {{ formatCount(overview.totalMessagesProcessed) }}
-      </mat-card-title>
-    </mat-card>
-  </section>
+</mat-navigation-suite>
 
-  <mat-card class="tools">
-    <mat-card-header>
-      <mat-icon mat-card-avatar aria-hidden="true">build</mat-icon>
-      <mat-card-title>Tools</mat-card-title>
-      <mat-card-subtitle
-        >{{ overview.tools.length }} registered</mat-card-subtitle
-      >
-    </mat-card-header>
-    <mat-divider></mat-divider>
-    <mat-card-content>
-      @if (overview.tools.length > 0) {
-      <div class="tool-list">
-        @for (tool of overview.tools; track tool.name) {
-        <mat-card appearance="outlined">
-          <mat-card-title>{{ tool.name }}</mat-card-title>
-          <mat-card-content>
-            <p>{{ tool.description || 'No description provided' }}</p>
-          </mat-card-content>
-        </mat-card>
-        }
-      </div>
-      } @else {
-      <p class="empty">No tools reported yet.</p>
-      }
-    </mat-card-content>
-  </mat-card>
-  }
-
-  <router-outlet></router-outlet>
+<main>
 </main>
+
+</mat-navigation-suite-scaffold>
+

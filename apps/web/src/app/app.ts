@@ -7,10 +7,10 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { RouterModule } from '@angular/router';
-import { DashboardService, type DashboardState } from './dashboard.service';
+import { MAT_NAVIGATION_SUITE_MODULES } from '@fairylights-studio/ngx-m3-navigation-suite';
 
 @Component({
-  imports: [
+  imports: [MAT_NAVIGATION_SUITE_MODULES,
     MatButtonModule,
     MatCardModule,
     MatChipsModule,
@@ -22,31 +22,8 @@ import { DashboardService, type DashboardState } from './dashboard.service';
   ],
   selector: 'app-root',
   templateUrl: './app.html',
-  styleUrl: './app.scss',
 })
-export class App implements OnInit {
-  private readonly dashboard = inject(DashboardService);
+export class App  {
+  selectedIndex = 0;
 
-  protected readonly state = signal<DashboardState>({ status: 'loading' });
-
-  async ngOnInit(): Promise<void> {
-    await this.refresh();
-  }
-
-  protected async refresh(): Promise<void> {
-    this.state.set({ status: 'loading' });
-
-    try {
-      const overview = await this.dashboard.getOverview();
-      this.state.set({ status: 'ready', overview });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unable to reach FrostAgent';
-      this.state.set({ status: 'error', message });
-    }
-  }
-
-  protected formatCount(value: bigint | number): string {
-    return value.toLocaleString();
-  }
 }
