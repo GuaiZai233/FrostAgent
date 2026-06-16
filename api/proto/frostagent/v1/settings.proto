@@ -2,58 +2,101 @@ syntax = "proto3";
 
 package frostagent.v1;
 
-// SettingsService manages environment variable configuration.
+// SettingsService manages environment variable configuration and raw .env file access.
 service SettingsService {
+  // ListEnvVars retrieves all configured environment variables.
   rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
+
+  // UpdateEnvVar creates or updates a specific environment variable.
   rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
+
+  // DeleteEnvVar removes an environment variable from the configuration.
   rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
+
+  // GetRawEnvFile retrieves the entire content of the .env file.
   rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse);
+
+  // UpdateRawEnvFile overwrites the .env file with new content.
   rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse);
 }
 
+// EnvVar represents a single configuration key-pair.
 message EnvVar {
+  // key is the environment variable name.
   string key = 1;
+
+  // value is the current string value of the variable.
   string value = 2;
+
+  // is_secret indicates if the value contains sensitive information (e.g., API keys).
   bool is_secret = 3;
 }
 
+// ListEnvVarsRequest requests all environment variables.
 message ListEnvVarsRequest {}
 
+// ListEnvVarsResponse contains the list of all configured environment variables.
 message ListEnvVarsResponse {
+  // env_vars is the collection of configuration entries.
   repeated EnvVar env_vars = 1;
 }
 
+// UpdateEnvVarRequest defines the variable to be created or modified.
 message UpdateEnvVarRequest {
+  // key is the name of the environment variable.
   string key = 1;
+
+  // value is the new value to be assigned.
   string value = 2;
+
+  // is_secret flags whether this variable should be treated as sensitive.
   bool is_secret = 3;
 }
 
+// UpdateEnvVarResponse reports the result of the update operation.
 message UpdateEnvVarResponse {
+  // success is true if the variable was updated.
   bool success = 1;
+
+  // error contains the error message if the operation failed.
   string error = 2;
 }
 
+// DeleteEnvVarRequest identifies the variable to be removed.
 message DeleteEnvVarRequest {
+  // key is the name of the variable to delete.
   string key = 1;
 }
 
+// DeleteEnvVarResponse reports the result of the deletion.
 message DeleteEnvVarResponse {
+  // success is true if the variable was deleted.
   bool success = 1;
+
+  // error contains the error message if the operation failed.
   string error = 2;
 }
 
+// GetRawEnvFileRequest requests the raw configuration file content.
 message GetRawEnvFileRequest {}
 
+// GetRawEnvFileResponse contains the raw file content.
 message GetRawEnvFileResponse {
+  // content is the full text of the .env file.
   string content = 1;
 }
 
+// UpdateRawEnvFileRequest provides new content for the configuration file.
 message UpdateRawEnvFileRequest {
+  // content is the new text to write to the .env file.
   string content = 1;
 }
 
+// UpdateRawEnvFileResponse reports the result of the file update.
 message UpdateRawEnvFileResponse {
+  // success is true if the file was updated.
   bool success = 1;
+
+  // error contains the error message if the operation failed.
   string error = 2;
 }

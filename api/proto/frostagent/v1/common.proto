@@ -2,24 +2,41 @@ syntax = "proto3";
 
 package frostagent.v1;
 
-// Pagination is used for list requests.
+// Pagination is used for list requests to control data windowing.
 message Pagination {
+  // page_size is the maximum number of items to return in a single page.
   int32 page_size = 1;
+
+  // page_token is used to retrieve the next page of results.
   string page_token = 2;
+
+  // total is the total number of items available across all pages.
   int32 total = 3;
 }
 
-// ToolInfo describes a registered tool.
+// ToolInfo describes a registered tool available for agent orchestration.
 message ToolInfo {
+  // name is the unique identifier of the tool.
   string name = 1;
+
+  // description explains what the tool does and how the agent should use it.
   string description = 2;
 }
 
-// SessionInfo describes an active session.
+// SessionInfo describes an active or historical agent interaction session.
 message SessionInfo {
+  // session_id is the unique identifier for the interaction session.
   string session_id = 1;
+
+  // platform identifies the communication channel (e.g., "onebot", "http").
   string platform = 2;
+
+  // message_count is the number of messages exchanged in this session.
   int32 message_count = 3;
+
+  // created_at is the ISO 8601 timestamp when the session was initialized.
   string created_at = 4;
+
+  // last_active is the ISO 8601 timestamp of the most recent interaction.
   string last_active = 5;
 }
