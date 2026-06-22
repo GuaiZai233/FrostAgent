@@ -25,7 +25,7 @@
     "@connectrpc/connect": "2.1.2",
     "@connectrpc/connect-web": "2.1.2",
     "@fairylights-studio/ngx-m3-button": "^0.3.2",
-    "@fairylights-studio/ngx-m3-navigation-suite": "^0.3.3",
+    "@fairylights-studio/ngx-m3-navigation-suite": "^0.3.4",
     "monaco-editor": "^0.55.1",
     "ngx-monaco-editor-v2": "^21.1.4",
     "rxjs": "7.8.2",
