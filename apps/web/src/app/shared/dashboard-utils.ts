@@ -115,15 +115,6 @@ export function maskSecret(value: string): string {
   return `${'*'.repeat(value.length - 4)}${value.slice(-4)}`;
 }
 
-export function localeSwitchPath(pathname: string): string {
-  const path = pathname || '/';
-  if (path === '/en' || path.startsWith('/en/')) {
-    const withoutLocale = path.replace(/^\/en(?=\/|$)/, '') || '/';
-    return withoutLocale;
-  }
-  return path === '/' ? '/en/' : `/en${path}`;
-}
-
 export class PageTokenStack {
   private readonly tokens = [''];
   private index = 0;

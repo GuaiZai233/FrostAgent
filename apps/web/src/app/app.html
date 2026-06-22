@@ -10,12 +10,12 @@
       [matMenuTriggerFor]="addMenu"
     >
       <mat-icon>add</mat-icon>
-      新增...
+      <span i18n="@@addFab">新增...</span>
     </button>
     <mat-menu #addMenu="matMenu">
       <button mat-menu-item (click)="openAddEnvVarDialog()">
 
-        <span i18n="@@addEnvVar">环境变量</span>
+        <span i18n="@@EnvVar">环境变量</span>
       </button>
     </mat-menu>
   }

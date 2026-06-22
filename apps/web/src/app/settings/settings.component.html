@@ -1,124 +1,39 @@
-<section >
-  <header >
-    <button matIconButton (click)="refresh()" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip">
-      <mat-icon>refresh</mat-icon>
-    </button>
+<section>
+  @if (!isChildRoute()) {
+    <header style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+      <h2 i18n="@@settingsTitle" style="margin: 0; flex: 1;">设置</h2>
+    </header>
 
-  </header>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+      <mat-card
+        appearance="outlined"
+        style="cursor: pointer;"
+        (click)="navigateTo('/settings/backend')"
+      >
+        <mat-card-content style="display: flex; align-items: center; gap: 16px; padding: 24px;">
+          <mat-icon style="font-size: 40px; width: 40px; height: 40px;">dns</mat-icon>
+          <div>
+            <h3 i18n="@@backendSettings" style="margin: 0 0 4px;">bot软件设置</h3>
+            <p i18n="@@backendSettingsDesc" style="margin: 0; color: var(--mat-sys-outline);">快捷修改服务端环境变量</p>
+          </div>
+        </mat-card-content>
+      </mat-card>
 
-  @if (loading() || saving()) {
-    <mat-progress-bar mode="indeterminate" />
+      <mat-card
+        appearance="outlined"
+        style="cursor: pointer;"
+        (click)="navigateTo('/settings/frontend')"
+      >
+        <mat-card-content style="display: flex; align-items: center; gap: 16px; padding: 24px;">
+          <mat-icon style="font-size: 40px; width: 40px; height: 40px;">palette</mat-icon>
+          <div>
+            <h3 i18n="@@frontendSettings" style="margin: 0 0 4px;">网页设置</h3>
+            <p i18n="@@frontendSettingsDesc" style="margin: 0; color: var(--mat-sys-outline);">语言、色彩等</p>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
   }
 
-  @if (error()) {
-    <mat-card >
-      <mat-card-content>{{ error() }}</mat-card-content>
-    </mat-card>
-  }
-
-  <mat-tab-group animationDuration="200ms">
-    <mat-tab label="环境变量" i18n-label="@@envVarsTab">
-      <section >
-        <mat-card >
-          <table mat-table [dataSource]="envVars()">
-            <ng-container matColumnDef="key">
-              <th mat-header-cell *matHeaderCellDef i18n="@@key">Key</th>
-              <td mat-cell *matCellDef="let env">
-                <div style="display: flex; align-items: center; gap: 4px;">
-                  @if (env.isSecret) {
-                    <mat-icon style="font-size: 18px; width: 18px; height: 18px; margin-right: 4px;" i18n-title="@@isSecret" title="这是敏感信息">lock</mat-icon>
-                  }
-                  {{ env.key }}
-                </div>
-              </td>
-            </ng-container>
-
-            <ng-container matColumnDef="value">
-              <th mat-header-cell *matHeaderCellDef i18n="@@value">Value</th>
-              <td mat-cell *matCellDef="let env">
-                @if (editingKey() === env.key) {
-                  <div style="display: flex; flex-direction: column; padding: 12px 0;">
-                    <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                      <mat-label i18n="@@value">Value</mat-label>
-                      <input
-                        matInput
-                        [ngModel]="editingValue()"
-                        (ngModelChange)="editingValue.set($event)"
-                      />
-                    </mat-form-field>
-                    <mat-checkbox
-                      style="margin-top: 4px;"
-                      [ngModel]="editingIsSecret()"
-                      (ngModelChange)="editingIsSecret.set($event)"
-                    >
-                      <span i18n="@@isSecret">这是敏感信息</span>
-                    </mat-checkbox>
-                  </div>
-                } @else {
-                  <code>{{ displayValue(env) || '-' }}</code>
-                }
-              </td>
-            </ng-container>
-
-            <ng-container matColumnDef="actions">
-              <th mat-header-cell *matHeaderCellDef i18n="@@actions">操作</th>
-              <td mat-cell *matCellDef="let env">
-                @if (editingKey() === env.key) {
-                  <button mat-icon-button type="button" (click)="saveEdit()" aria-label="Save">
-                    <mat-icon>check</mat-icon>
-                  </button>
-                  <button mat-icon-button type="button" (click)="cancelEdit()" aria-label="Cancel">
-                    <mat-icon>close</mat-icon>
-                  </button>
-                } @else {
-                  @if (env.isSecret) {
-                    <button
-                      mat-icon-button
-                      type="button"
-                      (click)="toggleSecret(env.key)"
-                      aria-label="Toggle secret visibility"
-                    >
-                      <mat-icon>{{ isSecretVisible(env.key) ? 'visibility_off' : 'visibility' }}</mat-icon>
-                    </button>
-                  }
-                  <button mat-icon-button type="button" (click)="startEdit(env)" aria-label="Edit">
-                    <mat-icon>edit</mat-icon>
-                  </button>
-                  <button mat-icon-button type="button" (click)="deleteEnvVar(env.key)" aria-label="Delete">
-                    <mat-icon>delete</mat-icon>
-                  </button>
-                }
-              </td>
-            </ng-container>
-
-            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
-          </table>
-        </mat-card>
-      </section>
-    </mat-tab>
-
-    <mat-tab label="原始 .env" i18n-label="@@rawEnvTab">
-      <section >
-        <mat-card >
-          <mat-card-content>
-            <div style="height: 500px;overflow: hidden; margin-top: 16px;">
-              <ngx-monaco-editor
-                style="height: 100%"
-                [options]="editorOptions"
-                [ngModel]="rawContent()"
-                (ngModelChange)="rawContent.set($event)"
-              ></ngx-monaco-editor>
-            </div>
-          </mat-card-content>
-          <mat-card-actions align="end">
-            <button mat-flat-button type="button" (click)="saveRawEnvFile()">
-              <mat-icon>save</mat-icon>
-              <span i18n="@@saveRawEnv">保存 .env</span>
-            </button>
-          </mat-card-actions>
-        </mat-card>
-      </section>
-    </mat-tab>
-  </mat-tab-group>
+  <router-outlet />
 </section>

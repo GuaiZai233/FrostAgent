@@ -11,7 +11,6 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
 import { MAT_NAVIGATION_SUITE_MODULES, MatNavigationSuiteScaffoldState, MatNavigationSuiteScaffoldDefaults } from '@fairylights-studio/ngx-m3-navigation-suite';
 import { Subscription, filter } from 'rxjs';
-import { localeSwitchPath } from './shared/dashboard-utils';
 import { MatExtendedFabCollapsedDirective } from '@fairylights-studio/ngx-m3-button';
 import { AddEnvVarDialogComponent } from './shared/add-env-var-dialog.component';
 
@@ -99,15 +98,5 @@ export class App implements OnDestroy {
     this.dialog.open(AddEnvVarDialogComponent, {
       width: '400px',
     });
-  }
-
-  switchLocalePath(): string {
-    return localeSwitchPath(window.location.pathname);
-  }
-
-  switchLocaleLabel(): string {
-    return $localize.locale === 'en'
-      ? $localize`:@@switchToChinese:简体中文`
-      : $localize`:@@switchToEnglish:English`;
   }
 }

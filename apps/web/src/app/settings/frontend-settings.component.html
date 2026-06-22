@@ -1,0 +1,25 @@
+<section>
+  <mat-toolbar style="margin-bottom: 16px; border-radius: 12px;">
+    <a mat-icon-button routerLink="/settings" aria-label="Back to settings">
+      <mat-icon>arrow_back</mat-icon>
+    </a>
+    <span i18n="@@frontendSettingsTitle">网页设置</span>
+  </mat-toolbar>
+
+  <mat-card appearance="outlined">
+    <mat-card-content style="padding: 0;">
+      <mat-list role="list">
+        <mat-list-item role="listitem">
+          <mat-icon matListItemIcon>language</mat-icon>
+          <div matListItemTitle i18n="@@language">语言</div>
+          <div matListItemLine>{{ currentLocaleLabel() }}</div>
+          <a
+            matListItemMeta
+            mat-button
+            [href]="switchLocaleHref()"
+          >{{ switchLocaleLabel() }}</a>
+        </mat-list-item>
+      </mat-list>
+    </mat-card-content>
+  </mat-card>
+</section>

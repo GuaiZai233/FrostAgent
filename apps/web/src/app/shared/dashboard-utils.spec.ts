@@ -14,13 +14,6 @@ beforeAll(async () => {
 });
 
 describe('dashboard utilities', () => {
-  it('maps locale paths between zh-CN root and English subpath', () => {
-    expect(utils.localeSwitchPath('/')).toBe('/en/');
-    expect(utils.localeSwitchPath('/logs')).toBe('/en/logs');
-    expect(utils.localeSwitchPath('/en')).toBe('/');
-    expect(utils.localeSwitchPath('/en/settings')).toBe('/settings');
-  });
-
   it('masks secrets without double masking server-provided masks', () => {
     expect(utils.maskSecret('abcdef1234')).toBe('******1234');
     expect(utils.maskSecret('abc')).toBe('****');
