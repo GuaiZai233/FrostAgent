@@ -33,7 +33,7 @@
       ],
       "outputs": ["{workspaceRoot}/bin"],
       "options": {
-        "command": "go build ./...",
+        "command": "mkdir -p ./bin && go build -o ./bin/app ./cmd/app && go build -o ./bin/agent ./cmd/agent",
         "cwd": "."
       }
     },
