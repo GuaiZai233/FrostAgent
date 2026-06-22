@@ -13,6 +13,7 @@ import { MAT_NAVIGATION_SUITE_MODULES, MatNavigationSuiteScaffoldState, MatNavig
 import { Subscription, filter } from 'rxjs';
 import { MatExtendedFabCollapsedDirective } from '@fairylights-studio/ngx-m3-button';
 import { AddEnvVarDialogComponent } from './shared/add-env-var-dialog.component';
+import { ThemeService } from './shared/theme.service';
 
 @Component({
   imports: [
@@ -37,21 +38,17 @@ export class App implements OnDestroy {
   private readonly router = inject(Router);
   private readonly dialog = inject(MatDialog);
   private readonly scaffoldDefaults = inject(MatNavigationSuiteScaffoldDefaults);
+  private readonly themeService = inject(ThemeService);
   private readonly routerEvents: Subscription;
   readonly currentUrl = signal(this.router.url);
 
   readonly scaffoldState = new MatNavigationSuiteScaffoldState();
 
-  readonly isSettingsPage = computed(() =>
-    this.currentUrl().startsWith('/settings'),
+  readonly isSettingsBackendPage = computed(() =>
+    this.currentUrl().startsWith('/settings/backend'),
   );
 
-  readonly isRailMode = computed(() => {
-    const type = this.scaffoldDefaults.navSuiteType()();
-    return type === 'RailCollapsed' || type === 'RailExpanded';
-  });
-
-  readonly shouldShowFab = computed(() => this.isRailMode() || this.isSettingsPage());
+  readonly shouldShowFab = computed(() => this.isSettingsBackendPage());
 
   readonly destinations = [
     {

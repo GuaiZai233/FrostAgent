@@ -7,6 +7,7 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTableModule } from '@angular/material/table';
+import { MatToolbarModule } from '@angular/material/toolbar';
 import type { SessionInfo } from '@frostagent/proto';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import { FrostagentApiService } from '../core/frostagent-api.service';
@@ -28,6 +29,7 @@ import {
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
+    MatToolbarModule,
   ],
   templateUrl: './sessions.component.html',
 })

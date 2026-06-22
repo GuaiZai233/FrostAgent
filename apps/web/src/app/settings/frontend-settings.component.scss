@@ -1,0 +1,18 @@
+.toolbar-title {
+  font-size: 20px;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.form-section-title {
+
+  // 1. 字体与文字排版 (Typography)
+  // 映射到 M3 的 body-large 级别（16px, 400, 24px）
+  font: var(--mat-sys-body-large-font);
+  
+  // 颜色映射到 on-surface-variant
+  color: var(--mat-sys-on-surface-variant, rgb(196, 199, 197));
+
+  // 2. 间距 (Spacing)
+  margin-top: 24px;
+  margin-bottom: 10px;
+}

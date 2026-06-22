@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Restrict GITHUB_TOKEN to read-only access for security
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout with full history so `nx affected` can diff against the base branch
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # pnpm must be set up before setup-node can use its cache
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: 'go.sum'
+
+      # Cache the Nx computation cache to speed up affected/task graph resolution
+      - name: Cache Nx
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ hashFiles('nx.json') }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ hashFiles('nx.json') }}-${{ github.ref_name }}-
+            nx-${{ runner.os }}-${{ hashFiles('nx.json') }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # buf compiles protobuf schemas into Go / TypeScript code as part of Nx targets
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      # On PRs, run only tasks affected by the change set to keep CI fast
+      - name: Run affected tasks (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm exec nx affected -t build test lint vet \
+            --base="origin/${{ github.base_ref }}" \
+            --head=HEAD
+
+      # On push to main, run every task to ensure the full tree stays green
+      - name: Run all tasks (push)
+        if: github.event_name == 'push'
+        run: pnpm exec nx run-many -t build test lint vet --all

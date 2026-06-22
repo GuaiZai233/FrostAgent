@@ -1,25 +1,58 @@
-<section>
-  <mat-toolbar style="margin-bottom: 16px; border-radius: 12px;">
+<div class="page">
+  <mat-toolbar >
     <a mat-icon-button routerLink="/settings" aria-label="Back to settings">
       <mat-icon>arrow_back</mat-icon>
     </a>
-    <span i18n="@@frontendSettingsTitle">网页设置</span>
+    <span class="toolbar-title" i18n="@@frontendSettingsTitle">网页设置</span>
   </mat-toolbar>
 
-  <mat-card appearance="outlined">
-    <mat-card-content style="padding: 0;">
-      <mat-list role="list">
-        <mat-list-item role="listitem">
-          <mat-icon matListItemIcon>language</mat-icon>
-          <div matListItemTitle i18n="@@language">语言</div>
-          <div matListItemLine>{{ currentLocaleLabel() }}</div>
-          <a
-            matListItemMeta
-            mat-button
-            [href]="switchLocaleHref()"
-          >{{ switchLocaleLabel() }}</a>
-        </mat-list-item>
-      </mat-list>
-    </mat-card-content>
-  </mat-card>
-</section>
+  <section>
+    <mat-form-field subscriptSizing="dynamic">
+        <mat-label i18n="@@localeSelectPlaceholder">语言</mat-label>
+      <mat-select
+        i18n-placeholder="@@localeSelectPlaceholder"
+        placeholder="选择语言"
+        [ngModel]="currentLocale"
+        (ngModelChange)="switchLocale($event)"
+      >
+        @for (option of localeOptions; track option.value) {
+          <mat-option [value]="option.value">{{ option.label }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+  </section>
+
+  <section >
+    <h3 class="form-section-title" i18n="@@themeMode">主题</h3>
+    
+    <mat-button-toggle-group
+      [ngModel]="themeService.currentMode()"
+      (ngModelChange)="themeService.setMode($event)"
+      hideSingleSelectionIndicator="true"
+    >
+      @for (option of themeOptions; track option.mode) {
+        <mat-button-toggle [value]="option.mode">
+          <mat-icon>{{ option.icon }}</mat-icon>
+          <span>{{ option.label }}</span>
+        </mat-button-toggle>
+      }
+    </mat-button-toggle-group>
+  </section>
+
+  <section >
+    <h3 class="form-section-title" i18n="@@themeSeason">配色</h3>
+    
+    <mat-button-toggle-group
+      [ngModel]="themeService.currentSeasonMode()"
+      (ngModelChange)="themeService.setSeasonMode($event)"
+      hideSingleSelectionIndicator="true"
+    >
+      @for (option of seasonOptions; track option.mode) {
+        <mat-button-toggle [value]="option.mode">
+          <mat-icon>{{ option.icon }}</mat-icon>
+          <span>{{ option.label }}</span>
+        </mat-button-toggle>
+      }
+    </mat-button-toggle-group>
+  </section>
+</div>

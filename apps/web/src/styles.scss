@@ -15,11 +15,36 @@ html {
   );
 }
 
-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
+html.theme-spring {
+  @include mat.theme((
+    color: (
+      primary: mat.$green-palette,
+    )
+  ));
+}
+
+html.theme-summer {
+  @include mat.theme((
+    color: (
+      primary: mat.$red-palette,
+    )
+  ));
+}
+
+html.theme-autumn {
+  @include mat.theme((
+    color: (
+      primary: mat.$yellow-palette,
+    )
+  ));
+}
+
+html.theme-winter {
+  @include mat.theme((
+    color: (
+      primary: mat.$azure-palette,
+    )
+  ));
 }
 
 html,
@@ -38,4 +63,16 @@ body {
   'GRAD' -25,
   'opsz' 24
 }
+}
+
+.page {
+  display: block;
+  padding: 0 16px 0 16px;
+  max-width: 960px;
+  margin: 0;
+
+  > mat-toolbar {
+    margin-inline: -16px;
+    width: calc(100% + 32px);
+  }
 }

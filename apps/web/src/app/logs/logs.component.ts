@@ -11,6 +11,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
+import { MatToolbarModule } from '@angular/material/toolbar';
 import { LogLevel, type LogEntry } from '@frostagent/proto';import {MatTooltipModule} from '@angular/material/tooltip';
 
 import { FrostagentApiService } from '../core/frostagent-api.service';
@@ -40,6 +41,7 @@ import {
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
+    MatToolbarModule,
   ],
   templateUrl: './logs.component.html',
 })

@@ -424,45 +424,63 @@
         </context-group>
       </trans-unit>
       <trans-unit id="frontendSettingsTitle" datatype="html">
-        <source>前端设置</source>
+        <source>网页设置</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
           <context context-type="linenumber">6,9</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="language" datatype="html">
+      <trans-unit id="localeSelectPlaceholder" datatype="html">
         <source>语言</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
-          <context context-type="linenumber">15</context>
+          <context context-type="linenumber">11,13</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">15,16</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="currentLanguageEn" datatype="html">
-        <source>当前: English</source>
+      <trans-unit id="themeMode" datatype="html">
+        <source>主题</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">27,28</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeSystem" datatype="html">
+        <source>跟随系统</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
-          <context context-type="linenumber">24</context>
+          <context context-type="linenumber">37</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="currentLanguageZh" datatype="html">
-        <source>当前: 简体中文</source>
+      <trans-unit id="themeLight" datatype="html">
+        <source>亮色</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
-          <context context-type="linenumber">25</context>
+          <context context-type="linenumber">38</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="switchToChinese" datatype="html">
+      <trans-unit id="themeDark" datatype="html">
+        <source>暗色</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">39</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="localeZhCN" datatype="html">
         <source>简体中文</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
-          <context context-type="linenumber">30</context>
+          <context context-type="linenumber">45</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="switchToEnglish" datatype="html">
+      <trans-unit id="localeEn" datatype="html">
         <source>English</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
-          <context context-type="linenumber">31</context>
+          <context context-type="linenumber">46</context>
         </context-group>
       </trans-unit>
       <trans-unit id="settingsTitle" datatype="html">
@@ -473,7 +491,7 @@
         </context-group>
       </trans-unit>
       <trans-unit id="backendSettings" datatype="html">
-        <source>bot软件设置</source>
+        <source>bot设置</source>
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
           <context context-type="linenumber">16,17</context>

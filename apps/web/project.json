@@ -86,6 +86,7 @@
     },
     "test": {
       "executor": "@angular/build:unit-test",
+      "dependsOn": ["proto:generate-web"],
       "options": {
         "watch": false
       }
