@@ -1,10 +1,12 @@
 import {
   ApplicationConfig,
-  provideBrowserGlobalErrorListeners,inject,provideAppInitializer
+  provideBrowserGlobalErrorListeners,
+  inject,
+  provideAppInitializer
 } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { appRoutes } from './app.routes';
-import { MatIconRegistry } from '@angular/material/icon'; 
+import { MatIconRegistry } from '@angular/material/icon';
 import { provideMonacoEditor } from 'ngx-monaco-editor-v2';
 
 export const appConfig: ApplicationConfig = {
@@ -19,5 +21,4 @@ export const appConfig: ApplicationConfig = {
       baseUrl: '/assets/monaco-editor/vs',
     }),
   ],
-  
 };
