@@ -1,4 +1,4 @@
-import { Injectable, Inject, signal, computed, effect } from '@angular/core';
+import { Injectable, inject, signal, computed, effect } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -8,6 +8,7 @@ export type SeasonMode = 'auto' | 'spring' | 'summer' | 'autumn' | 'winter';
   providedIn: 'root',
 })
 export class ThemeService {
+  private readonly document = inject(DOCUMENT);
   private readonly mediaQuery: MediaQueryList;
   private readonly localStorageKey = 'user-theme';
   private readonly seasonStorageKey = 'user-season';
@@ -35,8 +36,8 @@ export class ThemeService {
     return mode;
   });
 
-  constructor(@Inject(DOCUMENT) private readonly document: Document) {
-    this.mediaQuery = this.document.defaultView!.matchMedia(
+  constructor() {
+    this.mediaQuery = (this.document.defaultView ?? window).matchMedia(
       '(prefers-color-scheme: dark)',
     );
 

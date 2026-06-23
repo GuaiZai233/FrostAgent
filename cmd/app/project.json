@@ -41,6 +41,10 @@
       "executor": "nx:run-commands",
       "dependsOn": [
         {
+          "projects": ["web"],
+          "target": "build"
+        },
+        {
           "projects": ["proto"],
           "target": "generate-go"
         }
@@ -53,6 +57,10 @@
     "vet": {
       "executor": "nx:run-commands",
       "dependsOn": [
+        {
+          "projects": ["web"],
+          "target": "build"
+        },
         {
           "projects": ["proto"],
           "target": "generate-go"
