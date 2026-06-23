@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"sort"
 	"sync"
 	"time"
 )
@@ -127,7 +128,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 
 	session = &SessionContext{
 		ConversationID: sessionID,
-		History:         make([]ChatMessage, 0),
+		History:        make([]ChatMessage, 0),
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -246,23 +247,23 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	keys := make([]string, 0, len(sm.sessions))
-	for k := range sm.sessions {
-		keys = append(keys, k)
+	sessions := make([]*SessionContext, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		sessions = append(sessions, session)
 	}
 
-	if offset >= len(keys) {
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+
+	if offset >= len(sessions) {
 		return nil
 	}
 
 	end := offset + limit
-	if end > len(keys) || limit <= 0 {
-		end = len(keys)
+	if end > len(sessions) || limit <= 0 {
+		end = len(sessions)
 	}
 
-	result := make([]*SessionContext, 0, end-offset)
-	for i := offset; i < end; i++ {
-		result = append(result, sm.sessions[keys[i]])
-	}
-	return result
+	return sessions[offset:end]
 }
