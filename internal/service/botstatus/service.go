@@ -53,8 +53,17 @@ func (s *Service) GetOverview(
 		})
 	}
 
-	// Sort by name to ensure deterministic order
-	sort.Slice(toolInfos, func(i, j int) bool {
+	// Sort by name to ensure deterministic order, with a stable tiebreaker for robustness.
+	sort.SliceStable(toolInfos, func(i, j int) bool {
+		if toolInfos[i] == nil {
+			return false
+		}
+		if toolInfos[j] == nil {
+			return true
+		}
+		if toolInfos[i].Name == toolInfos[j].Name {
+			return toolInfos[i].Description < toolInfos[j].Description
+		}
 		return toolInfos[i].Name < toolInfos[j].Name
 	})
 

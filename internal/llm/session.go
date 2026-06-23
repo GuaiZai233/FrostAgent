@@ -247,23 +247,49 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	sessions := make([]*SessionContext, 0, len(sm.sessions))
-	for _, session := range sm.sessions {
-		sessions = append(sessions, session)
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = len(sm.sessions)
 	}
 
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	type sessionEntry struct {
+		context   *SessionContext
+		id        string
+		updatedAt time.Time
+	}
+
+	entries := make([]sessionEntry, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		session.mu.Lock()
+		entries = append(entries, sessionEntry{
+			context:   session,
+			id:        session.ConversationID,
+			updatedAt: session.UpdatedAt,
+		})
+		session.mu.Unlock()
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].updatedAt.Equal(entries[j].updatedAt) {
+			return entries[i].id < entries[j].id
+		}
+		return entries[i].updatedAt.After(entries[j].updatedAt)
 	})
 
-	if offset >= len(sessions) {
+	if offset >= len(entries) {
 		return nil
 	}
 
 	end := offset + limit
-	if end > len(sessions) || limit <= 0 {
-		end = len(sessions)
+	if end > len(entries) {
+		end = len(entries)
 	}
 
-	return sessions[offset:end]
+	result := make([]*SessionContext, 0, end-offset)
+	for _, entry := range entries[offset:end] {
+		result = append(result, entry.context)
+	}
+	return result
 }

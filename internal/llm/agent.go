@@ -95,7 +95,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 			Parameters:  t.Parameters(),
 		})
 	}
-	sort.Slice(modelTools, func(i, j int) bool {
+	sort.SliceStable(modelTools, func(i, j int) bool {
 		return modelTools[i].Name < modelTools[j].Name
 	})
 
