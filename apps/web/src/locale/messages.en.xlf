@@ -778,6 +778,62 @@
           <context context-type="linenumber">27</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="overviewGreeting" datatype="html">
+        <source>你好👋！我是 <x id="PH" equiv-text="name"/></source>
+        <target>Hello 👋! I'm <x id="PH" equiv-text="name"/></target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.ts</context>
+          <context context-type="linenumber">71</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonAuto" datatype="html">
+        <source>跟随月份</source>
+        <target>Follow Month</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">43</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonSpring" datatype="html">
+        <source>春</source>
+        <target>Spring</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">44</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonSummer" datatype="html">
+        <source>夏</source>
+        <target>Summer</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">45</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonAutumn" datatype="html">
+        <source>秋</source>
+        <target>Autumn</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">46</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonWinter" datatype="html">
+        <source>冬</source>
+        <target>Winter</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">47</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeSeason" datatype="html">
+        <source>配色</source>
+        <target>Color Scheme</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">43</context>
+        </context-group>
+      </trans-unit>
     </body>
   </file>
 </xliff>

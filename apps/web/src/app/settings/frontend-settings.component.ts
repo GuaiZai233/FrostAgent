@@ -47,16 +47,20 @@ export class FrontendSettingsComponent {
     { mode: 'winter', icon: 'ac_unit', label: $localize`:@@seasonWinter:冬` },
   ];
 
-  readonly currentLocale = $localize.locale === 'en' ? 'en' : 'zh-CN';
+  readonly currentLocale = $localize.locale === 'en' ? 'en' : 'zh';
 
   readonly localeOptions: { value: string; label: string }[] = [
-    { value: 'zh-CN', label: $localize`:@@localeZhCN:简体中文` },
+    { value: 'zh', label: $localize`:@@localeZhCN:简体中文` },
     { value: 'en', label: $localize`:@@localeEn:English` },
   ];
 
   switchLocale(locale: string): void {
-    if (locale !== this.currentLocale) {
-      window.location.href = locale === 'en' ? '/' : '/en/';
-    }
+    if (locale === this.currentLocale) return;
+    // Keep the current path, but change the locale prefix.
+    const path = window.location.pathname;
+    // Strip any existing locale prefix (/zh/xxx or /en/xxx → /xxx).
+    const stripped = path.replace(new RegExp(`^/(${this.currentLocale})(/|$)`), '/$2');
+    const target = '/' + locale + stripped;
+    window.location.href = target;
   }
 }

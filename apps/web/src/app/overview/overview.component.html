@@ -16,7 +16,7 @@
   @if (overview(); as data) {
     <section>
       <div>
-        <h2>你好👋！我是 {{ data.botName || 'FrostAgent' }}</h2>
+        <h2>{{ greet(data.botName || 'FrostAgent') }}</h2>
       </div>
       <mat-chip-set aria-label="Bot metadata">
         <mat-chip [ngClass]="{

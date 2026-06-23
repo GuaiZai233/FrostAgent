@@ -66,4 +66,8 @@ export class OverviewComponent {
   formatStatus(value: BotStatus): string {
     return formatStatus(value);
   }
+
+  greet(name: string): string {
+    return $localize`:@@overviewGreeting:你好👋！我是 ${name}`;
+  }
 }

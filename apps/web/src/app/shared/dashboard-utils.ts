@@ -29,7 +29,7 @@ export const logLevelOptions = [
 ] as const;
 
 export function formatCount(value: bigint | number): string {
-  return new Intl.NumberFormat($localize.locale || 'zh-CN').format(value);
+  return new Intl.NumberFormat($localize.locale || 'zh').format(value);
 }
 
 export function formatUptime(totalSeconds: bigint | number): string {
@@ -57,7 +57,7 @@ export function formatDateTime(value: string): string {
     return value;
   }
 
-  return new Intl.DateTimeFormat($localize.locale || 'zh-CN', {
+  return new Intl.DateTimeFormat($localize.locale || 'zh', {
     dateStyle: 'medium',
     timeStyle: 'medium',
   }).format(date);

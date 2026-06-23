@@ -5,7 +5,7 @@
   "prefix": "app",
   "sourceRoot": "apps/web/src",
   "i18n": {
-    "sourceLocale": "zh-CN",
+    "sourceLocale": "zh",
     "locales": {
       "en": {
         "translation": "apps/web/src/locale/messages.en.xlf",

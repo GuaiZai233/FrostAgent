@@ -21,3 +21,5 @@
 - The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
 
 <!-- nx configuration end-->
+
+写完代码后不需要测试，最多运行一下语法检查。人类自己会测试你的代码的！
