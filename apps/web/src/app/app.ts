@@ -1,11 +1,6 @@
 import { Component, OnDestroy, inject, signal, computed } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatDividerModule } from '@angular/material/divider';
 import { MatIconModule } from '@angular/material/icon';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
@@ -20,14 +15,9 @@ import { ThemeService } from './shared/theme.service';
     MAT_NAVIGATION_SUITE_MODULES,
     MatExtendedFabCollapsedDirective,
     MatButtonModule,
-    MatCardModule,
-    MatChipsModule,
-    MatDividerModule,
     MatIconModule,
     MatMenuModule,
     MatDialogModule,
-    MatProgressBarModule,
-    MatToolbarModule,
     RouterModule,
   ],
   selector: 'app-root',

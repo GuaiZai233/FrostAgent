@@ -33,7 +33,7 @@
         </mat-chip>
         <mat-chip>
           <mat-icon matChipAvatar>deployed_code</mat-icon>
-          后端版本 {{ data.version || '-' }}
+          {{ backendVersion(data.version || '-') }}
         </mat-chip>
       </mat-chip-set>
     </section>

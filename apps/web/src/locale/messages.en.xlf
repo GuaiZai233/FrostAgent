@@ -786,6 +786,14 @@
           <context context-type="linenumber">71</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="backendVersion" datatype="html">
+        <source>后端版本 <x id="PH" equiv-text="version"/></source>
+        <target>Backend <x id="PH" equiv-text="version"/></target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.ts</context>
+          <context context-type="linenumber">75</context>
+        </context-group>
+      </trans-unit>
       <trans-unit id="seasonAuto" datatype="html">
         <source>跟随月份</source>
         <target>Follow Month</target>
