@@ -41,8 +41,8 @@ Compiled backend binaries are placed in `./bin/` and the frontend static assets 
 You can also build individual parts:
 
 ```bash
-pnpm exec nx build api    # Backend only
-pnpm exec nx build web    # Frontend only
+pnpm nx build api    # Backend only
+pnpm nx build web    # Frontend only
 ```
 
 ### 2. Configure Environment Variables

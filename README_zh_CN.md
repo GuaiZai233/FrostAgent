@@ -41,8 +41,8 @@ pnpm build
 也可以单独构建：
 
 ```bash
-pnpm exec nx build api    # 仅构建后端
-pnpm exec nx build web    # 仅构建前端
+pnpm nx build api    # 仅构建后端
+pnpm nx build web    # 仅构建前端
 ```
 
 ### 2. 配置环境变量

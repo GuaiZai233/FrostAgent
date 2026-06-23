@@ -58,11 +58,11 @@ jobs:
       - name: Run affected tasks (PR)
         if: github.event_name == 'pull_request'
         run: |
-          pnpm exec nx affected -t build test lint vet \
+          pnpm nx affected -t build test lint vet \
             --base="origin/${{ github.base_ref }}" \
             --head=HEAD
 
       # On push to main, run every task to ensure the full tree stays green
       - name: Run all tasks (push)
         if: github.event_name == 'push'
-        run: pnpm exec nx run-many -t build test lint vet --all
+        run: pnpm nx run-many -t build test lint vet --all
