@@ -13,6 +13,7 @@ An AI Agent orchestration + API middleware service built with Golang.
 This project is still in early stages and is intended for personal research use. We welcome PRs and guidance from everyone!
 
 ## Collaboration with ActionsCat
+
 [ActionsCat](https://github.com/actionscat/actionscat) supports the automation of static orchestration workflows.
 
 After integrating ActionsCat into the adapter, you can operate both simultaneously, and the agent will demonstrate its outstanding capabilities.
@@ -21,8 +22,27 @@ After integrating ActionsCat into the adapter, you can operate both simultaneous
 
 ### 1. Build the Project
 
+This project uses [Nx](https://nx.dev) for build orchestration.
+
 ```bash
-go build -o frostagent.exe
+# Install Node.js dependencies (Nx, Angular toolchain, etc.)
+# This project uses pnpm as the package manager
+pnpm install
+
+# Install buf for protobuf code generation
+go install github.com/bufbuild/buf/cmd/buf@latest
+
+# Build everything — backend Go binaries + frontend Angular app
+pnpm build
+```
+
+Compiled backend binaries are placed in `./bin/` and the frontend static assets go to `internal/frontend/dist/`.
+
+You can also build individual parts:
+
+```bash
+pnpm exec nx build api    # Backend only
+pnpm exec nx build web    # Frontend only
 ```
 
 ### 2. Configure Environment Variables
@@ -55,8 +75,9 @@ curl http://localhost:8080/health
 ```
 
 Response:
+
 ```json
-{"status":"ok"}
+{ "status": "ok" }
 ```
 
 ### Chat Completion Endpoint
@@ -89,22 +110,21 @@ FrostAgent can proxy to any OpenAI-compatible API endpoint. Simply modify the en
 
 ## Routes
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| POST | `/agent/query` | Chat completion endpoint |
+| Method | Endpoint       | Description              |
+| ------ | -------------- | ------------------------ |
+| GET    | `/health`      | Health check             |
+| POST   | `/agent/query` | Chat completion endpoint |
 
 ## Environment Variables
 
-| Variable | Description | Default Value                                                        |
-|----------|-------------|----------------------------------------------------------------------|
-| `UPSTREAM_ENDPOINT` | Upstream API endpoint URL | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` |
-| `UPSTREAM_API_KEY` | Upstream API authentication key | `sk-xxx`                                                             |
-| `LISTEN_ADDR` | Middleware service listening address | `:8080`                                                              |
-| `MAX_CONTEXT_MESSAGES` | Max messages kept in context, including system prompt | `20` |
-| `MAX_CONTEXT_CHARS` | Approximate max context characters before trimming | `24000` |
+| Variable               | Description                                           | Default Value                                                        |
+| ---------------------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `UPSTREAM_ENDPOINT`    | Upstream API endpoint URL                             | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` |
+| `UPSTREAM_API_KEY`     | Upstream API authentication key                       | `sk-xxx`                                                             |
+| `LISTEN_ADDR`          | Middleware service listening address                  | `:8080`                                                              |
+| `MAX_CONTEXT_MESSAGES` | Max messages kept in context, including system prompt | `20`                                                                 |
+| `MAX_CONTEXT_CHARS`    | Approximate max context characters before trimming    | `24000`                                                              |
 
 ## License
 
 MPL-2.0 (see LICENSE file)
-
