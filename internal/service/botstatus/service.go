@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/llm"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,11 @@ func (s *Service) GetOverview(
 			Description: t.Description(),
 		})
 	}
+
+	// Sort by name to ensure deterministic order
+	sort.Slice(toolInfos, func(i, j int) bool {
+		return toolInfos[i].Name < toolInfos[j].Name
+	})
 
 	resp := &v1.GetOverviewResponse{
 		BotName:                "FrostAgent",
