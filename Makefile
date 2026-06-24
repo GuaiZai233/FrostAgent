@@ -1,5 +1,7 @@
 SHELL := /bin/bash
 
+export PATH := $(CURDIR)/node_modules/.bin:$(PATH)
+
 PNPM ?= pnpm
 NG ?= $(PNPM) exec ng
 ESLINT ?= $(PNPM) exec eslint
