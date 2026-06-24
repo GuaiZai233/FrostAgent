@@ -18,11 +18,10 @@
       "sourceRoot": "apps/web/src",
       "prefix": "app",
       "i18n": {
-        "sourceLocale": "zh",
+        "sourceLocale": "zh-Hans",
         "locales": {
-          "en": {
-            "translation": "apps/web/src/locale/messages.en.xlf",
-            "subPath": "en"
+          "en-US": {
+            "translation": "apps/web/src/locale/messages.en.xlf"
           }
         }
       },
