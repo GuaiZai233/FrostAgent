@@ -23,6 +23,7 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
+import { ThemeService } from '../shared/theme.service';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution.js';
 import type { EnvVar } from '@frostagent/proto';
@@ -77,10 +78,10 @@ export class BackendSettingsComponent
   ngOnInit(): void {
     void this.refresh();
   }
-
+  readonly themeService = inject(ThemeService);
   ngAfterViewInit(): void {
     this.monacoEditor = monaco.editor.create(this.editorDiv().nativeElement, {
-      theme: 'vs',
+      theme: this.themeService.effectiveMode() === 'dark' ? 'vs-dark' : 'vs',
       language: 'ini',
       automaticLayout: true,
       minimap: { enabled: false },
