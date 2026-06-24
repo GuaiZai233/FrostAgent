@@ -1,1 +1,0 @@
-内容已迁移到 @AGENTS.md，阅读它的内容等同于阅读 CLAUDE.md。
