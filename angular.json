@@ -42,14 +42,15 @@
               {
                 "glob": "**/*",
                 "input": "apps/web/public"
-              },
-              {
-                "glob": "**/*",
-                "input": "node_modules/monaco-editor/min/vs",
-                "output": "assets/monaco-editor/vs"
               }
             ],
-            "styles": ["apps/web/src/styles.scss"]
+            "styles": [
+              "apps/web/node_modules/monaco-editor/min/vs/editor/editor.main.css",
+              "apps/web/src/styles.scss"
+            ],
+            "loader": {
+              ".ttf": "file"
+            }
           },
           "configurations": {
             "production": {
@@ -57,13 +58,13 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "650kb",
-                  "maximumError": "1.2mb"
+                  "maximumWarning": "1.5mb",
+                  "maximumError": "2mb"
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "4kb",
-                  "maximumError": "8kb"
+                  "maximumWarning": "320kb",
+                  "maximumError": "400kb"
                 }
               ],
               "outputHashing": "all"

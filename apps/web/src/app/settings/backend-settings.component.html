@@ -1,10 +1,10 @@
 <section class="page">
-  <mat-toolbar style="margin-bottom: 16px; border-radius: 12px;">
+  <mat-toolbar style="margin-bottom: 16px; border-radius: 12px">
     <a mat-icon-button routerLink="/settings" aria-label="Back to settings">
       <mat-icon>arrow_back</mat-icon>
     </a>
     <span i18n="@@backendSettingsTitle">后端设置</span>
-    <span style="flex: 1;"></span>
+    <span style="flex: 1"></span>
     <button mat-icon-button (click)="refresh()">
       <mat-icon>refresh</mat-icon>
     </button>
@@ -22,19 +22,25 @@
 
   <mat-tab-group animationDuration="200ms">
     <mat-tab i18n-label="@@envVarsTab" label="环境变量">
-      <section style="margin-top: 16px;">
+      <section style="margin-top: 16px">
         <mat-card>
           <table mat-table [dataSource]="envVars()">
             <ng-container matColumnDef="key">
               <th mat-header-cell *matHeaderCellDef i18n="@@key">Key</th>
               <td mat-cell *matCellDef="let env">
-                <div style="display: flex; align-items: center; gap: 4px;">
+                <div style="display: flex; align-items: center; gap: 4px">
                   @if (env.isSecret) {
                     <mat-icon
-                      style="font-size: 18px; width: 18px; height: 18px; margin-right: 4px;"
+                      style="
+                        font-size: 18px;
+                        width: 18px;
+                        height: 18px;
+                        margin-right: 4px;
+                      "
                       i18n-title="@@isSecret"
                       title="这是敏感信息"
-                    >lock</mat-icon>
+                      >lock</mat-icon
+                    >
                   }
                   {{ env.key }}
                 </div>
@@ -45,8 +51,17 @@
               <th mat-header-cell *matHeaderCellDef i18n="@@value">Value</th>
               <td mat-cell *matCellDef="let env">
                 @if (editingKey() === env.key) {
-                  <div style="display: flex; flex-direction: column; padding: 12px 0;">
-                    <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                  <div
+                    style="
+                      display: flex;
+                      flex-direction: column;
+                      padding: 12px 0;
+                    "
+                  >
+                    <mat-form-field
+                      appearance="outline"
+                      subscriptSizing="dynamic"
+                    >
                       <mat-label i18n="@@value">Value</mat-label>
                       <input
                         matInput
@@ -55,7 +70,7 @@
                       />
                     </mat-form-field>
                     <mat-checkbox
-                      style="margin-top: 4px;"
+                      style="margin-top: 4px"
                       [ngModel]="editingIsSecret()"
                       (ngModelChange)="editingIsSecret.set($event)"
                     >
@@ -72,10 +87,20 @@
               <th mat-header-cell *matHeaderCellDef i18n="@@actions">操作</th>
               <td mat-cell *matCellDef="let env">
                 @if (editingKey() === env.key) {
-                  <button mat-icon-button type="button" (click)="saveEdit()" aria-label="Save">
+                  <button
+                    mat-icon-button
+                    type="button"
+                    (click)="saveEdit()"
+                    aria-label="Save"
+                  >
                     <mat-icon>check</mat-icon>
                   </button>
-                  <button mat-icon-button type="button" (click)="cancelEdit()" aria-label="Cancel">
+                  <button
+                    mat-icon-button
+                    type="button"
+                    (click)="cancelEdit()"
+                    aria-label="Cancel"
+                  >
                     <mat-icon>close</mat-icon>
                   </button>
                 } @else {
@@ -86,13 +111,27 @@
                       (click)="toggleSecret(env.key)"
                       aria-label="Toggle secret visibility"
                     >
-                      <mat-icon>{{ isSecretVisible(env.key) ? 'visibility_off' : 'visibility' }}</mat-icon>
+                      <mat-icon>{{
+                        isSecretVisible(env.key)
+                          ? 'visibility_off'
+                          : 'visibility'
+                      }}</mat-icon>
                     </button>
                   }
-                  <button mat-icon-button type="button" (click)="startEdit(env)" aria-label="Edit">
+                  <button
+                    mat-icon-button
+                    type="button"
+                    (click)="startEdit(env)"
+                    aria-label="Edit"
+                  >
                     <mat-icon>edit</mat-icon>
                   </button>
-                  <button mat-icon-button type="button" (click)="deleteEnvVar(env.key)" aria-label="Delete">
+                  <button
+                    mat-icon-button
+                    type="button"
+                    (click)="deleteEnvVar(env.key)"
+                    aria-label="Delete"
+                  >
                     <mat-icon>delete</mat-icon>
                   </button>
                 }
@@ -107,16 +146,11 @@
     </mat-tab>
 
     <mat-tab i18n-label="@@rawEnvTab" label="原始 .env">
-      <section style="margin-top: 16px;">
+      <section style="margin-top: 16px">
         <mat-card>
           <mat-card-content>
-            <div style="height: 500px; overflow: hidden; margin-top: 16px;">
-              <ngx-monaco-editor
-                style="height: 100%"
-                [options]="editorOptions"
-                [ngModel]="rawContent()"
-                (ngModelChange)="rawContent.set($event)"
-              ></ngx-monaco-editor>
+            <div style="height: 500px; overflow: hidden; margin-top: 16px">
+              <div #editor style="height: 100%"></div>
             </div>
           </mat-card-content>
           <mat-card-actions align="end">

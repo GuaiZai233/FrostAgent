@@ -96,13 +96,13 @@ importers:
         specifier: ^0.3.2
         version: 0.3.2(@angular/cdk@22.0.2(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(@angular/platform-browser@22.0.2(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2)))(rxjs@7.8.2))(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(@angular/material@22.0.2(7473e4e991de21645c87674f2c977631))
       '@fairylights-studio/ngx-m3-navigation-bar':
-        specifier: 0.3.3
+        specifier: ^0.3.3
         version: 0.3.3(e4935315bc56d91138064a5f85819a0e)
       '@fairylights-studio/ngx-m3-navigation-common':
-        specifier: 0.3.2
+        specifier: ^0.3.2
         version: 0.3.2(@angular/cdk@22.0.2(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(@angular/platform-browser@22.0.2(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2)))(rxjs@7.8.2))(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(@angular/material@22.0.2(7473e4e991de21645c87674f2c977631))
       '@fairylights-studio/ngx-m3-navigation-rail':
-        specifier: 0.3.3
+        specifier: ^0.3.3
         version: 0.3.3(e4935315bc56d91138064a5f85819a0e)
       '@fairylights-studio/ngx-m3-navigation-suite':
         specifier: ^0.3.5
@@ -113,9 +113,6 @@ importers:
       monaco-editor:
         specifier: ^0.55.1
         version: 0.55.1
-      ngx-monaco-editor-v2:
-        specifier: ^21.1.4
-        version: 21.1.4(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(monaco-editor@0.55.1)
       rxjs:
         specifier: 7.8.2
         version: 7.8.2
@@ -2522,13 +2519,6 @@ packages:
   negotiator@1.0.0:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
-
-  ngx-monaco-editor-v2@21.1.4:
-    resolution: {integrity: sha512-dZu3dY3D1YXPTIDRn9zOERdtDtGy1SOztpWG6gJlaj6NMSV59kNR/hfzaP+L3BukP6Ve07f3bIyvsx6Pz7uOaA==}
-    peerDependencies:
-      '@angular/common': ^21.1.4
-      '@angular/core': ^21.1.4
-      monaco-editor: ^0.55.1
 
   node-addon-api@6.1.0:
     resolution: {integrity: sha512-+eawOlIgy680F0kBzPUNFhMZGtJ1YmqM6l4+Crf4IkImjYrO/mqPwRMh352g23uIaQKFItcQ64I7KMaJxHgAVA==}
@@ -5444,13 +5434,6 @@ snapshots:
   natural-compare@1.4.0: {}
 
   negotiator@1.0.0: {}
-
-  ngx-monaco-editor-v2@21.1.4(@angular/common@22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(monaco-editor@0.55.1):
-    dependencies:
-      '@angular/common': 22.0.2(@angular/core@22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2))(rxjs@7.8.2)
-      '@angular/core': 22.0.2(@angular/compiler@22.0.2)(rxjs@7.8.2)
-      monaco-editor: 0.55.1
-      tslib: 2.8.1
 
   node-addon-api@6.1.0:
     optional: true

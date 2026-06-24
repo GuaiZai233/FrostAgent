@@ -1,4 +1,13 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  AfterViewInit,
+  OnDestroy,
+  inject,
+  signal,
+  viewChild,
+  ElementRef,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -14,7 +23,8 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
-import { EditorComponent } from 'ngx-monaco-editor-v2';
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
+import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution.js';
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
@@ -38,23 +48,20 @@ import { maskSecret } from '../shared/dashboard-utils';
     MatTableModule,
     MatTabsModule,
     MatToolbarModule,
-    EditorComponent,
     RouterModule,
   ],
   templateUrl: './backend-settings.component.html',
 })
-export class BackendSettingsComponent implements OnInit {
+export class BackendSettingsComponent
+  implements OnInit, AfterViewInit, OnDestroy
+{
   private readonly api = inject(FrostagentApiService);
   private readonly dialog = inject(MatDialog);
   private readonly snackBar = inject(MatSnackBar);
 
-  readonly editorOptions = {
-    theme: 'vs-light',
-    language: 'ini',
-    automaticLayout: true,
-    minimap: { enabled: false },
-    scrollBeyondLastLine: false,
-  };
+  private readonly editorDiv =
+    viewChild.required<ElementRef<HTMLDivElement>>('editor');
+  private monacoEditor?: monaco.editor.IStandaloneCodeEditor;
 
   readonly envVars = signal<EnvVar[]>([]);
   readonly visibleSecrets = signal(new Set<string>());
@@ -71,6 +78,21 @@ export class BackendSettingsComponent implements OnInit {
     void this.refresh();
   }
 
+  ngAfterViewInit(): void {
+    this.monacoEditor = monaco.editor.create(this.editorDiv().nativeElement, {
+      theme: 'vs',
+      language: 'ini',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      value: this.rawContent(),
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.monacoEditor?.dispose();
+  }
+
   async refresh(): Promise<void> {
     this.loading.set(true);
     this.error.set('');
@@ -82,6 +104,9 @@ export class BackendSettingsComponent implements OnInit {
       ]);
       this.envVars.set(envVars);
       this.rawContent.set(rawContent);
+      if (this.monacoEditor) {
+        this.monacoEditor.setValue(rawContent);
+      }
     } catch (error) {
       this.error.set(error instanceof Error ? error.message : String(error));
     } finally {
@@ -147,7 +172,8 @@ export class BackendSettingsComponent implements OnInit {
     this.error.set('');
 
     try {
-      const response = await this.api.updateRawEnvFile(this.rawContent());
+      const content = this.monacoEditor?.getValue() ?? this.rawContent();
+      const response = await this.api.updateRawEnvFile(content);
       if (!response.success) {
         this.error.set(response.error);
         return;
