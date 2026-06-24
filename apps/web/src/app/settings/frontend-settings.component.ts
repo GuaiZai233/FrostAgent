@@ -34,20 +34,33 @@ export class FrontendSettingsComponent {
   readonly themeService = inject(ThemeService);
 
   readonly themeOptions: { mode: ThemeMode; icon: string; label: string }[] = [
-    { mode: 'system', icon: 'brightness_auto', label: $localize`:@@themeSystem:跟随系统` },
+    {
+      mode: 'system',
+      icon: 'brightness_auto',
+      label: $localize`:@@themeSystem:跟随系统`,
+    },
     { mode: 'light', icon: 'light_mode', label: $localize`:@@themeLight:亮色` },
     { mode: 'dark', icon: 'dark_mode', label: $localize`:@@themeDark:暗色` },
   ];
 
-  readonly seasonOptions: { mode: SeasonMode; icon: string; label: string }[] = [
-    { mode: 'auto', icon: 'schedule', label: $localize`:@@seasonAuto:跟随月份` },
-    { mode: 'spring', icon: 'potted_plant', label: $localize`:@@seasonSpring:春` },
-    { mode: 'summer', icon: 'sunny', label: $localize`:@@seasonSummer:夏` },
-    { mode: 'autumn', icon: 'eco', label: $localize`:@@seasonAutumn:秋` },
-    { mode: 'winter', icon: 'ac_unit', label: $localize`:@@seasonWinter:冬` },
-  ];
+  readonly seasonOptions: { mode: SeasonMode; icon: string; label: string }[] =
+    [
+      {
+        mode: 'auto',
+        icon: 'schedule',
+        label: $localize`:@@seasonAuto:跟随月份`,
+      },
+      {
+        mode: 'spring',
+        icon: 'potted_plant',
+        label: $localize`:@@seasonSpring:春`,
+      },
+      { mode: 'summer', icon: 'sunny', label: $localize`:@@seasonSummer:夏` },
+      { mode: 'autumn', icon: 'eco', label: $localize`:@@seasonAutumn:秋` },
+      { mode: 'winter', icon: 'ac_unit', label: $localize`:@@seasonWinter:冬` },
+    ];
 
-  readonly currentLocale = $localize.locale === 'en' ? 'en' : 'zh';
+  readonly currentLocale = $localize.locale;
 
   readonly localeOptions: { value: string; label: string }[] = [
     { value: 'zh', label: $localize`:@@localeZhCN:简体中文` },
@@ -58,8 +71,10 @@ export class FrontendSettingsComponent {
     if (locale === this.currentLocale) return;
     // Keep the current path, but change the locale prefix.
     const path = window.location.pathname;
-    // Strip any existing locale prefix (/zh/xxx or /en/xxx → /xxx).
-    const stripped = path.replace(new RegExp(`^/(${this.currentLocale})(/|$)`), '/$2');
+    const stripped = path.replace(
+      new RegExp(`^/(${this.currentLocale})(/|$)`),
+      '/$2',
+    );
     const target = '/' + locale + stripped;
     window.location.href = target;
   }
