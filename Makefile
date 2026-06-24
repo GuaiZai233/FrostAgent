@@ -1,18 +1,21 @@
 SHELL := /bin/bash
 
-export PATH := $(CURDIR)/node_modules/.bin:$(PATH)
-
 PNPM ?= pnpm
 NG ?= $(PNPM) exec ng
 ESLINT ?= $(PNPM) exec eslint
 BUF ?= buf
 GO ?= go
+TOOLS_BIN := $(CURDIR)/.tools/bin
+PROTOC_GEN_GO := $(TOOLS_BIN)/protoc-gen-go
+PROTOC_GEN_CONNECT_GO := $(TOOLS_BIN)/protoc-gen-connect-go
+
+export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 
 .DEFAULT_GOAL := build
 
 .PHONY: build build-api build-web build-web-dev
 .PHONY: dev serve-api serve-agent serve-web
-.PHONY: proto-generate proto-generate-go proto-generate-web
+.PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
 .PHONY: lint test test-api test-web vet extract-i18n clean ci
 
 build: build-api
@@ -49,7 +52,17 @@ serve-web: proto-generate-web
 
 proto-generate: proto-generate-go proto-generate-web
 
-proto-generate-go:
+proto-tools: $(PROTOC_GEN_GO) $(PROTOC_GEN_CONNECT_GO)
+
+$(PROTOC_GEN_GO):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) $(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+
+$(PROTOC_GEN_CONNECT_GO):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) $(GO) install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
+
+proto-generate-go: proto-tools
 	$(BUF) generate --template buf.gen.yaml
 
 proto-generate-web:
@@ -73,6 +86,6 @@ extract-i18n:
 	$(NG) extract-i18n web
 
 clean:
-	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.angular/cache ./.nx
+	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.angular/cache ./.nx ./.tools
 
 ci: build test lint vet
