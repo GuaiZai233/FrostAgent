@@ -110,6 +110,10 @@ export class BackendSettingsComponent
         EditorView.lineWrapping,
         StreamLanguage.define(properties),
         this.themeCompartment.of(isDark ? synthwave84 : []),
+        EditorView.theme({
+          '&': { height: '100%' },
+          '.cm-scroller': { overflow: 'auto' },
+        }),
       ],
       parent: this.editorDiv().nativeElement,
     });
