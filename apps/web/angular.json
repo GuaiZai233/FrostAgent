@@ -1,11 +1,10 @@
 {
-  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "$schema": "../../node_modules/@angular/cli/lib/config/schema.json",
   "version": 1,
   "cli": {
     "packageManager": "pnpm",
     "analytics": "dd61bbc8-8943-437a-9f3e-8b9df63b7c99"
   },
-  "newProjectRoot": "apps",
   "schematics": {
     "@schematics/angular:component": {
       "style": "scss"
@@ -14,14 +13,14 @@
   "projects": {
     "web": {
       "projectType": "application",
-      "root": "apps/web",
-      "sourceRoot": "apps/web/src",
+      "root": "",
+      "sourceRoot": "src",
       "prefix": "app",
       "i18n": {
         "sourceLocale": "zh-Hans",
         "locales": {
           "en-US": {
-            "translation": "apps/web/src/locale/messages.en.xlf"
+            "translation": "src/locale/messages.en.xlf"
           }
         }
       },
@@ -30,20 +29,20 @@
           "builder": "@angular/build:application",
           "options": {
             "outputPath": {
-              "base": "internal/frontend/dist",
+              "base": "../../internal/frontend/dist",
               "browser": ""
             },
-            "browser": "apps/web/src/main.ts",
+            "browser": "src/main.ts",
             "polyfills": ["@angular/localize/init"],
-            "tsConfig": "apps/web/tsconfig.app.json",
+            "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
             "assets": [
               {
                 "glob": "**/*",
-                "input": "apps/web/public"
+                "input": "public"
               }
             ],
-            "styles": ["apps/web/src/styles.scss"],
+            "styles": ["src/styles.scss"],
             "loader": {
               ".ttf": "file"
             }
@@ -78,7 +77,7 @@
           "builder": "@angular/build:dev-server",
           "options": {
             "buildTarget": "web:build:development",
-            "proxyConfig": "apps/web/proxy.conf.json"
+            "proxyConfig": "proxy.conf.json"
           },
           "configurations": {
             "production": {
@@ -86,7 +85,7 @@
             },
             "development": {
               "buildTarget": "web:build:development",
-              "proxyConfig": "apps/web/proxy.conf.json"
+              "proxyConfig": "proxy.conf.json"
             }
           },
           "defaultConfiguration": "development"
@@ -96,7 +95,7 @@
           "options": {
             "buildTarget": "web:build",
             "format": "xlf",
-            "outputPath": "apps/web/src/locale",
+            "outputPath": "src/locale",
             "outFile": "messages.xlf"
           }
         }

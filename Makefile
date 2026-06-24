@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 PNPM ?= pnpm
-NG ?= $(PNPM) exec ng
+NG ?= $(PNPM) --filter @frostagent/web exec ng
 ESLINT ?= $(PNPM) exec eslint
 BUF ?= buf
 GO ?= go
