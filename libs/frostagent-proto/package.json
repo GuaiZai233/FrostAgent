@@ -1,0 +1,14 @@
+{
+  "name": "@frostagent/proto",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "typings": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.0"
+  }
+}
