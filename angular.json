@@ -43,10 +43,7 @@
                 "input": "apps/web/public"
               }
             ],
-            "styles": [
-              "apps/web/node_modules/monaco-editor/min/vs/editor/editor.main.css",
-              "apps/web/src/styles.scss"
-            ],
+            "styles": ["apps/web/src/styles.scss"],
             "loader": {
               ".ttf": "file"
             }
@@ -57,7 +54,7 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "1.5mb",
+                  "maximumWarning": "1mb",
                   "maximumError": "2mb"
                 },
                 {

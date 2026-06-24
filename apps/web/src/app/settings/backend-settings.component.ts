@@ -24,8 +24,10 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
 import { ThemeService } from '../shared/theme.service';
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
-import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution.js';
+import { EditorView, basicSetup } from 'codemirror';
+import { StreamLanguage } from '@codemirror/language';
+import { properties } from '@codemirror/legacy-modes/mode/properties';
+import { synthwave84 } from '@fsegurai/codemirror-theme-synthwave-84';
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
@@ -62,7 +64,7 @@ export class BackendSettingsComponent
 
   private readonly editorDiv =
     viewChild.required<ElementRef<HTMLDivElement>>('editor');
-  private monacoEditor?: monaco.editor.IStandaloneCodeEditor;
+  private editorView?: EditorView;
 
   readonly envVars = signal<EnvVar[]>([]);
   readonly visibleSecrets = signal(new Set<string>());
@@ -80,18 +82,23 @@ export class BackendSettingsComponent
   }
   readonly themeService = inject(ThemeService);
   ngAfterViewInit(): void {
-    this.monacoEditor = monaco.editor.create(this.editorDiv().nativeElement, {
-      theme: this.themeService.effectiveMode() === 'dark' ? 'vs-dark' : 'vs',
-      language: 'ini',
-      automaticLayout: true,
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      value: this.rawContent(),
+    const isDark = this.themeService.effectiveMode() === 'dark';
+    const themeExtension = isDark ? synthwave84 : [];
+
+    this.editorView = new EditorView({
+      doc: this.rawContent(),
+      extensions: [
+        basicSetup,
+        EditorView.lineWrapping,
+        StreamLanguage.define(properties),
+        themeExtension,
+      ],
+      parent: this.editorDiv().nativeElement,
     });
   }
 
   ngOnDestroy(): void {
-    this.monacoEditor?.dispose();
+    this.editorView?.destroy();
   }
 
   async refresh(): Promise<void> {
@@ -105,8 +112,14 @@ export class BackendSettingsComponent
       ]);
       this.envVars.set(envVars);
       this.rawContent.set(rawContent);
-      if (this.monacoEditor) {
-        this.monacoEditor.setValue(rawContent);
+      if (this.editorView) {
+        this.editorView.dispatch({
+          changes: {
+            from: 0,
+            to: this.editorView.state.doc.length,
+            insert: rawContent,
+          },
+        });
       }
     } catch (error) {
       this.error.set(error instanceof Error ? error.message : String(error));
@@ -173,7 +186,8 @@ export class BackendSettingsComponent
     this.error.set('');
 
     try {
-      const content = this.monacoEditor?.getValue() ?? this.rawContent();
+      const content =
+        this.editorView?.state.doc.toString() ?? this.rawContent();
       const response = await this.api.updateRawEnvFile(content);
       if (!response.success) {
         this.error.set(response.error);
