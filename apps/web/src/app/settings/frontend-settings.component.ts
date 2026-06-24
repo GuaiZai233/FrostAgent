@@ -63,8 +63,8 @@ export class FrontendSettingsComponent {
   readonly currentLocale = $localize.locale;
 
   readonly localeOptions: { value: string; label: string }[] = [
-    { value: 'zh', label: $localize`:@@localeZhCN:简体中文` },
-    { value: 'en', label: $localize`:@@localeEn:English` },
+    { value: 'zh-Hans', label: $localize`:@@localeZhCN:简体中文` },
+    { value: 'en-US', label: $localize`:@@localeEn:English` },
   ];
 
   switchLocale(locale: string): void {
