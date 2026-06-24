@@ -13,13 +13,16 @@ export class ThemeService {
   private readonly localStorageKey = 'user-theme';
   private readonly seasonStorageKey = 'user-season';
 
+  private readonly isSystemDark = signal(false);
+
   readonly currentMode = signal<ThemeMode>(this.loadPreference());
   readonly currentSeasonMode = signal<SeasonMode>(this.loadSeasonPreference());
 
   readonly effectiveMode = computed(() => {
     const mode = this.currentMode();
     if (mode === 'system') {
-      return this.mediaQuery.matches ? 'dark' : 'light';
+      // 当这个 Signal 改变时，computed 才会真正联动
+      return this.isSystemDark() ? 'dark' : 'light';
     }
     return mode;
   });
@@ -41,17 +44,17 @@ export class ThemeService {
       '(prefers-color-scheme: dark)',
     );
 
-    this.mediaQuery.addEventListener('change', () => {
-      if (this.currentMode() === 'system') {
-        // Trigger re-computation of effectiveMode
-        this.currentMode.set('system');
-      }
+    // 初始化同步当前的系统状态
+    this.isSystemDark.set(this.mediaQuery.matches);
+
+    // 当浏览器/系统主题改变时，直接更新这个 Signal
+    this.mediaQuery.addEventListener('change', (e) => {
+      this.isSystemDark.set(e.matches);
     });
 
     effect(() => {
       this.applyMode(this.currentMode());
     });
-
     effect(() => {
       this.applySeason(this.effectiveSeason() as Exclude<SeasonMode, 'auto'>);
     });
