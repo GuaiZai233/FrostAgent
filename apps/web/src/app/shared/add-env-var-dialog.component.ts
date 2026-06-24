@@ -23,10 +23,8 @@ import { FrostagentApiService } from '../core/frostagent-api.service';
   ],
   template: `
     <h2 mat-dialog-title i18n="@@addEnvVar">新增环境变量</h2>
-    <mat-dialog-content>
-      <div
-        style="display: flex; flex-direction: column; gap: 16px; padding-top: 8px;"
-      >
+    <mat-dialog-content style="overflow: hidden;">
+      <div style="display: flex; flex-direction: column;  padding-top: 8px;">
         <mat-form-field appearance="outline">
           <mat-label i18n="@@key">Key</mat-label>
           <input matInput [ngModel]="key()" (ngModelChange)="key.set($event)" />
