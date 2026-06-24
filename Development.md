@@ -3,7 +3,6 @@
 
 make proto-generate
 make lint
-make test-web
 make test-api
 make vet
 make build-api

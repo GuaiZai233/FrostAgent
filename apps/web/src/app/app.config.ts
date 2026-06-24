@@ -2,7 +2,8 @@ import {
   ApplicationConfig,
   provideBrowserGlobalErrorListeners,
   inject,
-  provideAppInitializer
+  provideAppInitializer,
+  provideZonelessChangeDetection
 } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { appRoutes } from './app.routes';
@@ -11,6 +12,7 @@ import { provideMonacoEditor } from 'ngx-monaco-editor-v2';
 
 export const appConfig: ApplicationConfig = {
   providers: [
+    provideZonelessChangeDetection(),
     provideBrowserGlobalErrorListeners(),
     provideRouter(appRoutes),
     provideAppInitializer(() => {

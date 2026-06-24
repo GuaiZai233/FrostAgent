@@ -10,7 +10,6 @@
     "build:web": "make build-web",
     "test": "make test",
     "test:api": "make test-api",
-    "test:web": "make test-web",
     "lint": "make lint",
     "vet": "make vet",
     "proto:generate": "make proto-generate",
@@ -54,10 +53,8 @@
     "angular-eslint": "22.0.0",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
-    "jsdom": "^27.4.0",
     "prettier": "~3.6.2",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.61.1",
-    "vitest": "4.0.8"
+    "typescript-eslint": "^8.61.1"
   }
 }

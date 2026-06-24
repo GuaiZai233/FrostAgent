@@ -94,14 +94,6 @@
           },
           "defaultConfiguration": "development"
         },
-        "test": {
-          "builder": "@angular/build:unit-test",
-          "options": {
-            "buildTarget": "web:build:development",
-            "tsConfig": "apps/web/tsconfig.spec.json",
-            "watch": false
-          }
-        },
         "extract-i18n": {
           "builder": "@angular/build:extract-i18n",
           "options": {

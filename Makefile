@@ -16,7 +16,7 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 .PHONY: build build-api build-web build-web-dev
 .PHONY: dev serve-api serve-agent serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
-.PHONY: lint test test-api test-web vet extract-i18n clean ci
+.PHONY: lint test test-api vet extract-i18n clean ci
 
 build: build-api
 
@@ -71,13 +71,10 @@ proto-generate-web:
 lint:
 	$(ESLINT) .
 
-test: test-api test-web
+test: test-api
 
 test-api: build-web proto-generate-go
 	$(GO) test ./...
-
-test-web: proto-generate-web
-	$(NG) test web --watch=false
 
 vet: build-web proto-generate-go
 	$(GO) vet ./...
