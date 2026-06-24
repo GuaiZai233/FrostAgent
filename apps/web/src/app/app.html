@@ -1,7 +1,6 @@
 <mat-navigation-suite-scaffold [state]="scaffoldState">
-  
-<ng-template matNavigationSuitePrimaryAction let-collapsed="collapsed">
-  @if (shouldShowFab()) {
+  <ng-template matNavigationSuitePrimaryAction let-collapsed="collapsed">
+    @if (shouldShowFab()) {
     <button
       matFab
       extended
@@ -14,29 +13,24 @@
     </button>
     <mat-menu #addMenu="matMenu">
       <button mat-menu-item (click)="openAddEnvVarDialog()">
-
         <span i18n="@@EnvVar">环境变量</span>
       </button>
     </mat-menu>
-  }
-</ng-template>
+    }
+  </ng-template>
 
-  <mat-navigation-suite
-    [alwaysShowItemLabel]="true"
-    ariaLabel="FrostAgent"
-  >
+  <mat-navigation-suite [alwaysShowItemLabel]="true" ariaLabel="FrostAgent">
     @for (destination of destinations; track destination.path) {
-      <mat-navigation-suite-item
-        [selected]="isSelected(destination.path)"
-        [icon]="destination.icon"
-        [label]="destination.label"
-        (click)="navigate(destination.path)"
-      />
+    <mat-navigation-suite-item
+      [selected]="isSelected(destination.path)"
+      [icon]="destination.icon"
+      [label]="destination.label"
+      (click)="navigate(destination.path)"
+    />
     }
   </mat-navigation-suite>
 
   <section>
     <router-outlet />
   </section>
-    
 </mat-navigation-suite-scaffold>
