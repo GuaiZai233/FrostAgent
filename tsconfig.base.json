@@ -13,10 +13,9 @@
     "lib": ["ES2022", "DOM"],
     "skipLibCheck": true,
     "skipDefaultLibCheck": true,
-    "baseUrl": ".",
     "paths": {
-      "@frostagent/proto": ["libs/frostagent-proto/src/index.ts"],
-      "@frostagent/proto/*": ["libs/frostagent-proto/src/*"]
+      "@frostagent/proto": ["./libs/frostagent-proto/src/index.ts"],
+      "@frostagent/proto/*": ["./libs/frostagent-proto/src/*"]
     }
   }
 }
