@@ -7,6 +7,7 @@ import {
   signal,
   viewChild,
   ElementRef,
+  effect,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
@@ -24,10 +25,13 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
 import { ThemeService } from '../shared/theme.service';
+
 import { EditorView, basicSetup } from 'codemirror';
+import { Compartment } from '@codemirror/state';
 import { StreamLanguage } from '@codemirror/language';
 import { properties } from '@codemirror/legacy-modes/mode/properties';
 import { synthwave84 } from '@fsegurai/codemirror-theme-synthwave-84';
+
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
@@ -61,10 +65,13 @@ export class BackendSettingsComponent
   private readonly api = inject(FrostagentApiService);
   private readonly dialog = inject(MatDialog);
   private readonly snackBar = inject(MatSnackBar);
+  readonly themeService = inject(ThemeService);
 
   private readonly editorDiv =
     viewChild.required<ElementRef<HTMLDivElement>>('editor');
   private editorView?: EditorView;
+
+  private readonly themeCompartment = new Compartment();
 
   readonly envVars = signal<EnvVar[]>([]);
   readonly visibleSecrets = signal(new Set<string>());
@@ -77,13 +84,24 @@ export class BackendSettingsComponent
   readonly editingIsSecret = signal(false);
   readonly displayedColumns = ['key', 'value', 'actions'];
 
+  constructor() {
+    effect(() => {
+      const isDark = this.themeService.effectiveMode() === 'dark';
+
+      if (this.editorView) {
+        this.editorView.dispatch({
+          effects: this.themeCompartment.reconfigure(isDark ? synthwave84 : []),
+        });
+      }
+    });
+  }
+
   ngOnInit(): void {
     void this.refresh();
   }
-  readonly themeService = inject(ThemeService);
+
   ngAfterViewInit(): void {
     const isDark = this.themeService.effectiveMode() === 'dark';
-    const themeExtension = isDark ? synthwave84 : [];
 
     this.editorView = new EditorView({
       doc: this.rawContent(),
@@ -91,7 +109,7 @@ export class BackendSettingsComponent
         basicSetup,
         EditorView.lineWrapping,
         StreamLanguage.define(properties),
-        themeExtension,
+        this.themeCompartment.of(isDark ? synthwave84 : []),
       ],
       parent: this.editorDiv().nativeElement,
     });
@@ -104,7 +122,6 @@ export class BackendSettingsComponent
   async refresh(): Promise<void> {
     this.loading.set(true);
     this.error.set('');
-
     try {
       const [envVars, rawContent] = await Promise.all([
         this.api.listEnvVars(),
