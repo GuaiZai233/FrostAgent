@@ -22,18 +22,18 @@
 
 ### 1. 构建项目
 
-本项目使用 [Nx](https://nx.dev) 进行构建编排。
+本项目使用根目录 `Makefile` 进行构建编排。
 
 ```bash
-# 安装 Node.js 依赖（Nx、Angular 工具链等）
+# 安装 Node.js 依赖（Angular 工具链等）
 # 本项目使用 pnpm 作为包管理器
 pnpm install
 
 # 安装 buf 用于 protobuf 代码生成
 go install github.com/bufbuild/buf/cmd/buf@latest
 
-# 构建全部 — 后端 Go 二进制文件 + 前端 Angular 应用
-pnpm build
+# 构建全部 - 后端 Go 二进制文件 + 前端 Angular 应用
+make build
 ```
 
 编译后的后端二进制文件位于 `./bin/`，前端静态资源位于 `internal/frontend/dist/`。
@@ -41,8 +41,8 @@ pnpm build
 也可以单独构建：
 
 ```bash
-pnpm nx build api    # 仅构建后端
-pnpm nx build web    # 仅构建前端
+make build-api    # 构建后端和嵌入的前端
+make build-web    # 仅构建前端
 ```
 
 ### 2. 配置环境变量

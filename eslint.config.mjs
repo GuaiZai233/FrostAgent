@@ -1,42 +1,59 @@
-import nx from '@nx/eslint-plugin';
+import js from '@eslint/js';
+import angular from 'angular-eslint';
+import prettier from 'eslint-config-prettier';
+import tseslint from 'typescript-eslint';
 
-export default [
-  ...nx.configs['flat/base'],
-  ...nx.configs['flat/typescript'],
-  ...nx.configs['flat/javascript'],
+const tsFiles = ['**/*.ts'];
+const htmlFiles = ['**/*.html'];
+const scopeTo = (configs, files) =>
+  configs.map((config) => ({
+    ...config,
+    files: config.files ?? files,
+  }));
+
+export default tseslint.config(
   {
-    ignores: ['**/dist', '**/out-tsc'],
+    ignores: [
+      '**/dist/**',
+      '**/out-tsc/**',
+      '.angular/**',
+      '.nx/**',
+      'bin/**',
+      'gen/**',
+      'internal/frontend/dist/**',
+      'libs/frostagent-proto/src/generated/**',
+      'node_modules/**',
+    ],
   },
+  js.configs.recommended,
+  ...scopeTo(tseslint.configs.recommended, tsFiles),
+  ...scopeTo(angular.configs.tsRecommended, tsFiles),
   {
-    files: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
+    files: ['**/*.ts'],
+    processor: angular.processInlineTemplates,
     rules: {
-      '@nx/enforce-module-boundaries': [
+      '@angular-eslint/directive-selector': [
         'error',
         {
-          enforceBuildableLibDependency: true,
-          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?[jt]s$'],
-          depConstraints: [
-            {
-              sourceTag: '*',
-              onlyDependOnLibsWithTags: ['*'],
-            },
-          ],
+          type: 'attribute',
+          prefix: 'app',
+          style: 'camelCase',
+        },
+      ],
+      '@angular-eslint/component-selector': [
+        'error',
+        {
+          type: 'element',
+          prefix: 'app',
+          style: 'kebab-case',
         },
       ],
     },
   },
+  ...scopeTo(angular.configs.templateRecommended, htmlFiles),
   {
-    files: [
-      '**/*.ts',
-      '**/*.tsx',
-      '**/*.cts',
-      '**/*.mts',
-      '**/*.js',
-      '**/*.jsx',
-      '**/*.cjs',
-      '**/*.mjs',
-    ],
-    // Override or add rules here
+    files: ['**/*.html'],
     rules: {},
   },
-];
+  prettier,
+);

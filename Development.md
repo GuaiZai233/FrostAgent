@@ -1,11 +1,10 @@
 你需要安装 golang、buf 并将其添加到 PATH。
-你还需要pnpm，pnpm会帮你安装好 前端依赖项 以及本项目依赖的 nx。
+你还需要 pnpm，pnpm 会帮你安装好前端依赖项。
 
-pnpm nx show projects
-pnpm nx run proto:generate
-pnpm nx run web:lint
-pnpm nx run web:test
-pnpm nx run api:test
-pnpm nx run api:vet
-pnpm nx run api:build
-pnpm nx run workspace:build
+make proto-generate
+make lint
+make test-web
+make test-api
+make vet
+make build-api
+make build

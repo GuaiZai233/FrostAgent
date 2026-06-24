@@ -22,18 +22,18 @@ After integrating ActionsCat into the adapter, you can operate both simultaneous
 
 ### 1. Build the Project
 
-This project uses [Nx](https://nx.dev) for build orchestration.
+This project uses a root `Makefile` for build orchestration.
 
 ```bash
-# Install Node.js dependencies (Nx, Angular toolchain, etc.)
+# Install Node.js dependencies (Angular toolchain, etc.)
 # This project uses pnpm as the package manager
 pnpm install
 
 # Install buf for protobuf code generation
 go install github.com/bufbuild/buf/cmd/buf@latest
 
-# Build everything — backend Go binaries + frontend Angular app
-pnpm build
+# Build everything - backend Go binaries + frontend Angular app
+make build
 ```
 
 Compiled backend binaries are placed in `./bin/` and the frontend static assets go to `internal/frontend/dist/`.
@@ -41,8 +41,8 @@ Compiled backend binaries are placed in `./bin/` and the frontend static assets 
 You can also build individual parts:
 
 ```bash
-pnpm nx build api    # Backend only
-pnpm nx build web    # Frontend only
+make build-api    # Backend and embedded frontend
+make build-web    # Frontend only
 ```
 
 ### 2. Configure Environment Variables
