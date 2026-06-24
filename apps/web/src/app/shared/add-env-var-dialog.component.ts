@@ -24,16 +24,25 @@ import { FrostagentApiService } from '../core/frostagent-api.service';
   template: `
     <h2 mat-dialog-title i18n="@@addEnvVar">新增环境变量</h2>
     <mat-dialog-content>
-      <div style="display: flex; flex-direction: column; gap: 16px; padding-top: 8px;">
+      <div
+        style="display: flex; flex-direction: column; gap: 16px; padding-top: 8px;"
+      >
         <mat-form-field appearance="outline">
           <mat-label i18n="@@key">Key</mat-label>
           <input matInput [ngModel]="key()" (ngModelChange)="key.set($event)" />
         </mat-form-field>
         <mat-form-field appearance="outline">
           <mat-label i18n="@@value">Value</mat-label>
-          <input matInput [ngModel]="value()" (ngModelChange)="value.set($event)" />
+          <input
+            matInput
+            [ngModel]="value()"
+            (ngModelChange)="value.set($event)"
+          />
         </mat-form-field>
-        <mat-checkbox [ngModel]="isSecret()" (ngModelChange)="isSecret.set($event)">
+        <mat-checkbox
+          [ngModel]="isSecret()"
+          (ngModelChange)="isSecret.set($event)"
+        >
           <span i18n="@@isSecret">这是敏感信息</span>
         </mat-checkbox>
       </div>
@@ -79,7 +88,7 @@ export class AddEnvVarDialogComponent {
           duration: 2500,
         });
         this.dialogRef.close(true);
-        void this.router.navigate(['/settings']);
+        void this.router.navigate(['/settings/backend']);
       } else {
         this.snackBar.open(response.error, $localize`:@@close:关闭`, {
           duration: 5000,
