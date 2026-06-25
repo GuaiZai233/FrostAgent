@@ -7,8 +7,9 @@ import (
 	"os"
 	"strings"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
 	"connectrpc.com/connect"
+
+	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
 
 // envEntry defines metadata for a known environment variable.
