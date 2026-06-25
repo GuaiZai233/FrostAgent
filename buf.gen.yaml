@@ -5,9 +5,9 @@ managed:
     - file_option: go_package_prefix
       value: FrostAgent/gen/proto
 plugins:
-  - remote: buf.build/protocolbuffers/go
+  - local: protoc-gen-go
     out: gen/proto
     opt: paths=source_relative
-  - remote: buf.build/connectrpc/go
+  - local: protoc-gen-connect-go
     out: gen/proto
     opt: paths=source_relative

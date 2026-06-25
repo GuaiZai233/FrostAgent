@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"sort"
 	"sync"
 	"time"
 )
@@ -127,7 +128,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 
 	session = &SessionContext{
 		ConversationID: sessionID,
-		History:         make([]ChatMessage, 0),
+		History:        make([]ChatMessage, 0),
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -246,23 +247,49 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	keys := make([]string, 0, len(sm.sessions))
-	for k := range sm.sessions {
-		keys = append(keys, k)
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = len(sm.sessions)
 	}
 
-	if offset >= len(keys) {
+	type sessionEntry struct {
+		context   *SessionContext
+		id        string
+		updatedAt time.Time
+	}
+
+	entries := make([]sessionEntry, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		session.mu.Lock()
+		entries = append(entries, sessionEntry{
+			context:   session,
+			id:        session.ConversationID,
+			updatedAt: session.UpdatedAt,
+		})
+		session.mu.Unlock()
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].updatedAt.Equal(entries[j].updatedAt) {
+			return entries[i].id < entries[j].id
+		}
+		return entries[i].updatedAt.After(entries[j].updatedAt)
+	})
+
+	if offset >= len(entries) {
 		return nil
 	}
 
 	end := offset + limit
-	if end > len(keys) || limit <= 0 {
-		end = len(keys)
+	if end > len(entries) {
+		end = len(entries)
 	}
 
 	result := make([]*SessionContext, 0, end-offset)
-	for i := offset; i < end; i++ {
-		result = append(result, sm.sessions[keys[i]])
+	for _, entry := range entries[offset:end] {
+		result = append(result, entry.context)
 	}
 	return result
 }

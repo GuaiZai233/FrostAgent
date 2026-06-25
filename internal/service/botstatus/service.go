@@ -4,11 +4,13 @@ import (
 	"FrostAgent/internal/llm"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
 	v1 "FrostAgent/gen/proto/frostagent/v1"
+
+	"connectrpc.com/connect"
 )
 
 // Service implements frostagent.v1.BotStatusServiceHandler.
@@ -32,9 +34,9 @@ func (s *Service) GetOverview(
 		uptime = int64(time.Since(s.engine.StartedAt).Seconds())
 	}
 
-	status := "running"
+	status := v1.BotStatus_BOT_STATUS_RUNNING
 	if s.engine.SessionManager == nil {
-		status = "initializing"
+		status = v1.BotStatus_BOT_STATUS_INITIALIZING
 	}
 
 	activeSessions := int32(0)
@@ -50,6 +52,20 @@ func (s *Service) GetOverview(
 			Description: t.Description(),
 		})
 	}
+
+	// Sort by name to ensure deterministic order, with a stable tiebreaker for robustness.
+	sort.SliceStable(toolInfos, func(i, j int) bool {
+		if toolInfos[i] == nil {
+			return false
+		}
+		if toolInfos[j] == nil {
+			return true
+		}
+		if toolInfos[i].Name == toolInfos[j].Name {
+			return toolInfos[i].Description < toolInfos[j].Description
+		}
+		return toolInfos[i].Name < toolInfos[j].Name
+	})
 
 	resp := &v1.GetOverviewResponse{
 		BotName:                "FrostAgent",

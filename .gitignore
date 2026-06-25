@@ -37,3 +37,13 @@ go.work.sum
 
 # Generated proto code
 gen/
+
+.angular/
+.nx/
+
+__screenshots__/
+node_modules
+.tools/
+
+.claude/worktrees
+.claude/settings.local.json

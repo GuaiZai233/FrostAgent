@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -94,6 +95,9 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 			Parameters:  t.Parameters(),
 		})
 	}
+	sort.SliceStable(modelTools, func(i, j int) bool {
+		return modelTools[i].Name < modelTools[j].Name
+	})
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {

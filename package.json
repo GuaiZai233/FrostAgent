@@ -1,0 +1,40 @@
+{
+  "name": "frostagent",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "make dev",
+    "build": "make build",
+    "build:api": "make build-api",
+    "build:web": "make build-web",
+    "test": "make test",
+    "test:api": "make test-api",
+    "lint": "make lint",
+    "vet": "make vet",
+    "proto:generate": "make proto-generate",
+    "proto:generate:go": "make proto-generate-go",
+    "proto:generate:web": "make proto-generate-web",
+    "serve:api": "make serve-api",
+    "serve:agent": "make serve-agent",
+    "serve:web": "make serve-web"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@angular-devkit/core": "22.0.4",
+    "@angular-devkit/schematics": "22.0.4",
+    "@angular/build": "22.0.4",
+    "@angular/cli": "22.0.4",
+    "@bufbuild/protoc-gen-es": "2.12.0",
+    "@eslint/js": "^9.39.4",
+    "@schematics/angular": "22.0.4",
+    "@types/node": "24.10.1",
+    "@typescript-eslint/utils": "^8.62.0",
+    "angular-eslint": "22.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "~3.6.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.62.0"
+  }
+}

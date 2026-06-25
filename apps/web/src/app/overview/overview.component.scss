@@ -1,0 +1,45 @@
+mat-card {
+  height: 100%;
+}
+
+.status-chip-running {
+  --mdc-chip-elevated-container-color: light-dark(#e8f5e9, #1b3a1b);
+  --mdc-chip-label-text-color: light-dark(#2e7d32, #81c784);
+  --mdc-chip-with-leading-icon-leading-icon-color: light-dark(#2e7d32, #81c784);
+  background-color: light-dark(#e8f5e9, #1b3a1b) !important;
+  color: light-dark(#2e7d32, #81c784) !important;
+
+  mat-icon {
+    color: light-dark(#2e7d32, #81c784) !important;
+  }
+}
+
+.status-chip-initializing {
+  --mdc-chip-elevated-container-color: light-dark(#fff3e0, #3e2723);
+  --mdc-chip-label-text-color: light-dark(#ef6c00, #ffb74d);
+  --mdc-chip-with-leading-icon-leading-icon-color: light-dark(#ef6c00, #ffb74d);
+  background-color: light-dark(#fff3e0, #3e2723) !important;
+  color: light-dark(#ef6c00, #ffb74d) !important;
+
+  mat-icon {
+    color: light-dark(#ef6c00, #ffb74d) !important;
+  }
+}
+
+.status-chip-error {
+  --mdc-chip-elevated-container-color: light-dark(#ffebee, #3e1010);
+  --mdc-chip-label-text-color: light-dark(#c62828, #ef9a9a);
+  --mdc-chip-with-leading-icon-leading-icon-color: light-dark(#c62828, #ef9a9a);
+  background-color: light-dark(#ffebee, #3e1010) !important;
+  color: light-dark(#c62828, #ef9a9a) !important;
+
+  mat-icon {
+    color: light-dark(#c62828, #ef9a9a) !important;
+  }
+}
+
+.tools-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}

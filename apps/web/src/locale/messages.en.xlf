@@ -1,0 +1,847 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+  <file source-language="zh-Hans" target-language="en-US" datatype="plaintext" original="ng2.template">
+    <body>
+      <trans-unit id="addFab" datatype="html">
+        <source>新增...</source>
+        <target>Add...</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.html</context>
+          <context context-type="linenumber">13,14</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="EnvVar" datatype="html">
+        <source>环境变量</source>
+        <target>Environment Variables</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.html</context>
+          <context context-type="linenumber">18,19</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="navOverview" datatype="html">
+        <source>Bot状态</source>
+        <target>Bot Status</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">61</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="navSessions" datatype="html">
+        <source>会话</source>
+        <target>Sessions</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">66</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="navLogs" datatype="html">
+        <source>日志</source>
+        <target>Logs</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">71</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="navSettings" datatype="html">
+        <source>设置</source>
+        <target>Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">76</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="switchToChinese" datatype="html">
+        <source>简体中文</source>
+        <target>简体中文</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">110</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="switchToEnglish" datatype="html">
+        <source>English</source>
+        <target>English</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
+          <context context-type="linenumber">111</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="refreshTooltip" datatype="html">
+        <source>刷新</source>
+        <target>Refresh</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">3</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">3</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">3</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">3</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="clearLogs" datatype="html">
+        <source>清理日志</source>
+        <target>Clear Logs</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">8,10</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="minLogLevel" datatype="html">
+        <source>最低级别</source>
+        <target>Min Level</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">15,16</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="sourceFilter" datatype="html">
+        <source>来源过滤</source>
+        <target>Source Filter</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">24,25</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="applyFilter" datatype="html">
+        <source>应用过滤</source>
+        <target>Apply Filter</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">35,37</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="timestamp" datatype="html">
+        <source>时间</source>
+        <target>Timestamp</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">55</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="level" datatype="html">
+        <source>级别</source>
+        <target>Level</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">60</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="source" datatype="html">
+        <source>来源</source>
+        <target>Source</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">69</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="summary" datatype="html">
+        <source>摘要</source>
+        <target>Summary</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">74</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="noLogs" datatype="html">
+        <source>暂无日志。</source>
+        <target>No logs yet.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">86,89</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logDetail" datatype="html">
+        <source>日志详情</source>
+        <target>Log Detail</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">103,104</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="requestBody" datatype="html">
+        <source>请求体</source>
+        <target>Request Body</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">109</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="responseBody" datatype="html">
+        <source>响应体</source>
+        <target>Response Body</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">111</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="selectLogPrompt" datatype="html">
+        <source>选择一条日志查看详情。</source>
+        <target>Select a log to view details.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">114,116</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="liveLogs" datatype="html">
+        <source>实时日志流</source>
+        <target>Live Log Stream</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">122,123</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="noStreamLogs" datatype="html">
+        <source>实时流尚未收到日志。</source>
+        <target>No logs received in live stream yet.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">140,143</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="clearLogsTitle" datatype="html">
+        <source>清理日志</source>
+        <target>Clear Logs</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">152</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="clearLogsMessage" datatype="html">
+        <source>确认清理当前内存日志缓冲区吗？此操作无法撤销。</source>
+        <target>Are you sure you want to clear the current in-memory log buffer? This action cannot be undone.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">153</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="cancel" datatype="html">
+        <source>取消</source>
+        <target>Cancel</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">154</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">113</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">42,43</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="clear" datatype="html">
+        <source>清理</source>
+        <target>Clear</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">155</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logsCleared" datatype="html">
+        <source>日志已清理</source>
+        <target>Logs cleared</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">171</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="stopStream" datatype="html">
+        <source>停止</source>
+        <target>Stop</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">192</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="startStream" datatype="html">
+        <source>开始</source>
+        <target>Start</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/logs/logs.component.ts</context>
+          <context context-type="linenumber">193</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="totalMessages" datatype="html">
+        <source>处理消息</source>
+        <target>Messages Processed</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.html</context>
+          <context context-type="linenumber">45</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="activeSessions" datatype="html">
+        <source>活跃会话</source>
+        <target>Active Sessions</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.html</context>
+          <context context-type="linenumber">49</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="currentModel" datatype="html">
+        <source>当前模型</source>
+        <target>Current Model</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.html</context>
+          <context context-type="linenumber">53</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="loadedTools" datatype="html">
+        <source>我可以使用 <x id="INTERPOLATION" equiv-text="{{ data.tools.length }}"/> 个工具</source>
+        <target>I can use <x id="INTERPOLATION" equiv-text="{{ data.tools.length }}"/> tools</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.html</context>
+          <context context-type="linenumber">59,61</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="noTools" datatype="html">
+        <source>暂无已注册工具。</source>
+        <target>No registered tools yet.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.html</context>
+          <context context-type="linenumber">72,73</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="sessionId" datatype="html">
+        <source>会话 ID</source>
+        <target>Session ID</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">22,23</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="platform" datatype="html">
+        <source>平台</source>
+        <target>Platform</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">28</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="messageCount" datatype="html">
+        <source>消息数</source>
+        <target>Messages</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">35</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="createdAt" datatype="html">
+        <source>创建时间</source>
+        <target>Created At</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">39,40</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="lastActive" datatype="html">
+        <source>最后活跃</source>
+        <target>Last Active</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">46,47</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="noSessions" datatype="html">
+        <source>暂无会话。</source>
+        <target>No sessions yet.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">57,60</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="envVarsTab" datatype="html">
+        <source>环境变量</source>
+        <target>Environment Variables</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">20</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="key" datatype="html">
+        <source>Key</source>
+        <target>Key</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">26</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">29,30</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="isSecret" datatype="html">
+        <source>这是敏感信息</source>
+        <target>This is sensitive information</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">29,30</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">54,55</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">37,38</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="value" datatype="html">
+        <source>Value</source>
+        <target>Value</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">37,38</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">42,43</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">33,34</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="actions" datatype="html">
+        <source>操作</source>
+        <target>Actions</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">65</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="rawEnvTab" datatype="html">
+        <source>原始 .env</source>
+        <target>Raw .env</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">101</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="saveRawEnv" datatype="html">
+        <source>保存 .env</source>
+        <target>Save .env</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">117,118</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="deleteEnvTitle" datatype="html">
+        <source>删除环境变量</source>
+        <target>Delete Environment Variable</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">111</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="deleteEnvMessage" datatype="html">
+        <source>确认删除 <x id="INTERPOLATION" equiv-text="key"/> 吗？</source>
+        <target>Are you sure you want to delete <x id="INTERPOLATION" equiv-text="key"/>?</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">112</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="delete" datatype="html">
+        <source>删除</source>
+        <target>Delete</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">114</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="envDeleted" datatype="html">
+        <source>环境变量已删除</source>
+        <target>Environment variable deleted</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">132</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="rawEnvSaved" datatype="html">
+        <source>.env 文件已更新</source>
+        <target>.env file updated</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">151</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="keyRequired" datatype="html">
+        <source>Key 不能为空</source>
+        <target>Key cannot be empty</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">189</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="envSaved" datatype="html">
+        <source>环境变量已保存</source>
+        <target>Environment variable saved</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.ts</context>
+          <context context-type="linenumber">206</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">78</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="addEnvVar" datatype="html">
+        <source>新增环境变量</source>
+        <target>Add Environment Variable</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">25,26</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="save" datatype="html">
+        <source>保存</source>
+        <target>Save</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">49,50</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="close" datatype="html">
+        <source>关闭</source>
+        <target>Close</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">84</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
+          <context context-type="linenumber">91</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelAll" datatype="html">
+        <source>全部</source>
+        <target>All</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">6</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelDebug" datatype="html">
+        <source>调试</source>
+        <target>Debug</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">11</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelInfo" datatype="html">
+        <source>信息</source>
+        <target>Info</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">16</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelWarn" datatype="html">
+        <source>警告</source>
+        <target>Warn</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">21</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelError" datatype="html">
+        <source>错误</source>
+        <target>Error</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">26</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="uptimeDays" datatype="html">
+        <source>上线 <x id="INTERPOLATION" equiv-text="days"/> 天 <x id="INTERPOLATION_1" equiv-text="hours"/> 小时</source>
+        <target>Uptime <x id="INTERPOLATION" equiv-text="days"/> days <x id="INTERPOLATION_1" equiv-text="hours"/> hours</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">42</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="uptimeHours" datatype="html">
+        <source>上线 <x id="INTERPOLATION" equiv-text="hours"/> 小时 <x id="INTERPOLATION_1" equiv-text="minutes"/> 分钟</source>
+        <target>Uptime <x id="INTERPOLATION" equiv-text="hours"/> hours <x id="INTERPOLATION_1" equiv-text="minutes"/> minutes</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">45</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="uptimeMinutes" datatype="html">
+        <source>上线 <x id="INTERPOLATION" equiv-text="Math.max(minutes, 0)"/> 分钟</source>
+        <target>Uptime <x id="INTERPOLATION" equiv-text="Math.max(minutes, 0)"/> minutes</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">47</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="emptyValue" datatype="html">
+        <source>暂无</source>
+        <target>N/A</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">52</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="statusRunning" datatype="html">
+        <source>运行中</source>
+        <target>Running</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">69</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="statusInitializing" datatype="html">
+        <source>初始化中</source>
+        <target>Initializing</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">71</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="statusError" datatype="html">
+        <source>出现错误</source>
+        <target>Error</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">73</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="statusUnknown" datatype="html">
+        <source>未知</source>
+        <target>Unknown</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">75</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="platformGroup" datatype="html">
+        <source>群聊</source>
+        <target>Group</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">82</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="platformPrivate" datatype="html">
+        <source>私聊</source>
+        <target>Private</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">84</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="platformUnknown" datatype="html">
+        <source>未知</source>
+        <target>Unknown</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">86</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="logLevelUnknown" datatype="html">
+        <source>未知</source>
+        <target>Unknown</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/shared/dashboard-utils.ts</context>
+          <context context-type="linenumber">95</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="backendSettingsTitle" datatype="html">
+        <source>后端设置</source>
+        <target>Backend Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">6,7</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="backendSettings" datatype="html">
+        <source>bot设置</source>
+        <target>Bot Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">16,17</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="backendSettingsDesc" datatype="html">
+        <source>快捷修改服务端环境变量</source>
+        <target>Quick Edit Server Env Variables</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">17,19</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="frontendSettingsTitle" datatype="html">
+        <source>网页设置</source>
+        <target>Web Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">6,9</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="frontendSettings" datatype="html">
+        <source>网页设置</source>
+        <target>Web Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">30,31</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="frontendSettingsDesc" datatype="html">
+        <source>语言、色彩等</source>
+        <target>Language, color, etc.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">31,33</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="settingsTitle" datatype="html">
+        <source>设置</source>
+        <target>Settings</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/settings.component.html</context>
+          <context context-type="linenumber">5,7</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="language" datatype="html">
+        <source>语言</source>
+        <target>Language</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">15</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="localeZhCN" datatype="html">
+        <source>简体中文</source>
+        <target>简体中文</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">34</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="localeEn" datatype="html">
+        <source>English</source>
+        <target>English</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">35</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="localeSelectPlaceholder" datatype="html">
+        <source>选择语言</source>
+        <target>Select language</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">19</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeSystem" datatype="html">
+        <source>跟随系统</source>
+        <target>Follow System</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">27</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeLight" datatype="html">
+        <source>亮色</source>
+        <target>Light</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">28</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeDark" datatype="html">
+        <source>暗色</source>
+        <target>Dark</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">29</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeMode" datatype="html">
+        <source>主题模式</source>
+        <target>Theme Mode</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">27</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="overviewGreeting" datatype="html">
+        <source>你好👋！我是 <x id="PH" equiv-text="name"/></source>
+        <target>Hello 👋! I'm <x id="PH" equiv-text="name"/></target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.ts</context>
+          <context context-type="linenumber">71</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="backendVersion" datatype="html">
+        <source>后端版本 <x id="PH" equiv-text="version"/></source>
+        <target>Backend <x id="PH" equiv-text="version"/></target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/overview/overview.component.ts</context>
+          <context context-type="linenumber">75</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonAuto" datatype="html">
+        <source>跟随月份</source>
+        <target>Follow Month</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">43</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonSpring" datatype="html">
+        <source>春</source>
+        <target>Spring</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">44</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonSummer" datatype="html">
+        <source>夏</source>
+        <target>Summer</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">45</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonAutumn" datatype="html">
+        <source>秋</source>
+        <target>Autumn</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">46</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="seasonWinter" datatype="html">
+        <source>冬</source>
+        <target>Winter</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.ts</context>
+          <context context-type="linenumber">47</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="themeSeason" datatype="html">
+        <source>配色</source>
+        <target>Color Scheme</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/settings/frontend-settings.component.html</context>
+          <context context-type="linenumber">43</context>
+        </context-group>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

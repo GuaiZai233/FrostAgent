@@ -1,0 +1,78 @@
+<section class="page">
+  <header >
+
+  </header>
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (error()) {
+    <mat-card >
+      <mat-card-content>{{ error() }}</mat-card-content>
+    </mat-card>
+  }
+
+  @if (overview(); as data) {
+    <section>
+      <div>
+        <h2>{{ greet(data.botName || 'FrostAgent') }}</h2>
+      </div>
+      <mat-chip-set aria-label="Bot metadata">
+        <mat-chip [ngClass]="{
+            'status-chip-running': data.status === BotStatus.RUNNING,
+            'status-chip-initializing': data.status === BotStatus.INITIALIZING,
+            'status-chip-error': data.status === BotStatus.ERROR
+          }">
+          <mat-icon matChipAvatar>sensors</mat-icon>
+          {{ formatStatus(data.status) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>acute</mat-icon>
+          {{ formatUptime(data.uptimeSeconds) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>deployed_code</mat-icon>
+          {{ backendVersion(data.version || '-') }}
+        </mat-chip>
+      </mat-chip-set>
+    </section>
+
+    <section style="margin-top: 16px;">
+      <mat-chip-set aria-label="Bot statistics">
+        <mat-chip>
+          <mat-icon matChipAvatar>mark_chat_read</mat-icon>
+          <span i18n="@@totalMessages">处理消息</span> {{ formatCount(data.totalMessagesProcessed) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>forum</mat-icon>
+          <span i18n="@@activeSessions">活跃会话</span> {{ formatCount(data.activeSessions) }}
+        </mat-chip>
+        <mat-chip>
+          <mat-icon matChipAvatar>psychology</mat-icon>
+          <span i18n="@@currentModel">当前模型</span> {{ data.currentModel || '-' }}
+        </mat-chip>
+      </mat-chip-set>
+    </section>
+
+    <section style="margin-top: 32px;">
+      <h2 i18n="@@loadedTools" style="margin-bottom: 16px;">我可以使用 {{ data.tools.length }} 个工具</h2>
+
+      <div class="tools-container">
+        @for (tool of data.tools; track tool.name) {
+          <mat-card appearance="outlined">
+            <mat-card-header>
+              <mat-icon mat-card-avatar>construction</mat-icon>
+              <mat-card-title>{{ tool.name }}</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>{{ tool.description || '' }}</mat-card-content>
+          </mat-card>
+        } @empty {
+          <mat-card appearance="outlined">
+            <mat-card-content i18n="@@noTools">暂无已注册工具。</mat-card-content>
+          </mat-card>
+        }
+      </div>
+    </section>
+  }
+</section>

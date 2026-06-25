@@ -10,6 +10,13 @@ service BotStatusService {
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
 }
 
+enum BotStatus {
+  BOT_STATUS_UNSPECIFIED = 0;
+  BOT_STATUS_INITIALIZING = 1;
+  BOT_STATUS_RUNNING = 2;
+  BOT_STATUS_ERROR = 3;
+}
+
 message GetOverviewRequest {}
 
 message GetOverviewResponse {
@@ -19,7 +26,7 @@ message GetOverviewResponse {
   int64 total_messages_processed = 4;
   int32 active_sessions = 5;
   string current_model = 6;
-  string status = 7;
+  BotStatus status = 7;
   repeated ToolInfo tools = 8;
 }
 

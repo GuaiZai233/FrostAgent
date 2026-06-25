@@ -1,0 +1,17 @@
+{
+  "/frostagent.v1.BotStatusService": {
+    "target": "http://localhost:8080",
+    "secure": false,
+    "changeOrigin": true
+  },
+  "/frostagent.v1.SettingsService": {
+    "target": "http://localhost:8080",
+    "secure": false,
+    "changeOrigin": true
+  },
+  "/frostagent.v1.LogService": {
+    "target": "http://localhost:8080",
+    "secure": false,
+    "changeOrigin": true
+  }
+}

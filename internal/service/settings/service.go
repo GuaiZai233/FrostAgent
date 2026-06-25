@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"connectrpc.com/connect"
+
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
 
@@ -35,14 +35,6 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_AT_IN_GROUP_MSG": {"是否开启群聊回复前艾特", false, false},
 }
 
-// maskSecret hides all but the last 4 characters of a value.
-func maskSecret(v string) string {
-	if len(v) <= 4 {
-		return "****"
-	}
-	return strings.Repeat("*", len(v)-4) + v[len(v)-4:]
-}
-
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
 	envPath string // path to .env file
@@ -64,13 +56,9 @@ func (s *Service) ListEnvVars(
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
 		val := os.Getenv(key)
-		displayVal := val
-		if meta.IsSecret && val != "" {
-			displayVal = maskSecret(val)
-		}
 		vars = append(vars, &v1.EnvVar{
 			Key:      key,
-			Value:    displayVal,
+			Value:    val,
 			IsSecret: meta.IsSecret,
 		})
 	}
@@ -268,6 +256,3 @@ func copyFile(src, dst string) error {
 	}
 	return os.WriteFile(dst, data, 0644)
 }
-
-// Ensure path/filepath is used.
-var _ = filepath.Base

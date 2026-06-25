@@ -1,0 +1,39 @@
+<section class="page">
+  @if (!isChildRoute()) {
+    <mat-toolbar>
+      <h2 i18n="@@settingsTitle" style="margin: 0; flex: 1;">设置</h2>
+    </mat-toolbar>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+      <mat-card
+        appearance="outlined"
+        style="cursor: pointer;"
+        (click)="navigateTo('/settings/backend')"
+      >
+        <mat-card-content style="display: flex; align-items: center; gap: 16px; padding: 24px;">
+          <mat-icon style="font-size: 40px; width: 40px; height: 40px;">dns</mat-icon>
+          <div>
+            <h3 i18n="@@backendSettings" style="margin: 0 0 4px;">bot设置</h3>
+            <p i18n="@@backendSettingsDesc" style="margin: 0; color: var(--mat-sys-outline);">快捷修改服务端环境变量</p>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card
+        appearance="outlined"
+        style="cursor: pointer;"
+        (click)="navigateTo('/settings/frontend')"
+      >
+        <mat-card-content style="display: flex; align-items: center; gap: 16px; padding: 24px;">
+          <mat-icon style="font-size: 40px; width: 40px; height: 40px;">palette</mat-icon>
+          <div>
+            <h3 i18n="@@frontendSettings" style="margin: 0 0 4px;">网页设置</h3>
+            <p i18n="@@frontendSettingsDesc" style="margin: 0; color: var(--mat-sys-outline);">语言、色彩等</p>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <router-outlet />
+</section>

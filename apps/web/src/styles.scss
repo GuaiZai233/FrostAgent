@@ -1,0 +1,78 @@
+@use '@angular/material' as mat;
+@use '@fairylights-studio/ngx-m3-button/styles';
+
+html {
+  color-scheme: light dark;
+  @include mat.theme(
+    (
+      color: (
+        primary: mat.$azure-palette,
+        tertiary: mat.$green-palette,
+      ),
+      typography: Roboto,
+      density: 0,
+    )
+  );
+}
+
+html.theme-spring {
+  @include mat.theme((
+    color: (
+      primary: mat.$green-palette,
+    )
+  ));
+}
+
+html.theme-summer {
+  @include mat.theme((
+    color: (
+      primary: mat.$red-palette,
+    )
+  ));
+}
+
+html.theme-autumn {
+  @include mat.theme((
+    color: (
+      primary: mat.$yellow-palette,
+    )
+  ));
+}
+
+html.theme-winter {
+  @include mat.theme((
+    color: (
+      primary: mat.$azure-palette,
+    )
+  ));
+}
+
+html,
+body {
+  background: var(--mat-sys-surface);
+  color: var(--mat-sys-on-surface);
+  @include mat.system-classes();
+
+  min-height: 100%;
+  margin: 0;
+
+.material-symbols-rounded {
+  font-variation-settings:
+  'FILL' 0,
+  'wght' 400,
+  'GRAD' -25,
+  'opsz' 24
+}
+}
+
+.page {
+  display: block;
+  padding: 0 16px 0 16px;
+  max-width: 960px;
+  margin: 0;
+
+  > mat-toolbar {
+    margin-inline: -16px;
+    width: calc(100% + 32px);
+  }
+}
