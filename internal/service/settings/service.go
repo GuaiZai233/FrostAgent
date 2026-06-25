@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
@@ -256,6 +255,3 @@ func copyFile(src, dst string) error {
 	}
 	return os.WriteFile(dst, data, 0644)
 }
-
-// Ensure path/filepath is used.
-var _ = filepath.Base
