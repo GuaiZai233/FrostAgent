@@ -106,9 +106,6 @@ export function maskSecret(value: string): string {
   if (!value) {
     return '';
   }
-  if (value.includes('*')) {
-    return value;
-  }
   if (value.length <= 4) {
     return '****';
   }
