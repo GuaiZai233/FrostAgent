@@ -1,53 +1,111 @@
 syntax = "proto3";
 
+import "google/api/annotations.proto";
+
 package frostagent.v1;
 
 import "frostagent/v1/common.proto";
 
-// LogService provides log retrieval and streaming.
+// LogService provides log retrieval and streaming for monitoring agent activity.
 service LogService {
-  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
-  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
-  rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse);
+  // ListLogs retrieves a paginated list of historical logs.
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse) {
+    option (google.api.http) = {
+      get: "/v1/logs"
+    };
+  }
+
+  // StreamLogs opens a server-side stream to receive real-time log entries.
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry) {
+    option (google.api.http) = {
+      get: "/v1/logs/stream"
+    };
+  }
+
+  // ClearLogs deletes historical log entries from the database.
+  rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse) {
+    option (google.api.http) = {
+      delete: "/v1/logs"
+    };
+  }
 }
 
+// LogLevel defines the severity of a log entry.
 enum LogLevel {
+  // LOG_LEVEL_UNSPECIFIED is the default value when no level is provided.
   LOG_LEVEL_UNSPECIFIED = 0;
+  // LOG_LEVEL_DEBUG for detailed diagnostic information.
   LOG_LEVEL_DEBUG = 1;
+  // LOG_LEVEL_INFO for general operational messages.
   LOG_LEVEL_INFO = 2;
+  // LOG_LEVEL_WARN for potentially harmful situations.
   LOG_LEVEL_WARN = 3;
+  // LOG_LEVEL_ERROR for serious failures that affect functionality.
   LOG_LEVEL_ERROR = 4;
 }
 
+// LogEntry represents a single log record with metadata and optional payload details.
 message LogEntry {
+  // id is the unique identifier for the log entry.
   string id = 1;
+
+  // timestamp is the ISO 8601 time when the log was recorded.
   string timestamp = 2;
+
+  // level is the severity of the log.
   LogLevel level = 3;
+
+  // source identifies the component or module that generated the log.
   string source = 4;
+
+  // summary is a brief human-readable description of the log event.
   string summary = 5;
+
+  // has_detail indicates if the log contains extended request/response payloads.
   bool has_detail = 6;
+
+  // request_body contains the raw input payload for the logged action (if available).
   string request_body = 7;
+
+  // response_body contains the raw output payload for the logged action (if available).
   string response_body = 8;
 }
 
+// ListLogsRequest defines filters and pagination for log retrieval.
 message ListLogsRequest {
+  // pagination controls the data window for the log list.
   Pagination pagination = 1;
+
+  // min_level filters logs to only those with severity equal to or greater than this level.
   LogLevel min_level = 2;
+
+  // source_filter restricts results to logs from a specific component.
   string source_filter = 3;
 }
 
+// ListLogsResponse contains the filtered log entries and paging state.
 message ListLogsResponse {
+  // entries is the list of log records matching the request criteria.
   repeated LogEntry entries = 1;
+
+  // pagination provides the token for the next page of results.
   Pagination pagination = 2;
 }
 
+// StreamLogsRequest defines filters for the real-time log stream.
 message StreamLogsRequest {
+  // min_level filters the stream to logs with severity equal to or greater than this level.
   LogLevel min_level = 1;
+
+  // source_filter restricts the stream to logs from a specific component.
   string source_filter = 2;
 }
 
+// ClearLogsRequest requests the deletion of historical logs.
 message ClearLogsRequest {}
 
+// ClearLogsResponse confirms the outcome of the log deletion request.
 message ClearLogsResponse {
+  // success is true if logs were successfully cleared.
   bool success = 1;
 }

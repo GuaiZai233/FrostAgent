@@ -1,15 +1,29 @@
 syntax = "proto3";
 
+import "google/api/annotations.proto";
+
 package frostagent.v1;
 
 import "frostagent/v1/common.proto";
 
 // BotStatusService provides bot overview and session management.
 service BotStatusService {
-  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
-  rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
+  // GetOverview returns runtime status and capability metadata for the AI Agent middleware.
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse) {
+    option (google.api.http) = {
+      get: "/v1/bot/overview"
+    };
+  }
+
+  // GetSessions lists active or recent agent interaction sessions.
+  rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/bot/sessions"
+    };
+  }
 }
 
+// BotStatus describes the operational state of the bot.
 enum BotStatus {
   BOT_STATUS_UNSPECIFIED = 0;
   BOT_STATUS_INITIALIZING = 1;
@@ -17,24 +31,47 @@ enum BotStatus {
   BOT_STATUS_ERROR = 3;
 }
 
+// GetOverviewRequest requests a high-level runtime overview of the agent service.
 message GetOverviewRequest {}
 
+// GetOverviewResponse contains runtime health, usage, and capability details.
 message GetOverviewResponse {
+  // bot_name is the display name of the running AI Agent instance.
   string bot_name = 1;
+
+  // version is the semantic or build version of the middleware service.
   string version = 2;
+
+  // uptime_seconds is the number of seconds the service has been running.
   int64 uptime_seconds = 3;
+
+  // total_messages_processed is the cumulative number of messages handled by the agent.
   int64 total_messages_processed = 4;
+
+  // active_sessions is the number of currently active orchestration sessions.
   int32 active_sessions = 5;
+
+  // current_model identifies the default or active AI model used by the agent.
   string current_model = 6;
+
+  // status describes the current operational state of the service.
   BotStatus status = 7;
+
+  // tools lists the tools currently registered for agent orchestration.
   repeated ToolInfo tools = 8;
 }
 
+// GetSessionsRequest requests a paginated list of agent sessions.
 message GetSessionsRequest {
+  // pagination controls paging for the session list.
   Pagination pagination = 1;
 }
 
+// GetSessionsResponse contains the requested agent sessions and paging state.
 message GetSessionsResponse {
+  // sessions contains the agent interaction sessions returned for the request.
   repeated SessionInfo sessions = 1;
+
+  // pagination provides the token for the next page of results.
   Pagination pagination = 2;
 }

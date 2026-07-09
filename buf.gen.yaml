@@ -4,6 +4,9 @@ managed:
   override:
     - file_option: go_package_prefix
       value: FrostAgent/gen/proto
+  disable:
+    - file_option: go_package_prefix
+      path: google/api
 plugins:
   - local: protoc-gen-go
     out: gen/proto
@@ -11,3 +14,8 @@ plugins:
   - local: protoc-gen-connect-go
     out: gen/proto
     opt: paths=source_relative
+  - remote: buf.build/grpc-ecosystem/openapiv2
+    out: gen/openapi
+    opt:
+      - allow_merge=true
+      - merge_file_name=frostagent
