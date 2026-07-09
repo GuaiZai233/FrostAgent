@@ -32,9 +32,9 @@ func (s *Service) GetOverview(
 		uptime = int64(time.Since(s.engine.StartedAt).Seconds())
 	}
 
-	status := "running"
+	status := v1.BotStatus_BOT_STATUS_RUNNING
 	if s.engine.SessionManager == nil {
-		status = "initializing"
+		status = v1.BotStatus_BOT_STATUS_INITIALIZING
 	}
 
 	activeSessions := int32(0)
