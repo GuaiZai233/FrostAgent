@@ -1,3 +1,5 @@
+// 负责把 core 层产出的 OutgoingMessage 按平台标识准确送到对应的 MessageAdapter
+
 package core
 
 import (

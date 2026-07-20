@@ -10,7 +10,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { RouterModule } from '@angular/router';
-import { ThemeService, ThemeMode, SeasonMode } from '../shared/theme.service';
+import { ThemeService, ThemeMode } from '../shared/theme.service';
 
 @Component({
   selector: 'app-frontend-settings',
@@ -42,23 +42,6 @@ export class FrontendSettingsComponent {
     { mode: 'light', icon: 'light_mode', label: $localize`:@@themeLight:亮色` },
     { mode: 'dark', icon: 'dark_mode', label: $localize`:@@themeDark:暗色` },
   ];
-
-  readonly seasonOptions: { mode: SeasonMode; icon: string; label: string }[] =
-    [
-      {
-        mode: 'auto',
-        icon: 'schedule',
-        label: $localize`:@@seasonAuto:跟随月份`,
-      },
-      {
-        mode: 'spring',
-        icon: 'potted_plant',
-        label: $localize`:@@seasonSpring:春`,
-      },
-      { mode: 'summer', icon: 'sunny', label: $localize`:@@seasonSummer:夏` },
-      { mode: 'autumn', icon: 'eco', label: $localize`:@@seasonAutumn:秋` },
-      { mode: 'winter', icon: 'ac_unit', label: $localize`:@@seasonWinter:冬` },
-    ];
 
   readonly currentLocale = $localize.locale;
 

@@ -5,6 +5,7 @@ package core
 // ──────────────────────────────────────────────
 
 // ChatRequest represents a request to an LLM.
+// 调用 LLM 时传入的所有参数,对应 OpenAI Chat Completions API 的请求体。
 type ChatRequest struct {
 	Model       string
 	Messages    []ChatMessage
@@ -69,7 +70,7 @@ type Tool struct {
 
 // Usage tracks token usage.
 type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
+	PromptTokens     int // 输入消耗
+	CompletionTokens int // 输出消耗
 	TotalTokens      int
 }

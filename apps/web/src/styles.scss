@@ -15,38 +15,6 @@ html {
   );
 }
 
-html.theme-spring {
-  @include mat.theme((
-    color: (
-      primary: mat.$green-palette,
-    )
-  ));
-}
-
-html.theme-summer {
-  @include mat.theme((
-    color: (
-      primary: mat.$red-palette,
-    )
-  ));
-}
-
-html.theme-autumn {
-  @include mat.theme((
-    color: (
-      primary: mat.$yellow-palette,
-    )
-  ));
-}
-
-html.theme-winter {
-  @include mat.theme((
-    color: (
-      primary: mat.$azure-palette,
-    )
-  ));
-}
-
 html,
 body {
   background: var(--mat-sys-surface);
