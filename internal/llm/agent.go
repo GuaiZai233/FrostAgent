@@ -3,6 +3,7 @@ package llm
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"context"
 	"fmt"
 	"os"
@@ -31,6 +32,11 @@ type Engine struct {
 	StartedAt              time.Time                   // 引擎启动时间
 	Version                string                      // 版本号
 	TotalMessagesProcessed int64                       // 已处理消息总数（原子操作，非线程安全计数器）
+
+	// Memory components (optional, nil = memory disabled)
+	MemoryReader  *memory.Reader
+	MemoryWriter  *memory.Writer
+	MemoryGateway *memory.Gateway
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -54,6 +60,52 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 		}, messages...)
 	}
 	return e.runLoop(context.Background(), messages)
+}
+
+// RunMessagesWithUser 执行智能体的主循环（带记忆上下文）
+// userID 用于记忆系统的 Owner 过滤；传空则跳过记忆。
+func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) string {
+	if len(messages) == 0 || messages[0].Role != "system" {
+		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+
+		// 召回 → 网关过滤 → 注入
+		if userID != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+			lastUserMsg := extractLastUserMessage(messages)
+			raw, err := e.MemoryReader.Recall(lastUserMsg)
+			if err == nil {
+				filtered := e.MemoryGateway.Filter(raw, userID)
+				if len(filtered) > 0 {
+					memoryContext := e.MemoryGateway.FormatForContext(filtered, userID)
+					systemPrompt += "\n\n" + memoryContext
+				}
+			}
+		}
+
+		messages = append([]ChatMessage{
+			{Role: "system", Content: systemPrompt},
+		}, messages...)
+	}
+
+	result := e.runLoop(context.Background(), messages)
+
+	// 异步提取记忆（不阻塞对话）
+	if userID != "" && e.MemoryWriter != nil {
+		go e.MemoryWriter.Write(userID, result, nil) // P1: 改为 LLM 提取
+	}
+
+	return result
+}
+
+// extractLastUserMessage 从消息数组中提取最后一条用户消息的内容。
+func extractLastUserMessage(messages []ChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			if s, ok := messages[i].Content.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
