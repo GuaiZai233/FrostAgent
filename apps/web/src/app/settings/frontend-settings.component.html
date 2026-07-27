@@ -39,20 +39,4 @@
     </mat-button-toggle-group>
   </section>
 
-  <section >
-    <h3 class="form-section-title" i18n="@@themeSeason">配色</h3>
-    
-    <mat-button-toggle-group
-      [ngModel]="themeService.currentSeasonMode()"
-      (ngModelChange)="themeService.setSeasonMode($event)"
-      hideSingleSelectionIndicator="true"
-    >
-      @for (option of seasonOptions; track option.mode) {
-        <mat-button-toggle [value]="option.mode">
-          <mat-icon>{{ option.icon }}</mat-icon>
-          <span>{{ option.label }}</span>
-        </mat-button-toggle>
-      }
-    </mat-button-toggle-group>
-  </section>
 </div>
