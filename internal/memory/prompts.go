@@ -1,0 +1,21 @@
+package memory
+
+// extractPrompt 是发送给 LLM 的记忆提取提示词。
+// {conversation} 会被替换为最近的对话内容。
+const extractPrompt = `请从以下对话中提取值得长期记住的信息。
+返回 JSON 数组，每条包含：
+- content: 自然语言描述（简洁、独立可理解）
+- tags: 关键词标签数组（2-5个）
+- visibility: "private"（个人信息）或 "public"（公共知识）
+
+提取标准：
+- 用户的身份信息（名字、职业、偏好等）
+- 重要的事实和决定
+- 长期有效的偏好或习惯
+- 不要提取：临时性的对话、闲聊、一次性的请求
+
+如果没有任何值得记住的信息，返回空数组 []。
+只返回 JSON，不要其他文字。
+
+对话内容：
+{conversation}`

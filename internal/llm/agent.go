@@ -90,7 +90,7 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 
 	// 异步提取记忆（不阻塞对话）
 	if userID != "" && e.MemoryWriter != nil {
-		go e.MemoryWriter.Write(userID, result, nil) // P1: 改为 LLM 提取
+		go e.MemoryWriter.Extract(userID, convertToCoreMessages(messages))
 	}
 
 	return result
