@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/service/botstatus"
 	logsvc "FrostAgent/internal/service/logs"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
@@ -25,6 +27,30 @@ var GlobalEngine *llm.Engine
 
 const version = "0.1.0"
 
+// brainPath returns the path to brain.json, defaulting to data/brain.json.
+func brainPath() string {
+	if p := os.Getenv("BRAIN_PATH"); p != "" {
+		return p
+	}
+	return "data/brain.json"
+}
+
+// vectorPath returns the path to vectors.json, derived from the brain path.
+func vectorPath() string {
+	bp := brainPath()
+	dir := filepath.Dir(bp)
+	name := filepath.Base(bp)
+	// e.g. data/brain.json -> data/vectors.json
+	name = "vectors.json"
+	return filepath.Join(dir, name)
+}
+
+// ensureDataDir ensures the data directory exists for brain.json.
+func ensureDataDir() {
+	dir := filepath.Dir(brainPath())
+	os.MkdirAll(dir, 0755)
+}
+
 func init() {
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
@@ -36,14 +62,43 @@ func init() {
 
 	logs.Info(logs.SYSTEM, "正在初始化智能体引擎...")
 
-	llmClient := llm.NewClient()
+	// Ensure data directory exists
+	ensureDataDir()
 
-	// 注册工具
+	// Initialize LLM client (both the low-level and provider-level)
+	llmClientBase := llm.NewClient()
+	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
+
+	// Initialize memory system
+	store := memory.NewStore(brainPath())
+
+	var vs *memory.VectorStore
+	embedModel := os.Getenv("EMBEDDING_MODEL")
+	if embedModel != "" {
+		embedder := openai.NewEmbedder(llmClient, embedModel)
+		vs = memory.NewVectorStore(vectorPath(), embedder)
+		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 向量检索已启用 (模型: %s)", embedModel))
+	} else {
+		logs.Info(logs.SYSTEM, "⚠ 向量检索未配置 (EMBEDDING_MODEL 未设置)，使用关键词检索")
+	}
+
+	// Reader: hybrid search (vector + keyword)
+	reader := memory.NewReader(store, vs, 20)
+	// Writer: auto-extract + auto-index
+	writer := memory.NewWriter(store)
+	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
+	if vs != nil {
+		writer.SetVectorStore(vs)
+	}
+	// Gateway: owner + visibility filtering
+	gateway := memory.NewGateway()
+
+	// Register tools
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
 
-	subAgentTool := tools.SubAgentTool(llmClient)
+	subAgentTool := tools.SubAgentTool(llmClientBase)
 	registry[subAgentTool.Name()] = subAgentTool
 
 	weatherTool := tools.GetWeatherTool()
@@ -60,13 +115,17 @@ func init() {
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
-		Provider:       openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY")),
+		Provider:       llmClient,
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
 		SessionManager: llm.NewSessionManager(),
 		StartedAt:      time.Now(),
 		Version:        version,
+		// Memory components
+		MemoryReader:  reader,
+		MemoryWriter:  writer,
+		MemoryGateway: gateway,
 	}
 
 	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")

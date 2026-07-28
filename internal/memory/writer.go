@@ -14,7 +14,9 @@ import (
 
 // Writer handles memory writing.
 type Writer struct {
-	store    *Store
+	store *Store
+	vs    *VectorStore
+	// LLM fields (set via SetLLM)
 	provider core.LLMProvider
 	model    string
 }
@@ -30,7 +32,13 @@ func (w *Writer) SetLLM(provider core.LLMProvider, model string) {
 	w.model = model
 }
 
-// Write directly saves a memory entry (user explicitly said "remember this").
+// SetVectorStore configures the vector store for semantic indexing.
+func (w *Writer) SetVectorStore(vs *VectorStore) {
+	w.vs = vs
+}
+
+// Write directly saves a memory entry and indexes it in the vector store
+// (user explicitly said "remember this").
 func (w *Writer) Write(owner string, content string, tags []string) error {
 	entry := MemoryEntry{
 		ID:         generateID(),
@@ -43,11 +51,18 @@ func (w *Writer) Write(owner string, content string, tags []string) error {
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	return w.store.Save(entry)
+	if err := w.store.Save(entry); err != nil {
+		return err
+	}
+	if w.vs != nil {
+		_ = w.vs.Index(context.Background(), entry.ID, content) // index non-blocking
+	}
+	return nil
 }
 
 // Extract uses LLM to analyze conversation and extract memories.
 // Called asynchronously after each conversation turn.
+// Extracted memories are also indexed in the vector store.
 func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
 	if w.provider == nil || w.model == "" {
 		return nil // LLM not configured, skip extraction
@@ -114,6 +129,7 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 		return err
 	}
 
+	ctx := context.Background()
 	for _, e := range entries {
 		if e.Content == "" {
 			continue
@@ -135,6 +151,10 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 		}
 		if err := w.store.Save(entry); err != nil {
 			logs.Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
+			continue
+		}
+		if w.vs != nil {
+			_ = w.vs.Index(ctx, entry.ID, e.Content) // index non-blocking
 		}
 	}
 

@@ -71,7 +71,7 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 		// 召回 → 网关过滤 → 注入
 		if userID != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 			lastUserMsg := extractLastUserMessage(messages)
-			raw, err := e.MemoryReader.Recall(lastUserMsg)
+			raw, err := e.MemoryReader.Recall(context.Background(), lastUserMsg)
 			if err == nil {
 				filtered := e.MemoryGateway.Filter(raw, userID)
 				if len(filtered) > 0 {
