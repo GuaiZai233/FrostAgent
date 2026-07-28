@@ -137,31 +137,43 @@ func (s *Store) ListAll() ([]MemoryEntry, error) {
 	return brain.Entries, nil
 }
 
-// GetSummary returns the memory summary for the specified owner.
+// GetSummary returns the memory summary for the specified owner from the unified brain.
 func (s *Store) GetSummary(owner string) (*MemorySummary, error) {
-	summaryPath := s.summaryPath(owner)
-	data, err := os.ReadFile(summaryPath)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	brain, err := s.load()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		return nil, err
+	}
+
+	for _, summary := range brain.Summaries {
+		if summary.Owner == owner {
+			s2 := summary
+			return &s2, nil
 		}
-		return nil, fmt.Errorf("failed to read summary: %w", err)
 	}
-	var summary MemorySummary
-	if err := json.Unmarshal(data, &summary); err != nil {
-		return nil, fmt.Errorf("failed to parse summary: %w", err)
-	}
-	return &summary, nil
+	return nil, nil
 }
 
-// SaveSummary writes a memory summary to disk.
+// SaveSummary writes or updates a memory summary in the unified brain.
 func (s *Store) SaveSummary(summary MemorySummary) error {
-	summaryPath := s.summaryPath(summary.Owner)
-	data, err := json.MarshalIndent(summary, "", "  ")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
 	if err != nil {
-		return fmt.Errorf("failed to marshal summary: %w", err)
+		return err
 	}
-	return os.WriteFile(summaryPath, data, 0644)
+
+	for i, s2 := range brain.Summaries {
+		if s2.Owner == summary.Owner {
+			brain.Summaries[i] = summary
+			return s.save(brain)
+		}
+	}
+	brain.Summaries = append(brain.Summaries, summary)
+	return s.save(brain)
 }
 
 // Delete removes a memory entry by ID.
@@ -181,12 +193,6 @@ func (s *Store) Delete(memoryID string) error {
 		}
 	}
 	return fmt.Errorf("memory %s not found", memoryID)
-}
-
-// summaryPath returns the file path for an owner's summary.
-func (s *Store) summaryPath(owner string) string {
-	dir := strings.TrimSuffix(s.path, "brain.json")
-	return dir + "summaries/" + owner + ".json"
 }
 
 // UpdateImportance updates a single memory's importance score.

@@ -48,5 +48,6 @@ type MemorySummary struct {
 
 // BrainData 统一大脑的持久化结构。
 type BrainData struct {
-	Entries []MemoryEntry `json:"entries"`
+	Entries   []MemoryEntry   `json:"entries"`
+	Summaries []MemorySummary `json:"summaries,omitempty"`
 }
