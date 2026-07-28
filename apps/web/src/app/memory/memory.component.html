@@ -1,7 +1,33 @@
 <section class="page">
-  <header>
+  <!-- Toolbar -->
+  <div class="toolbar">
     <h1 i18n="@@memoryManagement">记忆管理</h1>
-  </header>
+    <div class="toolbar-actions">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic" class="search-field">
+        <mat-label i18n="@@search">搜索</mat-label>
+        <input matInput [(ngModel)]="searchQuery" (keyup.enter)="search()" />
+        <button matSuffix mat-icon-button (click)="search()" matTooltip="搜索">
+          <mat-icon>search</mat-icon>
+        </button>
+      </mat-form-field>
+      <button mat-stroked-button (click)="openAddDialog()" matTooltip="添加记忆">
+        <mat-icon>add</mat-icon>
+        <span i18n="@@addMemory">添加</span>
+      </button>
+      <button mat-stroked-button (click)="exportMemories()" matTooltip="导出">
+        <mat-icon>file_download</mat-icon>
+        <span i18n="@@export">导出</span>
+      </button>
+      <button mat-stroked-button (click)="importInput.click()" matTooltip="导入">
+        <mat-icon>file_upload</mat-icon>
+        <span i18n="@@import">导入</span>
+      </button>
+      <input #importInput type="file" accept=".json" (change)="importMemories($event)" style="display:none" />
+      <button mat-icon-button (click)="refresh()" matTooltip="刷新">
+        <mat-icon>refresh</mat-icon>
+      </button>
+    </div>
+  </div>
 
   @if (loading() && memories().length === 0) {
     <mat-progress-bar mode="indeterminate" />
@@ -48,18 +74,27 @@
     </section>
   }
 
-  <!-- Owner filter chip -->
+  <!-- Filter chips -->
   @if (ownerFilter()) {
     <section class="filter-row">
       <mat-chip-set>
-        <mat-chip highlighted (removed)="refresh()">
+        <mat-chip highlighted (removed)="clearOwnerFilter()">
           <mat-icon matChipAvatar>person</mat-icon>
           {{ ownerFilter() }}
-          <button matChipRemove>
-            <mat-icon>cancel</mat-icon>
-          </button>
+          <button matChipRemove><mat-icon>cancel</mat-icon></button>
         </mat-chip>
       </mat-chip-set>
+    </section>
+  }
+
+  <!-- Batch delete bar -->
+  @if (selectedIds().size > 0) {
+    <section class="batch-bar">
+      <span i18n="@@selectedCount">已选择 {{ selectedIds().size }} 条</span>
+      <button mat-stroked-button color="warn" (click)="deleteSelected()">
+        <mat-icon>delete</mat-icon>
+        <span i18n="@@deleteSelected">删除所选</span>
+      </button>
     </section>
   }
 
@@ -67,10 +102,19 @@
   @if (memories().length > 0) {
     <section class="table-container">
       <table mat-table [dataSource]="memories()" class="memory-table">
-        <ng-container matColumnDef="id">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryId">ID</th>
-          <td mat-cell *matCellDef="let mem" [matTooltip]="mem.id">
-            {{ mem.id.length > 12 ? (mem.id | slice:0:12) + '...' : mem.id }}
+        <ng-container matColumnDef="select">
+          <th mat-header-cell *matHeaderCellDef>
+            <mat-checkbox [checked]="isAllSelected()" [indeterminate]="isSomeSelected()" (change)="toggleSelectAll()" />
+          </th>
+          <td mat-cell *matCellDef="let mem">
+            <mat-checkbox [checked]="selectedIds().has(mem.id)" (change)="toggleSelect(mem.id)" />
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="source">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memorySource">来源</th>
+          <td mat-cell *matCellDef="let mem">
+            <mat-icon [matTooltip]="getSourceLabel(mem.source)">{{ getSourceIcon(mem.source) }}</mat-icon>
           </td>
         </ng-container>
 
@@ -86,8 +130,8 @@
 
         <ng-container matColumnDef="content">
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryContent">内容</th>
-          <td mat-cell *matCellDef="let mem" [matTooltip]="mem.content">
-            {{ mem.content.length > 60 ? (mem.content | slice:0:60) + '...' : mem.content }}
+          <td mat-cell *matCellDef="let mem" class="content-cell" (click)="openDetail(mem)">
+            <span [matTooltip]="mem.content">{{ mem.content.length > 60 ? (mem.content | slice:0:60) + '...' : mem.content }}</span>
           </td>
         </ng-container>
 
@@ -115,7 +159,12 @@
 
         <ng-container matColumnDef="importance">
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryImportance">重要度</th>
-          <td mat-cell *matCellDef="let mem">{{ mem.importance.toFixed(2) }}</td>
+          <td mat-cell *matCellDef="let mem" class="importance-cell">
+            <div class="importance-bar">
+              <div class="importance-fill" [style.width.%]="mem.importance * 100"></div>
+            </div>
+            <span class="importance-text">{{ (mem.importance * 100).toFixed(0) }}%</span>
+          </td>
         </ng-container>
 
         <ng-container matColumnDef="createdAt">
@@ -126,14 +175,17 @@
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryActions">操作</th>
           <td mat-cell *matCellDef="let mem">
-            <button mat-icon-button color="warn" [matTooltip]="'删除'" (click)="deleteMemory(mem.id)">
+            <button mat-icon-button (click)="openDetail(mem)" matTooltip="查看/编辑">
+              <mat-icon>visibility</mat-icon>
+            </button>
+            <button mat-icon-button color="warn" (click)="deleteMemory(mem.id)" matTooltip="删除">
               <mat-icon>delete</mat-icon>
             </button>
           </td>
         </ng-container>
 
         <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-        <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns;" class="memory-row"></tr>
       </table>
 
       <mat-paginator

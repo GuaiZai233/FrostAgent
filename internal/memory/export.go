@@ -56,6 +56,20 @@ func (s *Store) Import(path string, overwrite bool) (imported int, skipped int, 
 		return 0, 0, fmt.Errorf("unmarshal import data: %w", err)
 	}
 
+	return s.importDataLocked(&data, overwrite)
+}
+
+// ImportData imports memories from an ExportData struct, merging with existing data.
+// If overwrite is true, existing entries with the same ID are replaced.
+func (s *Store) ImportData(data ExportData, overwrite bool) (imported int, skipped int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.importDataLocked(&data, overwrite)
+}
+
+// importDataLocked is the shared import logic, assumes s.mu is held.
+func (s *Store) importDataLocked(data *ExportData, overwrite bool) (imported int, skipped int, err error) {
 	brain, err := s.load()
 	if err != nil {
 		return 0, 0, fmt.Errorf("load brain: %w", err)

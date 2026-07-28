@@ -16,6 +16,11 @@ import {
   type ListMemoriesResponse,
   type DeleteMemoryResponse,
   type GetMemoryStatsResponse,
+  type SearchMemoriesResponse,
+  type AddMemoryResponse,
+  type UpdateMemoryResponse,
+  type ExportMemoriesResponse,
+  type ImportMemoriesResponse,
 } from '@frostagent/proto';
 
 export interface EnvVarUpdate {
@@ -143,5 +148,46 @@ export class FrostagentApiService {
 
   getMemoryStats(): Promise<GetMemoryStatsResponse> {
     return this.memoryClient.getMemoryStats({});
+  }
+
+  searchMemories(
+    query: string,
+    pageSize: number,
+    pageToken = '',
+  ): Promise<SearchMemoriesResponse> {
+    return this.memoryClient.searchMemories({
+      query,
+      pagination: { pageSize, pageToken },
+    });
+  }
+
+  addMemory(
+    owner: string,
+    content: string,
+    tags: string[],
+    visibility: string,
+  ): Promise<AddMemoryResponse> {
+    return this.memoryClient.addMemory({ owner, content, tags, visibility });
+  }
+
+  updateMemory(
+    id: string,
+    content: string,
+    tags: string[],
+    visibility: string,
+    importance: number,
+  ): Promise<UpdateMemoryResponse> {
+    return this.memoryClient.updateMemory({ id, content, tags, visibility, importance });
+  }
+
+  exportMemories(): Promise<ExportMemoriesResponse> {
+    return this.memoryClient.exportMemories({});
+  }
+
+  importMemories(
+    jsonContent: string,
+    overwrite: boolean,
+  ): Promise<ImportMemoriesResponse> {
+    return this.memoryClient.importMemories({ jsonContent, overwrite });
   }
 }

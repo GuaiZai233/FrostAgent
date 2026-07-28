@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/memory.proto.
  */
 export const file_frostagent_v1_memory: GenFile = /*@__PURE__*/
-  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSKnAQoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmltcG9ydGFuY2UYByABKAESEgoKY3JlYXRlZF9hdBgIIAEoCRISCgp1cGRhdGVkX2F0GAkgASgJIlMKE0xpc3RNZW1vcmllc1JlcXVlc3QSDQoFb3duZXIYASABKAkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJzChRMaXN0TWVtb3JpZXNSZXNwb25zZRIsCghtZW1vcmllcxgBIAMoCzIaLmZyb3N0YWdlbnQudjEuTWVtb3J5RW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiIhChNEZWxldGVNZW1vcnlSZXF1ZXN0EgoKAmlkGAEgASgJIjYKFERlbGV0ZU1lbW9yeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiFwoVR2V0TWVtb3J5U3RhdHNSZXF1ZXN0IsoBChZHZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEg0KBXRvdGFsGAEgASgFEhQKDHB1YmxpY19jb3VudBgCIAEoBRIVCg1wcml2YXRlX2NvdW50GAMgASgFEkQKCGJ5X293bmVyGAQgAygLMjIuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlLkJ5T3duZXJFbnRyeRouCgxCeU93bmVyRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgFOgI4ATKgAgoNTWVtb3J5U2VydmljZRJXCgxMaXN0TWVtb3JpZXMSIi5mcm9zdGFnZW50LnYxLkxpc3RNZW1vcmllc1JlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkxpc3RNZW1vcmllc1Jlc3BvbnNlElcKDERlbGV0ZU1lbW9yeRIiLmZyb3N0YWdlbnQudjEuRGVsZXRlTWVtb3J5UmVxdWVzdBojLmZyb3N0YWdlbnQudjEuRGVsZXRlTWVtb3J5UmVzcG9uc2USXQoOR2V0TWVtb3J5U3RhdHMSJC5mcm9zdGFnZW50LnYxLkdldE1lbW9yeVN0YXRzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuR2V0TWVtb3J5U3RhdHNSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
+  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSKnAQoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmltcG9ydGFuY2UYByABKAESEgoKY3JlYXRlZF9hdBgIIAEoCRISCgp1cGRhdGVkX2F0GAkgASgJIlMKE0xpc3RNZW1vcmllc1JlcXVlc3QSDQoFb3duZXIYASABKAkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJzChRMaXN0TWVtb3JpZXNSZXNwb25zZRIsCghtZW1vcmllcxgBIAMoCzIaLmZyb3N0YWdlbnQudjEuTWVtb3J5RW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJVChVTZWFyY2hNZW1vcmllc1JlcXVlc3QSDQoFcXVlcnkYASABKAkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJ1ChZTZWFyY2hNZW1vcmllc1Jlc3BvbnNlEiwKCG1lbW9yaWVzGAEgAygLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uIlQKEEFkZE1lbW9yeVJlcXVlc3QSDQoFb3duZXIYASABKAkSDwoHY29udGVudBgCIAEoCRIMCgR0YWdzGAMgAygJEhIKCnZpc2liaWxpdHkYBCABKAkiTgoRQWRkTWVtb3J5UmVzcG9uc2USKgoGbWVtb3J5GAEgASgLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRINCgVlcnJvchgCIAEoCSJoChNVcGRhdGVNZW1vcnlSZXF1ZXN0EgoKAmlkGAEgASgJEg8KB2NvbnRlbnQYAiABKAkSDAoEdGFncxgDIAMoCRISCgp2aXNpYmlsaXR5GAQgASgJEhIKCmltcG9ydGFuY2UYBSABKAEiNgoUVXBkYXRlTWVtb3J5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSIhChNEZWxldGVNZW1vcnlSZXF1ZXN0EgoKAmlkGAEgASgJIjYKFERlbGV0ZU1lbW9yeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiFwoVR2V0TWVtb3J5U3RhdHNSZXF1ZXN0IsoBChZHZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEg0KBXRvdGFsGAEgASgFEhQKDHB1YmxpY19jb3VudBgCIAEoBRIVCg1wcml2YXRlX2NvdW50GAMgASgFEkQKCGJ5X293bmVyGAQgAygLMjIuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlLkJ5T3duZXJFbnRyeRouCgxCeU93bmVyRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgFOgI4ASIXChVFeHBvcnRNZW1vcmllc1JlcXVlc3QiPQoWRXhwb3J0TWVtb3JpZXNSZXNwb25zZRIUCgxqc29uX2NvbnRlbnQYASABKAkSDQoFZXJyb3IYAiABKAkiQAoVSW1wb3J0TWVtb3JpZXNSZXF1ZXN0EhQKDGpzb25fY29udGVudBgBIAEoCRIRCglvdmVyd3JpdGUYAiABKAgiSgoWSW1wb3J0TWVtb3JpZXNSZXNwb25zZRIQCghpbXBvcnRlZBgBIAEoBRIPCgdza2lwcGVkGAIgASgFEg0KBWVycm9yGAMgASgJMuYFCg1NZW1vcnlTZXJ2aWNlElcKDExpc3RNZW1vcmllcxIiLmZyb3N0YWdlbnQudjEuTGlzdE1lbW9yaWVzUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuTGlzdE1lbW9yaWVzUmVzcG9uc2USXQoOU2VhcmNoTWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLlNlYXJjaE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuU2VhcmNoTWVtb3JpZXNSZXNwb25zZRJOCglBZGRNZW1vcnkSHy5mcm9zdGFnZW50LnYxLkFkZE1lbW9yeVJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLkFkZE1lbW9yeVJlc3BvbnNlElcKDFVwZGF0ZU1lbW9yeRIiLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtb3J5UmVxdWVzdBojLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtb3J5UmVzcG9uc2USVwoMRGVsZXRlTWVtb3J5EiIuZnJvc3RhZ2VudC52MS5EZWxldGVNZW1vcnlSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5EZWxldGVNZW1vcnlSZXNwb25zZRJdCg5HZXRNZW1vcnlTdGF0cxIkLmZyb3N0YWdlbnQudjEuR2V0TWVtb3J5U3RhdHNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEl0KDkV4cG9ydE1lbW9yaWVzEiQuZnJvc3RhZ2VudC52MS5FeHBvcnRNZW1vcmllc1JlcXVlc3QaJS5mcm9zdGFnZW50LnYxLkV4cG9ydE1lbW9yaWVzUmVzcG9uc2USXQoOSW1wb3J0TWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLkltcG9ydE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuSW1wb3J0TWVtb3JpZXNSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * MemoryEntry mirrors the internal memory model for the UI.
@@ -120,6 +120,165 @@ export const ListMemoriesResponseSchema: GenMessage<ListMemoriesResponse> = /*@_
   messageDesc(file_frostagent_v1_memory, 2);
 
 /**
+ * @generated from message frostagent.v1.SearchMemoriesRequest
+ */
+export type SearchMemoriesRequest = Message<"frostagent.v1.SearchMemoriesRequest"> & {
+  /**
+   * @generated from field: string query = 1;
+   */
+  query: string;
+
+  /**
+   * @generated from field: frostagent.v1.Pagination pagination = 2;
+   */
+  pagination?: Pagination | undefined;
+};
+
+/**
+ * Describes the message frostagent.v1.SearchMemoriesRequest.
+ * Use `create(SearchMemoriesRequestSchema)` to create a new message.
+ */
+export const SearchMemoriesRequestSchema: GenMessage<SearchMemoriesRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 3);
+
+/**
+ * @generated from message frostagent.v1.SearchMemoriesResponse
+ */
+export type SearchMemoriesResponse = Message<"frostagent.v1.SearchMemoriesResponse"> & {
+  /**
+   * @generated from field: repeated frostagent.v1.MemoryEntry memories = 1;
+   */
+  memories: MemoryEntry[];
+
+  /**
+   * @generated from field: frostagent.v1.Pagination pagination = 2;
+   */
+  pagination?: Pagination | undefined;
+};
+
+/**
+ * Describes the message frostagent.v1.SearchMemoriesResponse.
+ * Use `create(SearchMemoriesResponseSchema)` to create a new message.
+ */
+export const SearchMemoriesResponseSchema: GenMessage<SearchMemoriesResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 4);
+
+/**
+ * @generated from message frostagent.v1.AddMemoryRequest
+ */
+export type AddMemoryRequest = Message<"frostagent.v1.AddMemoryRequest"> & {
+  /**
+   * @generated from field: string owner = 1;
+   */
+  owner: string;
+
+  /**
+   * @generated from field: string content = 2;
+   */
+  content: string;
+
+  /**
+   * @generated from field: repeated string tags = 3;
+   */
+  tags: string[];
+
+  /**
+   * "public" or "private" (default private)
+   *
+   * @generated from field: string visibility = 4;
+   */
+  visibility: string;
+};
+
+/**
+ * Describes the message frostagent.v1.AddMemoryRequest.
+ * Use `create(AddMemoryRequestSchema)` to create a new message.
+ */
+export const AddMemoryRequestSchema: GenMessage<AddMemoryRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 5);
+
+/**
+ * @generated from message frostagent.v1.AddMemoryResponse
+ */
+export type AddMemoryResponse = Message<"frostagent.v1.AddMemoryResponse"> & {
+  /**
+   * @generated from field: frostagent.v1.MemoryEntry memory = 1;
+   */
+  memory?: MemoryEntry | undefined;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.AddMemoryResponse.
+ * Use `create(AddMemoryResponseSchema)` to create a new message.
+ */
+export const AddMemoryResponseSchema: GenMessage<AddMemoryResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 6);
+
+/**
+ * @generated from message frostagent.v1.UpdateMemoryRequest
+ */
+export type UpdateMemoryRequest = Message<"frostagent.v1.UpdateMemoryRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string content = 2;
+   */
+  content: string;
+
+  /**
+   * @generated from field: repeated string tags = 3;
+   */
+  tags: string[];
+
+  /**
+   * @generated from field: string visibility = 4;
+   */
+  visibility: string;
+
+  /**
+   * @generated from field: double importance = 5;
+   */
+  importance: number;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateMemoryRequest.
+ * Use `create(UpdateMemoryRequestSchema)` to create a new message.
+ */
+export const UpdateMemoryRequestSchema: GenMessage<UpdateMemoryRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 7);
+
+/**
+ * @generated from message frostagent.v1.UpdateMemoryResponse
+ */
+export type UpdateMemoryResponse = Message<"frostagent.v1.UpdateMemoryResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateMemoryResponse.
+ * Use `create(UpdateMemoryResponseSchema)` to create a new message.
+ */
+export const UpdateMemoryResponseSchema: GenMessage<UpdateMemoryResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 8);
+
+/**
  * @generated from message frostagent.v1.DeleteMemoryRequest
  */
 export type DeleteMemoryRequest = Message<"frostagent.v1.DeleteMemoryRequest"> & {
@@ -134,7 +293,7 @@ export type DeleteMemoryRequest = Message<"frostagent.v1.DeleteMemoryRequest"> &
  * Use `create(DeleteMemoryRequestSchema)` to create a new message.
  */
 export const DeleteMemoryRequestSchema: GenMessage<DeleteMemoryRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_memory, 3);
+  messageDesc(file_frostagent_v1_memory, 9);
 
 /**
  * @generated from message frostagent.v1.DeleteMemoryResponse
@@ -156,7 +315,7 @@ export type DeleteMemoryResponse = Message<"frostagent.v1.DeleteMemoryResponse">
  * Use `create(DeleteMemoryResponseSchema)` to create a new message.
  */
 export const DeleteMemoryResponseSchema: GenMessage<DeleteMemoryResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_memory, 4);
+  messageDesc(file_frostagent_v1_memory, 10);
 
 /**
  * @generated from message frostagent.v1.GetMemoryStatsRequest
@@ -169,7 +328,7 @@ export type GetMemoryStatsRequest = Message<"frostagent.v1.GetMemoryStatsRequest
  * Use `create(GetMemoryStatsRequestSchema)` to create a new message.
  */
 export const GetMemoryStatsRequestSchema: GenMessage<GetMemoryStatsRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_memory, 5);
+  messageDesc(file_frostagent_v1_memory, 11);
 
 /**
  * @generated from message frostagent.v1.GetMemoryStatsResponse
@@ -201,7 +360,97 @@ export type GetMemoryStatsResponse = Message<"frostagent.v1.GetMemoryStatsRespon
  * Use `create(GetMemoryStatsResponseSchema)` to create a new message.
  */
 export const GetMemoryStatsResponseSchema: GenMessage<GetMemoryStatsResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_memory, 6);
+  messageDesc(file_frostagent_v1_memory, 12);
+
+/**
+ * @generated from message frostagent.v1.ExportMemoriesRequest
+ */
+export type ExportMemoriesRequest = Message<"frostagent.v1.ExportMemoriesRequest"> & {
+};
+
+/**
+ * Describes the message frostagent.v1.ExportMemoriesRequest.
+ * Use `create(ExportMemoriesRequestSchema)` to create a new message.
+ */
+export const ExportMemoriesRequestSchema: GenMessage<ExportMemoriesRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 13);
+
+/**
+ * @generated from message frostagent.v1.ExportMemoriesResponse
+ */
+export type ExportMemoriesResponse = Message<"frostagent.v1.ExportMemoriesResponse"> & {
+  /**
+   * full export JSON string
+   *
+   * @generated from field: string json_content = 1;
+   */
+  jsonContent: string;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ExportMemoriesResponse.
+ * Use `create(ExportMemoriesResponseSchema)` to create a new message.
+ */
+export const ExportMemoriesResponseSchema: GenMessage<ExportMemoriesResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 14);
+
+/**
+ * @generated from message frostagent.v1.ImportMemoriesRequest
+ */
+export type ImportMemoriesRequest = Message<"frostagent.v1.ImportMemoriesRequest"> & {
+  /**
+   * export JSON string to import
+   *
+   * @generated from field: string json_content = 1;
+   */
+  jsonContent: string;
+
+  /**
+   * overwrite existing IDs
+   *
+   * @generated from field: bool overwrite = 2;
+   */
+  overwrite: boolean;
+};
+
+/**
+ * Describes the message frostagent.v1.ImportMemoriesRequest.
+ * Use `create(ImportMemoriesRequestSchema)` to create a new message.
+ */
+export const ImportMemoriesRequestSchema: GenMessage<ImportMemoriesRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 15);
+
+/**
+ * @generated from message frostagent.v1.ImportMemoriesResponse
+ */
+export type ImportMemoriesResponse = Message<"frostagent.v1.ImportMemoriesResponse"> & {
+  /**
+   * @generated from field: int32 imported = 1;
+   */
+  imported: number;
+
+  /**
+   * @generated from field: int32 skipped = 2;
+   */
+  skipped: number;
+
+  /**
+   * @generated from field: string error = 3;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ImportMemoriesResponse.
+ * Use `create(ImportMemoriesResponseSchema)` to create a new message.
+ */
+export const ImportMemoriesResponseSchema: GenMessage<ImportMemoriesResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 16);
 
 /**
  * MemoryService provides memory management for the web UI.
@@ -218,6 +467,30 @@ export const MemoryService: GenService<{
     output: typeof ListMemoriesResponseSchema;
   },
   /**
+   * @generated from rpc frostagent.v1.MemoryService.SearchMemories
+   */
+  searchMemories: {
+    methodKind: "unary";
+    input: typeof SearchMemoriesRequestSchema;
+    output: typeof SearchMemoriesResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.AddMemory
+   */
+  addMemory: {
+    methodKind: "unary";
+    input: typeof AddMemoryRequestSchema;
+    output: typeof AddMemoryResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.UpdateMemory
+   */
+  updateMemory: {
+    methodKind: "unary";
+    input: typeof UpdateMemoryRequestSchema;
+    output: typeof UpdateMemoryResponseSchema;
+  },
+  /**
    * @generated from rpc frostagent.v1.MemoryService.DeleteMemory
    */
   deleteMemory: {
@@ -232,6 +505,22 @@ export const MemoryService: GenService<{
     methodKind: "unary";
     input: typeof GetMemoryStatsRequestSchema;
     output: typeof GetMemoryStatsResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.ExportMemories
+   */
+  exportMemories: {
+    methodKind: "unary";
+    input: typeof ExportMemoriesRequestSchema;
+    output: typeof ExportMemoriesResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.ImportMemories
+   */
+  importMemories: {
+    methodKind: "unary";
+    input: typeof ImportMemoriesRequestSchema;
+    output: typeof ImportMemoriesResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_frostagent_v1_memory, 0);

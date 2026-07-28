@@ -7,8 +7,13 @@ import "frostagent/v1/common.proto";
 // MemoryService provides memory management for the web UI.
 service MemoryService {
   rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
+  rpc SearchMemories(SearchMemoriesRequest) returns (SearchMemoriesResponse);
+  rpc AddMemory(AddMemoryRequest) returns (AddMemoryResponse);
+  rpc UpdateMemory(UpdateMemoryRequest) returns (UpdateMemoryResponse);
   rpc DeleteMemory(DeleteMemoryRequest) returns (DeleteMemoryResponse);
   rpc GetMemoryStats(GetMemoryStatsRequest) returns (GetMemoryStatsResponse);
+  rpc ExportMemories(ExportMemoriesRequest) returns (ExportMemoriesResponse);
+  rpc ImportMemories(ImportMemoriesRequest) returns (ImportMemoriesResponse);
 }
 
 // MemoryEntry mirrors the internal memory model for the UI.
@@ -34,6 +39,41 @@ message ListMemoriesResponse {
   Pagination pagination = 2;
 }
 
+message SearchMemoriesRequest {
+  string query = 1;
+  Pagination pagination = 2;
+}
+
+message SearchMemoriesResponse {
+  repeated MemoryEntry memories = 1;
+  Pagination pagination = 2;
+}
+
+message AddMemoryRequest {
+  string owner = 1;
+  string content = 2;
+  repeated string tags = 3;
+  string visibility = 4;      // "public" or "private" (default private)
+}
+
+message AddMemoryResponse {
+  MemoryEntry memory = 1;
+  string error = 2;
+}
+
+message UpdateMemoryRequest {
+  string id = 1;
+  string content = 2;
+  repeated string tags = 3;
+  string visibility = 4;
+  double importance = 5;
+}
+
+message UpdateMemoryResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 message DeleteMemoryRequest {
   string id = 1;
 }
@@ -50,4 +90,22 @@ message GetMemoryStatsResponse {
   int32 public_count = 2;
   int32 private_count = 3;
   map<string, int32> by_owner = 4;
+}
+
+message ExportMemoriesRequest {}
+
+message ExportMemoriesResponse {
+  string json_content = 1;    // full export JSON string
+  string error = 2;
+}
+
+message ImportMemoriesRequest {
+  string json_content = 1;    // export JSON string to import
+  bool overwrite = 2;         // overwrite existing IDs
+}
+
+message ImportMemoriesResponse {
+  int32 imported = 1;
+  int32 skipped = 2;
+  string error = 3;
 }

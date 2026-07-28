@@ -214,3 +214,24 @@ func (s *Store) UpdateImportance(memoryID string, newImportance float64) error {
 	}
 	return fmt.Errorf("memory %s not found", memoryID)
 }
+
+// UpdateEntry replaces an existing memory entry in-place, preserving its ID and CreatedAt.
+func (s *Store) UpdateEntry(updated MemoryEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+
+	for i, entry := range brain.Entries {
+		if entry.ID == updated.ID {
+			updated.CreatedAt = entry.CreatedAt
+			updated.UpdatedAt = time.Now()
+			brain.Entries[i] = updated
+			return s.save(brain)
+		}
+	}
+	return fmt.Errorf("memory %s not found", updated.ID)
+}

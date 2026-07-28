@@ -2,6 +2,7 @@ package memsvc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -40,43 +41,114 @@ func (s *Service) ListMemories(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list memories: %w", err))
 	}
 
-	// Pagination
-	pageSize := int(req.Msg.GetPagination().GetPageSize())
-	pageToken := req.Msg.GetPagination().GetPageToken()
-	offset := 0
-	if pageToken != "" {
-		fmt.Sscanf(pageToken, "%d", &offset)
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-
-	total := len(entries)
-	end := offset + pageSize
-	if end > total {
-		end = total
-	}
-	page := entries[offset:end]
-
-	nextToken := ""
-	if end < total {
-		nextToken = fmt.Sprintf("%d", end)
-	}
-
-	memories := make([]*v1.MemoryEntry, len(page))
-	for i, e := range page {
-		memories[i] = toProtoEntry(e)
-	}
-
-	resp := &v1.ListMemoriesResponse{
-		Memories: memories,
-		Pagination: &v1.Pagination{
-			PageSize:  int32(pageSize),
-			PageToken: nextToken,
-			Total:     int32(total),
-		},
-	}
+	resp := paginateEntries(entries, req.Msg.GetPagination())
 	return connect.NewResponse(resp), nil
+}
+
+// SearchMemories performs keyword search across all memories.
+func (s *Service) SearchMemories(
+	ctx context.Context,
+	req *connect.Request[v1.SearchMemoriesRequest],
+) (*connect.Response[v1.SearchMemoriesResponse], error) {
+	query := req.Msg.GetQuery()
+	if query == "" {
+		return connect.NewResponse(&v1.SearchMemoriesResponse{}), nil
+	}
+
+	entries, err := s.store.Search(query, 0) // 0 = no limit
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search memories: %w", err))
+	}
+
+	// Apply pagination
+	resp := paginateEntries(entries, req.Msg.GetPagination())
+	return connect.NewResponse(&v1.SearchMemoriesResponse{
+		Memories:   resp.Memories,
+		Pagination: resp.Pagination,
+	}), nil
+}
+
+// AddMemory manually creates a new memory entry.
+func (s *Service) AddMemory(
+	ctx context.Context,
+	req *connect.Request[v1.AddMemoryRequest],
+) (*connect.Response[v1.AddMemoryResponse], error) {
+	content := req.Msg.GetContent()
+	if content == "" {
+		return connect.NewResponse(&v1.AddMemoryResponse{
+			Error: "content is required",
+		}), nil
+	}
+
+	owner := req.Msg.GetOwner()
+	if owner == "" {
+		owner = "webui"
+	}
+
+	vis := memory.VisibilityPrivate
+	if req.Msg.GetVisibility() == "public" {
+		vis = memory.VisibilityPublic
+	}
+
+	now := time.Now()
+	entry := memory.MemoryEntry{
+		ID:         fmt.Sprintf("mem_%d", now.UnixNano()),
+		Owner:      owner,
+		Content:    content,
+		Tags:       req.Msg.GetTags(),
+		Source:     memory.SourceManual,
+		Visibility: vis,
+		Importance: 0.5,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	if err := s.store.Save(entry); err != nil {
+		return connect.NewResponse(&v1.AddMemoryResponse{
+			Error: fmt.Sprintf("save failed: %v", err),
+		}), nil
+	}
+
+	return connect.NewResponse(&v1.AddMemoryResponse{
+		Memory: toProtoEntry(entry),
+	}), nil
+}
+
+// UpdateMemory updates an existing memory entry's content, tags, visibility, and importance.
+func (s *Service) UpdateMemory(
+	ctx context.Context,
+	req *connect.Request[v1.UpdateMemoryRequest],
+) (*connect.Response[v1.UpdateMemoryResponse], error) {
+	id := req.Msg.GetId()
+	if id == "" {
+		return connect.NewResponse(&v1.UpdateMemoryResponse{
+			Success: false,
+			Error:   "id is required",
+		}), nil
+	}
+
+	// Build the updated entry
+	vis := memory.VisibilityPrivate
+	if req.Msg.GetVisibility() == "public" {
+		vis = memory.VisibilityPublic
+	}
+
+	updated := memory.MemoryEntry{
+		ID:         id,
+		Content:    req.Msg.GetContent(),
+		Tags:       req.Msg.GetTags(),
+		Visibility: vis,
+		Importance: req.Msg.GetImportance(),
+	}
+
+	if err := s.store.UpdateEntry(updated); err != nil {
+		return connect.NewResponse(&v1.UpdateMemoryResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+
+	return connect.NewResponse(&v1.UpdateMemoryResponse{Success: true}), nil
 }
 
 // DeleteMemory removes a memory entry by ID.
@@ -129,6 +201,108 @@ func (s *Service) GetMemoryStats(
 		ByOwner:      byOwner,
 	}
 	return connect.NewResponse(resp), nil
+}
+
+// ExportMemories returns all memories as a JSON export string.
+func (s *Service) ExportMemories(
+	ctx context.Context,
+	req *connect.Request[v1.ExportMemoriesRequest],
+) (*connect.Response[v1.ExportMemoriesResponse], error) {
+	entries, err := s.store.ListAll()
+	if err != nil {
+		return connect.NewResponse(&v1.ExportMemoriesResponse{
+			Error: fmt.Sprintf("list failed: %v", err),
+		}), nil
+	}
+
+	data := memory.ExportData{
+		Version:    1,
+		Entries:    entries,
+		ExportedAt: time.Now(),
+	}
+
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return connect.NewResponse(&v1.ExportMemoriesResponse{
+			Error: fmt.Sprintf("marshal failed: %v", err),
+		}), nil
+	}
+
+	return connect.NewResponse(&v1.ExportMemoriesResponse{
+		JsonContent: string(raw),
+	}), nil
+}
+
+// ImportMemories imports memories from a JSON export string.
+func (s *Service) ImportMemories(
+	ctx context.Context,
+	req *connect.Request[v1.ImportMemoriesRequest],
+) (*connect.Response[v1.ImportMemoriesResponse], error) {
+	jsonContent := req.Msg.GetJsonContent()
+	if jsonContent == "" {
+		return connect.NewResponse(&v1.ImportMemoriesResponse{
+			Error: "json_content is required",
+		}), nil
+	}
+
+	var data memory.ExportData
+	if err := json.Unmarshal([]byte(jsonContent), &data); err != nil {
+		return connect.NewResponse(&v1.ImportMemoriesResponse{
+			Error: fmt.Sprintf("parse failed: %v", err),
+		}), nil
+	}
+
+	overwrite := req.Msg.GetOverwrite()
+	imported, skipped, err := s.store.ImportData(data, overwrite)
+	if err != nil {
+		return connect.NewResponse(&v1.ImportMemoriesResponse{
+			Error: fmt.Sprintf("import failed: %v", err),
+		}), nil
+	}
+
+	return connect.NewResponse(&v1.ImportMemoriesResponse{
+		Imported: int32(imported),
+		Skipped:  int32(skipped),
+	}), nil
+}
+
+// paginateEntries slices entries according to pagination params and returns ListMemoriesResponse.
+func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) *v1.ListMemoriesResponse {
+	pageSize := int(pagination.GetPageSize())
+	pageToken := pagination.GetPageToken()
+	offset := 0
+	if pageToken != "" {
+		fmt.Sscanf(pageToken, "%d", &offset)
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	total := len(entries)
+	end := offset + pageSize
+	if end > total {
+		end = total
+	}
+	page := entries[offset:end]
+
+	nextToken := ""
+	if end < total {
+		nextToken = fmt.Sprintf("%d", end)
+	}
+
+	memories := make([]*v1.MemoryEntry, len(page))
+	for i, e := range page {
+		memories[i] = toProtoEntry(e)
+	}
+
+	return &v1.ListMemoriesResponse{
+		Memories: memories,
+		Pagination: &v1.Pagination{
+			PageSize:  int32(pageSize),
+			PageToken: nextToken,
+			Total:     int32(total),
+		},
+	}
 }
 
 // toProtoEntry converts a memory.MemoryEntry to a proto MemoryEntry.
