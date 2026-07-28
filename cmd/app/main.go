@@ -102,11 +102,7 @@ func init() {
 	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
 
-	weatherTool := tools.GetWeatherTool()
-	registry[weatherTool.Name()] = weatherTool
 
-	gameVersionTool := tools.GetGameVersionTool()
-	registry[gameVersionTool.Name()] = gameVersionTool
 
 
 	executorMap := make(map[string]llm.ToolExecutor)
