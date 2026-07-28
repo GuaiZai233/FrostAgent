@@ -1,0 +1,155 @@
+<section class="page">
+  <header>
+    <h1 i18n="@@memoryManagement">记忆管理</h1>
+  </header>
+
+  @if (loading() && memories().length === 0) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (error()) {
+    <mat-card appearance="outlined" class="error-card">
+      <mat-card-content>
+        <mat-icon color="warn">error</mat-icon>
+        {{ error() }}
+      </mat-card-content>
+    </mat-card>
+  }
+
+  <!-- Stats row -->
+  @if (stats(); as s) {
+    <section class="stats-row">
+      <mat-card appearance="outlined" class="stat-card">
+        <mat-card-content>
+          <span class="stat-value">{{ s.total }}</span>
+          <span class="stat-label" i18n="@@totalMemories">总记忆数</span>
+        </mat-card-content>
+      </mat-card>
+      <mat-card appearance="outlined" class="stat-card">
+        <mat-card-content>
+          <span class="stat-value">{{ s.publicCount }}</span>
+          <span class="stat-label" i18n="@@publicMemories">公开</span>
+        </mat-card-content>
+      </mat-card>
+      <mat-card appearance="outlined" class="stat-card">
+        <mat-card-content>
+          <span class="stat-value">{{ s.privateCount }}</span>
+          <span class="stat-label" i18n="@@privateMemories">私有</span>
+        </mat-card-content>
+      </mat-card>
+      @for (entry of s.byOwner | keyvalue; track entry.key) {
+        <mat-card appearance="outlined" class="stat-card clickable" (click)="filterByOwner(entry.key)">
+          <mat-card-content>
+            <span class="stat-value">{{ entry.value }}</span>
+            <span class="stat-label">{{ entry.key }}</span>
+          </mat-card-content>
+        </mat-card>
+      }
+    </section>
+  }
+
+  <!-- Owner filter chip -->
+  @if (ownerFilter()) {
+    <section class="filter-row">
+      <mat-chip-set>
+        <mat-chip highlighted (removed)="refresh()">
+          <mat-icon matChipAvatar>person</mat-icon>
+          {{ ownerFilter() }}
+          <button matChipRemove>
+            <mat-icon>cancel</mat-icon>
+          </button>
+        </mat-chip>
+      </mat-chip-set>
+    </section>
+  }
+
+  <!-- Memory table -->
+  @if (memories().length > 0) {
+    <section class="table-container">
+      <table mat-table [dataSource]="memories()" class="memory-table">
+        <ng-container matColumnDef="id">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryId">ID</th>
+          <td mat-cell *matCellDef="let mem" [matTooltip]="mem.id">
+            {{ mem.id.length > 12 ? (mem.id | slice:0:12) + '...' : mem.id }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="owner">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryOwner">归属者</th>
+          <td mat-cell *matCellDef="let mem">
+            <mat-chip-row (click)="filterByOwner(mem.owner)" class="owner-chip">
+              <mat-icon matChipAvatar>person</mat-icon>
+              {{ mem.owner }}
+            </mat-chip-row>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="content">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryContent">内容</th>
+          <td mat-cell *matCellDef="let mem" [matTooltip]="mem.content">
+            {{ mem.content.length > 60 ? (mem.content | slice:0:60) + '...' : mem.content }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="tags">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryTags">标签</th>
+          <td mat-cell *matCellDef="let mem">
+            @if (mem.tags.length > 0) {
+              <mat-chip-set>
+                @for (tag of mem.tags; track tag) {
+                  <mat-chip>{{ tag }}</mat-chip>
+                }
+              </mat-chip-set>
+            }
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="visibility">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryVisibility">可见性</th>
+          <td mat-cell *matCellDef="let mem">
+            <mat-icon [matTooltip]="mem.visibility === 'public' ? '公开' : '私有'">
+              {{ mem.visibility === 'public' ? 'public' : 'lock' }}
+            </mat-icon>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="importance">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryImportance">重要度</th>
+          <td mat-cell *matCellDef="let mem">{{ mem.importance.toFixed(2) }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="createdAt">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryCreatedAt">创建时间</th>
+          <td mat-cell *matCellDef="let mem">{{ formatDateTime(mem.createdAt) }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef i18n="@@memoryActions">操作</th>
+          <td mat-cell *matCellDef="let mem">
+            <button mat-icon-button color="warn" [matTooltip]="'删除'" (click)="deleteMemory(mem.id)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+      </table>
+
+      <mat-paginator
+        [length]="total()"
+        [pageSize]="pageSize()"
+        [pageIndex]="pageIndex()"
+        [pageSizeOptions]="[10, 20, 50]"
+        (page)="handlePageEvent($event)"
+        showFirstLastButtons
+      />
+    </section>
+  } @else if (!loading() && !error()) {
+    <mat-card appearance="outlined">
+      <mat-card-content>
+        <p i18n="@@noMemories">暂无记忆记录。</p>
+      </mat-card-content>
+    </mat-card>
+  }
+</section>

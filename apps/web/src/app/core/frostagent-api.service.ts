@@ -6,12 +6,16 @@ import {
   BotStatusService,
   LogLevel,
   LogService,
+  MemoryService,
   SettingsService,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
   type ListLogsResponse,
   type LogEntry,
+  type ListMemoriesResponse,
+  type DeleteMemoryResponse,
+  type GetMemoryStatsResponse,
 } from '@frostagent/proto';
 
 export interface EnvVarUpdate {
@@ -36,6 +40,10 @@ export class FrostagentApiService {
   );
   private readonly settingsClient: Client<typeof SettingsService> =
     createClient(SettingsService, this.transport);
+  private readonly memoryClient: Client<typeof MemoryService> = createClient(
+    MemoryService,
+    this.transport,
+  );
 
   getOverview(): Promise<GetOverviewResponse> {
     return this.botClient.getOverview({});
@@ -116,5 +124,24 @@ export class FrostagentApiService {
     content: string,
   ): Promise<{ success: boolean; error: string }> {
     return this.settingsClient.updateRawEnvFile({ content });
+  }
+
+  listMemories(
+    pageSize: number,
+    pageToken = '',
+    owner = '',
+  ): Promise<ListMemoriesResponse> {
+    return this.memoryClient.listMemories({
+      pagination: { pageSize, pageToken },
+      owner,
+    });
+  }
+
+  deleteMemory(id: string): Promise<DeleteMemoryResponse> {
+    return this.memoryClient.deleteMemory({ id });
+  }
+
+  getMemoryStats(): Promise<GetMemoryStatsResponse> {
+    return this.memoryClient.getMemoryStats({});
   }
 }

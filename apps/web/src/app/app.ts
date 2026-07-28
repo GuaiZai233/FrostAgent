@@ -52,6 +52,11 @@ export class App implements OnDestroy {
       label: $localize`:@@navSessions:会话`,
     },
     {
+      path: '/memory',
+      icon: 'memory',
+      label: $localize`:@@navMemory:记忆`,
+    },
+    {
       path: '/logs',
       icon: 'terminal',
       label: $localize`:@@navLogs:日志`,

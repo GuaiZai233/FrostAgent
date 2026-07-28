@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+import "frostagent/v1/common.proto";
+
+// MemoryService provides memory management for the web UI.
+service MemoryService {
+  rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
+  rpc DeleteMemory(DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc GetMemoryStats(GetMemoryStatsRequest) returns (GetMemoryStatsResponse);
+}
+
+// MemoryEntry mirrors the internal memory model for the UI.
+message MemoryEntry {
+  string id = 1;
+  string owner = 2;
+  string content = 3;
+  repeated string tags = 4;
+  string source = 5;
+  string visibility = 6;
+  double importance = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message ListMemoriesRequest {
+  string owner = 1;           // filter by owner (empty = all)
+  Pagination pagination = 2;
+}
+
+message ListMemoriesResponse {
+  repeated MemoryEntry memories = 1;
+  Pagination pagination = 2;
+}
+
+message DeleteMemoryRequest {
+  string id = 1;
+}
+
+message DeleteMemoryResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetMemoryStatsRequest {}
+
+message GetMemoryStatsResponse {
+  int32 total = 1;
+  int32 public_count = 2;
+  int32 private_count = 3;
+  map<string, int32> by_owner = 4;
+}

@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/service/botstatus"
 	logsvc "FrostAgent/internal/service/logs"
+	memsvc "FrostAgent/internal/service/memory"
 	"FrostAgent/internal/service/settings"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -24,6 +25,9 @@ import (
 
 // 全局引擎实例
 var GlobalEngine *llm.Engine
+
+// 全局 memory store
+var globalStore *memory.Store
 
 const version = "0.1.0"
 
@@ -67,7 +71,7 @@ func init() {
 	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
 
 	// Initialize memory system
-	store := memory.NewStore(brainPath())
+	globalStore = memory.NewStore(brainPath())
 
 	var vs *memory.VectorStore
 	embedModel := os.Getenv("EMBEDDING_MODEL")
@@ -80,9 +84,9 @@ func init() {
 	}
 
 	// Reader: hybrid search (vector + keyword)
-	reader := memory.NewReader(store, vs, 20)
+	reader := memory.NewReader(globalStore, vs, 20)
 	// Writer: auto-extract + auto-index
-	writer := memory.NewWriter(store)
+	writer := memory.NewWriter(globalStore)
 	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
 	if vs != nil {
 		writer.SetVectorStore(vs)
@@ -140,6 +144,9 @@ func main() {
 
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)
+
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memsvc.New(globalStore))
+	mux.Handle(memoryPath, memoryHandler)
 
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())
