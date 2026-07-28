@@ -20,48 +20,66 @@ func NewReader(store *Store, vs *VectorStore, limit int) *Reader {
 }
 
 // Recall searches the unified brain using hybrid search (semantic + keyword).
-// If a VectorStore is configured and the semantic search returns results, those
-// are ranked by cosine similarity. Otherwise falls back to keyword matching on
-// Content and Tags. The Gateway is responsible for filtering by owner/visibility.
+// Semantic results are ranked by cosine similarity; keyword results fill remaining
+// slots by content/tag matching. The Gateway is responsible for owner/visibility filtering.
 func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEntry, error) {
-	// Try semantic search first
+	// Phase 1: semantic search (if vector store is configured)
+	seen := make(map[string]bool)
+	var results []MemoryEntry
+
 	if r.vs != nil {
 		ids, err := r.vs.Search(ctx, currentMessage, r.limit)
 		if err == nil && len(ids) > 0 {
-			entries, err := r.store.ListAll()
+			all, err := r.store.ListAll()
 			if err != nil {
 				return nil, err
 			}
-			var results []MemoryEntry
-			seen := make(map[string]bool)
+			// Build a lookup map for O(1) access
+			entryMap := make(map[string]MemoryEntry, len(all))
+			for _, e := range all {
+				entryMap[e.ID] = e
+			}
 			for _, id := range ids {
-				seen[id] = true
-			}
-			for _, entry := range entries {
-				if seen[entry.ID] {
-					results = append(results, entry)
+				if e, ok := entryMap[id]; ok {
+					results = append(results, e)
+					seen[id] = true
 				}
 			}
-			// If semantic results are enough, return them
-			if len(results) >= r.limit || r.limit == 0 {
-				return results, nil
-			}
-			// Fall back: combine with keyword search, deduplicate
-			kwResults, err := r.store.Search(currentMessage, r.limit*2)
-			if err == nil {
-				for _, e := range kwResults {
-					if !seen[e.ID] {
-						results = append(results, e)
-						seen[e.ID] = true
-					}
-					if r.limit > 0 && len(results) >= r.limit {
-						break
-					}
-				}
-			}
+		}
+		// If we have enough results (or unlimited and have some), return early
+		if r.limit > 0 && len(results) >= r.limit {
+			return results[:r.limit], nil
+		}
+		// Unlimited mode: always fall through to keyword to catch non-indexed entries
+	}
+
+	// Phase 2: keyword fallback — fill remaining slots
+	need := r.limit
+	if need == 0 {
+		need = 0 // unlimited, collect all
+	} else {
+		need -= len(results)
+		if need <= 0 {
 			return results, nil
 		}
 	}
-	// Fall back to keyword search
-	return r.store.Search(currentMessage, r.limit)
+
+	kwResults, err := r.store.Search(currentMessage, need)
+	if err != nil {
+		// If semantic search already returned something, return it best-effort
+		if len(results) > 0 {
+			return results, nil
+		}
+		return nil, err
+	}
+
+	for _, e := range kwResults {
+		if seen[e.ID] {
+			continue
+		}
+		results = append(results, e)
+		seen[e.ID] = true
+	}
+
+	return results, nil
 }

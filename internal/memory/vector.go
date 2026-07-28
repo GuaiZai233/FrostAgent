@@ -121,10 +121,9 @@ func (v *VectorStore) Search(ctx context.Context, query string, limit int) ([]st
 		results = append(results, scored{id: r.ID, score: cosineSim(queryVec, r.Vector)})
 	}
 
-	// Partial selection: find top-k by simple repeated max scan.
-	// Memory counts are small (<= MaxEntries), so O(n*k) is fine.
+	// Limit 0 means unlimited.
 	k := limit
-	if k > len(results) {
+	if k <= 0 || k > len(results) {
 		k = len(results)
 	}
 	top := make([]string, 0, k)

@@ -55,7 +55,7 @@ func (w *Writer) Write(owner string, content string, tags []string) error {
 		return err
 	}
 	if w.vs != nil {
-		_ = w.vs.Index(context.Background(), entry.ID, content) // index non-blocking
+		_ = w.vs.Index(context.Background(), entry.ID, content)
 	}
 	return nil
 }
@@ -75,7 +75,7 @@ func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
 			continue
 		}
 		content := fmt.Sprintf("%v", msg.Content)
-		conversation.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, content))
+		fmt.Fprintf(&conversation, "[%s]: %s\n", msg.Role, content)
 	}
 
 	prompt := strings.Replace(extractPrompt, "{conversation}", conversation.String(), 1)
@@ -154,7 +154,7 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 			continue
 		}
 		if w.vs != nil {
-			_ = w.vs.Index(ctx, entry.ID, e.Content) // index non-blocking
+			_ = w.vs.Index(ctx, entry.ID, e.Content)
 		}
 	}
 

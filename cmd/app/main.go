@@ -37,12 +37,9 @@ func brainPath() string {
 
 // vectorPath returns the path to vectors.json, derived from the brain path.
 func vectorPath() string {
-	bp := brainPath()
-	dir := filepath.Dir(bp)
-	name := filepath.Base(bp)
+	dir := filepath.Dir(brainPath())
 	// e.g. data/brain.json -> data/vectors.json
-	name = "vectors.json"
-	return filepath.Join(dir, name)
+	return filepath.Join(dir, "vectors.json")
 }
 
 // ensureDataDir ensures the data directory exists for brain.json.
@@ -65,8 +62,8 @@ func init() {
 	// Ensure data directory exists
 	ensureDataDir()
 
-	// Initialize LLM client (both the low-level and provider-level)
-	llmClientBase := llm.NewClient()
+	// Initialize LLM clients
+	llmHTTPClient := llm.NewClient() // HTTP client wrapper for SubAgentTool
 	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
 
 	// Initialize memory system
@@ -98,7 +95,7 @@ func init() {
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
 
-	subAgentTool := tools.SubAgentTool(llmClientBase)
+	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
 
 	weatherTool := tools.GetWeatherTool()
