@@ -188,3 +188,23 @@ func (s *Store) summaryPath(owner string) string {
 	dir := strings.TrimSuffix(s.path, "brain.json")
 	return dir + "summaries/" + owner + ".json"
 }
+
+// UpdateImportance updates a single memory's importance score.
+func (s *Store) UpdateImportance(memoryID string, newImportance float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+
+	for i, entry := range brain.Entries {
+		if entry.ID == memoryID {
+			brain.Entries[i].Importance = newImportance
+			brain.Entries[i].UpdatedAt = time.Now()
+			return s.save(brain)
+		}
+	}
+	return fmt.Errorf("memory %s not found", memoryID)
+}
