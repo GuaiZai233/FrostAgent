@@ -108,6 +108,7 @@ func init() {
 	gameVersionTool := tools.GetGameVersionTool()
 	registry[gameVersionTool.Name()] = gameVersionTool
 
+
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
 		executorMap[name] = tool
@@ -130,6 +131,9 @@ func init() {
 	}
 
 	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
+	// Register memory tool (must be after GlobalEngine assignment)
+	memTool := tools.NewMemoryTool(GlobalEngine)
+	GlobalEngine.ToolRegistry[memTool.Name()] = memTool
 }
 
 func main() {

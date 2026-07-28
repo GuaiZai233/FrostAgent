@@ -37,6 +37,10 @@ type Engine struct {
 	MemoryReader  *memory.Reader
 	MemoryWriter  *memory.Writer
 	MemoryGateway *memory.Gateway
+
+	// CurrentUserID is set by RunMessagesWithUser for per-request user context.
+	// Thread-safety: same model as SendHook — set before runLoop, read during tool execution.
+	CurrentUserID string
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -65,6 +69,8 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 // RunMessagesWithUser 执行智能体的主循环（带记忆上下文）
 // userID 用于记忆系统的 Owner 过滤；传空则跳过记忆。
 func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) string {
+	e.CurrentUserID = userID
+
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 

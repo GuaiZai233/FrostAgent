@@ -213,8 +213,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
-		// 传递给大模型（不在锁内调用，避免阻塞历史读写）
-		replyText = engine.RunMessages(messages)
+		// 传递给大模型（带记忆上下文）
+		userID := fmt.Sprintf("%d", event.UserID)
+		replyText = engine.RunMessagesWithUser(messages, userID)
 		engine.SendHook = nil
 
 		// 将大模型的回复也加入会话历史

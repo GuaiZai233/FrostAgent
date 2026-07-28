@@ -1,14 +1,16 @@
 package tools
 
 import (
-	"FrostAgent/internal/memory"
+	"context"
 	"encoding/json"
 	"fmt"
+
+	"FrostAgent/internal/llm"
 )
 
 // NewMemoryTool creates a tool that allows the LLM to actively manage memories.
-// currentUserFunc returns the current user ID (injected from the adapter layer).
-func NewMemoryTool(store *memory.Store, gateway *memory.Gateway, currentUserFunc func() string) Tool {
+// It reads the current user ID from engine.CurrentUserID (set by RunMessagesWithUser).
+func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
 		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list）。",
@@ -47,7 +49,7 @@ func NewMemoryTool(store *memory.Store, gateway *memory.Gateway, currentUserFunc
 				return "", fmt.Errorf("参数解析失败: %w", err)
 			}
 
-			currentUser := currentUserFunc()
+			currentUser := engine.CurrentUserID
 			if currentUser == "" {
 				return "无法获取当前用户信息", nil
 			}
@@ -57,8 +59,10 @@ func NewMemoryTool(store *memory.Store, gateway *memory.Gateway, currentUserFunc
 				if params.Content == "" {
 					return "写入记忆需要提供 content 参数", nil
 				}
-				writer := memory.NewWriter(store)
-				if err := writer.Write(currentUser, params.Content, params.Tags); err != nil {
+				if engine.MemoryWriter == nil {
+					return "记忆写入功能未启用", nil
+				}
+				if err := engine.MemoryWriter.Write(currentUser, params.Content, params.Tags); err != nil {
 					return fmt.Sprintf("写入失败: %v", err), nil
 				}
 				return "记忆已写入", nil
@@ -67,11 +71,14 @@ func NewMemoryTool(store *memory.Store, gateway *memory.Gateway, currentUserFunc
 				if params.Query == "" {
 					return "搜索需要提供 query 参数", nil
 				}
-				entries, err := store.Search(params.Query, 5)
+				if engine.MemoryReader == nil {
+					return "记忆搜索功能未启用", nil
+				}
+				entries, err := engine.MemoryReader.Recall(context.Background(), params.Query)
 				if err != nil {
 					return fmt.Sprintf("搜索失败: %v", err), nil
 				}
-				filtered := gateway.Filter(entries, currentUser)
+				filtered := engine.MemoryGateway.Filter(entries, currentUser)
 				if len(filtered) == 0 {
 					return "未找到相关记忆", nil
 				}
@@ -79,14 +86,18 @@ func NewMemoryTool(store *memory.Store, gateway *memory.Gateway, currentUserFunc
 				return string(result), nil
 
 			case "list":
-				entries, err := store.ListByOwner(currentUser)
+				if engine.MemoryGateway == nil {
+					return "记忆功能未启用", nil
+				}
+				entries, err := engine.MemoryReader.Recall(context.Background(), "")
 				if err != nil {
 					return fmt.Sprintf("列出失败: %v", err), nil
 				}
-				if len(entries) == 0 {
+				filtered := engine.MemoryGateway.Filter(entries, currentUser)
+				if len(filtered) == 0 {
 					return "你还没有任何记忆", nil
 				}
-				result, _ := json.Marshal(entries)
+				result, _ := json.Marshal(filtered)
 				return string(result), nil
 
 			default:
