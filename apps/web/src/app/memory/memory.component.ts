@@ -1,23 +1,22 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatDialog, MatDialogModule } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSelectModule } from '@angular/material/select';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import type { MemoryEntry, GetMemoryStatsResponse } from '@frostagent/proto';
+import { toast } from '@spartan-ng/brain/sonner';
+import { HlmBadge } from '@spartan-ng/helm/badge';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmCheckbox } from '@spartan-ng/helm/checkbox';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
+import { HlmSelectImports } from '@spartan-ng/helm/select';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
+import { firstValueFrom } from 'rxjs';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { formatDateTime, PageTokenStack } from '../shared/dashboard-utils';
 import { MemoryDetailDialog } from './memory-detail-dialog';
 import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
@@ -27,29 +26,24 @@ import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
   imports: [
     CommonModule,
     FormsModule,
-    MatButtonModule,
-    MatCardModule,
-    MatCheckboxModule,
-    MatChipsModule,
-    MatDialogModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-    MatPaginatorModule,
-    MatProgressBarModule,
-    MatSelectModule,
-    MatSnackBarModule,
-    MatTableModule,
-    MatToolbarModule,
-    MatTooltipModule,
+    HlmBadge,
+    HlmButton,
+    HlmCardImports,
+    HlmCheckbox,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    HlmPaginationImports,
+    HlmSelectImports,
+    HlmSpinner,
+    HlmTableImports,
+    AppIconComponent,
   ],
   templateUrl: './memory.component.html',
-  styleUrl: './memory.component.scss',
 })
 export class MemoryComponent implements OnInit {
   private readonly api = inject(FrostagentApiService);
-  private readonly snackBar = inject(MatSnackBar);
-  private readonly dialog = inject(MatDialog);
+  private readonly dialog = inject(HlmDialogService);
   private readonly pageTokens = new PageTokenStack();
 
   readonly memories = signal<MemoryEntry[]>([]);
@@ -65,18 +59,6 @@ export class MemoryComponent implements OnInit {
   readonly visibilityFilter = signal('');
   readonly searchQuery = signal('');
   readonly selectedIds = signal<Set<string>>(new Set());
-
-  readonly displayedColumns = [
-    'select',
-    'source',
-    'owner',
-    'content',
-    'tags',
-    'visibility',
-    'importance',
-    'createdAt',
-    'actions',
-  ];
 
   ngOnInit(): void {
     void this.loadStats();
@@ -115,21 +97,24 @@ export class MemoryComponent implements OnInit {
     void this.search();
   }
 
-  async handlePageEvent(event: PageEvent): Promise<void> {
-    if (event.pageSize !== this.pageSize()) {
-      this.pageSize.set(event.pageSize);
-      this.pageTokens.reset();
-      this.pageIndex.set(0);
-      await this.loadCurrentPage();
-      return;
-    }
-
-    if (event.pageIndex > this.pageIndex()) {
+  async changePage(direction: 'previous' | 'next'): Promise<void> {
+    if (direction === 'next') {
+      if (!this.nextToken()) return;
       this.pageTokens.push(this.nextToken());
-    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageIndex.update((value) => value + 1);
+    } else {
+      if (this.pageIndex() === 0) return;
       this.pageTokens.back();
+      this.pageIndex.update((value) => value - 1);
     }
-    this.pageIndex.set(event.pageIndex);
+    await this.loadCurrentPage();
+  }
+
+  async changePageSize(value: number | null | undefined): Promise<void> {
+    if (!value || value === this.pageSize()) return;
+    this.pageSize.set(value);
+    this.pageTokens.reset();
+    this.pageIndex.set(0);
     await this.loadCurrentPage();
   }
 
@@ -168,14 +153,14 @@ export class MemoryComponent implements OnInit {
     try {
       const result = await this.api.deleteMemory(id);
       if (result.success) {
-        this.snackBar.open($localize`:@@memoryDeleted:记忆已删除`, '', { duration: 3000 });
+        toast.success($localize`:@@memoryDeleted:记忆已删除`, { duration: 3000 });
         await this.loadStats();
         await this.loadCurrentPage();
       } else {
-        this.snackBar.open($localize`:@@memoryDeleteError:删除失败: ${result.error}`, '', { duration: 5000 });
+        toast.error($localize`:@@memoryDeleteError:删除失败: ${result.error}`, { duration: 5000 });
       }
     } catch (error) {
-      this.snackBar.open($localize`:@@memoryDeleteError:删除失败: ${error instanceof Error ? error.message : String(error)}`, '', { duration: 5000 });
+      toast.error($localize`:@@memoryDeleteError:删除失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
     }
   }
 
@@ -195,66 +180,89 @@ export class MemoryComponent implements OnInit {
     }
 
     this.selectedIds.set(new Set());
-    this.snackBar.open($localize`:@@memoryBatchDeleted:已删除 ${success} 条记忆${fail ? `, ${fail} 条失败` : ''}`, '', { duration: 3000 });
+    const message = $localize`:@@memoryBatchDeleted:已删除 ${success} 条记忆${fail ? `, ${fail} 条失败` : ''}`;
+    (fail ? toast.warning : toast.success)(message, { duration: 3000 });
     await this.loadStats();
     await this.loadCurrentPage();
   }
 
-  openDetail(memory: MemoryEntry): void {
-    const ref = this.dialog.open(MemoryDetailDialog, {
-      width: '600px',
-      data: { memory },
-    });
+  async openDetail(memory: MemoryEntry): Promise<void> {
+    const ref = this.dialog.open<MemoryEntry, { memory: MemoryEntry }>(
+      MemoryDetailDialog,
+      {
+        contentClass: 'sm:max-w-2xl',
+        context: { memory },
+      },
+    );
+    const result = await firstValueFrom(ref.closed$);
+    if (!result) return;
 
-    ref.afterClosed().subscribe(async (result: MemoryEntry | undefined) => {
-      if (!result) return;
-      try {
-        const r = await this.api.updateMemory(
-          result.id,
-          result.content,
-          result.tags,
-          result.visibility,
-          result.importance,
+    try {
+      const response = await this.api.updateMemory(
+        result.id,
+        result.content,
+        result.tags,
+        result.visibility,
+        result.importance,
+      );
+      if (response.success) {
+        toast.success($localize`:@@memoryUpdated:记忆已更新`, {
+          duration: 3000,
+        });
+        await this.loadCurrentPage();
+      } else {
+        toast.error(
+          $localize`:@@memoryUpdateError:更新失败: ${response.error}`,
+          { duration: 5000 },
         );
-        if (r.success) {
-          this.snackBar.open($localize`:@@memoryUpdated:记忆已更新`, '', { duration: 3000 });
-          await this.loadCurrentPage();
-        } else {
-          this.snackBar.open($localize`:@@memoryUpdateError:更新失败: ${r.error}`, '', { duration: 5000 });
-        }
-      } catch (error) {
-        this.snackBar.open($localize`:@@memoryUpdateError:更新失败: ${error instanceof Error ? error.message : String(error)}`, '', { duration: 5000 });
       }
-    });
+    } catch (error) {
+      toast.error(
+        $localize`:@@memoryUpdateError:更新失败: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: 5000 },
+      );
+    }
   }
 
-  openAddDialog(): void {
-    const ref = this.dialog.open(MemoryAddDialog, {
-      width: '500px',
+  async openAddDialog(): Promise<void> {
+    const ref = this.dialog.open<AddMemoryResult>(MemoryAddDialog, {
+      contentClass: 'sm:max-w-lg',
     });
+    const result = await firstValueFrom(ref.closed$);
+    if (!result) return;
 
-    ref.afterClosed().subscribe(async (result: AddMemoryResult | undefined) => {
-      if (!result) return;
-      try {
-        const r = await this.api.addMemory(result.owner, result.content, result.tags, result.visibility);
-        if (r.memory) {
-          this.snackBar.open($localize`:@@memoryAdded:记忆已添加`, '', { duration: 3000 });
-          await this.loadStats();
-          await this.loadCurrentPage();
-        } else {
-          this.snackBar.open($localize`:@@memoryAddError:添加失败: ${r.error}`, '', { duration: 5000 });
-        }
-      } catch (error) {
-        this.snackBar.open($localize`:@@memoryAddError:添加失败: ${error instanceof Error ? error.message : String(error)}`, '', { duration: 5000 });
+    try {
+      const response = await this.api.addMemory(
+        result.owner,
+        result.content,
+        result.tags,
+        result.visibility,
+      );
+      if (response.memory) {
+        toast.success($localize`:@@memoryAdded:记忆已添加`, {
+          duration: 3000,
+        });
+        await this.loadStats();
+        await this.loadCurrentPage();
+      } else {
+        toast.error(
+          $localize`:@@memoryAddError:添加失败: ${response.error}`,
+          { duration: 5000 },
+        );
       }
-    });
+    } catch (error) {
+      toast.error(
+        $localize`:@@memoryAddError:添加失败: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: 5000 },
+      );
+    }
   }
 
   async exportMemories(): Promise<void> {
     try {
       const result = await this.api.exportMemories();
       if (result.error) {
-        this.snackBar.open($localize`:@@memoryExportError:导出失败: ${result.error}`, '', { duration: 5000 });
+        toast.error($localize`:@@memoryExportError:导出失败: ${result.error}`, { duration: 5000 });
         return;
       }
       const blob = new Blob([result.jsonContent], { type: 'application/json' });
@@ -264,9 +272,9 @@ export class MemoryComponent implements OnInit {
       a.download = `memories-export-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      this.snackBar.open($localize`:@@memoryExported:导出成功`, '', { duration: 3000 });
+      toast.success($localize`:@@memoryExported:导出成功`, { duration: 3000 });
     } catch (error) {
-      this.snackBar.open($localize`:@@memoryExportError:导出失败: ${error instanceof Error ? error.message : String(error)}`, '', { duration: 5000 });
+      toast.error($localize`:@@memoryExportError:导出失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
     }
   }
 
@@ -280,14 +288,14 @@ export class MemoryComponent implements OnInit {
       try {
         const result = await this.api.importMemories(reader.result as string, false);
         if (result.error) {
-          this.snackBar.open($localize`:@@memoryImportError:导入失败: ${result.error}`, '', { duration: 5000 });
+          toast.error($localize`:@@memoryImportError:导入失败: ${result.error}`, { duration: 5000 });
         } else {
-          this.snackBar.open($localize`:@@memoryImported:已导入 ${result.imported} 条，跳过 ${result.skipped} 条`, '', { duration: 3000 });
+          toast.success($localize`:@@memoryImported:已导入 ${result.imported} 条，跳过 ${result.skipped} 条`, { duration: 3000 });
           await this.loadStats();
           await this.loadCurrentPage();
         }
       } catch (error) {
-        this.snackBar.open($localize`:@@memoryImportError:导入失败: ${error instanceof Error ? error.message : String(error)}`, '', { duration: 5000 });
+        toast.error($localize`:@@memoryImportError:导入失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
       }
     };
     reader.readAsText(file);

@@ -1,29 +1,26 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatIconModule } from '@angular/material/icon';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { toSignal } from '@angular/core/rxjs-interop';
+import { HlmBadge } from '@spartan-ng/helm/badge';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
 import { timer, from, of, combineLatest } from 'rxjs';
 import { switchMap, catchError, shareReplay, map, startWith, takeUntil, share } from 'rxjs/operators';
 import { BotStatus } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { formatCount, formatStatus, formatUptime } from '../shared/dashboard-utils';
 
 @Component({
   selector: 'app-overview',
   imports: [
     CommonModule,
-    MatButtonModule,
-    MatCardModule,
-    MatChipsModule,
-    MatIconModule,
-    MatProgressBarModule,
+    HlmBadge,
+    HlmCardImports,
+    HlmSpinner,
+    AppIconComponent,
   ],
   templateUrl: './overview.component.html',
-  styleUrl: './overview.component.scss',
 })
 export class OverviewComponent {
   private readonly api = inject(FrostagentApiService);
@@ -73,5 +70,18 @@ export class OverviewComponent {
 
   backendVersion(version: string): string {
     return $localize`:@@backendVersion:后端版本 ${version}`;
+  }
+
+  statusClass(status: BotStatus): string {
+    switch (status) {
+      case BotStatus.RUNNING:
+        return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+      case BotStatus.INITIALIZING:
+        return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+      case BotStatus.ERROR:
+        return 'border-destructive/30 bg-destructive/10 text-destructive';
+      default:
+        return '';
+    }
   }
 }

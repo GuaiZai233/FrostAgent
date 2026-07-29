@@ -37,9 +37,7 @@ export class ThemeService {
       this.isSystemDark.set(e.matches);
     });
 
-    effect(() => {
-      this.applyMode(this.currentMode());
-    });
+    effect(() => this.applyMode(this.effectiveMode()));
   }
 
   setMode(mode: ThemeMode): void {
@@ -47,15 +45,10 @@ export class ThemeService {
     localStorage.setItem(this.localStorageKey, mode);
   }
 
-  private applyMode(mode: ThemeMode): void {
+  private applyMode(mode: Exclude<ThemeMode, 'system'>): void {
     const html = this.document.documentElement;
-    if (mode === 'light') {
-      html.style.colorScheme = 'light';
-    } else if (mode === 'dark') {
-      html.style.colorScheme = 'dark';
-    } else {
-      html.style.colorScheme = 'light dark';
-    }
+    html.classList.toggle('dark', mode === 'dark');
+    html.style.colorScheme = mode;
   }
 
   private loadPreference(): ThemeMode {

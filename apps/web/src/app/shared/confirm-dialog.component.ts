@@ -1,6 +1,18 @@
-import { Component, inject } from '@angular/core';
-import { MAT_DIALOG_DATA, MatDialogModule } from '@angular/material/dialog';
-import { MatButtonModule } from '@angular/material/button';
+import { Component, Injectable, inject } from '@angular/core';
+import {
+  BrnDialogRef,
+  injectBrnDialogContext,
+} from '@spartan-ng/brain/dialog';
+import {
+  HlmAlertDialogAction,
+  HlmAlertDialogDescription,
+  HlmAlertDialogFooter,
+  HlmAlertDialogHeader,
+  HlmAlertDialogTitle,
+} from '@spartan-ng/helm/alert-dialog';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
+import { firstValueFrom } from 'rxjs';
 
 export interface ConfirmDialogData {
   title: string;
@@ -11,22 +23,56 @@ export interface ConfirmDialogData {
 
 @Component({
   selector: 'app-confirm-dialog',
-  imports: [MatButtonModule, MatDialogModule],
+  imports: [
+    HlmAlertDialogAction,
+    HlmAlertDialogDescription,
+    HlmAlertDialogFooter,
+    HlmAlertDialogHeader,
+    HlmAlertDialogTitle,
+    HlmButton,
+  ],
   template: `
-    <h2 mat-dialog-title>{{ data.title }}</h2>
-    <mat-dialog-content>
-      <p>{{ data.message }}</p>
-    </mat-dialog-content>
-    <mat-dialog-actions align="end">
-      <button mat-button [mat-dialog-close]="false">
+    <div hlmAlertDialogHeader>
+      <h2 hlmAlertDialogTitle>{{ data.title }}</h2>
+      <p hlmAlertDialogDescription>{{ data.message }}</p>
+    </div>
+    <div hlmAlertDialogFooter>
+      <button hlmBtn variant="outline" (click)="close(false)">
         {{ data.cancelLabel }}
       </button>
-      <button mat-flat-button color="warn" [mat-dialog-close]="true">
+      <button
+        hlmAlertDialogAction
+        variant="destructive"
+        (click)="close(true)"
+      >
         {{ data.confirmLabel }}
       </button>
-    </mat-dialog-actions>
+    </div>
   `,
 })
 export class ConfirmDialogComponent {
-  readonly data = inject<ConfirmDialogData>(MAT_DIALOG_DATA);
+  readonly data = injectBrnDialogContext<ConfirmDialogData>();
+  private readonly dialogRef = inject(BrnDialogRef<boolean>);
+
+  close(result: boolean): void {
+    this.dialogRef.close(result);
+  }
+}
+
+@Injectable({ providedIn: 'root' })
+export class ConfirmDialogService {
+  private readonly dialog = inject(HlmDialogService);
+
+  async confirm(data: ConfirmDialogData): Promise<boolean> {
+    const ref = this.dialog.open<boolean, ConfirmDialogData>(
+      ConfirmDialogComponent,
+      {
+        context: data,
+        role: 'alertdialog',
+        showCloseButton: false,
+        closeOnOutsidePointerEvents: false,
+      },
+    );
+    return (await firstValueFrom(ref.closed$)) ?? false;
+  }
 }

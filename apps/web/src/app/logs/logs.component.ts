@@ -1,24 +1,23 @@
 import { Component, OnDestroy, inject, signal } from '@angular/core';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatDialog } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSelectModule } from '@angular/material/select';
-import { MatSnackBar } from '@angular/material/snack-bar';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { LogLevel, type LogEntry } from '@frostagent/proto';import {MatTooltipModule} from '@angular/material/tooltip';
+import { LogLevel, type LogEntry } from '@frostagent/proto';
+import { toast } from '@spartan-ng/brain/sonner';
+import { HlmBadge } from '@spartan-ng/helm/badge';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
+import { HlmSelectImports } from '@spartan-ng/helm/select';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
 
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
-  ConfirmDialogComponent,
+  ConfirmDialogService,
   type ConfirmDialogData,
 } from '../shared/confirm-dialog.component';
+import { AppIconComponent } from '../shared/app-icon.component';
 import {
   PageTokenStack,
   formatDateTime,
@@ -26,29 +25,29 @@ import {
   logLevelOptions,
   logLevelTone,
 } from '../shared/dashboard-utils';
+import { LogSummaryDialogComponent } from './log-summary-dialog.component';
 
 @Component({
   selector: 'app-logs',
   imports: [
-    MatButtonModule,
-    MatCardModule,
-    MatTooltipModule,
-    MatChipsModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-    MatPaginatorModule,
-    MatProgressBarModule,
-    MatSelectModule,
-    MatTableModule,
-    MatToolbarModule,
+    HlmBadge,
+    HlmButton,
+    HlmCardImports,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    HlmPaginationImports,
+    HlmSelectImports,
+    HlmSpinner,
+    HlmTableImports,
+    AppIconComponent,
   ],
   templateUrl: './logs.component.html',
 })
 export class LogsComponent implements OnDestroy {
   private readonly api = inject(FrostagentApiService);
-  private readonly dialog = inject(MatDialog);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly confirmDialog = inject(ConfirmDialogService);
+  private readonly dialog = inject(HlmDialogService);
   private readonly pageTokens = new PageTokenStack();
   private streamAbortController: AbortController | null = null;
 
@@ -65,8 +64,6 @@ export class LogsComponent implements OnDestroy {
   readonly total = signal(0);
   readonly pageIndex = signal(0);
   readonly logLevelOptions = logLevelOptions;
-  readonly displayedColumns = ['timestamp', 'level', 'source', 'summary'];
-
   constructor() {
     void this.refresh();
   }
@@ -81,25 +78,29 @@ export class LogsComponent implements OnDestroy {
     await this.loadCurrentPage();
   }
 
-  async changeLevel(value: LogLevel): Promise<void> {
+  async changeLevel(value: LogLevel | null | undefined): Promise<void> {
+    if (value === null || value === undefined) return;
     this.minLevel.set(value);
     await this.refresh();
   }
 
-  async handlePageEvent(event: PageEvent): Promise<void> {
-    if (event.pageSize !== this.pageSize()) {
-      this.pageSize.set(event.pageSize);
-      await this.refresh();
-      return;
-    }
-
-    if (event.pageIndex > this.pageIndex()) {
+  async changePage(direction: 'previous' | 'next'): Promise<void> {
+    if (direction === 'next') {
+      if (!this.nextToken()) return;
       this.pageTokens.push(this.nextToken());
-    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageIndex.update((value) => value + 1);
+    } else {
+      if (!this.canGoBack()) return;
       this.pageTokens.back();
+      this.pageIndex.update((value) => value - 1);
     }
-    this.pageIndex.set(event.pageIndex);
     await this.loadCurrentPage();
+  }
+
+  async changePageSize(value: number | null | undefined): Promise<void> {
+    if (!value || value === this.pageSize()) return;
+    this.pageSize.set(value);
+    await this.refresh();
   }
 
   async applySourceFilter(value: string): Promise<void> {
@@ -113,6 +114,13 @@ export class LogsComponent implements OnDestroy {
 
   selectEntry(entry: LogEntry): void {
     this.selectedEntry.set(entry);
+  }
+
+  openSummary(entry: LogEntry): void {
+    this.dialog.open(LogSummaryDialogComponent, {
+      contentClass: 'sm:max-w-2xl',
+      context: { entry },
+    });
   }
 
   async toggleStream(): Promise<void> {
@@ -156,10 +164,7 @@ export class LogsComponent implements OnDestroy {
       cancelLabel: $localize`:@@cancel:取消`,
       confirmLabel: $localize`:@@clear:清理`,
     };
-    const confirmed = await this.dialog
-      .open(ConfirmDialogComponent, { data })
-      .afterClosed()
-      .toPromise();
+    const confirmed = await this.confirmDialog.confirm(data);
 
     if (!confirmed) {
       return;
@@ -170,7 +175,7 @@ export class LogsComponent implements OnDestroy {
       this.entries.set([]);
       this.streamEntries.set([]);
       this.selectedEntry.set(null);
-      this.snackBar.open($localize`:@@logsCleared:日志已清理`, undefined, {
+      toast.success($localize`:@@logsCleared:日志已清理`, {
         duration: 2500,
       });
       await this.refresh();
@@ -187,6 +192,20 @@ export class LogsComponent implements OnDestroy {
 
   logLevelTone(value: LogLevel): string {
     return logLevelTone(value);
+  }
+
+  logLevelClass(value: LogLevel): string {
+    switch (this.logLevelTone(value)) {
+      case 'error':
+        return 'border-destructive/30 bg-destructive/10 text-destructive';
+      case 'warn':
+      case 'warning':
+        return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+      case 'debug':
+        return 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300';
+      default:
+        return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300';
+    }
   }
 
   streamActionLabel(): string {

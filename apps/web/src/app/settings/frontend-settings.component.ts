@@ -1,34 +1,26 @@
 import { Component, inject } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatButtonToggleModule } from '@angular/material/button-toggle';
-import { MatCardModule } from '@angular/material/card';
-import { MatDividerModule } from '@angular/material/divider';
-import { MatIconModule } from '@angular/material/icon';
-import { MatListModule } from '@angular/material/list';
-import { MatSelectModule } from '@angular/material/select';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatToolbarModule } from '@angular/material/toolbar';
 import { RouterModule } from '@angular/router';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmSelectImports } from '@spartan-ng/helm/select';
+import { HlmToggleGroupImports } from '@spartan-ng/helm/toggle-group';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { ThemeService, ThemeMode } from '../shared/theme.service';
 
 @Component({
   selector: 'app-frontend-settings',
   imports: [
-    FormsModule,
-    MatButtonModule,
-    MatButtonToggleModule,
-    MatCardModule,
-    MatDividerModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatListModule,
-    MatSelectModule,
-    MatToolbarModule,
+    HlmButton,
+    HlmCardImports,
+    HlmField,
+    HlmFieldLabel,
+    HlmSelectImports,
+    HlmToggleGroupImports,
     RouterModule,
+    AppIconComponent,
   ],
   templateUrl: './frontend-settings.component.html',
-  styleUrl: './frontend-settings.component.scss',
 })
 export class FrontendSettingsComponent {
   readonly themeService = inject(ThemeService);
@@ -60,5 +52,15 @@ export class FrontendSettingsComponent {
     );
     const target = '/' + locale + stripped;
     window.location.href = target;
+  }
+
+  setLocale(locale: string | null | undefined): void {
+    if (locale) this.switchLocale(locale);
+  }
+
+  setTheme(mode: string | string[] | null | undefined): void {
+    if (typeof mode === 'string') {
+      this.themeService.setMode(mode as ThemeMode);
+    }
   }
 }
