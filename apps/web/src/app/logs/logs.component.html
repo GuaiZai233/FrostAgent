@@ -109,8 +109,15 @@
                   </span>
                 </td>
                 <td hlmTd>{{ entry.source || '-' }}</td>
-                <td hlmTd class="max-w-80 truncate">
-                  {{ entry.summary || '-' }}
+                <td hlmTd class="max-w-80">
+                  <button
+                    type="button"
+                    class="block max-w-80 cursor-pointer truncate text-start hover:underline"
+                    [title]="entry.summary || '-'"
+                    (click)="$event.stopPropagation(); openSummary(entry)"
+                  >
+                    {{ entry.summary || '-' }}
+                  </button>
                 </td>
               </tr>
             } @empty {

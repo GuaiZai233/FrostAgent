@@ -4,6 +4,7 @@ import { toast } from '@spartan-ng/brain/sonner';
 import { HlmBadge } from '@spartan-ng/helm/badge';
 import { HlmButton } from '@spartan-ng/helm/button';
 import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
 import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
@@ -24,6 +25,7 @@ import {
   logLevelOptions,
   logLevelTone,
 } from '../shared/dashboard-utils';
+import { LogSummaryDialogComponent } from './log-summary-dialog.component';
 
 @Component({
   selector: 'app-logs',
@@ -45,6 +47,7 @@ import {
 export class LogsComponent implements OnDestroy {
   private readonly api = inject(FrostagentApiService);
   private readonly confirmDialog = inject(ConfirmDialogService);
+  private readonly dialog = inject(HlmDialogService);
   private readonly pageTokens = new PageTokenStack();
   private streamAbortController: AbortController | null = null;
 
@@ -111,6 +114,13 @@ export class LogsComponent implements OnDestroy {
 
   selectEntry(entry: LogEntry): void {
     this.selectedEntry.set(entry);
+  }
+
+  openSummary(entry: LogEntry): void {
+    this.dialog.open(LogSummaryDialogComponent, {
+      contentClass: 'sm:max-w-2xl',
+      context: { entry },
+    });
   }
 
   async toggleStream(): Promise<void> {
