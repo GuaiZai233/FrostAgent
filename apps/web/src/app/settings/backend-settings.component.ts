@@ -13,16 +13,15 @@ import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
+import { toast } from '@spartan-ng/brain/sonner';
 import { ThemeService } from '../shared/theme.service';
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -35,7 +34,7 @@ import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import { AppIconComponent } from '../shared/app-icon.component';
 import {
-  ConfirmDialogComponent,
+  ConfirmDialogService,
   type ConfirmDialogData,
 } from '../shared/confirm-dialog.component';
 import { maskSecret } from '../shared/dashboard-utils';
@@ -63,8 +62,7 @@ export class BackendSettingsComponent
   implements OnInit, AfterViewInit, OnDestroy
 {
   private readonly api = inject(FrostagentApiService);
-  private readonly dialog = inject(MatDialog);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   readonly themeService = inject(ThemeService);
 
   private readonly editorDiv =
@@ -177,10 +175,7 @@ export class BackendSettingsComponent
       cancelLabel: $localize`:@@cancel:取消`,
       confirmLabel: $localize`:@@delete:删除`,
     };
-    const confirmed = await this.dialog
-      .open(ConfirmDialogComponent, { data })
-      .afterClosed()
-      .toPromise();
+    const confirmed = await this.confirmDialog.confirm(data);
 
     if (!confirmed) {
       return;
@@ -193,7 +188,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@envDeleted:环境变量已删除`, undefined, {
+      toast.success($localize`:@@envDeleted:环境变量已删除`, {
         duration: 2500,
       });
       await this.refresh();
@@ -214,7 +209,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@rawEnvSaved:.env 文件已更新`, undefined, {
+      toast.success($localize`:@@rawEnvSaved:.env 文件已更新`, {
         duration: 2500,
       });
       await this.refresh();
@@ -269,7 +264,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@envSaved:环境变量已保存`, undefined, {
+      toast.success($localize`:@@envSaved:环境变量已保存`, {
         duration: 2500,
       });
       await this.refresh();

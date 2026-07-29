@@ -2,20 +2,19 @@ import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatChipsModule } from '@angular/material/chips';
-import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { LogLevel, type LogEntry } from '@frostagent/proto';import {MatTooltipModule} from '@angular/material/tooltip';
+import { toast } from '@spartan-ng/brain/sonner';
 
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import {
-  ConfirmDialogComponent,
+  ConfirmDialogService,
   type ConfirmDialogData,
 } from '../shared/confirm-dialog.component';
 import { AppIconComponent } from '../shared/app-icon.component';
@@ -47,8 +46,7 @@ import {
 })
 export class LogsComponent implements OnDestroy {
   private readonly api = inject(FrostagentApiService);
-  private readonly dialog = inject(MatDialog);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly pageTokens = new PageTokenStack();
   private streamAbortController: AbortController | null = null;
 
@@ -156,10 +154,7 @@ export class LogsComponent implements OnDestroy {
       cancelLabel: $localize`:@@cancel:取消`,
       confirmLabel: $localize`:@@clear:清理`,
     };
-    const confirmed = await this.dialog
-      .open(ConfirmDialogComponent, { data })
-      .afterClosed()
-      .toPromise();
+    const confirmed = await this.confirmDialog.confirm(data);
 
     if (!confirmed) {
       return;
@@ -170,7 +165,7 @@ export class LogsComponent implements OnDestroy {
       this.entries.set([]);
       this.streamEntries.set([]);
       this.selectedEntry.set(null);
-      this.snackBar.open($localize`:@@logsCleared:日志已清理`, undefined, {
+      toast.success($localize`:@@logsCleared:日志已清理`, {
         duration: 2500,
       });
       await this.refresh();

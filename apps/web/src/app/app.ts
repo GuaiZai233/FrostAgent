@@ -1,22 +1,19 @@
-import { Component, OnDestroy, inject, signal, computed } from '@angular/core';
-import { MatButtonModule } from '@angular/material/button';
-import { MatMenuModule } from '@angular/material/menu';
-import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
-import { MAT_NAVIGATION_SUITE_MODULES, MatNavigationSuiteScaffoldState, MatNavigationSuiteScaffoldDefaults } from '@fairylights-studio/ngx-m3-navigation-suite';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
+import { HlmSidebarImports } from '@spartan-ng/helm/sidebar';
+import { HlmToaster } from '@spartan-ng/helm/sonner';
 import { Subscription, filter } from 'rxjs';
-import { MatExtendedFabCollapsedDirective } from '@fairylights-studio/ngx-m3-button';
 import { AddEnvVarDialogComponent } from './shared/add-env-var-dialog.component';
 import { AppIconComponent } from './shared/app-icon.component';
 import { ThemeService } from './shared/theme.service';
 
 @Component({
   imports: [
-    MAT_NAVIGATION_SUITE_MODULES,
-    MatExtendedFabCollapsedDirective,
-    MatButtonModule,
-    MatMenuModule,
-    MatDialogModule,
+    HlmButton,
+    HlmSidebarImports,
+    HlmToaster,
     RouterModule,
     AppIconComponent,
   ],
@@ -26,13 +23,10 @@ import { ThemeService } from './shared/theme.service';
 })
 export class App implements OnDestroy {
   private readonly router = inject(Router);
-  private readonly dialog = inject(MatDialog);
-  private readonly scaffoldDefaults = inject(MatNavigationSuiteScaffoldDefaults);
-  private readonly themeService = inject(ThemeService);
+  private readonly dialog = inject(HlmDialogService);
+  readonly themeService = inject(ThemeService);
   private readonly routerEvents: Subscription;
   readonly currentUrl = signal(this.router.url);
-
-  readonly scaffoldState = new MatNavigationSuiteScaffoldState();
 
   readonly isSettingsBackendPage = computed(() =>
     this.currentUrl().startsWith('/settings/backend'),
@@ -82,13 +76,9 @@ export class App implements OnDestroy {
     return this.currentUrl().startsWith(path);
   }
 
-  navigate(path: string): void {
-    void this.router.navigateByUrl(path);
-  }
-
   openAddEnvVarDialog(): void {
     this.dialog.open(AddEnvVarDialogComponent, {
-      width: '400px',
+      contentClass: 'sm:max-w-md',
     });
   }
 }
