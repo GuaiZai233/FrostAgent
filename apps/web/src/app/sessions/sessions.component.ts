@@ -1,14 +1,11 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSelectModule } from '@angular/material/select';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
 import type { SessionInfo } from '@frostagent/proto';
-import {MatTooltipModule} from '@angular/material/tooltip';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
+import { HlmSelectImports } from '@spartan-ng/helm/select';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import { AppIconComponent } from '../shared/app-icon.component';
 import {
@@ -20,15 +17,12 @@ import {
 @Component({
   selector: 'app-sessions',
   imports: [
-    MatButtonModule,
-    MatTooltipModule,
-    MatCardModule,
-    MatFormFieldModule,
-    MatPaginatorModule,
-    MatProgressBarModule,
-    MatSelectModule,
-    MatTableModule,
-    MatToolbarModule,
+    HlmButton,
+    HlmCardImports,
+    HlmPaginationImports,
+    HlmSelectImports,
+    HlmSpinner,
+    HlmTableImports,
     AppIconComponent,
   ],
   templateUrl: './sessions.component.html',
@@ -45,14 +39,6 @@ export class SessionsComponent implements OnInit {
   readonly total = signal(0);
   readonly pageIndex = signal(0);
 
-  readonly displayedColumns = [
-    'sessionId',
-    'platform',
-    'messageCount',
-    'createdAt',
-    'lastActive',
-  ];
-
   ngOnInit(): void {
     void this.loadCurrentPage();
   }
@@ -63,20 +49,23 @@ export class SessionsComponent implements OnInit {
     await this.loadCurrentPage();
   }
 
-  async handlePageEvent(event: PageEvent): Promise<void> {
-    if (event.pageSize !== this.pageSize()) {
-      this.pageSize.set(event.pageSize);
-      await this.refresh();
-      return;
-    }
-
-    if (event.pageIndex > this.pageIndex()) {
+  async changePage(direction: 'previous' | 'next'): Promise<void> {
+    if (direction === 'next') {
+      if (!this.nextToken()) return;
       this.pageTokens.push(this.nextToken());
-    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageIndex.update((value) => value + 1);
+    } else {
+      if (this.pageIndex() === 0) return;
       this.pageTokens.back();
+      this.pageIndex.update((value) => value - 1);
     }
-    this.pageIndex.set(event.pageIndex);
     await this.loadCurrentPage();
+  }
+
+  async changePageSize(value: number | null | undefined): Promise<void> {
+    if (!value || value === this.pageSize()) return;
+    this.pageSize.set(value);
+    await this.refresh();
   }
 
   formatDateTime(value: string): string {

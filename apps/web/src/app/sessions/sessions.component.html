@@ -1,70 +1,115 @@
-<section class="page">
-  <mat-toolbar>
-    <button matIconButton (click)="refresh()" matTooltip="刷新" i18n-matTooltip="@@refreshTooltip">
+<section class="mx-auto grid max-w-7xl gap-4 p-4 sm:p-6">
+  <header class="flex items-center justify-between">
+    <h1 class="text-2xl font-semibold" i18n="@@navSessions">会话</h1>
+    <button
+      hlmBtn
+      variant="outline"
+      size="icon"
+      (click)="refresh()"
+      title="刷新"
+      i18n-title="@@refreshTooltip"
+    >
       <app-icon>refresh</app-icon>
+      <span class="sr-only" i18n="@@refreshTooltip">刷新</span>
     </button>
-
-  </mat-toolbar>
+  </header>
 
   @if (loading()) {
-    <mat-progress-bar mode="indeterminate" />
+    <div class="text-muted-foreground flex items-center gap-2 text-sm">
+      <hlm-spinner />
+      <span i18n="@@loading">加载中</span>
+    </div>
   }
 
   @if (error()) {
-    <mat-card >
-      <mat-card-content>{{ error() }}</mat-card-content>
-    </mat-card>
+    <section hlmCard class="border-destructive/30">
+      <div hlmCardContent class="text-destructive">{{ error() }}</div>
+    </section>
   }
 
-  <mat-card >
-    <table mat-table [dataSource]="sessions()">
-      <ng-container matColumnDef="sessionId">
-        <th mat-header-cell *matHeaderCellDef i18n="@@sessionId">会话 ID</th>
-        <td mat-cell *matCellDef="let session">{{ session.sessionId }}</td>
-      </ng-container>
+  <section hlmCard class="py-0">
+    <div hlmTableContainer>
+      <table hlmTable>
+        <thead hlmTHead>
+          <tr hlmTr>
+            <th hlmTh i18n="@@sessionId">会话 ID</th>
+            <th hlmTh i18n="@@platform">平台</th>
+            <th hlmTh i18n="@@messageCount">消息数</th>
+            <th hlmTh i18n="@@createdAt">创建时间</th>
+            <th hlmTh i18n="@@lastActive">最后活跃</th>
+          </tr>
+        </thead>
+        <tbody hlmTBody>
+          @for (session of sessions(); track session.sessionId) {
+            <tr hlmTr>
+              <td hlmTd class="font-mono text-xs">{{ session.sessionId }}</td>
+              <td hlmTd>{{ formatPlatform(session.platform) }}</td>
+              <td hlmTd>{{ session.messageCount }}</td>
+              <td hlmTd>{{ formatDateTime(session.createdAt) }}</td>
+              <td hlmTd>{{ formatDateTime(session.lastActive) }}</td>
+            </tr>
+          } @empty {
+            @if (!loading()) {
+              <tr hlmTr>
+                <td hlmTd colspan="5" class="text-muted-foreground h-24 text-center" i18n="@@noSessions">
+                  暂无会话。
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </div>
 
-      <ng-container matColumnDef="platform">
-        <th mat-header-cell *matHeaderCellDef i18n="@@platform">平台</th>
-        <td mat-cell *matCellDef="let session">
-          {{ formatPlatform(session.platform) }}
-        </td>
-      </ng-container>
-
-      <ng-container matColumnDef="messageCount">
-        <th mat-header-cell *matHeaderCellDef i18n="@@messageCount">消息数</th>
-        <td mat-cell *matCellDef="let session">{{ session.messageCount }}</td>
-      </ng-container>
-
-      <ng-container matColumnDef="createdAt">
-        <th mat-header-cell *matHeaderCellDef i18n="@@createdAt">创建时间</th>
-        <td mat-cell *matCellDef="let session">
-          {{ formatDateTime(session.createdAt) }}
-        </td>
-      </ng-container>
-
-      <ng-container matColumnDef="lastActive">
-        <th mat-header-cell *matHeaderCellDef i18n="@@lastActive">最后活跃</th>
-        <td mat-cell *matCellDef="let session">
-          {{ formatDateTime(session.lastActive) }}
-        </td>
-      </ng-container>
-
-      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-      <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
-    </table>
-
-    @if (!loading() && sessions().length === 0) {
-      <div  i18n="@@noSessions">暂无会话。</div>
-    }
-
-    <mat-paginator
-      [length]="total()"
-      [pageSize]="pageSize()"
-      [pageIndex]="pageIndex()"
-      [pageSizeOptions]="[10, 20, 50, 100]"
-      (page)="handlePageEvent($event)"
-      aria-label="Select page"
-    >
-    </mat-paginator>
-  </mat-card>
+    <footer class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+      <p class="text-muted-foreground text-sm">
+        <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
+        ·
+        <span i18n="@@paginationPage">第 {{ pageIndex() + 1 }} 页</span>
+      </p>
+      <div class="flex items-center gap-3">
+        <hlm-select
+          [value]="pageSize()"
+          (valueChange)="changePageSize($event)"
+        >
+          <hlm-select-trigger class="w-20">
+            <hlm-select-value />
+          </hlm-select-trigger>
+          <hlm-select-content *hlmSelectPortal>
+            @for (size of [10, 20, 50, 100]; track size) {
+              <hlm-select-item [value]="size">{{ size }}</hlm-select-item>
+            }
+          </hlm-select-content>
+        </hlm-select>
+        <nav hlmPagination class="w-auto">
+          <ul hlmPaginationContent>
+            <li hlmPaginationItem>
+              <button
+                hlmBtn
+                variant="ghost"
+                size="sm"
+                [disabled]="pageIndex() === 0 || loading()"
+                (click)="changePage('previous')"
+                i18n="@@previousPage"
+              >
+                上一页
+              </button>
+            </li>
+            <li hlmPaginationItem>
+              <button
+                hlmBtn
+                variant="ghost"
+                size="sm"
+                [disabled]="!nextToken() || loading()"
+                (click)="changePage('next')"
+                i18n="@@nextPage"
+              >
+                下一页
+              </button>
+            </li>
+          </ul>
+        </nav>
+      </div>
+    </footer>
+  </section>
 </section>

@@ -1,21 +1,19 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatInputModule } from '@angular/material/input';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSelectModule } from '@angular/material/select';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import type { MemoryEntry, GetMemoryStatsResponse } from '@frostagent/proto';
 import { toast } from '@spartan-ng/brain/sonner';
+import { HlmBadge } from '@spartan-ng/helm/badge';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmCheckbox } from '@spartan-ng/helm/checkbox';
 import { HlmDialogService } from '@spartan-ng/helm/dialog';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
+import { HlmSelectImports } from '@spartan-ng/helm/select';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
 import { firstValueFrom } from 'rxjs';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import { AppIconComponent } from '../shared/app-icon.component';
@@ -28,22 +26,20 @@ import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
   imports: [
     CommonModule,
     FormsModule,
-    MatButtonModule,
-    MatCardModule,
-    MatCheckboxModule,
-    MatChipsModule,
-    MatFormFieldModule,
-    MatInputModule,
-    MatPaginatorModule,
-    MatProgressBarModule,
-    MatSelectModule,
-    MatTableModule,
-    MatToolbarModule,
-    MatTooltipModule,
+    HlmBadge,
+    HlmButton,
+    HlmCardImports,
+    HlmCheckbox,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    HlmPaginationImports,
+    HlmSelectImports,
+    HlmSpinner,
+    HlmTableImports,
     AppIconComponent,
   ],
   templateUrl: './memory.component.html',
-  styleUrl: './memory.component.scss',
 })
 export class MemoryComponent implements OnInit {
   private readonly api = inject(FrostagentApiService);
@@ -63,18 +59,6 @@ export class MemoryComponent implements OnInit {
   readonly visibilityFilter = signal('');
   readonly searchQuery = signal('');
   readonly selectedIds = signal<Set<string>>(new Set());
-
-  readonly displayedColumns = [
-    'select',
-    'source',
-    'owner',
-    'content',
-    'tags',
-    'visibility',
-    'importance',
-    'createdAt',
-    'actions',
-  ];
 
   ngOnInit(): void {
     void this.loadStats();
@@ -113,21 +97,24 @@ export class MemoryComponent implements OnInit {
     void this.search();
   }
 
-  async handlePageEvent(event: PageEvent): Promise<void> {
-    if (event.pageSize !== this.pageSize()) {
-      this.pageSize.set(event.pageSize);
-      this.pageTokens.reset();
-      this.pageIndex.set(0);
-      await this.loadCurrentPage();
-      return;
-    }
-
-    if (event.pageIndex > this.pageIndex()) {
+  async changePage(direction: 'previous' | 'next'): Promise<void> {
+    if (direction === 'next') {
+      if (!this.nextToken()) return;
       this.pageTokens.push(this.nextToken());
-    } else if (event.pageIndex < this.pageIndex()) {
+      this.pageIndex.update((value) => value + 1);
+    } else {
+      if (this.pageIndex() === 0) return;
       this.pageTokens.back();
+      this.pageIndex.update((value) => value - 1);
     }
-    this.pageIndex.set(event.pageIndex);
+    await this.loadCurrentPage();
+  }
+
+  async changePageSize(value: number | null | undefined): Promise<void> {
+    if (!value || value === this.pageSize()) return;
+    this.pageSize.set(value);
+    this.pageTokens.reset();
+    this.pageIndex.set(0);
     await this.loadCurrentPage();
   }
 

@@ -1,42 +1,65 @@
-<div class="page">
-  <mat-toolbar >
-    <a mat-icon-button routerLink="/settings" aria-label="Back to settings">
+<div class="grid gap-6">
+  <header class="flex items-center gap-3">
+    <a
+      hlmBtn
+      variant="ghost"
+      size="icon"
+      routerLink="/settings"
+      aria-label="Back to settings"
+    >
       <app-icon>arrow_back</app-icon>
     </a>
-    <span class="toolbar-title" i18n="@@frontendSettingsTitle">网页设置</span>
-  </mat-toolbar>
+    <h1 class="text-2xl font-semibold" i18n="@@frontendSettingsTitle">
+      网页设置
+    </h1>
+  </header>
 
-  <section>
-    <mat-form-field subscriptSizing="dynamic">
-        <mat-label i18n="@@localeSelectPlaceholder">语言</mat-label>
-      <mat-select
-        i18n-placeholder="@@localeSelectPlaceholder"
-        placeholder="选择语言"
-        [ngModel]="currentLocale"
-        (ngModelChange)="switchLocale($event)"
+  <section hlmCard>
+    <div hlmCardHeader>
+      <h2 hlmCardTitle i18n="@@localeSelectPlaceholder">语言</h2>
+    </div>
+    <div hlmCardContent>
+      <div hlmField>
+        <label hlmFieldLabel i18n="@@localeSelectPlaceholder">语言</label>
+        <hlm-select
+          [value]="currentLocale"
+          (valueChange)="setLocale($event)"
+        >
+          <hlm-select-trigger class="w-full sm:w-64">
+            <hlm-select-value placeholder="选择语言" i18n-placeholder="@@localeSelectPlaceholder" />
+          </hlm-select-trigger>
+          <hlm-select-content *hlmSelectPortal>
+            @for (option of localeOptions; track option.value) {
+              <hlm-select-item [value]="option.value">
+                {{ option.label }}
+              </hlm-select-item>
+            }
+          </hlm-select-content>
+        </hlm-select>
+      </div>
+    </div>
+  </section>
+
+  <section hlmCard>
+    <div hlmCardHeader>
+      <h2 hlmCardTitle i18n="@@themeMode">主题</h2>
+    </div>
+    <div hlmCardContent>
+      <div
+        hlmToggleGroup
+        type="single"
+        variant="outline"
+        [value]="themeService.currentMode()"
+        (valueChange)="setTheme($event)"
+        aria-label="Theme"
       >
-        @for (option of localeOptions; track option.value) {
-          <mat-option [value]="option.value">{{ option.label }}</mat-option>
+        @for (option of themeOptions; track option.mode) {
+          <button hlmToggleGroupItem [value]="option.mode">
+            <app-icon>{{ option.icon }}</app-icon>
+            <span>{{ option.label }}</span>
+          </button>
         }
-      </mat-select>
-    </mat-form-field>
+      </div>
+    </div>
   </section>
-
-  <section >
-    <h3 class="form-section-title" i18n="@@themeMode">主题</h3>
-    
-    <mat-button-toggle-group
-      [ngModel]="themeService.currentMode()"
-      (ngModelChange)="themeService.setMode($event)"
-      hideSingleSelectionIndicator="true"
-    >
-      @for (option of themeOptions; track option.mode) {
-        <mat-button-toggle [value]="option.mode">
-          <app-icon>{{ option.icon }}</app-icon>
-          <span>{{ option.label }}</span>
-        </mat-button-toggle>
-      }
-    </mat-button-toggle-group>
-  </section>
-
 </div>

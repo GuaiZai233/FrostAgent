@@ -10,18 +10,16 @@ import {
   effect,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatInputModule } from '@angular/material/input';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
 import { toast } from '@spartan-ng/brain/sonner';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmCheckbox } from '@spartan-ng/helm/checkbox';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
+import { HlmTabsImports } from '@spartan-ng/helm/tabs';
 import { ThemeService } from '../shared/theme.service';
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -43,16 +41,15 @@ import { maskSecret } from '../shared/dashboard-utils';
   selector: 'app-backend-settings',
   imports: [
     FormsModule,
-    MatButtonModule,
-    MatTooltipModule,
-    MatCardModule,
-    MatCheckboxModule,
-    MatFormFieldModule,
-    MatInputModule,
-    MatProgressBarModule,
-    MatTableModule,
-    MatTabsModule,
-    MatToolbarModule,
+    HlmButton,
+    HlmCardImports,
+    HlmCheckbox,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    HlmSpinner,
+    HlmTableImports,
+    HlmTabsImports,
     RouterModule,
     AppIconComponent,
   ],
@@ -80,8 +77,6 @@ export class BackendSettingsComponent
   readonly editingKey = signal('');
   readonly editingValue = signal('');
   readonly editingIsSecret = signal(false);
-  readonly displayedColumns = ['key', 'value', 'actions'];
-
   constructor() {
     effect(() => {
       const isDark = this.themeService.effectiveMode() === 'dark';
