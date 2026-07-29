@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -92,11 +93,18 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 		}, messages...)
 	}
 
-	result := e.runLoop(context.Background(), messages)
+	result, memoryWritten := e.runLoopWithResult(context.Background(), messages)
 
 	// 异步提取记忆（不阻塞对话）
 	if userID != "" && e.MemoryWriter != nil {
-		go e.MemoryWriter.Extract(userID, convertToCoreMessages(messages))
+		if memoryWritten {
+			logs.Info(logs.SYSTEM, "本轮已通过 memory 工具写入记忆，跳过自动提取")
+		} else {
+			currentTurn := extractCurrentTurn(messages)
+			if len(currentTurn) > 0 {
+				go e.MemoryWriter.Extract(userID, currentTurn)
+			}
+		}
 	}
 
 	return result
@@ -112,6 +120,17 @@ func extractLastUserMessage(messages []ChatMessage) string {
 		}
 	}
 	return ""
+}
+
+// extractCurrentTurn limits automatic memory extraction to the latest user
+// message so facts from older session history are not extracted repeatedly.
+func extractCurrentTurn(messages []ChatMessage) []core.ChatMessage {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return convertToCoreMessages(messages[i : i+1])
+		}
+	}
+	return nil
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
@@ -145,6 +164,14 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 
 // runLoop 核心循环逻辑
 func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
+	result, _ := e.runLoopWithResult(ctx, messages)
+	return result
+}
+
+// runLoopWithResult executes the agent loop and reports side effects that
+// callers need to coordinate with post-processing.
+func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) (string, bool) {
+	memoryWritten := false
 	var modelTools []core.Tool
 	for _, t := range e.ToolRegistry {
 		modelTools = append(modelTools, core.Tool{
@@ -169,7 +196,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 		}
 		resp, err := e.Provider.Chat(context.Background(), chatReq)
 		if err != nil {
-			return fmt.Sprintf("LLM调用失败: %v", err)
+			return fmt.Sprintf("LLM调用失败: %v", err), memoryWritten
 		}
 
 		// Map back to internal message for now to maintain compatibility
@@ -197,7 +224,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 		if len(responseMsg.ToolCalls) == 0 {
 			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
-			return contentStr
+			return contentStr, memoryWritten
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
@@ -211,6 +238,9 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 					toolResult = fmt.Sprintf("工具执行失败: %v", err)
 				} else {
 					toolResult = res
+					if isSuccessfulMemoryWrite(tc, res) {
+						memoryWritten = true
+					}
 				}
 			} else {
 				toolResult = "工具未找到"
@@ -232,7 +262,23 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 			messages = append(messages, toolMsg)
 		}
 	}
-	return "达到最大迭代次数，未能得出最终答案"
+	return "达到最大迭代次数，未能得出最终答案", memoryWritten
+}
+
+// isSuccessfulMemoryWrite distinguishes a completed memory write from the
+// memory tool's search/list actions and from writes rejected by the tool.
+func isSuccessfulMemoryWrite(toolCall ToolCall, result string) bool {
+	if toolCall.Function.Name != "memory" || result != "记忆已写入" {
+		return false
+	}
+
+	var params struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
+		return false
+	}
+	return params.Action == "write"
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
