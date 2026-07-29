@@ -40,15 +40,15 @@ export interface AddMemoryResult {
 
     <div class="grid gap-4 py-2">
       <div hlmField>
-        <label hlmFieldLabel for="memory-owner" i18n="@@memoryOwner">
-          归属者
+        <label hlmFieldLabel for="memory-owner">
+          <span i18n="@@memoryOwner">归属者</span>
         </label>
         <input id="memory-owner" hlmInput [(ngModel)]="owner" placeholder="webui" />
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel for="memory-content" i18n="@@memoryContent">
-          内容
+        <label hlmFieldLabel for="memory-content">
+          <span i18n="@@memoryContent">内容</span>
         </label>
         <textarea
           id="memory-content"
@@ -89,16 +89,15 @@ export interface AddMemoryResult {
     </div>
 
     <div hlmDialogFooter>
-      <button hlmBtn variant="outline" (click)="close()" i18n="@@cancel">
-        取消
+      <button hlmBtn variant="outline" (click)="close()">
+        <span i18n="@@cancel">取消</span>
       </button>
       <button
         hlmBtn
         [disabled]="!content.trim()"
         (click)="save()"
-        i18n="@@save"
       >
-        保存
+        <span i18n="@@save">保存</span>
       </button>
     </div>
   `,

@@ -75,12 +75,8 @@
                     @if (editingKey() === env.key) {
                       <div class="grid min-w-64 gap-2 py-2">
                         <div hlmField>
-                          <label
-                            hlmFieldLabel
-                            [for]="'env-edit-' + env.key"
-                            i18n="@@value"
-                          >
-                            Value
+                          <label hlmFieldLabel [for]="'env-edit-' + env.key">
+                            <span i18n="@@value">Value</span>
                           </label>
                           <input
                             hlmInput

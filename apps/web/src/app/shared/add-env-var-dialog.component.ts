@@ -73,8 +73,8 @@ import { AppIconComponent } from './app-icon.component';
     </div>
 
     <div hlmDialogFooter>
-      <button hlmBtn variant="outline" (click)="close()" i18n="@@cancel">
-        取消
+      <button hlmBtn variant="outline" (click)="close()">
+        <span i18n="@@cancel">取消</span>
       </button>
       <button
         hlmBtn

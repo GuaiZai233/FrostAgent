@@ -66,8 +66,8 @@ export interface MemoryDetailDialogData {
 
     <div class="grid max-h-[55vh] gap-4 overflow-y-auto py-2 pe-1">
       <div hlmField>
-        <label hlmFieldLabel for="detail-content" i18n="@@memoryContent">
-          内容
+        <label hlmFieldLabel for="detail-content">
+          <span i18n="@@memoryContent">内容</span>
         </label>
         <textarea
           id="detail-content"
@@ -121,10 +121,12 @@ export interface MemoryDetailDialogData {
     </div>
 
     <div hlmDialogFooter>
-      <button hlmBtn variant="outline" (click)="close()" i18n="@@cancel">
-        取消
+      <button hlmBtn variant="outline" (click)="close()">
+        <span i18n="@@cancel">取消</span>
       </button>
-      <button hlmBtn (click)="save()" i18n="@@save">保存</button>
+      <button hlmBtn (click)="save()">
+        <span i18n="@@save">保存</span>
+      </button>
     </div>
   `,
 })

@@ -2,14 +2,6 @@
 <xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
   <file source-language="zh-Hans" target-language="en-US" datatype="plaintext" original="ng2.template">
     <body>
-      <trans-unit id="addFab" datatype="html">
-        <source>新增...</source>
-        <target>Add...</target>
-        <context-group purpose="location">
-          <context context-type="sourcefile">apps/web/src/app/app.html</context>
-          <context context-type="linenumber">13,14</context>
-        </context-group>
-      </trans-unit>
       <trans-unit id="EnvVar" datatype="html">
         <source>环境变量</source>
         <target>Environment Variables</target>
@@ -48,22 +40,6 @@
         <context-group purpose="location">
           <context context-type="sourcefile">apps/web/src/app/app.ts</context>
           <context context-type="linenumber">76</context>
-        </context-group>
-      </trans-unit>
-      <trans-unit id="switchToChinese" datatype="html">
-        <source>简体中文</source>
-        <target>简体中文</target>
-        <context-group purpose="location">
-          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
-          <context context-type="linenumber">110</context>
-        </context-group>
-      </trans-unit>
-      <trans-unit id="switchToEnglish" datatype="html">
-        <source>English</source>
-        <target>English</target>
-        <context-group purpose="location">
-          <context context-type="sourcefile">apps/web/src/app/app.ts</context>
-          <context context-type="linenumber">111</context>
         </context-group>
       </trans-unit>
       <trans-unit id="refreshTooltip" datatype="html">
@@ -510,18 +486,6 @@
           <context context-type="linenumber">49,50</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="close" datatype="html">
-        <source>关闭</source>
-        <target>Close</target>
-        <context-group purpose="location">
-          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
-          <context context-type="linenumber">84</context>
-        </context-group>
-        <context-group purpose="location">
-          <context context-type="sourcefile">apps/web/src/app/shared/add-env-var-dialog.component.ts</context>
-          <context context-type="linenumber">91</context>
-        </context-group>
-      </trans-unit>
       <trans-unit id="logLevelAll" datatype="html">
         <source>全部</source>
         <target>All</target>
@@ -942,17 +906,33 @@
         <source>导入失败: {$PH}</source>
         <target>Import failed: {$PH}</target>
       </trans-unit>
-      <trans-unit id="dismiss" datatype="html">
-        <source>关闭</source>
-        <target>Dismiss</target>
+      <trans-unit id="loading" datatype="html">
+        <source>加载中</source>
+        <target>Loading</target>
       </trans-unit>
-      <trans-unit id="save" datatype="html">
-        <source>保存</source>
-        <target>Save</target>
+      <trans-unit id="paginationTotal" datatype="html">
+        <source>共 <x id="INTERPOLATION" equiv-text="{{ total() }}"/> 条</source>
+        <target>Total: <x id="INTERPOLATION" equiv-text="{{ total() }}"/></target>
       </trans-unit>
-      <trans-unit id="cancel" datatype="html">
-        <source>取消</source>
-        <target>Cancel</target>
+      <trans-unit id="paginationPage" datatype="html">
+        <source>第 <x id="INTERPOLATION" equiv-text="{{ pageIndex() + 1 }}"/> 页</source>
+        <target>Page <x id="INTERPOLATION" equiv-text="{{ pageIndex() + 1 }}"/></target>
+      </trans-unit>
+      <trans-unit id="previousPage" datatype="html">
+        <source> 上一页 </source>
+        <target> Previous </target>
+      </trans-unit>
+      <trans-unit id="nextPage" datatype="html">
+        <source> 下一页 </source>
+        <target> Next </target>
+      </trans-unit>
+      <trans-unit id="noEnvVars" datatype="html">
+        <source>暂无环境变量。</source>
+        <target>No environment variables.</target>
+      </trans-unit>
+      <trans-unit id="addEnvVarDescription" datatype="html">
+        <source> 添加或覆盖后端使用的环境变量。 </source>
+        <target> Add or overwrite an environment variable used by the backend. </target>
       </trans-unit>
     </body>
   </file>
