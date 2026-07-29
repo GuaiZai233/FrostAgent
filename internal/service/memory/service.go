@@ -3,6 +3,7 @@ package memsvc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -396,8 +397,10 @@ func (s *Service) indexEntry(ctx context.Context, entry memory.MemoryEntry) {
 	}
 	if err := s.vectors.IndexEntry(ctx, entry); err != nil {
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("同步记忆向量失败 (id: %s): %v", entry.ID, err))
-		if removeErr := s.vectors.Remove(entry.ID); removeErr != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("移除过期记忆向量失败 (id: %s): %v", entry.ID, removeErr))
+		if !errors.Is(err, memory.ErrVectorIndexRebuildRequired) {
+			if removeErr := s.vectors.Remove(entry.ID); removeErr != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("移除过期记忆向量失败 (id: %s): %v", entry.ID, removeErr))
+			}
 		}
 	}
 }

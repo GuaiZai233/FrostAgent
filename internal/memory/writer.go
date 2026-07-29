@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -175,5 +176,10 @@ func (w *Writer) indexEntry(ctx context.Context, entry MemoryEntry) {
 	}
 	if err := w.vs.IndexEntry(ctx, entry); err != nil {
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("记忆向量索引失败 (id: %s): %v", entry.ID, err))
+		if !errors.Is(err, ErrVectorIndexRebuildRequired) {
+			if removeErr := w.vs.Remove(entry.ID); removeErr != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("移除过期记忆向量失败 (id: %s): %v", entry.ID, removeErr))
+			}
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -13,9 +14,13 @@ import (
 )
 
 const (
-	currentVectorIndexVersion = 1
+	currentVectorIndexVersion = 2
 	defaultMinSimilarity      = 0.5
 )
+
+// ErrVectorIndexRebuildRequired indicates that the on-disk index cannot be
+// safely mixed with vectors produced by the current schema or embedding model.
+var ErrVectorIndexRebuildRequired = errors.New("vector index rebuild required")
 
 // Embedder abstracts embedding generation for semantic search.
 // Implementations call an external embedding API (e.g. OpenAI /embeddings).
@@ -62,12 +67,16 @@ func NewVectorStore(path string, embedder Embedder) *VectorStore {
 // SetIndexIdentity records the embedding model/configuration used to create
 // vectors so a model change triggers a rebuild even when dimensions match.
 func (v *VectorStore) SetIndexIdentity(identity string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.indexIdentity = identity
 }
 
 // SetMinSimilarity configures the minimum cosine similarity accepted by Search.
 func (v *VectorStore) SetMinSimilarity(minSimilarity float32) {
 	if minSimilarity >= -1 && minSimilarity <= 1 {
+		v.mu.Lock()
+		defer v.mu.Unlock()
 		v.minSimilarity = minSimilarity
 	}
 }
@@ -77,6 +86,10 @@ func (v *VectorStore) SetMinSimilarity(minSimilarity float32) {
 func (v *VectorStore) Index(ctx context.Context, memoryID, content string) error {
 	if v.embedder == nil {
 		return fmt.Errorf("vector store has no embedder")
+	}
+	indexIdentity, _, err := v.inspectIndex()
+	if err != nil {
+		return err
 	}
 	vecs, err := v.embedder.Embed(ctx, []string{content})
 	if err != nil {
@@ -92,13 +105,29 @@ func (v *VectorStore) Index(ctx context.Context, memoryID, content string) error
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
+	if v.indexIdentity != indexIdentity {
+		return fmt.Errorf(
+			"%w: index model changed from %q to %q during indexing",
+			ErrVectorIndexRebuildRequired,
+			indexIdentity,
+			v.indexIdentity,
+		)
+	}
 	file, err := v.load()
 	if err != nil {
 		return err
 	}
-	if file.Dimension != 0 && file.Dimension != len(vecs[0]) {
+	if err := v.validateIndexFile(file); err != nil {
+		return err
+	}
+	if len(file.Records) == 0 {
+		file.Version = currentVectorIndexVersion
+		file.Model = indexIdentity
+		file.Dimension = len(vecs[0])
+	} else if file.Dimension != len(vecs[0]) {
 		return fmt.Errorf(
-			"vector dimension changed from %d to %d; rebuild required",
+			"%w: vector dimension changed from %d to %d",
+			ErrVectorIndexRebuildRequired,
 			file.Dimension,
 			len(vecs[0]),
 		)
@@ -120,11 +149,6 @@ func (v *VectorStore) Index(ctx context.Context, memoryID, content string) error
 	if !replaced {
 		file.Records = append(file.Records, rec)
 	}
-	if file.Dimension == 0 && len(vecs[0]) > 0 {
-		file.Dimension = len(vecs[0])
-	}
-	file.Version = currentVectorIndexVersion
-	file.Model = v.indexIdentity
 
 	return v.save(file)
 }
@@ -142,6 +166,12 @@ func (v *VectorStore) NeedsRebuild(entries []MemoryEntry) (bool, error) {
 
 	file, err := v.load()
 	if err != nil {
+		return false, err
+	}
+	if err := v.validateIndexFile(file); err != nil {
+		if errors.Is(err, ErrVectorIndexRebuildRequired) {
+			return true, nil
+		}
 		return false, err
 	}
 	if file.Version != currentVectorIndexVersion ||
@@ -170,14 +200,25 @@ func (v *VectorStore) Rebuild(ctx context.Context, entries []MemoryEntry) error 
 		return fmt.Errorf("vector store has no embedder")
 	}
 
+	v.mu.RLock()
+	indexIdentity := v.indexIdentity
+	v.mu.RUnlock()
 	file := &vectorFile{
 		Version: currentVectorIndexVersion,
-		Model:   v.indexIdentity,
+		Model:   indexIdentity,
 		Records: make([]vectorRecord, 0, len(entries)),
 	}
 	if len(entries) == 0 {
 		v.mu.Lock()
 		defer v.mu.Unlock()
+		if v.indexIdentity != indexIdentity {
+			return fmt.Errorf(
+				"%w: index model changed from %q to %q during rebuild",
+				ErrVectorIndexRebuildRequired,
+				indexIdentity,
+				v.indexIdentity,
+			)
+		}
 		return v.save(file)
 	}
 
@@ -211,6 +252,14 @@ func (v *VectorStore) Rebuild(ctx context.Context, entries []MemoryEntry) error 
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.indexIdentity != indexIdentity {
+		return fmt.Errorf(
+			"%w: index model changed from %q to %q during rebuild",
+			ErrVectorIndexRebuildRequired,
+			indexIdentity,
+			v.indexIdentity,
+		)
+	}
 	return v.save(file)
 }
 
@@ -223,6 +272,13 @@ func (v *VectorStore) Search(ctx context.Context, query string, limit int) ([]st
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
+	indexIdentity, hasRecords, err := v.inspectIndex()
+	if err != nil {
+		return nil, err
+	}
+	if !hasRecords {
+		return nil, nil
+	}
 	vecs, err := v.embedder.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -230,17 +286,39 @@ func (v *VectorStore) Search(ctx context.Context, query string, limit int) ([]st
 	if len(vecs) == 0 {
 		return nil, fmt.Errorf("embedder returned no query vector")
 	}
+	if len(vecs[0]) == 0 {
+		return nil, fmt.Errorf("embedder returned an empty query vector")
+	}
 	queryVec := vecs[0]
 
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
+	if v.indexIdentity != indexIdentity {
+		return nil, fmt.Errorf(
+			"%w: index model changed from %q to %q during search",
+			ErrVectorIndexRebuildRequired,
+			indexIdentity,
+			v.indexIdentity,
+		)
+	}
 	file, err := v.load()
 	if err != nil {
 		return nil, err
 	}
+	if err := v.validateIndexFile(file); err != nil {
+		return nil, err
+	}
 	if len(file.Records) == 0 {
 		return nil, nil
+	}
+	if file.Dimension != len(queryVec) {
+		return nil, fmt.Errorf(
+			"%w: query vector dimension is %d, index dimension is %d",
+			ErrVectorIndexRebuildRequired,
+			len(queryVec),
+			file.Dimension,
+		)
 	}
 
 	type scored struct {
@@ -327,6 +405,64 @@ func (v *VectorStore) save(f *vectorFile) error {
 		return fmt.Errorf("marshal vectors: %w", err)
 	}
 	return os.WriteFile(v.path, data, 0644)
+}
+
+func (v *VectorStore) inspectIndex() (identity string, hasRecords bool, err error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	file, err := v.load()
+	if err != nil {
+		return "", false, err
+	}
+	if err := v.validateIndexFile(file); err != nil {
+		return "", false, err
+	}
+	return v.indexIdentity, len(file.Records) > 0, nil
+}
+
+func (v *VectorStore) validateIndexFile(file *vectorFile) error {
+	if len(file.Records) == 0 {
+		return nil
+	}
+	if file.Version != currentVectorIndexVersion {
+		return fmt.Errorf(
+			"%w: index version is %d, expected %d",
+			ErrVectorIndexRebuildRequired,
+			file.Version,
+			currentVectorIndexVersion,
+		)
+	}
+	if file.Model != v.indexIdentity {
+		return fmt.Errorf(
+			"%w: index model is %q, expected %q",
+			ErrVectorIndexRebuildRequired,
+			file.Model,
+			v.indexIdentity,
+		)
+	}
+	if file.Dimension <= 0 {
+		return fmt.Errorf("%w: index dimension is missing", ErrVectorIndexRebuildRequired)
+	}
+	for _, record := range file.Records {
+		if record.Fingerprint == "" {
+			return fmt.Errorf(
+				"%w: vector %s has no content fingerprint",
+				ErrVectorIndexRebuildRequired,
+				record.ID,
+			)
+		}
+		if len(record.Vector) != file.Dimension {
+			return fmt.Errorf(
+				"%w: vector %s has dimension %d, expected %d",
+				ErrVectorIndexRebuildRequired,
+				record.ID,
+				len(record.Vector),
+				file.Dimension,
+			)
+		}
+	}
+	return nil
 }
 
 func entryIndexText(entry MemoryEntry) string {

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"container/heap"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +17,38 @@ import (
 type Store struct {
 	path string
 	mu   sync.RWMutex
+}
+
+type searchHit struct {
+	index int
+	score float64
+}
+
+// searchHitHeap keeps the worst selected result at the root. Lower scores are
+// worse; for equal scores, later insertion order is worse.
+type searchHitHeap []searchHit
+
+func (h searchHitHeap) Len() int { return len(h) }
+
+func (h searchHitHeap) Less(i, j int) bool {
+	if h[i].score != h[j].score {
+		return h[i].score < h[j].score
+	}
+	return h[i].index > h[j].index
+}
+
+func (h searchHitHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *searchHitHeap) Push(value any) {
+	*h = append(*h, value.(searchHit))
+}
+
+func (h *searchHitHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
 }
 
 // NewStore creates a new file-based memory store.
@@ -93,32 +126,65 @@ func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {
 		return brain.Entries, nil
 	}
 
-	type scoredEntry struct {
-		entry MemoryEntry
-		score float64
+	// A bounded search only needs the best k hits. Keep those in a min-heap so
+	// recall with a small limit does not sort every matching memory.
+	if limit > 0 && limit < len(brain.Entries) {
+		hits := make(searchHitHeap, 0, limit)
+		heap.Init(&hits)
+		for index, entry := range brain.Entries {
+			score := entryScore(entry, terms)
+			if score <= 0 {
+				continue
+			}
+			candidate := searchHit{index: index, score: score}
+			if hits.Len() < limit {
+				heap.Push(&hits, candidate)
+				continue
+			}
+			if betterSearchHit(candidate, hits[0]) {
+				hits[0] = candidate
+				heap.Fix(&hits, 0)
+			}
+		}
+
+		sort.Slice(hits, func(i, j int) bool {
+			return betterSearchHit(hits[i], hits[j])
+		})
+		results := make([]MemoryEntry, 0, len(hits))
+		for _, hit := range hits {
+			results = append(results, brain.Entries[hit.index])
+		}
+		return results, nil
 	}
 
-	var scored []scoredEntry
-	for _, entry := range brain.Entries {
-		sc := entryScore(entry, terms)
-		if sc > 0 {
-			scored = append(scored, scoredEntry{entry: entry, score: sc})
+	var hits []searchHit
+	for index, entry := range brain.Entries {
+		score := entryScore(entry, terms)
+		if score > 0 {
+			hits = append(hits, searchHit{index: index, score: score})
 		}
 	}
 
 	// Sort by score descending (stable to preserve insertion order for ties)
-	sort.SliceStable(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+	sort.SliceStable(hits, func(i, j int) bool {
+		return hits[i].score > hits[j].score
 	})
 
-	results := make([]MemoryEntry, 0, len(scored))
-	for _, se := range scored {
-		results = append(results, se.entry)
+	results := make([]MemoryEntry, 0, len(hits))
+	for _, hit := range hits {
+		results = append(results, brain.Entries[hit.index])
 		if limit > 0 && len(results) >= limit {
 			break
 		}
 	}
 	return results, nil
+}
+
+func betterSearchHit(a, b searchHit) bool {
+	if a.score != b.score {
+		return a.score > b.score
+	}
+	return a.index < b.index
 }
 
 // splitTerms separates Han and non-Han words so mixed queries such as
