@@ -19,67 +19,74 @@ func NewReader(store *Store, vs *VectorStore, limit int) *Reader {
 	return &Reader{store: store, vs: vs, limit: limit}
 }
 
-// Recall searches the unified brain using hybrid search (semantic + keyword).
-// Semantic results are ranked by cosine similarity; keyword results fill remaining
-// slots by content/tag matching. The Gateway is responsible for owner/visibility filtering.
+// Recall searches the unified brain using hybrid search (keyword + semantic).
+// Deterministic content/tag matches are ranked first; semantic results that meet
+// the vector threshold fill the remaining slots. The Gateway is responsible for
+// owner/visibility filtering.
 func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEntry, error) {
-	// Phase 1: semantic search (if vector store is configured)
 	seen := make(map[string]bool)
 	var results []MemoryEntry
 
-	if r.vs != nil {
-		ids, err := r.vs.Search(ctx, currentMessage, r.limit)
-		if err == nil && len(ids) > 0 {
-			all, err := r.store.ListAll()
-			if err != nil {
-				return nil, err
+	// Phase 1: ranked keyword matches always get priority.
+	keywordResults, keywordErr := r.store.Search(currentMessage, r.limit)
+	if keywordErr == nil {
+		for _, entry := range keywordResults {
+			results = append(results, entry)
+			seen[entry.ID] = true
+		}
+	}
+	if r.limit > 0 && len(results) >= r.limit {
+		return results[:r.limit], nil
+	}
+
+	// Phase 2: semantic matches above the similarity threshold fill remaining slots.
+	if r.vs == nil {
+		return results, keywordErr
+	}
+
+	remaining := r.limit
+	if remaining > 0 {
+		remaining -= len(results)
+	}
+	ids, vectorErr := r.vs.Search(ctx, currentMessage, remaining)
+	if vectorErr == nil && len(ids) > 0 {
+		all, err := r.store.ListAll()
+		if err != nil {
+			if len(results) > 0 {
+				return results, nil
 			}
-			// Build a lookup map for O(1) access
-			entryMap := make(map[string]MemoryEntry, len(all))
-			for _, e := range all {
-				entryMap[e.ID] = e
+			return nil, err
+		}
+		entryMap := make(map[string]MemoryEntry, len(all))
+		for _, entry := range all {
+			entryMap[entry.ID] = entry
+		}
+		for _, id := range ids {
+			if seen[id] {
+				continue
 			}
-			for _, id := range ids {
-				if e, ok := entryMap[id]; ok {
-					results = append(results, e)
-					seen[id] = true
-				}
+			entry, ok := entryMap[id]
+			if !ok {
+				continue
+			}
+			results = append(results, entry)
+			seen[id] = true
+			if r.limit > 0 && len(results) >= r.limit {
+				break
 			}
 		}
-		// If we have enough results (or unlimited and have some), return early
-		if r.limit > 0 && len(results) >= r.limit {
-			return results[:r.limit], nil
-		}
-		// Unlimited mode: always fall through to keyword to catch non-indexed entries
 	}
 
-	// Phase 2: keyword fallback — fill remaining slots
-	need := r.limit
-	if need == 0 {
-		need = 0 // unlimited, collect all
-	} else {
-		need -= len(results)
-		if need <= 0 {
-			return results, nil
-		}
+	if len(results) > 0 {
+		return results, nil
 	}
-
-	kwResults, err := r.store.Search(currentMessage, need)
-	if err != nil {
-		// If semantic search already returned something, return it best-effort
-		if len(results) > 0 {
-			return results, nil
-		}
-		return nil, err
+	if keywordErr != nil {
+		return nil, keywordErr
 	}
-
-	for _, e := range kwResults {
-		if seen[e.ID] {
-			continue
-		}
-		results = append(results, e)
-		seen[e.ID] = true
+	if vectorErr != nil {
+		// Vector search is optional; a failure with a healthy keyword store is
+		// equivalent to no semantic matches.
+		return nil, nil
 	}
-
 	return results, nil
 }

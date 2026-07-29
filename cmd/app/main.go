@@ -12,10 +12,12 @@ import (
 	memsvc "FrostAgent/internal/service/memory"
 	"FrostAgent/internal/service/settings"
 	"FrostAgent/internal/tools"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
@@ -27,7 +29,10 @@ import (
 var GlobalEngine *llm.Engine
 
 // 全局 memory store
-var globalStore *memory.Store
+var (
+	globalStore       *memory.Store
+	globalVectorStore *memory.VectorStore
+)
 
 const version = "0.1.0"
 
@@ -78,7 +83,37 @@ func init() {
 	if embedModel != "" {
 		embedder := openai.NewEmbedder(llmClient, embedModel)
 		vs = memory.NewVectorStore(vectorPath(), embedder)
-		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 向量检索已启用 (模型: %s)", embedModel))
+		vs.SetIndexIdentity(embedModel)
+		if rawThreshold := os.Getenv("MEMORY_VECTOR_MIN_SIMILARITY"); rawThreshold != "" {
+			threshold, err := strconv.ParseFloat(rawThreshold, 32)
+			if err != nil || threshold < -1 || threshold > 1 {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("忽略无效的 MEMORY_VECTOR_MIN_SIMILARITY: %s", rawThreshold))
+			} else {
+				vs.SetMinSimilarity(float32(threshold))
+			}
+		}
+
+		entries, listErr := globalStore.ListAll()
+		if listErr != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("读取记忆失败，已禁用向量检索: %v", listErr))
+			vs = nil
+		} else {
+			needsRebuild, checkErr := vs.NeedsRebuild(entries)
+			if checkErr != nil || needsRebuild {
+				if checkErr != nil {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("向量索引状态不可用，尝试重建: %v", checkErr))
+				}
+				if rebuildErr := vs.Rebuild(context.Background(), entries); rebuildErr != nil {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("向量索引重建失败，已降级为关键词检索: %v", rebuildErr))
+					vs = nil
+				} else {
+					logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 已重建 %d 条记忆的向量索引", len(entries)))
+				}
+			}
+		}
+		if vs != nil {
+			logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 向量检索已启用 (模型: %s)", embedModel))
+		}
 	} else {
 		logs.Info(logs.SYSTEM, "⚠ 向量检索未配置 (EMBEDDING_MODEL 未设置)，使用关键词检索")
 	}
@@ -91,6 +126,7 @@ func init() {
 	if vs != nil {
 		writer.SetVectorStore(vs)
 	}
+	globalVectorStore = vs
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
 
@@ -101,9 +137,6 @@ func init() {
 
 	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
-
-
-
 
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
@@ -145,7 +178,7 @@ func main() {
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)
 
-	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memsvc.New(globalStore))
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memsvc.New(globalStore, globalVectorStore))
 	mux.Handle(memoryPath, memoryHandler)
 
 	// 前端 SPA（兜底，放在最后）

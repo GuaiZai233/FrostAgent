@@ -7,21 +7,27 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/memory"
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 
 	"connectrpc.com/connect"
 )
 
 // Service implements frostagent.v1.MemoryServiceHandler.
 type Service struct {
-	store *memory.Store
+	store   *memory.Store
+	vectors *memory.VectorStore
 }
 
 // New creates a new MemoryService.
-func New(store *memory.Store) *Service {
-	return &Service{store: store}
+func New(store *memory.Store, vectorStores ...*memory.VectorStore) *Service {
+	service := &Service{store: store}
+	if len(vectorStores) > 0 {
+		service.vectors = vectorStores[0]
+	}
+	return service
 }
 
 // ListMemories returns a paginated list of memories, optionally filtered by owner.
@@ -53,18 +59,24 @@ func (s *Service) SearchMemories(
 	ctx context.Context,
 	req *connect.Request[v1.SearchMemoriesRequest],
 ) (*connect.Response[v1.SearchMemoriesResponse], error) {
-	query := req.Msg.GetQuery()
-	if query == "" {
+	query := strings.TrimSpace(req.Msg.GetQuery())
+	filterTags := normalizeTags(req.Msg.GetTags())
+	if query == "" && len(filterTags) == 0 {
 		return connect.NewResponse(&v1.SearchMemoriesResponse{}), nil
 	}
 
-	entries, err := s.store.Search(query, 0) // 0 = no limit
+	var entries []memory.MemoryEntry
+	var err error
+	if query == "" {
+		entries, err = s.store.ListAll()
+	} else {
+		entries, err = s.store.Search(query, 0) // 0 = no limit
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search memories: %w", err))
 	}
 
 	// Apply tag filter if provided
-	filterTags := req.Msg.GetTags()
 	if len(filterTags) > 0 {
 		entries = filterByTags(entries, filterTags)
 	}
@@ -117,6 +129,7 @@ func (s *Service) AddMemory(
 			Error: fmt.Sprintf("save failed: %v", err),
 		}), nil
 	}
+	s.indexEntry(ctx, entry)
 
 	return connect.NewResponse(&v1.AddMemoryResponse{
 		Memory: toProtoEntry(entry),
@@ -156,6 +169,7 @@ func (s *Service) UpdateMemory(
 			Error:   err.Error(),
 		}), nil
 	}
+	s.indexEntry(ctx, updated)
 
 	return connect.NewResponse(&v1.UpdateMemoryResponse{Success: true}), nil
 }
@@ -178,6 +192,11 @@ func (s *Service) DeleteMemory(
 			Success: false,
 			Error:   err.Error(),
 		}), nil
+	}
+	if s.vectors != nil {
+		if err := s.vectors.Remove(id); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("删除记忆向量失败 (id: %s): %v", id, err))
+		}
 	}
 	return connect.NewResponse(&v1.DeleteMemoryResponse{Success: true}), nil
 }
@@ -268,6 +287,17 @@ func (s *Service) ImportMemories(
 			Error: fmt.Sprintf("import failed: %v", err),
 		}), nil
 	}
+	if s.vectors != nil {
+		entries, listErr := s.store.ListAll()
+		if listErr != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("导入后读取记忆失败，无法重建向量索引: %v", listErr))
+		} else if rebuildErr := s.vectors.Rebuild(ctx, entries); rebuildErr != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("导入后重建向量索引失败: %v", rebuildErr))
+			if clearErr := s.vectors.Clear(); clearErr != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("清空过期向量索引失败: %v", clearErr))
+			}
+		}
+	}
 
 	return connect.NewResponse(&v1.ImportMemoriesResponse{
 		Imported: int32(imported),
@@ -332,19 +362,44 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 // filterByTags returns entries that match at least one of the given tags (OR logic).
 func filterByTags(entries []memory.MemoryEntry, tags []string) []memory.MemoryEntry {
 	tagSet := make(map[string]bool, len(tags))
-	for _, t := range tags {
-		tagSet[strings.ToLower(t)] = true
+	for _, tag := range tags {
+		tagSet[tag] = true
 	}
 	var filtered []memory.MemoryEntry
 	for _, e := range entries {
 		for _, et := range e.Tags {
-			if tagSet[strings.ToLower(et)] {
+			if tagSet[strings.ToLower(strings.TrimSpace(et))] {
 				filtered = append(filtered, e)
 				break
 			}
 		}
 	}
 	return filtered
+}
+
+func normalizeTags(tags []string) []string {
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag != "" && !seen[tag] {
+			normalized = append(normalized, tag)
+			seen[tag] = true
+		}
+	}
+	return normalized
+}
+
+func (s *Service) indexEntry(ctx context.Context, entry memory.MemoryEntry) {
+	if s.vectors == nil {
+		return
+	}
+	if err := s.vectors.IndexEntry(ctx, entry); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("同步记忆向量失败 (id: %s): %v", entry.ID, err))
+		if removeErr := s.vectors.Remove(entry.ID); removeErr != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("移除过期记忆向量失败 (id: %s): %v", entry.ID, removeErr))
+		}
+	}
 }
 
 // Ensure Service implements the interface at compile time.

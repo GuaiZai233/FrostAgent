@@ -69,15 +69,21 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 // RunMessagesWithUser 执行智能体的主循环（带记忆上下文）
 // userID 用于记忆系统的 Owner 过滤；传空则跳过记忆。
 func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) string {
+	return e.RunMessagesWithUserQuery(messages, userID, extractLastUserMessage(messages))
+}
+
+// RunMessagesWithUserQuery executes the agent loop with an explicit memory
+// recall query. Adapters should pass only user-visible text, excluding transport
+// metadata that must not affect memory search.
+func (e *Engine) RunMessagesWithUserQuery(messages []ChatMessage, userID string, recallQuery string) string {
 	e.CurrentUserID = userID
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 
 		// 召回 → 网关过滤 → 注入
-		if userID != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
-			lastUserMsg := extractLastUserMessage(messages)
-			raw, err := e.MemoryReader.Recall(context.Background(), lastUserMsg)
+		if userID != "" && recallQuery != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+			raw, err := e.MemoryReader.Recall(context.Background(), recallQuery)
 			if err == nil {
 				filtered := e.MemoryGateway.Filter(raw, userID)
 				if len(filtered) > 0 {

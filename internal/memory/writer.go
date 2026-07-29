@@ -173,8 +173,7 @@ func (w *Writer) indexEntry(ctx context.Context, entry MemoryEntry) {
 	if w.vs == nil {
 		return
 	}
-	parts := []string{entry.Content}
-	parts = append(parts, entry.Tags...)
-	text := strings.Join(parts, " ")
-	_ = w.vs.Index(ctx, entry.ID, text)
+	if err := w.vs.IndexEntry(ctx, entry); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("记忆向量索引失败 (id: %s): %v", entry.ID, err))
+	}
 }

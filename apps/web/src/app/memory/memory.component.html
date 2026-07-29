@@ -10,6 +10,10 @@
           <mat-icon>search</mat-icon>
         </button>
       </mat-form-field>
+      <mat-form-field appearance="outline" subscriptSizing="dynamic" class="search-field">
+        <mat-label i18n="@@memoryTagsCommaSeparated">标签（逗号分隔）</mat-label>
+        <input matInput [(ngModel)]="tagFilter" (keyup.enter)="search()" />
+      </mat-form-field>
       <button mat-stroked-button (click)="openAddDialog()" matTooltip="添加记忆">
         <mat-icon>add</mat-icon>
         <span i18n="@@addMemory">添加</span>

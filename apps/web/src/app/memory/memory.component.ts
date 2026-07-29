@@ -64,6 +64,7 @@ export class MemoryComponent implements OnInit {
   readonly sourceFilter = signal('');
   readonly visibilityFilter = signal('');
   readonly searchQuery = signal('');
+  readonly tagFilter = signal('');
   readonly selectedIds = signal<Set<string>>(new Set());
 
   readonly displayedColumns = [
@@ -90,6 +91,7 @@ export class MemoryComponent implements OnInit {
     this.sourceFilter.set('');
     this.visibilityFilter.set('');
     this.searchQuery.set('');
+    this.tagFilter.set('');
     this.selectedIds.set(new Set());
     await this.loadStats();
     await this.loadCurrentPage();
@@ -107,6 +109,7 @@ export class MemoryComponent implements OnInit {
     this.pageIndex.set(0);
     this.ownerFilter.set(owner);
     this.searchQuery.set('');
+    this.tagFilter.set('');
     await this.loadCurrentPage();
   }
 
@@ -326,8 +329,17 @@ export class MemoryComponent implements OnInit {
 
     try {
       const query = this.searchQuery();
-      if (query) {
-        const response = await this.api.searchMemories(query, this.pageSize(), this.pageTokens.current());
+      const tags = this.tagFilter()
+        .split(/[,，]/)
+        .map(tag => tag.trim())
+        .filter(Boolean);
+      if (query || tags.length > 0) {
+        const response = await this.api.searchMemories(
+          query,
+          this.pageSize(),
+          this.pageTokens.current(),
+          tags,
+        );
         this.memories.set(response.memories);
         this.nextToken.set(response.pagination?.pageToken ?? '');
         this.total.set(response.pagination?.total ?? response.memories.length);

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Store implements a file-based unified memory store.
@@ -120,38 +121,54 @@ func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {
 	return results, nil
 }
 
-// splitTerms splits a query string into individual search terms.
-// It splits on whitespace, commas, semicolons, and Chinese punctuation.
-// Empty terms are filtered out.
+// splitTerms separates Han and non-Han words so mixed queries such as
+// "maimai当前版本" can match both English and Chinese memory fields.
 func splitTerms(query string) []string {
-	var terms []string
-	// Replace common delimiters with spaces, then split on whitespace
-	for _, r := range query {
-		switch r {
-		case ',', '，', '、', '；', ';', '：', ':', '|', '/', '\\':
-			// treated as delimiters
-		default:
-			// keep as-is; strings.Fields will split on whitespace later
+	const (
+		termNone = iota
+		termHan
+		termWord
+	)
+
+	terms := make([]string, 0)
+	seen := make(map[string]bool)
+	var current []rune
+	currentKind := termNone
+
+	flush := func() {
+		if len(current) == 0 {
+			return
 		}
-	}
-	// Normalize delimiters to spaces, then split
-	normalized := strings.NewReplacer(
-		",", " ",
-		"，", " ",
-		"、", " ",
-		"；", " ",
-		";", " ",
-		"：", " ",
-		":", " ",
-		"|", " ",
-		"/", " ",
-		"\\", " ",
-	).Replace(query)
-	for _, term := range strings.Fields(normalized) {
-		if term != "" {
+		term := strings.ToLower(string(current))
+		if !seen[term] {
 			terms = append(terms, term)
+			seen[term] = true
 		}
+		current = current[:0]
 	}
+
+	for _, r := range query {
+		kind := termNone
+		switch {
+		case unicode.Is(unicode.Han, r):
+			kind = termHan
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			kind = termWord
+		}
+
+		if kind == termNone {
+			flush()
+			currentKind = termNone
+			continue
+		}
+		if currentKind != termNone && currentKind != kind {
+			flush()
+		}
+		current = append(current, r)
+		currentKind = kind
+	}
+	flush()
+
 	return terms
 }
 
@@ -168,17 +185,18 @@ func entryScore(entry MemoryEntry, terms []string) float64 {
 		if strings.Contains(contentLower, termLower) {
 			score += 1.0
 		}
+		var tagScore float64
 		for _, tag := range entry.Tags {
 			tagLower := strings.ToLower(tag)
 			if tagLower == termLower {
-				score += 2.0
-				break // tag exact match is the highest, no need to check substring
+				tagScore = 2.0
+				break
 			}
-			if strings.Contains(tagLower, termLower) {
-				score += 1.5
-				break // one match per term per tag group is enough
+			if tagScore < 1.5 && strings.Contains(tagLower, termLower) {
+				tagScore = 1.5
 			}
 		}
+		score += tagScore
 	}
 	return score
 }
