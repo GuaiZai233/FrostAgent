@@ -54,9 +54,7 @@ func (w *Writer) Write(owner string, content string, tags []string) error {
 	if err := w.store.Save(entry); err != nil {
 		return err
 	}
-	if w.vs != nil {
-		_ = w.vs.Index(context.Background(), entry.ID, content)
-	}
+	w.indexEntry(context.Background(), entry)
 	return nil
 }
 
@@ -153,9 +151,7 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 			logs.Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
 			continue
 		}
-		if w.vs != nil {
-			_ = w.vs.Index(ctx, entry.ID, e.Content)
-		}
+		w.indexEntry(ctx, entry)
 	}
 
 	if len(entries) > 0 {
@@ -169,4 +165,16 @@ func generateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return "mem_" + hex.EncodeToString(b)
+}
+
+// indexEntry indexes a memory entry in the vector store using content + tags.
+// This ensures that tag terms are also searchable via semantic search.
+func (w *Writer) indexEntry(ctx context.Context, entry MemoryEntry) {
+	if w.vs == nil {
+		return
+	}
+	parts := []string{entry.Content}
+	parts = append(parts, entry.Tags...)
+	text := strings.Join(parts, " ")
+	_ = w.vs.Index(ctx, entry.ID, text)
 }

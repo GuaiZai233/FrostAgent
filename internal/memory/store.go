@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,9 @@ func (s *Store) Save(entry MemoryEntry) error {
 }
 
 // Search performs a global keyword search across all memories.
-// Returns entries whose content or tags contain the query string (case-insensitive).
+// The query is split into individual terms (by whitespace and common delimiters)
+// and matched with OR logic: any term matching content or tags qualifies the entry.
+// Results are ranked by relevance score (more term matches + tag hits rank higher).
 func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -80,30 +83,114 @@ func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {
 		return nil, err
 	}
 
-	queryLower := strings.ToLower(query)
-	var results []MemoryEntry
+	terms := splitTerms(query)
+	if len(terms) == 0 {
+		// Empty query: return all entries (respect limit)
+		if limit > 0 && len(brain.Entries) > limit {
+			return brain.Entries[:limit], nil
+		}
+		return brain.Entries, nil
+	}
+
+	type scoredEntry struct {
+		entry MemoryEntry
+		score float64
+	}
+
+	var scored []scoredEntry
 	for _, entry := range brain.Entries {
-		if matchEntry(entry, queryLower) {
-			results = append(results, entry)
-			if limit > 0 && len(results) >= limit {
-				break
-			}
+		sc := entryScore(entry, terms)
+		if sc > 0 {
+			scored = append(scored, scoredEntry{entry: entry, score: sc})
+		}
+	}
+
+	// Sort by score descending (stable to preserve insertion order for ties)
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	results := make([]MemoryEntry, 0, len(scored))
+	for _, se := range scored {
+		results = append(results, se.entry)
+		if limit > 0 && len(results) >= limit {
+			break
 		}
 	}
 	return results, nil
 }
 
-// matchEntry checks if a memory entry matches the query.
-func matchEntry(entry MemoryEntry, queryLower string) bool {
-	if strings.Contains(strings.ToLower(entry.Content), queryLower) {
-		return true
-	}
-	for _, tag := range entry.Tags {
-		if strings.Contains(strings.ToLower(tag), queryLower) {
-			return true
+// splitTerms splits a query string into individual search terms.
+// It splits on whitespace, commas, semicolons, and Chinese punctuation.
+// Empty terms are filtered out.
+func splitTerms(query string) []string {
+	var terms []string
+	// Replace common delimiters with spaces, then split on whitespace
+	for _, r := range query {
+		switch r {
+		case ',', '，', '、', '；', ';', '：', ':', '|', '/', '\\':
+			// treated as delimiters
+		default:
+			// keep as-is; strings.Fields will split on whitespace later
 		}
 	}
-	return false
+	// Normalize delimiters to spaces, then split
+	normalized := strings.NewReplacer(
+		",", " ",
+		"，", " ",
+		"、", " ",
+		"；", " ",
+		";", " ",
+		"：", " ",
+		":", " ",
+		"|", " ",
+		"/", " ",
+		"\\", " ",
+	).Replace(query)
+	for _, term := range strings.Fields(normalized) {
+		if term != "" {
+			terms = append(terms, term)
+		}
+	}
+	return terms
+}
+
+// entryScore computes a relevance score for a memory entry against search terms.
+// Scoring:
+//   - Content substring match: +1.0 per matched term
+//   - Tag substring match: +1.5 per matched term (tags are more specific)
+//   - Tag exact match: +2.0 per matched term
+func entryScore(entry MemoryEntry, terms []string) float64 {
+	var score float64
+	contentLower := strings.ToLower(entry.Content)
+	for _, term := range terms {
+		termLower := strings.ToLower(term)
+		if strings.Contains(contentLower, termLower) {
+			score += 1.0
+		}
+		for _, tag := range entry.Tags {
+			tagLower := strings.ToLower(tag)
+			if tagLower == termLower {
+				score += 2.0
+				break // tag exact match is the highest, no need to check substring
+			}
+			if strings.Contains(tagLower, termLower) {
+				score += 1.5
+				break // one match per term per tag group is enough
+			}
+		}
+	}
+	return score
+}
+
+// matchEntry checks if a memory entry matches any of the search terms (OR logic).
+// Deprecated: use entryScore > 0 instead for ranked results.
+func matchEntry(entry MemoryEntry, query string) bool {
+	terms := splitTerms(query)
+	if len(terms) == 0 {
+		return true
+	}
+	return entryScore(entry, terms) > 0
 }
 
 // ListByOwner returns all memories owned by the specified user.

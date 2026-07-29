@@ -42,6 +42,7 @@ message ListMemoriesResponse {
 message SearchMemoriesRequest {
   string query = 1;
   Pagination pagination = 2;
+  repeated string tags = 3;   // filter by tags (match any)
 }
 
 message SearchMemoriesResponse {

@@ -28,7 +28,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				},
 				"query": map[string]any{
 					"type":        "string",
-					"description": "搜索关键词（action=search 时必填）",
+					"description": "搜索关键词。请将用户查询拆分为最核心的检索词，用空格分隔。例如用户说\"maimai当前版本\"，应传\"maimai 版本\"或\"maimai 舞萌\"。避免传完整句子。优先使用记忆中可能出现的原始术语、别名和同义词。",
 				},
 				"tags": map[string]any{
 					"type":        "array",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"FrostAgent/internal/memory"
@@ -46,6 +47,8 @@ func (s *Service) ListMemories(
 }
 
 // SearchMemories performs keyword search across all memories.
+// Supports optional tag filtering: if tags are provided, only entries matching
+// at least one tag are returned.
 func (s *Service) SearchMemories(
 	ctx context.Context,
 	req *connect.Request[v1.SearchMemoriesRequest],
@@ -58,6 +61,12 @@ func (s *Service) SearchMemories(
 	entries, err := s.store.Search(query, 0) // 0 = no limit
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search memories: %w", err))
+	}
+
+	// Apply tag filter if provided
+	filterTags := req.Msg.GetTags()
+	if len(filterTags) > 0 {
+		entries = filterByTags(entries, filterTags)
 	}
 
 	// Apply pagination
@@ -318,6 +327,24 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:  e.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+// filterByTags returns entries that match at least one of the given tags (OR logic).
+func filterByTags(entries []memory.MemoryEntry, tags []string) []memory.MemoryEntry {
+	tagSet := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		tagSet[strings.ToLower(t)] = true
+	}
+	var filtered []memory.MemoryEntry
+	for _, e := range entries {
+		for _, et := range e.Tags {
+			if tagSet[strings.ToLower(et)] {
+				filtered = append(filtered, e)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // Ensure Service implements the interface at compile time.

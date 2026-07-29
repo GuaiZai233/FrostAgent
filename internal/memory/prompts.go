@@ -5,7 +5,7 @@ package memory
 const extractPrompt = `请从以下对话中提取值得长期记住的信息。
 返回 JSON 数组，每条包含：
 - content: 自然语言描述（简洁、独立可理解）
-- tags: 关键词标签数组（2-5个）
+- tags: 关键词标签数组（2-5个），应包含常见别名和同义词（例如对"舞萌"应包含"maimai"、"乌蒙"等称呼）
 - visibility: "private"（个人信息）或 "public"（公共知识）
 
 提取标准：

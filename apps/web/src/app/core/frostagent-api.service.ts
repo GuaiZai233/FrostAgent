@@ -154,10 +154,12 @@ export class FrostagentApiService {
     query: string,
     pageSize: number,
     pageToken = '',
+    tags: string[] = [],
   ): Promise<SearchMemoriesResponse> {
     return this.memoryClient.searchMemories({
       query,
       pagination: { pageSize, pageToken },
+      tags,
     });
   }
 
