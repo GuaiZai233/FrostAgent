@@ -3,13 +3,13 @@ import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatChipsModule } from '@angular/material/chips';
-import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { timer, from, of, combineLatest } from 'rxjs';
 import { switchMap, catchError, shareReplay, map, startWith, takeUntil, share } from 'rxjs/operators';
 import { BotStatus } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { formatCount, formatStatus, formatUptime } from '../shared/dashboard-utils';
 
 @Component({
@@ -19,8 +19,8 @@ import { formatCount, formatStatus, formatUptime } from '../shared/dashboard-uti
     MatButtonModule,
     MatCardModule,
     MatChipsModule,
-    MatIconModule,
     MatProgressBarModule,
+    AppIconComponent,
   ],
   templateUrl: './overview.component.html',
   styleUrl: './overview.component.scss',

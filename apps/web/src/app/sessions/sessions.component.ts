@@ -2,7 +2,6 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
@@ -11,6 +10,7 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import type { SessionInfo } from '@frostagent/proto';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import {
   PageTokenStack,
   formatDateTime,
@@ -24,12 +24,12 @@ import {
     MatTooltipModule,
     MatCardModule,
     MatFormFieldModule,
-    MatIconModule,
     MatPaginatorModule,
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
     MatToolbarModule,
+    AppIconComponent,
   ],
   templateUrl: './sessions.component.html',
 })

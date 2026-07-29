@@ -1,6 +1,5 @@
 import { Component, OnDestroy, inject, signal, computed } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
@@ -8,6 +7,7 @@ import { MAT_NAVIGATION_SUITE_MODULES, MatNavigationSuiteScaffoldState, MatNavig
 import { Subscription, filter } from 'rxjs';
 import { MatExtendedFabCollapsedDirective } from '@fairylights-studio/ngx-m3-button';
 import { AddEnvVarDialogComponent } from './shared/add-env-var-dialog.component';
+import { AppIconComponent } from './shared/app-icon.component';
 import { ThemeService } from './shared/theme.service';
 
 @Component({
@@ -15,10 +15,10 @@ import { ThemeService } from './shared/theme.service';
     MAT_NAVIGATION_SUITE_MODULES,
     MatExtendedFabCollapsedDirective,
     MatButtonModule,
-    MatIconModule,
     MatMenuModule,
     MatDialogModule,
     RouterModule,
+    AppIconComponent,
   ],
   selector: 'app-root',
   templateUrl: './app.html',

@@ -24,15 +24,15 @@
             'status-chip-initializing': data.status === BotStatus.INITIALIZING,
             'status-chip-error': data.status === BotStatus.ERROR
           }">
-          <mat-icon matChipAvatar>sensors</mat-icon>
+          <app-icon matChipAvatar>sensors</app-icon>
           {{ formatStatus(data.status) }}
         </mat-chip>
         <mat-chip>
-          <mat-icon matChipAvatar>acute</mat-icon>
+          <app-icon matChipAvatar>acute</app-icon>
           {{ formatUptime(data.uptimeSeconds) }}
         </mat-chip>
         <mat-chip>
-          <mat-icon matChipAvatar>deployed_code</mat-icon>
+          <app-icon matChipAvatar>deployed_code</app-icon>
           {{ backendVersion(data.version || '-') }}
         </mat-chip>
       </mat-chip-set>
@@ -41,15 +41,15 @@
     <section style="margin-top: 16px;">
       <mat-chip-set aria-label="Bot statistics">
         <mat-chip>
-          <mat-icon matChipAvatar>mark_chat_read</mat-icon>
+          <app-icon matChipAvatar>mark_chat_read</app-icon>
           <span i18n="@@totalMessages">处理消息</span> {{ formatCount(data.totalMessagesProcessed) }}
         </mat-chip>
         <mat-chip>
-          <mat-icon matChipAvatar>forum</mat-icon>
+          <app-icon matChipAvatar>forum</app-icon>
           <span i18n="@@activeSessions">活跃会话</span> {{ formatCount(data.activeSessions) }}
         </mat-chip>
         <mat-chip>
-          <mat-icon matChipAvatar>psychology</mat-icon>
+          <app-icon matChipAvatar>psychology</app-icon>
           <span i18n="@@currentModel">当前模型</span> {{ data.currentModel || '-' }}
         </mat-chip>
       </mat-chip-set>
@@ -62,7 +62,7 @@
         @for (tool of data.tools; track tool.name) {
           <mat-card appearance="outlined">
             <mat-card-header>
-              <mat-icon mat-card-avatar>construction</mat-icon>
+              <app-icon mat-card-avatar>construction</app-icon>
               <mat-card-title>{{ tool.name }}</mat-card-title>
             </mat-card-header>
             <mat-card-content>{{ tool.description || '' }}</mat-card-content>

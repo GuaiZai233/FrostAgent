@@ -4,12 +4,12 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatDividerModule } from '@angular/material/divider';
-import { MatIconModule } from '@angular/material/icon';
 import { MatListModule } from '@angular/material/list';
 import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { RouterModule } from '@angular/router';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { ThemeService, ThemeMode } from '../shared/theme.service';
 
 @Component({
@@ -21,11 +21,11 @@ import { ThemeService, ThemeMode } from '../shared/theme.service';
     MatCardModule,
     MatDividerModule,
     MatFormFieldModule,
-    MatIconModule,
     MatListModule,
     MatSelectModule,
     MatToolbarModule,
     RouterModule,
+    AppIconComponent,
   ],
   templateUrl: './frontend-settings.component.html',
   styleUrl: './frontend-settings.component.scss',

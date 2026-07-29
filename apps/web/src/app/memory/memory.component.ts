@@ -7,7 +7,6 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
@@ -18,6 +17,7 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import type { MemoryEntry, GetMemoryStatsResponse } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import { formatDateTime, PageTokenStack } from '../shared/dashboard-utils';
 import { MemoryDetailDialog } from './memory-detail-dialog';
 import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
@@ -33,7 +33,6 @@ import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
     MatChipsModule,
     MatDialogModule,
     MatFormFieldModule,
-    MatIconModule,
     MatInputModule,
     MatPaginatorModule,
     MatProgressBarModule,
@@ -42,6 +41,7 @@ import { MemoryAddDialog, type AddMemoryResult } from './memory-add-dialog';
     MatTableModule,
     MatToolbarModule,
     MatTooltipModule,
+    AppIconComponent,
   ],
   templateUrl: './memory.component.html',
   styleUrl: './memory.component.scss',

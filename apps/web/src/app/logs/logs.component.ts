@@ -4,7 +4,6 @@ import { MatCardModule } from '@angular/material/card';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
@@ -19,6 +18,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmDialogData,
 } from '../shared/confirm-dialog.component';
+import { AppIconComponent } from '../shared/app-icon.component';
 import {
   PageTokenStack,
   formatDateTime,
@@ -35,13 +35,13 @@ import {
     MatTooltipModule,
     MatChipsModule,
     MatFormFieldModule,
-    MatIconModule,
     MatInputModule,
     MatPaginatorModule,
     MatProgressBarModule,
     MatSelectModule,
     MatTableModule,
     MatToolbarModule,
+    AppIconComponent,
   ],
   templateUrl: './logs.component.html',
 })

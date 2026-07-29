@@ -4,11 +4,11 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { Router } from '@angular/router';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from './app-icon.component';
 
 @Component({
   selector: 'app-add-env-var-dialog',
@@ -18,8 +18,8 @@ import { FrostagentApiService } from '../core/frostagent-api.service';
     MatCheckboxModule,
     MatDialogModule,
     MatFormFieldModule,
-    MatIconModule,
     MatInputModule,
+    AppIconComponent,
   ],
   template: `
     <h2 mat-dialog-title i18n="@@addEnvVar">新增环境变量</h2>
@@ -52,7 +52,7 @@ import { FrostagentApiService } from '../core/frostagent-api.service';
         [disabled]="!key().trim() || saving()"
         (click)="save()"
       >
-        <mat-icon>save</mat-icon>
+        <app-icon>save</app-icon>
         <span i18n="@@save">保存</span>
       </button>
     </mat-dialog-actions>

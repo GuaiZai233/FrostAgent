@@ -1,7 +1,7 @@
 <div class="page">
   <mat-toolbar >
     <a mat-icon-button routerLink="/settings" aria-label="Back to settings">
-      <mat-icon>arrow_back</mat-icon>
+      <app-icon>arrow_back</app-icon>
     </a>
     <span class="toolbar-title" i18n="@@frontendSettingsTitle">网页设置</span>
   </mat-toolbar>
@@ -32,7 +32,7 @@
     >
       @for (option of themeOptions; track option.mode) {
         <mat-button-toggle [value]="option.mode">
-          <mat-icon>{{ option.icon }}</mat-icon>
+          <app-icon>{{ option.icon }}</app-icon>
           <span>{{ option.label }}</span>
         </mat-button-toggle>
       }

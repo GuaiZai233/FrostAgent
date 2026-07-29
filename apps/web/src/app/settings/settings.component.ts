@@ -1,18 +1,18 @@
 import { Component, inject, computed } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
-import { MatIconModule } from '@angular/material/icon';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { Router, RouterModule } from '@angular/router';
+import { AppIconComponent } from '../shared/app-icon.component';
 
 @Component({
   selector: 'app-settings',
   imports: [
     MatButtonModule,
     MatCardModule,
-    MatIconModule,
     MatToolbarModule,
     RouterModule,
+    AppIconComponent,
   ],
   templateUrl: './settings.component.html',
 })

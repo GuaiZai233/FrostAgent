@@ -7,24 +7,24 @@
         <mat-label i18n="@@search">搜索</mat-label>
         <input matInput [(ngModel)]="searchQuery" (keyup.enter)="search()" />
         <button matSuffix mat-icon-button (click)="search()" matTooltip="搜索">
-          <mat-icon>search</mat-icon>
+          <app-icon>search</app-icon>
         </button>
       </mat-form-field>
       <button mat-stroked-button (click)="openAddDialog()" matTooltip="添加记忆">
-        <mat-icon>add</mat-icon>
+        <app-icon>add</app-icon>
         <span i18n="@@addMemory">添加</span>
       </button>
       <button mat-stroked-button (click)="exportMemories()" matTooltip="导出">
-        <mat-icon>file_download</mat-icon>
+        <app-icon>file_download</app-icon>
         <span i18n="@@export">导出</span>
       </button>
       <button mat-stroked-button (click)="importInput.click()" matTooltip="导入">
-        <mat-icon>file_upload</mat-icon>
+        <app-icon>file_upload</app-icon>
         <span i18n="@@import">导入</span>
       </button>
       <input #importInput type="file" accept=".json" (change)="importMemories($event)" style="display:none" />
       <button mat-icon-button (click)="refresh()" matTooltip="刷新">
-        <mat-icon>refresh</mat-icon>
+        <app-icon>refresh</app-icon>
       </button>
     </div>
   </div>
@@ -36,7 +36,7 @@
   @if (error()) {
     <mat-card appearance="outlined" class="error-card">
       <mat-card-content>
-        <mat-icon color="warn">error</mat-icon>
+        <app-icon class="text-destructive">error</app-icon>
         {{ error() }}
       </mat-card-content>
     </mat-card>
@@ -79,9 +79,9 @@
     <section class="filter-row">
       <mat-chip-set>
         <mat-chip highlighted (removed)="clearOwnerFilter()">
-          <mat-icon matChipAvatar>person</mat-icon>
+          <app-icon matChipAvatar>person</app-icon>
           {{ ownerFilter() }}
-          <button matChipRemove><mat-icon>cancel</mat-icon></button>
+          <button matChipRemove><app-icon>cancel</app-icon></button>
         </mat-chip>
       </mat-chip-set>
     </section>
@@ -92,7 +92,7 @@
     <section class="batch-bar">
       <span i18n="@@selectedCount">已选择 {{ selectedIds().size }} 条</span>
       <button mat-stroked-button color="warn" (click)="deleteSelected()">
-        <mat-icon>delete</mat-icon>
+        <app-icon>delete</app-icon>
         <span i18n="@@deleteSelected">删除所选</span>
       </button>
     </section>
@@ -114,7 +114,7 @@
         <ng-container matColumnDef="source">
           <th mat-header-cell *matHeaderCellDef i18n="@@memorySource">来源</th>
           <td mat-cell *matCellDef="let mem">
-            <mat-icon [matTooltip]="getSourceLabel(mem.source)">{{ getSourceIcon(mem.source) }}</mat-icon>
+            <app-icon [matTooltip]="getSourceLabel(mem.source)">{{ getSourceIcon(mem.source) }}</app-icon>
           </td>
         </ng-container>
 
@@ -122,7 +122,7 @@
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryOwner">归属者</th>
           <td mat-cell *matCellDef="let mem">
             <mat-chip-row (click)="filterByOwner(mem.owner)" class="owner-chip">
-              <mat-icon matChipAvatar>person</mat-icon>
+              <app-icon matChipAvatar>person</app-icon>
               {{ mem.owner }}
             </mat-chip-row>
           </td>
@@ -151,9 +151,9 @@
         <ng-container matColumnDef="visibility">
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryVisibility">可见性</th>
           <td mat-cell *matCellDef="let mem">
-            <mat-icon [matTooltip]="mem.visibility === 'public' ? '公开' : '私有'">
+            <app-icon [matTooltip]="mem.visibility === 'public' ? '公开' : '私有'">
               {{ mem.visibility === 'public' ? 'public' : 'lock' }}
-            </mat-icon>
+            </app-icon>
           </td>
         </ng-container>
 
@@ -176,10 +176,10 @@
           <th mat-header-cell *matHeaderCellDef i18n="@@memoryActions">操作</th>
           <td mat-cell *matCellDef="let mem">
             <button mat-icon-button (click)="openDetail(mem)" matTooltip="查看/编辑">
-              <mat-icon>visibility</mat-icon>
+              <app-icon>visibility</app-icon>
             </button>
             <button mat-icon-button color="warn" (click)="deleteMemory(mem.id)" matTooltip="删除">
-              <mat-icon>delete</mat-icon>
+              <app-icon>delete</app-icon>
             </button>
           </td>
         </ng-container>

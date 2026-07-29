@@ -15,7 +15,6 @@ import { MatCardModule } from '@angular/material/card';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -34,6 +33,7 @@ import { synthwave84 } from '@fsegurai/codemirror-theme-synthwave-84';
 
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import {
   ConfirmDialogComponent,
   type ConfirmDialogData,
@@ -49,13 +49,13 @@ import { maskSecret } from '../shared/dashboard-utils';
     MatCardModule,
     MatCheckboxModule,
     MatFormFieldModule,
-    MatIconModule,
     MatInputModule,
     MatProgressBarModule,
     MatTableModule,
     MatTabsModule,
     MatToolbarModule,
     RouterModule,
+    AppIconComponent,
   ],
   templateUrl: './backend-settings.component.html',
 })
