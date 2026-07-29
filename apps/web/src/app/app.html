@@ -1,36 +1,71 @@
-<mat-navigation-suite-scaffold [state]="scaffoldState">
-  <ng-template matNavigationSuitePrimaryAction let-collapsed="collapsed">
+<div hlmSidebarWrapper>
+  <hlm-sidebar collapsible="icon">
+    <div hlmSidebarHeader>
+      <a
+        hlmSidebarMenuButton
+        size="lg"
+        routerLink="/overview"
+        tooltip="FrostAgent"
+        aria-label="FrostAgent"
+      >
+        <span class="bg-primary text-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-lg">
+          <app-icon>ac_unit</app-icon>
+        </span>
+        <span class="font-semibold">FrostAgent</span>
+      </a>
+    </div>
+
+    <div hlmSidebarContent>
+      <div hlmSidebarGroup>
+        <ul hlmSidebarMenu aria-label="FrostAgent">
+          @for (destination of destinations; track destination.path) {
+            <li hlmSidebarMenuItem>
+              <a
+                hlmSidebarMenuButton
+                [routerLink]="destination.path"
+                [isActive]="isSelected(destination.path)"
+                [tooltip]="destination.label"
+                [attr.aria-current]="isSelected(destination.path) ? 'page' : null"
+              >
+                <app-icon>{{ destination.icon }}</app-icon>
+                <span>{{ destination.label }}</span>
+              </a>
+            </li>
+          }
+        </ul>
+      </div>
+    </div>
+
     @if (shouldShowFab()) {
-    <button
-      matFab
-      extended
-      [collapsed]="collapsed"
-      aria-label="Create document"
-      [matMenuTriggerFor]="addMenu"
-    >
-      <mat-icon>add</mat-icon>
-      <span i18n="@@addFab">新增...</span>
-    </button>
-    <mat-menu #addMenu="matMenu">
-      <button mat-menu-item (click)="openAddEnvVarDialog()">
-        <span i18n="@@EnvVar">环境变量</span>
-      </button>
-    </mat-menu>
+      <div hlmSidebarFooter>
+        <button
+          hlmSidebarMenuButton
+          tooltip="新增环境变量"
+          i18n-tooltip="@@addEnvVar"
+          (click)="openAddEnvVarDialog()"
+        >
+          <app-icon>add</app-icon>
+          <span i18n="@@EnvVar">环境变量</span>
+        </button>
+      </div>
     }
-  </ng-template>
+    <button hlmSidebarRail aria-label="Toggle Sidebar"></button>
+  </hlm-sidebar>
 
-  <mat-navigation-suite [alwaysShowItemLabel]="true" ariaLabel="FrostAgent">
-    @for (destination of destinations; track destination.path) {
-    <mat-navigation-suite-item
-      [selected]="isSelected(destination.path)"
-      [icon]="destination.icon"
-      [label]="destination.label"
-      (click)="navigate(destination.path)"
-    />
-    }
-  </mat-navigation-suite>
+  <main hlmSidebarInset>
+    <header class="bg-background/95 sticky top-0 z-10 flex h-12 items-center gap-2 border-b px-3 backdrop-blur md:hidden">
+      <button hlmSidebarTrigger srOnlyText="Toggle navigation"></button>
+      <span class="font-medium">FrostAgent</span>
+    </header>
+    <section class="min-w-0 flex-1">
+      <router-outlet />
+    </section>
+  </main>
+</div>
 
-  <section>
-    <router-outlet />
-  </section>
-</mat-navigation-suite-scaffold>
+<hlm-toaster
+  [theme]="themeService.effectiveMode()"
+  position="bottom-right"
+  richColors
+  closeButton
+/>

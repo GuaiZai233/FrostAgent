@@ -1,73 +1,105 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { Router } from '@angular/router';
+import { BrnDialogRef } from '@spartan-ng/brain/dialog';
+import { toast } from '@spartan-ng/brain/sonner';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCheckbox } from '@spartan-ng/helm/checkbox';
+import {
+  HlmDialogDescription,
+  HlmDialogFooter,
+  HlmDialogHeader,
+  HlmDialogTitle,
+} from '@spartan-ng/helm/dialog';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from './app-icon.component';
 
 @Component({
   selector: 'app-add-env-var-dialog',
   imports: [
     FormsModule,
-    MatButtonModule,
-    MatCheckboxModule,
-    MatDialogModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
+    HlmButton,
+    HlmCheckbox,
+    HlmDialogDescription,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    AppIconComponent,
   ],
   template: `
-    <h2 mat-dialog-title i18n="@@addEnvVar">新增环境变量</h2>
-    <mat-dialog-content style="overflow: hidden;">
-      <div style="display: flex; flex-direction: column;  padding-top: 8px;">
-        <mat-form-field appearance="outline">
-          <mat-label i18n="@@key">Key</mat-label>
-          <input matInput [ngModel]="key()" (ngModelChange)="key.set($event)" />
-        </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label i18n="@@value">Value</mat-label>
-          <input
-            matInput
-            [ngModel]="value()"
-            (ngModelChange)="value.set($event)"
-          />
-        </mat-form-field>
-        <mat-checkbox
-          [ngModel]="isSecret()"
-          (ngModelChange)="isSecret.set($event)"
-        >
-          <span i18n="@@isSecret">这是敏感信息</span>
-        </mat-checkbox>
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle i18n="@@addEnvVar">新增环境变量</h2>
+      <p hlmDialogDescription i18n="@@addEnvVarDescription">
+        添加或覆盖后端使用的环境变量。
+      </p>
+    </div>
+
+    <div class="grid gap-4 py-2">
+      <div hlmField>
+        <label hlmFieldLabel for="env-key" i18n="@@key">Key</label>
+        <input
+          id="env-key"
+          hlmInput
+          autocomplete="off"
+          [ngModel]="key()"
+          (ngModelChange)="key.set($event)"
+        />
       </div>
-    </mat-dialog-content>
-    <mat-dialog-actions align="end">
-      <button mat-button mat-dialog-close i18n="@@cancel">取消</button>
+
+      <div hlmField>
+        <label hlmFieldLabel for="env-value" i18n="@@value">Value</label>
+        <input
+          id="env-value"
+          hlmInput
+          [type]="isSecret() ? 'password' : 'text'"
+          autocomplete="off"
+          [ngModel]="value()"
+          (ngModelChange)="value.set($event)"
+        />
+      </div>
+
+      <label hlmFieldLabel class="cursor-pointer">
+        <hlm-checkbox
+          [checked]="isSecret()"
+          (checkedChange)="isSecret.set($event)"
+        />
+        <span i18n="@@isSecret">这是敏感信息</span>
+      </label>
+    </div>
+
+    <div hlmDialogFooter>
+      <button hlmBtn variant="outline" (click)="close()">
+        <span i18n="@@cancel">取消</span>
+      </button>
       <button
-        mat-flat-button
+        hlmBtn
         [disabled]="!key().trim() || saving()"
         (click)="save()"
       >
-        <mat-icon>save</mat-icon>
+        <app-icon>save</app-icon>
         <span i18n="@@save">保存</span>
       </button>
-    </mat-dialog-actions>
+    </div>
   `,
 })
 export class AddEnvVarDialogComponent {
   private readonly api = inject(FrostagentApiService);
-  private readonly dialogRef = inject(MatDialogRef<AddEnvVarDialogComponent>);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly dialogRef = inject(BrnDialogRef<boolean>);
   private readonly router = inject(Router);
 
   readonly key = signal('');
   readonly value = signal('');
   readonly isSecret = signal(false);
   readonly saving = signal(false);
+
+  close(): void {
+    this.dialogRef.close(false);
+  }
 
   async save(): Promise<void> {
     const key = this.key().trim();
@@ -82,22 +114,18 @@ export class AddEnvVarDialogComponent {
       });
 
       if (response.success) {
-        this.snackBar.open($localize`:@@envSaved:环境变量已保存`, undefined, {
+        toast.success($localize`:@@envSaved:环境变量已保存`, {
           duration: 2500,
         });
         this.dialogRef.close(true);
         void this.router.navigate(['/settings/backend']);
       } else {
-        this.snackBar.open(response.error, $localize`:@@close:关闭`, {
-          duration: 5000,
-        });
+        toast.error(response.error, { duration: 5000 });
       }
     } catch (error) {
-      this.snackBar.open(
-        error instanceof Error ? error.message : String(error),
-        $localize`:@@close:关闭`,
-        { duration: 5000 },
-      );
+      toast.error(error instanceof Error ? error.message : String(error), {
+        duration: 5000,
+      });
     } finally {
       this.saving.set(false);
     }

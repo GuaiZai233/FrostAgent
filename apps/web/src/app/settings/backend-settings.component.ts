@@ -10,20 +10,16 @@ import {
   effect,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatDialog } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSnackBar } from '@angular/material/snack-bar';
-import { MatTableModule } from '@angular/material/table';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatTabsModule } from '@angular/material/tabs';
 import { RouterModule } from '@angular/router';
+import { toast } from '@spartan-ng/brain/sonner';
+import { HlmButton } from '@spartan-ng/helm/button';
+import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmCheckbox } from '@spartan-ng/helm/checkbox';
+import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmSpinner } from '@spartan-ng/helm/spinner';
+import { HlmTableImports } from '@spartan-ng/helm/table';
+import { HlmTabsImports } from '@spartan-ng/helm/tabs';
 import { ThemeService } from '../shared/theme.service';
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -34,8 +30,9 @@ import { synthwave84 } from '@fsegurai/codemirror-theme-synthwave-84';
 
 import type { EnvVar } from '@frostagent/proto';
 import { FrostagentApiService } from '../core/frostagent-api.service';
+import { AppIconComponent } from '../shared/app-icon.component';
 import {
-  ConfirmDialogComponent,
+  ConfirmDialogService,
   type ConfirmDialogData,
 } from '../shared/confirm-dialog.component';
 import { maskSecret } from '../shared/dashboard-utils';
@@ -44,18 +41,17 @@ import { maskSecret } from '../shared/dashboard-utils';
   selector: 'app-backend-settings',
   imports: [
     FormsModule,
-    MatButtonModule,
-    MatTooltipModule,
-    MatCardModule,
-    MatCheckboxModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-    MatProgressBarModule,
-    MatTableModule,
-    MatTabsModule,
-    MatToolbarModule,
+    HlmButton,
+    HlmCardImports,
+    HlmCheckbox,
+    HlmField,
+    HlmFieldLabel,
+    HlmInput,
+    HlmSpinner,
+    HlmTableImports,
+    HlmTabsImports,
     RouterModule,
+    AppIconComponent,
   ],
   templateUrl: './backend-settings.component.html',
 })
@@ -63,8 +59,7 @@ export class BackendSettingsComponent
   implements OnInit, AfterViewInit, OnDestroy
 {
   private readonly api = inject(FrostagentApiService);
-  private readonly dialog = inject(MatDialog);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   readonly themeService = inject(ThemeService);
 
   private readonly editorDiv =
@@ -82,8 +77,6 @@ export class BackendSettingsComponent
   readonly editingKey = signal('');
   readonly editingValue = signal('');
   readonly editingIsSecret = signal(false);
-  readonly displayedColumns = ['key', 'value', 'actions'];
-
   constructor() {
     effect(() => {
       const isDark = this.themeService.effectiveMode() === 'dark';
@@ -177,10 +170,7 @@ export class BackendSettingsComponent
       cancelLabel: $localize`:@@cancel:取消`,
       confirmLabel: $localize`:@@delete:删除`,
     };
-    const confirmed = await this.dialog
-      .open(ConfirmDialogComponent, { data })
-      .afterClosed()
-      .toPromise();
+    const confirmed = await this.confirmDialog.confirm(data);
 
     if (!confirmed) {
       return;
@@ -193,7 +183,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@envDeleted:环境变量已删除`, undefined, {
+      toast.success($localize`:@@envDeleted:环境变量已删除`, {
         duration: 2500,
       });
       await this.refresh();
@@ -214,7 +204,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@rawEnvSaved:.env 文件已更新`, undefined, {
+      toast.success($localize`:@@rawEnvSaved:.env 文件已更新`, {
         duration: 2500,
       });
       await this.refresh();
@@ -269,7 +259,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      this.snackBar.open($localize`:@@envSaved:环境变量已保存`, undefined, {
+      toast.success($localize`:@@envSaved:环境变量已保存`, {
         duration: 2500,
       });
       await this.refresh();

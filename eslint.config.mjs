@@ -50,6 +50,29 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ['apps/web/src/app/ui/**/*.ts'],
+    rules: {
+      // Spartan UI sources preserve their upstream `hlm` selectors and input aliases.
+      '@angular-eslint/component-selector': [
+        'error',
+        {
+          type: 'element',
+          prefix: 'hlm',
+          style: 'kebab-case',
+        },
+      ],
+      '@angular-eslint/directive-selector': [
+        'error',
+        {
+          type: 'attribute',
+          prefix: 'hlm',
+          style: 'camelCase',
+        },
+      ],
+      '@angular-eslint/no-input-rename': 'off',
+    },
+  },
   ...scopeTo(angular.configs.templateRecommended, htmlFiles),
   {
     files: ['**/*.html'],

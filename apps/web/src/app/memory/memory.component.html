@@ -1,211 +1,344 @@
-<section class="page">
-  <!-- Toolbar -->
-  <div class="toolbar">
-    <h1 i18n="@@memoryManagement">记忆管理</h1>
-    <div class="toolbar-actions">
-      <mat-form-field appearance="outline" subscriptSizing="dynamic" class="search-field">
-        <mat-label i18n="@@search">搜索</mat-label>
-        <input matInput [(ngModel)]="searchQuery" (keyup.enter)="search()" />
-        <button matSuffix mat-icon-button (click)="search()" matTooltip="搜索">
-          <mat-icon>search</mat-icon>
-        </button>
-      </mat-form-field>
-      <mat-form-field appearance="outline" subscriptSizing="dynamic" class="search-field">
-        <mat-label i18n="@@memoryTagsCommaSeparated">标签（逗号分隔）</mat-label>
-        <input matInput [(ngModel)]="tagFilter" (keyup.enter)="search()" />
-      </mat-form-field>
-      <button mat-stroked-button (click)="openAddDialog()" matTooltip="添加记忆">
-        <mat-icon>add</mat-icon>
+<section class="mx-auto grid max-w-[90rem] gap-4 p-4 sm:p-6">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="text-2xl font-semibold" i18n="@@memoryManagement">记忆管理</h1>
+    <div class="flex flex-wrap items-end gap-2">
+      <div hlmField class="w-60">
+        <label hlmFieldLabel for="memory-search" class="sr-only">
+          <span i18n="@@search">搜索</span>
+        </label>
+        <div class="flex gap-1">
+          <input
+            id="memory-search"
+            hlmInput
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+            (keyup.enter)="search()"
+            placeholder="搜索"
+            i18n-placeholder="@@search"
+          />
+          <button
+            hlmBtn
+            variant="outline"
+            size="icon"
+            (click)="search()"
+            title="搜索"
+          >
+            <app-icon>search</app-icon>
+          </button>
+        </div>
+      </div>
+      <div hlmField class="w-60">
+        <label hlmFieldLabel for="memory-tag-filter" class="sr-only">
+          <span i18n="@@memoryTagsCommaSeparated">标签（逗号分隔）</span>
+        </label>
+        <input
+          id="memory-tag-filter"
+          hlmInput
+          [ngModel]="tagFilter()"
+          (ngModelChange)="tagFilter.set($event)"
+          (keyup.enter)="search()"
+          placeholder="标签（逗号分隔）"
+          i18n-placeholder="@@memoryTagsCommaSeparated"
+        />
+      </div>
+      <button hlmBtn variant="outline" (click)="openAddDialog()">
+        <app-icon>add</app-icon>
         <span i18n="@@addMemory">添加</span>
       </button>
-      <button mat-stroked-button (click)="exportMemories()" matTooltip="导出">
-        <mat-icon>file_download</mat-icon>
+      <button hlmBtn variant="outline" (click)="exportMemories()">
+        <app-icon>file_download</app-icon>
         <span i18n="@@export">导出</span>
       </button>
-      <button mat-stroked-button (click)="importInput.click()" matTooltip="导入">
-        <mat-icon>file_upload</mat-icon>
+      <button hlmBtn variant="outline" (click)="importInput.click()">
+        <app-icon>file_upload</app-icon>
         <span i18n="@@import">导入</span>
       </button>
-      <input #importInput type="file" accept=".json" (change)="importMemories($event)" style="display:none" />
-      <button mat-icon-button (click)="refresh()" matTooltip="刷新">
-        <mat-icon>refresh</mat-icon>
+      <input
+        #importInput
+        type="file"
+        accept=".json"
+        class="hidden"
+        (change)="importMemories($event)"
+      />
+      <button
+        hlmBtn
+        variant="outline"
+        size="icon"
+        (click)="refresh()"
+        title="刷新"
+      >
+        <app-icon>refresh</app-icon>
       </button>
     </div>
-  </div>
+  </header>
 
   @if (loading() && memories().length === 0) {
-    <mat-progress-bar mode="indeterminate" />
+    <div class="text-muted-foreground flex items-center gap-2 text-sm">
+      <hlm-spinner />
+      <span i18n="@@loading">加载中</span>
+    </div>
   }
 
   @if (error()) {
-    <mat-card appearance="outlined" class="error-card">
-      <mat-card-content>
-        <mat-icon color="warn">error</mat-icon>
+    <section hlmCard class="border-destructive/30">
+      <div hlmCardContent class="text-destructive flex items-center gap-2">
+        <app-icon>error</app-icon>
         {{ error() }}
-      </mat-card-content>
-    </mat-card>
+      </div>
+    </section>
   }
 
-  <!-- Stats row -->
-  @if (stats(); as s) {
-    <section class="stats-row">
-      <mat-card appearance="outlined" class="stat-card">
-        <mat-card-content>
-          <span class="stat-value">{{ s.total }}</span>
-          <span class="stat-label" i18n="@@totalMemories">总记忆数</span>
-        </mat-card-content>
-      </mat-card>
-      <mat-card appearance="outlined" class="stat-card">
-        <mat-card-content>
-          <span class="stat-value">{{ s.publicCount }}</span>
-          <span class="stat-label" i18n="@@publicMemories">公开</span>
-        </mat-card-content>
-      </mat-card>
-      <mat-card appearance="outlined" class="stat-card">
-        <mat-card-content>
-          <span class="stat-value">{{ s.privateCount }}</span>
-          <span class="stat-label" i18n="@@privateMemories">私有</span>
-        </mat-card-content>
-      </mat-card>
-      @for (entry of s.byOwner | keyvalue; track entry.key) {
-        <mat-card appearance="outlined" class="stat-card clickable" (click)="filterByOwner(entry.key)">
-          <mat-card-content>
-            <span class="stat-value">{{ entry.value }}</span>
-            <span class="stat-label">{{ entry.key }}</span>
-          </mat-card-content>
-        </mat-card>
+  @if (stats(); as stats) {
+    <section class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+      <article hlmCard size="sm">
+        <div hlmCardContent class="text-center">
+          <p class="text-2xl font-semibold">{{ stats.total }}</p>
+          <p class="text-muted-foreground text-xs" i18n="@@totalMemories">
+            总记忆数
+          </p>
+        </div>
+      </article>
+      <article hlmCard size="sm">
+        <div hlmCardContent class="text-center">
+          <p class="text-2xl font-semibold">{{ stats.publicCount }}</p>
+          <p class="text-muted-foreground text-xs" i18n="@@publicMemories">
+            公开
+          </p>
+        </div>
+      </article>
+      <article hlmCard size="sm">
+        <div hlmCardContent class="text-center">
+          <p class="text-2xl font-semibold">{{ stats.privateCount }}</p>
+          <p class="text-muted-foreground text-xs" i18n="@@privateMemories">
+            私有
+          </p>
+        </div>
+      </article>
+      @for (entry of stats.byOwner | keyvalue; track entry.key) {
+        <button
+          hlmCard
+          size="sm"
+          class="hover:bg-muted/50 cursor-pointer transition-colors"
+          (click)="filterByOwner(entry.key)"
+        >
+          <div hlmCardContent class="text-center">
+            <p class="text-2xl font-semibold">{{ entry.value }}</p>
+            <p class="text-muted-foreground truncate text-xs">{{ entry.key }}</p>
+          </div>
+        </button>
       }
     </section>
   }
 
-  <!-- Filter chips -->
-  @if (ownerFilter()) {
-    <section class="filter-row">
-      <mat-chip-set>
-        <mat-chip highlighted (removed)="clearOwnerFilter()">
-          <mat-icon matChipAvatar>person</mat-icon>
-          {{ ownerFilter() }}
-          <button matChipRemove><mat-icon>cancel</mat-icon></button>
-        </mat-chip>
-      </mat-chip-set>
-    </section>
-  }
+  <div class="flex flex-wrap items-center gap-2">
+    @if (ownerFilter()) {
+      <span hlmBadge variant="secondary" class="gap-1">
+        <app-icon>person</app-icon>
+        {{ ownerFilter() }}
+        <button
+          type="button"
+          class="hover:text-destructive ms-1"
+          (click)="clearOwnerFilter()"
+          aria-label="Clear owner filter"
+        >
+          <app-icon>cancel</app-icon>
+        </button>
+      </span>
+    }
 
-  <!-- Batch delete bar -->
-  @if (selectedIds().size > 0) {
-    <section class="batch-bar">
-      <span i18n="@@selectedCount">已选择 {{ selectedIds().size }} 条</span>
-      <button mat-stroked-button color="warn" (click)="deleteSelected()">
-        <mat-icon>delete</mat-icon>
-        <span i18n="@@deleteSelected">删除所选</span>
-      </button>
-    </section>
-  }
+    @if (selectedIds().size > 0) {
+      <div class="bg-muted ms-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm">
+        <span i18n="@@selectedCount">
+          已选择 {{ selectedIds().size }} 条
+        </span>
+        <button hlmBtn variant="destructive" size="sm" (click)="deleteSelected()">
+          <app-icon>delete</app-icon>
+          <span i18n="@@deleteSelected">删除所选</span>
+        </button>
+      </div>
+    }
+  </div>
 
-  <!-- Memory table -->
   @if (memories().length > 0) {
-    <section class="table-container">
-      <table mat-table [dataSource]="memories()" class="memory-table">
-        <ng-container matColumnDef="select">
-          <th mat-header-cell *matHeaderCellDef>
-            <mat-checkbox [checked]="isAllSelected()" [indeterminate]="isSomeSelected()" (change)="toggleSelectAll()" />
-          </th>
-          <td mat-cell *matCellDef="let mem">
-            <mat-checkbox [checked]="selectedIds().has(mem.id)" (change)="toggleSelect(mem.id)" />
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="source">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memorySource">来源</th>
-          <td mat-cell *matCellDef="let mem">
-            <mat-icon [matTooltip]="getSourceLabel(mem.source)">{{ getSourceIcon(mem.source) }}</mat-icon>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="owner">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryOwner">归属者</th>
-          <td mat-cell *matCellDef="let mem">
-            <mat-chip-row (click)="filterByOwner(mem.owner)" class="owner-chip">
-              <mat-icon matChipAvatar>person</mat-icon>
-              {{ mem.owner }}
-            </mat-chip-row>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="content">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryContent">内容</th>
-          <td mat-cell *matCellDef="let mem" class="content-cell" (click)="openDetail(mem)">
-            <span [matTooltip]="mem.content">{{ mem.content.length > 60 ? (mem.content | slice:0:60) + '...' : mem.content }}</span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="tags">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryTags">标签</th>
-          <td mat-cell *matCellDef="let mem">
-            @if (mem.tags.length > 0) {
-              <mat-chip-set>
-                @for (tag of mem.tags; track tag) {
-                  <mat-chip>{{ tag }}</mat-chip>
-                }
-              </mat-chip-set>
+    <section hlmCard class="py-0">
+      <div hlmTableContainer>
+        <table hlmTable>
+          <thead hlmTHead>
+            <tr hlmTr>
+              <th hlmTh>
+                <hlm-checkbox
+                  aria-label="Select all memories"
+                  [checked]="isAllSelected()"
+                  [indeterminate]="isSomeSelected()"
+                  (checkedChange)="toggleSelectAll()"
+                />
+              </th>
+              <th hlmTh i18n="@@memorySource">来源</th>
+              <th hlmTh i18n="@@memoryOwner">归属者</th>
+              <th hlmTh i18n="@@memoryContent">内容</th>
+              <th hlmTh i18n="@@memoryTags">标签</th>
+              <th hlmTh i18n="@@memoryVisibility">可见性</th>
+              <th hlmTh i18n="@@memoryImportance">重要度</th>
+              <th hlmTh i18n="@@memoryCreatedAt">创建时间</th>
+              <th hlmTh class="text-end" i18n="@@memoryActions">操作</th>
+            </tr>
+          </thead>
+          <tbody hlmTBody>
+            @for (memory of memories(); track memory.id) {
+              <tr hlmTr>
+                <td hlmTd>
+                  <hlm-checkbox
+                    [attr.aria-label]="'Select memory ' + memory.id"
+                    [checked]="selectedIds().has(memory.id)"
+                    (checkedChange)="toggleSelect(memory.id)"
+                  />
+                </td>
+                <td hlmTd>
+                  <app-icon [title]="getSourceLabel(memory.source)">
+                    {{ getSourceIcon(memory.source) }}
+                  </app-icon>
+                </td>
+                <td hlmTd>
+                  <button
+                    type="button"
+                    hlmBadge
+                    variant="outline"
+                    class="cursor-pointer gap-1"
+                    (click)="filterByOwner(memory.owner)"
+                  >
+                    <app-icon>person</app-icon>
+                    {{ memory.owner }}
+                  </button>
+                </td>
+                <td hlmTd class="max-w-80">
+                  <button
+                    type="button"
+                    class="block max-w-80 cursor-pointer truncate text-start hover:underline"
+                    [title]="memory.content"
+                    (click)="openDetail(memory)"
+                  >
+                    {{ memory.content }}
+                  </button>
+                </td>
+                <td hlmTd>
+                  <div class="flex max-w-64 flex-wrap gap-1">
+                    @for (tag of memory.tags; track tag) {
+                      <span hlmBadge variant="secondary">{{ tag }}</span>
+                    }
+                  </div>
+                </td>
+                <td hlmTd>
+                  <span
+                    hlmBadge
+                    variant="outline"
+                    class="gap-1"
+                    [title]="memory.visibility === 'public' ? '公开' : '私有'"
+                  >
+                    <app-icon>
+                      {{ memory.visibility === 'public' ? 'public' : 'lock' }}
+                    </app-icon>
+                    {{ memory.visibility }}
+                  </span>
+                </td>
+                <td hlmTd>
+                  <div class="flex items-center gap-2">
+                    <div class="bg-muted h-2 w-16 overflow-hidden rounded-full">
+                      <div
+                        class="bg-primary h-full rounded-full transition-[width]"
+                        [style.width.%]="memory.importance * 100"
+                      ></div>
+                    </div>
+                    <span class="text-muted-foreground text-xs">
+                      {{ (memory.importance * 100).toFixed(0) }}%
+                    </span>
+                  </div>
+                </td>
+                <td hlmTd>{{ formatDateTime(memory.createdAt) }}</td>
+                <td hlmTd>
+                  <div class="flex justify-end gap-1">
+                    <button
+                      hlmBtn
+                      variant="ghost"
+                      size="icon-sm"
+                      (click)="openDetail(memory)"
+                      aria-label="View or edit"
+                    >
+                      <app-icon>visibility</app-icon>
+                    </button>
+                    <button
+                      hlmBtn
+                      variant="ghost"
+                      size="icon-sm"
+                      class="text-destructive"
+                      (click)="deleteMemory(memory.id)"
+                      aria-label="Delete"
+                    >
+                      <app-icon>delete</app-icon>
+                    </button>
+                  </div>
+                </td>
+              </tr>
             }
-          </td>
-        </ng-container>
+          </tbody>
+        </table>
+      </div>
 
-        <ng-container matColumnDef="visibility">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryVisibility">可见性</th>
-          <td mat-cell *matCellDef="let mem">
-            <mat-icon [matTooltip]="mem.visibility === 'public' ? '公开' : '私有'">
-              {{ mem.visibility === 'public' ? 'public' : 'lock' }}
-            </mat-icon>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="importance">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryImportance">重要度</th>
-          <td mat-cell *matCellDef="let mem" class="importance-cell">
-            <div class="importance-bar">
-              <div class="importance-fill" [style.width.%]="mem.importance * 100"></div>
-            </div>
-            <span class="importance-text">{{ (mem.importance * 100).toFixed(0) }}%</span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="createdAt">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryCreatedAt">创建时间</th>
-          <td mat-cell *matCellDef="let mem">{{ formatDateTime(mem.createdAt) }}</td>
-        </ng-container>
-
-        <ng-container matColumnDef="actions">
-          <th mat-header-cell *matHeaderCellDef i18n="@@memoryActions">操作</th>
-          <td mat-cell *matCellDef="let mem">
-            <button mat-icon-button (click)="openDetail(mem)" matTooltip="查看/编辑">
-              <mat-icon>visibility</mat-icon>
-            </button>
-            <button mat-icon-button color="warn" (click)="deleteMemory(mem.id)" matTooltip="删除">
-              <mat-icon>delete</mat-icon>
-            </button>
-          </td>
-        </ng-container>
-
-        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-        <tr mat-row *matRowDef="let row; columns: displayedColumns;" class="memory-row"></tr>
-      </table>
-
-      <mat-paginator
-        [length]="total()"
-        [pageSize]="pageSize()"
-        [pageIndex]="pageIndex()"
-        [pageSizeOptions]="[10, 20, 50]"
-        (page)="handlePageEvent($event)"
-        showFirstLastButtons
-      />
+      <footer class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+        <p class="text-muted-foreground text-sm">
+          <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
+          ·
+          <span i18n="@@paginationPage">第 {{ pageIndex() + 1 }} 页</span>
+        </p>
+        <div class="flex items-center gap-3">
+          <hlm-select
+            [value]="pageSize()"
+            (valueChange)="changePageSize($event)"
+          >
+            <hlm-select-trigger class="w-20">
+              <hlm-select-value />
+            </hlm-select-trigger>
+            <hlm-select-content *hlmSelectPortal>
+              @for (size of [10, 20, 50]; track size) {
+                <hlm-select-item [value]="size">{{ size }}</hlm-select-item>
+              }
+            </hlm-select-content>
+          </hlm-select>
+          <nav hlmPagination class="w-auto">
+            <ul hlmPaginationContent>
+              <li hlmPaginationItem>
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="sm"
+                  [disabled]="pageIndex() === 0 || loading()"
+                  (click)="changePage('previous')"
+                  i18n="@@previousPage"
+                >
+                  上一页
+                </button>
+              </li>
+              <li hlmPaginationItem>
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="sm"
+                  [disabled]="!nextToken() || loading()"
+                  (click)="changePage('next')"
+                  i18n="@@nextPage"
+                >
+                  下一页
+                </button>
+              </li>
+            </ul>
+          </nav>
+        </div>
+      </footer>
     </section>
   } @else if (!loading() && !error()) {
-    <mat-card appearance="outlined">
-      <mat-card-content>
-        <p i18n="@@noMemories">暂无记忆记录。</p>
-      </mat-card-content>
-    </mat-card>
+    <section hlmCard>
+      <div hlmCardContent class="text-muted-foreground text-center" i18n="@@noMemories">
+        暂无记忆记录。
+      </div>
+    </section>
   }
 </section>
