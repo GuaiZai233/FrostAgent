@@ -794,6 +794,166 @@
           <context context-type="linenumber">75</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="navMemory" datatype="html">
+        <source>记忆</source>
+        <target>Memory</target>
+      </trans-unit>
+      <trans-unit id="memoryManagement" datatype="html">
+        <source>记忆管理</source>
+        <target>Memory Management</target>
+      </trans-unit>
+      <trans-unit id="memoryDetail" datatype="html">
+        <source>记忆详情</source>
+        <target>Memory Detail</target>
+      </trans-unit>
+      <trans-unit id="memoryId" datatype="html">
+        <source>ID</source>
+        <target>ID</target>
+      </trans-unit>
+      <trans-unit id="memoryOwner" datatype="html">
+        <source>归属者</source>
+        <target>Owner</target>
+      </trans-unit>
+      <trans-unit id="memorySource" datatype="html">
+        <source>来源</source>
+        <target>Source</target>
+      </trans-unit>
+      <trans-unit id="memoryContent" datatype="html">
+        <source>内容</source>
+        <target>Content</target>
+      </trans-unit>
+      <trans-unit id="memoryTags" datatype="html">
+        <source>标签</source>
+        <target>Tags</target>
+      </trans-unit>
+      <trans-unit id="memoryTagsCommaSeparated" datatype="html">
+        <source>标签（逗号分隔）</source>
+        <target>Tags (comma separated)</target>
+      </trans-unit>
+      <trans-unit id="memoryVisibility" datatype="html">
+        <source>可见性</source>
+        <target>Visibility</target>
+      </trans-unit>
+      <trans-unit id="memoryImportance" datatype="html">
+        <source>重要度</source>
+        <target>Importance</target>
+      </trans-unit>
+      <trans-unit id="memoryImportanceSlider" datatype="html">
+        <source>重要度: {$INTERPOLATION}</source>
+        <target>Importance: {$INTERPOLATION}</target>
+      </trans-unit>
+      <trans-unit id="memoryCreatedAt" datatype="html">
+        <source>创建时间</source>
+        <target>Created At</target>
+      </trans-unit>
+      <trans-unit id="memoryUpdatedAt" datatype="html">
+        <source>更新时间</source>
+        <target>Updated At</target>
+      </trans-unit>
+      <trans-unit id="memoryActions" datatype="html">
+        <source>操作</source>
+        <target>Actions</target>
+      </trans-unit>
+      <trans-unit id="noMemories" datatype="html">
+        <source>暂无记忆记录。</source>
+        <target>No memories found.</target>
+      </trans-unit>
+      <trans-unit id="search" datatype="html">
+        <source>搜索</source>
+        <target>Search</target>
+      </trans-unit>
+      <trans-unit id="addMemoryDialog" datatype="html">
+        <source>添加记忆</source>
+        <target>Add Memory</target>
+      </trans-unit>
+      <trans-unit id="addMemory" datatype="html">
+        <source>添加</source>
+        <target>Add</target>
+      </trans-unit>
+      <trans-unit id="export" datatype="html">
+        <source>导出</source>
+        <target>Export</target>
+      </trans-unit>
+      <trans-unit id="import" datatype="html">
+        <source>导入</source>
+        <target>Import</target>
+      </trans-unit>
+      <trans-unit id="totalMemories" datatype="html">
+        <source>总记忆数</source>
+        <target>Total Memories</target>
+      </trans-unit>
+      <trans-unit id="publicMemories" datatype="html">
+        <source>公开</source>
+        <target>Public</target>
+      </trans-unit>
+      <trans-unit id="privateMemories" datatype="html">
+        <source>私有</source>
+        <target>Private</target>
+      </trans-unit>
+      <trans-unit id="selectedCount" datatype="html">
+        <source>已选择 {$INTERPOLATION} 条</source>
+        <target>{$INTERPOLATION} selected</target>
+      </trans-unit>
+      <trans-unit id="deleteSelected" datatype="html">
+        <source>删除所选</source>
+        <target>Delete Selected</target>
+      </trans-unit>
+      <trans-unit id="memoryDeleted" datatype="html">
+        <source>记忆已删除</source>
+        <target>Memory deleted</target>
+      </trans-unit>
+      <trans-unit id="memoryDeleteError" datatype="html">
+        <source>删除失败: {$PH}</source>
+        <target>Delete failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryBatchDeleted" datatype="html">
+        <source>已删除 {$PH} 条记忆{$PH_1}</source>
+        <target>Deleted {$PH} memories{$PH_1}</target>
+      </trans-unit>
+      <trans-unit id="memoryUpdated" datatype="html">
+        <source>记忆已更新</source>
+        <target>Memory updated</target>
+      </trans-unit>
+      <trans-unit id="memoryUpdateError" datatype="html">
+        <source>更新失败: {$PH}</source>
+        <target>Update failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryAdded" datatype="html">
+        <source>记忆已添加</source>
+        <target>Memory added</target>
+      </trans-unit>
+      <trans-unit id="memoryAddError" datatype="html">
+        <source>添加失败: {$PH}</source>
+        <target>Add failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryExported" datatype="html">
+        <source>导出成功</source>
+        <target>Export successful</target>
+      </trans-unit>
+      <trans-unit id="memoryExportError" datatype="html">
+        <source>导出失败: {$PH}</source>
+        <target>Export failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryImported" datatype="html">
+        <source>已导入 {$PH} 条，跳过 {$PH_1} 条</source>
+        <target>Imported {$PH}, skipped {$PH_1}</target>
+      </trans-unit>
+      <trans-unit id="memoryImportError" datatype="html">
+        <source>导入失败: {$PH}</source>
+        <target>Import failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="dismiss" datatype="html">
+        <source>关闭</source>
+        <target>Dismiss</target>
+      </trans-unit>
+      <trans-unit id="save" datatype="html">
+        <source>保存</source>
+        <target>Save</target>
+      </trans-unit>
+      <trans-unit id="cancel" datatype="html">
+        <source>取消</source>
+        <target>Cancel</target>
+      </trans-unit>
     </body>
   </file>
 </xliff>

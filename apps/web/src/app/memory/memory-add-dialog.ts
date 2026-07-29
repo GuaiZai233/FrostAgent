@@ -24,7 +24,7 @@ export interface AddMemoryResult {
     MatSelectModule,
   ],
   template: `
-    <h2 mat-dialog-title i18n="@@addMemory">添加记忆</h2>
+    <h2 mat-dialog-title i18n="@@addMemoryDialog">添加记忆</h2>
     <mat-dialog-content>
       <mat-form-field appearance="outline" class="full-width">
         <mat-label i18n="@@memoryOwner">归属者</mat-label>
@@ -37,7 +37,7 @@ export interface AddMemoryResult {
       </mat-form-field>
 
       <mat-form-field appearance="outline" class="full-width">
-        <mat-label i18n="@@memoryTags">标签（逗号分隔）</mat-label>
+        <mat-label i18n="@@memoryTagsCommaSeparated">标签（逗号分隔）</mat-label>
         <input matInput [(ngModel)]="tags" placeholder="tag1, tag2" />
       </mat-form-field>
 

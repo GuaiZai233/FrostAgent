@@ -42,7 +42,7 @@ export interface MemoryDetailDialogData {
       </mat-form-field>
 
       <mat-form-field appearance="outline" class="full-width">
-        <mat-label i18n="@@memoryTags">标签（逗号分隔）</mat-label>
+        <mat-label i18n="@@memoryTagsCommaSeparated">标签（逗号分隔）</mat-label>
         <input matInput [(ngModel)]="editedTags" placeholder="tag1, tag2, tag3" />
       </mat-form-field>
 
@@ -55,7 +55,7 @@ export interface MemoryDetailDialogData {
       </mat-form-field>
 
       <div class="slider-row">
-        <label i18n="@@memoryImportance">重要度: {{ editedImportance.toFixed(2) }}</label>
+        <label i18n="@@memoryImportanceSlider">重要度: {{ editedImportance.toFixed(2) }}</label>
         <mat-slider min="0" max="1" step="0.01" class="full-width">
           <input matSliderThumb [(ngModel)]="editedImportance" />
         </mat-slider>
