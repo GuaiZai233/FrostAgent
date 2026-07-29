@@ -47,7 +47,9 @@ export class HlmPaginationLink {
         variant: this.isActive() ? 'outline' : 'ghost',
         size: this.size(),
       }),
-      this.link() === undefined && 'cursor-pointer',
+      this.isActive()
+        ? 'pointer-events-none cursor-default'
+        : this.link() === undefined && 'cursor-pointer',
     ]);
   }
 }

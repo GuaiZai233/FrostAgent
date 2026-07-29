@@ -9,7 +9,9 @@ import {
 import { HlmDialogContent } from './hlm-dialog-content';
 import { hlmDialogOverlayClass } from './hlm-dialog-overlay';
 
-export type HlmDialogOptions<DialogContext = unknown> = BrnDialogOptions & {
+export type HlmDialogOptions<
+  DialogContext extends object = Record<string, never>,
+> = BrnDialogOptions & {
   contentClass?: string;
   showCloseButton?: boolean;
   context?: DialogContext;
@@ -21,7 +23,10 @@ export type HlmDialogOptions<DialogContext = unknown> = BrnDialogOptions & {
 export class HlmDialogService {
   private readonly _brnDialogService = inject(BrnDialogService);
 
-  public open<TResult = unknown, TContext = unknown>(
+  public open<
+    TResult = unknown,
+    TContext extends object = Record<string, never>,
+  >(
     component: ComponentType<unknown> | TemplateRef<unknown>,
     options?: Partial<HlmDialogOptions<TContext>>,
   ): BrnDialogRef<TResult> {
@@ -31,9 +36,7 @@ export class HlmDialogService {
         `${hlmDialogOverlayClass} ${options?.backdropClass ?? ''}`,
       ),
       context: {
-        ...(options?.context && typeof options.context === 'object'
-          ? options.context
-          : {}),
+        ...(options?.context ?? {}),
         $component: component,
         $dynamicComponentClass: options?.contentClass,
         $showCloseButton: options?.showCloseButton,
