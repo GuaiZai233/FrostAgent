@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"FrostAgent/internal/llm"
 )
@@ -29,8 +30,8 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				"tags": map[string]any{
 					"type":        "array",
 					"description": "write 时写入标签，search 时搜索标签（如[\"maimai\",\"游戏版本\"]）。每个标签应是实体、主题、属性、版本名、别名或同义词，去掉\"当前、什么、帮我查\"等无检索价值的语气词，固定名称保持完整不要拆分。1～6个。",
-					"items":       map[string]any{"type": "string"},
-					"minItems":    0,
+					"items":       map[string]any{"type": "string", "minLength": 1},
+					"minItems":    1,
 					"maxItems":    6,
 				},
 			},
@@ -69,6 +70,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				tags := cleanSearchTags(params.Tags)
 				if len(tags) == 0 {
 					return "搜索需要提供 tags 参数（1～6个标签）", nil
+				}
+				if len(tags) > 6 {
+					return "搜索最多支持 6 个不同的 tags 标签", nil
 				}
 				if engine.MemoryReader == nil {
 					return "记忆搜索功能未启用", nil
@@ -111,11 +115,11 @@ func cleanSearchTags(tags []string) []string {
 	seen := make(map[string]bool, len(tags))
 	result := make([]string, 0, len(tags))
 	for _, t := range tags {
-		trimmed := t
+		trimmed := strings.TrimSpace(t)
 		if trimmed == "" {
 			continue
 		}
-		lower := trimmed
+		lower := strings.ToLower(trimmed)
 		if !seen[lower] {
 			seen[lower] = true
 			result = append(result, lower)

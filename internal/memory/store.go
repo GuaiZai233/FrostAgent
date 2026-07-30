@@ -143,22 +143,27 @@ func tagMatchScore(entry MemoryEntry, searchTags []string) float64 {
 	var score float64
 	contentLower := strings.ToLower(entry.Content)
 	for _, st := range searchTags {
-		stLower := strings.ToLower(st)
+		stLower := strings.ToLower(strings.TrimSpace(st))
+		if stLower == "" {
+			continue
+		}
 
-		// Check entry tags
+		var termScore float64
 		for _, et := range entry.Tags {
-			tagLower := strings.ToLower(et)
+			tagLower := strings.ToLower(strings.TrimSpace(et))
 			if tagLower == stLower {
-				score += 3.0 // exact tag match
-			} else if strings.Contains(tagLower, stLower) {
-				score += 2.0 // tag substring match
+				termScore = 3.0
+				break
+			}
+			if termScore < 2.0 && strings.Contains(tagLower, stLower) {
+				termScore = 2.0
 			}
 		}
 
-		// Check content
-		if strings.Contains(contentLower, stLower) {
-			score += 1.0 // content substring match
+		if termScore == 0 && strings.Contains(contentLower, stLower) {
+			termScore = 1.0
 		}
+		score += termScore
 	}
 	return score
 }
