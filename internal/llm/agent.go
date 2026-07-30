@@ -112,9 +112,9 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 		if memoryHandled {
 			logs.Info(logs.SYSTEM, "本轮已通过 memory 工具处理记忆，跳过自动提取")
 		} else {
-			currentTurn := extractCurrentTurn(messages)
-			if len(currentTurn) > 0 {
-				go e.MemoryWriter.Extract(userID, currentTurn)
+			extractionContext := buildExtractionContext(messages, result)
+			if len(extractionContext) > 0 {
+				go e.MemoryWriter.Extract(userID, extractionContext)
 			}
 		}
 	}
@@ -134,15 +134,55 @@ func extractLastUserMessage(messages []ChatMessage) string {
 	return ""
 }
 
-// extractCurrentTurn limits automatic memory extraction to the latest user
-// message so facts from older session history are not extracted repeatedly.
-func extractCurrentTurn(messages []ChatMessage) []core.ChatMessage {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return convertToCoreMessages(messages[i : i+1])
+// buildExtractionContext returns the recent user/assistant text exchanges
+// that the background extractor needs to detect implicit corrections and
+// updates to previously saved memories. It anchors on the agent's final
+// reply for the current turn and walks backward through the conversation,
+// collecting up to two user messages and any assistant text replies
+// between them so the LLM can see both the prior claim and the correction.
+//
+// System, tool, and tool-call assistant messages (no text content) are
+// filtered out — the extractor only needs the conversation narrative.
+// The window is intentionally small: it preserves the 9ad77fe guarantee
+// that older session history is not re-extracted, while giving the
+// extractor enough context to recognise when the user is correcting
+// a previous fact.
+func buildExtractionContext(messages []ChatMessage, finalReply string) []core.ChatMessage {
+	if finalReply == "" {
+		return nil
+	}
+	type pick struct {
+		role core.MessageRole
+		body any
+	}
+	var picked []pick
+	// Anchor with the agent's final reply for the current turn.
+	picked = append(picked, pick{core.RoleAssistant, finalReply})
+	// Walk backward, collect up to 2 user messages plus the assistant text
+	// replies that follow them. Assistant messages with empty or non-string
+	// content (tool-call turns) are skipped.
+	userCount := 0
+	for i := len(messages) - 1; i >= 0 && userCount < 2; i-- {
+		m := messages[i]
+		switch m.Role {
+		case "user":
+			picked = append(picked, pick{core.RoleUser, m.Content})
+			userCount++
+		case "assistant":
+			if s, ok := m.Content.(string); ok && s != "" {
+				picked = append(picked, pick{core.RoleAssistant, s})
+			}
 		}
 	}
-	return nil
+	// Reverse to chronological order.
+	for i, j := 0, len(picked)-1; i < j; i, j = i+1, j-1 {
+		picked[i], picked[j] = picked[j], picked[i]
+	}
+	out := make([]core.ChatMessage, len(picked))
+	for i, p := range picked {
+		out[i] = core.ChatMessage{Role: p.role, Content: p.body}
+	}
+	return out
 }
 
 // RunWithSession 执行智能体的主循环（带会话上下文）
