@@ -31,6 +31,22 @@
         <app-icon>add</app-icon>
         <span i18n="@@addMemory">添加</span>
       </button>
+      <button
+        hlmBtn
+        variant="outline"
+        [disabled]="reflecting()"
+        (click)="triggerReflection()"
+        [title]="
+          ownerFilter() ? '反思当前筛选用户的记忆' : '反思全部用户的记忆'
+        "
+      >
+        @if (reflecting()) {
+          <hlm-spinner />
+        } @else {
+          <app-icon>psychology</app-icon>
+        }
+        <span i18n="@@reflectMemories">反思</span>
+      </button>
       <button hlmBtn variant="outline" (click)="exportMemories()">
         <app-icon>file_download</app-icon>
         <span i18n="@@export">导出</span>
@@ -109,7 +125,9 @@
         >
           <div hlmCardContent class="text-center">
             <p class="text-2xl font-semibold">{{ entry.value }}</p>
-            <p class="text-muted-foreground truncate text-xs">{{ entry.key }}</p>
+            <p class="text-muted-foreground truncate text-xs">
+              {{ entry.key }}
+            </p>
           </div>
         </button>
       }
@@ -133,11 +151,16 @@
     }
 
     @if (selectedIds().size > 0) {
-      <div class="bg-muted ms-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm">
-        <span i18n="@@selectedCount">
-          已选择 {{ selectedIds().size }} 条
-        </span>
-        <button hlmBtn variant="destructive" size="sm" (click)="deleteSelected()">
+      <div
+        class="bg-muted ms-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm"
+      >
+        <span i18n="@@selectedCount"> 已选择 {{ selectedIds().size }} 条 </span>
+        <button
+          hlmBtn
+          variant="destructive"
+          size="sm"
+          (click)="deleteSelected()"
+        >
           <app-icon>delete</app-icon>
           <span i18n="@@deleteSelected">删除所选</span>
         </button>
@@ -269,7 +292,9 @@
         </table>
       </div>
 
-      <footer class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+      <footer
+        class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3"
+      >
         <p class="text-muted-foreground text-sm">
           <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
           ·
@@ -322,7 +347,11 @@
     </section>
   } @else if (!loading() && !error()) {
     <section hlmCard>
-      <div hlmCardContent class="text-muted-foreground text-center" i18n="@@noMemories">
+      <div
+        hlmCardContent
+        class="text-muted-foreground text-center"
+        i18n="@@noMemories"
+      >
         暂无记忆记录。
       </div>
     </section>

@@ -6,21 +6,22 @@ import (
 	"fmt"
 	"time"
 
-	"FrostAgent/internal/memory"
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"FrostAgent/internal/memory"
 
 	"connectrpc.com/connect"
 )
 
 // Service implements frostagent.v1.MemoryServiceHandler.
 type Service struct {
-	store *memory.Store
+	store       *memory.Store
+	reflections *memory.ReflectionManager
 }
 
 // New creates a new MemoryService.
-func New(store *memory.Store) *Service {
-	return &Service{store: store}
+func New(store *memory.Store, reflections *memory.ReflectionManager) *Service {
+	return &Service{store: store, reflections: reflections}
 }
 
 // ListMemories returns a paginated list of memories, optionally filtered by owner.
@@ -264,6 +265,40 @@ func (s *Service) ImportMemories(
 		Imported: int32(imported),
 		Skipped:  int32(skipped),
 	}), nil
+}
+
+// TriggerReflection starts owner-scoped or global reflection in the background.
+func (s *Service) TriggerReflection(
+	ctx context.Context,
+	req *connect.Request[v1.TriggerReflectionRequest],
+) (*connect.Response[v1.TriggerReflectionResponse], error) {
+	if s.reflections == nil {
+		return connect.NewResponse(&v1.TriggerReflectionResponse{
+			Error: "memory reflection is not configured",
+		}), nil
+	}
+
+	status, started, err := s.reflections.Start(req.Msg.GetOwner())
+	if err != nil {
+		return connect.NewResponse(&v1.TriggerReflectionResponse{
+			Error: err.Error(),
+		}), nil
+	}
+	return connect.NewResponse(&v1.TriggerReflectionResponse{
+		Started:         started,
+		Running:         status.Running,
+		Owner:           status.Owner,
+		StartedAt:       formatOptionalTime(status.StartedAt),
+		LastCompletedAt: formatOptionalTime(status.LastCompletedAt),
+		LastError:       status.LastError,
+	}), nil
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339)
 }
 
 // paginateEntries slices entries according to pagination params and returns ListMemoriesResponse.

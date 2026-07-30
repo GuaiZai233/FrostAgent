@@ -834,6 +834,10 @@
         <source>添加</source>
         <target>Add</target>
       </trans-unit>
+      <trans-unit id="reflectMemories" datatype="html">
+        <source>反思</source>
+        <target>Reflect</target>
+      </trans-unit>
       <trans-unit id="export" datatype="html">
         <source>导出</source>
         <target>Export</target>
@@ -905,6 +909,26 @@
       <trans-unit id="memoryImportError" datatype="html">
         <source>导入失败: {$PH}</source>
         <target>Import failed: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryReflectionError" datatype="html">
+        <source>启动反思失败: {$PH}</source>
+        <target>Failed to start reflection: {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryReflectionRunning" datatype="html">
+        <source>已有记忆反思任务正在后台运行</source>
+        <target>A memory reflection job is already running in the background</target>
+      </trans-unit>
+      <trans-unit id="memoryReflectionOwnerScope" datatype="html">
+        <source>用户 {$PH}</source>
+        <target>user {$PH}</target>
+      </trans-unit>
+      <trans-unit id="memoryReflectionAllScope" datatype="html">
+        <source>全部用户</source>
+        <target>all users</target>
+      </trans-unit>
+      <trans-unit id="memoryReflectionStarted" datatype="html">
+        <source>已在后台启动 {$PH} 的记忆反思</source>
+        <target>Started memory reflection for {$PH} in the background</target>
       </trans-unit>
       <trans-unit id="loading" datatype="html">
         <source>加载中</source>

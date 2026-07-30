@@ -9,13 +9,13 @@ import (
 
 // ExportData represents the full export format for memories
 type ExportData struct {
-	Version    int             `json:"version"`
-	Entries    []MemoryEntry   `json:"entries"`
-	Summaries  []MemorySummary `json:"summaries,omitempty"`
-	ExportedAt time.Time       `json:"exported_at"`
+	Version    int           `json:"version"`
+	Entries    []MemoryEntry `json:"entries"`
+	ExportedAt time.Time     `json:"exported_at"`
 }
 
-// Export exports all memories and summaries to a JSON file.
+// Export exports all memory entries to a JSON file. Derived reflection
+// catalogs are intentionally excluded because they can be rebuilt.
 func (s *Store) Export(path string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -28,7 +28,6 @@ func (s *Store) Export(path string) error {
 	data := ExportData{
 		Version:    1,
 		Entries:    brain.Entries,
-		Summaries:  brain.Summaries,
 		ExportedAt: time.Now(),
 	}
 

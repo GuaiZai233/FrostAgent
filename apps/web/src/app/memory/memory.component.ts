@@ -59,6 +59,7 @@ export class MemoryComponent implements OnInit {
   readonly visibilityFilter = signal('');
   readonly searchQuery = signal('');
   readonly selectedIds = signal<Set<string>>(new Set());
+  readonly reflecting = signal(false);
 
   ngOnInit(): void {
     void this.loadStats();
@@ -129,9 +130,9 @@ export class MemoryComponent implements OnInit {
   }
 
   toggleSelectAll(): void {
-    const all = this.memories().map(m => m.id);
+    const all = this.memories().map((m) => m.id);
     const selected = this.selectedIds();
-    const allSelected = all.every(id => selected.has(id));
+    const allSelected = all.every((id) => selected.has(id));
     if (allSelected) {
       this.selectedIds.set(new Set());
     } else {
@@ -142,7 +143,7 @@ export class MemoryComponent implements OnInit {
   isAllSelected(): boolean {
     const mems = this.memories();
     if (mems.length === 0) return false;
-    return mems.every(m => this.selectedIds().has(m.id));
+    return mems.every((m) => this.selectedIds().has(m.id));
   }
 
   isSomeSelected(): boolean {
@@ -153,14 +154,21 @@ export class MemoryComponent implements OnInit {
     try {
       const result = await this.api.deleteMemory(id);
       if (result.success) {
-        toast.success($localize`:@@memoryDeleted:记忆已删除`, { duration: 3000 });
+        toast.success($localize`:@@memoryDeleted:记忆已删除`, {
+          duration: 3000,
+        });
         await this.loadStats();
         await this.loadCurrentPage();
       } else {
-        toast.error($localize`:@@memoryDeleteError:删除失败: ${result.error}`, { duration: 5000 });
+        toast.error($localize`:@@memoryDeleteError:删除失败: ${result.error}`, {
+          duration: 5000,
+        });
       }
     } catch (error) {
-      toast.error($localize`:@@memoryDeleteError:删除失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
+      toast.error(
+        $localize`:@@memoryDeleteError:删除失败: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: 5000 },
+      );
     }
   }
 
@@ -173,7 +181,8 @@ export class MemoryComponent implements OnInit {
     for (const id of ids) {
       try {
         const result = await this.api.deleteMemory(id);
-        if (result.success) success++; else fail++;
+        if (result.success) success++;
+        else fail++;
       } catch {
         fail++;
       }
@@ -245,10 +254,9 @@ export class MemoryComponent implements OnInit {
         await this.loadStats();
         await this.loadCurrentPage();
       } else {
-        toast.error(
-          $localize`:@@memoryAddError:添加失败: ${response.error}`,
-          { duration: 5000 },
-        );
+        toast.error($localize`:@@memoryAddError:添加失败: ${response.error}`, {
+          duration: 5000,
+        });
       }
     } catch (error) {
       toast.error(
@@ -262,7 +270,9 @@ export class MemoryComponent implements OnInit {
     try {
       const result = await this.api.exportMemories();
       if (result.error) {
-        toast.error($localize`:@@memoryExportError:导出失败: ${result.error}`, { duration: 5000 });
+        toast.error($localize`:@@memoryExportError:导出失败: ${result.error}`, {
+          duration: 5000,
+        });
         return;
       }
       const blob = new Blob([result.jsonContent], { type: 'application/json' });
@@ -274,7 +284,46 @@ export class MemoryComponent implements OnInit {
       URL.revokeObjectURL(url);
       toast.success($localize`:@@memoryExported:导出成功`, { duration: 3000 });
     } catch (error) {
-      toast.error($localize`:@@memoryExportError:导出失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
+      toast.error(
+        $localize`:@@memoryExportError:导出失败: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: 5000 },
+      );
+    }
+  }
+
+  async triggerReflection(): Promise<void> {
+    this.reflecting.set(true);
+    try {
+      const owner = this.ownerFilter();
+      const result = await this.api.triggerMemoryReflection(owner);
+      if (result.error) {
+        toast.error(
+          $localize`:@@memoryReflectionError:启动反思失败: ${result.error}`,
+          { duration: 5000 },
+        );
+        return;
+      }
+      if (!result.started) {
+        toast.warning(
+          $localize`:@@memoryReflectionRunning:已有记忆反思任务正在后台运行`,
+          { duration: 4000 },
+        );
+        return;
+      }
+      const scope = owner
+        ? $localize`:@@memoryReflectionOwnerScope:用户 ${owner}`
+        : $localize`:@@memoryReflectionAllScope:全部用户`;
+      toast.success(
+        $localize`:@@memoryReflectionStarted:已在后台启动 ${scope} 的记忆反思`,
+        { duration: 4000 },
+      );
+    } catch (error) {
+      toast.error(
+        $localize`:@@memoryReflectionError:启动反思失败: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: 5000 },
+      );
+    } finally {
+      this.reflecting.set(false);
     }
   }
 
@@ -286,16 +335,28 @@ export class MemoryComponent implements OnInit {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const result = await this.api.importMemories(reader.result as string, false);
+        const result = await this.api.importMemories(
+          reader.result as string,
+          false,
+        );
         if (result.error) {
-          toast.error($localize`:@@memoryImportError:导入失败: ${result.error}`, { duration: 5000 });
+          toast.error(
+            $localize`:@@memoryImportError:导入失败: ${result.error}`,
+            { duration: 5000 },
+          );
         } else {
-          toast.success($localize`:@@memoryImported:已导入 ${result.imported} 条，跳过 ${result.skipped} 条`, { duration: 3000 });
+          toast.success(
+            $localize`:@@memoryImported:已导入 ${result.imported} 条，跳过 ${result.skipped} 条`,
+            { duration: 3000 },
+          );
           await this.loadStats();
           await this.loadCurrentPage();
         }
       } catch (error) {
-        toast.error($localize`:@@memoryImportError:导入失败: ${error instanceof Error ? error.message : String(error)}`, { duration: 5000 });
+        toast.error(
+          $localize`:@@memoryImportError:导入失败: ${error instanceof Error ? error.message : String(error)}`,
+          { duration: 5000 },
+        );
       }
     };
     reader.readAsText(file);
@@ -304,19 +365,27 @@ export class MemoryComponent implements OnInit {
 
   getSourceIcon(source: string): string {
     switch (source) {
-      case 'extract': return 'auto_awesome';
-      case 'manual': return 'edit_note';
-      case 'reflect': return 'psychology';
-      default: return 'help_outline';
+      case 'extract':
+        return 'auto_awesome';
+      case 'manual':
+        return 'edit_note';
+      case 'reflect':
+        return 'psychology';
+      default:
+        return 'help_outline';
     }
   }
 
   getSourceLabel(source: string): string {
     switch (source) {
-      case 'extract': return '自动提取';
-      case 'manual': return '手动添加';
-      case 'reflect': return '反思生成';
-      default: return source;
+      case 'extract':
+        return '自动提取';
+      case 'manual':
+        return '手动添加';
+      case 'reflect':
+        return '反思生成';
+      default:
+        return source;
     }
   }
 
@@ -335,7 +404,11 @@ export class MemoryComponent implements OnInit {
     try {
       const query = this.searchQuery();
       if (query) {
-        const response = await this.api.searchMemories(query, this.pageSize(), this.pageTokens.current());
+        const response = await this.api.searchMemories(
+          query,
+          this.pageSize(),
+          this.pageTokens.current(),
+        );
         this.memories.set(response.memories);
         this.nextToken.set(response.pagination?.pageToken ?? '');
         this.total.set(response.pagination?.total ?? response.memories.length);

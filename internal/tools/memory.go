@@ -14,14 +14,14 @@ import (
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
-		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list）。",
+		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list），或在后台整理自己的记忆主题（reflect）。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action": map[string]any{
 					"type":        "string",
-					"description": "操作类型：write（写入）、search（搜索）、list（列出）",
-					"enum":        []string{"write", "search", "list"},
+					"description": "操作类型：write（写入）、search（搜索）、list（列出）、reflect（后台反思整理）",
+					"enum":        []string{"write", "search", "list", "reflect"},
 				},
 				"content": map[string]any{
 					"type":        "string",
@@ -103,8 +103,25 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				result, _ := json.Marshal(filtered)
 				return string(result), nil
 
+			case "reflect":
+				if engine.MemoryReflections == nil {
+					return "记忆反思功能未启用", nil
+				}
+				status, started, err := engine.MemoryReflections.Start(currentUser)
+				if err != nil {
+					return fmt.Sprintf("启动记忆反思失败: %v", err), nil
+				}
+				if !started {
+					target := status.Owner
+					if target == "" {
+						target = "全部用户"
+					}
+					return fmt.Sprintf("记忆反思任务正在运行（范围：%s）", target), nil
+				}
+				return "记忆反思任务已在后台启动，完成后会更新主题索引", nil
+
 			default:
-				return "未知操作，支持：write、search、list", nil
+				return "未知操作，支持：write、search、list、reflect", nil
 			}
 		},
 	}

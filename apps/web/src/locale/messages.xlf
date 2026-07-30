@@ -63,6 +63,17 @@
           <context context-type="linenumber">61</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="summary" datatype="html">
+        <source>摘要</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/logs/log-summary-dialog.component.ts</context>
+          <context context-type="linenumber">20</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/logs/logs.component.html</context>
+          <context context-type="linenumber">91</context>
+        </context-group>
+      </trans-unit>
       <trans-unit id="refreshTooltip" datatype="html">
         <source>刷新</source>
         <context-group purpose="location">
@@ -86,7 +97,7 @@
         <source>清理日志</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">18,20</context>
+          <context context-type="linenumber">18,19</context>
         </context-group>
       </trans-unit>
       <trans-unit id="minLogLevel" datatype="html">
@@ -100,7 +111,7 @@
         <source> 来源过滤 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">46,48</context>
+          <context context-type="linenumber">46,47</context>
         </context-group>
       </trans-unit>
       <trans-unit id="applyFilter" datatype="html">
@@ -118,7 +129,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">64,66</context>
+          <context context-type="linenumber">82,84</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/overview/overview.component.html</context>
@@ -154,29 +165,22 @@
           <context context-type="linenumber">90</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="summary" datatype="html">
-        <source>摘要</source>
-        <context-group purpose="location">
-          <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">91</context>
-        </context-group>
-      </trans-unit>
       <trans-unit id="noLogs" datatype="html">
         <source> 暂无日志。 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">120,121</context>
+          <context context-type="linenumber">127</context>
         </context-group>
       </trans-unit>
       <trans-unit id="paginationTotal" datatype="html">
         <source>共 <x id="INTERPOLATION" equiv-text="{{ total() }}"/> 条</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">131,132</context>
+          <context context-type="linenumber">138,139</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">274,275</context>
+          <context context-type="linenumber">292,293</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/sessions/sessions.component.html</context>
@@ -187,11 +191,11 @@
         <source>第 <x id="INTERPOLATION" equiv-text="{{ pageIndex() + 1 }}"/> 页</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">133,134</context>
+          <context context-type="linenumber">140,141</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">276,277</context>
+          <context context-type="linenumber">294,295</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/sessions/sessions.component.html</context>
@@ -202,11 +206,11 @@
         <source> 上一页 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">160,161</context>
+          <context context-type="linenumber">167,168</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">303,304</context>
+          <context context-type="linenumber">321,322</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/sessions/sessions.component.html</context>
@@ -217,11 +221,11 @@
         <source> 下一页 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">172,173</context>
+          <context context-type="linenumber">179,180</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">315,316</context>
+          <context context-type="linenumber">333,334</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/sessions/sessions.component.html</context>
@@ -232,63 +236,63 @@
         <source>日志详情</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">185,187</context>
+          <context context-type="linenumber">192,194</context>
         </context-group>
       </trans-unit>
       <trans-unit id="requestBody" datatype="html">
         <source>请求体</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">193,194</context>
+          <context context-type="linenumber">199,200</context>
         </context-group>
       </trans-unit>
       <trans-unit id="responseBody" datatype="html">
         <source>响应体</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">199,200</context>
+          <context context-type="linenumber">205,207</context>
         </context-group>
       </trans-unit>
       <trans-unit id="selectLogPrompt" datatype="html">
         <source> 选择一条日志查看详情。 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">206,208</context>
+          <context context-type="linenumber">213,215</context>
         </context-group>
       </trans-unit>
       <trans-unit id="liveLogs" datatype="html">
         <source>实时日志流</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">215,216</context>
+          <context context-type="linenumber">222,223</context>
         </context-group>
       </trans-unit>
       <trans-unit id="noStreamLogs" datatype="html">
         <source> 实时流尚未收到日志。 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.html</context>
-          <context context-type="linenumber">235,237</context>
+          <context context-type="linenumber">242,244</context>
         </context-group>
       </trans-unit>
       <trans-unit id="clearLogsTitle" datatype="html">
         <source>清理日志</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">152</context>
+          <context context-type="linenumber">162</context>
         </context-group>
       </trans-unit>
       <trans-unit id="clearLogsMessage" datatype="html">
         <source>确认清理当前内存日志缓冲区吗？此操作无法撤销。</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">153</context>
+          <context context-type="linenumber">163</context>
         </context-group>
       </trans-unit>
       <trans-unit id="cancel" datatype="html">
         <source>取消</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">154</context>
+          <context context-type="linenumber">164</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory-add-dialog.ts</context>
@@ -311,28 +315,28 @@
         <source>清理</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">155</context>
+          <context context-type="linenumber">165</context>
         </context-group>
       </trans-unit>
       <trans-unit id="logsCleared" datatype="html">
         <source>日志已清理</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">168</context>
+          <context context-type="linenumber">178</context>
         </context-group>
       </trans-unit>
       <trans-unit id="stopStream" datatype="html">
         <source>停止</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">203</context>
+          <context context-type="linenumber">213</context>
         </context-group>
       </trans-unit>
       <trans-unit id="startStream" datatype="html">
         <source>开始</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/logs/logs.component.ts</context>
-          <context context-type="linenumber">204</context>
+          <context context-type="linenumber">214</context>
         </context-group>
       </trans-unit>
       <trans-unit id="addMemoryDialog" datatype="html">
@@ -346,15 +350,15 @@
         <source>归属者</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory-add-dialog.ts</context>
-          <context context-type="linenumber">44,46</context>
+          <context context-type="linenumber">44,45</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory-detail-dialog.ts</context>
-          <context context-type="linenumber">51</context>
+          <context context-type="linenumber">50,51</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">164</context>
+          <context context-type="linenumber">181,182</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryContent" datatype="html">
@@ -369,7 +373,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">165</context>
+          <context context-type="linenumber">183</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryTagsCommaSeparated" datatype="html">
@@ -395,7 +399,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">167</context>
+          <context context-type="linenumber">184,185</context>
         </context-group>
       </trans-unit>
       <trans-unit id="save" datatype="html">
@@ -435,7 +439,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">163</context>
+          <context context-type="linenumber">181</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryCreatedAt" datatype="html">
@@ -446,7 +450,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">168,169</context>
+          <context context-type="linenumber">186,187</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryUpdatedAt" datatype="html">
@@ -460,7 +464,7 @@
         <source> 重要度: <x id="INTERPOLATION" equiv-text="{{ editedImportance.toFixed(2) }}"/> </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory-detail-dialog.ts</context>
-          <context context-type="linenumber">110,112</context>
+          <context context-type="linenumber">110,111</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryManagement" datatype="html">
@@ -488,178 +492,224 @@
           <context context-type="linenumber">32,34</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="reflectMemories" datatype="html">
+        <source>反思</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.html</context>
+          <context context-type="linenumber">50,52</context>
+        </context-group>
+      </trans-unit>
       <trans-unit id="export" datatype="html">
         <source>导出</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">36,37</context>
+          <context context-type="linenumber">54,55</context>
         </context-group>
       </trans-unit>
       <trans-unit id="import" datatype="html">
         <source>导入</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">40,41</context>
+          <context context-type="linenumber">58,59</context>
         </context-group>
       </trans-unit>
       <trans-unit id="totalMemories" datatype="html">
         <source> 总记忆数 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">83,85</context>
+          <context context-type="linenumber">101,102</context>
         </context-group>
       </trans-unit>
       <trans-unit id="publicMemories" datatype="html">
         <source> 公开 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">91,93</context>
+          <context context-type="linenumber">109,110</context>
         </context-group>
       </trans-unit>
       <trans-unit id="privateMemories" datatype="html">
         <source> 私有 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">99,101</context>
+          <context context-type="linenumber">117,119</context>
         </context-group>
       </trans-unit>
       <trans-unit id="selectedCount" datatype="html">
         <source> 已选择 <x id="INTERPOLATION" equiv-text="{{ selectedIds().size }}"/> 条 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">138,140</context>
+          <context context-type="linenumber">156,157</context>
         </context-group>
       </trans-unit>
       <trans-unit id="deleteSelected" datatype="html">
         <source>删除所选</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">142,144</context>
+          <context context-type="linenumber">160,162</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryTags" datatype="html">
         <source>标签</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">166</context>
+          <context context-type="linenumber">184</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryImportance" datatype="html">
         <source>重要度</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">168</context>
+          <context context-type="linenumber">185,186</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryActions" datatype="html">
         <source>操作</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">170,171</context>
+          <context context-type="linenumber">188,189</context>
         </context-group>
       </trans-unit>
       <trans-unit id="noMemories" datatype="html">
         <source> 暂无记忆记录。 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.html</context>
-          <context context-type="linenumber">326,328</context>
+          <context context-type="linenumber">344,346</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryDeleted" datatype="html">
         <source>记忆已删除</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">156</context>
+          <context context-type="linenumber">157</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryDeleteError" datatype="html">
         <source>删除失败: <x id="PH" equiv-text="result.error"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">160</context>
+          <context context-type="linenumber">161</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">163</context>
+          <context context-type="linenumber">164</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryBatchDeleted" datatype="html">
         <source>已删除 <x id="PH" equiv-text="success"/> 条记忆<x id="PH_1" equiv-text="fail ? `, ${fail} 条失败` : &apos;&apos;"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">183</context>
+          <context context-type="linenumber">184</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryUpdated" datatype="html">
         <source>记忆已更新</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">209</context>
+          <context context-type="linenumber">210</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryUpdateError" datatype="html">
         <source>更新失败: <x id="PH" equiv-text="response.error"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">215</context>
+          <context context-type="linenumber">216</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">221</context>
+          <context context-type="linenumber">222</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryAdded" datatype="html">
         <source>记忆已添加</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">242</context>
+          <context context-type="linenumber">243</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryAddError" datatype="html">
         <source>添加失败: <x id="PH" equiv-text="response.error"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">249</context>
+          <context context-type="linenumber">250</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">255</context>
+          <context context-type="linenumber">256</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryExportError" datatype="html">
         <source>导出失败: <x id="PH" equiv-text="result.error"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">265</context>
+          <context context-type="linenumber">266</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">277</context>
+          <context context-type="linenumber">278</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryExported" datatype="html">
         <source>导出成功</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">275</context>
+          <context context-type="linenumber">276</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="memoryReflectionError" datatype="html">
+        <source>启动反思失败: <x id="PH" equiv-text="result.error"/></source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">289</context>
+        </context-group>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">310</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="memoryReflectionRunning" datatype="html">
+        <source>已有记忆反思任务正在后台运行</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">296</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="memoryReflectionOwnerScope" datatype="html">
+        <source>用户 <x id="PH" equiv-text="owner"/></source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">302</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="memoryReflectionAllScope" datatype="html">
+        <source>全部用户</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">303</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="memoryReflectionStarted" datatype="html">
+        <source>已在后台启动 <x id="PH" equiv-text="scope"/> 的记忆反思</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
+          <context context-type="linenumber">305</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryImportError" datatype="html">
         <source>导入失败: <x id="PH" equiv-text="result.error"/></source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">291</context>
+          <context context-type="linenumber">328</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">298</context>
+          <context context-type="linenumber">335</context>
         </context-group>
       </trans-unit>
       <trans-unit id="memoryImported" datatype="html">
         <source>已导入 <x id="PH" equiv-text="result.imported"/> 条，跳过 <x id="PH_1" equiv-text="result.skipped"/> 条</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/memory/memory.component.ts</context>
-          <context context-type="linenumber">293</context>
+          <context context-type="linenumber">330</context>
         </context-group>
       </trans-unit>
       <trans-unit id="totalMessages" datatype="html">
@@ -729,7 +779,7 @@
         <source>消息数</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/sessions/sessions.component.html</context>
-          <context context-type="linenumber">38</context>
+          <context context-type="linenumber">37,38</context>
         </context-group>
       </trans-unit>
       <trans-unit id="createdAt" datatype="html">
@@ -771,14 +821,14 @@
         <source>原始 .env</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
-          <context context-type="linenumber">43,46</context>
+          <context context-type="linenumber">43,45</context>
         </context-group>
       </trans-unit>
       <trans-unit id="key" datatype="html">
         <source>Key</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
-          <context context-type="linenumber">53</context>
+          <context context-type="linenumber">52,53</context>
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/shared/add-env-var-dialog.component.ts</context>
@@ -819,7 +869,7 @@
         </context-group>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/shared/add-env-var-dialog.component.ts</context>
-          <context context-type="linenumber">71,73</context>
+          <context context-type="linenumber">71,72</context>
         </context-group>
       </trans-unit>
       <trans-unit id="noEnvVars" datatype="html">
@@ -995,7 +1045,7 @@
         <source> 添加或覆盖后端使用的环境变量。 </source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/shared/add-env-var-dialog.component.ts</context>
-          <context context-type="linenumber">38,42</context>
+          <context context-type="linenumber">38,41</context>
         </context-group>
       </trans-unit>
       <trans-unit id="logLevelAll" datatype="html">

@@ -21,6 +21,7 @@ import {
   type UpdateMemoryResponse,
   type ExportMemoriesResponse,
   type ImportMemoriesResponse,
+  type TriggerReflectionResponse,
 } from '@frostagent/proto';
 
 export interface EnvVarUpdate {
@@ -177,7 +178,13 @@ export class FrostagentApiService {
     visibility: string,
     importance: number,
   ): Promise<UpdateMemoryResponse> {
-    return this.memoryClient.updateMemory({ id, content, tags, visibility, importance });
+    return this.memoryClient.updateMemory({
+      id,
+      content,
+      tags,
+      visibility,
+      importance,
+    });
   }
 
   exportMemories(): Promise<ExportMemoriesResponse> {
@@ -189,5 +196,9 @@ export class FrostagentApiService {
     overwrite: boolean,
   ): Promise<ImportMemoriesResponse> {
     return this.memoryClient.importMemories({ jsonContent, overwrite });
+  }
+
+  triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
+    return this.memoryClient.triggerReflection({ owner });
   }
 }

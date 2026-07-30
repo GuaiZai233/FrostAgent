@@ -8,14 +8,14 @@
 
 1. **统一的记忆系统**：所有记忆存储在一起，不分隔。Agent 是一个完整的人，不是多个分裂的人格
 2. **输出网关**：召回和注入时，通过 Gateway（过滤 + 提示词工程）确保不串台
-3. **反思全局视图**：反思系统可以看到所有记忆，发现跨用户关联
+3. **反思按用户隔离**：全量反思任务按 owner 分批处理，避免跨用户主题污染
 4. **降级安全**：任何环节失败都不影响正常对话
 
 让 Agent 通过与人类的交流自行写入和管理记忆，实现：
 
 - **跨会话记忆**：记住用户说过的话、偏好、习惯
 - **主动回忆**：日常对话时自动检索相关记忆注入上下文
-- **自我进化**：通过反思机制淘汰过时记忆、生成摘要索引
+- **自我进化**：通过反思机制淘汰过时记忆、生成主题索引
 - **防串台**：统一大脑 + 输出网关
 
 ---
@@ -55,8 +55,8 @@
           └───────────────┘
 
           ┌───────────────┐
-          │   Reflector   │  反思器 —— 可以看到全局记忆（不受 Gateway 限制）
-          │   反思器      │  定期总结、淘汰、生成摘要
+          │   Reflector   │  反思器 —— 按 owner 分批整理记忆
+          │   反思器      │  更新重要度、淘汰过时项、生成主题目录
           └───────────────┘
 ```
 
@@ -83,12 +83,6 @@ type MemoryStore interface {
 
     // 列出全部记忆（仅反思器使用）
     ListAll(ctx context.Context) ([]MemoryEntry, error)
-
-    // 获取记忆摘要
-    GetSummary(ctx context.Context, owner string) (*MemorySummary, error)
-
-    // 更新记忆摘要
-    SaveSummary(ctx context.Context, summary MemorySummary) error
 
     // 删除一条记忆
     Delete(ctx context.Context, memoryID string) error
@@ -136,11 +130,13 @@ type MemoryGateway interface {
 ### 3.4 MemoryReflector（反思器）
 
 ```go
-// MemoryReflector handles periodic memory summarization.
-// 反思器拥有全局视野，不受 Gateway 限制。
+// MemoryReflector rebuilds a compact topic catalog per owner.
 type MemoryReflector interface {
-    // 对所有记忆执行反思（生成摘要、淘汰过时记忆）
+    // 后台整理全部 owner 的记忆
     Reflect(ctx context.Context) error
+
+    // 只整理指定 owner 的记忆
+    ReflectOwner(ctx context.Context, owner string) error
 }
 ```
 
@@ -170,17 +166,25 @@ type MemoryEntry struct {
 - `private`（默认）：只有 owner 自己能看到。Gateway 会过滤掉其他用户的 private 记忆
 - `public`：所有人可见。例如"舞萌更新到Circle+了"、"项目 deadline 是下周五"
 
-### 4.2 MemorySummary（记忆摘要）
+### 4.2 UserMemoryCatalog（记忆主题目录）
 
 ```go
-// MemorySummary is the product of the reflection system.
-type MemorySummary struct {
-    Owner       string    `json:"owner"`        // 归属者
-    Summary     string    `json:"summary"`      // 自然语言摘要（供注入 system prompt）
-    KeyTopics   []string  `json:"key_topics"`   // 关键话题索引
-    GeneratedAt time.Time `json:"generated_at"` // 生成时间
+type MemoryTopic struct {
+    Name       string   `json:"name"`
+    Aliases    []string `json:"aliases,omitempty"`
+    Importance float64  `json:"importance,omitempty"`
+}
+
+type UserMemoryCatalog struct {
+    Owner       string        `json:"owner"`
+    Topics      []MemoryTopic `json:"topics"`
+    MemoryCount int           `json:"memory_count"`
+    GeneratedAt time.Time     `json:"generated_at"`
 }
 ```
+
+主题目录只是帮助模型决定何时调用 memory 搜索工具的索引，不代表具体事实。
+它独立保存并可随时覆写，不进入 `brain.json`，也不随记忆导入导出。
 
 ### 4.3 MemoryConfig（配置）
 
@@ -200,15 +204,13 @@ type MemoryConfig struct {
 
 ### 第一阶段：文件存储（JSON）
 
-所有记忆统一存放在一个文件中（统一大脑）：
+原始记忆和可重建的主题目录分开保存：
 
 ```
-internal/memory/storage/
-├── brain.json           # 统一大脑：所有记忆条目
-└── summaries/           # 摘要（按 owner 分文件，仅用于快速索引）
-    ├── frost.json
-    ├── alice.json
-    └── ...
+data/
+├── brain.json            # 统一大脑：原始记忆条目
+├── memory_catalog.json   # 可覆写的按 owner 主题目录
+└── vectors.json          # 可选向量索引
 ```
 
 **为什么先用文件**：
@@ -344,14 +346,16 @@ JSON
 ### 6.3 反思流程
 
 ```
-一段时间内没有请求或负载低时──▶ Reflector.Reflect()
-                               │
-                               ├─ 1. 读取用户全部记忆
-                               ├─ 2. 发给 LLM 生成摘要
-                               │     提示词下面会写
-                               ├─ 3. 淘汰过时记忆（importance < 阈值）
-                               ├─ 4. 更新 MemorySummary
-                               └─ 5. 更新重要度分数
+Web 或聊天手动触发 ──▶ ReflectionManager.Start(owner)
+                         │  立即返回，不阻塞对话
+                         ▼
+                    后台 goroutine
+                         ├─ 按 owner 读取记忆
+                         ├─ LLM 提取主题、别名和重要度
+                         ├─ 校验 LLM 返回的记忆 ID
+                         ├─ 淘汰明确过时的记忆
+                         ├─ 更新重要度
+                         └─ 覆写 memory_catalog.json
 ```
 
 ```
@@ -360,8 +364,7 @@ JSON
 
 【任务要求】
 
-- 全局摘要 (Summary)：将零散的记忆融合成一段流畅的自然语言描述，形成对该用户的全面、立体的认知画像。
-- 核心话题 (Key Topics)：提取该用户最常讨论或最关注的 3-5 个核心关键词/话题。
+- 主题目录 (Topics)：提取该用户最常讨论或最关注的主题、别名与同义词。
 - 记忆淘汰 (Obsolete IDs)：识别出已经相互矛盾、被新信息覆盖、或不再具有保留价值的旧记忆的 ID，系统将清理它们。如果没有，则返回空列表。
 
 【输出格式】
@@ -369,9 +372,11 @@ JSON
 JSON
 
 {
-  "summary": "该用户是一名后端开发者，主要技术栈为 Go 语言，目前致力于开发 FrostAgent...",
-  "key_topics": ["Go语言", "系统设计", "AI Agent"],
-  "obsolete_ids": ["mem_005", "mem_012"]
+  "topics": [
+    {"name": "FrostAgent", "aliases": ["霜降狐项目"], "importance": 1.0}
+  ],
+  "outdated_ids": ["mem_005", "mem_012"],
+  "importance_updates": {"mem_001": 0.9}
 }
 
 【记忆条目】
@@ -380,7 +385,7 @@ JSON
 
 ### 6.4 隔离机制（统一大脑 + 输出网关）
 
-**核心理念**：Agent 的大脑是统一的，所有记忆存储在一起。隔离发生在输出层——通过 Gateway 确保"嘴巴严实"。
+**核心理念**：原始记忆统一存储；召回结果通过 Gateway 过滤；反思按 owner 分批处理并生成独立主题目录。
 
 ```
 统一大脑（brain.json）
@@ -423,7 +428,7 @@ JSON
 ```
 
 **隔离规则**：
-- **存储层不隔离**：所有记忆在一起，反思系统可以看到全局
+- **存储统一、处理隔离**：原始记忆在一起，反思按 owner 分批处理
 - **输出层隔离**：Gateway 过滤 + 提示词工程，双重防线
 - **跨群共享**：同一用户在不同群的记忆是同一份（owner 不含 group_id）
 - **群级记忆**（可选扩展）：owner 可扩展为 `{user_id}@{group_id}`
@@ -529,13 +534,15 @@ internal/memory/
 ├── reader.go         # MemoryReader 实现（全量搜索）
 ├── gateway.go        # MemoryGateway 实现（过滤 + 提示词）
 ├── gateway_test.go
-├── reflector.go      # MemoryReflector 实现
-├── models.go         # MemoryEntry, MemorySummary 数据结构
+├── reflector.go      # 按 owner 的反思执行器
+├── reflection_manager.go # 非阻塞后台反思任务
+├── catalog.go        # 独立主题目录存储与提示词格式化
+├── models.go         # MemoryEntry 数据结构
 ├── config.go         # MemoryConfig 配置
 ├── prompts.go        # LLM 提示词模板（提取、反思、隔离指令）
-└── storage/
-    ├── brain.json    # 统一大脑
-    └── summaries/    # 摘要索引
+└── data/
+    ├── brain.json          # 统一大脑
+    └── memory_catalog.json # 可重建主题目录
 ```
 
 ---
@@ -544,7 +551,7 @@ internal/memory/
 
 ### P0：基础记忆（最小可用）
 
-- [ ] 数据模型（MemoryEntry, MemorySummary, Visibility）
+- [ ] 数据模型（MemoryEntry, UserMemoryCatalog, Visibility）
 - [ ] MemoryStore 统一存储实现（brain.json）
 - [ ] MemoryWriter 被动写入（用户明确指令）
 - [ ] MemoryReader 全量搜索

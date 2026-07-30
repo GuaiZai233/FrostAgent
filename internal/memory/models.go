@@ -38,16 +38,7 @@ type MemoryEntry struct {
 	AccessCount int        `json:"access_count"` // 被召回次数
 }
 
-// MemorySummary is the product of the reflection system.
-type MemorySummary struct {
-	Owner       string    `json:"owner"`        // 归属者
-	Summary     string    `json:"summary"`      // 自然语言摘要（供注入 system prompt）
-	KeyTopics   []string  `json:"key_topics"`   // 关键话题索引
-	GeneratedAt time.Time `json:"generated_at"` // 生成时间
-}
-
 // BrainData 统一大脑的持久化结构。
 type BrainData struct {
-	Entries   []MemoryEntry   `json:"entries"`
-	Summaries []MemorySummary `json:"summaries,omitempty"`
+	Entries []MemoryEntry `json:"entries"`
 }

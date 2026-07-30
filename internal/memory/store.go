@@ -212,45 +212,6 @@ func (s *Store) ListAll() ([]MemoryEntry, error) {
 	return brain.Entries, nil
 }
 
-// GetSummary returns the memory summary for the specified owner from the unified brain.
-func (s *Store) GetSummary(owner string) (*MemorySummary, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	brain, err := s.load()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, summary := range brain.Summaries {
-		if summary.Owner == owner {
-			s2 := summary
-			return &s2, nil
-		}
-	}
-	return nil, nil
-}
-
-// SaveSummary writes or updates a memory summary in the unified brain.
-func (s *Store) SaveSummary(summary MemorySummary) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	brain, err := s.load()
-	if err != nil {
-		return err
-	}
-
-	for i, s2 := range brain.Summaries {
-		if s2.Owner == summary.Owner {
-			brain.Summaries[i] = summary
-			return s.save(brain)
-		}
-	}
-	brain.Summaries = append(brain.Summaries, summary)
-	return s.save(brain)
-}
-
 // Delete removes a memory entry by ID.
 func (s *Store) Delete(memoryID string) error {
 	s.mu.Lock()
@@ -268,6 +229,68 @@ func (s *Store) Delete(memoryID string) error {
 		}
 	}
 	return fmt.Errorf("memory %s not found", memoryID)
+}
+
+// ApplyReflection atomically applies a validated reflection result for one
+// owner and returns the remaining entries plus IDs that were deleted.
+func (s *Store) ApplyReflection(
+	owner string,
+	outdatedIDs []string,
+	importanceUpdates map[string]float64,
+) ([]MemoryEntry, []string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	outdated := make(map[string]bool, len(outdatedIDs))
+	for _, id := range outdatedIDs {
+		outdated[id] = true
+	}
+
+	remaining := make([]MemoryEntry, 0)
+	deleted := make([]string, 0)
+	for i := range brain.Entries {
+		entry := &brain.Entries[i]
+		if entry.Owner != owner {
+			continue
+		}
+		if outdated[entry.ID] {
+			deleted = append(deleted, entry.ID)
+			continue
+		}
+		if importance, ok := importanceUpdates[entry.ID]; ok {
+			if importance < 0 {
+				importance = 0
+			} else if importance > 1 {
+				importance = 1
+			}
+			entry.Importance = importance
+			entry.UpdatedAt = time.Now()
+		}
+		remaining = append(remaining, *entry)
+	}
+
+	if len(deleted) > 0 {
+		filtered := brain.Entries[:0]
+		for _, entry := range brain.Entries {
+			if entry.Owner == owner && outdated[entry.ID] {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		brain.Entries = filtered
+	}
+
+	// Always rewrite after reflection so legacy inline "summaries" fields are
+	// removed from brain.json even when no importance or deletion changed.
+	if err := s.save(brain); err != nil {
+		return nil, nil, err
+	}
+	return remaining, deleted, nil
 }
 
 // UpdateImportance updates a single memory's importance score.

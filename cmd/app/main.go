@@ -46,6 +46,11 @@ func vectorPath() string {
 	return filepath.Join(dir, "vectors.json")
 }
 
+// catalogPath returns the independent, replaceable reflection catalog path.
+func catalogPath() string {
+	return filepath.Join(filepath.Dir(brainPath()), "memory_catalog.json")
+}
+
 // ensureDataDir ensures the data directory exists for brain.json.
 func ensureDataDir() {
 	dir := filepath.Dir(brainPath())
@@ -93,6 +98,19 @@ func init() {
 	}
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
+	// Reflection: background, owner-isolated topic catalog generation
+	catalog := memory.NewCatalogStore(catalogPath())
+	reflector := memory.NewReflector(
+		globalStore,
+		catalog,
+		llmClient,
+		os.Getenv("MODEL_NAME"),
+		memory.DefaultConfig(),
+	)
+	if vs != nil {
+		reflector.SetVectorStore(vs)
+	}
+	reflections := memory.NewReflectionManager(reflector)
 
 	// Register tools
 	registry := make(map[string]tools.Tool)
@@ -101,9 +119,6 @@ func init() {
 
 	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
-
-
-
 
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
@@ -121,9 +136,11 @@ func init() {
 		StartedAt:      time.Now(),
 		Version:        version,
 		// Memory components
-		MemoryReader:  reader,
-		MemoryWriter:  writer,
-		MemoryGateway: gateway,
+		MemoryReader:      reader,
+		MemoryWriter:      writer,
+		MemoryGateway:     gateway,
+		MemoryCatalog:     catalog,
+		MemoryReflections: reflections,
 	}
 
 	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
@@ -145,7 +162,9 @@ func main() {
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)
 
-	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memsvc.New(globalStore))
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
+		memsvc.New(globalStore, GlobalEngine.MemoryReflections),
+	)
 	mux.Handle(memoryPath, memoryHandler)
 
 	// 前端 SPA（兜底，放在最后）
