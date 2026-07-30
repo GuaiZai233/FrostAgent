@@ -1,8 +1,6 @@
 package memory
 
-import (
-	"context"
-)
+import "context"
 
 // Reader handles memory retrieval from the unified brain.
 // It performs global search without filtering — the Gateway handles access control.
@@ -82,4 +80,10 @@ func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEnt
 	}
 
 	return results, nil
+}
+
+// SearchByTags searches memories by multiple tags using the store's tag-based search.
+// Results are ranked by relevance (tag exact match > tag substring > content substring).
+func (r *Reader) SearchByTags(ctx context.Context, tags []string) ([]MemoryEntry, error) {
+	return r.store.SearchByTags(tags, r.limit)
 }
