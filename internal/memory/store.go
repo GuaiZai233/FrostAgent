@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +92,80 @@ func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {
 		}
 	}
 	return results, nil
+}
+
+// SearchByTags searches memories by multiple tags using OR logic.
+// Each search tag is matched against entry tags and content, with results
+// ranked by relevance: tag exact match > tag substring > content substring.
+// Tags are never split or reprocessed — the caller is responsible for providing
+// meaningful search terms.
+func (s *Store) SearchByTags(tags []string, limit int) ([]MemoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+
+	type scored struct {
+		entry MemoryEntry
+		score float64
+	}
+
+	var scoredEntries []scored
+	for _, entry := range brain.Entries {
+		sc := tagMatchScore(entry, tags)
+		if sc > 0 {
+			scoredEntries = append(scoredEntries, scored{entry: entry, score: sc})
+		}
+	}
+
+	// Sort by score descending
+	sort.SliceStable(scoredEntries, func(i, j int) bool {
+		return scoredEntries[i].score > scoredEntries[j].score
+	})
+
+	results := make([]MemoryEntry, 0, len(scoredEntries))
+	for _, se := range scoredEntries {
+		results = append(results, se.entry)
+		if limit > 0 && len(results) >= limit {
+			break
+		}
+	}
+	return results, nil
+}
+
+// tagMatchScore computes a relevance score for an entry against search tags.
+// Scoring: tag exact match +3, tag substring match +2, content substring match +1.
+// Lowercases both the entry and search tags for case-insensitive matching.
+func tagMatchScore(entry MemoryEntry, searchTags []string) float64 {
+	var score float64
+	contentLower := strings.ToLower(entry.Content)
+	for _, st := range searchTags {
+		stLower := strings.ToLower(strings.TrimSpace(st))
+		if stLower == "" {
+			continue
+		}
+
+		var termScore float64
+		for _, et := range entry.Tags {
+			tagLower := strings.ToLower(strings.TrimSpace(et))
+			if tagLower == stLower {
+				termScore = 3.0
+				break
+			}
+			if termScore < 2.0 && strings.Contains(tagLower, stLower) {
+				termScore = 2.0
+			}
+		}
+
+		if termScore == 0 && strings.Contains(contentLower, stLower) {
+			termScore = 1.0
+		}
+		score += termScore
+	}
+	return score
 }
 
 // matchEntry checks if a memory entry matches the query.
