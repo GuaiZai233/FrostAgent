@@ -44,6 +44,35 @@
     </div>
 
     <section hlmTabsContent="env">
+      <article hlmCard class="mt-4">
+        <div hlmCardHeader>
+          <h3 hlmCardTitle i18n="@@groupReplyCard">群聊回复行为</h3>
+          <p hlmCardDescription i18n="@@groupReplyCardDesc">开关即时生效，无需重启</p>
+        </div>
+        <div hlmCardContent class="grid gap-3">
+          <label class="flex cursor-pointer items-center justify-between gap-4">
+            <span class="text-sm" i18n="@@groupReplyOnMention">群聊被@/提及时触发对话</span>
+            <hlm-checkbox
+              [checked]="groupReplyOnMention()"
+              (checkedChange)="onToggle('GROUP_REPLY_ON_MENTION', $event)"
+            />
+          </label>
+          <label class="flex cursor-pointer items-center justify-between gap-4">
+            <span class="text-sm" i18n="@@enableAtOther">回复时@对方</span>
+            <hlm-checkbox
+              [checked]="enableAtOther()"
+              (checkedChange)="onToggle('ENABLE_AT_IN_GROUP_MSG', $event)"
+            />
+          </label>
+          <label class="flex cursor-pointer items-center justify-between gap-4">
+            <span class="text-sm" i18n="@@enableReplyOther">回复时引用原消息</span>
+            <hlm-checkbox
+              [checked]="enableReplyOther()"
+              (checkedChange)="onToggle('ENABLE_REPLY_IN_GROUP_MSG', $event)"
+            />
+          </label>
+        </div>
+      </article>
       <article hlmCard class="mt-4 py-0">
         <div hlmTableContainer>
           <table hlmTable>
