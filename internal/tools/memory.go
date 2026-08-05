@@ -14,7 +14,7 @@ import (
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
-		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list），或在后台整理自己的记忆主题（reflect）。",
+		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list），或在后台整理自己的记忆主题（reflect）。警告：请谨慎使用list，除非用户明确要求！",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
