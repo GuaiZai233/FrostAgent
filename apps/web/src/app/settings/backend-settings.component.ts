@@ -73,6 +73,9 @@ export class BackendSettingsComponent
   readonly loading = signal(false);
   readonly saving = signal(false);
   readonly error = signal('');
+  readonly groupReplyOnMention = signal(false);
+  readonly enableAtOther = signal(false);
+  readonly enableReplyOther = signal(false);
   readonly rawContent = signal('');
   readonly editingKey = signal('');
   readonly editingValue = signal('');
@@ -126,6 +129,11 @@ export class BackendSettingsComponent
       ]);
       this.envVars.set(envVars);
       this.rawContent.set(rawContent);
+      const envValue = (key: string): string =>
+        envVars.find((v) => v.key === key)?.value ?? '';
+      this.groupReplyOnMention.set(envValue('GROUP_REPLY_ON_MENTION') !== 'false');
+      this.enableAtOther.set(envValue('ENABLE_AT_IN_GROUP_MSG') === 'true');
+      this.enableReplyOther.set(envValue('ENABLE_REPLY_IN_GROUP_MSG') === 'true');
       if (this.editorView) {
         this.editorView.dispatch({
           changes: {
@@ -260,6 +268,28 @@ export class BackendSettingsComponent
         return;
       }
       toast.success($localize`:@@envSaved:环境变量已保存`, {
+        duration: 2500,
+      });
+      await this.refresh();
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  async onToggle(key: string, value: boolean): Promise<void> {
+    this.saving.set(true);
+    this.error.set('');
+    try {
+      const response = await this.api.updateEnvVar({
+        key,
+        value: value ? 'true' : 'false',
+        isSecret: false,
+      });
+      if (!response.success) {
+        this.error.set(response.error);
+        return;
+      }
+      toast.success($localize`:@@groupReplyToggled:群聊回复设置已更新`, {
         duration: 2500,
       });
       await this.refresh();

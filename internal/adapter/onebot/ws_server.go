@@ -156,6 +156,10 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				string(event.Message),
 			),
 		)
+		// 群聊被@/提及时触发对话（总开关；未设置视为启用）
+		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+			return
+		}
 		if !IsMentionedBot(event) {
 			return
 		}
@@ -242,6 +246,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if len(oneBotSegments) == 0 {
 				return
 			}
+			if event.MessageType == "group" {
+				oneBotSegments = wrapGroupReply(oneBotSegments, event)
+			}
 			botAction := model.OneBotAction{
 				Action: action,
 				Params: map[string]interface{}{
@@ -280,6 +287,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
 		if len(oneBotSegments) > 0 {
+			if event.MessageType == "group" {
+				oneBotSegments = wrapGroupReply(oneBotSegments, event)
+			}
 			finalMessage = oneBotSegments
 		} else {
 			finalMessage = replyText // Fallback to raw text if conversion fails
@@ -287,12 +297,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	} else {
 		// B. It's plain text
 		if event.MessageType == "group" {
-			// Prepend @ in group chats
-			if os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" {
-				finalMessage = []map[string]interface{}{
-					{"type": "at", "data": map[string]interface{}{"qq": strconv.FormatInt(event.UserID, 10)}},
-					{"type": "text", "data": map[string]interface{}{"text": " " + replyText}},
+			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
+			enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+			enableReply := os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+			if enableAt || enableReply {
+				textSeg := tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]interface{}{"text": " " + replyText},
 				}
+				finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
 			} else {
 				finalMessage = replyText
 			}
@@ -317,6 +330,28 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
 	}
+}
+
+// wrapGroupReply 按 env 开关为群聊回复前置 reply 段（引用原消息）与 at 段。
+// 顺序：reply → at → base；两个开关都关闭时返回 base 原样，方便无条件调用。
+func wrapGroupReply(base []tools.OneBotSegment, event model.OneBotEvent) []tools.OneBotSegment {
+	out := make([]tools.OneBotSegment, 0, len(base)+2)
+	if os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true" {
+		out = append(out, tools.OneBotSegment{
+			Type: "reply",
+			Data: map[string]interface{}{"id": strconv.FormatInt(int64(event.MessageID), 10)},
+		})
+	}
+	if os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" {
+		out = append(out, tools.OneBotSegment{
+			Type: "at",
+			Data: map[string]interface{}{"qq": strconv.FormatInt(event.UserID, 10)},
+		})
+	}
+	if len(out) == 0 {
+		return base
+	}
+	return append(out, base...)
 }
 
 func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {

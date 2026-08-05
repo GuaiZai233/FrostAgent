@@ -939,6 +939,48 @@
           <context context-type="linenumber">117</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="groupReplyCard" datatype="html">
+        <source>群聊回复行为</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">47</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="groupReplyCardDesc" datatype="html">
+        <source>开关即时生效，无需重启</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">49</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="groupReplyOnMention" datatype="html">
+        <source>群聊被@/提及时触发对话</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">52</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="enableAtOther" datatype="html">
+        <source>回复时@对方</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">58</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="enableReplyOther" datatype="html">
+        <source>回复时引用原消息</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.html</context>
+          <context context-type="linenumber">64</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="groupReplyToggled" datatype="html">
+        <source>群聊回复设置已更新</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/settings/backend-settings.component.ts</context>
+          <context context-type="linenumber">283</context>
+        </context-group>
+      </trans-unit>
       <trans-unit id="frontendSettingsTitle" datatype="html">
         <source> 网页设置 </source>
         <context-group purpose="location">

@@ -33,6 +33,8 @@ var knownEnvVars = map[string]envEntry{
 	"MAX_CONTEXT_CHARS":      {"近似字符上限", false, false},
 	"WS_ALLOWED_ORIGINS":     {"允许的 WebSocket Origin", false, true},
 	"ENABLE_AT_IN_GROUP_MSG": {"是否开启群聊回复前艾特", false, false},
+	"GROUP_REPLY_ON_MENTION": {"群聊被@/提及时触发对话回复（false 则群聊消息不回复）", false, false},
+	"ENABLE_REPLY_IN_GROUP_MSG": {"群聊回复时是否引用原消息", false, false},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.
