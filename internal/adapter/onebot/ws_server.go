@@ -68,21 +68,37 @@ func checkWebSocketOrigin(r *http.Request) bool {
 
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
-	conn    *websocket.Conn
-	writeMu sync.Mutex
+	conn               *websocket.Conn
+	writeMu            sync.Mutex
+	groupMu            sync.Mutex
+	groupCache         map[int64]cachedGroupInfo
+	pendingGroupByEcho map[string]pendingGroupInfo
+	pendingGroupByID   map[int64]string
+	nextGroupEcho      uint64
 }
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
-	return &wsConnection{conn: conn}
+	return &wsConnection{
+		conn:               conn,
+		groupCache:         make(map[int64]cachedGroupInfo),
+		pendingGroupByEcho: make(map[string]pendingGroupInfo),
+		pendingGroupByID:   make(map[int64]string),
+	}
 }
 
 func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("websocket connection is nil")
+	}
 	return c.conn.WriteMessage(messageType, data)
 }
 
 func (c *wsConnection) Close() error {
+	if c.conn == nil {
+		return nil
+	}
 	return c.conn.Close()
 }
 
@@ -103,6 +119,10 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			if err != nil {
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
 				break
+			}
+
+			if wsConn.handleAPIResponse(message) {
+				continue
 			}
 
 			var event model.OneBotEvent
@@ -126,14 +146,31 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	}
 
 	if event.MessageType == "group" {
-		logs.Info(logs.WEBSOCKET, fmt.Sprintf("收到群 [%d] 用户 [%d] 的消息: %s", event.GroupID, event.UserID, string(event.Message)))
+		logs.Info(
+			logs.WEBSOCKET,
+			fmt.Sprintf(
+				"收到群 [%d] 用户 [%d/%s] 的消息: %s",
+				event.GroupID,
+				event.UserID,
+				senderDisplayName(event),
+				string(event.Message),
+			),
+		)
 		if !IsMentionedBot(event) {
 			return
 		}
 		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn)
 
 	} else if event.MessageType == "private" {
-		logs.Info(logs.WEBSOCKET, fmt.Sprintf("收到用户 [%d] 的私聊消息: %s", event.UserID, string(event.Message)))
+		logs.Info(
+			logs.WEBSOCKET,
+			fmt.Sprintf(
+				"收到用户 [%d/%s] 的私聊消息: %s",
+				event.UserID,
+				senderDisplayName(event),
+				string(event.Message),
+			),
+		)
 		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn)
 	}
 }
@@ -168,6 +205,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if event.GroupID != 0 {
 		contextMap["group_id"] = event.GroupID
+		if groupName := conn.groupName(event.GroupID); groupName != "" {
+			contextMap["group_name"] = groupName
+		}
+	}
+	if sender := senderContext(event); len(sender) > 0 {
+		contextMap["sender"] = sender
 	}
 	contextBytes, _ := json.Marshal(contextMap)
 
