@@ -270,6 +270,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		// 将大模型的回复也加入会话历史
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
+		// 裁剪会话历史，限制后续发送给 LLM 的上下文大小
+		engine.TrimSession(session)
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		logs.Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
