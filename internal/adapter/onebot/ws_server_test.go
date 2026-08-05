@@ -248,6 +248,30 @@ func TestSenderContextDeduplicatesEqualNicknameAndCard(t *testing.T) {
 	}
 }
 
+func TestSenderDisplayNameIncludesCardAndNickname(t *testing.T) {
+	event := model.OneBotEvent{
+		Sender: &model.OneBotSender{
+			Nickname: "怪哉GuaiZai",
+			Card:     "guaizai",
+		},
+	}
+	if got := senderDisplayName(event); got != "guaizai（怪哉GuaiZai）" {
+		t.Fatalf("unexpected sender display name: %q", got)
+	}
+}
+
+func TestSenderDisplayNameDeduplicatesEqualCardAndNickname(t *testing.T) {
+	event := model.OneBotEvent{
+		Sender: &model.OneBotSender{
+			Nickname: "同一个名字",
+			Card:     "同一个名字",
+		},
+	}
+	if got := senderDisplayName(event); got != "同一个名字" {
+		t.Fatalf("unexpected sender display name: %q", got)
+	}
+}
+
 func TestGroupInfoResponseUpdatesConnectionCache(t *testing.T) {
 	conn := newWSConnection(nil)
 	conn.pendingGroupByID[123456] = "group-echo"

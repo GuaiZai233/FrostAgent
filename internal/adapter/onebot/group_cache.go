@@ -200,10 +200,15 @@ func senderDisplayName(event model.OneBotEvent) string {
 	if event.Sender == nil {
 		return "未提供"
 	}
-	if card := sanitizeContextName(event.Sender.Card); card != "" {
+	nickname := sanitizeContextName(event.Sender.Nickname)
+	card := sanitizeContextName(event.Sender.Card)
+	if card != "" {
+		if nickname != "" && nickname != card {
+			return fmt.Sprintf("%s（%s）", card, nickname)
+		}
 		return card
 	}
-	if nickname := sanitizeContextName(event.Sender.Nickname); nickname != "" {
+	if nickname != "" {
 		return nickname
 	}
 	return "未提供"
