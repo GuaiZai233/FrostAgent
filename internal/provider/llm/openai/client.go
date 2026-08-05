@@ -67,12 +67,24 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
+const defaultHTTPTimeout = 120 * time.Second
+
 func NewClient(baseURL, apiKey string) *Client {
+	return NewClientWithTimeout(baseURL, apiKey, defaultHTTPTimeout)
+}
+
+// NewClientWithTimeout creates an isolated OpenAI-compatible client with a
+// caller-specific total HTTP timeout. Long-running background jobs should use
+// their own client instead of widening the foreground chat timeout.
+func NewClientWithTimeout(baseURL, apiKey string, timeout time.Duration) *Client {
+	if timeout <= 0 {
+		timeout = defaultHTTPTimeout
+	}
 	return &Client{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		HTTPClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }

@@ -71,6 +71,9 @@ func NewReflector(
 	model string,
 	config Config,
 ) *Reflector {
+	if config.ReflectTimeout <= 0 {
+		config.ReflectTimeout = DefaultConfig().ReflectTimeout
+	}
 	return &Reflector{
 		store:    store,
 		catalog:  catalog,
@@ -161,7 +164,27 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 		"{memories}", memories.String(),
 	).Replace(reflectPrompt)
 
-	resp, err := r.provider.Chat(ctx, core.ChatRequest{
+	callCtx := ctx
+	cancel := func() {}
+	if r.config.ReflectTimeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, r.config.ReflectTimeout)
+	}
+	defer cancel()
+
+	startedAt := time.Now()
+	promptBytes := len([]byte(prompt))
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"开始记忆反思请求：owner=%s，记忆=%d 条，prompt=%d bytes，timeout=%s",
+			owner,
+			len(entries),
+			promptBytes,
+			r.config.ReflectTimeout,
+		),
+	)
+
+	resp, err := r.provider.Chat(callCtx, core.ChatRequest{
 		Model: r.model,
 		Messages: []core.ChatMessage{
 			{Role: core.RoleUser, Content: prompt},
@@ -170,8 +193,22 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 		Temperature: 0.2,
 	})
 	if err != nil {
-		return fmt.Errorf("call reflection LLM: %w", err)
+		return fmt.Errorf(
+			"call reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
+			time.Since(startedAt).Round(time.Millisecond),
+			len(entries),
+			promptBytes,
+			err,
+		)
 	}
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"记忆反思响应完成：owner=%s，耗时=%s",
+			owner,
+			time.Since(startedAt).Round(time.Millisecond),
+		),
+	)
 
 	raw, ok := resp.Message.Content.(string)
 	if !ok {

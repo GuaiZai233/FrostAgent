@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
@@ -57,6 +58,22 @@ func ensureDataDir() {
 	os.MkdirAll(dir, 0755)
 }
 
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		logs.Warn(
+			logs.SYSTEM,
+			fmt.Sprintf("%s=%q 不是有效的正数时长，使用默认值 %s", name, raw, fallback),
+		)
+		return fallback
+	}
+	return value
+}
+
 func init() {
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
@@ -74,6 +91,16 @@ func init() {
 	// Initialize LLM clients
 	llmHTTPClient := llm.NewClient() // HTTP client wrapper for SubAgentTool
 	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
+	memoryConfig := memory.DefaultConfig()
+	memoryConfig.ReflectTimeout = durationFromEnv(
+		"MEMORY_REFLECTION_TIMEOUT",
+		memoryConfig.ReflectTimeout,
+	)
+	reflectionLLMClient := openai.NewClientWithTimeout(
+		os.Getenv("UPSTREAM_ENDPOINT"),
+		os.Getenv("UPSTREAM_API_KEY"),
+		memoryConfig.ReflectTimeout,
+	)
 
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
@@ -103,9 +130,13 @@ func init() {
 	reflector := memory.NewReflector(
 		globalStore,
 		catalog,
-		llmClient,
+		reflectionLLMClient,
 		os.Getenv("MODEL_NAME"),
-		memory.DefaultConfig(),
+		memoryConfig,
+	)
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf("✓ 记忆反思独立超时: %s", memoryConfig.ReflectTimeout),
 	)
 	if vs != nil {
 		reflector.SetVectorStore(vs)
