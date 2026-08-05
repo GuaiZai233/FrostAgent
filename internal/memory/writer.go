@@ -78,7 +78,13 @@ func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
 		fmt.Fprintf(&conversation, "[%s]: %s\n", msg.Role, content)
 	}
 
-	prompt := strings.Replace(extractPrompt, "{conversation}", conversation.String(), 1)
+	prompt := strings.Replace(
+		extractPrompt,
+		"{conversation}",
+		conversation.String(),
+		1,
+	)
+	prompt = strings.Replace(prompt, "{current_time}", CurrentTimeLabel(time.Now()), 1)
 
 	req := core.ChatRequest{
 		Model: w.model,

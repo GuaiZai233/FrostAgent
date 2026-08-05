@@ -77,6 +77,8 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
+		systemPrompt = memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
 
 		if userID != "" && e.MemoryCatalog != nil {
 			catalogContext, err := e.MemoryCatalog.FormatForPrompt(userID)

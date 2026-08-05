@@ -14,12 +14,19 @@ import (
 
 const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于同一用户的记忆，完成以下任务：
 
+当前系统时间：{current_time}
+
 1. 提取 3～20 个便于未来检索的主题。主题应简短、具体，合并同义表达，并把别名放入 aliases
 2. 标记已经明确过时、被新事实取代或不再有保留价值的记忆 ID
 3. 为每条记忆评估重要度（0.0～1.0）
 4. 将描述同一主体、内容兼容且合并后更利于检索的记忆整合成一条
 
 主题只是检索索引，不要在主题中编造原始记忆没有的事实。不要因为两条记忆相似就擅自删除；只有明确过时或被取代时才放入 outdated_ids。
+
+时效性规则（对照当前系统时间判断）：
+- 仅在某时间点之前/当天有效、且该时间已过的记忆（如"用户明天要去极兽聚"、"用户本周在成都"、"用户预约下周一去医院"），属于已过时效性，应放入 outdated_ids 删除
+- 长期偏好仍成立、只是夹带已过去临时信息的记忆（如"用户喜欢打舞萌，下周要去参赛"），不要整条删除：用 importance_updates 适当降低重要度，可把已失效的临时部分拆出后用 outdated_ids 删除
+- 不要因为内容提及过去的日期就一律删除；只有当日期已过且该事实本身已失效时才删除
 
 合并规则：
 - 每组合并必须包含 2～8 个不同的 source_ids，每轮最多返回 10 组
@@ -51,6 +58,14 @@ const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于
 用户：{owner}
 记忆列表：
 {memories}`
+
+// CurrentTimeLabel formats the current time with a Chinese weekday so the LLM
+// can judge relative dates ("明天", "下周") when evaluating whether
+// time-sensitive memory content is still valid.
+func CurrentTimeLabel(t time.Time) string {
+	weekdays := [...]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"}
+	return t.Format("2006-01-02 15:04") + " " + weekdays[int(t.Weekday())]
+}
 
 // Reflector analyzes memories per owner and rebuilds the replaceable topic
 // catalog. It never injects a full summary into the conversation.
@@ -162,6 +177,7 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 	prompt := strings.NewReplacer(
 		"{owner}", owner,
 		"{memories}", memories.String(),
+		"{current_time}", CurrentTimeLabel(time.Now()),
 	).Replace(reflectPrompt)
 
 	callCtx := ctx
