@@ -26,19 +26,31 @@ const (
 
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
-	ID          string     `json:"id"`           // 唯一标识
-	Owner       string     `json:"owner"`        // 归属者（如 "frost"、"alice"）
-	Content     string     `json:"content"`      // 记忆内容（自然语言）
-	Tags        []string   `json:"tags"`         // 标签（用于精确匹配和分类）
-	Source      Source     `json:"source"`       // 来源
-	Visibility  Visibility `json:"visibility"`   // 可见性
-	Importance  float64    `json:"importance"`   // 重要度 0.0~1.0（反思时更新）
-	CreatedAt   time.Time  `json:"created_at"`   // 创建时间
-	UpdatedAt   time.Time  `json:"updated_at"`   // 最后访问/更新时间
-	AccessCount int        `json:"access_count"` // 被召回次数
+	ID          string     `json:"id"`                    // 唯一标识
+	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"）
+	Content     string     `json:"content"`               // 记忆内容（自然语言）
+	Tags        []string   `json:"tags"`                  // 标签（用于精确匹配和分类）
+	Source      Source     `json:"source"`                // 来源
+	Visibility  Visibility `json:"visibility"`            // 可见性
+	Importance  float64    `json:"importance"`            // 重要度 0.0~1.0（反思时更新）
+	CreatedAt   time.Time  `json:"created_at"`            // 创建时间
+	UpdatedAt   time.Time  `json:"updated_at"`            // 最后访问/更新时间
+	AccessCount int        `json:"access_count"`          // 被召回次数
+	MergedFrom  []string   `json:"merged_from,omitempty"` // 反思合并时的直接来源 ID
+}
+
+// MemoryMergeArchive keeps the complete source snapshots for a reflected
+// merge. Archived entries are not searched or injected, but remain available
+// in brain.json if a lossy merge ever needs to be inspected or recovered.
+type MemoryMergeArchive struct {
+	MergedID string        `json:"merged_id"`
+	Owner    string        `json:"owner"`
+	Sources  []MemoryEntry `json:"sources"`
+	MergedAt time.Time     `json:"merged_at"`
 }
 
 // BrainData 统一大脑的持久化结构。
 type BrainData struct {
-	Entries []MemoryEntry `json:"entries"`
+	Entries       []MemoryEntry        `json:"entries"`
+	MergeArchives []MemoryMergeArchive `json:"merge_archives,omitempty"`
 }

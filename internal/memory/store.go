@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -238,12 +239,38 @@ func (s *Store) ApplyReflection(
 	outdatedIDs []string,
 	importanceUpdates map[string]float64,
 ) ([]MemoryEntry, []string, error) {
+	applied, err := s.applyReflectionWithMerges(owner, nil, outdatedIDs, importanceUpdates)
+	if err != nil {
+		return nil, nil, err
+	}
+	return applied.Remaining, applied.RemovedIDs, nil
+}
+
+type reflectionApplyResult struct {
+	Remaining         []MemoryEntry
+	RemovedIDs        []string
+	OutdatedIDs       []string
+	MergedEntries     []MemoryEntry
+	MergedSourceCount int
+}
+
+// applyReflectionWithMerges applies validated merge proposals together with
+// the existing reflection updates. Merge sources are archived in full before
+// they leave the active entry set, so a lossy LLM synthesis remains auditable.
+// The store rechecks every source snapshot while holding the write lock; stale
+// or cross-owner proposals are skipped without deleting their sources.
+func (s *Store) applyReflectionWithMerges(
+	owner string,
+	merges []validatedMerge,
+	outdatedIDs []string,
+	importanceUpdates map[string]float64,
+) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	brain, err := s.load()
 	if err != nil {
-		return nil, nil, err
+		return reflectionApplyResult{}, err
 	}
 
 	outdated := make(map[string]bool, len(outdatedIDs))
@@ -251,46 +278,175 @@ func (s *Store) ApplyReflection(
 		outdated[id] = true
 	}
 
-	remaining := make([]MemoryEntry, 0)
-	deleted := make([]string, 0)
-	for i := range brain.Entries {
-		entry := &brain.Entries[i]
-		if entry.Owner != owner {
-			continue
+	// A source mentioned by a merge must never be deleted as outdated in the
+	// same cycle, even if the merge later fails its stale-snapshot check.
+	for _, merge := range merges {
+		for _, source := range merge.Sources {
+			delete(outdated, source.ID)
 		}
-		if outdated[entry.ID] {
-			deleted = append(deleted, entry.ID)
-			continue
-		}
-		if importance, ok := importanceUpdates[entry.ID]; ok {
-			if importance < 0 {
-				importance = 0
-			} else if importance > 1 {
-				importance = 1
-			}
-			entry.Importance = importance
-			entry.UpdatedAt = time.Now()
-		}
-		remaining = append(remaining, *entry)
 	}
 
-	if len(deleted) > 0 {
-		filtered := brain.Entries[:0]
-		for _, entry := range brain.Entries {
-			if entry.Owner == owner && outdated[entry.ID] {
+	currentByID := make(map[string]MemoryEntry, len(brain.Entries))
+	existingIDs := make(map[string]bool, len(brain.Entries))
+	for _, entry := range brain.Entries {
+		currentByID[entry.ID] = entry
+		existingIDs[entry.ID] = true
+	}
+
+	now := time.Now()
+	consumed := make(map[string]bool)
+	mergedEntries := make([]MemoryEntry, 0, len(merges))
+	archives := make([]MemoryMergeArchive, 0, len(merges))
+	for _, merge := range merges {
+		if len(merge.Sources) < 2 || len(merge.Sources) > maxMergeSources ||
+			strings.TrimSpace(merge.Content) == "" || len([]rune(merge.Content)) > maxMergedContent ||
+			len(merge.Tags) == 0 || len(merge.Tags) > maxMergedTags {
+			continue
+		}
+
+		currentSources := make([]MemoryEntry, 0, len(merge.Sources))
+		seenSources := make(map[string]bool, len(merge.Sources))
+		valid := true
+		for _, snapshot := range merge.Sources {
+			current, ok := currentByID[snapshot.ID]
+			if !ok || current.Owner != owner || seenSources[current.ID] || consumed[current.ID] ||
+				!sameMergeSource(current, snapshot) {
+				valid = false
+				break
+			}
+			seenSources[current.ID] = true
+			currentSources = append(currentSources, current)
+		}
+		if !valid {
+			continue
+		}
+
+		mergedID := generateID()
+		for existingIDs[mergedID] {
+			mergedID = generateID()
+		}
+		existingIDs[mergedID] = true
+		merged := buildMergedEntry(mergedID, owner, merge, currentSources, now)
+		mergedEntries = append(mergedEntries, merged)
+		archives = append(archives, MemoryMergeArchive{
+			MergedID: mergedID,
+			Owner:    owner,
+			Sources:  currentSources,
+			MergedAt: now,
+		})
+		for _, source := range currentSources {
+			consumed[source.ID] = true
+		}
+	}
+
+	remainingAll := make([]MemoryEntry, 0, len(brain.Entries)+len(mergedEntries))
+	removedIDs := make([]string, 0, len(consumed)+len(outdated))
+	appliedOutdated := make([]string, 0, len(outdated))
+	for _, entry := range brain.Entries {
+		if entry.Owner == owner {
+			if consumed[entry.ID] {
+				removedIDs = append(removedIDs, entry.ID)
 				continue
 			}
-			filtered = append(filtered, entry)
+			if outdated[entry.ID] {
+				removedIDs = append(removedIDs, entry.ID)
+				appliedOutdated = append(appliedOutdated, entry.ID)
+				continue
+			}
+			if importance, ok := importanceUpdates[entry.ID]; ok {
+				entry.Importance = clampImportance(importance)
+				entry.UpdatedAt = now
+			}
 		}
-		brain.Entries = filtered
+		remainingAll = append(remainingAll, entry)
 	}
+	remainingAll = append(remainingAll, mergedEntries...)
+	brain.Entries = remainingAll
+	brain.MergeArchives = append(brain.MergeArchives, archives...)
 
 	// Always rewrite after reflection so legacy inline "summaries" fields are
 	// removed from brain.json even when no importance or deletion changed.
 	if err := s.save(brain); err != nil {
-		return nil, nil, err
+		return reflectionApplyResult{}, err
 	}
-	return remaining, deleted, nil
+
+	remaining := make([]MemoryEntry, 0)
+	for _, entry := range brain.Entries {
+		if entry.Owner == owner {
+			remaining = append(remaining, entry)
+		}
+	}
+	return reflectionApplyResult{
+		Remaining:         remaining,
+		RemovedIDs:        removedIDs,
+		OutdatedIDs:       appliedOutdated,
+		MergedEntries:     mergedEntries,
+		MergedSourceCount: len(consumed),
+	}, nil
+}
+
+func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
+	return current.ID == snapshot.ID &&
+		current.Owner == snapshot.Owner &&
+		current.Content == snapshot.Content &&
+		slices.Equal(current.Tags, snapshot.Tags) &&
+		current.Source == snapshot.Source &&
+		current.Visibility == snapshot.Visibility &&
+		current.Importance == snapshot.Importance &&
+		current.CreatedAt.Equal(snapshot.CreatedAt) &&
+		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
+		current.AccessCount == snapshot.AccessCount &&
+		slices.Equal(current.MergedFrom, snapshot.MergedFrom)
+}
+
+func buildMergedEntry(
+	id string,
+	owner string,
+	merge validatedMerge,
+	sources []MemoryEntry,
+	now time.Time,
+) MemoryEntry {
+	visibility := VisibilityPublic
+	importance := 0.0
+	accessCount := 0
+	mergedFrom := make([]string, 0, len(sources))
+	for _, source := range sources {
+		mergedFrom = append(mergedFrom, source.ID)
+		if source.Visibility != VisibilityPublic {
+			visibility = VisibilityPrivate
+		}
+		if source.Importance > importance {
+			importance = source.Importance
+		}
+		if source.AccessCount > accessCount {
+			accessCount = source.AccessCount
+		}
+	}
+	sort.Strings(mergedFrom)
+
+	return MemoryEntry{
+		ID:          id,
+		Owner:       owner,
+		Content:     merge.Content,
+		Tags:        slices.Clone(merge.Tags),
+		Source:      SourceReflect,
+		Visibility:  visibility,
+		Importance:  clampImportance(importance),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		AccessCount: accessCount,
+		MergedFrom:  mergedFrom,
+	}
+}
+
+func clampImportance(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 // UpdateImportance updates a single memory's importance score.
@@ -325,7 +481,11 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 
 	for i, entry := range brain.Entries {
 		if entry.ID == updated.ID {
+			updated.Owner = entry.Owner
+			updated.Source = entry.Source
 			updated.CreatedAt = entry.CreatedAt
+			updated.AccessCount = entry.AccessCount
+			updated.MergedFrom = slices.Clone(entry.MergedFrom)
 			updated.UpdatedAt = time.Now()
 			brain.Entries[i] = updated
 			return s.save(brain)
