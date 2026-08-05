@@ -2,7 +2,9 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -90,6 +92,23 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	s.UpdatedAt = time.Now()
 }
 
+// TrimHistory 只保留最近的 max 条消息，从头部丢弃更早的历史。
+func (s *SessionContext) TrimHistory(max int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if max <= 0 || len(s.History) <= max {
+		return
+	}
+	trimmed := make([]ChatMessage, max)
+	copy(trimmed, s.History[len(s.History)-max:])
+	s.History = trimmed
+	s.UpdatedAt = time.Now()
+}
+
+// minHistory 是历史消息数的下限，防止配置过小导致对话无法进行。
+const minHistory = 4
+
 // SessionManager 管理多个会话上下文，支持多用户/多群聊隔离
 type SessionManager struct {
 	sessions   map[string]*SessionContext
@@ -104,6 +123,13 @@ func NewSessionManager() *SessionManager {
 		sessions:   make(map[string]*SessionContext),
 		MaxHistory: 20,
 		TTL:        24 * time.Hour,
+	}
+	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
+	// （见 agent.go effectiveMaxHistory）。
+	if v := os.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+			sm.MaxHistory = n
+		}
 	}
 	// 启动定时清理协程
 	go sm.startCleanupRoutine()

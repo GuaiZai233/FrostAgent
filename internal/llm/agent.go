@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -342,9 +343,29 @@ func isMemoryMaintenanceAction(toolCall ToolCall, result string) bool {
 	}
 }
 
+// effectiveMaxHistory 返回当前生效的历史消息上限：
+// 优先读 MAX_CONTEXT_MESSAGES env（运行期修改即时生效），否则回退到 fallback。
+func effectiveMaxHistory(fallback int) int {
+	if v := os.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+			return n
+		}
+	}
+	return fallback
+}
+
+// TrimSession 将会话持久化的历史裁剪到配置的消息上限
+// （MAX_CONTEXT_MESSAGES env，未配置时回退 SessionManager.MaxHistory）。
+func (e *Engine) TrimSession(session *SessionContext) {
+	if session == nil {
+		return
+	}
+	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory))
+}
+
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
 func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
-	maxHistory := e.SessionManager.MaxHistory
+	maxHistory := effectiveMaxHistory(e.SessionManager.MaxHistory)
 	if len(messages) <= maxHistory+1 {
 		return messages
 	}
