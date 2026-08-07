@@ -66,6 +66,9 @@ func (s *Store) Save(entry MemoryEntry) error {
 	if entry.Visibility == "" {
 		entry.Visibility = VisibilityPrivate
 	}
+	if entry.OwnerType == "" {
+		entry.OwnerType = OwnerUser
+	}
 
 	brain.Entries = append(brain.Entries, entry)
 	return s.save(brain)

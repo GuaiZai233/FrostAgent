@@ -12,6 +12,18 @@ const (
 	VisibilityPublic Visibility = "public"
 )
 
+// OwnerType 区分 owner 是「单个用户」还是「某个群」——两套 owner 体系互不干扰：
+// 私聊记忆 owner_type=user 跟随 userID；群聊记忆 owner_type=group 跟随 group:ID。
+// 零值（""）视为 user，兼容未带此字段的老 brain.json。
+type OwnerType string
+
+const (
+	// OwnerUser 私聊用户（owner 为 userID 字符串）。
+	OwnerUser OwnerType = "user"
+	// OwnerGroup 群聊（owner 为 "group:<群号>" 字符串）。
+	OwnerGroup OwnerType = "group"
+)
+
 // Source 记忆的来源类型。
 type Source string
 
@@ -22,12 +34,15 @@ const (
 	SourceManual Source = "manual"
 	// SourceReflect 由反思系统生成。
 	SourceReflect Source = "reflect"
+	// SourceCompact 由群级 running compact 产生的群聊总结。
+	SourceCompact Source = "compact"
 )
 
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
 	ID          string     `json:"id"`                    // 唯一标识
-	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"）
+	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"，群聊则为 "group:<群号>"）
+	OwnerType   OwnerType  `json:"owner_type"`            // owner 是人还是群（零值兼容老数据）
 	Content     string     `json:"content"`               // 记忆内容（自然语言）
 	Tags        []string   `json:"tags"`                  // 标签（用于精确匹配和分类）
 	Source      Source     `json:"source"`                // 来源
