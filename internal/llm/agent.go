@@ -42,10 +42,13 @@ type Engine struct {
 	MemoryGateway     *memory.Gateway
 	MemoryCatalog     *memory.CatalogStore
 	MemoryReflections *memory.ReflectionManager
+	GroupCompactor    *GroupCompactor
 
-	// CurrentUserID is set by RunMessagesWithUser for per-request user context.
+	// CurrentUserID and CurrentOwnerType are set by RunMessagesWithUser for
+	// per-request memory context.
 	// Thread-safety: same model as SendHook — set before runLoop, read during tool execution.
-	CurrentUserID string
+	CurrentUserID    string
+	CurrentOwnerType memory.OwnerType
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -71,18 +74,23 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 	return e.runLoop(context.Background(), messages)
 }
 
-// RunMessagesWithUser 执行智能体的主循环（带记忆上下文）
-// userID 用于记忆系统的 Owner 过滤；传空则跳过记忆。
-func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) string {
-	e.CurrentUserID = userID
+// RunMessagesWithUser 执行智能体的主循环（带记忆上下文）。
+// owner 是私聊 userID 或 group:<群号>；传空则跳过记忆。
+func (e *Engine) RunMessagesWithUser(
+	messages []ChatMessage,
+	owner string,
+	ownerType memory.OwnerType,
+) (string, bool) {
+	e.CurrentUserID = owner
+	e.CurrentOwnerType = memory.NormalizeOwnerType(ownerType)
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
 		systemPrompt = memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
 
-		if userID != "" && e.MemoryCatalog != nil {
-			catalogContext, err := e.MemoryCatalog.FormatForPrompt(userID)
+		if owner != "" && e.MemoryCatalog != nil {
+			catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
 			if err != nil {
 				logs.Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
 			} else if catalogContext != "" {
@@ -91,13 +99,13 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 		}
 
 		// 召回 → 网关过滤 → 注入
-		if userID != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+		if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 			lastUserMsg := extractLastUserMessage(messages)
 			raw, err := e.MemoryReader.Recall(context.Background(), lastUserMsg)
 			if err == nil {
-				filtered := e.MemoryGateway.Filter(raw, userID)
+				filtered := e.MemoryGateway.Filter(raw, owner)
 				if len(filtered) > 0 {
-					memoryContext := e.MemoryGateway.FormatForContext(filtered, userID)
+					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
 				}
 			}
@@ -108,21 +116,69 @@ func (e *Engine) RunMessagesWithUser(messages []ChatMessage, userID string) stri
 		}, messages...)
 	}
 
-	result, memoryHandled := e.runLoopWithResult(context.Background(), messages)
+	return e.runLoopWithResult(context.Background(), messages)
+}
 
-	// 异步提取记忆（不阻塞对话）
-	if userID != "" && e.MemoryWriter != nil {
-		if memoryHandled {
-			logs.Info(logs.SYSTEM, "本轮已通过 memory 工具处理记忆，跳过自动提取")
-		} else {
-			extractionContext := buildExtractionContext(messages, result)
-			if len(extractionContext) > 0 {
-				go e.MemoryWriter.Extract(userID, extractionContext)
-			}
+// EnqueueExtractionTurn buffers one completed turn. Extraction runs only when
+// the session-specific random threshold is reached.
+func (e *Engine) EnqueueExtractionTurn(
+	session *SessionContext,
+	items []memory.PendingExtractionItem,
+) {
+	if e == nil || e.MemoryWriter == nil || session == nil || len(items) == 0 {
+		return
+	}
+	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3)
+	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5)
+	if maxTurns < minTurns {
+		maxTurns = minTurns
+	}
+	batch, ready := session.EnqueuePendingTurn(items, minTurns, maxTurns)
+	if !ready {
+		return
+	}
+	go e.extractPendingBatch(batch)
+}
+
+func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
+	type ownerBatch struct {
+		ownerType memory.OwnerType
+		messages  []core.ChatMessage
+	}
+	groups := make(map[string]*ownerBatch)
+	order := make([]string, 0)
+	for _, item := range batch {
+		if item.Owner == "" {
+			continue
+		}
+		key := string(item.OwnerType) + "\x00" + item.Owner
+		group := groups[key]
+		if group == nil {
+			group = &ownerBatch{ownerType: memory.NormalizeOwnerType(item.OwnerType)}
+			groups[key] = group
+			order = append(order, key)
+		}
+		group.messages = append(group.messages, item.Message)
+	}
+	for _, key := range order {
+		group := groups[key]
+		owner := strings.SplitN(key, "\x00", 2)[1]
+		if err := e.MemoryWriter.ExtractByOwner(owner, group.ownerType, group.messages); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", owner, err))
 		}
 	}
+}
 
-	return result
+func positiveIntEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 // extractLastUserMessage 从消息数组中提取最后一条用户消息的内容。
@@ -137,6 +193,10 @@ func extractLastUserMessage(messages []ChatMessage) string {
 	return ""
 }
 
+// Deprecated: automatic extraction now uses per-session pending turns.
+// buildExtractionContext remains for compatibility with existing callers and
+// tests that validate the previous two-turn extraction window.
+//
 // buildExtractionContext returns the recent user/assistant text exchanges
 // that the background extractor needs to detect implicit corrections and
 // updates to previously saved memories. It anchors on the agent's final
@@ -226,7 +286,7 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 // runLoopWithResult executes the agent loop and reports side effects that
 // callers need to coordinate with post-processing.
 func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) (string, bool) {
-	memoryHandled := false
+	memoryWritten := false
 	var modelTools []core.Tool
 	for _, t := range e.ToolRegistry {
 		modelTools = append(modelTools, core.Tool{
@@ -251,7 +311,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err := e.Provider.Chat(context.Background(), chatReq)
 		if err != nil {
-			return fmt.Sprintf("LLM调用失败: %v", err), memoryHandled
+			return fmt.Sprintf("LLM调用失败: %v", err), memoryWritten
 		}
 
 		// Map back to internal message for now to maintain compatibility
@@ -279,7 +339,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if len(responseMsg.ToolCalls) == 0 {
 			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
-			return contentStr, memoryHandled
+			return contentStr, memoryWritten
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
@@ -293,8 +353,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolResult = fmt.Sprintf("工具执行失败: %v", err)
 				} else {
 					toolResult = res
-					if isMemoryMaintenanceAction(tc, res) {
-						memoryHandled = true
+					if isMemoryWriteAction(tc, res) {
+						memoryWritten = true
 					}
 				}
 			} else {
@@ -317,12 +377,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			messages = append(messages, toolMsg)
 		}
 	}
-	return "达到最大迭代次数，未能得出最终答案", memoryHandled
+	return "达到最大迭代次数，未能得出最终答案", memoryWritten
 }
 
-// isMemoryMaintenanceAction identifies memory actions after which the user's
-// maintenance instruction should not be extracted as a new memory.
-func isMemoryMaintenanceAction(toolCall ToolCall, result string) bool {
+// isMemoryWriteAction identifies explicit writes that must not be extracted a
+// second time. Background reflection does not count as handling this turn.
+func isMemoryWriteAction(toolCall ToolCall, result string) bool {
 	if toolCall.Function.Name != "memory" {
 		return false
 	}
@@ -333,14 +393,7 @@ func isMemoryMaintenanceAction(toolCall ToolCall, result string) bool {
 	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
 		return false
 	}
-	switch params.Action {
-	case "write":
-		return result == "记忆已写入"
-	case "reflect":
-		return strings.HasPrefix(result, "记忆反思任务")
-	default:
-		return false
-	}
+	return params.Action == "write" && result == "记忆已写入"
 }
 
 // effectiveMaxHistory 返回当前生效的历史消息上限：

@@ -10,7 +10,7 @@ import (
 )
 
 // NewMemoryTool creates a tool that allows the LLM to actively manage memories.
-// It reads the current user ID from engine.CurrentUserID (set by RunMessagesWithUser).
+// It reads the current owner namespace from the engine (set by RunMessagesWithUser).
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
@@ -60,7 +60,12 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				if engine.MemoryWriter == nil {
 					return "记忆写入功能未启用", nil
 				}
-				if err := engine.MemoryWriter.Write(currentUser, params.Content, params.Tags); err != nil {
+				if err := engine.MemoryWriter.WriteByOwner(
+					currentUser,
+					engine.CurrentOwnerType,
+					params.Content,
+					params.Tags,
+				); err != nil {
 					return fmt.Sprintf("写入失败: %v", err), nil
 				}
 				return "记忆已写入", nil

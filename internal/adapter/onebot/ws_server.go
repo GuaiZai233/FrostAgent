@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/tools"
 	"encoding/json"
 	"fmt"
@@ -135,6 +136,11 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 				continue
 			}
 
+			// Capture group context on the WebSocket read goroutine so messages
+			// enter the compact ring in wire order, including non-mention traffic.
+			if event.PostType == "message" && event.MessageType == "group" {
+				captureGroupCompactMessage(event, engine)
+			}
 			go processEvent(wsConn, event, engine)
 		}
 	}
@@ -218,15 +224,29 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	contextBytes, _ := json.Marshal(contextMap)
 
-	// 3. Combine user text and context into the final prompt for the LLM
-	prompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
+	var session *llm.SessionContext
+	runningSummary := ""
+	if engine != nil {
+		session = engine.SessionManager.GetOrCreate(historyKey(event))
+		if event.MessageType == "group" {
+			runningSummary = session.GroupRunningSummary()
+		}
+	}
+
+	// 3. Combine user text, the group running summary, and transport context.
+	// The summary intentionally stays in the user segment rather than system.
+	prompt := fmt.Sprintf("User Message: %s", userText)
+	if runningSummary != "" {
+		prompt += fmt.Sprintf(
+			"\n\n<group_running_summary>\n%s\n</group_running_summary>",
+			runningSummary,
+		)
+	}
+	prompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	// 4. Call the agent engine with history
 	var replyText string
 	if engine != nil {
-		sessionID := historyKey(event)
-		session := engine.SessionManager.GetOrCreate(sessionID)
-
 		// 将用户的 prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
 		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: prompt})
 
@@ -263,15 +283,40 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
-		// 传递给大模型（带记忆上下文）
-		userID := fmt.Sprintf("%d", event.UserID)
-		replyText = engine.RunMessagesWithUser(messages, userID)
+		// 传递给大模型（带 owner 隔离的记忆上下文）
+		owner, ownerType := memory.OwnerForPrivate(strconv.FormatInt(event.UserID, 10))
+		if event.MessageType == "group" {
+			owner, ownerType = memory.OwnerForGroup(event.GroupID)
+		}
+		var memoryWritten bool
+		replyText, memoryWritten = engine.RunMessagesWithUser(messages, owner, ownerType)
 		engine.SendHook = nil
 
 		// 将大模型的回复也加入会话历史
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
 		// 裁剪会话历史，限制后续发送给 LLM 的上下文大小
 		engine.TrimSession(session)
+
+		if memoryWritten {
+			logs.Info(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+		} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
+			pendingUserText := userText
+			if event.MessageType == "group" {
+				pendingUserText = formatGroupSpeakerMessage(event, userText)
+			}
+			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+				{
+					Owner:     owner,
+					OwnerType: ownerType,
+					Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
+				},
+				{
+					Owner:     owner,
+					OwnerType: ownerType,
+					Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+				},
+			})
+		}
 	} else {
 		replyText = "系统出错，引擎未初始化"
 		logs.Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
@@ -332,6 +377,28 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
 	}
+}
+
+func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
+	if engine == nil || engine.GroupCompactor == nil || event.GroupID <= 0 {
+		return
+	}
+	segments := ParseMessageSegments(event.Message)
+	visibleText := extractUserText(segments, event.Message)
+	if strings.TrimSpace(visibleText) == "" {
+		return
+	}
+	session := engine.SessionManager.GetOrCreate(historyKey(event))
+	session.AppendGroupCompactMessage(
+		formatGroupSpeakerMessage(event, visibleText),
+		engine.GroupCompactor.BufferSize(),
+	)
+	owner, _ := memory.OwnerForGroup(event.GroupID)
+	engine.GroupCompactor.Trigger(session, owner)
+}
+
+func formatGroupSpeakerMessage(event model.OneBotEvent, text string) string {
+	return fmt.Sprintf("%s (%d): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
 }
 
 // wrapGroupReply 按 env 开关为群聊回复前置 reply 段（引用原消息）与 at 段。

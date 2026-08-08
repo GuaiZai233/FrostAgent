@@ -22,6 +22,12 @@ func NewGateway() *Gateway {
 func (g *Gateway) Filter(entries []MemoryEntry, currentUser string) []MemoryEntry {
 	var result []MemoryEntry
 	for _, e := range entries {
+		// Running compact summaries are injected explicitly into the group user
+		// segment. Keeping them out of Gateway avoids duplicate/system-level
+		// injection and guarantees they never leak into private conversations.
+		if e.Source == SourceCompact {
+			continue
+		}
 		if e.Owner == currentUser {
 			result = append(result, e)
 			continue

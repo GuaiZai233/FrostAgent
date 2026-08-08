@@ -74,6 +74,37 @@ func (s *Store) Save(entry MemoryEntry) error {
 	return s.save(brain)
 }
 
+// UpsertCompact keeps exactly one running compact entry per group owner.
+func (s *Store) UpsertCompact(entry MemoryEntry) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	entry.OwnerType = OwnerGroup
+	entry.Source = SourceCompact
+	entry.Visibility = VisibilityPrivate
+	entry.UpdatedAt = now
+	for i, existing := range brain.Entries {
+		if existing.Owner == entry.Owner && existing.Source == SourceCompact {
+			entry.ID = existing.ID
+			entry.CreatedAt = existing.CreatedAt
+			entry.AccessCount = existing.AccessCount
+			entry.MergedFrom = slices.Clone(existing.MergedFrom)
+			brain.Entries[i] = entry
+			return entry.ID, s.save(brain)
+		}
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = now
+	}
+	brain.Entries = append(brain.Entries, entry)
+	return entry.ID, s.save(brain)
+}
+
 // Search performs a global keyword search across all memories.
 // Returns entries whose content or tags contain the query string (case-insensitive).
 func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {

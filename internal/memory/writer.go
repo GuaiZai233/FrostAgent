@@ -40,9 +40,20 @@ func (w *Writer) SetVectorStore(vs *VectorStore) {
 // Write directly saves a memory entry and indexes it in the vector store
 // (user explicitly said "remember this").
 func (w *Writer) Write(owner string, content string, tags []string) error {
+	return w.WriteByOwner(owner, OwnerUser, content, tags)
+}
+
+// WriteByOwner directly saves a memory with an explicit owner namespace.
+func (w *Writer) WriteByOwner(
+	owner string,
+	ownerType OwnerType,
+	content string,
+	tags []string,
+) error {
 	entry := MemoryEntry{
 		ID:         generateID(),
 		Owner:      owner,
+		OwnerType:  NormalizeOwnerType(ownerType),
 		Content:    content,
 		Tags:       tags,
 		Source:     SourceManual,
@@ -51,11 +62,31 @@ func (w *Writer) Write(owner string, content string, tags []string) error {
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	if err := w.store.Save(entry); err != nil {
+	return w.saveAndIndex(context.Background(), entry)
+}
+
+// WriteCompact persists one completed group running summary.
+func (w *Writer) WriteCompact(owner, summary string) error {
+	entry := MemoryEntry{
+		ID:         generateID(),
+		Owner:      owner,
+		OwnerType:  OwnerGroup,
+		Content:    summary,
+		Tags:       []string{"群聊总结"},
+		Source:     SourceCompact,
+		Visibility: VisibilityPrivate,
+		Importance: 0.5,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	entryID, err := w.store.UpsertCompact(entry)
+	if err != nil {
 		return err
 	}
 	if w.vs != nil {
-		_ = w.vs.Index(context.Background(), entry.ID, content)
+		if err := w.vs.Index(context.Background(), entryID, entry.Content); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊总结向量索引失败 (owner: %s): %v", owner, err))
+		}
 	}
 	return nil
 }
@@ -64,6 +95,15 @@ func (w *Writer) Write(owner string, content string, tags []string) error {
 // Called asynchronously after each conversation turn.
 // Extracted memories are also indexed in the vector store.
 func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
+	return w.ExtractByOwner(owner, OwnerUser, messages)
+}
+
+// ExtractByOwner extracts memories into the provided owner namespace.
+func (w *Writer) ExtractByOwner(
+	owner string,
+	ownerType OwnerType,
+	messages []core.ChatMessage,
+) error {
 	if w.provider == nil || w.model == "" {
 		return nil // LLM not configured, skip extraction
 	}
@@ -106,7 +146,7 @@ func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
 		return fmt.Errorf("unexpected response type: %T", resp.Message.Content)
 	}
 
-	return w.parseAndSave(owner, raw)
+	return w.parseAndSave(owner, NormalizeOwnerType(ownerType), raw)
 }
 
 // extractedEntry represents one item from the LLM extraction response.
@@ -117,7 +157,7 @@ type extractedEntry struct {
 }
 
 // parseAndSave parses the LLM JSON response and saves entries to the store.
-func (w *Writer) parseAndSave(owner string, raw string) error {
+func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) error {
 	// Strip markdown code fences if present
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
@@ -147,6 +187,7 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 		entry := MemoryEntry{
 			ID:         generateID(),
 			Owner:      owner,
+			OwnerType:  ownerType,
 			Content:    e.Content,
 			Tags:       e.Tags,
 			Source:     SourceExtract,
@@ -155,12 +196,9 @@ func (w *Writer) parseAndSave(owner string, raw string) error {
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
-		if err := w.store.Save(entry); err != nil {
+		if err := w.saveAndIndex(ctx, entry); err != nil {
 			logs.Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
 			continue
-		}
-		if w.vs != nil {
-			_ = w.vs.Index(ctx, entry.ID, e.Content)
 		}
 	}
 
@@ -175,4 +213,16 @@ func generateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return "mem_" + hex.EncodeToString(b)
+}
+
+func (w *Writer) saveAndIndex(ctx context.Context, entry MemoryEntry) error {
+	if err := w.store.Save(entry); err != nil {
+		return err
+	}
+	if w.vs != nil {
+		if err := w.vs.Index(ctx, entry.ID, entry.Content); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("记忆向量索引失败 (id: %s): %v", entry.ID, err))
+		}
+	}
+	return nil
 }

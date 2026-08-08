@@ -7,7 +7,7 @@ import "FrostAgent/internal/core"
 // 这个类型放在 memory 包（而不是 llm 包）以避免反向依赖：llm 通过此类型
 // 喂数据给 memory.Writer。
 type PendingExtractionItem struct {
-	Owner     string         // 主键字符串（userID 或 "group:<群号>"）
-	OwnerType OwnerType      // 区分人 / 群
+	Owner     string           // 主键字符串（userID 或 "group:<群号>"）
+	OwnerType OwnerType        // 区分人 / 群
 	Message   core.ChatMessage // 消息内容（user 或 assistant）
 }

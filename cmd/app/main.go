@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,19 @@ func durationFromEnv(name string, fallback time.Duration) time.Duration {
 	return value
 }
 
+func positiveIntFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("%s=%q 不是有效的正整数，使用默认值 %d", name, raw, fallback))
+		return fallback
+	}
+	return value
+}
+
 func init() {
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
@@ -123,6 +137,15 @@ func init() {
 	if vs != nil {
 		writer.SetVectorStore(vs)
 	}
+	groupCompactBufferSize := positiveIntFromEnv("GROUP_COMPACT_BUFFER_SIZE", 20)
+	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
+	groupCompactor := llm.NewGroupCompactor(
+		llmClient,
+		writer,
+		os.Getenv("MODEL_NAME"),
+		groupCompactBufferSize,
+		groupCompactMinInterval,
+	)
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
@@ -172,7 +195,16 @@ func init() {
 		MemoryGateway:     gateway,
 		MemoryCatalog:     catalog,
 		MemoryReflections: reflections,
+		GroupCompactor:    groupCompactor,
 	}
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
+			groupCompactBufferSize,
+			groupCompactMinInterval,
+		),
+	)
 
 	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after GlobalEngine assignment)
