@@ -40,6 +40,9 @@ type oneBotMessageData struct {
 	Message     json.RawMessage     `json:"message"`
 }
 
+// lookupReplyContext resolves the first reply segment through OneBot get_msg.
+// It waits at most one second and always degrades to an empty context so stale
+// or unsupported history cannot block the current event's normal wake signal.
 func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReplyContext {
 	messageID, ok := replyMessageID(event)
 	if !ok || c == nil {

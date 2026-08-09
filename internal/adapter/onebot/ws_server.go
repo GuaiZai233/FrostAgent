@@ -150,6 +150,9 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	}
 }
 
+// processEvent routes one decoded OneBot event into the private or group reply
+// path. Group messages without an enabled wake signal return before invoking
+// the LLM, while compact capture has already happened on the read goroutine.
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
 	if event.PostType != "message" {
 		return
@@ -171,11 +174,13 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 			return
 		}
+		wakeSignals := DetectGroupWakeSignals(event)
 		replyContext := conn.lookupReplyContext(event)
-		if !HasGroupWakeSignal(event) && !replyContext.MentionsBot {
+		if !wakeSignals.Any() && !replyContext.MentionsBot {
 			return
 		}
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt)
+		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt, responseContext)
 
 	} else if event.MessageType == "private" {
 		logs.Info(
@@ -188,11 +193,15 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			),
 		)
 		replyContext := conn.lookupReplyContext(event)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt)
+		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt, responseContext)
 	}
 }
 
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string) {
+// reply builds the per-turn prompt, runs the agent with session history, and
+// emits the resulting OneBot action. A terminal Silent result records the
+// hidden assistant marker and returns before final sending or memory batching.
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string, responseContext string) {
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
 	segments = []content.MessageSegment{}
@@ -249,6 +258,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			runningSummary,
 		)
 	}
+	if responseContext != "" {
+		prompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
+	}
 	prompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 	requestPrompt := prompt
 	if replyContext != "" {
@@ -304,16 +316,29 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if event.MessageType == "group" {
 			owner, ownerType = memory.OwnerForGroup(event.GroupID)
 		}
-		var memoryWritten bool
-		replyText, memoryWritten = engine.RunMessagesWithUser(messages, owner, ownerType)
+		runResult := engine.RunMessagesWithUser(messages, owner, ownerType)
+		replyText = runResult.Content
 		engine.SendHook = nil
+
+		// A deliberate terminal silence keeps the user turn and an assistant
+		// marker in history, but never emits an empty OneBot message or feeds the
+		// turn into automatic memory extraction.
+		if runResult.Silent {
+			session.AddMessage(core.ChatMessage{
+				Role:    core.RoleAssistant,
+				Content: llm.AssistantSilentMarker,
+			})
+			engine.TrimSession(session)
+			logs.Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", historyKey(event)))
+			return
+		}
 
 		// 将大模型的回复也加入会话历史
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
 		// 裁剪会话历史，限制后续发送给 LLM 的上下文大小
 		engine.TrimSession(session)
 
-		if memoryWritten {
+		if runResult.MemoryWritten {
 			logs.Info(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 		} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
 			pendingUserText := userText

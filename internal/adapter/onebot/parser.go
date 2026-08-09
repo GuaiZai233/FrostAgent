@@ -14,11 +14,34 @@ const (
 	defaultBotAliases = "霜降,FrostAgent"
 )
 
+// GroupWakeSignals records the equivalent observable reasons that caused a
+// group message to enter the LLM response path. The fields are descriptive
+// context only and do not establish a priority between at and alias matches.
+type GroupWakeSignals struct {
+	AtBot bool
+	Alias bool
+}
+
+// Any reports whether at least one direct group wake signal was detected.
+func (s GroupWakeSignals) Any() bool {
+	return s.AtBot || s.Alias
+}
+
+// DetectGroupWakeSignals evaluates the OneBot at segment and configured
+// literal names once so routing and response-context generation use the same
+// decision.
+func DetectGroupWakeSignals(event model.OneBotEvent) GroupWakeSignals {
+	return GroupWakeSignals{
+		AtBot: IsMentionedBot(event),
+		Alias: IsBotNameMentioned(event),
+	}
+}
+
 // HasGroupWakeSignal reports whether a group message explicitly addresses the
 // bot, either through a OneBot at segment or a configured literal name/alias.
 // The response pipeline intentionally treats the two signals as equivalent.
 func HasGroupWakeSignal(event model.OneBotEvent) bool {
-	return IsMentionedBot(event) || IsBotNameMentioned(event)
+	return DetectGroupWakeSignals(event).Any()
 }
 
 func IsMentionedBot(event model.OneBotEvent) bool {

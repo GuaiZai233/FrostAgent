@@ -21,6 +21,20 @@ type ToolExecutor interface {
 	Execute(args string) (string, error)
 }
 
+const (
+	StaySilentToolName    = "stay_silent"
+	AssistantSilentMarker = "<assistant_silent />"
+)
+
+// AgentRunResult carries the final content and side-effect decisions from one
+// agent loop. Silent is true only when the model explicitly and successfully
+// invokes the terminal stay_silent tool; provider failures never set it.
+type AgentRunResult struct {
+	Content       string
+	MemoryWritten bool
+	Silent        bool
+}
+
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
 	MaxIterations          int
@@ -80,7 +94,7 @@ func (e *Engine) RunMessagesWithUser(
 	messages []ChatMessage,
 	owner string,
 	ownerType memory.OwnerType,
-) (string, bool) {
+) AgentRunResult {
 	e.CurrentUserID = owner
 	e.CurrentOwnerType = memory.NormalizeOwnerType(ownerType)
 
@@ -279,13 +293,13 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 
 // runLoop 核心循环逻辑
 func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
-	result, _ := e.runLoopWithResult(ctx, messages)
-	return result
+	return e.runLoopWithResult(ctx, messages).Content
 }
 
-// runLoopWithResult executes the agent loop and reports side effects that
-// callers need to coordinate with post-processing.
-func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) (string, bool) {
+// runLoopWithResult executes the agent loop and reports terminal decisions and
+// memory side effects. A stay_silent call must be the only tool call in its
+// assistant response; conflicts are returned to the model for another choice.
+func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) AgentRunResult {
 	memoryWritten := false
 	var modelTools []core.Tool
 	for _, t := range e.ToolRegistry {
@@ -311,7 +325,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err := e.Provider.Chat(context.Background(), chatReq)
 		if err != nil {
-			return fmt.Sprintf("LLM调用失败: %v", err), memoryWritten
+			return AgentRunResult{
+				Content:       fmt.Sprintf("LLM调用失败: %v", err),
+				MemoryWritten: memoryWritten,
+			}
 		}
 
 		// Map back to internal message for now to maintain compatibility
@@ -339,7 +356,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if len(responseMsg.ToolCalls) == 0 {
 			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
-			return contentStr, memoryWritten
+			return AgentRunResult{Content: contentStr, MemoryWritten: memoryWritten}
+		}
+
+		if conflict := staySilentConflict(responseMsg.ToolCalls); conflict != "" {
+			logs.Warn(logs.TOOL, conflict)
+			for _, tc := range responseMsg.ToolCalls {
+				messages = append(messages, ChatMessage{
+					Role:       "tool",
+					Content:    conflict,
+					ToolCallID: tc.ID,
+				})
+			}
+			continue
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
@@ -353,6 +382,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolResult = fmt.Sprintf("工具执行失败: %v", err)
 				} else {
 					toolResult = res
+					if tc.Function.Name == StaySilentToolName {
+						logs.Info(logs.SYSTEM, "【智能体选择保持沉默】")
+						return AgentRunResult{MemoryWritten: memoryWritten, Silent: true}
+					}
 					if isMemoryWriteAction(tc, res) {
 						memoryWritten = true
 					}
@@ -377,7 +410,25 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			messages = append(messages, toolMsg)
 		}
 	}
-	return "达到最大迭代次数，未能得出最终答案", memoryWritten
+	return AgentRunResult{
+		Content:       "达到最大迭代次数，未能得出最终答案",
+		MemoryWritten: memoryWritten,
+	}
+}
+
+// staySilentConflict rejects ambiguous parallel tool batches before any tool
+// executes. The terminal decision must be exclusive so the model cannot both
+// request side effects and terminate the same assistant response.
+func staySilentConflict(toolCalls []ToolCall) string {
+	if len(toolCalls) <= 1 {
+		return ""
+	}
+	for _, toolCall := range toolCalls {
+		if toolCall.Function.Name == StaySilentToolName {
+			return "工具调用冲突：stay_silent 必须单独调用，不能与其他工具同时使用；请重新选择要执行的动作"
+		}
+	}
+	return ""
 }
 
 // isMemoryWriteAction identifies explicit writes that must not be extracted a

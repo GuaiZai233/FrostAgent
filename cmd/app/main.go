@@ -170,6 +170,8 @@ func init() {
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
+	staySilentTool := tools.StaySilentTool()
+	registry[staySilentTool.Name()] = staySilentTool
 
 	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
