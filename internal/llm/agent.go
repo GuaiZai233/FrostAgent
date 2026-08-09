@@ -337,7 +337,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
 			return AgentRunResult{
-				Content:       fmt.Sprintf("LLM调用失败: %v", err),
+				Content:       fmt.Sprintf("FrostAgent错误：LLM调用失败: %v", err),
 				MemoryWritten: memoryWritten,
 			}
 		}
@@ -397,7 +397,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					res, err = tool.Execute(tc.Function.Arguments)
 				}
 				if err != nil {
-					toolResult = fmt.Sprintf("工具执行失败: %v", err)
+					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
 				} else {
 					toolSucceeded = true
 					toolResult = res
@@ -410,7 +410,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			} else {
-				toolResult = "工具未找到"
+				toolResult = "FrostAgent错误：工具未找到"
 			}
 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
@@ -430,7 +430,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 	}
 	return AgentRunResult{
-		Content:       "达到最大迭代次数，未能得出最终答案",
+		Content:       "FrostAgent错误：达到最大迭代次数，未能得出最终答案",
 		MemoryWritten: memoryWritten,
 	}
 }
