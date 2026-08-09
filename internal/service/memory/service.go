@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
@@ -42,7 +43,10 @@ func (s *Service) ListMemories(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list memories: %w", err))
 	}
 
-	resp := paginateEntries(entries, req.Msg.GetPagination())
+	resp, err := paginateEntries(entries, req.Msg.GetPagination())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	return connect.NewResponse(resp), nil
 }
 
@@ -62,7 +66,10 @@ func (s *Service) SearchMemories(
 	}
 
 	// Apply pagination
-	resp := paginateEntries(entries, req.Msg.GetPagination())
+	resp, err := paginateEntries(entries, req.Msg.GetPagination())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	return connect.NewResponse(&v1.SearchMemoriesResponse{
 		Memories:   resp.Memories,
 		Pagination: resp.Pagination,
@@ -302,21 +309,28 @@ func formatOptionalTime(value time.Time) string {
 }
 
 // paginateEntries slices entries according to pagination params and returns ListMemoriesResponse.
-func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) *v1.ListMemoriesResponse {
+func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) (*v1.ListMemoriesResponse, error) {
 	pageSize := int(pagination.GetPageSize())
 	pageToken := pagination.GetPageToken()
 	offset := 0
 	if pageToken != "" {
-		fmt.Sscanf(pageToken, "%d", &offset)
+		parsed, err := strconv.Atoi(pageToken)
+		if err != nil || parsed < 0 {
+			return nil, fmt.Errorf("invalid page token %q", pageToken)
+		}
+		offset = parsed
 	}
 	if pageSize <= 0 {
 		pageSize = 20
 	}
 
 	total := len(entries)
-	end := offset + pageSize
-	if end > total {
-		end = total
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if pageSize < total-offset {
+		end = offset + pageSize
 	}
 	page := entries[offset:end]
 
@@ -337,7 +351,7 @@ func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) *v
 			PageToken: nextToken,
 			Total:     int32(total),
 		},
-	}
+	}, nil
 }
 
 // toProtoEntry converts a memory.MemoryEntry to a proto MemoryEntry.
