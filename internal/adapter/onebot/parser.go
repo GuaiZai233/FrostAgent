@@ -70,18 +70,25 @@ func IsBotNameMentioned(event model.OneBotEvent) bool {
 		return false
 	}
 	for _, raw := range EventRawMessages(event) {
-		for _, segment := range ParseMessageSegments(raw) {
-			if segment.Type != "text" {
-				continue
-			}
-			text, ok := segment.Data["text"].(string)
-			if !ok {
-				continue
-			}
-			for _, name := range names {
-				if strings.Contains(text, name) {
-					return true
-				}
+		if rawMessageMentionsBot(raw, names) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawMessageMentionsBot(raw json.RawMessage, names []string) bool {
+	for _, segment := range ParseMessageSegments(raw) {
+		if segment.Type != "text" {
+			continue
+		}
+		text, ok := segment.Data["text"].(string)
+		if !ok {
+			continue
+		}
+		for _, name := range names {
+			if strings.Contains(text, name) {
+				return true
 			}
 		}
 	}

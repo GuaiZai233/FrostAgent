@@ -89,13 +89,7 @@ func (c *wsConnection) groupName(groupID int64) string {
 // Responses unrelated to the group cache are still recognized and ignored,
 // matching the previous behavior where they became empty, non-message events.
 func (c *wsConnection) handleAPIResponse(raw []byte) bool {
-	var response struct {
-		PostType string          `json:"post_type"`
-		Status   string          `json:"status"`
-		RetCode  int             `json:"retcode"`
-		Data     json.RawMessage `json:"data"`
-		Echo     json.RawMessage `json:"echo"`
-	}
+	var response oneBotAPIResponse
 	if err := json.Unmarshal(raw, &response); err != nil || response.PostType != "" ||
 		len(response.Echo) == 0 || string(response.Echo) == "null" {
 		return false
@@ -103,6 +97,9 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 
 	var echo string
 	if err := json.Unmarshal(response.Echo, &echo); err != nil || echo == "" {
+		return true
+	}
+	if c.deliverMessageResponse(echo, response) {
 		return true
 	}
 

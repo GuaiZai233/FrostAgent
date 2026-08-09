@@ -71,6 +71,9 @@ func checkWebSocketOrigin(r *http.Request) bool {
 type wsConnection struct {
 	conn               *websocket.Conn
 	writeMu            sync.Mutex
+	messageMu          sync.Mutex
+	pendingMessage     map[string]chan oneBotAPIResponse
+	nextMessageEcho    uint64
 	groupMu            sync.Mutex
 	groupCache         map[int64]cachedGroupInfo
 	pendingGroupByEcho map[string]pendingGroupInfo
@@ -81,6 +84,7 @@ type wsConnection struct {
 func newWSConnection(conn *websocket.Conn) *wsConnection {
 	return &wsConnection{
 		conn:               conn,
+		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		groupCache:         make(map[int64]cachedGroupInfo),
 		pendingGroupByEcho: make(map[string]pendingGroupInfo),
 		pendingGroupByID:   make(map[int64]string),
@@ -167,10 +171,11 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 			return
 		}
-		if !HasGroupWakeSignal(event) {
+		replyContext := conn.lookupReplyContext(event)
+		if !HasGroupWakeSignal(event) && !replyContext.MentionsBot {
 			return
 		}
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt)
 
 	} else if event.MessageType == "private" {
 		logs.Info(
@@ -182,11 +187,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				string(event.Message),
 			),
 		)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn)
+		replyContext := conn.lookupReplyContext(event)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt)
 	}
 }
 
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string) {
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
 	segments = []content.MessageSegment{}
@@ -244,6 +250,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		)
 	}
 	prompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
+	requestPrompt := prompt
+	if replyContext != "" {
+		requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", replyContext)
+	}
 
 	// 4. Call the agent engine with history
 	var replyText string
@@ -253,6 +263,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		// 获取带历史的消息快照（已深拷贝，线程安全）
 		messages := session.Snapshot()
+		// 引用原文仅供本轮理解，不写回 session，避免在后续 history、
+		// running compact 与自动记忆中重复累计旧消息。
+		if replyContext != "" && len(messages) > 0 {
+			messages[len(messages)-1].Content = requestPrompt
+		}
 
 		// 设置 SendHook：send_message 调用时立即通过 OneBot 发送
 		engine.SendHook = func(toolResultJSON string) {
