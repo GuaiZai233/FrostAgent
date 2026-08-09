@@ -17,16 +17,16 @@ func NewReader(store *Store, vs *VectorStore, limit int) *Reader {
 	return &Reader{store: store, vs: vs, limit: limit}
 }
 
-// Recall searches the unified brain using hybrid search (semantic + keyword).
-// Semantic results are ranked by cosine similarity; keyword results fill remaining
-// slots by content/tag matching. The Gateway is responsible for owner/visibility filtering.
+// Recall returns globally ranked candidates without applying the result limit.
+// The caller must pass them through Gateway before calling Limit, otherwise
+// inaccessible entries could crowd the current owner's memories out of the window.
 func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEntry, error) {
 	// Phase 1: semantic search (if vector store is configured)
 	seen := make(map[string]bool)
 	var results []MemoryEntry
 
 	if r.vs != nil {
-		ids, err := r.vs.Search(ctx, currentMessage, r.limit)
+		ids, err := r.vs.Search(ctx, currentMessage, 0)
 		if err == nil && len(ids) > 0 {
 			all, err := r.store.ListAll()
 			if err != nil {
@@ -44,25 +44,10 @@ func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEnt
 				}
 			}
 		}
-		// If we have enough results (or unlimited and have some), return early
-		if r.limit > 0 && len(results) >= r.limit {
-			return results[:r.limit], nil
-		}
-		// Unlimited mode: always fall through to keyword to catch non-indexed entries
 	}
 
-	// Phase 2: keyword fallback — fill remaining slots
-	need := r.limit
-	if need == 0 {
-		need = 0 // unlimited, collect all
-	} else {
-		need -= len(results)
-		if need <= 0 {
-			return results, nil
-		}
-	}
-
-	kwResults, err := r.store.Search(currentMessage, need)
+	// Always include keyword matches so non-indexed entries remain candidates.
+	kwResults, err := r.store.Search(currentMessage, 0)
 	if err != nil {
 		// If semantic search already returned something, return it best-effort
 		if len(results) > 0 {
@@ -85,5 +70,13 @@ func (r *Reader) Recall(ctx context.Context, currentMessage string) ([]MemoryEnt
 // SearchByTags searches memories by multiple tags using the store's tag-based search.
 // Results are ranked by relevance (tag exact match > tag substring > content substring).
 func (r *Reader) SearchByTags(ctx context.Context, tags []string) ([]MemoryEntry, error) {
-	return r.store.SearchByTags(tags, r.limit)
+	return r.store.SearchByTags(tags, 0)
+}
+
+// Limit caps an already access-filtered candidate list.
+func (r *Reader) Limit(entries []MemoryEntry) []MemoryEntry {
+	if r.limit <= 0 || len(entries) <= r.limit {
+		return entries
+	}
+	return entries[:r.limit]
 }

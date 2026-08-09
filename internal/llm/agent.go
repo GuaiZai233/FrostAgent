@@ -127,6 +127,7 @@ func (e *Engine) RunMessagesWithContext(
 			raw, err := e.MemoryReader.Recall(context.Background(), lastUserMsg)
 			if err == nil {
 				filtered := e.MemoryGateway.Filter(raw, owner)
+				filtered = e.MemoryReader.Limit(filtered)
 				if len(filtered) > 0 {
 					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext

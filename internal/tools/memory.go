@@ -87,6 +87,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					return fmt.Sprintf("搜索失败: %v", err), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
+				filtered = engine.MemoryReader.Limit(filtered)
 				if len(filtered) == 0 {
 					return "未找到相关记忆", nil
 				}
@@ -102,6 +103,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					return fmt.Sprintf("列出失败: %v", err), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
+				filtered = engine.MemoryReader.Limit(filtered)
 				if len(filtered) == 0 {
 					return "你还没有任何记忆", nil
 				}
