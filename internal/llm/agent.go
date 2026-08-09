@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +20,10 @@ type ToolExecutor interface {
 	Description() string
 	Parameters() map[string]any
 	Execute(args string) (string, error)
+}
+
+type contextualToolExecutor interface {
+	ExecuteContext(ctx context.Context, args string) (string, error)
 }
 
 const (
@@ -45,10 +50,9 @@ type Engine struct {
 	ModelName              string           // 模型名称
 	SessionManager         *SessionManager  // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
-	SendHook               func(toolResultJSON string) // 当 send_message 被调用时立即触发
-	StartedAt              time.Time                   // 引擎启动时间
-	Version                string                      // 版本号
-	TotalMessagesProcessed int64                       // 已处理消息总数（原子操作，非线程安全计数器）
+	StartedAt              time.Time // 引擎启动时间
+	Version                string    // 版本号
+	TotalMessagesProcessed atomic.Int64
 
 	// Memory components (optional, nil = memory disabled)
 	MemoryReader      *memory.Reader
@@ -57,12 +61,6 @@ type Engine struct {
 	MemoryCatalog     *memory.CatalogStore
 	MemoryReflections *memory.ReflectionManager
 	GroupCompactor    *GroupCompactor
-
-	// CurrentUserID and CurrentOwnerType are set by RunMessagesWithUser for
-	// per-request memory context.
-	// Thread-safety: same model as SendHook — set before runLoop, read during tool execution.
-	CurrentUserID    string
-	CurrentOwnerType memory.OwnerType
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -95,8 +93,19 @@ func (e *Engine) RunMessagesWithUser(
 	owner string,
 	ownerType memory.OwnerType,
 ) AgentRunResult {
-	e.CurrentUserID = owner
-	e.CurrentOwnerType = memory.NormalizeOwnerType(ownerType)
+	return e.RunMessagesWithContext(messages, RunContext{
+		Owner:     owner,
+		OwnerType: ownerType,
+	})
+}
+
+// RunMessagesWithContext runs one agent request with owner and transport hooks
+// scoped to that request instead of mutable Engine fields.
+func (e *Engine) RunMessagesWithContext(
+	messages []ChatMessage,
+	runContext RunContext,
+) AgentRunResult {
+	owner := runContext.Owner
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
@@ -130,7 +139,8 @@ func (e *Engine) RunMessagesWithUser(
 		}, messages...)
 	}
 
-	return e.runLoopWithResult(context.Background(), messages)
+	ctx := withRunContext(context.Background(), runContext)
+	return e.runLoopWithResult(ctx, messages)
 }
 
 // EnqueueExtractionTurn buffers one completed turn. Extraction runs only when
@@ -315,7 +325,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
-		e.TotalMessagesProcessed++
+		e.TotalMessagesProcessed.Add(1)
 		logs.Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		chatReq := core.ChatRequest{
@@ -323,7 +333,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			Messages: convertToCoreMessages(messages),
 			Tools:    modelTools,
 		}
-		resp, err := e.Provider.Chat(context.Background(), chatReq)
+		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
 			return AgentRunResult{
 				Content:       fmt.Sprintf("LLM调用失败: %v", err),
@@ -377,7 +387,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			var toolResult string
 			// 从 map 中找到工具执行
 			if tool, exists := e.ToolRegistry[tc.Function.Name]; exists {
-				res, err := tool.Execute(tc.Function.Arguments)
+				var res string
+				var err error
+				if contextualTool, ok := tool.(contextualToolExecutor); ok {
+					res, err = contextualTool.ExecuteContext(ctx, tc.Function.Arguments)
+				} else {
+					res, err = tool.Execute(tc.Function.Arguments)
+				}
 				if err != nil {
 					toolResult = fmt.Sprintf("工具执行失败: %v", err)
 				} else {
@@ -397,8 +413,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
 
 			// send_message 立即通过 SendHook 发送，并告知 LLM 发送成功
-			if tc.Function.Name == "send_message" && e.SendHook != nil {
-				e.SendHook(toolResult)
+			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && ok && runContext.SendHook != nil {
+				runContext.SendHook(toolResult)
 				toolResult = "消息已发送"
 			}
 

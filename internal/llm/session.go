@@ -26,6 +26,27 @@ type GroupCompactSnapshot struct {
 	ThroughSequence uint64
 }
 
+// SessionTurn forms a FIFO chain reserved in WebSocket arrival order. It is
+// separate from the history mutex because a full LLM turn calls methods that
+// briefly lock session state themselves.
+type SessionTurn struct {
+	wait <-chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
+func (t *SessionTurn) Wait() {
+	if t != nil && t.wait != nil {
+		<-t.wait
+	}
+}
+
+func (t *SessionTurn) Done() {
+	if t != nil {
+		t.once.Do(func() { close(t.done) })
+	}
+}
+
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
 	ConversationID string
@@ -33,12 +54,24 @@ type SessionContext struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	mu             sync.Mutex // 保护单个会话的并发访问
+	turnMu         sync.Mutex
+	turnTail       chan struct{}
 
 	groupCompactSummary  string
 	groupCompactBuffer   []groupCompactItem
 	groupCompactSequence uint64
 	pendingTurns         [][]memory.PendingExtractionItem
 	extractionThreshold  int
+}
+
+// ReserveTurn appends one complete dialogue turn to this session's FIFO chain.
+func (s *SessionContext) ReserveTurn() *SessionTurn {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+
+	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{})}
+	s.turnTail = turn.done
+	return turn
 }
 
 // Lock 锁定会话

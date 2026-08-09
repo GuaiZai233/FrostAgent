@@ -18,7 +18,7 @@ func NewRegistry() *Registry {
 // Register adds a tool to the registry.
 func (r *Registry) Register(t Tool) {
 	r.tools[t.name] = t
-	r.executors[t.name] = t.execute
+	r.executors[t.name] = t.Execute
 }
 
 // GetTool returns the tool metadata by name.

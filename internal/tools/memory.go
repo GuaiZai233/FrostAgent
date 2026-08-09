@@ -9,8 +9,7 @@ import (
 	"FrostAgent/internal/llm"
 )
 
-// NewMemoryTool creates a tool that allows the LLM to actively manage memories.
-// It reads the current owner namespace from the engine (set by RunMessagesWithUser).
+// NewMemoryTool creates a tool that manages the current request's memory owner.
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
@@ -37,7 +36,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 			},
 			"required": []string{"action"},
 		},
-		execute: func(args string) (string, error) {
+		executeContext: func(ctx context.Context, args string) (string, error) {
 			var params struct {
 				Action  string   `json:"action"`
 				Content string   `json:"content"`
@@ -47,10 +46,11 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return "", fmt.Errorf("参数解析失败: %w", err)
 			}
 
-			currentUser := engine.CurrentUserID
-			if currentUser == "" {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok || runContext.Owner == "" {
 				return "无法获取当前用户信息", nil
 			}
+			currentUser := runContext.Owner
 
 			switch params.Action {
 			case "write":
@@ -62,7 +62,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				if err := engine.MemoryWriter.WriteByOwner(
 					currentUser,
-					engine.CurrentOwnerType,
+					runContext.OwnerType,
 					params.Content,
 					params.Tags,
 				); err != nil {

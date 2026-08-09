@@ -145,15 +145,22 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 			if event.PostType == "message" && event.MessageType == "group" {
 				captureGroupCompactMessage(event, engine)
 			}
-			go processEvent(wsConn, event, engine)
+			var turn *llm.SessionTurn
+			if engine != nil && engine.SessionManager != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				turn = engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
+			}
+			go processEvent(wsConn, event, engine, turn)
 		}
 	}
 }
 
-// processEvent routes one decoded OneBot event into the private or group reply
-// path. Group messages without an enabled wake signal return before invoking
-// the LLM, while compact capture has already happened on the read goroutine.
-func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) {
+// processEvent holds its reserved session turn until routing and reply finish.
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn) {
+	if turn != nil {
+		turn.Wait()
+		defer turn.Done()
+	}
 	if event.PostType != "message" {
 		return
 	}
@@ -198,9 +205,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	}
 }
 
-// reply builds the per-turn prompt, runs the agent with session history, and
-// emits the resulting OneBot action. A terminal Silent result records the
-// hidden assistant marker and returns before final sending or memory batching.
+// reply records terminal silence without sending or batching memory.
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string, responseContext string) {
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
@@ -281,8 +286,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			messages[len(messages)-1].Content = requestPrompt
 		}
 
-		// 设置 SendHook：send_message 调用时立即通过 OneBot 发送
-		engine.SendHook = func(toolResultJSON string) {
+		sendHook := func(toolResultJSON string) {
 			var toolOutput struct {
 				Messages []tools.Msg `json:"messages"`
 			}
@@ -316,9 +320,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if event.MessageType == "group" {
 			owner, ownerType = memory.OwnerForGroup(event.GroupID)
 		}
-		runResult := engine.RunMessagesWithUser(messages, owner, ownerType)
+		runResult := engine.RunMessagesWithContext(messages, llm.RunContext{
+			Owner:     owner,
+			OwnerType: ownerType,
+			SendHook:  sendHook,
+		})
 		replyText = runResult.Content
-		engine.SendHook = nil
 
 		// A deliberate terminal silence keeps the user turn and an assistant
 		// marker in history, but never emits an empty OneBot message or feeds the
