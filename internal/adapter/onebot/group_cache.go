@@ -85,9 +85,8 @@ func (c *wsConnection) groupName(groupID int64) string {
 	return ""
 }
 
-// handleAPIResponse consumes OneBot action responses before the event decoder.
-// Responses unrelated to the group cache are still recognized and ignored,
-// matching the previous behavior where they became empty, non-message events.
+// handleAPIResponse consumes OneBot action responses before the event decoder,
+// dispatching awaited lookups and logging failures from fire-and-forget actions.
 func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	var response oneBotAPIResponse
 	if err := json.Unmarshal(raw, &response); err != nil || response.PostType != "" ||
@@ -107,6 +106,7 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	pending, ok := c.pendingGroupByEcho[echo]
 	if !ok {
 		c.groupMu.Unlock()
+		logOneBotActionFailure(echo, response)
 		return true
 	}
 	delete(c.pendingGroupByEcho, echo)
@@ -153,6 +153,26 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 		)
 	}
 	return true
+}
+
+func logOneBotActionFailure(echo string, response oneBotAPIResponse) {
+	if response.RetCode == 0 && (response.Status == "" || response.Status == "ok") {
+		return
+	}
+	detail := strings.TrimSpace(response.Wording)
+	if detail == "" {
+		detail = strings.TrimSpace(response.Message)
+	}
+	logs.Error(
+		logs.WEBSOCKET,
+		fmt.Sprintf(
+			"OneBot action 失败: echo=%s status=%s retcode=%d detail=%q",
+			echo,
+			response.Status,
+			response.RetCode,
+			detail,
+		),
+	)
 }
 
 func (c *wsConnection) clearPendingGroupInfo(echo string) {

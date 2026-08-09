@@ -385,6 +385,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			logs.Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
 
 			var toolResult string
+			toolSucceeded := false
 			// 从 map 中找到工具执行
 			if tool, exists := e.ToolRegistry[tc.Function.Name]; exists {
 				var res string
@@ -397,6 +398,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if err != nil {
 					toolResult = fmt.Sprintf("工具执行失败: %v", err)
 				} else {
+					toolSucceeded = true
 					toolResult = res
 					if tc.Function.Name == StaySilentToolName {
 						logs.Info(logs.SYSTEM, "【智能体选择保持沉默】")
@@ -412,8 +414,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
 
-			// send_message 立即通过 SendHook 发送，并告知 LLM 发送成功
-			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && ok && runContext.SendHook != nil {
+			// 只有校验通过的 send_message 才能触发实际发送。
+			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && toolSucceeded && ok && runContext.SendHook != nil {
 				runContext.SendHook(toolResult)
 				toolResult = "消息已发送"
 			}
