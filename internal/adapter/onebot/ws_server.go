@@ -162,11 +162,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				string(event.Message),
 			),
 		)
-		// 群聊被@/提及时触发对话（总开关；未设置视为启用）
+		// 群聊被真实 @ 或名称/别名提及时触发对话（总开关；未设置视为启用）。
+		// 两种唤醒信号等价；无信号消息仍已在读取协程中进入 running compact。
 		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 			return
 		}
-		if !IsMentionedBot(event) {
+		if !HasGroupWakeSignal(event) {
 			return
 		}
 		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn)
