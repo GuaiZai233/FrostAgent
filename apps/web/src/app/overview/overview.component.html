@@ -1,76 +1,108 @@
-<section class="page">
-  <header >
-
-  </header>
-
+<section class="mx-auto grid max-w-7xl gap-6 p-4 sm:p-6">
   @if (loading()) {
-    <mat-progress-bar mode="indeterminate" />
+    <div class="text-muted-foreground flex items-center gap-2 text-sm">
+      <hlm-spinner />
+      <span i18n="@@loading">加载中</span>
+    </div>
   }
 
   @if (error()) {
-    <mat-card >
-      <mat-card-content>{{ error() }}</mat-card-content>
-    </mat-card>
+    <section hlmCard class="border-destructive/30">
+      <div hlmCardContent class="text-destructive">{{ error() }}</div>
+    </section>
   }
 
   @if (overview(); as data) {
-    <section>
-      <div>
-        <h2>{{ greet(data.botName || 'FrostAgent') }}</h2>
-      </div>
-      <mat-chip-set aria-label="Bot metadata">
-        <mat-chip [ngClass]="{
-            'status-chip-running': data.status === BotStatus.RUNNING,
-            'status-chip-initializing': data.status === BotStatus.INITIALIZING,
-            'status-chip-error': data.status === BotStatus.ERROR
-          }">
-          <mat-icon matChipAvatar>sensors</mat-icon>
+    <header class="grid gap-4">
+      <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">
+        {{ greet(data.botName || 'FrostAgent') }}
+      </h1>
+      <div class="flex flex-wrap gap-2" aria-label="Bot metadata">
+        <span
+          hlmBadge
+          variant="outline"
+          class="gap-1"
+          [ngClass]="statusClass(data.status)"
+        >
+          <app-icon>sensors</app-icon>
           {{ formatStatus(data.status) }}
-        </mat-chip>
-        <mat-chip>
-          <mat-icon matChipAvatar>acute</mat-icon>
+        </span>
+        <span hlmBadge variant="outline" class="gap-1">
+          <app-icon>acute</app-icon>
           {{ formatUptime(data.uptimeSeconds) }}
-        </mat-chip>
-        <mat-chip>
-          <mat-icon matChipAvatar>deployed_code</mat-icon>
+        </span>
+        <span hlmBadge variant="outline" class="gap-1">
+          <app-icon>deployed_code</app-icon>
           {{ backendVersion(data.version || '-') }}
-        </mat-chip>
-      </mat-chip-set>
+        </span>
+      </div>
+    </header>
+
+    <section class="grid gap-3 sm:grid-cols-3" aria-label="Bot statistics">
+      <article hlmCard size="sm">
+        <div hlmCardContent class="flex items-center gap-3">
+          <app-icon class="text-primary">mark_chat_read</app-icon>
+          <div>
+            <p class="text-muted-foreground text-xs" i18n="@@totalMessages">
+              处理消息
+            </p>
+            <p class="text-xl font-semibold">
+              {{ formatCount(data.totalMessagesProcessed) }}
+            </p>
+          </div>
+        </div>
+      </article>
+      <article hlmCard size="sm">
+        <div hlmCardContent class="flex items-center gap-3">
+          <app-icon class="text-primary">forum</app-icon>
+          <div>
+            <p class="text-muted-foreground text-xs" i18n="@@activeSessions">
+              活跃会话
+            </p>
+            <p class="text-xl font-semibold">
+              {{ formatCount(data.activeSessions) }}
+            </p>
+          </div>
+        </div>
+      </article>
+      <article hlmCard size="sm">
+        <div hlmCardContent class="flex items-center gap-3">
+          <app-icon class="text-primary">psychology</app-icon>
+          <div class="min-w-0">
+            <p class="text-muted-foreground text-xs" i18n="@@currentModel">
+              当前模型
+            </p>
+            <p class="truncate text-xl font-semibold">
+              {{ data.currentModel || '-' }}
+            </p>
+          </div>
+        </div>
+      </article>
     </section>
 
-    <section style="margin-top: 16px;">
-      <mat-chip-set aria-label="Bot statistics">
-        <mat-chip>
-          <mat-icon matChipAvatar>mark_chat_read</mat-icon>
-          <span i18n="@@totalMessages">处理消息</span> {{ formatCount(data.totalMessagesProcessed) }}
-        </mat-chip>
-        <mat-chip>
-          <mat-icon matChipAvatar>forum</mat-icon>
-          <span i18n="@@activeSessions">活跃会话</span> {{ formatCount(data.activeSessions) }}
-        </mat-chip>
-        <mat-chip>
-          <mat-icon matChipAvatar>psychology</mat-icon>
-          <span i18n="@@currentModel">当前模型</span> {{ data.currentModel || '-' }}
-        </mat-chip>
-      </mat-chip-set>
-    </section>
-
-    <section style="margin-top: 32px;">
-      <h2 i18n="@@loadedTools" style="margin-bottom: 16px;">我可以使用 {{ data.tools.length }} 个工具</h2>
-
-      <div class="tools-container">
+    <section class="grid gap-4">
+      <h2 class="text-xl font-semibold" i18n="@@loadedTools">
+        我可以使用 {{ data.tools.length }} 个工具
+      </h2>
+      <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         @for (tool of data.tools; track tool.name) {
-          <mat-card appearance="outlined">
-            <mat-card-header>
-              <mat-icon mat-card-avatar>construction</mat-icon>
-              <mat-card-title>{{ tool.name }}</mat-card-title>
-            </mat-card-header>
-            <mat-card-content>{{ tool.description || '' }}</mat-card-content>
-          </mat-card>
+          <article hlmCard>
+            <div hlmCardHeader>
+              <div class="flex items-center gap-2">
+                <app-icon class="text-primary">construction</app-icon>
+                <h3 hlmCardTitle>{{ tool.name }}</h3>
+              </div>
+            </div>
+            <div hlmCardContent class="text-muted-foreground">
+              {{ tool.description || '' }}
+            </div>
+          </article>
         } @empty {
-          <mat-card appearance="outlined">
-            <mat-card-content i18n="@@noTools">暂无已注册工具。</mat-card-content>
-          </mat-card>
+          <article hlmCard>
+            <div hlmCardContent class="text-muted-foreground" i18n="@@noTools">
+              暂无已注册工具。
+            </div>
+          </article>
         }
       </div>
     </section>

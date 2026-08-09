@@ -21,18 +21,26 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
-	"UPSTREAM_ENDPOINT":      {"上游 API 端点 URL，支持 OpenAI 兼容服务", false, true},
-	"UPSTREAM_API_KEY":       {"上游 API 认证密钥", true, true},
-	"CODER_API_KEY":          {"Coder API 密钥", true, true},
-	"LISTEN_ADDR":            {"HTTP 监听地址", false, true},
-	"WS_LISTEN_ADDR":         {"WebSocket 监听地址", false, true},
-	"SYSTEM_PROMPT":          {"系统提示词", false, false},
-	"MODEL_NAME":             {"模型名称", false, true},
-	"VISUAL_MODEL_NAME":      {"视觉模型名称（留空则采用默认模型）", false, true},
-	"MAX_CONTEXT_MESSAGES":   {"最多保留的消息数", false, false},
-	"MAX_CONTEXT_CHARS":      {"近似字符上限", false, false},
-	"WS_ALLOWED_ORIGINS":     {"允许的 WebSocket Origin", false, true},
-	"ENABLE_AT_IN_GROUP_MSG": {"是否开启群聊回复前艾特", false, false},
+	"UPSTREAM_ENDPOINT":          {"上游 API 端点 URL，支持 OpenAI 兼容服务", false, true},
+	"UPSTREAM_API_KEY":           {"上游 API 认证密钥", true, true},
+	"CODER_API_KEY":              {"Coder API 密钥", true, true},
+	"LISTEN_ADDR":                {"HTTP 监听地址", false, true},
+	"WS_LISTEN_ADDR":             {"WebSocket 监听地址", false, true},
+	"SYSTEM_PROMPT":              {"系统提示词", false, false},
+	"MODEL_NAME":                 {"模型名称", false, true},
+	"VISUAL_MODEL_NAME":          {"视觉模型名称（留空则采用默认模型）", false, true},
+	"MAX_CONTEXT_MESSAGES":       {"最多保留的消息数", false, false},
+	"MAX_CONTEXT_CHARS":          {"近似字符上限", false, false},
+	"WS_ALLOWED_ORIGINS":         {"允许的 WebSocket Origin", false, true},
+	"ENABLE_AT_IN_GROUP_MSG":     {"是否开启群聊回复前艾特", false, false},
+	"GROUP_REPLY_ON_MENTION":     {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false},
+	"BOT_NAME":                   {"机器人主名称，用于群聊文本唤醒", false, false},
+	"BOT_ALIASES":                {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false},
+	"ENABLE_REPLY_IN_GROUP_MSG":  {"群聊回复时是否引用原消息", false, false},
+	"GROUP_COMPACT_BUFFER_SIZE":  {"群聊 running compact 每批原消息数量", false, true},
+	"GROUP_COMPACT_MIN_INTERVAL": {"同群 running compact 最小触发间隔（如 30s）", false, true},
+	"MEMORY_EXTRACT_BATCH_MIN":   {"自动记忆提取的最小累计轮数", false, false},
+	"MEMORY_EXTRACT_BATCH_MAX":   {"自动记忆提取的最大累计轮数", false, false},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.

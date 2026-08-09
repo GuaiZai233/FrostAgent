@@ -5,14 +5,19 @@ import (
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/service/botstatus"
 	logsvc "FrostAgent/internal/service/logs"
+	memsvc "FrostAgent/internal/service/memory"
 	"FrostAgent/internal/service/settings"
 	"FrostAgent/internal/tools"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
@@ -23,7 +28,58 @@ import (
 // 全局引擎实例
 var GlobalEngine *llm.Engine
 
+// 全局 memory store
+var globalStore *memory.Store
+
 const version = "0.1.0"
+
+// brainPath returns the path to brain.json, defaulting to data/brain.json.
+func brainPath() string {
+	if p := os.Getenv("BRAIN_PATH"); p != "" {
+		return p
+	}
+	return "data/brain.json"
+}
+
+// catalogPath returns the independent, replaceable reflection catalog path.
+func catalogPath() string {
+	return filepath.Join(filepath.Dir(brainPath()), "memory_catalog.json")
+}
+
+// ensureDataDir ensures the data directory exists for brain.json.
+func ensureDataDir() {
+	dir := filepath.Dir(brainPath())
+	os.MkdirAll(dir, 0755)
+}
+
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		logs.Warn(
+			logs.SYSTEM,
+			fmt.Sprintf("%s=%q 不是有效的正数时长，使用默认值 %s", name, raw, fallback),
+		)
+		return fallback
+	}
+	return value
+}
+
+func positiveIntFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("%s=%q 不是有效的正整数，使用默认值 %d", name, raw, fallback))
+		return fallback
+	}
+	return value
+}
 
 func init() {
 	// 加载 .env 文件
@@ -36,21 +92,64 @@ func init() {
 
 	logs.Info(logs.SYSTEM, "正在初始化智能体引擎...")
 
-	llmClient := llm.NewClient()
+	// Ensure data directory exists
+	ensureDataDir()
 
-	// 注册工具
+	// Initialize LLM clients
+	llmHTTPClient := llm.NewClient() // HTTP client wrapper for SubAgentTool
+	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
+	memoryConfig := memory.DefaultConfig()
+	memoryConfig.ReflectTimeout = durationFromEnv(
+		"MEMORY_REFLECTION_TIMEOUT",
+		memoryConfig.ReflectTimeout,
+	)
+	reflectionLLMClient := openai.NewClientWithTimeout(
+		os.Getenv("UPSTREAM_ENDPOINT"),
+		os.Getenv("UPSTREAM_API_KEY"),
+		memoryConfig.ReflectTimeout,
+	)
+
+	// Initialize memory system
+	globalStore = memory.NewStore(brainPath())
+
+	reader := memory.NewReader(globalStore, 20)
+	writer := memory.NewWriter(globalStore)
+	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
+	groupCompactBufferSize := positiveIntFromEnv("GROUP_COMPACT_BUFFER_SIZE", 20)
+	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
+	groupCompactor := llm.NewGroupCompactor(
+		llmClient,
+		writer,
+		os.Getenv("MODEL_NAME"),
+		groupCompactBufferSize,
+		groupCompactMinInterval,
+	)
+	// Gateway: owner + visibility filtering
+	gateway := memory.NewGateway()
+	// Reflection: background, owner-isolated topic catalog generation
+	catalog := memory.NewCatalogStore(catalogPath())
+	reflector := memory.NewReflector(
+		globalStore,
+		catalog,
+		reflectionLLMClient,
+		os.Getenv("MODEL_NAME"),
+		memoryConfig,
+	)
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf("✓ 记忆反思独立超时: %s", memoryConfig.ReflectTimeout),
+	)
+	reflections := memory.NewReflectionManager(reflector)
+
+	// Register tools
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
+	staySilentTool := tools.StaySilentTool()
+	registry[staySilentTool.Name()] = staySilentTool
 
-	subAgentTool := tools.SubAgentTool(llmClient)
+	subAgentTool := tools.SubAgentTool(llmHTTPClient)
 	registry[subAgentTool.Name()] = subAgentTool
-
-	weatherTool := tools.GetWeatherTool()
-	registry[weatherTool.Name()] = weatherTool
-
-	gameVersionTool := tools.GetGameVersionTool()
-	registry[gameVersionTool.Name()] = gameVersionTool
 
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
@@ -60,16 +159,34 @@ func init() {
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
-		Provider:       openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY")),
+		Provider:       llmClient,
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
 		SessionManager: llm.NewSessionManager(),
 		StartedAt:      time.Now(),
 		Version:        version,
+		// Memory components
+		MemoryReader:      reader,
+		MemoryWriter:      writer,
+		MemoryGateway:     gateway,
+		MemoryCatalog:     catalog,
+		MemoryReflections: reflections,
+		GroupCompactor:    groupCompactor,
 	}
+	logs.Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
+			groupCompactBufferSize,
+			groupCompactMinInterval,
+		),
+	)
 
 	logs.Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
+	// Register memory tool (must be after GlobalEngine assignment)
+	memTool := tools.NewMemoryTool(GlobalEngine)
+	GlobalEngine.ToolRegistry[memTool.Name()] = memTool
 }
 
 func main() {
@@ -84,6 +201,11 @@ func main() {
 
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)
+
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
+		memsvc.New(globalStore, GlobalEngine.MemoryReflections),
+	)
+	mux.Handle(memoryPath, memoryHandler)
 
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())

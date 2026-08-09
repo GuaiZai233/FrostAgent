@@ -164,9 +164,35 @@ func TestHandleWSGroupMessageMentioned(t *testing.T) {
 		t.Fatalf("发送消息失败: %v", err)
 	}
 
+	// 首次遇到群聊时先收到非阻塞的群信息查询。
 	_, respBytes, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("读取响应失败: %v", err)
+		t.Fatalf("读取群信息查询失败: %v", err)
+	}
+	var groupInfoAction model.OneBotAction
+	if err := json.Unmarshal(respBytes, &groupInfoAction); err != nil {
+		t.Fatalf("解析群信息查询失败: %v\n原始响应: %s", err, string(respBytes))
+	}
+	if groupInfoAction.Action != "get_group_info" {
+		t.Fatalf("期望首个 action=get_group_info, 实际=%s", groupInfoAction.Action)
+	}
+	groupInfoResponse := map[string]interface{}{
+		"status":  "ok",
+		"retcode": 0,
+		"data": map[string]interface{}{
+			"group_id":   event.GroupID,
+			"group_name": "测试群",
+		},
+		"echo": groupInfoAction.Echo,
+	}
+	responseBytes, _ := json.Marshal(groupInfoResponse)
+	if err := conn.WriteMessage(websocket.TextMessage, responseBytes); err != nil {
+		t.Fatalf("发送群信息响应失败: %v", err)
+	}
+
+	_, respBytes, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取群消息回复失败: %v", err)
 	}
 
 	var action model.OneBotAction
@@ -188,6 +214,83 @@ func TestHandleWSGroupMessageMentioned(t *testing.T) {
 	}
 
 	t.Logf("✅ 群聊@消息测试通过，回复内容: %v", params["message"])
+}
+
+func TestSenderContextKeepsDistinctNicknameAndCard(t *testing.T) {
+	event := model.OneBotEvent{
+		UserID: 10001,
+		Sender: &model.OneBotSender{
+			UserID:   10001,
+			Nickname: "QQ昵称",
+			Card:     "群名片",
+		},
+	}
+	context := senderContext(event)
+	if context["nickname"] != "QQ昵称" || context["card"] != "群名片" {
+		t.Fatalf("expected both nickname and card, got %#v", context)
+	}
+}
+
+func TestSenderContextDeduplicatesEqualNicknameAndCard(t *testing.T) {
+	event := model.OneBotEvent{
+		UserID: 10001,
+		Sender: &model.OneBotSender{
+			Nickname: "同一个名字",
+			Card:     "同一个名字",
+		},
+	}
+	context := senderContext(event)
+	if context["nickname"] != "同一个名字" {
+		t.Fatalf("expected nickname retained, got %#v", context)
+	}
+	if _, ok := context["card"]; ok {
+		t.Fatalf("expected duplicate card omitted, got %#v", context)
+	}
+}
+
+func TestSenderDisplayNameIncludesCardAndNickname(t *testing.T) {
+	event := model.OneBotEvent{
+		Sender: &model.OneBotSender{
+			Nickname: "怪哉GuaiZai",
+			Card:     "guaizai",
+		},
+	}
+	if got := senderDisplayName(event); got != "guaizai（怪哉GuaiZai）" {
+		t.Fatalf("unexpected sender display name: %q", got)
+	}
+}
+
+func TestSenderDisplayNameDeduplicatesEqualCardAndNickname(t *testing.T) {
+	event := model.OneBotEvent{
+		Sender: &model.OneBotSender{
+			Nickname: "同一个名字",
+			Card:     "同一个名字",
+		},
+	}
+	if got := senderDisplayName(event); got != "同一个名字" {
+		t.Fatalf("unexpected sender display name: %q", got)
+	}
+}
+
+func TestGroupInfoResponseUpdatesConnectionCache(t *testing.T) {
+	conn := newWSConnection(nil)
+	conn.pendingGroupByID[123456] = "group-echo"
+	conn.pendingGroupByEcho["group-echo"] = pendingGroupInfo{
+		GroupID:     123456,
+		RequestedAt: time.Now(),
+	}
+
+	raw := []byte(`{"status":"ok","retcode":0,"data":{"group_id":123456,"group_name":" 群名称\n "},"echo":"group-echo"}`)
+	if !conn.handleAPIResponse(raw) {
+		t.Fatal("expected API response to be consumed")
+	}
+	cached := conn.groupCache[123456]
+	if cached.Name != "群名称" {
+		t.Fatalf("unexpected cached group name: %q", cached.Name)
+	}
+	if _, ok := conn.pendingGroupByID[123456]; ok {
+		t.Fatal("expected pending group request cleared")
+	}
 }
 
 func TestHandleWSGroupMessageNotMentioned(t *testing.T) {

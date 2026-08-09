@@ -6,12 +6,22 @@ import {
   BotStatusService,
   LogLevel,
   LogService,
+  MemoryService,
   SettingsService,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
   type ListLogsResponse,
   type LogEntry,
+  type ListMemoriesResponse,
+  type DeleteMemoryResponse,
+  type GetMemoryStatsResponse,
+  type SearchMemoriesResponse,
+  type AddMemoryResponse,
+  type UpdateMemoryResponse,
+  type ExportMemoriesResponse,
+  type ImportMemoriesResponse,
+  type TriggerReflectionResponse,
 } from '@frostagent/proto';
 
 export interface EnvVarUpdate {
@@ -36,6 +46,10 @@ export class FrostagentApiService {
   );
   private readonly settingsClient: Client<typeof SettingsService> =
     createClient(SettingsService, this.transport);
+  private readonly memoryClient: Client<typeof MemoryService> = createClient(
+    MemoryService,
+    this.transport,
+  );
 
   getOverview(): Promise<GetOverviewResponse> {
     return this.botClient.getOverview({});
@@ -116,5 +130,75 @@ export class FrostagentApiService {
     content: string,
   ): Promise<{ success: boolean; error: string }> {
     return this.settingsClient.updateRawEnvFile({ content });
+  }
+
+  listMemories(
+    pageSize: number,
+    pageToken = '',
+    owner = '',
+  ): Promise<ListMemoriesResponse> {
+    return this.memoryClient.listMemories({
+      pagination: { pageSize, pageToken },
+      owner,
+    });
+  }
+
+  deleteMemory(id: string): Promise<DeleteMemoryResponse> {
+    return this.memoryClient.deleteMemory({ id });
+  }
+
+  getMemoryStats(): Promise<GetMemoryStatsResponse> {
+    return this.memoryClient.getMemoryStats({});
+  }
+
+  searchMemories(
+    query: string,
+    pageSize: number,
+    pageToken = '',
+  ): Promise<SearchMemoriesResponse> {
+    return this.memoryClient.searchMemories({
+      query,
+      pagination: { pageSize, pageToken },
+    });
+  }
+
+  addMemory(
+    owner: string,
+    content: string,
+    tags: string[],
+    visibility: string,
+  ): Promise<AddMemoryResponse> {
+    return this.memoryClient.addMemory({ owner, content, tags, visibility });
+  }
+
+  updateMemory(
+    id: string,
+    content: string,
+    tags: string[],
+    visibility: string,
+    importance: number,
+  ): Promise<UpdateMemoryResponse> {
+    return this.memoryClient.updateMemory({
+      id,
+      content,
+      tags,
+      visibility,
+      importance,
+    });
+  }
+
+  exportMemories(): Promise<ExportMemoriesResponse> {
+    return this.memoryClient.exportMemories({});
+  }
+
+  importMemories(
+    jsonContent: string,
+    overwrite: boolean,
+  ): Promise<ImportMemoriesResponse> {
+    return this.memoryClient.importMemories({ jsonContent, overwrite });
+  }
+
+  triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
+    return this.memoryClient.triggerReflection({ owner });
   }
 }

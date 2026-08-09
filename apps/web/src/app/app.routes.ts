@@ -17,6 +17,11 @@ export const appRoutes: Route[] = [
       import('./sessions/sessions.component').then((m) => m.SessionsComponent),
   },
   {
+    path: 'memory',
+    loadComponent: () =>
+      import('./memory/memory.component').then((m) => m.MemoryComponent),
+  },
+  {
     path: 'logs',
     loadComponent: () =>
       import('./logs/logs.component').then((m) => m.LogsComponent),

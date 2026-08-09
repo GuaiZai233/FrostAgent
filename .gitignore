@@ -47,3 +47,7 @@ node_modules
 
 .claude/worktrees
 .claude/settings.local.json
+
+# Local brain memory data
+/data/brain.json
+/data/memory_catalog.json

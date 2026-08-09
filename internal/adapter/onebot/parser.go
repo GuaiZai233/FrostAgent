@@ -4,8 +4,45 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/model"
 	"encoding/json"
+	"os"
 	"strconv"
+	"strings"
 )
+
+const (
+	defaultBotName    = "霜降狐"
+	defaultBotAliases = "霜降,FrostAgent"
+)
+
+// GroupWakeSignals records the equivalent observable reasons that caused a
+// group message to enter the LLM response path. The fields are descriptive
+// context only and do not establish a priority between at and alias matches.
+type GroupWakeSignals struct {
+	AtBot bool
+	Alias bool
+}
+
+// Any reports whether at least one direct group wake signal was detected.
+func (s GroupWakeSignals) Any() bool {
+	return s.AtBot || s.Alias
+}
+
+// DetectGroupWakeSignals evaluates the OneBot at segment and configured
+// literal names once so routing and response-context generation use the same
+// decision.
+func DetectGroupWakeSignals(event model.OneBotEvent) GroupWakeSignals {
+	return GroupWakeSignals{
+		AtBot: IsMentionedBot(event),
+		Alias: IsBotNameMentioned(event),
+	}
+}
+
+// HasGroupWakeSignal reports whether a group message explicitly addresses the
+// bot, either through a OneBot at segment or a configured literal name/alias.
+// The response pipeline intentionally treats the two signals as equivalent.
+func HasGroupWakeSignal(event model.OneBotEvent) bool {
+	return DetectGroupWakeSignals(event).Any()
+}
 
 func IsMentionedBot(event model.OneBotEvent) bool {
 	if event.MessageType != "group" {
@@ -41,6 +78,71 @@ func IsMentionedBot(event model.OneBotEvent) bool {
 	}
 
 	return false
+}
+
+// IsBotNameMentioned checks text segments only. Configuration values are
+// treated as literal strings rather than regular expressions, so aliases such
+// as ".*" cannot accidentally wake the bot for every group message.
+func IsBotNameMentioned(event model.OneBotEvent) bool {
+	if event.MessageType != "group" {
+		return false
+	}
+
+	names := configuredBotNames()
+	if len(names) == 0 {
+		return false
+	}
+	for _, raw := range EventRawMessages(event) {
+		if rawMessageMentionsBot(raw, names) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawMessageMentionsBot(raw json.RawMessage, names []string) bool {
+	for _, segment := range ParseMessageSegments(raw) {
+		if segment.Type != "text" {
+			continue
+		}
+		text, ok := segment.Data["text"].(string)
+		if !ok {
+			continue
+		}
+		for _, name := range names {
+			if strings.Contains(text, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func configuredBotNames() []string {
+	name, nameSet := os.LookupEnv("BOT_NAME")
+	if !nameSet {
+		name = defaultBotName
+	}
+	aliases, aliasesSet := os.LookupEnv("BOT_ALIASES")
+	if !aliasesSet {
+		aliases = defaultBotAliases
+	}
+
+	values := append([]string{name}, strings.Split(aliases, ",")...)
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // EventRawMessages returns all raw messages carried by a OneBot event.

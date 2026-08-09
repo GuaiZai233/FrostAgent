@@ -71,7 +71,7 @@ func (s *Service) GetOverview(
 		BotName:                "FrostAgent",
 		Version:                s.version,
 		UptimeSeconds:          uptime,
-		TotalMessagesProcessed: s.engine.TotalMessagesProcessed,
+		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
 		ActiveSessions:         activeSessions,
 		CurrentModel:           s.engine.ModelName,
 		Status:                 status,

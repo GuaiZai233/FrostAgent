@@ -2,10 +2,50 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/memory"
+	"math/rand/v2"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+type groupCompactItem struct {
+	sequence uint64
+	content  string
+}
+
+// GroupCompactSnapshot is an immutable batch sent to the asynchronous
+// compactor. ThroughSequence lets the session commit only the messages covered
+// by this summary while preserving messages that arrived during the LLM call.
+type GroupCompactSnapshot struct {
+	Summary         string
+	Messages        []string
+	ThroughSequence uint64
+}
+
+// SessionTurn forms a FIFO chain reserved in WebSocket arrival order. It is
+// separate from the history mutex because a full LLM turn calls methods that
+// briefly lock session state themselves.
+type SessionTurn struct {
+	wait <-chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
+func (t *SessionTurn) Wait() {
+	if t != nil && t.wait != nil {
+		<-t.wait
+	}
+}
+
+func (t *SessionTurn) Done() {
+	if t != nil {
+		t.once.Do(func() { close(t.done) })
+	}
+}
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
@@ -14,6 +54,24 @@ type SessionContext struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	mu             sync.Mutex // 保护单个会话的并发访问
+	turnMu         sync.Mutex
+	turnTail       chan struct{}
+
+	groupCompactSummary  string
+	groupCompactBuffer   []groupCompactItem
+	groupCompactSequence uint64
+	pendingTurns         [][]memory.PendingExtractionItem
+	extractionThreshold  int
+}
+
+// ReserveTurn appends one complete dialogue turn to this session's FIFO chain.
+func (s *SessionContext) ReserveTurn() *SessionTurn {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+
+	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{})}
+	s.turnTail = turn.done
+	return turn
 }
 
 // Lock 锁定会话
@@ -46,13 +104,13 @@ func (s *SessionContext) Snapshot() []ChatMessage {
 		// 注意：如果 MessagePart 未定义，此处会编译失败。
 		// 但根据 PR 要求，我们需要处理这种潜在的切片类型。
 		/*
-		if msg.Content != nil {
-			if v, ok := msg.Content.([]MessagePart); ok {
-				newContent := make([]MessagePart, len(v))
-				copy(newContent, v)
-				newMsg.Content = newContent
+			if msg.Content != nil {
+				if v, ok := msg.Content.([]MessagePart); ok {
+					newContent := make([]MessagePart, len(v))
+					copy(newContent, v)
+					newMsg.Content = newContent
+				}
 			}
-		}
 		*/
 
 		snapshot[i] = newMsg
@@ -75,13 +133,13 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 		}
 		// 2. 深拷贝 Content
 		/*
-		if msg.Content != nil {
-			if v, ok := msg.Content.([]MessagePart); ok {
-				newContent := make([]MessagePart, len(v))
-				copy(newContent, v)
-				newMsg.Content = newContent
+			if msg.Content != nil {
+				if v, ok := msg.Content.([]MessagePart); ok {
+					newContent := make([]MessagePart, len(v))
+					copy(newContent, v)
+					newMsg.Content = newContent
+				}
 			}
-		}
 		*/
 		newMessages[i] = newMsg
 	}
@@ -89,6 +147,161 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	s.History = newMessages
 	s.UpdatedAt = time.Now()
 }
+
+// TrimHistory 只保留最近的 max 条消息，从头部丢弃更早的历史。
+func (s *SessionContext) TrimHistory(max int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if max <= 0 || len(s.History) <= max {
+		return
+	}
+	trimmed := make([]ChatMessage, max)
+	copy(trimmed, s.History[len(s.History)-max:])
+	s.History = trimmed
+	s.UpdatedAt = time.Now()
+}
+
+// AppendGroupCompactMessage appends one visible group message to the running
+// compact ring. The raw-message portion is capped at bufferSize; the summary is
+// stored separately and acts as the conceptual first item.
+func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize int) int {
+	content = strings.TrimSpace(content)
+	if content == "" || bufferSize <= 0 {
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.groupCompactSequence++
+	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
+		sequence: s.groupCompactSequence,
+		content:  content,
+	})
+	if len(s.groupCompactBuffer) > bufferSize {
+		drop := len(s.groupCompactBuffer) - bufferSize
+		copy(s.groupCompactBuffer, s.groupCompactBuffer[drop:])
+		s.groupCompactBuffer = s.groupCompactBuffer[:bufferSize]
+	}
+	s.UpdatedAt = time.Now()
+	return len(s.groupCompactBuffer)
+}
+
+// SnapshotGroupCompact returns a batch once bufferSize raw messages are ready.
+// It does not mutate session state; CommitGroupCompact performs the atomic
+// replacement after the asynchronous summary succeeds.
+func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
+		return GroupCompactSnapshot{}, false
+	}
+	items := make([]string, len(s.groupCompactBuffer))
+	for i, item := range s.groupCompactBuffer {
+		items[i] = item.content
+	}
+	return GroupCompactSnapshot{
+		Summary:         s.groupCompactSummary,
+		Messages:        items,
+		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
+	}, true
+}
+
+// CommitGroupCompact replaces the running summary and removes only raw
+// messages included in snapshot. Newer messages remain pending.
+func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.groupCompactSummary = summary
+	firstNew := 0
+	for firstNew < len(s.groupCompactBuffer) &&
+		s.groupCompactBuffer[firstNew].sequence <= snapshot.ThroughSequence {
+		firstNew++
+	}
+	if firstNew > 0 {
+		remaining := append([]groupCompactItem(nil), s.groupCompactBuffer[firstNew:]...)
+		s.groupCompactBuffer = remaining
+	}
+	s.UpdatedAt = time.Now()
+}
+
+// GroupRunningSummary returns the latest completed group summary.
+func (s *SessionContext) GroupRunningSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupCompactSummary
+}
+
+// GroupCompactReady reports whether another full raw-message batch is ready.
+func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bufferSize > 0 && len(s.groupCompactBuffer) >= bufferSize
+}
+
+// EnqueuePendingTurn appends one completed user/assistant turn. Once the
+// per-session random threshold is reached, it atomically returns and clears the
+// pending batch for asynchronous extraction.
+func (s *SessionContext) EnqueuePendingTurn(
+	items []memory.PendingExtractionItem,
+	minTurns int,
+	maxTurns int,
+) ([]memory.PendingExtractionItem, bool) {
+	if len(items) == 0 {
+		return nil, false
+	}
+	if minTurns <= 0 {
+		minTurns = 3
+	}
+	if maxTurns < minTurns {
+		maxTurns = minTurns
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.extractionThreshold == 0 {
+		s.extractionThreshold = minTurns
+		if width := maxTurns - minTurns + 1; width > 1 {
+			s.extractionThreshold += rand.IntN(width)
+		}
+	}
+	turn := append([]memory.PendingExtractionItem(nil), items...)
+	s.pendingTurns = append(s.pendingTurns, turn)
+	s.UpdatedAt = time.Now()
+	if len(s.pendingTurns) < s.extractionThreshold {
+		return nil, false
+	}
+
+	count := 0
+	for _, pendingTurn := range s.pendingTurns {
+		count += len(pendingTurn)
+	}
+	batch := make([]memory.PendingExtractionItem, 0, count)
+	for _, pendingTurn := range s.pendingTurns {
+		batch = append(batch, pendingTurn...)
+	}
+	s.pendingTurns = nil
+	s.extractionThreshold = 0
+	return batch, true
+}
+
+func (s *SessionContext) PendingTurnCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pendingTurns)
+}
+
+// minHistory 是历史消息数的下限，防止配置过小导致对话无法进行。
+const minHistory = 4
 
 // SessionManager 管理多个会话上下文，支持多用户/多群聊隔离
 type SessionManager struct {
@@ -104,6 +317,13 @@ func NewSessionManager() *SessionManager {
 		sessions:   make(map[string]*SessionContext),
 		MaxHistory: 20,
 		TTL:        24 * time.Hour,
+	}
+	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
+	// （见 agent.go effectiveMaxHistory）。
+	if v := os.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+			sm.MaxHistory = n
+		}
 	}
 	// 启动定时清理协程
 	go sm.startCleanupRoutine()
@@ -207,6 +427,10 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.groupCompactSummary = ""
+	s.groupCompactBuffer = nil
+	s.pendingTurns = nil
+	s.extractionThreshold = 0
 	s.UpdatedAt = time.Now()
 }
 
