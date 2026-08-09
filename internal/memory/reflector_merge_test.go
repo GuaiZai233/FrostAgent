@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -186,7 +185,7 @@ func TestApplyReflectionMergeRejectsStaleOrCrossOwnerSources(t *testing.T) {
 	}
 }
 
-func TestReflectorMergeSynchronizesVectorAndCatalog(t *testing.T) {
+func TestReflectorMergeUpdatesCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir + "/brain.json")
 	seedMemoryEntries(t, store, []MemoryEntry{
@@ -198,14 +197,8 @@ func TestReflectorMergeSynchronizesVectorAndCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vectorStore := NewVectorStore(dir+"/vectors.json", fixedTestEmbedder{})
-	for _, entry := range entries {
-		if err := vectorStore.Index(context.Background(), entry.ID, entry.Content); err != nil {
-			t.Fatal(err)
-		}
-	}
 	catalog := NewCatalogStore(dir + "/catalog.json")
-	reflector := &Reflector{store: store, catalog: catalog, vs: vectorStore}
+	reflector := &Reflector{store: store, catalog: catalog}
 	payload, err := json.Marshal(reflectResult{
 		Topics: []MemoryTopic{{Name: "舞萌", Importance: 0.9}},
 		Merges: []reflectMerge{{
@@ -228,13 +221,6 @@ func TestReflectorMergeSynchronizesVectorAndCatalog(t *testing.T) {
 	if len(remaining) != 1 {
 		t.Fatalf("expected one merged memory, got %d", len(remaining))
 	}
-	vectorFile, err := vectorStore.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(vectorFile.Records) != 1 || vectorFile.Records[0].ID != remaining[0].ID {
-		t.Fatalf("vector index was not replaced: %#v", vectorFile.Records)
-	}
 	storedCatalog, err := catalog.Get("alice")
 	if err != nil {
 		t.Fatal(err)
@@ -242,16 +228,6 @@ func TestReflectorMergeSynchronizesVectorAndCatalog(t *testing.T) {
 	if storedCatalog == nil || storedCatalog.MemoryCount != 1 {
 		t.Fatalf("unexpected catalog: %#v", storedCatalog)
 	}
-}
-
-type fixedTestEmbedder struct{}
-
-func (fixedTestEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
-	vectors := make([][]float32, len(texts))
-	for i := range texts {
-		vectors[i] = []float32{float32(len([]rune(texts[i]))), 1}
-	}
-	return vectors, nil
 }
 
 func seedMemoryEntries(t *testing.T, store *Store, entries []MemoryEntry) {

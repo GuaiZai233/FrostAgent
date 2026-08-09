@@ -41,13 +41,6 @@ func brainPath() string {
 	return "data/brain.json"
 }
 
-// vectorPath returns the path to vectors.json, derived from the brain path.
-func vectorPath() string {
-	dir := filepath.Dir(brainPath())
-	// e.g. data/brain.json -> data/vectors.json
-	return filepath.Join(dir, "vectors.json")
-}
-
 // catalogPath returns the independent, replaceable reflection catalog path.
 func catalogPath() string {
 	return filepath.Join(filepath.Dir(brainPath()), "memory_catalog.json")
@@ -119,24 +112,9 @@ func init() {
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
 
-	var vs *memory.VectorStore
-	embedModel := os.Getenv("EMBEDDING_MODEL")
-	if embedModel != "" {
-		embedder := openai.NewEmbedder(llmClient, embedModel)
-		vs = memory.NewVectorStore(vectorPath(), embedder)
-		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 向量检索已启用 (模型: %s)", embedModel))
-	} else {
-		logs.Info(logs.SYSTEM, "⚠ 向量检索未配置 (EMBEDDING_MODEL 未设置)，使用关键词检索")
-	}
-
-	// Reader: hybrid search (vector + keyword)
-	reader := memory.NewReader(globalStore, vs, 20)
-	// Writer: auto-extract + auto-index
+	reader := memory.NewReader(globalStore, 20)
 	writer := memory.NewWriter(globalStore)
 	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
-	if vs != nil {
-		writer.SetVectorStore(vs)
-	}
 	groupCompactBufferSize := positiveIntFromEnv("GROUP_COMPACT_BUFFER_SIZE", 20)
 	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
 	groupCompactor := llm.NewGroupCompactor(
@@ -161,9 +139,6 @@ func init() {
 		logs.SYSTEM,
 		fmt.Sprintf("✓ 记忆反思独立超时: %s", memoryConfig.ReflectTimeout),
 	)
-	if vs != nil {
-		reflector.SetVectorStore(vs)
-	}
 	reflections := memory.NewReflectionManager(reflector)
 
 	// Register tools

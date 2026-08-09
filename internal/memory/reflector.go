@@ -72,7 +72,6 @@ func CurrentTimeLabel(t time.Time) string {
 type Reflector struct {
 	store    *Store
 	catalog  *CatalogStore
-	vs       *VectorStore
 	provider core.LLMProvider
 	model    string
 	config   Config
@@ -96,11 +95,6 @@ func NewReflector(
 		model:    model,
 		config:   config,
 	}
-}
-
-// SetVectorStore enables cleanup of vectors for memories removed by reflection.
-func (r *Reflector) SetVectorStore(vs *VectorStore) {
-	r.vs = vs
 }
 
 // Available reports whether reflection has the dependencies required to run.
@@ -310,22 +304,6 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 	if err != nil {
 		return fmt.Errorf("apply reflection changes: %w", err)
 	}
-	if r.vs != nil {
-		for _, entry := range applied.MergedEntries {
-			if err := r.vs.Index(context.Background(), entry.ID, entry.Content); err != nil {
-				logs.Error(
-					logs.SYSTEM,
-					fmt.Sprintf("建立合并记忆向量失败 %s: %v", entry.ID, err),
-				)
-			}
-		}
-		for _, id := range applied.RemovedIDs {
-			if err := r.vs.Remove(id); err != nil {
-				logs.Error(logs.SYSTEM, fmt.Sprintf("清理已淘汰记忆向量失败 %s: %v", id, err))
-			}
-		}
-	}
-
 	topics := cleanTopics(result.Topics)
 	if len(applied.Remaining) == 0 {
 		if err := r.catalog.Delete(owner); err != nil {

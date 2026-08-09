@@ -21,20 +21,6 @@ type chatRequest struct {
 	Tools    []any         `json:"tools,omitempty"`
 }
 
-type embeddingRequest struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
-}
-
-type embeddingResponse struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-	} `json:"data"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
 type chatMessage struct {
 	Role       string     `json:"role"`
 	Content    any        `json:"content"`
@@ -201,73 +187,4 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	return &core.ChatResponse{
 		Message: coreMsg,
 	}, nil
-}
-
-// Embed calls the OpenAI-compatible /embeddings endpoint and returns
-// one vector (float32) per input text.
-func (c *Client) Embed(ctx context.Context, texts []string, model string) ([][]float32, error) {
-	if len(texts) == 0 {
-		return nil, nil
-	}
-
-	reqBody := embeddingRequest{Model: model, Input: texts}
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
-	}
-
-	fullURL, err := url.JoinPath(c.BaseURL, "embeddings")
-	if err != nil {
-		return nil, fmt.Errorf("failed to join url path: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-
-	resp, err := c.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("embedding API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var embResp embeddingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&embResp); err != nil {
-		return nil, fmt.Errorf("failed to decode embedding response: %w", err)
-	}
-	if embResp.Error != nil {
-		return nil, fmt.Errorf("embedding API error: %s", embResp.Error.Message)
-	}
-
-	vectors := make([][]float32, len(embResp.Data))
-	for i, d := range embResp.Data {
-		vectors[i] = d.Embedding
-	}
-	return vectors, nil
-}
-
-// Embedder adapts an OpenAI-compatible Client to the memory.Embedder interface.
-type Embedder struct {
-	Client *Client
-	Model  string
-}
-
-// NewEmbedder creates an Embedder that uses the given OpenAI-compatible client
-// with the specified embedding model.
-func NewEmbedder(client *Client, model string) *Embedder {
-	return &Embedder{Client: client, Model: model}
-}
-
-// Embed satisfies memory.Embedder.
-func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	return e.Client.Embed(ctx, texts, e.Model)
 }

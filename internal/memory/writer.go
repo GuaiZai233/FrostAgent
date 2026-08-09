@@ -15,7 +15,6 @@ import (
 // Writer handles memory writing.
 type Writer struct {
 	store *Store
-	vs    *VectorStore
 	// LLM fields (set via SetLLM)
 	provider core.LLMProvider
 	model    string
@@ -32,13 +31,7 @@ func (w *Writer) SetLLM(provider core.LLMProvider, model string) {
 	w.model = model
 }
 
-// SetVectorStore configures the vector store for semantic indexing.
-func (w *Writer) SetVectorStore(vs *VectorStore) {
-	w.vs = vs
-}
-
-// Write directly saves a memory entry and indexes it in the vector store
-// (user explicitly said "remember this").
+// Write directly saves a memory entry (user explicitly said "remember this").
 func (w *Writer) Write(owner string, content string, tags []string) error {
 	return w.WriteByOwner(owner, OwnerUser, content, tags)
 }
@@ -62,7 +55,7 @@ func (w *Writer) WriteByOwner(
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	return w.saveAndIndex(context.Background(), entry)
+	return w.store.Save(entry)
 }
 
 // WriteCompact persists one completed group running summary.
@@ -79,21 +72,12 @@ func (w *Writer) WriteCompact(owner, summary string) error {
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	entryID, err := w.store.UpsertCompact(entry)
-	if err != nil {
-		return err
-	}
-	if w.vs != nil {
-		if err := w.vs.Index(context.Background(), entryID, entry.Content); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊总结向量索引失败 (owner: %s): %v", owner, err))
-		}
-	}
-	return nil
+	_, err := w.store.UpsertCompact(entry)
+	return err
 }
 
 // Extract uses LLM to analyze conversation and extract memories.
 // Called asynchronously after each conversation turn.
-// Extracted memories are also indexed in the vector store.
 func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
 	return w.ExtractByOwner(owner, OwnerUser, messages)
 }
@@ -175,7 +159,6 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 		return err
 	}
 
-	ctx := context.Background()
 	for _, e := range entries {
 		if e.Content == "" {
 			continue
@@ -196,7 +179,7 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
-		if err := w.saveAndIndex(ctx, entry); err != nil {
+		if err := w.store.Save(entry); err != nil {
 			logs.Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
 			continue
 		}
@@ -213,16 +196,4 @@ func generateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return "mem_" + hex.EncodeToString(b)
-}
-
-func (w *Writer) saveAndIndex(ctx context.Context, entry MemoryEntry) error {
-	if err := w.store.Save(entry); err != nil {
-		return err
-	}
-	if w.vs != nil {
-		if err := w.vs.Index(ctx, entry.ID, entry.Content); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("记忆向量索引失败 (id: %s): %v", entry.ID, err))
-		}
-	}
-	return nil
 }
