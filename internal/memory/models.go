@@ -34,7 +34,7 @@ const (
 	SourceManual Source = "manual"
 	// SourceReflect 由反思系统生成。
 	SourceReflect Source = "reflect"
-	// SourceCompact 由群级 running compact 产生的群聊总结。
+	// SourceCompact 标记旧版本写入 brain.json 的群聊总结，仅用于迁移清理。
 	SourceCompact Source = "compact"
 )
 

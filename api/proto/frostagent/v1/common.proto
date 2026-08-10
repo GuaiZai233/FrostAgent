@@ -22,4 +22,5 @@ message SessionInfo {
   int32 message_count = 3;
   string created_at = 4;
   string last_active = 5;
+  string group_summary = 6;
 }

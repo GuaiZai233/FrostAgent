@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import type { SessionInfo } from '@frostagent/proto';
 import { HlmButton } from '@spartan-ng/helm/button';
 import { HlmCardImports } from '@spartan-ng/helm/card';
+import { HlmDialogService } from '@spartan-ng/helm/dialog';
 import { HlmPaginationImports } from '@spartan-ng/helm/pagination';
 import { HlmSelectImports } from '@spartan-ng/helm/select';
 import { HlmSpinner } from '@spartan-ng/helm/spinner';
@@ -13,6 +14,7 @@ import {
   formatDateTime,
   formatPlatform,
 } from '../shared/dashboard-utils';
+import { SessionSummaryDialogComponent } from './session-summary-dialog.component';
 
 @Component({
   selector: 'app-sessions',
@@ -29,6 +31,7 @@ import {
 })
 export class SessionsComponent implements OnInit {
   private readonly api = inject(FrostagentApiService);
+  private readonly dialog = inject(HlmDialogService);
   private readonly pageTokens = new PageTokenStack();
 
   readonly sessions = signal<SessionInfo[]>([]);
@@ -74,6 +77,13 @@ export class SessionsComponent implements OnInit {
 
   formatPlatform(value: string): string {
     return formatPlatform(value);
+  }
+
+  openSummary(session: SessionInfo): void {
+    this.dialog.open(SessionSummaryDialogComponent, {
+      contentClass: 'sm:max-w-2xl',
+      context: { session },
+    });
   }
 
   private async loadCurrentPage(): Promise<void> {

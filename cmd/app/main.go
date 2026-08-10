@@ -111,6 +111,11 @@ func init() {
 
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
+	if removed, err := globalStore.DeleteBySource(memory.SourceCompact); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("清理旧版群聊总结失败: %v", err))
+	} else if removed > 0 {
+		logs.Info(logs.SYSTEM, fmt.Sprintf("已从记忆中清理 %d 条旧版群聊总结", removed))
+	}
 
 	reader := memory.NewReader(globalStore, 20)
 	writer := memory.NewWriter(globalStore)
@@ -119,7 +124,6 @@ func init() {
 	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
 	groupCompactor := llm.NewGroupCompactor(
 		llmClient,
-		writer,
 		os.Getenv("MODEL_NAME"),
 		groupCompactBufferSize,
 		groupCompactMinInterval,

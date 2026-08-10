@@ -120,6 +120,7 @@ func (s *Service) GetSessions(
 			MessageCount: int32(msgCount),
 			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
 			LastActive:   sess.UpdatedAt.Format(time.RFC3339),
+			GroupSummary: sess.GroupRunningSummary(),
 		})
 	}
 

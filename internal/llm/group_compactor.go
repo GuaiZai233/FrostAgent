@@ -3,7 +3,6 @@ package llm
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
 	"context"
 	"fmt"
 	"strings"
@@ -21,7 +20,6 @@ const groupCompactPrompt = `你是群聊上下文压缩器。请将已有总结�
 // running summary. Only one request per group may be in flight.
 type GroupCompactor struct {
 	provider    core.LLMProvider
-	writer      *memory.Writer
 	model       string
 	bufferSize  int
 	minInterval time.Duration
@@ -31,9 +29,9 @@ type GroupCompactor struct {
 	lastRun  map[string]time.Time
 }
 
+// NewGroupCompactor creates a session-only running summary compactor.
 func NewGroupCompactor(
 	provider core.LLMProvider,
-	writer *memory.Writer,
 	model string,
 	bufferSize int,
 	minInterval time.Duration,
@@ -46,7 +44,6 @@ func NewGroupCompactor(
 	}
 	return &GroupCompactor{
 		provider:    provider,
-		writer:      writer,
 		model:       model,
 		bufferSize:  bufferSize,
 		minInterval: minInterval,
@@ -131,11 +128,6 @@ func (c *GroupCompactor) compact(
 	}
 
 	session.CommitGroupCompact(snapshot, summary)
-	if c.writer != nil {
-		if err := c.writer.WriteCompact(owner, summary); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("持久化群聊 running compact 失败 (%s): %v", owner, err))
-		}
-	}
 	logs.Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 }

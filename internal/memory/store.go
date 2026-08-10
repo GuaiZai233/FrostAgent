@@ -74,35 +74,31 @@ func (s *Store) Save(entry MemoryEntry) error {
 	return s.save(brain)
 }
 
-// UpsertCompact keeps exactly one running compact entry per group owner.
-func (s *Store) UpsertCompact(entry MemoryEntry) (string, error) {
+// DeleteBySource removes legacy records of a retired memory source.
+func (s *Store) DeleteBySource(source Source) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	brain, err := s.load()
 	if err != nil {
-		return "", err
+		return 0, err
 	}
-	now := time.Now()
-	entry.OwnerType = OwnerGroup
-	entry.Source = SourceCompact
-	entry.Visibility = VisibilityPrivate
-	entry.UpdatedAt = now
-	for i, existing := range brain.Entries {
-		if existing.Owner == entry.Owner && existing.Source == SourceCompact {
-			entry.ID = existing.ID
-			entry.CreatedAt = existing.CreatedAt
-			entry.AccessCount = existing.AccessCount
-			entry.MergedFrom = slices.Clone(existing.MergedFrom)
-			brain.Entries[i] = entry
-			return entry.ID, s.save(brain)
+
+	kept := make([]MemoryEntry, 0, len(brain.Entries))
+	for _, entry := range brain.Entries {
+		if entry.Source != source {
+			kept = append(kept, entry)
 		}
 	}
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = now
+	removed := len(brain.Entries) - len(kept)
+	if removed == 0 {
+		return 0, nil
 	}
-	brain.Entries = append(brain.Entries, entry)
-	return entry.ID, s.save(brain)
+	brain.Entries = kept
+	if err := s.save(brain); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 // Search performs a global keyword search across all memories.

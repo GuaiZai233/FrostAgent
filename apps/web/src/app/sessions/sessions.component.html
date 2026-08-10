@@ -42,7 +42,22 @@
         <tbody hlmTBody>
           @for (session of sessions(); track session.sessionId) {
             <tr hlmTr>
-              <td hlmTd class="font-mono text-xs">{{ session.sessionId }}</td>
+              <td hlmTd class="font-mono text-xs">
+                @if (session.platform === 'group') {
+                  <button
+                    hlmBtn
+                    variant="link"
+                    class="h-auto p-0 font-mono text-xs"
+                    (click)="openSummary(session)"
+                    i18n-title="@@viewGroupSummary"
+                    title="查看群聊总结"
+                  >
+                    {{ session.sessionId }}
+                  </button>
+                } @else {
+                  {{ session.sessionId }}
+                }
+              </td>
               <td hlmTd>{{ formatPlatform(session.platform) }}</td>
               <td hlmTd>{{ session.messageCount }}</td>
               <td hlmTd>{{ formatDateTime(session.createdAt) }}</td>

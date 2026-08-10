@@ -58,24 +58,6 @@ func (w *Writer) WriteByOwner(
 	return w.store.Save(entry)
 }
 
-// WriteCompact persists one completed group running summary.
-func (w *Writer) WriteCompact(owner, summary string) error {
-	entry := MemoryEntry{
-		ID:         generateID(),
-		Owner:      owner,
-		OwnerType:  OwnerGroup,
-		Content:    summary,
-		Tags:       []string{"群聊总结"},
-		Source:     SourceCompact,
-		Visibility: VisibilityPrivate,
-		Importance: 0.5,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	_, err := w.store.UpsertCompact(entry)
-	return err
-}
-
 // Extract uses LLM to analyze conversation and extract memories.
 // Called asynchronously after each conversation turn.
 func (w *Writer) Extract(owner string, messages []core.ChatMessage) error {
