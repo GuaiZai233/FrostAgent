@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/bot.proto.
  */
 export const file_frostagent_v1_bot: GenFile = /*@__PURE__*/
-  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi9AEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24qcgoJQm90U3RhdHVzEhoKFkJPVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIbChdCT1RfU1RBVFVTX0lOSVRJQUxJWklORxABEhYKEkJPVF9TVEFUVVNfUlVOTklORxACEhQKEEJPVF9TVEFUVVNfRVJST1IQAzK+AQoQQm90U3RhdHVzU2VydmljZRJUCgtHZXRPdmVydmlldxIhLmZyb3N0YWdlbnQudjEuR2V0T3ZlcnZpZXdSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1Jlc3BvbnNlElQKC0dldFNlc3Npb25zEiEuZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uc1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
+  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi9AEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iLwoZRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJIjwKGkRlbGV0ZUdyb3VwU3VtbWFyeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkqcgoJQm90U3RhdHVzEhoKFkJPVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIbChdCT1RfU1RBVFVTX0lOSVRJQUxJWklORxABEhYKEkJPVF9TVEFUVVNfUlVOTklORxACEhQKEEJPVF9TVEFUVVNfRVJST1IQAzKpAgoQQm90U3RhdHVzU2VydmljZRJUCgtHZXRPdmVydmlldxIhLmZyb3N0YWdlbnQudjEuR2V0T3ZlcnZpZXdSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1Jlc3BvbnNlElQKC0dldFNlc3Npb25zEiEuZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uc1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVzcG9uc2USaQoSRGVsZXRlR3JvdXBTdW1tYXJ5EiguZnJvc3RhZ2VudC52MS5EZWxldGVHcm91cFN1bW1hcnlSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5EZWxldGVHcm91cFN1bW1hcnlSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.GetOverviewRequest
@@ -119,6 +119,45 @@ export const GetSessionsResponseSchema: GenMessage<GetSessionsResponse> = /*@__P
   messageDesc(file_frostagent_v1_bot, 3);
 
 /**
+ * @generated from message frostagent.v1.DeleteGroupSummaryRequest
+ */
+export type DeleteGroupSummaryRequest = Message<"frostagent.v1.DeleteGroupSummaryRequest"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+};
+
+/**
+ * Describes the message frostagent.v1.DeleteGroupSummaryRequest.
+ * Use `create(DeleteGroupSummaryRequestSchema)` to create a new message.
+ */
+export const DeleteGroupSummaryRequestSchema: GenMessage<DeleteGroupSummaryRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 4);
+
+/**
+ * @generated from message frostagent.v1.DeleteGroupSummaryResponse
+ */
+export type DeleteGroupSummaryResponse = Message<"frostagent.v1.DeleteGroupSummaryResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.DeleteGroupSummaryResponse.
+ * Use `create(DeleteGroupSummaryResponseSchema)` to create a new message.
+ */
+export const DeleteGroupSummaryResponseSchema: GenMessage<DeleteGroupSummaryResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 5);
+
+/**
  * @generated from enum frostagent.v1.BotStatus
  */
 export enum BotStatus {
@@ -170,6 +209,14 @@ export const BotStatusService: GenService<{
     methodKind: "unary";
     input: typeof GetSessionsRequestSchema;
     output: typeof GetSessionsResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.BotStatusService.DeleteGroupSummary
+   */
+  deleteGroupSummary: {
+    methodKind: "unary";
+    input: typeof DeleteGroupSummaryRequestSchema;
+    output: typeof DeleteGroupSummaryResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_frostagent_v1_bot, 0);

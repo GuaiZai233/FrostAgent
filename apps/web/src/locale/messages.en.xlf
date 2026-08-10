@@ -326,6 +326,62 @@
           <context context-type="linenumber">46,47</context>
         </context-group>
       </trans-unit>
+      <trans-unit id="viewGroupSummary" datatype="html">
+        <source>查看群聊总结</source>
+        <target>View group summary</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.html</context>
+          <context context-type="linenumber">53</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="groupSummary" datatype="html">
+        <source>群聊总结</source>
+        <target>Group Summary</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/session-summary-dialog.component.ts</context>
+          <context context-type="linenumber">19</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="noGroupSummary" datatype="html">
+        <source>暂无群聊总结。</source>
+        <target>No group summary yet.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/session-summary-dialog.component.ts</context>
+          <context context-type="linenumber">30</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="deleteGroupSummaryTitle" datatype="html">
+        <source>删除群聊总结</source>
+        <target>Delete group summary</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.ts</context>
+          <context context-type="linenumber">98</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="deleteGroupSummaryMessage" datatype="html">
+        <source>确认删除 <x id="INTERPOLATION" equiv-text="session.sessionId"/> 的群聊总结吗？内存总结和待压缩上下文也会清空。</source>
+        <target>Delete the group summary for <x id="INTERPOLATION" equiv-text="session.sessionId"/>? The in-memory summary and pending compact context will also be cleared.</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.ts</context>
+          <context context-type="linenumber">99</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="deleteFailed" datatype="html">
+        <source>删除失败</source>
+        <target>Delete failed</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.ts</context>
+          <context context-type="linenumber">111</context>
+        </context-group>
+      </trans-unit>
+      <trans-unit id="groupSummaryDeleted" datatype="html">
+        <source>群聊总结已删除</source>
+        <target>Group summary deleted</target>
+        <context-group purpose="location">
+          <context context-type="sourcefile">apps/web/src/app/sessions/sessions.component.ts</context>
+          <context context-type="linenumber">116</context>
+        </context-group>
+      </trans-unit>
       <trans-unit id="noSessions" datatype="html">
         <source>暂无会话。</source>
         <target>No sessions yet.</target>

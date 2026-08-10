@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"context"
@@ -61,6 +62,7 @@ type Engine struct {
 	MemoryCatalog     *memory.CatalogStore
 	MemoryReflections *memory.ReflectionManager
 	GroupCompactor    *GroupCompactor
+	GroupSummaryStore *groupsummary.Store
 }
 
 // Run 执行智能体的主循环（单次无状态调用）

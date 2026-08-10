@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/common.proto.
  */
 export const file_frostagent_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("Chpmcm9zdGFnZW50L3YxL2NvbW1vbi5wcm90bxINZnJvc3RhZ2VudC52MSJCCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJEg0KBXRvdGFsGAMgASgFIi0KCFRvb2xJbmZvEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkicwoLU2Vzc2lvbkluZm8SEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIVCg1tZXNzYWdlX2NvdW50GAMgASgFEhIKCmNyZWF0ZWRfYXQYBCABKAkSEwoLbGFzdF9hY3RpdmUYBSABKAliBnByb3RvMw");
+  fileDesc("Chpmcm9zdGFnZW50L3YxL2NvbW1vbi5wcm90bxINZnJvc3RhZ2VudC52MSJCCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJEg0KBXRvdGFsGAMgASgFIi0KCFRvb2xJbmZvEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkiigEKC1Nlc3Npb25JbmZvEhIKCnNlc3Npb25faWQYASABKAkSEAoIcGxhdGZvcm0YAiABKAkSFQoNbWVzc2FnZV9jb3VudBgDIAEoBRISCgpjcmVhdGVkX2F0GAQgASgJEhMKC2xhc3RfYWN0aXZlGAUgASgJEhUKDWdyb3VwX3N1bW1hcnkYBiABKAliBnByb3RvMw");
 
 /**
  * Pagination is used for list requests.
@@ -66,7 +66,7 @@ export const ToolInfoSchema: GenMessage<ToolInfo> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_common, 1);
 
 /**
- * SessionInfo describes an active session.
+ * SessionInfo describes a current session or a persisted group summary.
  *
  * @generated from message frostagent.v1.SessionInfo
  */
@@ -95,6 +95,11 @@ export type SessionInfo = Message<"frostagent.v1.SessionInfo"> & {
    * @generated from field: string last_active = 5;
    */
   lastActive: string;
+
+  /**
+   * @generated from field: string group_summary = 6;
+   */
+  groupSummary: string;
 };
 
 /**

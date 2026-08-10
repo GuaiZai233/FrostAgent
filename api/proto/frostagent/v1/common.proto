@@ -15,11 +15,12 @@ message ToolInfo {
   string description = 2;
 }
 
-// SessionInfo describes an active session.
+// SessionInfo describes a current session or a persisted group summary.
 message SessionInfo {
   string session_id = 1;
   string platform = 2;
   int32 message_count = 3;
   string created_at = 4;
   string last_active = 5;
+  string group_summary = 6;
 }

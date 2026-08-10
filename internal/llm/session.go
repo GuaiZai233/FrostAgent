@@ -2,6 +2,8 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"math/rand/v2"
 	"os"
@@ -24,6 +26,7 @@ type GroupCompactSnapshot struct {
 	Summary         string
 	Messages        []string
 	ThroughSequence uint64
+	Generation      uint64
 }
 
 // SessionTurn forms a FIFO chain reserved in WebSocket arrival order. It is
@@ -57,11 +60,12 @@ type SessionContext struct {
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
 
-	groupCompactSummary  string
-	groupCompactBuffer   []groupCompactItem
-	groupCompactSequence uint64
-	pendingTurns         [][]memory.PendingExtractionItem
-	extractionThreshold  int
+	groupCompactSummary    string
+	groupCompactBuffer     []groupCompactItem
+	groupCompactSequence   uint64
+	groupCompactGeneration uint64
+	pendingTurns           [][]memory.PendingExtractionItem
+	extractionThreshold    int
 }
 
 // ReserveTurn appends one complete dialogue turn to this session's FIFO chain.
@@ -206,19 +210,23 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 		Summary:         s.groupCompactSummary,
 		Messages:        items,
 		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
+		Generation:      s.groupCompactGeneration,
 	}, true
 }
 
 // CommitGroupCompact replaces the running summary and removes only raw
-// messages included in snapshot. Newer messages remain pending.
-func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) {
+// messages included in snapshot. It rejects results invalidated by deletion.
+func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) bool {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return
+		return false
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if snapshot.Generation != s.groupCompactGeneration {
+		return false
+	}
 
 	s.groupCompactSummary = summary
 	firstNew := 0
@@ -231,6 +239,7 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 		s.groupCompactBuffer = remaining
 	}
 	s.UpdatedAt = time.Now()
+	return true
 }
 
 // GroupRunningSummary returns the latest completed group summary.
@@ -238,6 +247,17 @@ func (s *SessionContext) GroupRunningSummary() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.groupCompactSummary
+}
+
+// ResetGroupCompact clears summary state and invalidates any in-flight result.
+func (s *SessionContext) ResetGroupCompact() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.groupCompactGeneration++
+	s.groupCompactSummary = ""
+	s.groupCompactBuffer = nil
+	s.UpdatedAt = time.Now()
 }
 
 // GroupCompactReady reports whether another full raw-message batch is ready.
@@ -305,10 +325,11 @@ const minHistory = 4
 
 // SessionManager 管理多个会话上下文，支持多用户/多群聊隔离
 type SessionManager struct {
-	sessions   map[string]*SessionContext
-	mu         sync.RWMutex
-	MaxHistory int           // 单个会话保留的最大历史消息数
-	TTL        time.Duration // 会话有效期
+	sessions          map[string]*SessionContext
+	mu                sync.RWMutex
+	groupSummaryStore *groupsummary.Store
+	MaxHistory        int           // 单个会话保留的最大历史消息数
+	TTL               time.Duration // 会话有效期
 }
 
 // NewSessionManager 创建新的会话管理器
@@ -330,6 +351,13 @@ func NewSessionManager() *SessionManager {
 	return sm
 }
 
+// SetGroupSummaryStore enables lazy restoration when a group session is born.
+func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.groupSummaryStore = store
+}
+
 // GetOrCreate 获取或创建会话
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	sm.mu.RLock()
@@ -346,11 +374,21 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		return session
 	}
 
+	summary := ""
+	if sm.groupSummaryStore != nil && strings.HasPrefix(sessionID, "group:") {
+		record, ok, err := sm.groupSummaryStore.Get(sessionID)
+		if err != nil {
+			logs.Warn(logs.SYSTEM, "恢复群聊总结失败 ("+sessionID+"): "+err.Error())
+		} else if ok {
+			summary = record.Summary
+		}
+	}
 	session = &SessionContext{
-		ConversationID: sessionID,
-		History:        make([]ChatMessage, 0),
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		ConversationID:      sessionID,
+		History:             make([]ChatMessage, 0),
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+		groupCompactSummary: summary,
 	}
 	sm.sessions[sessionID] = session
 	return session
@@ -429,9 +467,23 @@ func (s *SessionContext) Clear() {
 	s.History = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
+	s.groupCompactGeneration++
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.UpdatedAt = time.Now()
+}
+
+// ResetGroupCompact clears one active group's compact state without deleting
+// its normal conversation history.
+func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
+	sm.mu.RLock()
+	session, ok := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	session.ResetGroupCompact()
+	return true
 }
 
 // ── core.SessionStore interface implementation ──

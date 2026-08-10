@@ -3,6 +3,7 @@ package main
 import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/frontend"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
@@ -44,6 +45,12 @@ func brainPath() string {
 // catalogPath returns the independent, replaceable reflection catalog path.
 func catalogPath() string {
 	return filepath.Join(filepath.Dir(brainPath()), "memory_catalog.json")
+}
+
+// groupSummaryPath keeps durable summaries beside brain.json without mixing
+// them into the memory store.
+func groupSummaryPath() string {
+	return filepath.Join(filepath.Dir(brainPath()), "group_summaries.json")
 }
 
 // ensureDataDir ensures the data directory exists for brain.json.
@@ -111,15 +118,20 @@ func init() {
 
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
-
 	reader := memory.NewReader(globalStore, 20)
 	writer := memory.NewWriter(globalStore)
 	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
+	groupSummaryStore, err := groupsummary.NewStore(groupSummaryPath())
+	if err != nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("群聊总结存储不可用，已保护原文件: %v", err))
+	}
+	sessionManager := llm.NewSessionManager()
+	sessionManager.SetGroupSummaryStore(groupSummaryStore)
 	groupCompactBufferSize := positiveIntFromEnv("GROUP_COMPACT_BUFFER_SIZE", 20)
 	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
 	groupCompactor := llm.NewGroupCompactor(
 		llmClient,
-		writer,
+		groupSummaryStore,
 		os.Getenv("MODEL_NAME"),
 		groupCompactBufferSize,
 		groupCompactMinInterval,
@@ -163,7 +175,7 @@ func init() {
 		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
-		SessionManager: llm.NewSessionManager(),
+		SessionManager: sessionManager,
 		StartedAt:      time.Now(),
 		Version:        version,
 		// Memory components
@@ -173,6 +185,7 @@ func init() {
 		MemoryCatalog:     catalog,
 		MemoryReflections: reflections,
 		GroupCompactor:    groupCompactor,
+		GroupSummaryStore: groupSummaryStore,
 	}
 	logs.Info(
 		logs.SYSTEM,

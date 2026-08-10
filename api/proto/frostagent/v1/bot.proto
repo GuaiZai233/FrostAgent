@@ -8,6 +8,7 @@ import "frostagent/v1/common.proto";
 service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
+  rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
 enum BotStatus {
@@ -37,4 +38,13 @@ message GetSessionsRequest {
 message GetSessionsResponse {
   repeated SessionInfo sessions = 1;
   Pagination pagination = 2;
+}
+
+message DeleteGroupSummaryRequest {
+  string session_id = 1;
+}
+
+message DeleteGroupSummaryResponse {
+  bool success = 1;
+  string error = 2;
 }
