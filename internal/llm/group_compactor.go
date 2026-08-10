@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"context"
 	"fmt"
@@ -16,10 +17,18 @@ const groupCompactPrompt = `你是群聊上下文压缩器。请将已有总结�
 
 {conversation}`
 
+var groupSummaryRetryDelays = [...]time.Duration{
+	0,
+	100 * time.Millisecond,
+	300 * time.Millisecond,
+	900 * time.Millisecond,
+}
+
 // GroupCompactor asynchronously turns a bounded group-message ring into a
 // running summary. Only one request per group may be in flight.
 type GroupCompactor struct {
 	provider    core.LLMProvider
+	store       *groupsummary.Store
 	model       string
 	bufferSize  int
 	minInterval time.Duration
@@ -29,9 +38,10 @@ type GroupCompactor struct {
 	lastRun  map[string]time.Time
 }
 
-// NewGroupCompactor creates a session-only running summary compactor.
+// NewGroupCompactor creates a durable running summary compactor.
 func NewGroupCompactor(
 	provider core.LLMProvider,
+	store *groupsummary.Store,
 	model string,
 	bufferSize int,
 	minInterval time.Duration,
@@ -44,6 +54,7 @@ func NewGroupCompactor(
 	}
 	return &GroupCompactor{
 		provider:    provider,
+		store:       store,
 		model:       model,
 		bufferSize:  bufferSize,
 		minInterval: minInterval,
@@ -81,13 +92,18 @@ func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
 	c.lastRun[key] = time.Now()
 	c.mu.Unlock()
 
-	go c.compact(session, owner, snapshot)
+	storeGeneration := uint64(0)
+	if c.store != nil {
+		storeGeneration = c.store.Generation(owner)
+	}
+	go c.compact(session, owner, snapshot, storeGeneration)
 }
 
 func (c *GroupCompactor) compact(
 	session *SessionContext,
 	owner string,
 	snapshot GroupCompactSnapshot,
+	storeGeneration uint64,
 ) {
 	succeeded := false
 	defer func() {
@@ -127,9 +143,41 @@ func (c *GroupCompactor) compact(
 		return
 	}
 
-	session.CommitGroupCompact(snapshot, summary)
+	if !session.CommitGroupCompact(snapshot, summary) {
+		logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
+		return
+	}
+	c.persistSummary(owner, summary, storeGeneration)
 	logs.Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
+}
+
+// persistSummary retries transient write failures without rolling back the
+// in-memory summary. A later compact can persist the combined newer state.
+func (c *GroupCompactor) persistSummary(
+	owner string,
+	summary string,
+	storeGeneration uint64,
+) {
+	if c.store == nil {
+		return
+	}
+
+	var lastErr error
+	for _, delay := range groupSummaryRetryDelays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		applied, err := c.store.Upsert(owner, summary, storeGeneration)
+		if err == nil {
+			if !applied {
+				logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结持久化 (%s)", owner))
+			}
+			return
+		}
+		lastErr = err
+	}
+	logs.Error(logs.SYSTEM, fmt.Sprintf("群聊总结持久化失败，已重试 3 次 (%s): %v", owner, lastErr))
 }
 
 func formatGroupCompactInput(snapshot GroupCompactSnapshot) string {

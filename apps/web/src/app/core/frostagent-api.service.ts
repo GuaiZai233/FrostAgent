@@ -11,6 +11,7 @@ import {
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
+  type DeleteGroupSummaryResponse,
   type ListLogsResponse,
   type LogEntry,
   type ListMemoriesResponse,
@@ -62,6 +63,10 @@ export class FrostagentApiService {
         pageToken,
       },
     });
+  }
+
+  deleteGroupSummary(sessionId: string): Promise<DeleteGroupSummaryResponse> {
+    return this.botClient.deleteGroupSummary({ sessionId });
   }
 
   listLogs(

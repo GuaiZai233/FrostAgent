@@ -2,6 +2,7 @@ package botstatus
 
 import (
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"context"
 	"fmt"
 	"sort"
@@ -81,7 +82,8 @@ func (s *Service) GetOverview(
 	return connect.NewResponse(resp), nil
 }
 
-// GetSessions returns a paginated list of active sessions.
+// GetSessions merges active sessions with durable group summaries before
+// sorting and pagination, so every group appears at most once.
 func (s *Service) GetSessions(
 	ctx context.Context,
 	req *connect.Request[v1.GetSessionsRequest],
@@ -101,29 +103,98 @@ func (s *Service) GetSessions(
 	if pageSize <= 0 {
 		pageSize = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
 
-	sessions := s.engine.SessionManager.ListSessions(offset, pageSize)
-	total := s.engine.SessionManager.Count()
-
-	var sessionInfos []*v1.SessionInfo
+	type sessionView struct {
+		info      *v1.SessionInfo
+		createdAt time.Time
+		updatedAt time.Time
+	}
+	viewsByID := make(map[string]sessionView)
+	sessions := s.engine.SessionManager.ListSessions(0, 0)
 	for _, sess := range sessions {
 		platform := derivePlatform(sess.ConversationID)
 
-		msgCount := 0
 		sess.Lock()
-		msgCount = len(sess.History)
+		msgCount := len(sess.History)
+		createdAt := sess.CreatedAt
+		updatedAt := sess.UpdatedAt
 		sess.Unlock()
-
-		sessionInfos = append(sessionInfos, &v1.SessionInfo{
-			SessionId:    sess.ConversationID,
-			Platform:     platform,
-			MessageCount: int32(msgCount),
-			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
-			LastActive:   sess.UpdatedAt.Format(time.RFC3339),
-			GroupSummary: sess.GroupRunningSummary(),
-		})
+		viewsByID[sess.ConversationID] = sessionView{
+			info: &v1.SessionInfo{
+				SessionId:    sess.ConversationID,
+				Platform:     platform,
+				MessageCount: int32(msgCount),
+				CreatedAt:    createdAt.Format(time.RFC3339),
+				LastActive:   updatedAt.Format(time.RFC3339),
+				GroupSummary: sess.GroupRunningSummary(),
+			},
+			createdAt: createdAt,
+			updatedAt: updatedAt,
+		}
 	}
 
+	if s.engine.GroupSummaryStore != nil {
+		records, err := s.engine.GroupSummaryStore.List()
+		if err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
+		} else {
+			for _, record := range records {
+				if existing, ok := viewsByID[record.SessionID]; ok {
+					if existing.info.GroupSummary == "" {
+						existing.info.GroupSummary = record.Summary
+					}
+					if record.CreatedAt.Before(existing.createdAt) {
+						existing.createdAt = record.CreatedAt
+						existing.info.CreatedAt = record.CreatedAt.Format(time.RFC3339)
+					}
+					if record.UpdatedAt.After(existing.updatedAt) {
+						existing.updatedAt = record.UpdatedAt
+						existing.info.LastActive = record.UpdatedAt.Format(time.RFC3339)
+					}
+					viewsByID[record.SessionID] = existing
+					continue
+				}
+				viewsByID[record.SessionID] = sessionView{
+					info: &v1.SessionInfo{
+						SessionId:    record.SessionID,
+						Platform:     "group",
+						CreatedAt:    record.CreatedAt.Format(time.RFC3339),
+						LastActive:   record.UpdatedAt.Format(time.RFC3339),
+						GroupSummary: record.Summary,
+					},
+					createdAt: record.CreatedAt,
+					updatedAt: record.UpdatedAt,
+				}
+			}
+		}
+	}
+
+	views := make([]sessionView, 0, len(viewsByID))
+	for _, view := range viewsByID {
+		views = append(views, view)
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].updatedAt.Equal(views[j].updatedAt) {
+			return views[i].info.SessionId < views[j].info.SessionId
+		}
+		return views[i].updatedAt.After(views[j].updatedAt)
+	})
+
+	total := len(views)
+	if offset > total {
+		offset = total
+	}
+	end := offset + pageSize
+	if end > total {
+		end = total
+	}
+	sessionInfos := make([]*v1.SessionInfo, 0, end-offset)
+	for _, view := range views[offset:end] {
+		sessionInfos = append(sessionInfos, view.info)
+	}
 	nextOffset := offset + len(sessionInfos)
 	nextToken := ""
 	if nextOffset < total {
@@ -142,13 +213,39 @@ func (s *Service) GetSessions(
 	return connect.NewResponse(resp), nil
 }
 
+// DeleteGroupSummary resets active compact state and removes its durable copy.
+func (s *Service) DeleteGroupSummary(
+	ctx context.Context,
+	req *connect.Request[v1.DeleteGroupSummaryRequest],
+) (*connect.Response[v1.DeleteGroupSummaryResponse], error) {
+	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	if sessionID == "" || derivePlatform(sessionID) != "group" {
+		return connect.NewResponse(&v1.DeleteGroupSummaryResponse{
+			Error: "a group session_id is required",
+		}), nil
+	}
+	if s.engine.GroupSummaryStore == nil {
+		return connect.NewResponse(&v1.DeleteGroupSummaryResponse{
+			Error: "group summary store is unavailable",
+		}), nil
+	}
+
+	if s.engine.SessionManager != nil {
+		s.engine.SessionManager.ResetGroupCompact(sessionID)
+	}
+	if err := s.engine.GroupSummaryStore.Delete(sessionID); err != nil {
+		return connect.NewResponse(&v1.DeleteGroupSummaryResponse{
+			Error: err.Error(),
+		}), nil
+	}
+	logs.Info(logs.SYSTEM, "群聊总结已删除 ("+sessionID+")")
+	return connect.NewResponse(&v1.DeleteGroupSummaryResponse{Success: true}), nil
+}
+
 // derivePlatform infers the platform from the session ID prefix.
 func derivePlatform(sessionID string) string {
-	if strings.HasPrefix(sessionID, "group_") {
-		return "group"
-	}
-	if strings.HasPrefix(sessionID, "private_") {
-		return "private"
+	if platform, _, ok := strings.Cut(sessionID, ":"); ok {
+		return platform
 	}
 	if strings.Contains(sessionID, "_") {
 		return strings.SplitN(sessionID, "_", 2)[0]

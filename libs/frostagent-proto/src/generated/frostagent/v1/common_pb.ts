@@ -66,7 +66,7 @@ export const ToolInfoSchema: GenMessage<ToolInfo> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_common, 1);
 
 /**
- * SessionInfo describes an active session.
+ * SessionInfo describes a current session or a persisted group summary.
  *
  * @generated from message frostagent.v1.SessionInfo
  */

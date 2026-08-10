@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import type { SessionInfo } from '@frostagent/proto';
+import { toast } from '@spartan-ng/brain/sonner';
 import { HlmButton } from '@spartan-ng/helm/button';
 import { HlmCardImports } from '@spartan-ng/helm/card';
 import { HlmDialogService } from '@spartan-ng/helm/dialog';
@@ -9,6 +10,10 @@ import { HlmSpinner } from '@spartan-ng/helm/spinner';
 import { HlmTableImports } from '@spartan-ng/helm/table';
 import { FrostagentApiService } from '../core/frostagent-api.service';
 import { AppIconComponent } from '../shared/app-icon.component';
+import {
+  ConfirmDialogService,
+  type ConfirmDialogData,
+} from '../shared/confirm-dialog.component';
 import {
   PageTokenStack,
   formatDateTime,
@@ -31,6 +36,7 @@ import { SessionSummaryDialogComponent } from './session-summary-dialog.componen
 })
 export class SessionsComponent implements OnInit {
   private readonly api = inject(FrostagentApiService);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly dialog = inject(HlmDialogService);
   private readonly pageTokens = new PageTokenStack();
 
@@ -41,6 +47,7 @@ export class SessionsComponent implements OnInit {
   readonly nextToken = signal('');
   readonly total = signal(0);
   readonly pageIndex = signal(0);
+  readonly deleting = signal('');
 
   ngOnInit(): void {
     void this.loadCurrentPage();
@@ -84,6 +91,39 @@ export class SessionsComponent implements OnInit {
       contentClass: 'sm:max-w-2xl',
       context: { session },
     });
+  }
+
+  async deleteSummary(session: SessionInfo): Promise<void> {
+    const data: ConfirmDialogData = {
+      title: $localize`:@@deleteGroupSummaryTitle:删除群聊总结`,
+      message: $localize`:@@deleteGroupSummaryMessage:确认删除 ${session.sessionId}:INTERPOLATION: 的群聊总结吗？内存总结和待压缩上下文也会清空。`,
+      cancelLabel: $localize`:@@cancel:取消`,
+      confirmLabel: $localize`:@@delete:删除`,
+    };
+    if (!(await this.confirmDialog.confirm(data))) {
+      return;
+    }
+
+    this.deleting.set(session.sessionId);
+    try {
+      const response = await this.api.deleteGroupSummary(session.sessionId);
+      if (!response.success) {
+        const message = response.error || $localize`:@@deleteFailed:删除失败`;
+        this.error.set(message);
+        toast.error(message, { duration: 3000 });
+        return;
+      }
+      toast.success($localize`:@@groupSummaryDeleted:群聊总结已删除`, {
+        duration: 2500,
+      });
+      await this.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.error.set(message);
+      toast.error(message, { duration: 3000 });
+    } finally {
+      this.deleting.set('');
+    }
   }
 
   private async loadCurrentPage(): Promise<void> {

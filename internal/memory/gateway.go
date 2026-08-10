@@ -22,7 +22,7 @@ func NewGateway() *Gateway {
 func (g *Gateway) Filter(entries []MemoryEntry, currentUser string) []MemoryEntry {
 	var result []MemoryEntry
 	for _, e := range entries {
-		// Keep legacy compact records out of context if startup migration failed.
+		// Legacy compact records never participate in memory recall.
 		if e.Source == SourceCompact {
 			continue
 		}

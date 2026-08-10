@@ -74,33 +74,6 @@ func (s *Store) Save(entry MemoryEntry) error {
 	return s.save(brain)
 }
 
-// DeleteBySource removes legacy records of a retired memory source.
-func (s *Store) DeleteBySource(source Source) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	brain, err := s.load()
-	if err != nil {
-		return 0, err
-	}
-
-	kept := make([]MemoryEntry, 0, len(brain.Entries))
-	for _, entry := range brain.Entries {
-		if entry.Source != source {
-			kept = append(kept, entry)
-		}
-	}
-	removed := len(brain.Entries) - len(kept)
-	if removed == 0 {
-		return 0, nil
-	}
-	brain.Entries = kept
-	if err := s.save(brain); err != nil {
-		return 0, err
-	}
-	return removed, nil
-}
-
 // Search performs a global keyword search across all memories.
 // Returns entries whose content or tags contain the query string (case-insensitive).
 func (s *Store) Search(query string, limit int) ([]MemoryEntry, error) {

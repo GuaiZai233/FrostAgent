@@ -51,3 +51,4 @@ node_modules
 # Local brain memory data
 /data/brain.json
 /data/memory_catalog.json
+/data/group_summaries.json

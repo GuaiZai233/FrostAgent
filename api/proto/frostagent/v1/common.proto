@@ -15,7 +15,7 @@ message ToolInfo {
   string description = 2;
 }
 
-// SessionInfo describes an active session.
+// SessionInfo describes a current session or a persisted group summary.
 message SessionInfo {
   string session_id = 1;
   string platform = 2;

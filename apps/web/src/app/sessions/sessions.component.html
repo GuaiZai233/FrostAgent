@@ -37,6 +37,7 @@
             <th hlmTh i18n="@@messageCount">消息数</th>
             <th hlmTh i18n="@@createdAt">创建时间</th>
             <th hlmTh i18n="@@lastActive">最后活跃</th>
+            <th hlmTh class="text-end" i18n="@@actions">操作</th>
           </tr>
         </thead>
         <tbody hlmTBody>
@@ -59,14 +60,37 @@
                 }
               </td>
               <td hlmTd>{{ formatPlatform(session.platform) }}</td>
-              <td hlmTd>{{ session.messageCount }}</td>
+              <td hlmTd>
+                @if (session.platform === 'group') {
+                  —
+                } @else {
+                  {{ session.messageCount }}
+                }
+              </td>
               <td hlmTd>{{ formatDateTime(session.createdAt) }}</td>
               <td hlmTd>{{ formatDateTime(session.lastActive) }}</td>
+              <td hlmTd class="text-end">
+                @if (session.platform === 'group' && session.groupSummary) {
+                  <button
+                    hlmBtn
+                    variant="ghost"
+                    size="icon"
+                    class="text-destructive"
+                    [disabled]="deleting() === session.sessionId"
+                    (click)="deleteSummary(session)"
+                    title="删除群聊总结"
+                    i18n-title="@@deleteGroupSummaryTitle"
+                  >
+                    <app-icon>delete</app-icon>
+                    <span class="sr-only" i18n="@@deleteGroupSummaryTitle">删除群聊总结</span>
+                  </button>
+                }
+              </td>
             </tr>
           } @empty {
             @if (!loading()) {
               <tr hlmTr>
-                <td hlmTd colspan="5" class="text-muted-foreground h-24 text-center" i18n="@@noSessions">
+                <td hlmTd colspan="6" class="text-muted-foreground h-24 text-center" i18n="@@noSessions">
                   暂无会话。
                 </td>
               </tr>
