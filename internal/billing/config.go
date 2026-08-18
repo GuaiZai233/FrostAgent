@@ -12,13 +12,15 @@ import (
 
 // Config holds runtime configuration for the Alcyone billing integration.
 type Config struct {
-	Enabled          bool          `json:"enabled"`
-	BaseURL          string        `json:"base_url"`
-	ServiceToken     string        `json:"service_token"`
-	Timeout          time.Duration `json:"timeout"`
-	ModelName        string        `json:"model_name"`
-	MaxOutputTokens  int           `json:"max_output_tokens"`
-	SafetyMultiplier float64       `json:"safety_multiplier"`
+	Enabled                     bool          `json:"enabled"`
+	BaseURL                     string        `json:"base_url"`
+	ServiceToken                string        `json:"service_token"`
+	Timeout                     time.Duration `json:"timeout"`
+	ModelName                   string        `json:"model_name"`
+	MaxOutputTokens             int           `json:"max_output_tokens"`
+	SafetyMultiplier            float64       `json:"safety_multiplier"`
+	CustomPromptPriceMinor      *int64        `json:"custom_prompt_price_minor,omitempty"`
+	CustomCompletionPriceMinor  *int64        `json:"custom_completion_price_minor,omitempty"`
 }
 
 const (
@@ -67,14 +69,30 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	var customPromptPrice *int64
+	if pStr := strings.TrimSpace(os.Getenv("BILLING_PROMPT_PRICE_PER_MILLION")); pStr != "" {
+		if val, err := strconv.ParseInt(pStr, 10, 64); err == nil && val >= 0 {
+			customPromptPrice = &val
+		}
+	}
+
+	var customCompletionPrice *int64
+	if cStr := strings.TrimSpace(os.Getenv("BILLING_COMPLETION_PRICE_PER_MILLION")); cStr != "" {
+		if val, err := strconv.ParseInt(cStr, 10, 64); err == nil && val >= 0 {
+			customCompletionPrice = &val
+		}
+	}
+
 	return Config{
-		Enabled:          enabled,
-		BaseURL:          baseURL,
-		ServiceToken:     serviceToken,
-		Timeout:          timeout,
-		ModelName:        modelName,
-		MaxOutputTokens:  maxOutputTokens,
-		SafetyMultiplier: safetyMultiplier,
+		Enabled:                    enabled,
+		BaseURL:                    baseURL,
+		ServiceToken:               serviceToken,
+		Timeout:                    timeout,
+		ModelName:                  modelName,
+		MaxOutputTokens:            maxOutputTokens,
+		SafetyMultiplier:           safetyMultiplier,
+		CustomPromptPriceMinor:     customPromptPrice,
+		CustomCompletionPriceMinor: customCompletionPrice,
 	}
 }
 
@@ -90,21 +108,39 @@ func InitBillingClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("billing is enabled but ALCYONE_BASE_URL is empty")
 	}
 
-	price, registered := GetPrice(cfg.ModelName)
-	if !registered {
-		logs.Warn(logs.SYSTEM, fmt.Sprintf(
-			"⚠️ 计费系统：模型 %q 未在官方价格表中注册，将使用默认兜底价格 (输入 %s 片/1M, 输出 %s 片/1M)",
+	// Apply custom price override from environment variables if specified
+	if cfg.CustomPromptPriceMinor != nil || cfg.CustomCompletionPriceMinor != nil {
+		currentPrice, _ := GetPrice(cfg.ModelName)
+		if cfg.CustomPromptPriceMinor != nil {
+			currentPrice.PromptPricePerMillion = *cfg.CustomPromptPriceMinor
+		}
+		if cfg.CustomCompletionPriceMinor != nil {
+			currentPrice.CompletionPricePerMillion = *cfg.CustomCompletionPriceMinor
+		}
+		RegisterPrice(cfg.ModelName, currentPrice)
+		logs.Info(logs.SYSTEM, fmt.Sprintf(
+			"💳 计费系统已应用自定义模型价格: %s (输入 %s 片/1M, 输出 %s 片/1M)",
 			cfg.ModelName,
-			FormatSnowflakes(price.PromptPricePerMillion),
-			FormatSnowflakes(price.CompletionPricePerMillion),
+			FormatSnowflakes(currentPrice.PromptPricePerMillion),
+			FormatSnowflakes(currentPrice.CompletionPricePerMillion),
 		))
 	} else {
-		logs.Info(logs.SYSTEM, fmt.Sprintf(
-			"💳 计费系统模型价格: %s (输入 %s 片/1M, 输出 %s 片/1M)",
-			cfg.ModelName,
-			FormatSnowflakes(price.PromptPricePerMillion),
-			FormatSnowflakes(price.CompletionPricePerMillion),
-		))
+		price, registered := GetPrice(cfg.ModelName)
+		if !registered {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf(
+				"⚠️ 计费系统：模型 %q 未在官方价格表中注册，将使用默认兜底价格 (输入 %s 片/1M, 输出 %s 片/1M)",
+				cfg.ModelName,
+				FormatSnowflakes(price.PromptPricePerMillion),
+				FormatSnowflakes(price.CompletionPricePerMillion),
+			))
+		} else {
+			logs.Info(logs.SYSTEM, fmt.Sprintf(
+				"💳 计费系统模型价格: %s (输入 %s 片/1M, 输出 %s 片/1M)",
+				cfg.ModelName,
+				FormatSnowflakes(price.PromptPricePerMillion),
+				FormatSnowflakes(price.CompletionPricePerMillion),
+			))
+		}
 	}
 
 	client := NewClient(cfg.BaseURL, cfg.ServiceToken, cfg.Timeout)

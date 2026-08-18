@@ -88,11 +88,11 @@ func TestPriceTable_CalculateCost(t *testing.T) {
 			wantMinor:        3,    // 0.03 snowflakes
 		},
 		{
-			name:             "gpt-4o large request",
-			model:            "gpt-4o", // 25000 / 100000
-			promptTokens:     5000,    // 5000 * 25000 = 125,000,000
-			completionTokens: 1000,    // 1000 * 100000 = 100,000,000 => sum = 225,000,000 => 225 minor
-			wantMinor:        225,
+			name:             "deepseek-reasoner request",
+			model:            "deepseek-reasoner", // 4000 / 16000
+			promptTokens:     5000,                // 5000 * 4000 = 20,000,000
+			completionTokens: 1000,                // 1000 * 16000 = 16,000,000 => sum = 36,000,000 => 36 minor
+			wantMinor:        36,
 		},
 	}
 

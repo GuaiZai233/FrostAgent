@@ -29,16 +29,6 @@ var defaultPrices = map[string]ModelPrice{
 	"deepseek-reasoner":       {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
 	"deepseek-r1":             {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
 	"deepseek-ai/deepseek-r1": {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
-
-	// OpenAI models
-	"gpt-4o":      {PromptPricePerMillion: 25000, CompletionPricePerMillion: 100000},
-	"gpt-4o-mini": {PromptPricePerMillion: 1500, CompletionPricePerMillion: 6000},
-
-	// Anthropic models
-	"claude-3-5-sonnet": {PromptPricePerMillion: 30000, CompletionPricePerMillion: 150000},
-	"claude-sonnet-4-6": {PromptPricePerMillion: 30000, CompletionPricePerMillion: 150000},
-	"claude-3-5-haiku":  {PromptPricePerMillion: 8000, CompletionPricePerMillion: 40000},
-	"claude-haiku-4-5":  {PromptPricePerMillion: 8000, CompletionPricePerMillion: 40000},
 }
 
 // PriceTable manages model pricing lookups.

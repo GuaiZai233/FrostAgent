@@ -15,6 +15,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	os.Setenv("MODEL_NAME", "deepseek-v4-flash")
 	os.Setenv("BILLING_MAX_OUTPUT_TOKENS", "4096")
 	os.Setenv("BILLING_SAFETY_MULTIPLIER", "1.5")
+	os.Setenv("BILLING_PROMPT_PRICE_PER_MILLION", "1500")
+	os.Setenv("BILLING_COMPLETION_PRICE_PER_MILLION", "3000")
 	defer func() {
 		os.Unsetenv("BILLING_ENABLED")
 		os.Unsetenv("ALCYONE_BASE_URL")
@@ -23,6 +25,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		os.Unsetenv("MODEL_NAME")
 		os.Unsetenv("BILLING_MAX_OUTPUT_TOKENS")
 		os.Unsetenv("BILLING_SAFETY_MULTIPLIER")
+		os.Unsetenv("BILLING_PROMPT_PRICE_PER_MILLION")
+		os.Unsetenv("BILLING_COMPLETION_PRICE_PER_MILLION")
 	}()
 
 	cfg := LoadConfigFromEnv()
@@ -47,6 +51,12 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if cfg.SafetyMultiplier != 1.5 {
 		t.Errorf("unexpected SafetyMultiplier: %f", cfg.SafetyMultiplier)
+	}
+	if cfg.CustomPromptPriceMinor == nil || *cfg.CustomPromptPriceMinor != 1500 {
+		t.Errorf("unexpected CustomPromptPriceMinor: %v", cfg.CustomPromptPriceMinor)
+	}
+	if cfg.CustomCompletionPriceMinor == nil || *cfg.CustomCompletionPriceMinor != 3000 {
+		t.Errorf("unexpected CustomCompletionPriceMinor: %v", cfg.CustomCompletionPriceMinor)
 	}
 }
 
@@ -79,6 +89,25 @@ func TestInitBillingClient(t *testing.T) {
 	client, err = InitBillingClient(cfgValid)
 	if err != nil || client == nil {
 		t.Fatalf("expected valid client, got %v, %v", client, err)
+	}
+
+	// Enabled with custom prices overrides price table
+	customPrompt := int64(333)
+	customCompletion := int64(777)
+	cfgCustom := Config{
+		Enabled:                    true,
+		BaseURL:                    "http://127.0.0.1:8081",
+		ModelName:                  "custom-override-model",
+		CustomPromptPriceMinor:     &customPrompt,
+		CustomCompletionPriceMinor: &customCompletion,
+	}
+	client, err = InitBillingClient(cfgCustom)
+	if err != nil || client == nil {
+		t.Fatalf("expected valid client with custom prices, got %v, %v", client, err)
+	}
+	p, ok := GetPrice("custom-override-model")
+	if !ok || p.PromptPricePerMillion != 333 || p.CompletionPricePerMillion != 777 {
+		t.Errorf("custom price not applied: %+v, ok=%v", p, ok)
 	}
 }
 
