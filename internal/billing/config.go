@@ -12,15 +12,15 @@ import (
 
 // Config holds runtime configuration for the Alcyone billing integration.
 type Config struct {
-	Enabled                     bool          `json:"enabled"`
-	BaseURL                     string        `json:"base_url"`
-	ServiceToken                string        `json:"service_token"`
-	Timeout                     time.Duration `json:"timeout"`
-	ModelName                   string        `json:"model_name"`
-	MaxOutputTokens             int           `json:"max_output_tokens"`
-	SafetyMultiplier            float64       `json:"safety_multiplier"`
-	CustomPromptPriceMinor      *int64        `json:"custom_prompt_price_minor,omitempty"`
-	CustomCompletionPriceMinor  *int64        `json:"custom_completion_price_minor,omitempty"`
+	Enabled                         bool          `json:"enabled"`
+	BaseURL                         string        `json:"base_url"`
+	ServiceToken                    string        `json:"service_token"`
+	Timeout                         time.Duration `json:"timeout"`
+	ModelName                       string        `json:"model_name"`
+	MaxOutputTokens                 int           `json:"max_output_tokens"`
+	SafetyMultiplier                float64       `json:"safety_multiplier"`
+	CustomPromptPricePerMillion     *int64        `json:"custom_prompt_price_per_million,omitempty"`
+	CustomCompletionPricePerMillion *int64        `json:"custom_completion_price_per_million,omitempty"`
 }
 
 const (
@@ -84,15 +84,15 @@ func LoadConfigFromEnv() Config {
 	}
 
 	return Config{
-		Enabled:                    enabled,
-		BaseURL:                    baseURL,
-		ServiceToken:               serviceToken,
-		Timeout:                    timeout,
-		ModelName:                  modelName,
-		MaxOutputTokens:            maxOutputTokens,
-		SafetyMultiplier:           safetyMultiplier,
-		CustomPromptPriceMinor:     customPromptPrice,
-		CustomCompletionPriceMinor: customCompletionPrice,
+		Enabled:                         enabled,
+		BaseURL:                         baseURL,
+		ServiceToken:                    serviceToken,
+		Timeout:                         timeout,
+		ModelName:                       modelName,
+		MaxOutputTokens:                 maxOutputTokens,
+		SafetyMultiplier:                safetyMultiplier,
+		CustomPromptPricePerMillion:     customPromptPrice,
+		CustomCompletionPricePerMillion: customCompletionPrice,
 	}
 }
 
@@ -109,13 +109,13 @@ func InitBillingClient(cfg Config) (*Client, error) {
 	}
 
 	// Apply custom price override from environment variables if specified
-	if cfg.CustomPromptPriceMinor != nil || cfg.CustomCompletionPriceMinor != nil {
+	if cfg.CustomPromptPricePerMillion != nil || cfg.CustomCompletionPricePerMillion != nil {
 		currentPrice, _ := GetPrice(cfg.ModelName)
-		if cfg.CustomPromptPriceMinor != nil {
-			currentPrice.PromptPricePerMillion = *cfg.CustomPromptPriceMinor
+		if cfg.CustomPromptPricePerMillion != nil {
+			currentPrice.PromptPricePerMillion = *cfg.CustomPromptPricePerMillion
 		}
-		if cfg.CustomCompletionPriceMinor != nil {
-			currentPrice.CompletionPricePerMillion = *cfg.CustomCompletionPriceMinor
+		if cfg.CustomCompletionPricePerMillion != nil {
+			currentPrice.CompletionPricePerMillion = *cfg.CustomCompletionPricePerMillion
 		}
 		RegisterPrice(cfg.ModelName, currentPrice)
 		logs.Info(logs.SYSTEM, fmt.Sprintf(

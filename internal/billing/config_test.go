@@ -52,11 +52,11 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	if cfg.SafetyMultiplier != 1.5 {
 		t.Errorf("unexpected SafetyMultiplier: %f", cfg.SafetyMultiplier)
 	}
-	if cfg.CustomPromptPriceMinor == nil || *cfg.CustomPromptPriceMinor != 1500 {
-		t.Errorf("unexpected CustomPromptPriceMinor: %v", cfg.CustomPromptPriceMinor)
+	if cfg.CustomPromptPricePerMillion == nil || *cfg.CustomPromptPricePerMillion != 1500 {
+		t.Errorf("unexpected CustomPromptPricePerMillion: %v", cfg.CustomPromptPricePerMillion)
 	}
-	if cfg.CustomCompletionPriceMinor == nil || *cfg.CustomCompletionPriceMinor != 3000 {
-		t.Errorf("unexpected CustomCompletionPriceMinor: %v", cfg.CustomCompletionPriceMinor)
+	if cfg.CustomCompletionPricePerMillion == nil || *cfg.CustomCompletionPricePerMillion != 3000 {
+		t.Errorf("unexpected CustomCompletionPricePerMillion: %v", cfg.CustomCompletionPricePerMillion)
 	}
 }
 
@@ -95,11 +95,11 @@ func TestInitBillingClient(t *testing.T) {
 	customPrompt := int64(333)
 	customCompletion := int64(777)
 	cfgCustom := Config{
-		Enabled:                    true,
-		BaseURL:                    "http://127.0.0.1:8081",
-		ModelName:                  "custom-override-model",
-		CustomPromptPriceMinor:     &customPrompt,
-		CustomCompletionPriceMinor: &customCompletion,
+		Enabled:                         true,
+		BaseURL:                         "http://127.0.0.1:8081",
+		ModelName:                       "custom-override-model",
+		CustomPromptPricePerMillion:     &customPrompt,
+		CustomCompletionPricePerMillion: &customCompletion,
 	}
 	client, err = InitBillingClient(cfgCustom)
 	if err != nil || client == nil {

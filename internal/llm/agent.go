@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type ToolExecutor interface {
@@ -339,8 +340,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		coreMsgs := convertToCoreMessages(messages)
 
-		// 检查上下文总 Token 是否超出模型硬上限
-		contextTokens := billing.EstimateTokens(coreMsgs)
+		// 检查上下文总 Token 是否超出模型硬上限 (包含 tools 定义开销)
+		contextTokens, err := billing.EstimateMessagesTokens(coreMsgs, modelTools)
+		if err != nil {
+			contextTokens = billing.EstimateTokens(coreMsgs)
+		}
 		if contextTokens > MaxContextTokens {
 			logs.Warn(logs.SYSTEM, fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens))
 			return AgentRunResult{
@@ -400,6 +404,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						}
 						cCancel()
 					}
+					runCtx.Billing.LastBalanceMinor = balMinor
 					var replyMsg string
 					if i == 0 {
 						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
@@ -595,7 +600,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			// 单条工具结果过大保护
 			if len(toolResult) > MaxToolOutputBytes {
 				logs.Warn(logs.TOOL, fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes))
-				toolResult = toolResult[:MaxToolOutputBytes] + "\n...(工具输出过长，已截断)"
+				cut := MaxToolOutputBytes
+				for cut > 0 && !utf8.RuneStart(toolResult[cut]) {
+					cut--
+				}
+				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
