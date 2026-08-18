@@ -18,19 +18,6 @@ var DefaultFallbackPrice = ModelPrice{
 	CompletionPricePerMillion: 8000, // 0.80 CNY / 1M tokens = 80 snowflakes / 1M
 }
 
-var defaultPrices = map[string]ModelPrice{
-	// DeepSeek Chat / V3 / V4 Flash family
-	"deepseek-chat":           {PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000},
-	"deepseek-v4-flash":       {PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000},
-	"deepseek-v3":             {PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000},
-	"deepseek-ai/deepseek-v3": {PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000},
-
-	// DeepSeek Reasoner / R1 family
-	"deepseek-reasoner":       {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
-	"deepseek-r1":             {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
-	"deepseek-ai/deepseek-r1": {PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000},
-}
-
 // PriceTable manages model pricing lookups.
 type PriceTable struct {
 	mu     sync.RWMutex
@@ -39,15 +26,12 @@ type PriceTable struct {
 
 var defaultRegistry = NewPriceTable()
 
-// NewPriceTable creates a new PriceTable populated with default model prices.
+// NewPriceTable creates an empty PriceTable. Model-specific prices must be
+// registered explicitly at runtime.
 func NewPriceTable() *PriceTable {
-	pt := &PriceTable{
-		prices: make(map[string]ModelPrice, len(defaultPrices)),
+	return &PriceTable{
+		prices: make(map[string]ModelPrice),
 	}
-	for k, v := range defaultPrices {
-		pt.prices[strings.ToLower(k)] = v
-	}
-	return pt
 }
 
 // RegisterPrice adds or overrides the price for a specific model name.

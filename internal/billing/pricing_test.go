@@ -6,20 +6,22 @@ import (
 
 func TestPriceTable_GetPrice(t *testing.T) {
 	pt := NewPriceTable()
+	price := ModelPrice{PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000}
+	pt.RegisterPrice("fixture-model", price)
 
 	// Registered model
-	p, ok := pt.GetPrice("deepseek-chat")
+	p, ok := pt.GetPrice("fixture-model")
 	if !ok {
-		t.Fatalf("expected deepseek-chat to be registered")
+		t.Fatalf("expected fixture-model to be registered")
 	}
 	if p.PromptPricePerMillion != 1000 || p.CompletionPricePerMillion != 2000 {
 		t.Errorf("unexpected price: %+v", p)
 	}
 
 	// Case insensitive
-	p2, ok2 := pt.GetPrice("DeepSeek-V4-Flash")
+	p2, ok2 := pt.GetPrice("FIXTURE-MODEL")
 	if !ok2 {
-		t.Fatalf("expected DeepSeek-V4-Flash to be registered")
+		t.Fatalf("expected FIXTURE-MODEL to be registered")
 	}
 	if p2.PromptPricePerMillion != 1000 {
 		t.Errorf("unexpected price: %+v", p2)
@@ -37,6 +39,8 @@ func TestPriceTable_GetPrice(t *testing.T) {
 
 func TestPriceTable_CalculateCost(t *testing.T) {
 	pt := NewPriceTable()
+	pt.RegisterPrice("fixture-standard", ModelPrice{PromptPricePerMillion: 1000, CompletionPricePerMillion: 2000})
+	pt.RegisterPrice("fixture-premium", ModelPrice{PromptPricePerMillion: 4000, CompletionPricePerMillion: 16000})
 
 	tests := []struct {
 		name             string
@@ -47,51 +51,51 @@ func TestPriceTable_CalculateCost(t *testing.T) {
 	}{
 		{
 			name:             "zero tokens",
-			model:            "deepseek-chat",
+			model:            "fixture-standard",
 			promptTokens:     0,
 			completionTokens: 0,
 			wantMinor:        0,
 		},
 		{
 			name:             "negative tokens clamped to zero",
-			model:            "deepseek-chat",
+			model:            "fixture-standard",
 			promptTokens:     -10,
 			completionTokens: -5,
 			wantMinor:        0,
 		},
 		{
 			name:             "small token count rounds up to 1 minor unit",
-			model:            "deepseek-chat", // 1000 / 2000 per 1M
-			promptTokens:     10,              // 10 * 1000 = 10,000
-			completionTokens: 10,              // 10 * 2000 = 20,000 => sum = 30,000 => (30000 + 999999) / 1000000 = 1
+			model:            "fixture-standard", // 1000 / 2000 per 1M
+			promptTokens:     10,                 // 10 * 1000 = 10,000
+			completionTokens: 10,                 // 10 * 2000 = 20,000 => sum = 30,000 => (30000 + 999999) / 1000000 = 1
 			wantMinor:        1,
 		},
 		{
 			name:             "exact 1M prompt tokens",
-			model:            "deepseek-chat", // 1000 / 2000
+			model:            "fixture-standard", // 1000 / 2000
 			promptTokens:     1_000_000,
 			completionTokens: 0,
 			wantMinor:        1000, // 10.00 snowflakes
 		},
 		{
 			name:             "exact 1M completion tokens",
-			model:            "deepseek-chat", // 1000 / 2000
+			model:            "fixture-standard", // 1000 / 2000
 			promptTokens:     0,
 			completionTokens: 1_000_000,
 			wantMinor:        2000, // 20.00 snowflakes
 		},
 		{
 			name:             "typical request rounding up",
-			model:            "deepseek-chat",
+			model:            "fixture-standard",
 			promptTokens:     1500, // 1500 * 1000 = 1,500,000
 			completionTokens: 300,  // 300 * 2000 = 600,000 => sum = 2,100,000 => ceil = 3
 			wantMinor:        3,    // 0.03 snowflakes
 		},
 		{
-			name:             "deepseek-reasoner request",
-			model:            "deepseek-reasoner", // 4000 / 16000
-			promptTokens:     5000,                // 5000 * 4000 = 20,000,000
-			completionTokens: 1000,                // 1000 * 16000 = 16,000,000 => sum = 36,000,000 => 36 minor
+			name:             "premium price request",
+			model:            "fixture-premium", // 4000 / 16000
+			promptTokens:     5000,              // 5000 * 4000 = 20,000,000
+			completionTokens: 1000,              // 1000 * 16000 = 16,000,000 => sum = 36,000,000 => 36 minor
 			wantMinor:        36,
 		},
 	}
