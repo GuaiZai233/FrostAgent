@@ -46,7 +46,7 @@
         ▼ 每轮迭代 (Iteration)                                         │
 ┌──────────────────────────────┐                                      │
 │ 1. 上下文与输入 Token 估算     │                                      │
-│    (billing.EstimateTokens)  │                                      │
+│    (EstimateMessagesTokens)  │                                      │
 └──────────────┬───────────────┘                                      │
                ▼                                                      │
 ┌──────────────────────────────┐                                      │
@@ -132,4 +132,4 @@ type Client interface {
 ### 4.4 消息尺寸与工具输出硬限制
 - 单条用户消息长度超过 30,000 字符时，前置拦截拒绝处理。
 - 单次上下文估算超过 128,000 Token 时，快速失败拒绝调用。
-- 工具执行结果超过 64KB (`MaxToolOutputBytes`) 时，进行安全尾部截断并附带 `...[tool output truncated: exceeds 65536 bytes]` 标记。
+- 工具执行结果超过 64KB (`MaxToolOutputBytes`) 时，进行 UTF-8 字符边界安全回退截断并附带截断标记提示。
