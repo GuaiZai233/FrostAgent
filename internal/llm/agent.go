@@ -373,7 +373,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				amountMinor = 1
 			}
 
-			callID := fmt.Sprintf("call_%s_%d_%d", runCtx.Billing.TaskID, i, time.Now().UnixNano())
+			callID := fmt.Sprintf("call_%s_%d", runCtx.Billing.TaskID, i)
 			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", runCtx.Billing.Platform, runCtx.Billing.TaskID, i)
 
 			reserveReq := billing.LLMReserveRequest{
@@ -438,9 +438,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 
-			reservationID = res.ReservationID
+			if res.Decision == billing.DecisionReserved {
+				reservationID = res.ReservationID
+			}
 			if res.Decision == billing.DecisionWelcome {
 				runCtx.Billing.WelcomeGranted = true
+				reservationID = ""
 			}
 			runCtx.Billing.LastBalanceMinor = res.BalanceMinor
 		}

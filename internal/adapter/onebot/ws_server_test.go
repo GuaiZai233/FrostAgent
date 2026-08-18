@@ -665,10 +665,153 @@ func TestWSBilling_WelcomeBonus(t *testing.T) {
 	if !strings.Contains(replyMsg, "❄️ 本次消耗:") || !strings.Contains(replyMsg, "剩余余额:") {
 		t.Errorf("期望回复包含消费小票，实际回复: %s", replyMsg)
 	}
-	if state.reserveCount != 1 || state.commitCount != 1 {
-		t.Errorf("期望 reserve=1, commit=1; 实际 reserve=%d, commit=%d", state.reserveCount, state.commitCount)
+	if state.reserveCount != 1 || state.commitCount != 0 {
+		t.Errorf("期望 reserve=1, commit=0; 实际 reserve=%d, commit=%d", state.reserveCount, state.commitCount)
 	}
 	t.Logf("✅ 首次对话欢迎奖励测试通过，最终回复: %s", replyMsg)
+}
+
+func TestWSBilling_WelcomeBonus_WithToolCall(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	state.reserveHandler = func(w http.ResponseWriter, r *http.Request) {
+		state.reserveCount++
+		if state.reserveCount == 1 {
+			result := billing.LLMReservationResult{
+				ReservationID: "res_welcome_1",
+				UserUID:       "user_new",
+				Decision:      billing.DecisionWelcome,
+				Status:        billing.StatusWelcome,
+				ReservedMinor: 200,
+				BalanceMinor:  10000,
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": result})
+		} else {
+			result := billing.LLMReservationResult{
+				ReservationID: "res_tool_turn2",
+				UserUID:       "user_new",
+				Decision:      billing.DecisionReserved,
+				Status:        billing.StatusReserved,
+				ReservedMinor: 200,
+				BalanceMinor:  10000 - 200,
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": result})
+		}
+	}
+
+	state.commitHandler = func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]int64
+		json.NewDecoder(r.Body).Decode(&req)
+		actualMinor := req["actual_minor"]
+		state.commitCount++
+		state.committedActuals = append(state.committedActuals, actualMinor)
+		result := billing.LLMReservationResult{
+			ReservationID: "res_tool_turn2",
+			Status:        billing.StatusCommitted,
+			BalanceMinor:  9800 - actualMinor,
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": result})
+	}
+
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_weather_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "get_weather",
+								Arguments: `{"city":"杭州"}`,
+							},
+						},
+					},
+				},
+				Usage: &core.Usage{
+					PromptTokens:     500,
+					CompletionTokens: 50,
+					TotalTokens:      550,
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "杭州天气晴朗！",
+				},
+				Usage: &core.Usage{
+					PromptTokens:     700,
+					CompletionTokens: 100,
+					TotalTokens:      800,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.ToolRegistry["get_weather"] = &mockTestTool{name: "get_weather", result: "杭州天气晴朗"}
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   103,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"查一下杭州天气"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if !strings.Contains(replyMsg, "杭州天气晴朗！") {
+		t.Errorf("期望包含最终工具回答，实际回复: %s", replyMsg)
+	}
+	if !strings.Contains(replyMsg, "🎉 首次对话赠送 100.00 片雪花！") {
+		t.Errorf("期望包含首充赠送提示，实际回复: %s", replyMsg)
+	}
+	if state.reserveCount != 2 || state.commitCount != 1 {
+		t.Errorf("期望 reserve=2, commit=1; 实际 reserve=%d, commit=%d", state.reserveCount, state.commitCount)
+	}
+	t.Logf("✅ 首次对话带 Tool Call 闭环测试通过，最终回复: %s", replyMsg)
 }
 
 func TestWSBilling_StandardConsumption(t *testing.T) {
@@ -745,7 +888,7 @@ func TestWSBilling_StandardConsumption(t *testing.T) {
 		MessageType: "private",
 		UserID:      987654,
 		MessageID:   102,
-		Message:     json.RawMessage(`[{"type":"text","data":{"text":"继续聊"}}]`),
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"再聊一句"}}]`),
 	}
 	eventBytes, _ := json.Marshal(event)
 
