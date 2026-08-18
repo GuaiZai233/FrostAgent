@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
@@ -221,8 +220,36 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	userText := extractUserText(segments, event.Message)
 	if content.IsContainImage(segments) {
+		// Fast-fail balance check before downloading images or calling vision LLM
+		if engine != nil && engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+			bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
+			bCancel()
+			if err != nil {
+				if errors.Is(err, billing.ErrInsufficientFunds) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
+					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+					return
+				}
+				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+				return
+			}
+			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
+				return
+			}
+		}
 		imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
 		userText = userText + " 【图片内容】：" + imageDesc
+	}
+
+	// 检查单条用户消息输入上限保护
+	if len([]rune(userText)) > 30000 {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 消息过长 (%d 字)，拒绝处理", event.UserID, len([]rune(userText))))
+		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。")
+		return
 	}
 
 	// 2. Build the implicit context as a JSON string, replicating the OneBotEvent structure
@@ -278,14 +305,23 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	// 4. Call the agent engine with history
 	var (
-		replyText      string
-		receiptText    string
-		reservationID  string
-		welcomeGranted bool
-		billingActive  bool
+		replyText   string
+		receiptText string
 	)
 
 	if engine != nil {
+		var billingState *llm.BillingRunState
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
+			billingState = &llm.BillingRunState{
+				Platform:      "qq",
+				ExternalID:    strconv.FormatInt(event.UserID, 10),
+				DisplayName:   senderDisplayName(event),
+				TaskID:        taskID,
+				BillingActive: true,
+			}
+		}
+
 		// 将用户的 prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
 		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: prompt})
 
@@ -295,74 +331,6 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// running compact 与自动记忆中重复累计旧消息。
 		if replyContext != "" && len(messages) > 0 {
 			messages[len(messages)-1].Content = requestPrompt
-		}
-
-		// 计费检查与预扣款
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-			billingActive = true
-			coreMsgs := llm.ConvertToCoreMessages(messages)
-			modelTools := engine.ModelTools()
-
-			amountMinor, err := billing.EstimateReservationAmount(
-				engine.ModelName,
-				coreMsgs,
-				modelTools,
-				engine.BillingConfig.MaxOutputTokens,
-				engine.BillingConfig.SafetyMultiplier,
-			)
-			if err != nil {
-				logs.Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed): %v", err))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
-				return
-			}
-			if amountMinor < 1 {
-				amountMinor = 1
-			}
-
-			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
-			callID := fmt.Sprintf("call_%d_%d", event.MessageID, time.Now().UnixNano())
-			idempotencyKey := fmt.Sprintf("res_%d_%d", event.UserID, event.MessageID)
-
-			reserveReq := billing.LLMReserveRequest{
-				Platform:       "qq",
-				ExternalID:     strconv.FormatInt(event.UserID, 10),
-				DisplayName:    senderDisplayName(event),
-				TaskID:         taskID,
-				CallID:         callID,
-				AmountMinor:    amountMinor,
-				IdempotencyKey: idempotencyKey,
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
-			res, err := engine.BillingClient.ReserveLLM(ctx, reserveReq)
-			cancel()
-
-			if err != nil {
-				if errors.Is(err, billing.ErrInsufficientFunds) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝对话", event.UserID))
-					var balanceMinor int64 = 0
-					if bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout); bCancel != nil {
-						if bRes, bErr := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10)); bErr == nil && bRes != nil {
-							balanceMinor = bRes.BalanceMinor
-						}
-						bCancel()
-					}
-					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(balanceMinor))
-					return
-				}
-				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed): %v", err))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
-				return
-			}
-
-			if res.Decision == billing.DecisionInsufficient {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝对话", event.UserID, res.BalanceMinor))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(res.BalanceMinor))
-				return
-			}
-
-			reservationID = res.ReservationID
-			welcomeGranted = (res.Decision == billing.DecisionWelcome)
 		}
 
 		sendHook := func(toolResultJSON string) {
@@ -403,41 +371,25 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Owner:     owner,
 			OwnerType: ownerType,
 			SendHook:  sendHook,
+			Billing:   billingState,
 		})
 		replyText = runResult.Content
 
-		// 计费后置结算 / 释放
-		if billingActive && reservationID != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
-			if runResult.Error != nil {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("LLM 调用出错，释放预扣款 (reservation %s): %v", reservationID, runResult.Error))
-				if _, relErr := engine.BillingClient.ReleaseLLM(ctx, reservationID, billing.ReasonModelFailed); relErr != nil {
-					logs.Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败: %v", relErr))
-				}
-			} else {
-				price, _ := billing.GetPrice(engine.ModelName)
-				actualMinor := billing.CalculateMinorUnits(
-					runResult.Usage.PromptTokens,
-					runResult.Usage.CompletionTokens,
-					price,
-				)
-				commitRes, commitErr := engine.BillingClient.CommitLLM(ctx, reservationID, actualMinor)
-				if commitErr != nil {
-					logs.Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s): %v", reservationID, commitErr))
-				}
-				var currentBalance int64 = 0
-				if commitRes != nil {
-					currentBalance = commitRes.BalanceMinor
-				}
-				receiptText = billing.FormatReceipt(
-					actualMinor,
-					runResult.Usage.PromptTokens,
-					runResult.Usage.CompletionTokens,
-					currentBalance,
-					welcomeGranted,
-				)
+		// 计费回执处理与历史保护
+		if billingState != nil && billingState.BillingActive {
+			if runResult.Error != nil && billingState.IterationsBilled == 0 {
+				// 首次迭代即失败且无任何消费记录，不污染历史并直接回复
+				session.TrimHistory(len(session.Snapshot()) - 1)
+				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+				return
 			}
-			cancel()
+			receiptText = billing.FormatReceipt(
+				billingState.TotalBilledMinor,
+				runResult.Usage.PromptTokens,
+				runResult.Usage.CompletionTokens,
+				billingState.LastBalanceMinor,
+				billingState.WelcomeGranted,
+			)
 		}
 
 		// A deliberate terminal silence keeps the user turn and an assistant

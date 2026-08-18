@@ -8,6 +8,7 @@ import (
 	"FrostAgent/internal/memory"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -31,6 +32,10 @@ type contextualToolExecutor interface {
 const (
 	StaySilentToolName    = "stay_silent"
 	AssistantSilentMarker = "<assistant_silent />"
+
+	MaxSingleInputTokens = 32000
+	MaxContextTokens     = 128000
+	MaxToolOutputBytes   = 65536 // 64KB
 )
 
 // AgentRunResult carries the final content and side-effect decisions from one
@@ -324,18 +329,138 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	var totalUsage core.Usage
 	modelTools := e.ModelTools()
 
+	runCtx, hasRunCtx := RunContextFromContext(ctx)
+	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
 		e.TotalMessagesProcessed.Add(1)
 		logs.Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
+
+		coreMsgs := convertToCoreMessages(messages)
+
+		// 检查上下文总 Token 是否超出模型硬上限
+		contextTokens := billing.EstimateTokens(coreMsgs)
+		if contextTokens > MaxContextTokens {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens))
+			return AgentRunResult{
+				Content:       "FrostAgent错误：对话上下文过长，超出模型处理上限。",
+				MemoryWritten: memoryWritten,
+				Usage:         totalUsage,
+				Error:         fmt.Errorf("context tokens %d exceeded limit %d", contextTokens, MaxContextTokens),
+			}
+		}
+
+		var reservationID string
+		if billingActive {
+			amountMinor, err := billing.EstimateReservationAmount(
+				e.ModelName,
+				coreMsgs,
+				modelTools,
+				e.BillingConfig.MaxOutputTokens,
+				e.BillingConfig.SafetyMultiplier,
+			)
+			if err != nil {
+				logs.Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed, iter %d): %v", i+1, err))
+				return AgentRunResult{
+					Content:       billing.FormatBillingUnavailableMessage(),
+					MemoryWritten: memoryWritten,
+					Usage:         totalUsage,
+					Error:         err,
+				}
+			}
+			if amountMinor < 1 {
+				amountMinor = 1
+			}
+
+			callID := fmt.Sprintf("call_%s_%d_%d", runCtx.Billing.TaskID, i, time.Now().UnixNano())
+			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", runCtx.Billing.Platform, runCtx.Billing.TaskID, i)
+
+			reserveReq := billing.LLMReserveRequest{
+				Platform:       runCtx.Billing.Platform,
+				ExternalID:     runCtx.Billing.ExternalID,
+				DisplayName:    runCtx.Billing.DisplayName,
+				TaskID:         runCtx.Billing.TaskID,
+				CallID:         callID,
+				AmountMinor:    amountMinor,
+				IdempotencyKey: idempotencyKey,
+			}
+
+			bCtx, bCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+			res, err := e.BillingClient.ReserveLLM(bCtx, reserveReq)
+			bCancel()
+
+			if err != nil {
+				if errors.Is(err, billing.ErrInsufficientFunds) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, i+1))
+					var balMinor int64 = 0
+					if cCtx, cCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout); cCancel != nil {
+						if bRes, bErr := e.BillingClient.Balance(cCtx, runCtx.Billing.Platform, runCtx.Billing.ExternalID); bErr == nil && bRes != nil {
+							balMinor = bRes.BalanceMinor
+						}
+						cCancel()
+					}
+					var replyMsg string
+					if i == 0 {
+						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
+					} else {
+						replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(balMinor))
+					}
+					return AgentRunResult{
+						Content:       replyMsg,
+						MemoryWritten: memoryWritten,
+						Usage:         totalUsage,
+						Error:         billing.ErrInsufficientFunds,
+					}
+				}
+				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %v", i+1, err))
+				return AgentRunResult{
+					Content:       billing.FormatBillingUnavailableMessage(),
+					MemoryWritten: memoryWritten,
+					Usage:         totalUsage,
+					Error:         err,
+				}
+			}
+
+			if res.Decision == billing.DecisionInsufficient {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足 (%d minor)，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, res.BalanceMinor, i+1))
+				var replyMsg string
+				if i == 0 {
+					replyMsg = billing.FormatInsufficientFundsMessage(res.BalanceMinor)
+				} else {
+					replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(res.BalanceMinor))
+				}
+				return AgentRunResult{
+					Content:       replyMsg,
+					MemoryWritten: memoryWritten,
+					Usage:         totalUsage,
+					Error:         billing.ErrInsufficientFunds,
+				}
+			}
+
+			reservationID = res.ReservationID
+			if res.Decision == billing.DecisionWelcome {
+				runCtx.Billing.WelcomeGranted = true
+			}
+			runCtx.Billing.LastBalanceMinor = res.BalanceMinor
+		}
+
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		chatReq := core.ChatRequest{
-			Model:    e.ModelName,
-			Messages: convertToCoreMessages(messages),
-			Tools:    modelTools,
+			Model:     e.ModelName,
+			Messages:  coreMsgs,
+			Tools:     modelTools,
+			MaxTokens: e.BillingConfig.MaxOutputTokens,
 		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
+			if billingActive && reservationID != "" {
+				rCtx, rCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
+					logs.Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败 (iter %d): %v", i+1, relErr))
+				}
+				rCancel()
+			}
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent错误：LLM调用失败: %v", err),
 				MemoryWritten: memoryWritten,
@@ -343,6 +468,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				Error:         err,
 			}
 		}
+
 		if resp.Usage != nil {
 			totalUsage.PromptTokens += resp.Usage.PromptTokens
 			totalUsage.CompletionTokens += resp.Usage.CompletionTokens
@@ -365,6 +491,41 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						Arguments: tc.Function.Arguments,
 					},
 				}
+			}
+		}
+
+		// 结算本轮调用
+		if billingActive && reservationID != "" {
+			promptTok := 0
+			compTok := 0
+			if resp.Usage != nil {
+				promptTok = resp.Usage.PromptTokens
+				compTok = resp.Usage.CompletionTokens
+			}
+			price, _ := billing.GetPrice(e.ModelName)
+			actualMinor := billing.CalculateMinorUnits(promptTok, compTok, price)
+
+			cCtx, cCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+			commitRes, commitErr := e.BillingClient.CommitLLM(cCtx, reservationID, actualMinor)
+			cCancel()
+
+			if commitErr != nil {
+				logs.Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
+				// 如果是 Tool Call 且 commit 失败，禁止执行工具以防止免费副作用
+				if len(responseMsg.ToolCalls) > 0 {
+					logs.Warn(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行")
+					return AgentRunResult{
+						Content:       "FrostAgent错误：计费结算失败，已终止后续工具执行。",
+						MemoryWritten: memoryWritten,
+						Usage:         totalUsage,
+						Error:         commitErr,
+					}
+				}
+				// 若是最终回答且 commit 失败，本轮按免费处理，不影响回复输出
+			} else if commitRes != nil {
+				runCtx.Billing.TotalBilledMinor += actualMinor
+				runCtx.Billing.LastBalanceMinor = commitRes.BalanceMinor
+				runCtx.Billing.IterationsBilled++
 			}
 		}
 
@@ -426,6 +587,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			} else {
 				toolResult = "FrostAgent错误：工具未找到"
+			}
+
+			// 单条工具结果过大保护
+			if len(toolResult) > MaxToolOutputBytes {
+				logs.Warn(logs.TOOL, fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes))
+				toolResult = toolResult[:MaxToolOutputBytes] + "\n...(工具输出过长，已截断)"
 			}
 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))

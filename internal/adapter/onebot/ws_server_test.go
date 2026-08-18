@@ -1009,3 +1009,508 @@ func TestWSBilling_ModelFailureReleasesReservation(t *testing.T) {
 	}
 	t.Logf("✅ 模型异常自动释放预扣款测试通过: releaseCount=%d", state.releaseCount)
 }
+
+type mockTestTool struct {
+	name     string
+	executed int
+	result   string
+	err      error
+}
+
+func (m *mockTestTool) Name() string        { return m.name }
+func (m *mockTestTool) Description() string { return "test tool description" }
+func (m *mockTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (m *mockTestTool) Execute(args string) (string, error) {
+	m.executed++
+	return m.result, m.err
+}
+
+func TestWSBilling_ToolLoop_MultiTurnAccumulation(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	mockTool := &mockTestTool{
+		name:   "search_tool",
+		result: "搜索结果: 明天多云转晴",
+	}
+
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			// Turn 1: model requests tool call
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_search_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "search_tool",
+								Arguments: `{"query":"天气"}`,
+							},
+						},
+					},
+				},
+				Usage: &core.Usage{
+					PromptTokens:     500,
+					CompletionTokens: 50,
+					TotalTokens:      550,
+				},
+			},
+			// Turn 2: model provides final answer
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "根据查询，明天天气多云转晴！",
+				},
+				Usage: &core.Usage{
+					PromptTokens:     700,
+					CompletionTokens: 100,
+					TotalTokens:      800,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.ToolRegistry["search_tool"] = mockTool
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   106,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"明天天气怎么样"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if mockTool.executed != 1 {
+		t.Errorf("期望 tool 执行 1 次, 实际=%d", mockTool.executed)
+	}
+	if mockLLM.reqCount != 2 {
+		t.Errorf("期望 LLM 调用 2 次, 实际=%d", mockLLM.reqCount)
+	}
+	if state.reserveCount != 2 {
+		t.Errorf("期望 reserve 2 次 (每轮单独预扣), 实际=%d", state.reserveCount)
+	}
+	if state.commitCount != 2 {
+		t.Errorf("期望 commit 2 次 (每轮单独结算), 实际=%d", state.commitCount)
+	}
+	if !strings.Contains(replyMsg, "输入: 1200, 输出: 150") {
+		t.Errorf("期望回执包含两轮累计 token (1200 in, 150 out)，实际回复: %s", replyMsg)
+	}
+	t.Logf("✅ Tool 循环多轮计费与 Token 累计测试通过: %s", replyMsg)
+}
+
+func TestWSBilling_ToolLoop_InsufficientFundsOnSecondTurn(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	mockTool := &mockTestTool{
+		name:   "search_tool",
+		result: "搜索结果: 内容",
+	}
+
+	state.reserveHandler = func(w http.ResponseWriter, r *http.Request) {
+		state.reserveCount++
+		if state.reserveCount == 1 {
+			// 第一轮正常
+			result := billing.LLMReservationResult{
+				ReservationID: "res_turn_1",
+				Decision:      billing.DecisionReserved,
+				Status:        billing.StatusReserved,
+				ReservedMinor: 200,
+				BalanceMinor:  300,
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": result})
+			return
+		}
+		// 第二轮余额不足
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "insufficient_funds",
+				"message": "insufficient snowflake balance",
+			},
+		})
+	}
+
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_search_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "search_tool",
+								Arguments: `{"query":"test"}`,
+							},
+						},
+					},
+				},
+				Usage: &core.Usage{
+					PromptTokens:     500,
+					CompletionTokens: 50,
+					TotalTokens:      550,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.ToolRegistry["search_tool"] = mockTool
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   107,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"执行多步任务"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if state.reserveCount != 2 {
+		t.Errorf("期望 reserve 尝试 2 次, 实际=%d", state.reserveCount)
+	}
+	if state.commitCount != 1 {
+		t.Errorf("期望第一轮成功 commit (不退款), commitCount 实际=%d", state.commitCount)
+	}
+	if !strings.Contains(replyMsg, "余额不足") {
+		t.Errorf("期望中途余额不足提示，实际回复: %s", replyMsg)
+	}
+	t.Logf("✅ Tool 循环中途余额不足早停测试通过: %s", replyMsg)
+}
+
+func TestWSBilling_ToolCall_CommitFailureStopsTool(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	mockTool := &mockTestTool{
+		name:   "search_tool",
+		result: "搜索结果",
+	}
+
+	state.commitHandler = func(w http.ResponseWriter, r *http.Request) {
+		state.commitCount++
+		// 模拟结算端点异常
+		http.Error(w, `{"error":"internal_error"}`, http.StatusInternalServerError)
+	}
+
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_search_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "search_tool",
+								Arguments: `{"query":"test"}`,
+							},
+						},
+					},
+				},
+				Usage: &core.Usage{
+					PromptTokens:     500,
+					CompletionTokens: 50,
+					TotalTokens:      550,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.ToolRegistry["search_tool"] = mockTool
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   108,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"搜索资料"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if mockTool.executed != 0 {
+		t.Errorf("Tool Call commit 失败时严禁执行工具，实际执行次数=%d", mockTool.executed)
+	}
+	if !strings.Contains(replyMsg, "计费结算失败") && !strings.Contains(replyMsg, "已终止后续工具执行") {
+		t.Errorf("期望包含结算失败终止提示，实际回复: %s", replyMsg)
+	}
+	t.Logf("✅ Tool Call commit 失败禁止执行工具测试通过: %s", replyMsg)
+}
+
+func TestWSBilling_Vision_InsufficientBalance_EarlyAbort(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	state.balanceHandler = func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": billing.BalanceResult{
+				Exists:       true,
+				Platform:     "qq",
+				ExternalID:   "987654",
+				BalanceMinor: 0, // 0 balance
+			},
+		})
+	}
+
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   109,
+		Message:     json.RawMessage(`[{"type":"image","data":{"file":"http://example.com/test.jpg"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if mockLLM.reqCount != 0 {
+		t.Errorf("视觉快速失败拦截时不应调用 LLM，实际调用次数=%d", mockLLM.reqCount)
+	}
+	if state.reserveCount != 0 {
+		t.Errorf("视觉快速失败拦截时不应发生 reserve，实际=%d", state.reserveCount)
+	}
+	if !strings.Contains(replyMsg, "余额不足") {
+		t.Errorf("期望收到余额不足提示，实际回复: %s", replyMsg)
+	}
+	t.Logf("✅ 视觉前置余额检查与快速失败测试通过: %s", replyMsg)
+}
+
+func TestWSBilling_OversizedInput_EarlyAbort(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingClient = billingClient
+	engine.BillingConfig = billing.Config{
+		Enabled:          true,
+		BaseURL:          alcyoneSrv.URL,
+		Timeout:          2 * time.Second,
+		MaxOutputTokens:  2048,
+		SafetyMultiplier: 1.2,
+		ModelName:        "deepseek-chat",
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	oversizedText := strings.Repeat("超长消息测试", 6000) // ~36,000 runes
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   110,
+		Message:     json.RawMessage(fmt.Sprintf(`[{"type":"text","data":{"text":%q}}]`, oversizedText)),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	params, ok := action.Params.(map[string]interface{})
+	if !ok {
+		t.Fatalf("params 不是 map: %T", action.Params)
+	}
+	replyMsg, _ := params["message"].(string)
+
+	if mockLLM.reqCount != 0 {
+		t.Errorf("超长单条消息拦截时不应调用 LLM，实际调用次数=%d", mockLLM.reqCount)
+	}
+	if state.reserveCount != 0 {
+		t.Errorf("超长单条消息拦截时不应发生 reserve")
+	}
+	if !strings.Contains(replyMsg, "单条消息长度过长") {
+		t.Errorf("期望收到单条消息过长提示，实际回复: %s", replyMsg)
+	}
+	t.Logf("✅ 单条超大输入拒绝拦截测试通过: %s", replyMsg)
+}

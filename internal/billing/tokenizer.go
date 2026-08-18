@@ -147,6 +147,21 @@ func EstimateMessagesTokens(msgs []core.ChatMessage, tools []core.Tool) (int, er
 	return total, nil
 }
 
+// EstimateTokens returns estimated token count for a slice of core.ChatMessage.
+func EstimateTokens(msgs []core.ChatMessage) int {
+	total, err := EstimateMessagesTokens(msgs, nil)
+	if err != nil {
+		fallback := 0
+		for _, m := range msgs {
+			if str, ok := m.Content.(string); ok {
+				fallback += EstimateTextTokens(str)
+			}
+		}
+		return fallback
+	}
+	return total
+}
+
 // EstimateReservationAmount computes the minor-unit snowflake amount to reserve
 // before calling the model, incorporating a safety multiplier on prompt tokens
 // and reserving for max output tokens.
