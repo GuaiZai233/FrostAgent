@@ -53,8 +53,8 @@ func (pt *PriceTable) GetPrice(model string) (ModelPrice, bool) {
 	return DefaultFallbackPrice, false
 }
 
-// CalculateCost computes total token cost in minor units using ceiling integer arithmetic.
-func (pt *PriceTable) CalculateCost(model string, promptTokens, completionTokens int) int64 {
+// CalculateMinorUnits computes total token cost in minor units for a given ModelPrice.
+func CalculateMinorUnits(promptTokens, completionTokens int, price ModelPrice) int64 {
 	if promptTokens < 0 {
 		promptTokens = 0
 	}
@@ -64,14 +64,18 @@ func (pt *PriceTable) CalculateCost(model string, promptTokens, completionTokens
 	if promptTokens == 0 && completionTokens == 0 {
 		return 0
 	}
-
-	price, _ := pt.GetPrice(model)
 	numerator := int64(promptTokens)*price.PromptPricePerMillion + int64(completionTokens)*price.CompletionPricePerMillion
 	if numerator <= 0 {
 		return 0
 	}
 	// Ceiling division: (numerator + 999,999) / 1,000,000
 	return (numerator + 999_999) / 1_000_000
+}
+
+// CalculateCost computes total token cost in minor units using ceiling integer arithmetic.
+func (pt *PriceTable) CalculateCost(model string, promptTokens, completionTokens int) int64 {
+	price, _ := pt.GetPrice(model)
+	return CalculateMinorUnits(promptTokens, completionTokens, price)
 }
 
 // Default registry convenience functions

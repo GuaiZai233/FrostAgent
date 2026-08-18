@@ -61,6 +61,25 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("Alcyone API error (status %d, code %s): %s", e.StatusCode, e.Code, e.Message)
 }
 
+func (e *APIError) Is(target error) bool {
+	if target == ErrInsufficientFunds && (e.StatusCode == http.StatusPaymentRequired || e.Code == "insufficient_funds") {
+		return true
+	}
+	if target == ErrReservationNotFound && (e.StatusCode == http.StatusNotFound || e.Code == "reservation_not_found") {
+		return true
+	}
+	if target == ErrReservationExpired && e.Code == "reservation_expired" {
+		return true
+	}
+	if target == ErrReservationTerminal && e.Code == "reservation_terminal" {
+		return true
+	}
+	if target == ErrIdempotencyConflict && (e.StatusCode == http.StatusConflict && e.Code == "idempotency_conflict") {
+		return true
+	}
+	return false
+}
+
 // BalanceResult represents the balance query response from Alcyone.
 type BalanceResult struct {
 	Exists       bool   `json:"exists"`
@@ -236,6 +255,8 @@ func (c *Client) post(ctx context.Context, path string, body any, idempotencyKey
 			Message:    errResp.Error.Message,
 		}
 		switch resp.StatusCode {
+		case http.StatusPaymentRequired:
+			return ErrInsufficientFunds
 		case http.StatusConflict:
 			switch apiErr.Code {
 			case "idempotency_conflict":
@@ -249,6 +270,9 @@ func (c *Client) post(ctx context.Context, path string, body any, idempotencyKey
 			if apiErr.Code == "reservation_not_found" {
 				return ErrReservationNotFound
 			}
+		}
+		if apiErr.Code == "insufficient_funds" {
+			return ErrInsufficientFunds
 		}
 		return apiErr
 	}

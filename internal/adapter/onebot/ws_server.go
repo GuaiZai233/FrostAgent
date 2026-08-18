@@ -2,12 +2,15 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/tools"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
@@ -273,7 +277,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// 4. Call the agent engine with history
-	var replyText string
+	var (
+		replyText      string
+		receiptText    string
+		reservationID  string
+		welcomeGranted bool
+		billingActive  bool
+	)
+
 	if engine != nil {
 		// 将用户的 prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
 		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: prompt})
@@ -284,6 +295,74 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// running compact 与自动记忆中重复累计旧消息。
 		if replyContext != "" && len(messages) > 0 {
 			messages[len(messages)-1].Content = requestPrompt
+		}
+
+		// 计费检查与预扣款
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			billingActive = true
+			coreMsgs := llm.ConvertToCoreMessages(messages)
+			modelTools := engine.ModelTools()
+
+			amountMinor, err := billing.EstimateReservationAmount(
+				engine.ModelName,
+				coreMsgs,
+				modelTools,
+				engine.BillingConfig.MaxOutputTokens,
+				engine.BillingConfig.SafetyMultiplier,
+			)
+			if err != nil {
+				logs.Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed): %v", err))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+				return
+			}
+			if amountMinor < 1 {
+				amountMinor = 1
+			}
+
+			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
+			callID := fmt.Sprintf("call_%d_%d", event.MessageID, time.Now().UnixNano())
+			idempotencyKey := fmt.Sprintf("res_%d_%d", event.UserID, event.MessageID)
+
+			reserveReq := billing.LLMReserveRequest{
+				Platform:       "qq",
+				ExternalID:     strconv.FormatInt(event.UserID, 10),
+				DisplayName:    senderDisplayName(event),
+				TaskID:         taskID,
+				CallID:         callID,
+				AmountMinor:    amountMinor,
+				IdempotencyKey: idempotencyKey,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+			res, err := engine.BillingClient.ReserveLLM(ctx, reserveReq)
+			cancel()
+
+			if err != nil {
+				if errors.Is(err, billing.ErrInsufficientFunds) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝对话", event.UserID))
+					var balanceMinor int64 = 0
+					if bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout); bCancel != nil {
+						if bRes, bErr := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10)); bErr == nil && bRes != nil {
+							balanceMinor = bRes.BalanceMinor
+						}
+						bCancel()
+					}
+					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(balanceMinor))
+					return
+				}
+				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed): %v", err))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+				return
+			}
+
+			if res.Decision == billing.DecisionInsufficient {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝对话", event.UserID, res.BalanceMinor))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(res.BalanceMinor))
+				return
+			}
+
+			reservationID = res.ReservationID
+			welcomeGranted = (res.Decision == billing.DecisionWelcome)
 		}
 
 		sendHook := func(toolResultJSON string) {
@@ -326,6 +405,40 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			SendHook:  sendHook,
 		})
 		replyText = runResult.Content
+
+		// 计费后置结算 / 释放
+		if billingActive && reservationID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+			if runResult.Error != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("LLM 调用出错，释放预扣款 (reservation %s): %v", reservationID, runResult.Error))
+				if _, relErr := engine.BillingClient.ReleaseLLM(ctx, reservationID, billing.ReasonModelFailed); relErr != nil {
+					logs.Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败: %v", relErr))
+				}
+			} else {
+				price, _ := billing.GetPrice(engine.ModelName)
+				actualMinor := billing.CalculateMinorUnits(
+					runResult.Usage.PromptTokens,
+					runResult.Usage.CompletionTokens,
+					price,
+				)
+				commitRes, commitErr := engine.BillingClient.CommitLLM(ctx, reservationID, actualMinor)
+				if commitErr != nil {
+					logs.Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s): %v", reservationID, commitErr))
+				}
+				var currentBalance int64 = 0
+				if commitRes != nil {
+					currentBalance = commitRes.BalanceMinor
+				}
+				receiptText = billing.FormatReceipt(
+					actualMinor,
+					runResult.Usage.PromptTokens,
+					runResult.Usage.CompletionTokens,
+					currentBalance,
+					welcomeGranted,
+				)
+			}
+			cancel()
+		}
 
 		// A deliberate terminal silence keeps the user turn and an assistant
 		// marker in history, but never emits an empty OneBot message or feeds the
@@ -382,15 +495,34 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
 		if len(oneBotSegments) > 0 {
+			if receiptText != "" {
+				oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]interface{}{"text": "\n\n" + receiptText},
+				})
+			}
 			if event.MessageType == "group" {
 				oneBotSegments = wrapGroupReply(oneBotSegments, event)
 			}
 			finalMessage = oneBotSegments
 		} else {
-			finalMessage = replyText // Fallback to raw text if conversion fails
+			displayText := replyText
+			if receiptText != "" {
+				displayText = displayText + "\n\n" + receiptText
+			}
+			finalMessage = displayText
 		}
 	} else {
 		// B. It's plain text
+		displayText := replyText
+		if receiptText != "" {
+			if strings.TrimSpace(displayText) == "" {
+				displayText = receiptText
+			} else {
+				displayText = displayText + "\n\n" + receiptText
+			}
+		}
+
 		if event.MessageType == "group" {
 			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
 			enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
@@ -398,16 +530,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if enableAt || enableReply {
 				textSeg := tools.OneBotSegment{
 					Type: "text",
-					Data: map[string]interface{}{"text": " " + replyText},
+					Data: map[string]interface{}{"text": " " + displayText},
 				}
 				finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
 			} else {
-				finalMessage = replyText
+				finalMessage = displayText
 			}
 
 		} else {
 			// Just plain text for private messages
-			finalMessage = replyText
+			finalMessage = displayText
 		}
 	}
 
@@ -424,6 +556,39 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
+	}
+}
+
+func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string) {
+	var finalMessage interface{}
+	if event.MessageType == "group" {
+		enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+		enableReply := os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+		if enableAt || enableReply {
+			textSeg := tools.OneBotSegment{
+				Type: "text",
+				Data: map[string]interface{}{"text": " " + text},
+			}
+			finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
+		} else {
+			finalMessage = text
+		}
+	} else {
+		finalMessage = text
+	}
+
+	botAction := model.OneBotAction{
+		Action: action,
+		Params: map[string]interface{}{
+			type1:     id,
+			"message": finalMessage,
+		},
+		Echo: echo,
+	}
+
+	actionBytes, _ := json.Marshal(botAction)
+	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
 	}
 }
 

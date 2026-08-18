@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
@@ -39,6 +40,8 @@ type AgentRunResult struct {
 	Content       string
 	MemoryWritten bool
 	Silent        bool
+	Usage         core.Usage
+	Error         error
 }
 
 // Engine 结构体，用于管理智能体的执行
@@ -54,6 +57,10 @@ type Engine struct {
 	StartedAt              time.Time // 引擎启动时间
 	Version                string    // 版本号
 	TotalMessagesProcessed atomic.Int64
+
+	// Billing integration (optional, nil = billing disabled)
+	BillingClient *billing.Client
+	BillingConfig billing.Config
 
 	// Memory components (optional, nil = memory disabled)
 	MemoryReader      *memory.Reader
@@ -314,17 +321,8 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 // assistant response; conflicts are returned to the model for another choice.
 func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) AgentRunResult {
 	memoryWritten := false
-	var modelTools []core.Tool
-	for _, t := range e.ToolRegistry {
-		modelTools = append(modelTools, core.Tool{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Parameters(),
-		})
-	}
-	sort.SliceStable(modelTools, func(i, j int) bool {
-		return modelTools[i].Name < modelTools[j].Name
-	})
+	var totalUsage core.Usage
+	modelTools := e.ModelTools()
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
@@ -341,7 +339,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent错误：LLM调用失败: %v", err),
 				MemoryWritten: memoryWritten,
+				Usage:         totalUsage,
+				Error:         err,
 			}
+		}
+		if resp.Usage != nil {
+			totalUsage.PromptTokens += resp.Usage.PromptTokens
+			totalUsage.CompletionTokens += resp.Usage.CompletionTokens
+			totalUsage.TotalTokens += resp.Usage.TotalTokens
 		}
 
 		// Map back to internal message for now to maintain compatibility
@@ -369,7 +374,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if len(responseMsg.ToolCalls) == 0 {
 			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
-			return AgentRunResult{Content: contentStr, MemoryWritten: memoryWritten}
+			return AgentRunResult{
+				Content:       contentStr,
+				MemoryWritten: memoryWritten,
+				Usage:         totalUsage,
+			}
 		}
 
 		if conflict := staySilentConflict(responseMsg.ToolCalls); conflict != "" {
@@ -405,7 +414,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolResult = res
 					if tc.Function.Name == StaySilentToolName {
 						logs.Info(logs.SYSTEM, "【智能体选择保持沉默】")
-						return AgentRunResult{MemoryWritten: memoryWritten, Silent: true}
+						return AgentRunResult{
+							MemoryWritten: memoryWritten,
+							Silent:        true,
+							Usage:         totalUsage,
+						}
 					}
 					if isMemoryWriteAction(tc, res) {
 						memoryWritten = true
@@ -434,6 +447,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	return AgentRunResult{
 		Content:       "FrostAgent错误：达到最大迭代次数，未能得出最终答案",
 		MemoryWritten: memoryWritten,
+		Usage:         totalUsage,
 	}
 }
 
@@ -508,6 +522,30 @@ func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
 	trimmed = append(trimmed, messages[0])
 	trimmed = append(trimmed, messages[startIdx:]...)
 	return trimmed
+}
+
+// ModelTools returns the registered tools as []core.Tool sorted by name.
+func (e *Engine) ModelTools() []core.Tool {
+	if e == nil || len(e.ToolRegistry) == 0 {
+		return nil
+	}
+	var modelTools []core.Tool
+	for _, t := range e.ToolRegistry {
+		modelTools = append(modelTools, core.Tool{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		})
+	}
+	sort.SliceStable(modelTools, func(i, j int) bool {
+		return modelTools[i].Name < modelTools[j].Name
+	})
+	return modelTools
+}
+
+// ConvertToCoreMessages converts internal ChatMessage to core.ChatMessage
+func ConvertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
+	return convertToCoreMessages(msgs)
 }
 
 // convertToCoreMessages converts internal ChatMessage to core.ChatMessage
