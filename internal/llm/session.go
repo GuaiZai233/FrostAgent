@@ -336,7 +336,7 @@ type SessionManager struct {
 func NewSessionManager() *SessionManager {
 	sm := &SessionManager{
 		sessions:   make(map[string]*SessionContext),
-		MaxHistory: 20,
+		MaxHistory: 50,
 		TTL:        24 * time.Hour,
 	}
 	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效

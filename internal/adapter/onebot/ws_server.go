@@ -2,12 +2,15 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/tools"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -217,8 +220,36 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	userText := extractUserText(segments, event.Message)
 	if content.IsContainImage(segments) {
+		// Fast-fail balance check before downloading images or calling vision LLM
+		if engine != nil && engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+			bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
+			bCancel()
+			if err != nil {
+				if errors.Is(err, billing.ErrInsufficientFunds) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
+					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+					return
+				}
+				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+				return
+			}
+			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
+				return
+			}
+		}
 		imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
 		userText = userText + " 【图片内容】：" + imageDesc
+	}
+
+	// 检查单条用户消息输入上限保护
+	if len([]rune(userText)) > 30000 {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 消息过长 (%d 字)，拒绝处理", event.UserID, len([]rune(userText))))
+		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。")
+		return
 	}
 
 	// 2. Build the implicit context as a JSON string, replicating the OneBotEvent structure
@@ -273,8 +304,24 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// 4. Call the agent engine with history
-	var replyText string
+	var (
+		replyText   string
+		receiptText string
+	)
+
 	if engine != nil {
+		var billingState *llm.BillingRunState
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
+			billingState = &llm.BillingRunState{
+				Platform:      "qq",
+				ExternalID:    strconv.FormatInt(event.UserID, 10),
+				DisplayName:   senderDisplayName(event),
+				TaskID:        taskID,
+				BillingActive: true,
+			}
+		}
+
 		// 将用户的 prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
 		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: prompt})
 
@@ -324,8 +371,26 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Owner:     owner,
 			OwnerType: ownerType,
 			SendHook:  sendHook,
+			Billing:   billingState,
 		})
 		replyText = runResult.Content
+
+		// 计费回执处理与历史保护
+		if billingState != nil && billingState.BillingActive {
+			if runResult.Error != nil && billingState.IterationsBilled == 0 {
+				// 首次迭代即失败且无任何消费记录，不污染历史并直接回复
+				session.TrimHistory(len(session.Snapshot()) - 1)
+				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+				return
+			}
+			receiptText = billing.FormatReceipt(
+				billingState.TotalBilledMinor,
+				runResult.Usage.PromptTokens,
+				runResult.Usage.CompletionTokens,
+				billingState.LastBalanceMinor,
+				billingState.WelcomeGranted,
+			)
+		}
 
 		// A deliberate terminal silence keeps the user turn and an assistant
 		// marker in history, but never emits an empty OneBot message or feeds the
@@ -382,15 +447,34 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
 		if len(oneBotSegments) > 0 {
+			if receiptText != "" {
+				oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]interface{}{"text": "\n\n" + receiptText},
+				})
+			}
 			if event.MessageType == "group" {
 				oneBotSegments = wrapGroupReply(oneBotSegments, event)
 			}
 			finalMessage = oneBotSegments
 		} else {
-			finalMessage = replyText // Fallback to raw text if conversion fails
+			displayText := replyText
+			if receiptText != "" {
+				displayText = displayText + "\n\n" + receiptText
+			}
+			finalMessage = displayText
 		}
 	} else {
 		// B. It's plain text
+		displayText := replyText
+		if receiptText != "" {
+			if strings.TrimSpace(displayText) == "" {
+				displayText = receiptText
+			} else {
+				displayText = displayText + "\n\n" + receiptText
+			}
+		}
+
 		if event.MessageType == "group" {
 			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
 			enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
@@ -398,16 +482,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if enableAt || enableReply {
 				textSeg := tools.OneBotSegment{
 					Type: "text",
-					Data: map[string]interface{}{"text": " " + replyText},
+					Data: map[string]interface{}{"text": " " + displayText},
 				}
 				finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
 			} else {
-				finalMessage = replyText
+				finalMessage = displayText
 			}
 
 		} else {
 			// Just plain text for private messages
-			finalMessage = replyText
+			finalMessage = displayText
 		}
 	}
 
@@ -424,6 +508,39 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
+	}
+}
+
+func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string) {
+	var finalMessage interface{}
+	if event.MessageType == "group" {
+		enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+		enableReply := os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+		if enableAt || enableReply {
+			textSeg := tools.OneBotSegment{
+				Type: "text",
+				Data: map[string]interface{}{"text": " " + text},
+			}
+			finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
+		} else {
+			finalMessage = text
+		}
+	} else {
+		finalMessage = text
+	}
+
+	botAction := model.OneBotAction{
+		Action: action,
+		Params: map[string]interface{}{
+			type1:     id,
+			"message": finalMessage,
+		},
+		Echo: echo,
+	}
+
+	actionBytes, _ := json.Marshal(botAction)
+	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
 	}
 }
 
