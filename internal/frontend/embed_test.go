@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+func TestStripLegacyLocalePrefix(t *testing.T) {
+	tests := []struct {
+		path     string
+		wantPath string
+		wantOk   bool
+	}{
+		{"/", "", false},
+		{"/overview", "", false},
+		{"/zh-Hans", "/", true},
+		{"/zh-Hans/", "/", true},
+		{"/zh-Hans/overview", "/overview", true},
+		{"/zh-Hans/settings/backend", "/settings/backend", true},
+		{"/en-US", "/", true},
+		{"/en-US/", "/", true},
+		{"/en-US/logs", "/logs", true},
+		{"/zh-Hans-custom", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			gotPath, gotOk := stripLegacyLocalePrefix(tt.path)
+			if gotOk != tt.wantOk || gotPath != tt.wantPath {
+				t.Errorf("stripLegacyLocalePrefix(%q) = (%q, %v), want (%q, %v)",
+					tt.path, gotPath, gotOk, tt.wantPath, tt.wantOk)
+			}
+		})
+	}
+}
+
 func TestHasExtension(t *testing.T) {
 	tests := []struct {
 		path string
@@ -67,6 +96,32 @@ func TestHandler(t *testing.T) {
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK for favicon.ico, got %d", rec.Code)
+		}
+	})
+
+	t.Run("redirect legacy zh-Hans prefix", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/zh-Hans/settings", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMovedPermanently {
+			t.Fatalf("expected 301 StatusMovedPermanently, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/settings" {
+			t.Errorf("expected Location /settings, got %q", loc)
+		}
+	})
+
+	t.Run("redirect legacy en-US prefix with query", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/en-US/logs?tab=env", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMovedPermanently {
+			t.Fatalf("expected 301 StatusMovedPermanently, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/logs?tab=env" {
+			t.Errorf("expected Location /logs?tab=env, got %q", loc)
 		}
 	})
 }

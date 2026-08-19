@@ -21,6 +21,16 @@ func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
+		// 0. 兼容旧版本多语言路径重定向（如 /zh-Hans/settings -> /settings, /en-US/logs -> /logs）
+		if newPath, ok := stripLegacyLocalePrefix(path); ok {
+			target := newPath
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			return
+		}
+
 		// 1. 根路径 "/" 或空路径：返回 index.html
 		if path == "/" || path == "" {
 			serveFile(fileFS, w, r, "index.html")
@@ -36,6 +46,23 @@ func Handler() http.Handler {
 		// 3. 静态资源（有后缀，如 /main.js, /styles.css, /favicon.ico）：直接由 FileServer 处理
 		http.FileServer(fileFS).ServeHTTP(w, r)
 	})
+}
+
+// stripLegacyLocalePrefix 检测并去除旧版多语言路径前缀（/zh-Hans, /en-US）
+func stripLegacyLocalePrefix(path string) (string, bool) {
+	for _, prefix := range []string{"/zh-Hans", "/en-US"} {
+		if path == prefix {
+			return "/", true
+		}
+		if strings.HasPrefix(path, prefix+"/") {
+			rest := strings.TrimPrefix(path, prefix)
+			if rest == "" {
+				rest = "/"
+			}
+			return rest, true
+		}
+	}
+	return "", false
 }
 
 // serveFile 读取并向浏览器输出单个文件
