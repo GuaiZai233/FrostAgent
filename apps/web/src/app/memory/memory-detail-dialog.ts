@@ -38,28 +38,28 @@ export interface MemoryDetailDialogData {
   ],
   template: `
     <div hlmDialogHeader>
-      <h2 hlmDialogTitle i18n="@@memoryDetail">记忆详情</h2>
+      <h2 hlmDialogTitle>记忆详情</h2>
     </div>
 
     <dl class="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border p-3 text-sm">
       <div class="col-span-2">
-        <dt class="text-muted-foreground" i18n="@@memoryId">ID</dt>
+        <dt class="text-muted-foreground">ID</dt>
         <dd class="break-all">{{ data.memory.id }}</dd>
       </div>
       <div>
-        <dt class="text-muted-foreground" i18n="@@memoryOwner">归属者</dt>
+        <dt class="text-muted-foreground">归属者</dt>
         <dd>{{ data.memory.owner }}</dd>
       </div>
       <div>
-        <dt class="text-muted-foreground" i18n="@@memorySource">来源</dt>
+        <dt class="text-muted-foreground">来源</dt>
         <dd>{{ data.memory.source }}</dd>
       </div>
       <div>
-        <dt class="text-muted-foreground" i18n="@@memoryCreatedAt">创建时间</dt>
+        <dt class="text-muted-foreground">创建时间</dt>
         <dd>{{ data.memory.createdAt }}</dd>
       </div>
       <div>
-        <dt class="text-muted-foreground" i18n="@@memoryUpdatedAt">更新时间</dt>
+        <dt class="text-muted-foreground">更新时间</dt>
         <dd>{{ data.memory.updatedAt }}</dd>
       </div>
     </dl>
@@ -67,7 +67,7 @@ export interface MemoryDetailDialogData {
     <div class="grid max-h-[55vh] gap-4 overflow-y-auto py-2 pe-1">
       <div hlmField>
         <label hlmFieldLabel for="detail-content">
-          <span i18n="@@memoryContent">内容</span>
+          <span>内容</span>
         </label>
         <textarea
           id="detail-content"
@@ -78,7 +78,7 @@ export interface MemoryDetailDialogData {
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel for="detail-tags" i18n="@@memoryTagsCommaSeparated">
+        <label hlmFieldLabel for="detail-tags">
           标签（逗号分隔）
         </label>
         <input
@@ -90,7 +90,7 @@ export interface MemoryDetailDialogData {
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel i18n="@@memoryVisibility">可见性</label>
+        <label hlmFieldLabel>可见性</label>
         <hlm-select
           [value]="editedVisibility"
           (valueChange)="setVisibility($event)"
@@ -106,7 +106,7 @@ export interface MemoryDetailDialogData {
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel id="importance-label" i18n="@@memoryImportanceSlider">
+        <label hlmFieldLabel id="importance-label">
           重要度: {{ editedImportance.toFixed(2) }}
         </label>
         <hlm-slider
@@ -122,10 +122,10 @@ export interface MemoryDetailDialogData {
 
     <div hlmDialogFooter>
       <button hlmBtn variant="outline" (click)="close()">
-        <span i18n="@@cancel">取消</span>
+        <span>取消</span>
       </button>
       <button hlmBtn (click)="save()">
-        <span i18n="@@save">保存</span>
+        <span>保存</span>
       </button>
     </div>
   `,

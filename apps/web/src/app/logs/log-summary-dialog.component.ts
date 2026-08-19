@@ -16,7 +16,7 @@ interface LogSummaryDialogData {
   imports: [HlmDialogDescription, HlmDialogHeader, HlmDialogTitle],
   template: `
     <div hlmDialogHeader>
-      <h2 hlmDialogTitle i18n="@@summary">摘要</h2>
+      <h2 hlmDialogTitle>摘要</h2>
       <p hlmDialogDescription>
         {{ data.entry.source || '-' }}
       </p>

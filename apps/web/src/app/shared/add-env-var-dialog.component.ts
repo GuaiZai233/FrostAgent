@@ -33,15 +33,15 @@ import { AppIconComponent } from './app-icon.component';
   ],
   template: `
     <div hlmDialogHeader>
-      <h2 hlmDialogTitle i18n="@@addEnvVar">新增环境变量</h2>
-      <p hlmDialogDescription i18n="@@addEnvVarDescription">
+      <h2 hlmDialogTitle>新增环境变量</h2>
+      <p hlmDialogDescription>
         添加或覆盖后端使用的环境变量。
       </p>
     </div>
 
     <div class="grid gap-4 py-2">
       <div hlmField>
-        <label hlmFieldLabel for="env-key" i18n="@@key">Key</label>
+        <label hlmFieldLabel for="env-key">Key</label>
         <input
           id="env-key"
           hlmInput
@@ -52,7 +52,7 @@ import { AppIconComponent } from './app-icon.component';
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel for="env-value" i18n="@@value">Value</label>
+        <label hlmFieldLabel for="env-value">Value</label>
         <input
           id="env-value"
           hlmInput
@@ -68,13 +68,13 @@ import { AppIconComponent } from './app-icon.component';
           [checked]="isSecret()"
           (checkedChange)="isSecret.set($event)"
         />
-        <span i18n="@@isSecret">这是敏感信息</span>
+        <span>这是敏感信息</span>
       </label>
     </div>
 
     <div hlmDialogFooter>
       <button hlmBtn variant="outline" (click)="close()">
-        <span i18n="@@cancel">取消</span>
+        <span>取消</span>
       </button>
       <button
         hlmBtn
@@ -82,7 +82,7 @@ import { AppIconComponent } from './app-icon.component';
         (click)="save()"
       >
         <app-icon>save</app-icon>
-        <span i18n="@@save">保存</span>
+        <span>保存</span>
       </button>
     </div>
   `,
@@ -114,7 +114,7 @@ export class AddEnvVarDialogComponent {
       });
 
       if (response.success) {
-        toast.success($localize`:@@envSaved:环境变量已保存`, {
+        toast.success('环境变量已保存', {
           duration: 2500,
         });
         this.dialogRef.close(true);

@@ -1,6 +1,6 @@
 <section class="mx-auto grid max-w-7xl gap-4 p-4 sm:p-6">
   <header class="flex flex-wrap items-center justify-between gap-3">
-    <h1 class="text-2xl font-semibold" i18n="@@navLogs">日志</h1>
+    <h1 class="text-2xl font-semibold">日志</h1>
     <div class="flex gap-2">
       <button
         hlmBtn
@@ -8,14 +8,13 @@
         size="icon"
         (click)="refresh()"
         title="刷新"
-        i18n-title="@@refreshTooltip"
       >
         <app-icon>refresh</app-icon>
-        <span class="sr-only" i18n="@@refreshTooltip">刷新</span>
+        <span class="sr-only">刷新</span>
       </button>
       <button hlmBtn variant="destructive" (click)="clearLogs()">
         <app-icon>delete_sweep</app-icon>
-        <span i18n="@@clearLogs">清理日志</span>
+        <span>清理日志</span>
       </button>
     </div>
   </header>
@@ -23,7 +22,7 @@
   <section hlmCard>
     <div hlmCardContent class="flex flex-wrap items-end gap-3">
       <div hlmField class="w-full sm:w-48">
-        <label hlmFieldLabel i18n="@@minLogLevel">最低级别</label>
+        <label hlmFieldLabel>最低级别</label>
         <hlm-select
           [value]="minLevel()"
           (valueChange)="changeLevel($event)"
@@ -42,7 +41,7 @@
       </div>
 
       <div hlmField class="min-w-56 flex-1">
-        <label hlmFieldLabel for="log-source" i18n="@@sourceFilter">
+        <label hlmFieldLabel for="log-source">
           来源过滤
         </label>
         <input
@@ -60,7 +59,7 @@
         (click)="applySourceFilter(sourceInput.value)"
       >
         <app-icon>filter_alt</app-icon>
-        <span i18n="@@applyFilter">应用过滤</span>
+        <span>应用过滤</span>
       </button>
     </div>
   </section>
@@ -68,7 +67,7 @@
   @if (loading()) {
     <div class="text-muted-foreground flex items-center gap-2 text-sm">
       <hlm-spinner />
-      <span i18n="@@loading">加载中</span>
+      <span>加载中</span>
     </div>
   }
 
@@ -84,10 +83,10 @@
         <table hlmTable>
           <thead hlmTHead>
             <tr hlmTr>
-              <th hlmTh i18n="@@timestamp">时间</th>
-              <th hlmTh i18n="@@level">级别</th>
-              <th hlmTh i18n="@@source">来源</th>
-              <th hlmTh i18n="@@summary">摘要</th>
+              <th hlmTh>时间</th>
+              <th hlmTh>级别</th>
+              <th hlmTh>来源</th>
+              <th hlmTh>摘要</th>
             </tr>
           </thead>
           <tbody hlmTBody>
@@ -123,7 +122,7 @@
             } @empty {
               @if (!loading()) {
                 <tr hlmTr>
-                  <td hlmTd colspan="4" class="text-muted-foreground h-24 text-center" i18n="@@noLogs">
+                  <td hlmTd colspan="4" class="text-muted-foreground h-24 text-center">
                     暂无日志。
                   </td>
                 </tr>
@@ -135,9 +134,9 @@
 
       <footer class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
         <p class="text-muted-foreground text-sm">
-          <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
+          <span>共 {{ total() }} 条</span>
           ·
-          <span i18n="@@paginationPage">第 {{ pageIndex() + 1 }} 页</span>
+          <span>第 {{ pageIndex() + 1 }} 页</span>
         </p>
         <div class="flex items-center gap-3">
           <hlm-select
@@ -162,7 +161,6 @@
                   size="sm"
                   [disabled]="!canGoBack() || loading()"
                   (click)="changePage('previous')"
-                  i18n="@@previousPage"
                 >
                   上一页
                 </button>
@@ -174,7 +172,6 @@
                   size="sm"
                   [disabled]="!nextToken() || loading()"
                   (click)="changePage('next')"
-                  i18n="@@nextPage"
                 >
                   下一页
                 </button>
@@ -189,27 +186,27 @@
       <div hlmCardHeader>
         <div class="flex items-center gap-2">
           <app-icon class="text-primary">receipt_long</app-icon>
-          <h2 hlmCardTitle i18n="@@logDetail">日志详情</h2>
+          <h2 hlmCardTitle>日志详情</h2>
         </div>
       </div>
       <div hlmCardContent>
         @if (selectedEntry(); as entry) {
           <dl class="grid gap-4">
             <div>
-              <dt class="mb-1 font-medium" i18n="@@requestBody">请求体</dt>
+              <dt class="mb-1 font-medium">请求体</dt>
               <dd>
                 <pre class="bg-muted max-h-64 overflow-auto rounded-lg p-3 text-xs whitespace-pre-wrap">{{ entry.requestBody || '-' }}</pre>
               </dd>
             </div>
             <div>
-              <dt class="mb-1 font-medium" i18n="@@responseBody">响应体</dt>
+              <dt class="mb-1 font-medium">响应体</dt>
               <dd>
                 <pre class="bg-muted max-h-64 overflow-auto rounded-lg p-3 text-xs whitespace-pre-wrap">{{ entry.responseBody || '-' }}</pre>
               </dd>
             </div>
           </dl>
         } @else {
-          <p class="text-muted-foreground" i18n="@@selectLogPrompt">
+          <p class="text-muted-foreground">
             选择一条日志查看详情。
           </p>
         }
@@ -219,7 +216,7 @@
 
   <section hlmCard>
     <div hlmCardHeader class="flex-row items-center justify-between">
-      <h2 hlmCardTitle i18n="@@liveLogs">实时日志流</h2>
+      <h2 hlmCardTitle>实时日志流</h2>
       <button hlmBtn (click)="toggleStream()">
         <app-icon>{{ streaming() ? 'stop_circle' : 'play_circle' }}</app-icon>
         <span>{{ streamActionLabel() }}</span>
@@ -238,7 +235,7 @@
           <p>{{ entry.summary }}</p>
         </article>
       } @empty {
-        <p class="text-muted-foreground" i18n="@@noStreamLogs">
+        <p class="text-muted-foreground">
           实时流尚未收到日志。
         </p>
       }

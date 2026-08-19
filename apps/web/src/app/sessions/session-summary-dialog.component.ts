@@ -16,7 +16,7 @@ interface SessionSummaryDialogData {
   imports: [HlmDialogDescription, HlmDialogHeader, HlmDialogTitle],
   template: `
     <div hlmDialogHeader>
-      <h2 hlmDialogTitle i18n="@@groupSummary">群聊总结</h2>
+      <h2 hlmDialogTitle>群聊总结</h2>
       <p hlmDialogDescription>{{ data.session.sessionId }}</p>
     </div>
     <div class="bg-muted/50 max-h-[65vh] overflow-auto rounded-lg border p-4">
@@ -24,7 +24,7 @@ interface SessionSummaryDialogData {
         @if (data.session.groupSummary) {
           {{ data.session.groupSummary }}
         } @else {
-          <span class="text-muted-foreground" i18n="@@noGroupSummary">
+          <span class="text-muted-foreground">
             暂无群聊总结。
           </span>
         }
