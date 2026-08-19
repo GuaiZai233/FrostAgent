@@ -65,11 +65,11 @@ export class OverviewComponent {
   }
 
   greet(name: string): string {
-    return $localize`:@@overviewGreeting:你好👋！我是 ${name}`;
+    return `你好👋！我是 ${name}`;
   }
 
   backendVersion(version: string): string {
-    return $localize`:@@backendVersion:后端版本 ${version}`;
+    return `后端版本 ${version}`;
   }
 
   statusClass(status: BotStatus): string {

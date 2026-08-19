@@ -159,10 +159,10 @@ export class LogsComponent implements OnDestroy {
 
   async clearLogs(): Promise<void> {
     const data: ConfirmDialogData = {
-      title: $localize`:@@clearLogsTitle:清理日志`,
-      message: $localize`:@@clearLogsMessage:确认清理当前内存日志缓冲区吗？此操作无法撤销。`,
-      cancelLabel: $localize`:@@cancel:取消`,
-      confirmLabel: $localize`:@@clear:清理`,
+      title: '清理日志',
+      message: '确认清理当前内存日志缓冲区吗？此操作无法撤销。',
+      cancelLabel: '取消',
+      confirmLabel: '清理',
     };
     const confirmed = await this.confirmDialog.confirm(data);
 
@@ -175,7 +175,7 @@ export class LogsComponent implements OnDestroy {
       this.entries.set([]);
       this.streamEntries.set([]);
       this.selectedEntry.set(null);
-      toast.success($localize`:@@logsCleared:日志已清理`, {
+      toast.success('日志已清理', {
         duration: 2500,
       });
       await this.refresh();
@@ -210,8 +210,8 @@ export class LogsComponent implements OnDestroy {
 
   streamActionLabel(): string {
     return this.streaming()
-      ? $localize`:@@stopStream:停止`
-      : $localize`:@@startStream:开始`;
+      ? '停止'
+      : '开始';
   }
 
   private async loadCurrentPage(): Promise<void> {

@@ -1,23 +1,22 @@
 <section class="mx-auto grid max-w-7xl gap-4 p-4 sm:p-6">
   <header class="flex items-center justify-between">
-    <h1 class="text-2xl font-semibold" i18n="@@navSessions">会话</h1>
+    <h1 class="text-2xl font-semibold">会话</h1>
     <button
       hlmBtn
       variant="outline"
       size="icon"
       (click)="refresh()"
       title="刷新"
-      i18n-title="@@refreshTooltip"
     >
       <app-icon>refresh</app-icon>
-      <span class="sr-only" i18n="@@refreshTooltip">刷新</span>
+      <span class="sr-only">刷新</span>
     </button>
   </header>
 
   @if (loading()) {
     <div class="text-muted-foreground flex items-center gap-2 text-sm">
       <hlm-spinner />
-      <span i18n="@@loading">加载中</span>
+      <span>加载中</span>
     </div>
   }
 
@@ -32,12 +31,12 @@
       <table hlmTable>
         <thead hlmTHead>
           <tr hlmTr>
-            <th hlmTh i18n="@@sessionId">会话 ID</th>
-            <th hlmTh i18n="@@platform">平台</th>
-            <th hlmTh i18n="@@messageCount">消息数</th>
-            <th hlmTh i18n="@@createdAt">创建时间</th>
-            <th hlmTh i18n="@@lastActive">最后活跃</th>
-            <th hlmTh class="text-end" i18n="@@actions">操作</th>
+            <th hlmTh>会话 ID</th>
+            <th hlmTh>平台</th>
+            <th hlmTh>消息数</th>
+            <th hlmTh>创建时间</th>
+            <th hlmTh>最后活跃</th>
+            <th hlmTh class="text-end">操作</th>
           </tr>
         </thead>
         <tbody hlmTBody>
@@ -50,7 +49,6 @@
                     variant="link"
                     class="h-auto p-0 font-mono text-xs"
                     (click)="openSummary(session)"
-                    i18n-title="@@viewGroupSummary"
                     title="查看群聊总结"
                   >
                     {{ session.sessionId }}
@@ -79,10 +77,9 @@
                     [disabled]="deleting() === session.sessionId"
                     (click)="deleteSummary(session)"
                     title="删除群聊总结"
-                    i18n-title="@@deleteGroupSummaryTitle"
                   >
                     <app-icon>delete</app-icon>
-                    <span class="sr-only" i18n="@@deleteGroupSummaryTitle">删除群聊总结</span>
+                    <span class="sr-only">删除群聊总结</span>
                   </button>
                 }
               </td>
@@ -90,7 +87,7 @@
           } @empty {
             @if (!loading()) {
               <tr hlmTr>
-                <td hlmTd colspan="6" class="text-muted-foreground h-24 text-center" i18n="@@noSessions">
+                <td hlmTd colspan="6" class="text-muted-foreground h-24 text-center">
                   暂无会话。
                 </td>
               </tr>
@@ -102,9 +99,9 @@
 
     <footer class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
       <p class="text-muted-foreground text-sm">
-        <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
+        <span>共 {{ total() }} 条</span>
         ·
-        <span i18n="@@paginationPage">第 {{ pageIndex() + 1 }} 页</span>
+        <span>第 {{ pageIndex() + 1 }} 页</span>
       </p>
       <div class="flex items-center gap-3">
         <hlm-select
@@ -129,7 +126,6 @@
                 size="sm"
                 [disabled]="pageIndex() === 0 || loading()"
                 (click)="changePage('previous')"
-                i18n="@@previousPage"
               >
                 上一页
               </button>
@@ -141,7 +137,6 @@
                 size="sm"
                 [disabled]="!nextToken() || loading()"
                 (click)="changePage('next')"
-                i18n="@@nextPage"
               >
                 下一页
               </button>

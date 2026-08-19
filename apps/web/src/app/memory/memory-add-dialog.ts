@@ -35,20 +35,20 @@ export interface AddMemoryResult {
   ],
   template: `
     <div hlmDialogHeader>
-      <h2 hlmDialogTitle i18n="@@addMemoryDialog">添加记忆</h2>
+      <h2 hlmDialogTitle>添加记忆</h2>
     </div>
 
     <div class="grid gap-4 py-2">
       <div hlmField>
         <label hlmFieldLabel for="memory-owner">
-          <span i18n="@@memoryOwner">归属者</span>
+          <span>归属者</span>
         </label>
         <input id="memory-owner" hlmInput [(ngModel)]="owner" placeholder="webui" />
       </div>
 
       <div hlmField>
         <label hlmFieldLabel for="memory-content">
-          <span i18n="@@memoryContent">内容</span>
+          <span>内容</span>
         </label>
         <textarea
           id="memory-content"
@@ -60,7 +60,7 @@ export interface AddMemoryResult {
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel for="memory-tags" i18n="@@memoryTagsCommaSeparated">
+        <label hlmFieldLabel for="memory-tags">
           标签（逗号分隔）
         </label>
         <input
@@ -72,7 +72,7 @@ export interface AddMemoryResult {
       </div>
 
       <div hlmField>
-        <label hlmFieldLabel i18n="@@memoryVisibility">可见性</label>
+        <label hlmFieldLabel>可见性</label>
         <hlm-select
           [value]="visibility"
           (valueChange)="setVisibility($event)"
@@ -90,14 +90,14 @@ export interface AddMemoryResult {
 
     <div hlmDialogFooter>
       <button hlmBtn variant="outline" (click)="close()">
-        <span i18n="@@cancel">取消</span>
+        <span>取消</span>
       </button>
       <button
         hlmBtn
         [disabled]="!content.trim()"
         (click)="save()"
       >
-        <span i18n="@@save">保存</span>
+        <span>保存</span>
       </button>
     </div>
   `,

@@ -7,7 +7,6 @@
     "build": "ng build web",
     "build:dev": "ng build web --configuration development",
     "serve": "ng serve web --configuration development",
-    "extract-i18n": "ng extract-i18n web",
     "lint": "ng lint"
   },
   "dependencies": {
@@ -16,7 +15,6 @@
     "@angular/compiler": "22.0.2",
     "@angular/core": "22.0.2",
     "@angular/forms": "22.0.2",
-    "@angular/localize": "22.0.2",
     "@angular/platform-browser": "22.0.2",
     "@angular/router": "22.0.2",
     "@bufbuild/protobuf": "2.12.0",

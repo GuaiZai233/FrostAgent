@@ -173,10 +173,10 @@ export class BackendSettingsComponent
 
   async deleteEnvVar(key: string): Promise<void> {
     const data: ConfirmDialogData = {
-      title: $localize`:@@deleteEnvTitle:删除环境变量`,
-      message: $localize`:@@deleteEnvMessage:确认删除 ${key}:INTERPOLATION: 吗？`,
-      cancelLabel: $localize`:@@cancel:取消`,
-      confirmLabel: $localize`:@@delete:删除`,
+      title: '删除环境变量',
+      message: `确认删除 ${key} 吗？`,
+      cancelLabel: '取消',
+      confirmLabel: '删除',
     };
     const confirmed = await this.confirmDialog.confirm(data);
 
@@ -191,7 +191,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      toast.success($localize`:@@envDeleted:环境变量已删除`, {
+      toast.success('环境变量已删除', {
         duration: 2500,
       });
       await this.refresh();
@@ -212,7 +212,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      toast.success($localize`:@@rawEnvSaved:.env 文件已更新`, {
+      toast.success('.env 文件已更新', {
         duration: 2500,
       });
       await this.refresh();
@@ -250,7 +250,7 @@ export class BackendSettingsComponent
     isSecret: boolean,
   ): Promise<void> {
     if (!key) {
-      this.error.set($localize`:@@keyRequired:Key 不能为空`);
+      this.error.set('Key 不能为空');
       return;
     }
 
@@ -267,7 +267,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      toast.success($localize`:@@envSaved:环境变量已保存`, {
+      toast.success('环境变量已保存', {
         duration: 2500,
       });
       await this.refresh();
@@ -289,7 +289,7 @@ export class BackendSettingsComponent
         this.error.set(response.error);
         return;
       }
-      toast.success($localize`:@@groupReplyToggled:群聊回复设置已更新`, {
+      toast.success('群聊回复设置已更新', {
         duration: 2500,
       });
       await this.refresh();

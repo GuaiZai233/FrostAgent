@@ -43,12 +43,6 @@ make vet          # Go 静态分析
 make ci           # 完整检查 (build + test + lint + vet)
 ```
 
-## 国际化
-
-```bash
-make extract-i18n
-```
-
 ## 清理
 
 ```bash

@@ -16,7 +16,7 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 .PHONY: build build-api build-web build-web-dev
 .PHONY: dev serve-api serve-agent serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
-.PHONY: lint test test-api vet extract-i18n clean ci
+.PHONY: lint test test-api vet clean ci
 
 build: build-api
 
@@ -79,10 +79,7 @@ test-api: build-web proto-generate-go
 vet: build-web proto-generate-go
 	$(GO) vet ./...
 
-extract-i18n:
-	$(NG) extract-i18n web
-
 clean:
-	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.angular/cache ./.nx ./.tools
+	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.angular/cache ./apps/web/.angular ./.nx ./.tools
 
 ci: build test lint vet

@@ -95,10 +95,10 @@ export class SessionsComponent implements OnInit {
 
   async deleteSummary(session: SessionInfo): Promise<void> {
     const data: ConfirmDialogData = {
-      title: $localize`:@@deleteGroupSummaryTitle:删除群聊总结`,
-      message: $localize`:@@deleteGroupSummaryMessage:确认删除 ${session.sessionId}:INTERPOLATION: 的群聊总结吗？内存总结和待压缩上下文也会清空。`,
-      cancelLabel: $localize`:@@cancel:取消`,
-      confirmLabel: $localize`:@@delete:删除`,
+      title: '删除群聊总结',
+      message: `确认删除 ${session.sessionId} 的群聊总结吗？内存总结和待压缩上下文也会清空。`,
+      cancelLabel: '取消',
+      confirmLabel: '删除',
     };
     if (!(await this.confirmDialog.confirm(data))) {
       return;
@@ -108,12 +108,12 @@ export class SessionsComponent implements OnInit {
     try {
       const response = await this.api.deleteGroupSummary(session.sessionId);
       if (!response.success) {
-        const message = response.error || $localize`:@@deleteFailed:删除失败`;
+        const message = response.error || '删除失败';
         this.error.set(message);
         toast.error(message, { duration: 3000 });
         return;
       }
-      toast.success($localize`:@@groupSummaryDeleted:群聊总结已删除`, {
+      toast.success('群聊总结已删除', {
         duration: 2500,
       });
       await this.refresh();

@@ -16,14 +16,6 @@
       "root": "",
       "sourceRoot": "src",
       "prefix": "app",
-      "i18n": {
-        "sourceLocale": "zh-Hans",
-        "locales": {
-          "en-US": {
-            "translation": "src/locale/messages.en.xlf"
-          }
-        }
-      },
       "architect": {
         "build": {
           "builder": "@angular/build:application",
@@ -33,7 +25,6 @@
               "browser": ""
             },
             "browser": "src/main.ts",
-            "polyfills": ["@angular/localize/init"],
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
             "assets": [
@@ -49,7 +40,6 @@
           },
           "configurations": {
             "production": {
-              "localize": true,
               "budgets": [
                 {
                   "type": "initial",
@@ -65,7 +55,6 @@
               "outputHashing": "all"
             },
             "development": {
-              "localize": true,
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true
@@ -89,15 +78,6 @@
             }
           },
           "defaultConfiguration": "development"
-        },
-        "extract-i18n": {
-          "builder": "@angular/build:extract-i18n",
-          "options": {
-            "buildTarget": "web:build",
-            "format": "xlf",
-            "outputPath": "src/locale",
-            "outFile": "messages.xlf"
-          }
         }
       }
     }

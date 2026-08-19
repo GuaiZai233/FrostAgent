@@ -2,7 +2,7 @@
   @if (loading()) {
     <div class="text-muted-foreground flex items-center gap-2 text-sm">
       <hlm-spinner />
-      <span i18n="@@loading">加载中</span>
+      <span>加载中</span>
     </div>
   }
 
@@ -43,7 +43,7 @@
         <div hlmCardContent class="flex items-center gap-3">
           <app-icon class="text-primary">mark_chat_read</app-icon>
           <div>
-            <p class="text-muted-foreground text-xs" i18n="@@totalMessages">
+            <p class="text-muted-foreground text-xs">
               处理消息
             </p>
             <p class="text-xl font-semibold">
@@ -56,7 +56,7 @@
         <div hlmCardContent class="flex items-center gap-3">
           <app-icon class="text-primary">forum</app-icon>
           <div>
-            <p class="text-muted-foreground text-xs" i18n="@@activeSessions">
+            <p class="text-muted-foreground text-xs">
               活跃会话
             </p>
             <p class="text-xl font-semibold">
@@ -69,7 +69,7 @@
         <div hlmCardContent class="flex items-center gap-3">
           <app-icon class="text-primary">psychology</app-icon>
           <div class="min-w-0">
-            <p class="text-muted-foreground text-xs" i18n="@@currentModel">
+            <p class="text-muted-foreground text-xs">
               当前模型
             </p>
             <p class="truncate text-xl font-semibold">
@@ -81,7 +81,7 @@
     </section>
 
     <section class="grid gap-4">
-      <h2 class="text-xl font-semibold" i18n="@@loadedTools">
+      <h2 class="text-xl font-semibold">
         我可以使用 {{ data.tools.length }} 个工具
       </h2>
       <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -99,7 +99,7 @@
           </article>
         } @empty {
           <article hlmCard>
-            <div hlmCardContent class="text-muted-foreground" i18n="@@noTools">
+            <div hlmCardContent class="text-muted-foreground">
               暂无已注册工具。
             </div>
           </article>

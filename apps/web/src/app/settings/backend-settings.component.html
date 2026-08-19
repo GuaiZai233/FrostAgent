@@ -9,7 +9,7 @@
     >
       <app-icon>arrow_back</app-icon>
     </a>
-    <h1 class="text-2xl font-semibold" i18n="@@backendSettingsTitle">
+    <h1 class="text-2xl font-semibold">
       后端设置
     </h1>
     <button
@@ -27,7 +27,7 @@
   @if (loading() || saving()) {
     <div class="text-muted-foreground flex items-center gap-2 text-sm">
       <hlm-spinner />
-      <span i18n="@@loading">加载中</span>
+      <span>加载中</span>
     </div>
   }
 
@@ -39,33 +39,33 @@
 
   <div hlmTabs tab="env">
     <div hlmTabsList>
-      <button hlmTabsTrigger="env" i18n="@@envVarsTab">环境变量</button>
-      <button hlmTabsTrigger="raw" i18n="@@rawEnvTab">原始 .env</button>
+      <button hlmTabsTrigger="env">环境变量</button>
+      <button hlmTabsTrigger="raw">原始 .env</button>
     </div>
 
     <section hlmTabsContent="env">
       <article hlmCard class="mt-4">
         <div hlmCardHeader>
-          <h3 hlmCardTitle i18n="@@groupReplyCard">群聊回复行为</h3>
-          <p hlmCardDescription i18n="@@groupReplyCardDesc">开关即时生效，无需重启</p>
+          <h3 hlmCardTitle>群聊回复行为</h3>
+          <p hlmCardDescription>开关即时生效，无需重启</p>
         </div>
         <div hlmCardContent class="grid gap-3">
           <label class="flex cursor-pointer items-center justify-between gap-4">
-            <span class="text-sm" i18n="@@groupReplyOnMention">群聊被@/提及时触发对话</span>
+            <span class="text-sm">群聊被@/提及时触发对话</span>
             <hlm-checkbox
               [checked]="groupReplyOnMention()"
               (checkedChange)="onToggle('GROUP_REPLY_ON_MENTION', $event)"
             />
           </label>
           <label class="flex cursor-pointer items-center justify-between gap-4">
-            <span class="text-sm" i18n="@@enableAtOther">回复时@对方</span>
+            <span class="text-sm">回复时@对方</span>
             <hlm-checkbox
               [checked]="enableAtOther()"
               (checkedChange)="onToggle('ENABLE_AT_IN_GROUP_MSG', $event)"
             />
           </label>
           <label class="flex cursor-pointer items-center justify-between gap-4">
-            <span class="text-sm" i18n="@@enableReplyOther">回复时引用原消息</span>
+            <span class="text-sm">回复时引用原消息</span>
             <hlm-checkbox
               [checked]="enableReplyOther()"
               (checkedChange)="onToggle('ENABLE_REPLY_IN_GROUP_MSG', $event)"
@@ -78,9 +78,9 @@
           <table hlmTable>
             <thead hlmTHead>
               <tr hlmTr>
-                <th hlmTh i18n="@@key">Key</th>
-                <th hlmTh i18n="@@value">Value</th>
-                <th hlmTh class="w-36 text-end" i18n="@@actions">操作</th>
+                <th hlmTh>Key</th>
+                <th hlmTh>Value</th>
+                <th hlmTh class="w-36 text-end">操作</th>
               </tr>
             </thead>
             <tbody hlmTBody>
@@ -91,7 +91,6 @@
                       @if (env.isSecret) {
                         <app-icon
                           class="text-muted-foreground"
-                          i18n-title="@@isSecret"
                           title="这是敏感信息"
                         >
                           lock
@@ -105,7 +104,7 @@
                       <div class="grid min-w-64 gap-2 py-2">
                         <div hlmField>
                           <label hlmFieldLabel [for]="'env-edit-' + env.key">
-                            <span i18n="@@value">Value</span>
+                            <span>Value</span>
                           </label>
                           <input
                             hlmInput
@@ -120,7 +119,7 @@
                             [checked]="editingIsSecret()"
                             (checkedChange)="editingIsSecret.set($event)"
                           />
-                          <span i18n="@@isSecret">这是敏感信息</span>
+                          <span>这是敏感信息</span>
                         </label>
                       </div>
                     } @else {
@@ -188,7 +187,7 @@
               } @empty {
                 <tr hlmTr>
                   <td hlmTd colspan="3" class="text-muted-foreground h-24 text-center">
-                    <span i18n="@@noEnvVars">暂无环境变量。</span>
+                    <span>暂无环境变量。</span>
                   </td>
                 </tr>
               }
@@ -208,7 +207,7 @@
         <div hlmCardFooter>
           <button hlmBtn (click)="saveRawEnvFile()">
             <app-icon>save</app-icon>
-            <span i18n="@@saveRawEnv">保存 .env</span>
+            <span>保存 .env</span>
           </button>
         </div>
       </article>

@@ -1,10 +1,10 @@
 <section class="mx-auto grid max-w-[90rem] gap-4 p-4 sm:p-6">
   <header class="flex flex-wrap items-center justify-between gap-3">
-    <h1 class="text-2xl font-semibold" i18n="@@memoryManagement">记忆管理</h1>
+    <h1 class="text-2xl font-semibold">记忆管理</h1>
     <div class="flex flex-wrap items-end gap-2">
       <div hlmField class="w-60">
         <label hlmFieldLabel for="memory-search" class="sr-only">
-          <span i18n="@@search">搜索</span>
+          <span>搜索</span>
         </label>
         <div class="flex gap-1">
           <input
@@ -14,7 +14,6 @@
             (ngModelChange)="searchQuery.set($event)"
             (keyup.enter)="search()"
             placeholder="搜索"
-            i18n-placeholder="@@search"
           />
           <button
             hlmBtn
@@ -29,7 +28,7 @@
       </div>
       <button hlmBtn variant="outline" (click)="openAddDialog()">
         <app-icon>add</app-icon>
-        <span i18n="@@addMemory">添加</span>
+        <span>添加</span>
       </button>
       <button
         hlmBtn
@@ -45,15 +44,15 @@
         } @else {
           <app-icon>psychology</app-icon>
         }
-        <span i18n="@@reflectMemories">反思</span>
+        <span>反思</span>
       </button>
       <button hlmBtn variant="outline" (click)="exportMemories()">
         <app-icon>file_download</app-icon>
-        <span i18n="@@export">导出</span>
+        <span>导出</span>
       </button>
       <button hlmBtn variant="outline" (click)="importInput.click()">
         <app-icon>file_upload</app-icon>
-        <span i18n="@@import">导入</span>
+        <span>导入</span>
       </button>
       <input
         #importInput
@@ -77,7 +76,7 @@
   @if (loading() && memories().length === 0) {
     <div class="text-muted-foreground flex items-center gap-2 text-sm">
       <hlm-spinner />
-      <span i18n="@@loading">加载中</span>
+      <span>加载中</span>
     </div>
   }
 
@@ -95,7 +94,7 @@
       <article hlmCard size="sm">
         <div hlmCardContent class="text-center">
           <p class="text-2xl font-semibold">{{ stats.total }}</p>
-          <p class="text-muted-foreground text-xs" i18n="@@totalMemories">
+          <p class="text-muted-foreground text-xs">
             总记忆数
           </p>
         </div>
@@ -103,7 +102,7 @@
       <article hlmCard size="sm">
         <div hlmCardContent class="text-center">
           <p class="text-2xl font-semibold">{{ stats.publicCount }}</p>
-          <p class="text-muted-foreground text-xs" i18n="@@publicMemories">
+          <p class="text-muted-foreground text-xs">
             公开
           </p>
         </div>
@@ -111,7 +110,7 @@
       <article hlmCard size="sm">
         <div hlmCardContent class="text-center">
           <p class="text-2xl font-semibold">{{ stats.privateCount }}</p>
-          <p class="text-muted-foreground text-xs" i18n="@@privateMemories">
+          <p class="text-muted-foreground text-xs">
             私有
           </p>
         </div>
@@ -154,7 +153,7 @@
       <div
         class="bg-muted ms-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm"
       >
-        <span i18n="@@selectedCount"> 已选择 {{ selectedIds().size }} 条 </span>
+        <span> 已选择 {{ selectedIds().size }} 条 </span>
         <button
           hlmBtn
           variant="destructive"
@@ -162,7 +161,7 @@
           (click)="deleteSelected()"
         >
           <app-icon>delete</app-icon>
-          <span i18n="@@deleteSelected">删除所选</span>
+          <span>删除所选</span>
         </button>
       </div>
     }
@@ -182,14 +181,14 @@
                   (checkedChange)="toggleSelectAll()"
                 />
               </th>
-              <th hlmTh i18n="@@memorySource">来源</th>
-              <th hlmTh i18n="@@memoryOwner">归属者</th>
-              <th hlmTh i18n="@@memoryContent">内容</th>
-              <th hlmTh i18n="@@memoryTags">标签</th>
-              <th hlmTh i18n="@@memoryVisibility">可见性</th>
-              <th hlmTh i18n="@@memoryImportance">重要度</th>
-              <th hlmTh i18n="@@memoryCreatedAt">创建时间</th>
-              <th hlmTh class="text-end" i18n="@@memoryActions">操作</th>
+              <th hlmTh>来源</th>
+              <th hlmTh>归属者</th>
+              <th hlmTh>内容</th>
+              <th hlmTh>标签</th>
+              <th hlmTh>可见性</th>
+              <th hlmTh>重要度</th>
+              <th hlmTh>创建时间</th>
+              <th hlmTh class="text-end">操作</th>
             </tr>
           </thead>
           <tbody hlmTBody>
@@ -296,9 +295,9 @@
         class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3"
       >
         <p class="text-muted-foreground text-sm">
-          <span i18n="@@paginationTotal">共 {{ total() }} 条</span>
+          <span>共 {{ total() }} 条</span>
           ·
-          <span i18n="@@paginationPage">第 {{ pageIndex() + 1 }} 页</span>
+          <span>第 {{ pageIndex() + 1 }} 页</span>
         </p>
         <div class="flex items-center gap-3">
           <hlm-select
@@ -323,7 +322,6 @@
                   size="sm"
                   [disabled]="pageIndex() === 0 || loading()"
                   (click)="changePage('previous')"
-                  i18n="@@previousPage"
                 >
                   上一页
                 </button>
@@ -335,7 +333,6 @@
                   size="sm"
                   [disabled]="!nextToken() || loading()"
                   (click)="changePage('next')"
-                  i18n="@@nextPage"
                 >
                   下一页
                 </button>
@@ -350,7 +347,6 @@
       <div
         hlmCardContent
         class="text-muted-foreground text-center"
-        i18n="@@noMemories"
       >
         暂无记忆记录。
       </div>
