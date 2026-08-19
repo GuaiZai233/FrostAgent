@@ -5,26 +5,12 @@ import (
 	"context"
 )
 
-// BillingRunState tracks request-level billing context and accumulates consumption across tool loop iterations.
-type BillingRunState struct {
-	Platform         string
-	ExternalID       string
-	DisplayName      string
-	TaskID           string
-	WelcomeGranted   bool
-	TotalBilledMinor int64
-	LastBalanceMinor int64
-	BillingActive    bool
-	IterationsBilled int
-}
-
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
 	Owner     string
 	OwnerType memory.OwnerType
 	SendHook  func(toolResultJSON string)
-	Billing   *BillingRunState
 }
 
 type runContextKey struct{}

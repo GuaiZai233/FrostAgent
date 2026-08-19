@@ -2,7 +2,6 @@ package main
 
 import (
 	"FrostAgent/internal/adapter/onebot"
-	"FrostAgent/internal/billing"
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
@@ -169,13 +168,6 @@ func init() {
 		executorMap[name] = tool
 	}
 
-	// Initialize billing system
-	billingCfg := billing.LoadConfigFromEnv()
-	billingClient, err := billing.InitBillingClient(billingCfg)
-	if err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("计费系统初始化失败: %v", err))
-	}
-
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
@@ -186,9 +178,6 @@ func init() {
 		SessionManager: sessionManager,
 		StartedAt:      time.Now(),
 		Version:        version,
-		// Billing components
-		BillingClient: billingClient,
-		BillingConfig: billingCfg,
 		// Memory components
 		MemoryReader:      reader,
 		MemoryWriter:      writer,

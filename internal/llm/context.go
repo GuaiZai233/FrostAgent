@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const DefaultMaxMessages = 50
+const DefaultMaxMessages = 20
 
 // TrimMessages 保留 system 消息，并裁剪最近 limit 条非 system 消息。
 func TrimMessages(messages []ChatMessage, limit int) []ChatMessage {
