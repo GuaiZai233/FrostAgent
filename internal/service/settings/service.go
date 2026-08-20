@@ -41,6 +41,10 @@ var knownEnvVars = map[string]envEntry{
 	"GROUP_COMPACT_MIN_INTERVAL": {"同群 running compact 最小触发间隔（如 30s）", false, true},
 	"MEMORY_EXTRACT_BATCH_MIN":   {"自动记忆提取的最小累计轮数", false, false},
 	"MEMORY_EXTRACT_BATCH_MAX":   {"自动记忆提取的最大累计轮数", false, false},
+	"ENABLE_ONEBOT_ADAPTER":      {"是否启用 OneBot WebSocket 适配器", false, true},
+	"ONEBOT_WS_PATH":             {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true},
+	"ENABLE_ASTRBOT_ADAPTER":     {"是否启用 AstrBot WebSocket 适配器", false, true},
+	"ASTRBOT_WS_PATH":            {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.

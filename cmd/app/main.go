@@ -260,18 +260,32 @@ func main() {
 	}()
 
 	// OneBot WebSocket 服务
-	onebotAdapter := onebot.NewAdapter(GlobalEngine)
-	if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
-		GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
+	if os.Getenv("ENABLE_ONEBOT_ADAPTER") != "false" {
+		onebotPath := os.Getenv("ONEBOT_WS_PATH")
+		if onebotPath == "" {
+			onebotPath = "/ws/frostagent"
+		}
+		onebotAdapter := onebot.NewAdapter(GlobalEngine)
+		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
+			GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
+		}
+		http.HandleFunc(onebotPath, onebotAdapter.Handler())
+		logs.Info(logs.WEBSOCKET, fmt.Sprintf("✓ OneBot WebSocket 适配器已挂载: %s", onebotPath))
 	}
-	http.HandleFunc("/ws/frostagent", onebotAdapter.Handler())
 
 	// AstrBot WebSocket 服务
-	astrbotAdapter := astrbot.NewAdapter(GlobalEngine)
-	if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
-		GlobalEngine.Dispatcher.RegisterAdapter(astrbotAdapter)
+	if os.Getenv("ENABLE_ASTRBOT_ADAPTER") != "false" {
+		astrbotPath := os.Getenv("ASTRBOT_WS_PATH")
+		if astrbotPath == "" {
+			astrbotPath = "/ws/astrbot"
+		}
+		astrbotAdapter := astrbot.NewAdapter(GlobalEngine)
+		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
+			GlobalEngine.Dispatcher.RegisterAdapter(astrbotAdapter)
+		}
+		http.HandleFunc(astrbotPath, astrbotAdapter.Handler())
+		logs.Info(logs.WEBSOCKET, fmt.Sprintf("✓ AstrBot WebSocket 适配器已挂载: %s", astrbotPath))
 	}
-	http.HandleFunc("/ws/astrbot", astrbotAdapter.Handler())
 
 	wsAddr := os.Getenv("WS_LISTEN_ADDR")
 	if wsAddr == "" {
