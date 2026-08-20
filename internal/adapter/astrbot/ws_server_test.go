@@ -139,7 +139,8 @@ func TestAstrBotGroupMessage(t *testing.T) {
 	}
 	defer conn.Close()
 
-	event := Event{
+	// 1. 测试未唤醒的群聊闲聊消息：应返回 noop 并不触发 LLM 回复
+	unwokenEvent := Event{
 		Type:        "event",
 		EventType:   "message",
 		MessageID:   "msg_grp_001",
@@ -147,9 +148,41 @@ func TestAstrBotGroupMessage(t *testing.T) {
 		SenderName:  "FoxMember",
 		GroupID:     "grp_456",
 		GroupName:   "FoxGroup",
-		Content:     "群聊测试消息",
+		Content:     "群聊闲聊消息",
 		Platform:    "astrbot",
 		MessageType: "group",
+		Timestamp:   time.Now().Unix(),
+	}
+	unwokenData, _ := json.Marshal(unwokenEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, unwokenData); err != nil {
+		t.Fatalf("发送未唤醒群聊事件失败: %v", err)
+	}
+
+	_, noopBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 noop 响应失败: %v", err)
+	}
+	var noopAction Action
+	if err := json.Unmarshal(noopBytes, &noopAction); err != nil {
+		t.Fatalf("解析 noop action 失败: %v", err)
+	}
+	if noopAction.Action != "noop" {
+		t.Errorf("未唤醒群聊期望 action=noop, 实际=%s", noopAction.Action)
+	}
+
+	// 2. 测试带唤醒标识 (IsWake/At/Mention) 的群聊消息：应正常回复
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_grp_002",
+		UserID:      "usr_123",
+		SenderName:  "FoxMember",
+		GroupID:     "grp_456",
+		GroupName:   "FoxGroup",
+		Content:     "霜降 你好呀",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
 		Timestamp:   time.Now().Unix(),
 	}
 	data, _ := json.Marshal(event)

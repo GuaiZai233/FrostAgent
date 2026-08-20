@@ -20,6 +20,8 @@ type Event struct {
 	Content     string            `json:"content,omitempty"`      // 文本内容
 	Messages    []string          `json:"messages,omitempty"`     // 连续上下文消息 (可选)
 	Attachments []core.Attachment `json:"attachments,omitempty"`  // 多媒体附件
+	IsWake      bool              `json:"is_wake,omitempty"`      // 是否触发唤醒 (At, 唤醒词, 引用等)
+	IsAt        bool              `json:"is_at,omitempty"`        // 是否 @ 了机器人
 	Timestamp   int64             `json:"timestamp,omitempty"`    // 时间戳 (秒)
 	Metadata    map[string]any    `json:"metadata,omitempty"`     // 扩展元数据
 }

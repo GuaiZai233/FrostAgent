@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -152,6 +153,65 @@ func formatGroupSpeakerMessage(event Event, text string) string {
 	return fmt.Sprintf("%s (%s): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
 }
 
+func isBotNameMentioned(text string) bool {
+	if text == "" {
+		return false
+	}
+	names := configuredBotNames()
+	for _, name := range names {
+		if strings.Contains(text, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func configuredBotNames() []string {
+	name, nameSet := os.LookupEnv("BOT_NAME")
+	if !nameSet {
+		name = "霜降狐"
+	}
+	aliases, aliasesSet := os.LookupEnv("BOT_ALIASES")
+	if !aliasesSet {
+		aliases = "霜降,FrostAgent"
+	}
+
+	values := append([]string{name}, strings.Split(aliases, ",")...)
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func shouldReply(event Event) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType == "group" {
+		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+			return false
+		}
+		if event.IsWake || event.IsAt {
+			return true
+		}
+		if isBotNameMentioned(event.Content) {
+			return true
+		}
+		return slices.ContainsFunc(event.Messages, isBotNameMentioned)
+	}
+	return true
+}
+
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn) {
 	if turn != nil {
 		turn.Wait()
@@ -168,6 +228,26 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 	platform := event.Platform
 	if platform == "" {
 		platform = "astrbot"
+	}
+
+	if !shouldReply(event) {
+		logs.Debug(
+			logs.WEBSOCKET,
+			fmt.Sprintf(
+				"AstrBot 忽略未唤醒群聊消息 (ID:%s Group:%s User:%s): %s",
+				event.MessageID,
+				event.GroupID,
+				event.UserID,
+				event.Content,
+			),
+		)
+		_ = conn.WriteJSON(Action{
+			Type:      "action",
+			Action:    "noop",
+			SessionID: event.SessionID,
+			Echo:      "reply_" + event.MessageID,
+		})
+		return
 	}
 
 	logs.Info(

@@ -189,6 +189,10 @@ class FrostAgentAdapter(Star):
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
 
+                # 如果收到 noop 动作，说明后端已将该群聊消息捕获进 compact 但无需回复，结束等待
+                if action.get("action") == "noop":
+                    break
+
                 response = action_to_astrbot_result(event, action)
                 if response is not None:
                     yield response
@@ -210,6 +214,7 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     message_type = "group" if group_id else "private"
     content = extract_message_text(event)
     attachments = extract_attachments(event)
+    is_wake, is_at = check_is_at_or_wake(event)
 
     msg_id = str(getattr(event, "message_id", "") or f"ast_{int(time.time() * 1000)}")
     platform = str(getattr(event, "platform", "astrbot") or "astrbot")
@@ -243,8 +248,34 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "group_name": group_name,
         "content": content,
         "attachments": attachments,
+        "is_wake": is_wake,
+        "is_at": is_at,
         "timestamp": int(time.time()),
     }
+
+
+def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
+    """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。"""
+    is_wake = bool(getattr(event, "is_wake", False) or getattr(event, "is_at_or_wake_command", False))
+    is_at = False
+
+    self_id = str(call_noargs(event, "get_self_id") or "")
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if isinstance(components, list):
+        for comp in components:
+            comp_type = type(comp).__name__.lower()
+            if comp_type == "at":
+                target_qq = str(first_attr(comp, "qq", "target_id", "user_id") or "")
+                if self_id and target_qq == self_id:
+                    is_at = True
+                    is_wake = True
+                elif target_qq == "all":
+                    is_wake = True
+            elif comp_type == "reply":
+                sender_id = str(first_attr(comp, "sender_id", "user_id") or "")
+                if self_id and sender_id == self_id:
+                    is_wake = True
+    return is_wake, is_at
 
 
 def extract_sender_id(event: AstrMessageEvent) -> str:
