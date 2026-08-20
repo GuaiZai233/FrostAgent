@@ -1,6 +1,7 @@
 package main
 
 import (
+	"FrostAgent/internal/adapter/astrbot"
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
@@ -264,6 +265,13 @@ func main() {
 		GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
 	}
 	http.HandleFunc("/ws/frostagent", onebotAdapter.Handler())
+
+	// AstrBot WebSocket 服务
+	astrbotAdapter := astrbot.NewAdapter(GlobalEngine)
+	if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
+		GlobalEngine.Dispatcher.RegisterAdapter(astrbotAdapter)
+	}
+	http.HandleFunc("/ws/astrbot", astrbotAdapter.Handler())
 
 	wsAddr := os.Getenv("WS_LISTEN_ADDR")
 	if wsAddr == "" {

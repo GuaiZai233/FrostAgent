@@ -30,3 +30,27 @@ func OwnerForGroup(groupID int64) (string, OwnerType) {
 	}
 	return fmt.Sprintf("group:%d", groupID), OwnerGroup
 }
+
+// OwnerForPlatformPrivate 生成带平台前缀的私聊 owner。
+// 当 platform 为空、"onebot" 或 "qq" 时保持与历史一致（即直接使用 userID 作为 owner）。
+func OwnerForPlatformPrivate(platform, userID string) (string, OwnerType) {
+	if userID == "" {
+		return "", OwnerUser
+	}
+	if platform == "" || platform == "onebot" || platform == "qq" {
+		return userID, OwnerUser
+	}
+	return fmt.Sprintf("%s:user:%s", platform, userID), OwnerUser
+}
+
+// OwnerForPlatformGroup 生成带平台前缀的群聊 owner。
+// 当 platform 为空、"onebot" 或 "qq" 时保持与历史一致（形如 "group:123456"）。
+func OwnerForPlatformGroup(platform, groupID string) (string, OwnerType) {
+	if groupID == "" {
+		return "", OwnerGroup
+	}
+	if platform == "" || platform == "onebot" || platform == "qq" {
+		return fmt.Sprintf("group:%s", groupID), OwnerGroup
+	}
+	return fmt.Sprintf("%s:group:%s", platform, groupID), OwnerGroup
+}
