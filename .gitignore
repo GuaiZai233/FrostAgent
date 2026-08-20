@@ -52,3 +52,8 @@ node_modules
 /data/brain.json
 /data/memory_catalog.json
 /data/group_summaries.json
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
