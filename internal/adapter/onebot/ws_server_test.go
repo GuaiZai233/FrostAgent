@@ -74,7 +74,11 @@ func newTestEngine(provider core.LLMProvider) *llm.Engine {
 // startWSTestServer 启动一个带 WebSocket handler 的测试服务器
 func startWSTestServer(engine *llm.Engine) (*httptest.Server, string) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/frostagent", HandleWS(engine))
+	adapter := NewAdapter(engine)
+	if engine != nil && engine.Dispatcher != nil {
+		engine.Dispatcher.RegisterAdapter(adapter)
+	}
+	mux.HandleFunc("/ws/frostagent", adapter.Handler())
 	srv := httptest.NewServer(mux)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/frostagent"
 	return srv, wsURL

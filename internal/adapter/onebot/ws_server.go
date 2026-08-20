@@ -110,6 +110,7 @@ func (c *wsConnection) Close() error {
 	return c.conn.Close()
 }
 
+// Deprecated: HandleWS 是遗留的 WebSocket 入口。请改用 NewAdapter(engine).Handler()。
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
 	adapter := NewAdapter(engine)
 	if engine != nil && engine.Dispatcher != nil {
