@@ -217,7 +217,7 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     is_wake, is_at = check_is_at_or_wake(event)
 
     msg_id = str(getattr(event, "message_id", "") or f"ast_{int(time.time() * 1000)}")
-    platform = str(getattr(event, "platform", "astrbot") or "astrbot")
+    platform = _extract_platform_name(event)
 
     sender_name = ""
     sender_card = ""
@@ -252,6 +252,20 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "is_at": is_at,
         "timestamp": int(time.time()),
     }
+
+
+def _extract_platform_name(event: AstrMessageEvent) -> str:
+    """从 PlatformMetadata 对象或字符串中提取纯净的平台名称。"""
+    obj = getattr(event, "platform", None)
+    if obj is None:
+        return "astrbot"
+    # PlatformMetadata 对象，优先取 .name，其次 .id
+    name = getattr(obj, "name", None) or getattr(obj, "id", None)
+    if name:
+        return str(name)
+    # 兜底：如果已经是字符串且长度合理就直接用，否则截断
+    raw = str(obj)
+    return raw[:32] if raw else "astrbot"
 
 
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
