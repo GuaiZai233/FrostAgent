@@ -25,31 +25,43 @@ type AttachmentType string
 const (
 	AttachmentTypeImage AttachmentType = "image"
 	AttachmentTypeFile  AttachmentType = "file"
+	AttachmentTypeAudio AttachmentType = "audio"
+	AttachmentTypeVideo AttachmentType = "video"
 )
 
 // Attachment 消息附件（内容/URL/MIME）
 type Attachment struct {
-	Type     AttachmentType
-	Content  []byte
-	MimeType string
-	URL      string
+	Type     AttachmentType `json:"type"`
+	Content  []byte         `json:"content,omitempty"`
+	MimeType string         `json:"mime_type,omitempty"`
+	URL      string         `json:"url,omitempty"`
+	Name     string         `json:"name,omitempty"`
 }
 
-// IncomingMessage 平台上游入站消息（含会话、用户、平台、附件等元数据）。从任何平台流进 core 层的一条消息,是 AgentService.Handle() 的输入。
+// IncomingMessage 平台上游入站消息（含会话、用户、平台、附件等元数据）。
 type IncomingMessage struct {
-	ID          string
-	SessionID   string
-	UserID      string
-	Content     string
-	Platform    string
-	CreatedAt   time.Time
-	Metadata    map[string]any
-	Attachments []Attachment
+	ID          string         `json:"id"`
+	SessionID   string         `json:"session_id"`
+	UserID      string         `json:"user_id"`
+	SenderName  string         `json:"sender_name,omitempty"`
+	SenderCard  string         `json:"sender_card,omitempty"`
+	Content     string         `json:"content"`
+	Platform    string         `json:"platform"`     // "qq", "telegram", "discord", "astrbot", etc.
+	MessageType string         `json:"message_type"` // "group" | "private"
+	GroupID     string         `json:"group_id,omitempty"`
+	GroupName   string         `json:"group_name,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	Attachments []Attachment   `json:"attachments,omitempty"`
+	RawMessage  any            `json:"raw_message,omitempty"`
 }
 
 // OutgoingMessage 送回平台的出站消息
 type OutgoingMessage struct {
-	Content     string
-	Attachments []Attachment
-	Metadata    map[string]any
+	TargetID    string         `json:"target_id"`    // 目标 group_id 或 user_id
+	MessageType string         `json:"message_type"` // "group" | "private"
+	Platform    string         `json:"platform"`
+	Content     string         `json:"content"`
+	Attachments []Attachment   `json:"attachments,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }

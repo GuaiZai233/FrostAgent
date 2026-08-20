@@ -3,6 +3,7 @@ package main
 import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/billing"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
@@ -176,6 +177,8 @@ func init() {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("计费系统初始化失败: %v", err))
 	}
 
+	dispatcher := core.NewDefaultDispatcher()
+
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
@@ -184,6 +187,7 @@ func init() {
 		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
 		ModelName:      os.Getenv("MODEL_NAME"),
 		SessionManager: sessionManager,
+		Dispatcher:     dispatcher,
 		StartedAt:      time.Now(),
 		Version:        version,
 		// Billing components
@@ -254,8 +258,12 @@ func main() {
 		}
 	}()
 
-	// OneBot WebSocket 服务（保持不变）
-	http.HandleFunc("/ws/frostagent", onebot.HandleWS(GlobalEngine))
+	// OneBot WebSocket 服务
+	onebotAdapter := onebot.NewAdapter(GlobalEngine)
+	if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
+		GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
+	}
+	http.HandleFunc("/ws/frostagent", onebotAdapter.Handler())
 
 	wsAddr := os.Getenv("WS_LISTEN_ADDR")
 	if wsAddr == "" {
