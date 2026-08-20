@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,6 +104,51 @@ func TestClient_ReserveLLM(t *testing.T) {
 
 	if res.ReservationID != "res-001" || res.Decision != DecisionReserved || res.ReservedMinor != 500 {
 		t.Errorf("unexpected reservation result: %+v", res)
+	}
+}
+
+func TestClient_ReserveLLM_FallbackIdempotencyKey(t *testing.T) {
+	var capturedKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedKey = r.Header.Get("Idempotency-Key")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": LLMReservationResult{
+				ReservationID: "res-002",
+				Decision:      DecisionReserved,
+				Status:        StatusReserved,
+				ReservedMinor: 100,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-token", 2*time.Second)
+	// 1. When IdempotencyKey is empty but TaskID is present
+	_, err := client.ReserveLLM(context.Background(), LLMReserveRequest{
+		Platform:    "astrbot",
+		ExternalID:  "u-999",
+		TaskID:      "task-abc",
+		AmountMinor: 100,
+	})
+	if err != nil {
+		t.Fatalf("reserve failed: %v", err)
+	}
+	if len(capturedKey) < 8 || !strings.HasPrefix(capturedKey, "res_astrbot_task-abc_") {
+		t.Errorf("expected auto-generated key starting with 'res_astrbot_task-abc_', got %q", capturedKey)
+	}
+
+	// 2. When IdempotencyKey and TaskID are both empty
+	_, err = client.ReserveLLM(context.Background(), LLMReserveRequest{
+		Platform:    "",
+		ExternalID:  "123456",
+		AmountMinor: 100,
+	})
+	if err != nil {
+		t.Fatalf("reserve failed: %v", err)
+	}
+	if len(capturedKey) < 8 || !strings.HasPrefix(capturedKey, "res_qq_123456_") {
+		t.Errorf("expected auto-generated key starting with 'res_qq_123456_', got %q", capturedKey)
 	}
 }
 
