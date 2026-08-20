@@ -164,10 +164,18 @@ func (c *Client) ReserveLLM(ctx context.Context, req LLMReserveRequest) (*LLMRes
 	if req.Platform == "" {
 		req.Platform = "qq"
 	}
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if idempotencyKey == "" {
+		if req.TaskID != "" {
+			idempotencyKey = fmt.Sprintf("res_%s_%s_%d", req.Platform, req.TaskID, time.Now().UnixNano())
+		} else {
+			idempotencyKey = fmt.Sprintf("res_%s_%s_%d", req.Platform, req.ExternalID, time.Now().UnixNano())
+		}
+	}
 	var resp struct {
 		Data LLMReservationResult `json:"data"`
 	}
-	if err := c.post(ctx, "/v1/billing/llm/reservations", req, req.IdempotencyKey, &resp); err != nil {
+	if err := c.post(ctx, "/v1/billing/llm/reservations", req, idempotencyKey, &resp); err != nil {
 		return nil, err
 	}
 	return &resp.Data, nil
