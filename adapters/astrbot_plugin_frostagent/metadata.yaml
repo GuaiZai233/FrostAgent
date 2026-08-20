@@ -1,0 +1,5 @@
+name: frostagent_adapter
+desc: FrostAgent 智能体核心适配器插件，通过双向 WebSocket 连接将 AstrBot 接入 FrostAgent。
+version: 0.1.0
+author: frostfallx
+repo: https://github.com/GuaiZai233/FrostAgent

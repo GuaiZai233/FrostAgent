@@ -1,0 +1,22 @@
+{
+    "ws_url": {
+        "description": "FrostAgent WebSocket 地址 (例如 ws://127.0.0.1:1234/ws/astrbot)",
+        "type": "string",
+        "default": "ws://127.0.0.1:1234/ws/astrbot"
+    },
+    "forward_all_group_messages": {
+        "description": "是否将所有群消息发送给 FrostAgent (用于群聊无感总结与记忆反思)",
+        "type": "bool",
+        "default": true
+    },
+    "heartbeat_interval": {
+        "description": "心跳保活间隔 (秒)",
+        "type": "int",
+        "default": 30
+    },
+    "reconnect_interval": {
+        "description": "连接断开后重试重连间隔 (秒)",
+        "type": "int",
+        "default": 5
+    }
+}
