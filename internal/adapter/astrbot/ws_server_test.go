@@ -341,3 +341,98 @@ func TestAstrBotDispatcherSend(t *testing.T) {
 		t.Errorf("期望内容不符: %s", action.Content)
 	}
 }
+
+func TestAstrBotGroupCompactAndMemoryIntegration(t *testing.T) {
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "我是霜降，群聊总结与记忆测试正常！",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 发送群聊闲聊消息（无唤醒）
+	chatMsg := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_compact_001",
+		UserID:      "usr_alice",
+		SenderName:  "Alice",
+		GroupID:     "group_fox_99",
+		GroupName:   "FoxDen",
+		Content:     "今天天气真不错呀",
+		Platform:    "astrbot",
+		MessageType: "group",
+		Timestamp:   time.Now().Unix(),
+	}
+	chatData, _ := json.Marshal(chatMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, chatData); err != nil {
+		t.Fatalf("发送闲聊消息失败: %v", err)
+	}
+
+	// 接收 noop
+	_, noopBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 noop 失败: %v", err)
+	}
+	var noopAction Action
+	_ = json.Unmarshal(noopBytes, &noopAction)
+	if noopAction.Action != "noop" {
+		t.Errorf("期望 action=noop, 实际=%s", noopAction.Action)
+	}
+
+	// 验证群聊 running compact buffer 已正确记录
+	sess := engine.SessionManager.GetOrCreate("astrbot:group:group_fox_99")
+	if sess == nil {
+		t.Fatalf("期望创建 session astrbot:group:group_fox_99")
+	}
+
+	// 2. 发送唤醒对话消息
+	wakeMsg := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_wake_002",
+		UserID:      "usr_bob",
+		SenderName:  "Bob",
+		GroupID:     "group_fox_99",
+		GroupName:   "FoxDen",
+		Content:     "霜降 你好呀",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	wakeData, _ := json.Marshal(wakeMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeData); err != nil {
+		t.Fatalf("发送唤醒消息失败: %v", err)
+	}
+
+	// 接收回复
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var respAction Action
+	_ = json.Unmarshal(respBytes, &respAction)
+	if respAction.Content != "我是霜降，群聊总结与记忆测试正常！" {
+		t.Errorf("回复内容不符: %s", respAction.Content)
+	}
+
+	// 验证会话历史中已包含该轮对话
+	history := sess.Snapshot()
+	if len(history) < 2 {
+		t.Errorf("期望会话历史至少 2 条消息，实际=%d", len(history))
+	}
+}
