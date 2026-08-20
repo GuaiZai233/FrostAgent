@@ -42,7 +42,7 @@ class FrostAgentWSClient:
     def __init__(self, settings: Settings, context: Context):
         self.settings = settings
         self.context = context
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: Optional[Any] = None
         self._running = False
         self._worker_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
