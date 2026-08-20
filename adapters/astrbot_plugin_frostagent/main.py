@@ -36,6 +36,22 @@ def load_settings(config: dict = None) -> Settings:
     )
 
 
+def is_ws_open(ws: Any) -> bool:
+    """兼容不同版本 websockets 的连接开启状态检查。"""
+    if ws is None:
+        return False
+    if hasattr(ws, "state"):
+        try:
+            return ws.state.name == "OPEN"
+        except Exception:
+            pass
+    if hasattr(ws, "open"):
+        return bool(ws.open)
+    if hasattr(ws, "closed"):
+        return not bool(ws.closed)
+    return True
+
+
 class FrostAgentWSClient:
     """FrostAgent WebSocket 双向通信客户端，支持自动重连、心跳维持及消息分发。"""
 
@@ -87,7 +103,7 @@ class FrostAgentWSClient:
     async def _heartbeat_loop(self) -> None:
         while self._running:
             await asyncio.sleep(self.settings.heartbeat_interval)
-            if self.ws and not self.ws.closed:
+            if is_ws_open(self.ws):
                 try:
                     heartbeat_payload = {
                         "type": "heartbeat",
@@ -98,7 +114,7 @@ class FrostAgentWSClient:
                     logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
 
     async def send_event(self, event_data: dict[str, Any]) -> None:
-        if self.ws and not self.ws.closed:
+        if is_ws_open(self.ws):
             await self.ws.send(json.dumps(event_data))
         else:
             logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
