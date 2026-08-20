@@ -377,14 +377,26 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				amountMinor = 1
 			}
 
-			callID := fmt.Sprintf("call_%s_%d", runCtx.Billing.TaskID, i)
-			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", runCtx.Billing.Platform, runCtx.Billing.TaskID, i)
+			platform := strings.TrimSpace(runCtx.Billing.Platform)
+			if platform == "" {
+				platform = "qq"
+			}
+			taskID := strings.TrimSpace(runCtx.Billing.TaskID)
+			if taskID == "" {
+				if runCtx.Billing.ExternalID != "" {
+					taskID = fmt.Sprintf("%s_%s_%d", platform, runCtx.Billing.ExternalID, time.Now().UnixNano())
+				} else {
+					taskID = fmt.Sprintf("%s_anon_%d", platform, time.Now().UnixNano())
+				}
+			}
+			callID := fmt.Sprintf("call_%s_%d", taskID, i)
+			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", platform, taskID, i)
 
 			reserveReq := billing.LLMReserveRequest{
-				Platform:       runCtx.Billing.Platform,
+				Platform:       platform,
 				ExternalID:     runCtx.Billing.ExternalID,
 				DisplayName:    runCtx.Billing.DisplayName,
-				TaskID:         runCtx.Billing.TaskID,
+				TaskID:         taskID,
 				CallID:         callID,
 				AmountMinor:    amountMinor,
 				IdempotencyKey: idempotencyKey,
