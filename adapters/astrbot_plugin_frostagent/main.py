@@ -255,8 +255,14 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
 
 
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
-    """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。"""
-    is_wake = bool(getattr(event, "is_wake", False) or getattr(event, "is_at_or_wake_command", False))
+    """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。
+
+    注意：不读取 event.is_wake，因为 AstrBot 的 WakingCheckStage 会在
+    handler filter 匹配时将其置为 True（我们注册了 EventMessageType.ALL，
+    导致所有消息的 is_wake 均为 True）。仅使用 is_at_or_wake_command，
+    它只在真正的 @机器人、唤醒词前缀或私聊时为 True。
+    """
+    is_wake = bool(getattr(event, "is_at_or_wake_command", False))
     is_at = False
 
     self_id = str(call_noargs(event, "get_self_id") or "")
