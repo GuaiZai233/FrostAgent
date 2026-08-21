@@ -18,6 +18,7 @@ import {
   PageTokenStack,
   formatDateTime,
   formatPlatform,
+  isGroupSession,
 } from '../shared/dashboard-utils';
 import { SessionSummaryDialogComponent } from './session-summary-dialog.component';
 
@@ -84,6 +85,10 @@ export class SessionsComponent implements OnInit {
 
   formatPlatform(value: string): string {
     return formatPlatform(value);
+  }
+
+  isGroupSession(session: SessionInfo): boolean {
+    return isGroupSession(session);
   }
 
   openSummary(session: SessionInfo): void {

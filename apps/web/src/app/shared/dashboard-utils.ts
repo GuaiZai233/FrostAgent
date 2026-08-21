@@ -84,9 +84,38 @@ export function formatPlatform(platform: string): string {
       return '私聊';
     case 'unknown':
       return '未知';
+    case 'onebot':
+      return 'OneBot';
+    case 'astrbot':
+      return 'AstrBot';
+    case 'aiocqhttp':
+      return 'aiocqhttp';
+    case 'telegram':
+      return 'Telegram';
+    case 'discord':
+      return 'Discord';
+    case 'qq':
+      return 'QQ';
     default:
       return platform;
   }
+}
+
+export function isGroupSession(
+  session: { sessionId?: string; platform?: string } | string | null | undefined,
+): boolean {
+  if (!session) {
+    return false;
+  }
+  if (typeof session === 'string') {
+    const s = session.toLowerCase();
+    return s.startsWith('group:') || s.includes(':group:');
+  }
+  if (session.platform?.toLowerCase() === 'group') {
+    return true;
+  }
+  const id = (session.sessionId ?? '').toLowerCase();
+  return id.startsWith('group:') || id.includes(':group:');
 }
 
 export function formatLogLevel(level: LogLevel): string {

@@ -160,7 +160,7 @@ func (s *Service) GetSessions(
 				viewsByID[record.SessionID] = sessionView{
 					info: &v1.SessionInfo{
 						SessionId:    record.SessionID,
-						Platform:     "group",
+						Platform:     derivePlatform(record.SessionID),
 						CreatedAt:    record.CreatedAt.Format(time.RFC3339),
 						LastActive:   record.UpdatedAt.Format(time.RFC3339),
 						GroupSummary: record.Summary,
