@@ -167,6 +167,9 @@ func (e *Engine) RunMessagesWithContext(
 				if len(filtered) > 0 {
 					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
+					if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+					}
 				}
 			}
 		}
@@ -190,7 +193,8 @@ func (e *Engine) EnqueueExtractionTurn(
 		return
 	}
 	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3)
-	maxTurns := max(positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5), minTurns)
+	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5)
+	maxTurns = max(maxTurns, minTurns)
 	batch, ready := session.EnqueuePendingTurn(items, minTurns, maxTurns)
 	if !ready {
 		return

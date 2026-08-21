@@ -106,7 +106,6 @@ func (s *Service) AddMemory(
 		Tags:       req.Msg.GetTags(),
 		Source:     memory.SourceManual,
 		Visibility: vis,
-		Importance: 0.5,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -122,7 +121,7 @@ func (s *Service) AddMemory(
 	}), nil
 }
 
-// UpdateMemory updates an existing memory entry's content, tags, visibility, and importance.
+// UpdateMemory updates an existing memory entry's content, tags, and visibility.
 func (s *Service) UpdateMemory(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateMemoryRequest],
@@ -146,7 +145,6 @@ func (s *Service) UpdateMemory(
 		Content:    req.Msg.GetContent(),
 		Tags:       req.Msg.GetTags(),
 		Visibility: vis,
-		Importance: req.Msg.GetImportance(),
 	}
 
 	if err := s.store.UpdateEntry(updated); err != nil {
@@ -357,15 +355,15 @@ func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) (*
 // toProtoEntry converts a memory.MemoryEntry to a proto MemoryEntry.
 func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 	return &v1.MemoryEntry{
-		Id:         e.ID,
-		Owner:      e.Owner,
-		Content:    e.Content,
-		Tags:       e.Tags,
-		Source:     string(e.Source),
-		Visibility: string(e.Visibility),
-		Importance: e.Importance,
-		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:  e.UpdatedAt.Format(time.RFC3339),
+		Id:          e.ID,
+		Owner:       e.Owner,
+		Content:     e.Content,
+		Tags:        e.Tags,
+		Source:      string(e.Source),
+		Visibility:  string(e.Visibility),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   e.UpdatedAt.Format(time.RFC3339),
+		AccessCount: int32(e.AccessCount),
 	}
 }
 

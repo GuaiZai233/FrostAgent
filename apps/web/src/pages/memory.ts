@@ -1,6 +1,6 @@
 import { api } from '../api/client';
 import { MemoryEntry, GetMemoryStatsResponse } from '@frostagent/proto';
-import { escapeHtml, formatDateTime, PageTokenStack } from '../utils/formatters';
+import { escapeHtml, formatCount, formatDateTime, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
@@ -118,13 +118,14 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                 <th>内容</th>
                 <th style="width: 10rem;">标签</th>
                 <th style="width: 5.5rem;">可见性</th>
+                <th style="width: 5.5rem;">召回次数</th>
                 <th style="width: 8.5rem;">创建时间</th>
                 <th style="width: 4.5rem; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="memory-table-body">
               <tr>
-                <td colspan="8" class="text-center text-muted" style="padding: 2.5rem;">
+                <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
                   <span class="spinner"></span>
                   <span style="margin-left: 0.5rem;">加载中...</span>
                 </td>
@@ -301,7 +302,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (loading && memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="8" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
             <span class="spinner"></span>
             <span style="margin-left: 0.5rem;">加载中...</span>
           </td>
@@ -314,7 +315,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="8" class="text-center text-muted" style="padding: 3rem;">
+          <td colspan="9" class="text-center text-muted" style="padding: 3rem;">
             暂无记忆记录。
           </td>
         </tr>
@@ -382,6 +383,9 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             </td>
             <td>${tagsHtml}</td>
             <td>${visibilityBadge}</td>
+            <td>
+              <span class="text-xs text-muted font-mono font-medium">${escapeHtml(formatCount(mem.accessCount))}</span>
+            </td>
             <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(mem.createdAt))}</td>
             <td style="text-align: right;">
               <div class="flex items-center justify-end gap-1">
@@ -670,7 +674,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
           try {
             saveBtn.disabled = true;
-            const res = await api.updateMemory(mem.id, content, tags, visibility, mem.importance || 0);
+            const res = await api.updateMemory(mem.id, content, tags, visibility);
             if (res.success) {
               toast.success('记忆已更新');
               close();

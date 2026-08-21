@@ -3,11 +3,11 @@ import type { Client } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import {
   BotStatusService,
+  DialogueService,
   LogLevel,
   LogService,
   MemoryService,
   SettingsService,
-  DialogueService,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
@@ -191,14 +191,12 @@ export const api = {
     content: string,
     tags: string[],
     visibility: string,
-    importance: number,
   ): Promise<UpdateMemoryResponse> {
     return memoryClient.updateMemory({
       id,
       content,
       tags,
       visibility,
-      importance,
     });
   },
 
