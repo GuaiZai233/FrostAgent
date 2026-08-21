@@ -375,7 +375,8 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	}
 
 	summary := ""
-	if sm.groupSummaryStore != nil && strings.HasPrefix(sessionID, "group:") {
+	isGroupSession := strings.HasPrefix(sessionID, "group:") || strings.Contains(sessionID, ":group:")
+	if sm.groupSummaryStore != nil && isGroupSession {
 		record, ok, err := sm.groupSummaryStore.Get(sessionID)
 		if err != nil {
 			logs.Warn(logs.SYSTEM, "恢复群聊总结失败 ("+sessionID+"): "+err.Error())

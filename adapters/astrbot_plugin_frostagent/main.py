@@ -143,8 +143,41 @@ class FrostAgentWSClient:
 
     async def _dispatch_proactive_action(self, action: dict) -> None:
         content = action.get("content", "")
-        target_id = action.get("target_id") or action.get("group_id") or action.get("user_id")
-        logger.info(f"[frostagent-adapter] 收到主动推送消息: {content} -> target: {target_id}")
+        attachments = action.get("attachments") or []
+        group_id = str(action.get("group_id") or "")
+        user_id = str(action.get("user_id") or "")
+        platform = str(action.get("platform") or "")
+        message_type = str(action.get("message_type") or "")
+        target_id = str(action.get("target_id") or group_id or user_id)
+
+        logger.info(f"[frostagent-adapter] 主动推送消息 -> platform={platform}, target={target_id}")
+
+        if not target_id:
+            logger.warning("[frostagent-adapter] 主动推送目标 ID 为空，丢弃")
+            return
+
+        try:
+            from astrbot.api.message_components import Image, Plain
+            from astrbot.api.message import MessageChain
+
+            parts: list = []
+            if content:
+                parts.append(Plain(content))
+            for att in attachments:
+                if att.get("type") == "image" and att.get("url"):
+                    parts.append(Image(att["url"]))
+
+            if not parts:
+                return
+
+            if message_type == "group" or group_id:
+                umo = f"{platform}:GroupMessage:{group_id or target_id}"
+            else:
+                umo = f"{platform}:FriendMessage:{user_id or target_id}"
+
+            await self.context.send_message(umo, MessageChain(parts))
+        except Exception as e:
+            logger.warning(f"[frostagent-adapter] 主动推送失败: {e}")
 
     def register_waiter(self, msg_id: str) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue()
@@ -176,6 +209,10 @@ class FrostAgentAdapter(Star):
         if not payload.get("content") and not payload.get("attachments"):
             return
 
+        if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
+            if not payload.get("is_wake"):
+                return
+
         # 注册该事件的响应队列
         queue = self.client.register_waiter(msg_id)
         try:
@@ -193,8 +230,7 @@ class FrostAgentAdapter(Star):
                 if action.get("action") == "noop":
                     break
 
-                response = action_to_astrbot_result(event, action)
-                if response is not None:
+                for response in action_to_astrbot_result(event, action):
                     yield response
 
                 # 如果不是中间消息（即最终回复），则本次交互轮次结束
@@ -355,20 +391,20 @@ def extract_attachments(event: AstrMessageEvent) -> list[dict[str, Any]]:
     return attachments
 
 
-def action_to_astrbot_result(event: AstrMessageEvent, action: dict[str, Any]) -> Any | None:
+def action_to_astrbot_result(event: AstrMessageEvent, action: dict[str, Any]) -> list[Any]:
     content = action.get("content", "")
     attachments = action.get("attachments") or []
 
-    # 优先使用 event 提供的 result 构造器
-    if attachments:
-        for att in attachments:
-            if att.get("type") == "image" and att.get("url"):
-                return event.image_result(str(att["url"]))
-
+    results = []
     if content:
-        return event.plain_result(str(content))
-
-    return None
+        results.append(event.plain_result(str(content)))
+    for att in attachments:
+        att_type = att.get("type", "")
+        if att_type == "image" and att.get("url"):
+            results.append(event.image_result(str(att["url"])))
+        elif att_type in ("audio", "video"):
+            logger.debug(f"[frostagent-adapter] 跳过不支持的附件类型: {att_type}")
+    return results
 
 
 def call_noargs(obj: Any, name: str) -> Any:
