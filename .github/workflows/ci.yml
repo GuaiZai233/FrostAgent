@@ -41,5 +41,8 @@ jobs:
       - name: Install buf
         run: go install github.com/bufbuild/buf/cmd/buf@latest
 
+      - name: Frontend checks (typecheck)
+        run: make check-web
+
       - name: Run checks
         run: make ci

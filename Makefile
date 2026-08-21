@@ -13,10 +13,10 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 
 .DEFAULT_GOAL := build
 
-.PHONY: build build-api build-web build-web-dev
+.PHONY: build build-api build-web build-web-dev check-web
 .PHONY: dev serve-api serve-agent serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
-.PHONY: lint test test-api vet clean ci
+.PHONY: lint test test-api test-web vet clean ci
 
 build: build-api
 
@@ -24,6 +24,9 @@ build-api: build-web proto-generate-go
 	mkdir -p ./bin
 	$(GO) build -o ./bin/app ./cmd/app
 	$(GO) build -o ./bin/agent ./cmd/agent
+
+check-web: proto-generate-web
+	$(PNPM) --filter @frostagent/web run check
 
 build-web: proto-generate-web
 	$(PNPM) --filter @frostagent/web run build
@@ -71,10 +74,12 @@ proto-generate-web:
 lint:
 	$(ESLINT) .
 
-test: test-api
+test: test-api test-web
 
 test-api: build-web proto-generate-go
 	$(GO) test ./...
+
+test-web: check-web build-web
 
 vet: build-web proto-generate-go
 	$(GO) vet ./...
@@ -82,4 +87,4 @@ vet: build-web proto-generate-go
 clean:
 	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.tools ./apps/web/dist
 
-ci: build test lint vet
+ci: check-web build test lint vet
