@@ -27,6 +27,7 @@ var knownEnvVars = map[string]envEntry{
 	"LISTEN_ADDR":                {"HTTP 监听地址", false, true},
 	"WS_LISTEN_ADDR":             {"WebSocket 监听地址", false, true},
 	"SYSTEM_PROMPT":              {"系统提示词", false, false},
+	"DIALOGUE_PATH":              {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true},
 	"MODEL_NAME":                 {"模型名称", false, true},
 	"VISUAL_MODEL_NAME":          {"视觉模型名称（留空则采用默认模型）", false, true},
 	"MAX_CONTEXT_MESSAGES":       {"最多保留的消息数", false, false},

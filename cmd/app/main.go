@@ -12,6 +12,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/service/botstatus"
+	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
 	memsvc "FrostAgent/internal/service/memory"
 	"FrostAgent/internal/service/settings"
@@ -54,6 +55,14 @@ func catalogPath() string {
 // them into the memory store.
 func groupSummaryPath() string {
 	return filepath.Join(filepath.Dir(brainPath()), "group_summaries.json")
+}
+
+// dialoguePath returns the path to dialogue.yml, defaulting to eval/dialogue/dialogue.yml.
+func dialoguePath() string {
+	if p := os.Getenv("DIALOGUE_PATH"); p != "" {
+		return p
+	}
+	return "eval/dialogue/dialogue.yml"
 }
 
 // ensureDataDir ensures the data directory exists for brain.json.
@@ -178,6 +187,18 @@ func init() {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("计费系统初始化失败: %v", err))
 	}
 
+	// Initialize dialogue examples prompt for persona enhancement
+	var dialoguePrompt string
+	dPath := dialoguePath()
+	if prompt, err := llm.LoadDialoguePrompt(dPath); err != nil {
+		if !os.IsNotExist(err) {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("加载示例对话失败 (%s): %v", dPath, err))
+		}
+	} else if prompt != "" {
+		dialoguePrompt = prompt
+		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 加载人设示例对话: %s", dPath))
+	}
+
 	dispatcher := core.NewDefaultDispatcher()
 
 	GlobalEngine = &llm.Engine{
@@ -202,6 +223,8 @@ func init() {
 		MemoryReflections: reflections,
 		GroupCompactor:    groupCompactor,
 		GroupSummaryStore: groupSummaryStore,
+		// Persona dialogue prompt
+		DialoguePrompt: dialoguePrompt,
 	}
 	logs.Info(
 		logs.SYSTEM,
@@ -235,6 +258,11 @@ func main() {
 		memsvc.New(globalStore, GlobalEngine.MemoryReflections),
 	)
 	mux.Handle(memoryPath, memoryHandler)
+
+	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
+		dialogue.New(dialoguePath(), GlobalEngine),
+	)
+	mux.Handle(dialogueServicePath, dialogueHandler)
 
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())
