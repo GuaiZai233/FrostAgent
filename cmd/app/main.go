@@ -12,6 +12,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/service/botstatus"
+	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
 	memsvc "FrostAgent/internal/service/memory"
 	"FrostAgent/internal/service/settings"
@@ -257,6 +258,11 @@ func main() {
 		memsvc.New(globalStore, GlobalEngine.MemoryReflections),
 	)
 	mux.Handle(memoryPath, memoryHandler)
+
+	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
+		dialogue.New(dialoguePath(), GlobalEngine),
+	)
+	mux.Handle(dialogueServicePath, dialogueHandler)
 
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())
