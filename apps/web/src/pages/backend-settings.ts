@@ -59,15 +59,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       <!-- Table View Container -->
       <div id="tab-table-content" class="flex flex-col gap-4">
         <!-- Group Behavior Settings Card -->
-        <article class="card p-3.5">
-          <div class="card-header border-b border-border pb-2.5 mb-2.5">
+        <article class="card p-4">
+          <div class="card-header border-b border-border pb-3 mb-3">
             <div class="flex items-center gap-2">
               <span class="text-primary flex items-center">${icon('users', 'w-4 h-4')}</span>
               <h2 class="card-title text-sm font-semibold">群聊回复行为策略</h2>
             </div>
           </div>
-          <div class="card-content grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+          <div class="card-content grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
                 <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
@@ -75,7 +75,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               </div>
             </label>
 
-            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
                 <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
@@ -83,7 +83,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               </div>
             </label>
 
-            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
                 <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
@@ -119,7 +119,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
       <!-- Raw .env View Container -->
       <div id="tab-raw-content" class="flex flex-col gap-3" style="display: none;">
-        <article class="card p-3.5 flex flex-col gap-3">
+        <article class="card p-4 flex flex-col gap-3.5">
           <div class="flex items-center justify-between">
             <label class="form-label" for="raw-env-textarea">.env 原始文件编辑</label>
             <button class="btn btn-primary btn-sm" id="save-raw-env-btn">

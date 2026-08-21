@@ -248,8 +248,8 @@ export function mountDialoguePage(container: HTMLElement): () => void {
         const isLast = originalIndex === dialogues.length - 1;
 
         return `
-          <article class="card p-3.5 flex flex-col gap-2.5">
-            <header class="flex items-center justify-between gap-2 border-b border-border pb-2 flex-wrap">
+          <article class="card p-4 flex flex-col gap-3">
+            <header class="flex items-center justify-between gap-2 border-b border-border pb-2.5 flex-wrap">
               <div class="flex items-center gap-2">
                 <span class="badge badge-outline font-mono text-xs">#${escapeHtml(item.id)}</span>
                 <span class="badge badge-secondary text-xs">${escapeHtml(item.relation || '默认')}</span>
@@ -271,8 +271,8 @@ export function mountDialoguePage(container: HTMLElement): () => void {
               </div>
             </header>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              <div class="card p-2.5 bg-muted text-xs leading-relaxed flex flex-col gap-1">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div class="card p-3.5 bg-muted text-xs leading-relaxed flex flex-col gap-1.5">
                 <div class="flex items-center gap-1.5 font-medium text-muted">
                   ${icon('user', 'w-3.5 h-3.5')}
                   <span>用户输入 (User)</span>
@@ -280,7 +280,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
                 <div class="font-mono whitespace-pre-wrap select-text mt-0.5 text-foreground">${escapeHtml(item.user)}</div>
               </div>
 
-              <div class="card p-2.5 bg-muted text-xs leading-relaxed flex flex-col gap-1 border-primary/20">
+              <div class="card p-3.5 bg-muted text-xs leading-relaxed flex flex-col gap-1.5 border-primary/20">
                 <div class="flex items-center gap-1.5 font-medium text-foreground">
                   ${icon('bot', 'w-3.5 h-3.5 text-primary')}
                   <span>期望回复 (Assistant / Preferred)</span>

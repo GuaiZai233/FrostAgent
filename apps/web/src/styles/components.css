@@ -346,6 +346,39 @@ input[type="range"]::-webkit-slider-thumb:hover {
   border-bottom: none;
 }
 
+/* ==================== MEMORY TABLE SPECIALIZED CELLS ==================== */
+.memory-content-cell {
+  min-width: 14rem;
+  max-width: 36rem;
+  width: 45%;
+}
+
+.memory-content-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+  font-size: 0.8125rem;
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  border: none;
+  background: transparent;
+  width: 100%;
+  transition: color 0.15s ease;
+}
+
+.memory-content-preview:hover {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ==================== DROPDOWN ==================== */
 details.dropdown {
   position: relative;

@@ -80,19 +80,19 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
       <!-- 4 Compact KPI Stats Cards -->
       <section id="memory-stats-container" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <article class="card p-3 flex flex-col justify-between">
+        <article class="card p-4 flex flex-col justify-between">
           <p class="text-xs text-muted font-medium">总记忆数</p>
           <p class="text-xl font-bold tracking-tight text-foreground mt-1" id="stat-total">-</p>
         </article>
-        <article class="card p-3 flex flex-col justify-between">
+        <article class="card p-4 flex flex-col justify-between">
           <p class="text-xs text-muted font-medium">公开记忆</p>
           <p class="text-xl font-bold tracking-tight text-foreground mt-1" id="stat-public">-</p>
         </article>
-        <article class="card p-3 flex flex-col justify-between">
+        <article class="card p-4 flex flex-col justify-between">
           <p class="text-xs text-muted font-medium">私有记忆</p>
           <p class="text-xl font-bold tracking-tight text-foreground mt-1" id="stat-private">-</p>
         </article>
-        <article class="card p-3 flex flex-col justify-between">
+        <article class="card p-4 flex flex-col justify-between">
           <p class="text-xs text-muted font-medium">归属者数</p>
           <p class="text-xl font-bold tracking-tight text-foreground mt-1" id="stat-owners">-</p>
         </article>
@@ -378,8 +378,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                 <span>${escapeHtml(mem.owner)}</span>
               </button>
             </td>
-            <td style="max-width: 22rem;">
-              <button class="btn btn-ghost text-left text-xs block w-full p-0 font-normal hover:text-primary leading-snug" style="max-height: 2.5rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-overflow: ellipsis; white-space: normal;" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
+            <td class="memory-content-cell">
+              <button type="button" class="memory-content-preview" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
                 ${escapeHtml(mem.content)}
               </button>
             </td>
