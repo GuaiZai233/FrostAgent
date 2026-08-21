@@ -182,21 +182,6 @@ export class PageTokenStack {
     }
   }
 
-  current(): string {
-    return this.currentToken;
-  }
-
-  push(nextToken: string): void {
-    if (!nextToken) return;
-    this.tokens.splice(this.index + 1);
-    this.tokens.push(nextToken);
-    this.index += 1;
-  }
-
-  back(): void {
-    this.prev();
-  }
-
   reset(): void {
     this.tokens.splice(1);
     this.tokens[0] = '';
