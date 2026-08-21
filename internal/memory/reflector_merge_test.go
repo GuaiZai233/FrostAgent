@@ -75,7 +75,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Tags:        []string{"舞萌"},
 			Source:      SourceExtract,
 			Visibility:  VisibilityPrivate,
-			Importance:  0.6,
 			AccessCount: 2,
 		},
 		{
@@ -85,7 +84,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Tags:        []string{"舞萌", "dx rating"},
 			Source:      SourceExtract,
 			Visibility:  VisibilityPublic,
-			Importance:  0.9,
 			AccessCount: 5,
 		},
 	})
@@ -102,7 +100,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Tags:    []string{"舞萌", "dx rating", "w6"},
 		}},
 		nil,
-		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +115,8 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 	if merged.Source != SourceReflect || merged.Visibility != VisibilityPrivate {
 		t.Fatalf("unexpected merged source/visibility: %q/%q", merged.Source, merged.Visibility)
 	}
-	if merged.Importance != 0.9 || merged.AccessCount != 5 {
-		t.Fatalf("unexpected merged ranking fields: importance=%v access=%d", merged.Importance, merged.AccessCount)
+	if merged.AccessCount != 5 {
+		t.Fatalf("unexpected merged ranking fields: access=%d", merged.AccessCount)
 	}
 	if !slices.Equal(merged.MergedFrom, []string{"mem_001", "mem_002"}) {
 		t.Fatalf("unexpected provenance: %#v", merged.MergedFrom)
@@ -157,7 +154,7 @@ func TestApplyReflectionMergeRejectsStaleOrCrossOwnerSources(t *testing.T) {
 			}
 			if tt.makeStale {
 				time.Sleep(time.Millisecond)
-				if err := store.UpdateImportance("mem_001", 0.7); err != nil {
+				if err := store.IncrementAccessCount("mem_001"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -166,7 +163,6 @@ func TestApplyReflectionMergeRejectsStaleOrCrossOwnerSources(t *testing.T) {
 				"alice",
 				[]validatedMerge{{Sources: all, Content: "merged", Tags: []string{"tag"}}},
 				[]string{"mem_001"},
-				nil,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -189,8 +185,8 @@ func TestReflectorMergeUpdatesCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir + "/brain.json")
 	seedMemoryEntries(t, store, []MemoryEntry{
-		{ID: "mem_001", Owner: "alice", Content: "用户喜欢打舞萌", Tags: []string{"舞萌"}, Importance: 0.7},
-		{ID: "mem_002", Owner: "alice", Content: "用户的舞萌 dx rating 为 w6", Tags: []string{"w6"}, Importance: 0.9},
+		{ID: "mem_001", Owner: "alice", Content: "用户喜欢打舞萌", Tags: []string{"舞萌"}},
+		{ID: "mem_002", Owner: "alice", Content: "用户的舞萌 dx rating 为 w6", Tags: []string{"w6"}},
 	})
 	entries, err := store.ListByOwner("alice")
 	if err != nil {
@@ -200,7 +196,7 @@ func TestReflectorMergeUpdatesCatalog(t *testing.T) {
 	catalog := NewCatalogStore(dir + "/catalog.json")
 	reflector := &Reflector{store: store, catalog: catalog}
 	payload, err := json.Marshal(reflectResult{
-		Topics: []MemoryTopic{{Name: "舞萌", Importance: 0.9}},
+		Topics: []MemoryTopic{{Name: "舞萌"}},
 		Merges: []reflectMerge{{
 			SourceIDs: []string{"mem_001", "mem_002"},
 			Content:   "用户是 dx rating 为 w6 的舞萌爱好者",

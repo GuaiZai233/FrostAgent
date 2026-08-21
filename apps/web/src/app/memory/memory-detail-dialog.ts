@@ -13,7 +13,6 @@ import {
 import { HlmField, HlmFieldLabel } from '@spartan-ng/helm/field';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmSelectImports } from '@spartan-ng/helm/select';
-import { HlmSlider } from '@spartan-ng/helm/slider';
 import { HlmTextarea } from '@spartan-ng/helm/textarea';
 import type { MemoryEntry } from '@frostagent/proto';
 
@@ -33,7 +32,6 @@ export interface MemoryDetailDialogData {
     HlmFieldLabel,
     HlmInput,
     HlmSelectImports,
-    HlmSlider,
     HlmTextarea,
   ],
   template: `
@@ -108,20 +106,6 @@ export interface MemoryDetailDialogData {
           </hlm-select-content>
         </hlm-select>
       </div>
-
-      <div hlmField>
-        <label hlmFieldLabel id="importance-label">
-          重要度: {{ editedImportance.toFixed(2) }}
-        </label>
-        <hlm-slider
-          aria-labelledby="importance-label"
-          [min]="0"
-          [max]="1"
-          [step]="0.01"
-          [value]="[editedImportance]"
-          (valueChange)="setImportance($event)"
-        />
-      </div>
     </div>
 
     <div hlmDialogFooter>
@@ -141,14 +125,9 @@ export class MemoryDetailDialog {
   editedContent = this.data.memory.content;
   editedTags = (this.data.memory.tags ?? []).join(', ');
   editedVisibility = this.data.memory.visibility;
-  editedImportance = this.data.memory.importance;
 
   close(): void {
     this.dialogRef.close();
-  }
-
-  setImportance(value: number[]): void {
-    this.editedImportance = value[0] ?? 0;
   }
 
   setVisibility(value: string | null | undefined): void {
@@ -164,7 +143,6 @@ export class MemoryDetailDialog {
         .map((tag) => tag.trim())
         .filter(Boolean),
       visibility: this.editedVisibility,
-      importance: this.editedImportance,
     } as MemoryEntry);
   }
 }

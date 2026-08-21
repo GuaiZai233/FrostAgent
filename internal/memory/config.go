@@ -8,7 +8,6 @@ type Config struct {
 	ReflectInterval time.Duration // 反思触发间隔（默认 6h）
 	ReflectTimeout  time.Duration // 单个 owner 反思请求超时（默认 10m）
 	RecallLimit     int           // 每次召回的最大记忆数（默认 10）
-	ImportanceDecay float64       // 重要度衰减系数（默认 0.95）
 	StoragePath     string        // brain.json 存储路径
 }
 
@@ -19,7 +18,6 @@ func DefaultConfig() Config {
 		ReflectInterval: 6 * time.Hour,
 		ReflectTimeout:  10 * time.Minute,
 		RecallLimit:     10,
-		ImportanceDecay: 0.95,
 		StoragePath:     "internal/memory/storage/brain.json",
 	}
 }

@@ -25,10 +25,9 @@ message MemoryEntry {
   repeated string tags = 4;
   string source = 5;
   string visibility = 6;
-  double importance = 7;
-  string created_at = 8;
-  string updated_at = 9;
-  int32 access_count = 10;
+  string created_at = 7;
+  string updated_at = 8;
+  int32 access_count = 9;
 }
 
 message ListMemoriesRequest {
@@ -68,7 +67,6 @@ message UpdateMemoryRequest {
   string content = 2;
   repeated string tags = 3;
   string visibility = 4;
-  double importance = 5;
 }
 
 message UpdateMemoryResponse {

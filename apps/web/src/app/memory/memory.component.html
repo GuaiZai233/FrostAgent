@@ -186,7 +186,6 @@
               <th hlmTh>内容</th>
               <th hlmTh>标签</th>
               <th hlmTh>可见性</th>
-              <th hlmTh>重要度</th>
               <th hlmTh>召回次数</th>
               <th hlmTh>创建时间</th>
               <th hlmTh class="text-end">操作</th>
@@ -248,19 +247,6 @@
                     </app-icon>
                     {{ memory.visibility }}
                   </span>
-                </td>
-                <td hlmTd>
-                  <div class="flex items-center gap-2">
-                    <div class="bg-muted h-2 w-16 overflow-hidden rounded-full">
-                      <div
-                        class="bg-primary h-full rounded-full transition-[width]"
-                        [style.width.%]="memory.importance * 100"
-                      ></div>
-                    </div>
-                    <span class="text-muted-foreground text-xs">
-                      {{ (memory.importance * 100).toFixed(0) }}%
-                    </span>
-                  </div>
                 </td>
                 <td hlmTd>
                   <span class="text-muted-foreground text-xs font-medium">

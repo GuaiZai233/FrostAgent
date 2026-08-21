@@ -56,7 +56,7 @@
 
           ┌───────────────┐
           │   Reflector   │  反思器 —— 按 owner 分批整理记忆
-          │   反思器      │  更新重要度、淘汰过时项、生成主题目录
+          │   反思器      │  合并条目、淘汰过时项、生成主题目录
           └───────────────┘
 ```
 
@@ -155,16 +155,15 @@ type MemoryReflector interface {
 ```go
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
-    ID         string    `json:"id"`          // 唯一标识
-    Owner      string    `json:"owner"`       // 归属者（如 "frost"、"alice"）
-    Content    string    `json:"content"`     // 记忆内容（自然语言）
-    Tags       []string  `json:"tags"`        // 标签（用于精确匹配）
-    Source     string    `json:"source"`      // 来源："extract" | "manual" | "reflect"
-    Visibility string    `json:"visibility"`  // 可见性："private" | "public"
-    Importance float64   `json:"importance"`  // 重要度 0.0~1.0（反思时更新）
-    CreatedAt  time.Time `json:"created_at"`  // 创建时间
-    UpdatedAt  time.Time `json:"updated_at"`  // 最后访问/更新时间
-    AccessCount int      `json:"access_count"` // 被召回次数
+    ID          string    `json:"id"`           // 唯一标识
+    Owner       string    `json:"owner"`        // 归属者（如 "frost"、"alice"）
+    Content     string    `json:"content"`      // 记忆内容（自然语言）
+    Tags        []string  `json:"tags"`         // 标签（用于精确匹配）
+    Source      string    `json:"source"`       // 来源："extract" | "manual" | "reflect"
+    Visibility  string    `json:"visibility"`   // 可见性："private" | "public"
+    CreatedAt   time.Time `json:"created_at"`   // 创建时间
+    UpdatedAt   time.Time `json:"updated_at"`   // 最后访问/更新时间
+    AccessCount int       `json:"access_count"` // 被召回次数
 }
 ```
 
@@ -181,9 +180,8 @@ type MemoryEntry struct {
 
 ```go
 type MemoryTopic struct {
-    Name       string   `json:"name"`
-    Aliases    []string `json:"aliases,omitempty"`
-    Importance float64  `json:"importance,omitempty"`
+    Name    string   `json:"name"`
+    Aliases []string `json:"aliases,omitempty"`
 }
 
 type UserMemoryCatalog struct {
@@ -201,10 +199,10 @@ type UserMemoryCatalog struct {
 
 ```go
 type MemoryConfig struct {
-    MaxEntries       int           // 单用户最大记忆条数（默认 100）
+    MaxEntries       int           // 全局最大记忆条数（默认 500）
     ReflectInterval  time.Duration // 反思触发间隔（默认 6h）
-    RecallLimit      int           // 每次召回的最大记忆数（默认 5）
-    ImportanceDecay  float64       // 重要度衰减系数（默认 0.95）
+    ReflectTimeout   time.Duration // 单个 owner 反思超时（默认 10m）
+    RecallLimit      int           // 每次召回的最大记忆数（默认 10）
     StoragePath      string        // 存储路径（文件模式）
 }
 ```
@@ -242,7 +240,6 @@ data/
       "tags": ["编程", "偏好", "Go"],
       "source": "extract",
       "visibility": "private",
-      "importance": 0.8,
       "created_at": "2026-07-27T10:00:00Z",
       "updated_at": "2026-07-27T10:00:00Z",
       "access_count": 3
@@ -254,7 +251,6 @@ data/
       "tags": ["编程", "学习", "Rust"],
       "source": "extract",
       "visibility": "private",
-      "importance": 0.6,
       "created_at": "2026-07-27T14:00:00Z",
       "updated_at": "2026-07-27T14:00:00Z",
       "access_count": 1
@@ -266,7 +262,6 @@ data/
       "tags": ["舞萌","maimai", "版本"],
       "source": "manual",
       "visibility": "public",
-      "importance": 0.9,
       "created_at": "2026-07-27T08:00:00Z",
       "updated_at": "2026-07-27T08:00:00Z",
       "access_count": 10
@@ -352,9 +347,9 @@ JSON
 当前系统时间：2026-08-05 17:50 星期三
 
 ## 关于用户的记忆
-- 用户的名字叫guaizai（重要度: 1.0）
-- 用户喜欢用 Go 语言写后端（重要度: 0.8）
-- 用户最近在做 FrostAgent 项目（重要度: 0.6）
+- 用户的名字叫guaizai
+- 用户喜欢用 Go 语言写后端
+- 用户最近在做 FrostAgent 项目
 ```
 
 系统提示词开头会注入当前系统时间字段（带中文星期），让模型能理解对话中的相对时间（今天/明天/本周）。
@@ -368,10 +363,10 @@ Web 或聊天手动触发 ──▶ ReflectionManager.Start(owner)
                     后台 goroutine
                          ├─ 按 owner 读取记忆
                          ├─ 注入当前系统时间（判断相对日期：今天/明天/下周）
-                         ├─ LLM 提取主题、别名和重要度
+                         ├─ LLM 提取主题与别名
                          ├─ 校验 LLM 返回的记忆 ID
                          ├─ 淘汰明确过时或已过时效性的记忆
-                         ├─ 更新重要度
+                         ├─ 合并同主体记忆
                          └─ 覆写 memory_catalog.json
 ```
 
@@ -384,19 +379,24 @@ Web 或聊天手动触发 ──▶ ReflectionManager.Start(owner)
 
 1. 提取 3～20 个便于未来检索的主题。主题应简短、具体，合并同义表达，并把别名放入 aliases
 2. 标记已经明确过时、被新事实取代或不再有保留价值的记忆 ID
-3. 为每条记忆评估重要度（0.0～1.0）
-4. 将描述同一主体、内容兼容且合并后更利于检索的记忆整合成一条
+3. 将描述同一主体、内容兼容且合并后更利于检索的记忆整合成一条
 
 时效性规则（对照当前系统时间判断）：
 - 仅在某时间点之前/当天有效、且该时间已过的记忆（如"用户明天要去极兽聚"、"用户本周在成都"），属于已过时效性，应放入 outdated_ids 删除
-- 长期偏好仍成立、只是夹带已过去临时信息的记忆（如"用户喜欢打舞萌，下周要去参赛"），不要整条删除：用 importance_updates 适当降低重要度，可把已失效的临时部分拆出后用 outdated_ids 删除
+- 长期偏好仍成立、只是夹带已过去临时信息的记忆（如"用户喜欢打舞萌，下周要去参赛"），不要整条删除：可把已失效的临时部分拆出后用 outdated_ids 删除
 - 不要因为内容提及过去的日期就一律删除；只有当日期已过且该事实本身已失效时才删除
 
 【输出格式】返回 JSON：
 {
-  "topics": [ {"name": "FrostAgent", "aliases": ["霜降狐项目"], "importance": 1.0} ],
+  "topics": [ {"name": "FrostAgent", "aliases": ["霜降狐项目"]} ],
   "outdated_ids": ["mem_005", "mem_012"],
-  "importance_updates": {"mem_001": 0.9}
+  "merges": [
+    {
+      "source_ids": ["mem_001", "mem_002"],
+      "content": "用户是 dx rating 为 w6 的舞萌爱好者",
+      "tags": ["舞萌", "dx rating", "w6", "maimai"]
+    }
+  ]
 }
 ```
 
@@ -586,7 +586,7 @@ internal/memory/
 ### P2：自我进化
 
 - [ ] MemoryReflector 反思系统
-- [ ] 重要度衰减机制
+- [ ] 记忆合并与归档机制
 - [ ] 记忆淘汰策略
 
 ### P3：高级特性
