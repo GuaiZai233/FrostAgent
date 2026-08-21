@@ -181,7 +181,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     // Update Owner Select dropdown options
     const currentSelected = ownerSelect.value;
     ownerSelect.innerHTML = `
-      <option value="">全部归属者 (${stats.total})</option>
+      <option value="">全部归属者</option>
       ${owners
         .map(
           ([owner, count]) => `

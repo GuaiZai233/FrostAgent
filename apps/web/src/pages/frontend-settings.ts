@@ -29,7 +29,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
     const currentMode = themeManager.getMode();
 
     container.innerHTML = `
-      <div class="page-container fade-in" style="max-width: 680px;">
+      <div class="page-container fade-in">
         <header class="flex items-center gap-2.5 pb-1">
           <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置" style="text-decoration: none;">
             ${icon('arrow_left', 'w-4 h-4')}
@@ -40,7 +40,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
           </div>
         </header>
 
-        <section class="card p-4 flex flex-col gap-4">
+        <section class="card p-4 flex flex-col gap-4" style="max-width: 42rem;">
           <div>
             <h2 class="text-sm font-semibold text-foreground">主题模式</h2>
             <p class="text-xs text-muted mt-0.5">选择最适合您当前工作环境的主题配色方案</p>
