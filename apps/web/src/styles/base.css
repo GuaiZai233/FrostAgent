@@ -52,45 +52,6 @@ code, pre {
   font-family: var(--font-mono);
 }
 
-/* Material Symbols font icon helper */
-.icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25em;
-  height: 1.25em;
-  flex-shrink: 0;
-  font-family: 'Material Symbols Rounded', sans-serif;
-  font-weight: normal;
-  font-style: normal;
-  font-size: 1.25rem;
-  line-height: 1;
-  letter-spacing: normal;
-  text-transform: none;
-  white-space: nowrap;
-  word-wrap: normal;
-  direction: ltr;
-  font-feature-settings: 'liga';
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-  user-select: none;
-}
-
-.icon.filled {
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-}
-
-.icon.sm {
-  font-size: 1rem;
-  width: 1em;
-  height: 1em;
-}
-
-.icon.lg {
-  font-size: 1.5rem;
-  width: 1.5em;
-  height: 1.5em;
-}
-
 /* Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -122,7 +83,7 @@ code, pre {
 }
 
 @keyframes modalIn {
-  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 

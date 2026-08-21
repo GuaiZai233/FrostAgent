@@ -22,77 +22,76 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <header class="flex items-center justify-between gap-3 flex-wrap">
+      <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">记忆管理</h1>
           <p class="page-description">管理 Bot 长期记忆、用户专属知识与反思提炼</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <div class="flex items-center gap-1" style="width: 14rem;">
+          <div class="flex items-center gap-1.5" style="width: 14rem;">
             <input
               type="search"
               id="memory-search-input"
-              class="input"
-              placeholder="搜索记忆..."
-              style="height: 2.25rem; font-size: 0.875rem;"
+              class="input h-8 text-xs px-2.5"
+              placeholder="搜索记忆内容..."
             />
-            <button class="btn btn-outline btn-icon-sm" id="memory-search-btn" title="搜索">
-              ${icon('search')}
+            <button class="btn btn-outline btn-sm h-8 px-2" id="memory-search-btn" title="搜索">
+              ${icon('search', 'size-3.5')}
             </button>
           </div>
-          <button class="btn btn-outline btn-sm" id="memory-add-btn">
-            ${icon('add')}
-            <span>添加</span>
+          <button class="btn btn-primary btn-sm h-8 gap-1.5 px-3" id="memory-add-btn">
+            ${icon('plus', 'size-3.5')}
+            <span>添加记忆</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="memory-reflect-btn" title="反思记忆">
-            <span id="memory-reflect-icon">${icon('psychology')}</span>
+          <button class="btn btn-outline btn-sm h-8 gap-1.5 px-2.5" id="memory-reflect-btn" title="触发后台反思提炼">
+            <span id="memory-reflect-icon" class="inline-flex">${icon('brain', 'size-3.5')}</span>
             <span>反思</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="memory-export-btn">
-            ${icon('file_download')}
+          <button class="btn btn-outline btn-sm h-8 gap-1.5 px-2.5" id="memory-export-btn" title="导出 JSON">
+            ${icon('download', 'size-3.5')}
             <span>导出</span>
           </button>
-          <label class="btn btn-outline btn-sm" style="cursor: pointer;">
-            ${icon('file_upload')}
+          <label class="btn btn-outline btn-sm h-8 gap-1.5 px-2.5 cursor-pointer" title="导入 JSON">
+            ${icon('upload', 'size-3.5')}
             <span>导入</span>
             <input type="file" id="memory-import-input" accept=".json" style="display: none;" />
           </label>
-          <button class="btn btn-outline btn-icon-sm" id="memory-refresh-btn" title="刷新">
-            ${icon('refresh')}
+          <button class="btn btn-outline btn-icon-sm h-8 w-8" id="memory-refresh-btn" title="刷新列表">
+            ${icon('refresh', 'size-3.5')}
           </button>
         </div>
       </header>
 
       <section id="memory-stats-container" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"></section>
 
-      <div class="flex items-center justify-between gap-3 flex-wrap min-h-8">
+      <div class="flex items-center justify-between gap-3 flex-wrap min-h-7">
         <div id="memory-active-filter" class="flex items-center gap-2"></div>
-        <div id="memory-bulk-actions" class="flex items-center gap-3" style="display: none;"></div>
+        <div id="memory-bulk-actions" class="flex items-center gap-2" style="display: none;"></div>
       </div>
 
-      <div class="card" style="padding: 0; overflow: hidden;">
+      <div class="border border-border rounded-lg bg-card overflow-hidden shadow-xs">
         <div class="table-container">
-          <table class="table">
-            <thead>
+          <table class="table text-xs">
+            <thead class="bg-muted/40 border-b border-border">
               <tr>
                 <th style="width: 2.5rem; text-align: center;">
                   <input type="checkbox" id="memory-select-all" class="checkbox" aria-label="全选" />
                 </th>
                 <th style="width: 4rem;">来源</th>
-                <th style="width: 7rem;">归属者</th>
+                <th style="width: 7.5rem;">归属者</th>
                 <th>内容</th>
                 <th style="width: 10rem;">标签</th>
-                <th style="width: 6rem;">可见性</th>
-                <th style="width: 6rem;">重要度</th>
+                <th style="width: 5.5rem;">可见性</th>
+                <th style="width: 6.5rem;">重要度</th>
                 <th style="width: 8.5rem;">创建时间</th>
                 <th style="width: 5rem; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="memory-table-body">
               <tr>
-                <td colspan="9" class="text-center text-muted" style="padding: 2rem;">
-                  <span class="spinner"></span>
-                  <span style="margin-left: 0.5rem;">加载中...</span>
+                <td colspan="9" class="text-center text-muted-foreground py-8">
+                  <span class="spinner size-4 inline-block align-middle mr-2"></span>
+                  <span class="align-middle">加载中...</span>
                 </td>
               </tr>
             </tbody>
@@ -137,26 +136,29 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     const byOwnerCards = Object.entries(stats.byOwner || {})
       .map(
         ([owner, count]) => `
-        <button class="card p-3 text-center cursor-pointer hover-bg transition-colors" data-owner="${escapeHtml(owner)}">
-          <p class="text-xl font-bold">${count}</p>
-          <p class="text-xs text-muted truncate">${escapeHtml(owner)}</p>
+        <button class="card p-3 rounded-lg border border-border bg-card hover:bg-muted/60 transition-colors text-left cursor-pointer shadow-xs" data-owner="${escapeHtml(owner)}">
+          <p class="text-2xl font-bold tracking-tight text-foreground">${count}</p>
+          <p class="text-xs text-muted-foreground font-medium truncate flex items-center gap-1 mt-0.5">
+            ${icon('user', 'size-3 text-muted-foreground')}
+            <span>${escapeHtml(owner)}</span>
+          </p>
         </button>
       `,
       )
       .join('');
 
     statsContainer.innerHTML = `
-      <article class="card p-3 text-center">
-        <p class="text-xl font-bold">${stats.total}</p>
-        <p class="text-xs text-muted">总记忆数</p>
+      <article class="card p-3 rounded-lg border border-border bg-card shadow-xs">
+        <p class="text-2xl font-bold tracking-tight text-foreground">${stats.total}</p>
+        <p class="text-xs text-muted-foreground font-medium mt-0.5">总记忆数</p>
       </article>
-      <article class="card p-3 text-center">
-        <p class="text-xl font-bold">${stats.publicCount}</p>
-        <p class="text-xs text-muted">公开</p>
+      <article class="card p-3 rounded-lg border border-border bg-card shadow-xs">
+        <p class="text-2xl font-bold tracking-tight text-foreground">${stats.publicCount}</p>
+        <p class="text-xs text-muted-foreground font-medium mt-0.5">公开记忆</p>
       </article>
-      <article class="card p-3 text-center">
-        <p class="text-xl font-bold">${stats.privateCount}</p>
-        <p class="text-xs text-muted">私有</p>
+      <article class="card p-3 rounded-lg border border-border bg-card shadow-xs">
+        <p class="text-2xl font-bold tracking-tight text-foreground">${stats.privateCount}</p>
+        <p class="text-xs text-muted-foreground font-medium mt-0.5">私有记忆</p>
       </article>
       ${byOwnerCards}
     `;
@@ -209,13 +211,13 @@ export function mountMemoryPage(container: HTMLElement): () => void {
   function getSourceIcon(source: string): string {
     switch (source) {
       case 'extract':
-        return 'auto_awesome';
+        return 'sparkles';
       case 'manual':
-        return 'edit_note';
+        return 'pencil';
       case 'reflect':
-        return 'psychology';
+        return 'brain';
       default:
-        return 'help_outline';
+        return 'help';
     }
   }
 
@@ -236,11 +238,11 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     // Render active filter
     if (ownerFilter) {
       activeFilterEl.innerHTML = `
-        <span class="badge badge-secondary flex items-center gap-1">
-          ${icon('person', 'sm')}
-          <span>${escapeHtml(ownerFilter)}</span>
-          <button class="btn btn-ghost btn-icon-sm" id="clear-owner-filter" style="width: 1rem; height: 1rem; padding: 0;" aria-label="清除筛选">
-            ${icon('close', 'sm')}
+        <span class="badge badge-secondary text-xs px-2.5 py-1 flex items-center gap-1.5 rounded-md border border-border">
+          ${icon('user', 'size-3')}
+          <span>归属: <strong class="text-foreground">${escapeHtml(ownerFilter)}</strong></span>
+          <button class="btn btn-ghost btn-icon-sm h-4 w-4 p-0 ml-1 text-muted-foreground hover:text-foreground cursor-pointer" id="clear-owner-filter" aria-label="清除筛选">
+            ${icon('close', 'size-3')}
           </button>
         </span>
       `;
@@ -257,11 +259,11 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (selectedIds.size > 0) {
       bulkActionsEl.style.display = 'flex';
       bulkActionsEl.innerHTML = `
-        <div class="card p-2 bg-muted flex items-center gap-3 text-sm">
-          <span>已选择 ${selectedIds.size} 条</span>
-          <button class="btn btn-destructive btn-sm" id="delete-selected-btn">
-            ${icon('delete', 'sm')}
-            <span>删除所选</span>
+        <div class="px-2.5 py-1 bg-muted/60 border border-border rounded-md flex items-center gap-2 text-xs">
+          <span class="text-muted-foreground">已选择 <strong class="text-foreground">${selectedIds.size}</strong> 项</span>
+          <button class="btn btn-destructive btn-sm h-6 px-2 text-xs gap-1" id="delete-selected-btn">
+            ${icon('trash', 'size-3')}
+            <span>批量删除</span>
           </button>
         </div>
       `;
@@ -282,9 +284,9 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (loading && memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 2rem;">
-            <span class="spinner"></span>
-            <span style="margin-left: 0.5rem;">加载中...</span>
+          <td colspan="9" class="text-center text-muted-foreground py-8">
+            <span class="spinner size-4 inline-block align-middle mr-2"></span>
+            <span class="align-middle">加载中...</span>
           </td>
         </tr>
       `;
@@ -295,7 +297,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="9" class="text-center text-muted-foreground py-10">
             暂无记忆记录。
           </td>
         </tr>
@@ -308,63 +310,63 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       .map((mem) => {
         const isChecked = selectedIds.has(mem.id);
         const tagsHtml = (mem.tags || [])
-          .map((t) => `<span class="badge badge-secondary text-xs">${escapeHtml(t)}</span>`)
+          .map((t) => `<span class="badge badge-secondary text-[11px] px-1.5 py-0">${escapeHtml(t)}</span>`)
           .join('');
 
         const isPublic = mem.visibility === 'public';
-        const visibilityIcon = isPublic ? 'public' : 'lock';
+        const visibilityIcon = isPublic ? 'globe' : 'lock';
         const visibilityTitle = isPublic ? '公开' : '私有';
 
         const importancePct = Math.round((mem.importance || 0) * 100);
 
         return `
-          <tr>
+          <tr class="hover:bg-muted/30 transition-colors border-b border-border">
             <td style="text-align: center;">
               <input type="checkbox" class="checkbox row-checkbox" data-id="${escapeHtml(mem.id)}" ${isChecked ? 'checked' : ''} />
             </td>
             <td>
-              <span title="${escapeHtml(getSourceLabel(mem.source))}" class="text-muted">
-                ${icon(getSourceIcon(mem.source), 'sm')}
+              <span title="${escapeHtml(getSourceLabel(mem.source))}" class="inline-flex items-center text-muted-foreground hover:text-foreground transition-colors">
+                ${icon(getSourceIcon(mem.source), 'size-3.5')}
               </span>
             </td>
             <td>
-              <button class="badge badge-outline cursor-pointer flex items-center gap-1" data-action="filter-owner" data-owner="${escapeHtml(mem.owner)}">
-                ${icon('person', 'sm')}
+              <button class="badge badge-outline text-xs px-2 py-0.5 cursor-pointer flex items-center gap-1 hover:bg-muted transition-colors font-normal" data-action="filter-owner" data-owner="${escapeHtml(mem.owner)}">
+                ${icon('user', 'size-3 text-muted-foreground')}
                 <span>${escapeHtml(mem.owner)}</span>
               </button>
             </td>
-            <td style="max-width: 20rem;">
-              <button class="btn btn-ghost btn-sm text-left truncate block w-full" style="padding: 0.25rem 0.5rem;" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
+            <td style="max-width: 22rem;">
+              <button class="btn btn-ghost btn-sm text-left truncate block w-full px-1.5 py-1 h-auto font-normal hover:bg-muted/60 text-xs" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
                 ${escapeHtml(mem.content)}
               </button>
             </td>
             <td>
               <div class="flex flex-wrap gap-1" style="max-width: 14rem;">
-                ${tagsHtml}
+                ${tagsHtml || '<span class="text-muted-foreground/50 text-[11px]">-</span>'}
               </div>
             </td>
             <td>
-              <span class="badge badge-outline flex items-center gap-1" title="${visibilityTitle}">
-                ${icon(visibilityIcon, 'sm')}
+              <span class="badge badge-outline text-[11px] px-1.5 py-0 flex items-center gap-1 font-normal" title="${visibilityTitle}">
+                ${icon(visibilityIcon, 'size-3 text-muted-foreground')}
                 <span>${escapeHtml(mem.visibility || 'private')}</span>
               </span>
             </td>
             <td>
-              <div class="flex items-center gap-1.5">
-                <div style="background-color: var(--muted); height: 0.375rem; width: 3rem; border-radius: 9999px; overflow: hidden;">
+              <div class="flex items-center gap-2">
+                <div style="background-color: var(--muted); height: 0.375rem; width: 3rem; border-radius: var(--radius-full); overflow: hidden;">
                   <div style="background-color: var(--primary); height: 100%; width: ${importancePct}%;"></div>
                 </div>
-                <span class="text-xs text-muted font-mono">${importancePct}%</span>
+                <span class="text-xs text-muted-foreground font-mono">${importancePct}%</span>
               </div>
             </td>
-            <td class="text-xs text-muted">${escapeHtml(formatDateTime(mem.createdAt))}</td>
+            <td class="text-xs text-muted-foreground font-mono">${escapeHtml(formatDateTime(mem.createdAt))}</td>
             <td style="text-align: right;">
               <div class="flex items-center justify-end gap-1">
-                <button class="btn btn-ghost btn-icon-sm" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="查看/编辑">
-                  ${icon('visibility', 'sm')}
+                <button class="btn btn-ghost btn-icon-sm h-7 w-7 text-muted-foreground hover:text-foreground" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="查看/编辑">
+                  ${icon('eye', 'size-3.5')}
                 </button>
-                <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-memory" data-id="${escapeHtml(mem.id)}" title="删除">
-                  ${icon('delete', 'sm')}
+                <button class="btn btn-ghost btn-icon-sm h-7 w-7 text-muted-foreground hover:text-destructive" data-action="delete-memory" data-id="${escapeHtml(mem.id)}" title="删除">
+                  ${icon('trash', 'size-3.5')}
                 </button>
               </div>
             </td>
@@ -500,31 +502,31 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       title: '添加记忆',
       maxWidth: '32rem',
       bodyHtml: `
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3.5">
           <div class="form-group">
             <label class="form-label" for="add-mem-owner">归属者</label>
-            <input id="add-mem-owner" class="input" placeholder="webui" value="webui" />
+            <input id="add-mem-owner" class="input h-8 text-xs" placeholder="webui" value="webui" />
           </div>
           <div class="form-group">
             <label class="form-label" for="add-mem-content">内容 <span class="text-destructive">*</span></label>
-            <textarea id="add-mem-content" class="textarea" rows="4" placeholder="输入记忆内容..."></textarea>
+            <textarea id="add-mem-content" class="textarea text-xs" rows="4" placeholder="输入需要记录的记忆内容..."></textarea>
           </div>
           <div class="form-group">
             <label class="form-label" for="add-mem-tags">标签（逗号分隔）</label>
-            <input id="add-mem-tags" class="input" placeholder="tag1, tag2" />
+            <input id="add-mem-tags" class="input h-8 text-xs" placeholder="tag1, tag2" />
           </div>
           <div class="form-group">
             <label class="form-label" for="add-mem-visibility">可见性</label>
-            <select id="add-mem-visibility" class="select">
-              <option value="private">🔒 Private</option>
-              <option value="public">🌐 Public</option>
+            <select id="add-mem-visibility" class="select h-8 text-xs">
+              <option value="private">🔒 Private (私有)</option>
+              <option value="public">🌐 Public (公开)</option>
             </select>
           </div>
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline" id="add-mem-cancel">取消</button>
-        <button class="btn btn-primary" id="add-mem-save">保存</button>
+        <button class="btn btn-outline btn-sm h-8 px-3" id="add-mem-cancel">取消</button>
+        <button class="btn btn-primary btn-sm h-8 px-3" id="add-mem-save">保存</button>
       `,
       onMount: (dialogEl, close) => {
         const cancelBtn = dialogEl.querySelector('#add-mem-cancel')!;
@@ -573,63 +575,63 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     let currentImportance = mem.importance || 0;
 
     openDialog({
-      title: '记忆详情',
+      title: '记忆详情与编辑',
       maxWidth: '38rem',
       bodyHtml: `
-        <div class="flex flex-col gap-4">
-          <div class="grid grid-cols-2 gap-3 p-3 rounded-lg border bg-muted text-xs">
+        <div class="flex flex-col gap-3.5">
+          <div class="grid grid-cols-2 gap-2 p-3 rounded-md border border-border bg-muted/40 text-xs">
             <div class="col-span-2">
-              <span class="text-muted">ID:</span>
-              <span class="font-mono ml-1 break-all">${escapeHtml(mem.id)}</span>
+              <span class="text-muted-foreground">ID:</span>
+              <span class="font-mono ml-1 break-all text-foreground select-all">${escapeHtml(mem.id)}</span>
             </div>
             <div>
-              <span class="text-muted">归属者:</span>
-              <span class="ml-1 font-medium">${escapeHtml(mem.owner)}</span>
+              <span class="text-muted-foreground">归属者:</span>
+              <span class="ml-1 font-medium text-foreground">${escapeHtml(mem.owner)}</span>
             </div>
             <div>
-              <span class="text-muted">来源:</span>
-              <span class="ml-1">${escapeHtml(getSourceLabel(mem.source))}</span>
+              <span class="text-muted-foreground">来源:</span>
+              <span class="ml-1 text-foreground">${escapeHtml(getSourceLabel(mem.source))}</span>
             </div>
             <div>
-              <span class="text-muted">创建时间:</span>
-              <span class="ml-1">${escapeHtml(formatDateTime(mem.createdAt))}</span>
+              <span class="text-muted-foreground">创建时间:</span>
+              <span class="ml-1 font-mono text-foreground">${escapeHtml(formatDateTime(mem.createdAt))}</span>
             </div>
             <div>
-              <span class="text-muted">更新时间:</span>
-              <span class="ml-1">${escapeHtml(formatDateTime(mem.updatedAt))}</span>
+              <span class="text-muted-foreground">更新时间:</span>
+              <span class="ml-1 font-mono text-foreground">${escapeHtml(formatDateTime(mem.updatedAt))}</span>
             </div>
           </div>
 
           <div class="form-group">
             <label class="form-label" for="edit-mem-content">内容</label>
-            <textarea id="edit-mem-content" class="textarea" rows="4">${escapeHtml(mem.content)}</textarea>
+            <textarea id="edit-mem-content" class="textarea text-xs" rows="4">${escapeHtml(mem.content)}</textarea>
           </div>
 
           <div class="form-group">
             <label class="form-label" for="edit-mem-tags">标签（逗号分隔）</label>
-            <input id="edit-mem-tags" class="input" value="${escapeHtml((mem.tags || []).join(', '))}" />
+            <input id="edit-mem-tags" class="input h-8 text-xs" value="${escapeHtml((mem.tags || []).join(', '))}" />
           </div>
 
           <div class="form-group">
             <label class="form-label" for="edit-mem-visibility">可见性</label>
-            <select id="edit-mem-visibility" class="select">
-              <option value="private" ${mem.visibility === 'private' ? 'selected' : ''}>🔒 Private</option>
-              <option value="public" ${mem.visibility === 'public' ? 'selected' : ''}>🌐 Public</option>
+            <select id="edit-mem-visibility" class="select h-8 text-xs">
+              <option value="private" ${mem.visibility === 'private' ? 'selected' : ''}>🔒 Private (私有)</option>
+              <option value="public" ${mem.visibility === 'public' ? 'selected' : ''}>🌐 Public (公开)</option>
             </select>
           </div>
 
           <div class="form-group">
             <div class="flex items-center justify-between">
               <label class="form-label" for="edit-mem-importance">重要度</label>
-              <span id="importance-val" class="text-xs font-mono font-medium">${(currentImportance * 100).toFixed(0)}%</span>
+              <span id="importance-val" class="text-xs font-mono font-medium text-foreground">${(currentImportance * 100).toFixed(0)}%</span>
             </div>
             <input type="range" id="edit-mem-importance" min="0" max="1" step="0.01" value="${currentImportance}" class="w-full" />
           </div>
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline" id="edit-mem-cancel">取消</button>
-        <button class="btn btn-primary" id="edit-mem-save">保存</button>
+        <button class="btn btn-outline btn-sm h-8 px-3" id="edit-mem-cancel">取消</button>
+        <button class="btn btn-primary btn-sm h-8 px-3" id="edit-mem-save">保存更新</button>
       `,
       onMount: (dialogEl, close) => {
         const cancelBtn = dialogEl.querySelector('#edit-mem-cancel')!;
@@ -684,7 +686,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (reflecting) return;
     reflecting = true;
     reflectBtn.disabled = true;
-    reflectIcon.innerHTML = `<span class="spinner" style="width: 1rem; height: 1rem;"></span>`;
+    reflectIcon.innerHTML = `<span class="spinner size-3.5 inline-block"></span>`;
 
     try {
       const result = await api.triggerMemoryReflection(ownerFilter);
@@ -703,7 +705,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     } finally {
       reflecting = false;
       reflectBtn.disabled = false;
-      reflectIcon.innerHTML = icon('psychology');
+      reflectIcon.innerHTML = icon('brain', 'size-3.5');
     }
   }
 

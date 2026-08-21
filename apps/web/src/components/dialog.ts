@@ -26,7 +26,7 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
           ${options.description ? `<p class="dialog-description">${escapeHtml(options.description)}</p>` : ''}
         </div>
         <button class="btn btn-ghost btn-icon-sm dialog-close-btn" aria-label="关闭">
-          ${icon('close', 'sm')}
+          ${icon('close', 'size-4')}
         </button>
       </div>
       <div class="dialog-body">

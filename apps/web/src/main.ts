@@ -1,9 +1,10 @@
+import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/layout.css';
 
-import { themeManager } from './theme';
+import { themeManager, type ThemeMode } from './theme';
 import { router } from './router';
 import { icon } from './components/icons';
 
@@ -36,7 +37,6 @@ function buildNavigationLinks(isMobile = false): string {
         href="#${item.path}"
         class="nav-item ${isMobile ? 'mobile-nav-link' : ''}"
         data-path="${item.path}"
-        style="text-decoration: none;"
       >
         <span class="nav-icon">${icon(item.iconName)}</span>
         <span class="nav-label">${item.label}</span>
@@ -46,9 +46,24 @@ function buildNavigationLinks(isMobile = false): string {
     .join('');
 }
 
+function getThemeIconAndLabel(mode: ThemeMode): { iconName: string; label: string } {
+  switch (mode) {
+    case 'light':
+      return { iconName: 'sun', label: '浅色模式' };
+    case 'dark':
+      return { iconName: 'moon', label: '深色模式' };
+    case 'system':
+    default:
+      return { iconName: 'sun_medium', label: '跟随系统' };
+  }
+}
+
 function initAppShell(): void {
   const appEl = document.getElementById('app');
   if (!appEl) return;
+
+  const currentTheme = themeManager.getMode();
+  const themeInfo = getThemeIconAndLabel(currentTheme);
 
   appEl.innerHTML = `
     <div class="app-layout">
@@ -57,7 +72,7 @@ function initAppShell(): void {
         <div class="sidebar-header">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('ac_unit')}
+              ${icon('sparkles')}
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -72,8 +87,11 @@ function initAppShell(): void {
 
         <div class="sidebar-footer">
           <button class="theme-toggle-btn" id="theme-toggle-desktop" title="切换主题">
-            <span class="theme-icon">${icon('light_mode', 'sm')}</span>
-            <span class="text-xs">主题模式</span>
+            <span class="flex items-center gap-2">
+              <span id="theme-icon-desktop" class="inline-flex">${icon(themeInfo.iconName)}</span>
+              <span id="theme-label-desktop" class="text-xs">${themeInfo.label}</span>
+            </span>
+            <span class="text-muted text-xs">切换</span>
           </button>
         </div>
       </aside>
@@ -84,11 +102,13 @@ function initAppShell(): void {
           ${icon('menu')}
         </button>
         <div class="flex items-center gap-2">
-          <span class="text-primary">${icon('ac_unit', 'sm')}</span>
+          <div class="brand-icon" style="width: 1.5rem; height: 1.5rem; border-radius: var(--radius-sm);">
+            ${icon('sparkles', '', 14)}
+          </div>
           <span class="font-bold text-sm">FrostAgent</span>
         </div>
         <button class="btn btn-ghost btn-icon-sm" id="theme-toggle-mobile" aria-label="切换主题">
-          ${icon('light_mode', 'sm')}
+          <span id="theme-icon-mobile" class="inline-flex">${icon(themeInfo.iconName)}</span>
         </button>
       </header>
 
@@ -100,7 +120,7 @@ function initAppShell(): void {
         <div class="drawer-header flex items-center justify-between p-4 border-b">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('ac_unit')}
+              ${icon('sparkles')}
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -148,6 +168,18 @@ function initAppShell(): void {
     link.addEventListener('click', closeDrawer);
   });
 
+  // Update theme UI elements
+  const updateThemeUI = (mode: ThemeMode) => {
+    const info = getThemeIconAndLabel(mode);
+    const iconDesktop = document.getElementById('theme-icon-desktop');
+    const labelDesktop = document.getElementById('theme-label-desktop');
+    const iconMobile = document.getElementById('theme-icon-mobile');
+
+    if (iconDesktop) iconDesktop.innerHTML = icon(info.iconName);
+    if (labelDesktop) labelDesktop.textContent = info.label;
+    if (iconMobile) iconMobile.innerHTML = icon(info.iconName);
+  };
+
   // Quick theme toggle helper
   const handleQuickThemeToggle = () => {
     const current = themeManager.getMode();
@@ -158,6 +190,10 @@ function initAppShell(): void {
 
   document.getElementById('theme-toggle-desktop')?.addEventListener('click', handleQuickThemeToggle);
   document.getElementById('theme-toggle-mobile')?.addEventListener('click', handleQuickThemeToggle);
+
+  themeManager.onChange((mode) => {
+    updateThemeUI(mode);
+  });
 
   // Update active links on route navigation
   router.onNavigate((activePath) => {

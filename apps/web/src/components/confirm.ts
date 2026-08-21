@@ -16,11 +16,11 @@ export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
 
   return openDialog<boolean>({
     title: options.title,
-    maxWidth: '28rem',
-    bodyHtml: `<p class="text-sm leading-relaxed">${escapeHtml(options.message)}</p>`,
+    maxWidth: '26rem',
+    bodyHtml: `<p class="text-sm text-muted-foreground leading-relaxed">${escapeHtml(options.message)}</p>`,
     footerHtml: `
-      <button class="btn btn-outline" id="confirm-cancel-btn">${escapeHtml(cancelText)}</button>
-      <button class="btn ${btnClass}" id="confirm-ok-btn">${escapeHtml(confirmText)}</button>
+      <button class="btn btn-outline btn-sm" id="confirm-cancel-btn">${escapeHtml(cancelText)}</button>
+      <button class="btn ${btnClass} btn-sm" id="confirm-ok-btn">${escapeHtml(confirmText)}</button>
     `,
     onMount: (dialogEl, close) => {
       const cancelBtn = dialogEl.querySelector('#confirm-cancel-btn');

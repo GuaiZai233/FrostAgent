@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite';
 import path from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
+  plugins: [tailwindcss()],
   root: '.',
   build: {
     outDir: '../../internal/frontend/dist',

@@ -1,3 +1,154 @@
-export function icon(name: string, className = ''): string {
-  return `<span class="icon ${className}" aria-hidden="true">${name}</span>`;
+import type { IconNode } from 'lucide';
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Bot,
+  Brain,
+  Calendar,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  Clock,
+  Code,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  FileCode,
+  FileText,
+  Filter,
+  Flame,
+  Globe,
+  Info,
+  LayoutDashboard,
+  Lock,
+  Menu,
+  MessageSquare,
+  MessageSquareQuote,
+  Moon,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings,
+  SlidersHorizontal,
+  Sparkles,
+  Sun,
+  SunMedium,
+  Tag,
+  Terminal,
+  Trash2,
+  Upload,
+  User,
+  Users,
+  X,
+} from 'lucide';
+
+const iconMap: Record<string, IconNode> = {
+  // Navigation & Shell
+  dashboard: LayoutDashboard,
+  layout_dashboard: LayoutDashboard,
+  forum: MessageSquare,
+  message_square: MessageSquare,
+  psychology: Brain,
+  brain: Brain,
+  chat: MessageSquareQuote,
+  message_square_quote: MessageSquareQuote,
+  receipt_long: FileText,
+  file_text: FileText,
+  settings: Settings,
+  ac_unit: Sparkles,
+  sparkles: Sparkles,
+  auto_awesome: Sparkles,
+  light_mode: Sun,
+  sun: Sun,
+  dark_mode: Moon,
+  moon: Moon,
+  sun_medium: SunMedium,
+  menu: Menu,
+  close: X,
+  x: X,
+
+  // Common UI actions & features
+  search: Search,
+  filter: Filter,
+  add: Plus,
+  plus: Plus,
+  delete: Trash2,
+  trash: Trash2,
+  trash2: Trash2,
+  refresh: RefreshCw,
+  refresh_cw: RefreshCw,
+  download: Download,
+  file_download: Download,
+  upload: Upload,
+  file_upload: Upload,
+  user: User,
+  person: User,
+  users: Users,
+  group: Users,
+  info: Info,
+  check: Check,
+  chevron_left: ChevronLeft,
+  chevron_right: ChevronRight,
+  chevron_down: ChevronDown,
+  sliders: SlidersHorizontal,
+  sliders_horizontal: SlidersHorizontal,
+  circle_alert: CircleAlert,
+  warning: CircleAlert,
+  circle_check: CircleCheck,
+  success: CircleCheck,
+  copy: Copy,
+  flame: Flame,
+  activity: Activity,
+  terminal: Terminal,
+  bot: Bot,
+  code: Code,
+  file_code: FileCode,
+  eye: Eye,
+  visibility: Eye,
+  eye_off: EyeOff,
+  visibility_off: EyeOff,
+  arrow_up_down: ArrowUpDown,
+  swap_vert: ArrowUpDown,
+  arrow_up: ArrowUp,
+  arrow_down: ArrowDown,
+  public: Globe,
+  globe: Globe,
+  lock: Lock,
+  tag: Tag,
+  edit: Pencil,
+  pencil: Pencil,
+  edit_note: Pencil,
+  help: CircleHelp,
+  help_outline: CircleHelp,
+  circle_help: CircleHelp,
+  calendar: Calendar,
+  clock: Clock,
+};
+
+export function renderLucideIcon(iconNode: IconNode, className = '', size?: number): string {
+  const children = iconNode
+    .map(([tag, attrs]) => {
+      const attrStr = Object.entries(attrs)
+        .map(([k, v]) => `${k}="${v}"`)
+        .join(' ');
+      return `<${tag} ${attrStr}></${tag}>`;
+    })
+    .join('');
+
+  const sizeAttr = size ? `width="${size}" height="${size}"` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide inline-block shrink-0 ${className}" ${sizeAttr}>${children}</svg>`;
+}
+
+export function icon(name: string, className = '', size?: number): string {
+  const normalized = name.toLowerCase().replace(/-/g, '_');
+  const node = iconMap[normalized] || iconMap.sparkles;
+  return renderLucideIcon(node, className, size);
 }
