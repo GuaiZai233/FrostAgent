@@ -22,8 +22,8 @@ func TestDerivePlatform(t *testing.T) {
 		{"onebot:group:123", "onebot"},
 		{"qq:group:123", "onebot"},
 		{"QQ:group:123", "onebot"},
-		{"aiocqhttp:group:370335958", "aiocqhttp"},
-		{"AIOCQHTTP:group:370335958", "aiocqhttp"},
+		{"aiocqhttp:group:100001", "aiocqhttp"},
+		{"AIOCQHTTP:group:100001", "aiocqhttp"},
 		{"telegram:group:999", "telegram"},
 		{"group:12345", "group"},
 		{"GROUP:12345", "group"},
@@ -49,8 +49,8 @@ func TestIsGroupSession(t *testing.T) {
 	}{
 		{"group:12345", true},
 		{"GROUP:12345", true},
-		{"aiocqhttp:group:370335958", true},
-		{"AIOCQHTTP:GROUP:370335958", true},
+		{"aiocqhttp:group:100001", true},
+		{"AIOCQHTTP:GROUP:100001", true},
 		{"astrbot:group:12345", true},
 		{"AstrBot:Group:12345", true},
 		{"onebot:group:12345", true},
@@ -92,7 +92,7 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	svc := New(engine, "test-v1")
 
 	// 1. Add active session in sessionManager
-	activeSession := sessionManager.GetOrCreate("aiocqhttp:group:370335958")
+	activeSession := sessionManager.GetOrCreate("aiocqhttp:group:100001")
 	activeSession.AppendGroupCompactMessage("User (123): hello", 20)
 
 	// 2. Add durable group summary
@@ -116,7 +116,7 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	}
 
 	// Verify aiocqhttp group session
-	aiocqhttpSession, ok := sessionMap["aiocqhttp:group:370335958"]
+	aiocqhttpSession, ok := sessionMap["aiocqhttp:group:100001"]
 	if !ok {
 		t.Fatalf("missing aiocqhttp session")
 	}

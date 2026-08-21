@@ -167,8 +167,8 @@ func TestHandleWSGroupMessageMentioned(t *testing.T) {
 		SelfID:      123456,
 		PostType:    "message",
 		MessageType: "group",
-		GroupID:     1040527846,
-		UserID:      3127306807,
+		GroupID:     20002,
+		UserID:      987654,
 		MessageID:   2,
 		Message: json.RawMessage(fmt.Sprintf(
 			`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"你好"}}]`,
@@ -225,8 +225,8 @@ func TestHandleWSGroupMessageMentioned(t *testing.T) {
 		t.Fatalf("params 不是 map: %T", action.Params)
 	}
 
-	if fmt.Sprintf("%v", params["group_id"]) != "1040527846" {
-		t.Errorf("期望 group_id=1040527846, 实际=%v", params["group_id"])
+	if fmt.Sprintf("%v", params["group_id"]) != "20002" {
+		t.Errorf("期望 group_id=20002, 实际=%v", params["group_id"])
 	}
 
 	t.Logf("✅ 群聊@消息测试通过，回复内容: %v", params["message"])
@@ -267,11 +267,11 @@ func TestSenderContextDeduplicatesEqualNicknameAndCard(t *testing.T) {
 func TestSenderDisplayNameIncludesCardAndNickname(t *testing.T) {
 	event := model.OneBotEvent{
 		Sender: &model.OneBotSender{
-			Nickname: "怪哉GuaiZai",
-			Card:     "guaizai",
+			Nickname: "FoxUser",
+			Card:     "foxcard",
 		},
 	}
-	if got := senderDisplayName(event); got != "guaizai（怪哉GuaiZai）" {
+	if got := senderDisplayName(event); got != "foxcard（FoxUser）" {
 		t.Fatalf("unexpected sender display name: %q", got)
 	}
 }
