@@ -118,14 +118,13 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                 <th>内容</th>
                 <th style="width: 10rem;">标签</th>
                 <th style="width: 5.5rem;">可见性</th>
-                <th style="width: 6rem;">重要度</th>
                 <th style="width: 8.5rem;">创建时间</th>
                 <th style="width: 4.5rem; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="memory-table-body">
               <tr>
-                <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
+                <td colspan="8" class="text-center text-muted" style="padding: 2.5rem;">
                   <span class="spinner"></span>
                   <span style="margin-left: 0.5rem;">加载中...</span>
                 </td>
@@ -302,7 +301,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (loading && memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="8" class="text-center text-muted" style="padding: 2.5rem;">
             <span class="spinner"></span>
             <span style="margin-left: 0.5rem;">加载中...</span>
           </td>
@@ -315,7 +314,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     if (memories.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 3rem;">
+          <td colspan="8" class="text-center text-muted" style="padding: 3rem;">
             暂无记忆记录。
           </td>
         </tr>
@@ -360,8 +359,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
           ? `<span class="badge badge-success text-[11px] px-1.5 py-0 gap-1">${icon('globe', 'w-3 h-3')}<span>public</span></span>`
           : `<span class="badge badge-outline text-[11px] px-1.5 py-0 gap-1 text-muted">${icon('lock', 'w-3 h-3')}<span>private</span></span>`;
 
-        const importancePct = Math.round((mem.importance || 0) * 100);
-
         return `
           <tr>
             <td style="text-align: center;">
@@ -385,14 +382,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             </td>
             <td>${tagsHtml}</td>
             <td>${visibilityBadge}</td>
-            <td>
-              <div class="flex items-center gap-1.5">
-                <div style="background-color: var(--muted); height: 0.25rem; width: 2.25rem; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0;">
-                  <div style="background-color: var(--muted-foreground); height: 100%; width: ${importancePct}%;"></div>
-                </div>
-                <span class="text-xs text-muted font-mono">${importancePct}%</span>
-              </div>
-            </td>
             <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(mem.createdAt))}</td>
             <td style="text-align: right;">
               <div class="flex items-center justify-end gap-1">
@@ -608,8 +597,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
   }
 
   function openDetailDialog(mem: MemoryEntry) {
-    let currentImportance = mem.importance || 0;
-
     openDialog({
       title: '记忆详情与编辑',
       maxWidth: '38rem',
@@ -655,14 +642,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               <option value="public" ${mem.visibility === 'public' ? 'selected' : ''}>🌐 Public (公开)</option>
             </select>
           </div>
-
-          <div class="form-group">
-            <div class="flex items-center justify-between">
-              <label class="form-label" for="edit-mem-importance">重要度</label>
-              <span id="importance-val" class="text-xs font-mono font-medium text-foreground">${(currentImportance * 100).toFixed(0)}%</span>
-            </div>
-            <input type="range" id="edit-mem-importance" min="0" max="1" step="0.01" value="${currentImportance}" class="w-full" />
-          </div>
         </div>
       `,
       footerHtml: `
@@ -675,14 +654,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
         const contentInput = dialogEl.querySelector<HTMLTextAreaElement>('#edit-mem-content')!;
         const tagsInput = dialogEl.querySelector<HTMLInputElement>('#edit-mem-tags')!;
         const visSelect = dialogEl.querySelector<HTMLSelectElement>('#edit-mem-visibility')!;
-        const impRange = dialogEl.querySelector<HTMLInputElement>('#edit-mem-importance')!;
-        const impVal = dialogEl.querySelector<HTMLElement>('#importance-val')!;
-
-        impRange.addEventListener('input', () => {
-          const val = parseFloat(impRange.value);
-          currentImportance = val;
-          impVal.textContent = `${(val * 100).toFixed(0)}%`;
-        });
 
         cancelBtn.addEventListener('click', () => close());
         saveBtn.addEventListener('click', async () => {
@@ -699,7 +670,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
           try {
             saveBtn.disabled = true;
-            const res = await api.updateMemory(mem.id, content, tags, visibility, currentImportance);
+            const res = await api.updateMemory(mem.id, content, tags, visibility, mem.importance || 0);
             if (res.success) {
               toast.success('记忆已更新');
               close();
