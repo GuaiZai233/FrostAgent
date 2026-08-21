@@ -357,15 +357,16 @@ func paginateEntries(entries []memory.MemoryEntry, pagination *v1.Pagination) (*
 // toProtoEntry converts a memory.MemoryEntry to a proto MemoryEntry.
 func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 	return &v1.MemoryEntry{
-		Id:         e.ID,
-		Owner:      e.Owner,
-		Content:    e.Content,
-		Tags:       e.Tags,
-		Source:     string(e.Source),
-		Visibility: string(e.Visibility),
-		Importance: e.Importance,
-		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:  e.UpdatedAt.Format(time.RFC3339),
+		Id:          e.ID,
+		Owner:       e.Owner,
+		Content:     e.Content,
+		Tags:        e.Tags,
+		Source:      string(e.Source),
+		Visibility:  string(e.Visibility),
+		Importance:  e.Importance,
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   e.UpdatedAt.Format(time.RFC3339),
+		AccessCount: int32(e.AccessCount),
 	}
 }
 

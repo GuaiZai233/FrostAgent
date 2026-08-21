@@ -28,6 +28,7 @@ message MemoryEntry {
   double importance = 7;
   string created_at = 8;
   string updated_at = 9;
+  int32 access_count = 10;
 }
 
 message ListMemoriesRequest {

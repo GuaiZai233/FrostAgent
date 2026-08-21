@@ -86,6 +86,9 @@ type MemoryStore interface {
 
     // 删除一条记忆
     Delete(ctx context.Context, memoryID string) error
+
+    // 递增记忆被召回次数并更新访问时间
+    IncrementAccessCount(memoryIDs ...string) error
 }
 ```
 
@@ -110,6 +113,9 @@ type MemoryWriter interface {
 type MemoryReader interface {
     // 从统一大脑中搜索相关记忆（全量搜索，不做用户隔离）
     Recall(ctx context.Context, currentMessage string) ([]MemoryEntry, error)
+
+    // 记录被召回的记忆（递增被召回次数及更新访问时间）
+    RecordRecall(entries []MemoryEntry) error
 }
 ```
 
@@ -165,6 +171,11 @@ type MemoryEntry struct {
 **Visibility 说明**：
 - `private`（默认）：只有 owner 自己能看到。Gateway 会过滤掉其他用户的 private 记忆
 - `public`：所有人可见。例如"舞萌更新到Circle+了"、"项目 deadline 是下周五"
+
+**AccessCount 说明**：
+- `access_count`：记录记忆被成功召回的累计次数。
+- 在主动召回注入系统上下文（`Reader.Recall`）以及工具搜索命中（`memory` 工具 `action=search`）时触发自增，并同步刷新 `updated_at` 为当前时间。
+- 在反思合并（`Reflect`）时，新生成的合并记忆继承各来源条目的最大 `access_count`。
 
 ### 4.2 UserMemoryCatalog（记忆主题目录）
 

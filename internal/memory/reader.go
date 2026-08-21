@@ -35,3 +35,17 @@ func (r *Reader) Limit(entries []MemoryEntry) []MemoryEntry {
 	}
 	return entries[:r.limit]
 }
+
+// RecordRecall increments the access count and updates the timestamp for recalled memories in the store.
+func (r *Reader) RecordRecall(entries []MemoryEntry) error {
+	if r == nil || r.store == nil || len(entries) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.ID != "" {
+			ids = append(ids, e.ID)
+		}
+	}
+	return r.store.IncrementAccessCount(ids...)
+}

@@ -34,6 +34,11 @@ func withRunContext(ctx context.Context, runContext RunContext) context.Context 
 	return context.WithValue(ctx, runContextKey{}, runContext)
 }
 
+// WithRunContext attaches RunContext to a context.
+func WithRunContext(ctx context.Context, runContext RunContext) context.Context {
+	return withRunContext(ctx, runContext)
+}
+
 // RunContextFromContext returns the request-local tool state, if the current
 // agent entry point supplied one.
 func RunContextFromContext(ctx context.Context) (RunContext, bool) {

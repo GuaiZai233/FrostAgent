@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 )
 
 // NewMemoryTool creates a tool that manages the current request's memory owner.
@@ -90,6 +92,14 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				filtered = engine.MemoryReader.Limit(filtered)
 				if len(filtered) == 0 {
 					return "未找到相关记忆", nil
+				}
+				if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
+				}
+				now := time.Now()
+				for i := range filtered {
+					filtered[i].AccessCount++
+					filtered[i].UpdatedAt = now
 				}
 				result, _ := json.Marshal(filtered)
 				return string(result), nil

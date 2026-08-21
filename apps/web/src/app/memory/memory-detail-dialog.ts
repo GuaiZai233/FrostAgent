@@ -62,6 +62,10 @@ export interface MemoryDetailDialogData {
         <dt class="text-muted-foreground">更新时间</dt>
         <dd>{{ data.memory.updatedAt }}</dd>
       </div>
+      <div class="col-span-2">
+        <dt class="text-muted-foreground">召回次数</dt>
+        <dd>{{ data.memory.accessCount }}</dd>
+      </div>
     </dl>
 
     <div class="grid max-h-[55vh] gap-4 overflow-y-auto py-2 pe-1">

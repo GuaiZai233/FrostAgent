@@ -496,3 +496,42 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 	}
 	return fmt.Errorf("memory %s not found", updated.ID)
 }
+
+// IncrementAccessCount increments the access count and updates UpdatedAt for the specified memory IDs.
+func (s *Store) IncrementAccessCount(memoryIDs ...string) error {
+	if len(memoryIDs) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+
+	targetMap := make(map[string]bool, len(memoryIDs))
+	for _, id := range memoryIDs {
+		if id != "" {
+			targetMap[id] = true
+		}
+	}
+	if len(targetMap) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	changed := false
+	for i, entry := range brain.Entries {
+		if targetMap[entry.ID] {
+			brain.Entries[i].AccessCount++
+			brain.Entries[i].UpdatedAt = now
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return s.save(brain)
+}
