@@ -346,6 +346,16 @@ input[type="range"]::-webkit-slider-thumb:hover {
   border-bottom: none;
 }
 
+/* ==================== DIALOGUE SPECIALIZED CARDS ==================== */
+.dialogue-card > header {
+  padding-inline: 0;
+}
+
+.prompt-preview-card {
+  padding-block: 0;
+  gap: 0;
+}
+
 /* ==================== MEMORY TABLE SPECIALIZED CELLS ==================== */
 .memory-content-cell {
   min-width: 14rem;

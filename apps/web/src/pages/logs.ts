@@ -332,9 +332,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}`,
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">
-          ${escapeHtml(entry.summary || '无摘要内容')}
-        </div>
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${escapeHtml(entry.summary || '无摘要内容')}</div>
       `,
       footerHtml: `
         <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>

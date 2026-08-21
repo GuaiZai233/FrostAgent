@@ -232,9 +232,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
       description: `平台: ${formatPlatform(session.platform)} · 消息数: ${formatCount(session.messageCount)}`,
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">
-          ${escapeHtml(summary)}
-        </div>
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(summary)}</div>
       `,
       footerHtml: `
         <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>

@@ -56,7 +56,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       </header>
 
       <!-- Prompt Preview Collapsible -->
-      <details class="card overflow-hidden" id="prompt-preview-details" open>
+      <details class="card prompt-preview-card overflow-hidden" id="prompt-preview-details" open>
         <summary class="flex items-center justify-between p-3 cursor-pointer select-none border-b border-border hover-bg text-xs font-medium">
           <div class="flex items-center gap-2">
             <span class="text-primary flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
@@ -248,7 +248,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
         const isLast = originalIndex === dialogues.length - 1;
 
         return `
-          <article class="card p-4 flex flex-col gap-3">
+          <article class="card dialogue-card p-4 flex flex-col gap-3">
             <header class="flex items-center justify-between gap-2 border-b border-border pb-2.5 flex-wrap">
               <div class="flex items-center gap-2">
                 <span class="badge badge-outline font-mono text-xs">#${escapeHtml(item.id)}</span>
