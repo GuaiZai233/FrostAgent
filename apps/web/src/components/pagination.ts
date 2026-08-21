@@ -15,20 +15,20 @@ export function renderPagination(config: PaginationConfig): string {
     .join('');
 
   return `
-    <footer class="pagination flex items-center justify-between gap-3 px-4 py-2.5 border-t border-border text-xs text-muted-foreground">
+    <footer class="pagination flex items-center justify-between gap-3 px-4 py-3 border-t border-border text-xs text-muted-foreground">
       <div class="flex items-center gap-2">
         <span>共 <span class="font-medium text-foreground">${config.total}</span> 条记录</span>
         <span class="text-muted-foreground/40">·</span>
         <span>第 <span class="font-medium text-foreground">${config.pageIndex + 1}</span> 页</span>
       </div>
       <div class="flex items-center gap-2">
-        <select class="select h-7 text-xs py-0 px-2 border border-input rounded-md bg-background text-foreground cursor-pointer" data-action="page-size">
+        <select class="select text-xs py-0 px-2 border border-input rounded-md bg-background text-foreground cursor-pointer" style="height: 2rem; width: auto;" data-action="page-size">
           ${sizeOptions}
         </select>
-        <button class="btn btn-outline btn-sm h-7 px-2.5 text-xs" data-action="prev-page" ${!config.canGoBack || config.loading ? 'disabled' : ''}>
+        <button class="btn btn-outline btn-sm" style="height: 2rem; padding: 0 0.625rem;" data-action="prev-page" ${!config.canGoBack || config.loading ? 'disabled' : ''}>
           上一页
         </button>
-        <button class="btn btn-outline btn-sm h-7 px-2.5 text-xs" data-action="next-page" ${!config.canGoNext || config.loading ? 'disabled' : ''}>
+        <button class="btn btn-outline btn-sm" style="height: 2rem; padding: 0 0.625rem;" data-action="next-page" ${!config.canGoNext || config.loading ? 'disabled' : ''}>
           下一页
         </button>
       </div>
