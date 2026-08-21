@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +15,8 @@ const currentCatalogVersion = 1
 // MemoryTopic is a compact lookup hint. It is not a memory fact and must only
 // be used by the model to decide whether to call the memory search tool.
 type MemoryTopic struct {
-	Name       string   `json:"name"`
-	Aliases    []string `json:"aliases,omitempty"`
-	Importance float64  `json:"importance,omitempty"`
+	Name    string   `json:"name"`
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // UserMemoryCatalog contains the derived topic index for one owner.
@@ -105,9 +103,6 @@ func (s *CatalogStore) FormatForPrompt(owner string) (string, error) {
 	}
 
 	topics := append([]MemoryTopic(nil), catalog.Topics...)
-	sort.SliceStable(topics, func(i, j int) bool {
-		return topics[i].Importance > topics[j].Importance
-	})
 	if len(topics) > 24 {
 		topics = topics[:24]
 	}

@@ -240,9 +240,8 @@ func (s *Store) Delete(memoryID string) error {
 func (s *Store) ApplyReflection(
 	owner string,
 	outdatedIDs []string,
-	importanceUpdates map[string]float64,
 ) ([]MemoryEntry, []string, error) {
-	applied, err := s.applyReflectionWithMerges(owner, nil, outdatedIDs, importanceUpdates)
+	applied, err := s.applyReflectionWithMerges(owner, nil, outdatedIDs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -266,7 +265,6 @@ func (s *Store) applyReflectionWithMerges(
 	owner string,
 	merges []validatedMerge,
 	outdatedIDs []string,
-	importanceUpdates map[string]float64,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -356,10 +354,6 @@ func (s *Store) applyReflectionWithMerges(
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
 			}
-			if importance, ok := importanceUpdates[entry.ID]; ok {
-				entry.Importance = clampImportance(importance)
-				entry.UpdatedAt = now
-			}
 		}
 		remainingAll = append(remainingAll, entry)
 	}
@@ -368,7 +362,7 @@ func (s *Store) applyReflectionWithMerges(
 	brain.MergeArchives = append(brain.MergeArchives, archives...)
 
 	// Always rewrite after reflection so legacy inline "summaries" fields are
-	// removed from brain.json even when no importance or deletion changed.
+	// removed from brain.json even when no deletion changed.
 	if err := s.save(brain); err != nil {
 		return reflectionApplyResult{}, err
 	}
@@ -395,7 +389,6 @@ func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
 		current.Visibility == snapshot.Visibility &&
-		current.Importance == snapshot.Importance &&
 		current.CreatedAt.Equal(snapshot.CreatedAt) &&
 		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
 		current.AccessCount == snapshot.AccessCount &&
@@ -410,16 +403,12 @@ func buildMergedEntry(
 	now time.Time,
 ) MemoryEntry {
 	visibility := VisibilityPublic
-	importance := 0.0
 	accessCount := 0
 	mergedFrom := make([]string, 0, len(sources))
 	for _, source := range sources {
 		mergedFrom = append(mergedFrom, source.ID)
 		if source.Visibility != VisibilityPublic {
 			visibility = VisibilityPrivate
-		}
-		if source.Importance > importance {
-			importance = source.Importance
 		}
 		if source.AccessCount > accessCount {
 			accessCount = source.AccessCount
@@ -434,42 +423,11 @@ func buildMergedEntry(
 		Tags:        slices.Clone(merge.Tags),
 		Source:      SourceReflect,
 		Visibility:  visibility,
-		Importance:  clampImportance(importance),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		AccessCount: accessCount,
 		MergedFrom:  mergedFrom,
 	}
-}
-
-func clampImportance(value float64) float64 {
-	if value < 0 {
-		return 0
-	}
-	if value > 1 {
-		return 1
-	}
-	return value
-}
-
-// UpdateImportance updates a single memory's importance score.
-func (s *Store) UpdateImportance(memoryID string, newImportance float64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	brain, err := s.load()
-	if err != nil {
-		return err
-	}
-
-	for i, entry := range brain.Entries {
-		if entry.ID == memoryID {
-			brain.Entries[i].Importance = newImportance
-			brain.Entries[i].UpdatedAt = time.Now()
-			return s.save(brain)
-		}
-	}
-	return fmt.Errorf("memory %s not found", memoryID)
 }
 
 // UpdateEntry replaces an existing memory entry in-place, preserving its ID and CreatedAt.
@@ -495,4 +453,43 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 		}
 	}
 	return fmt.Errorf("memory %s not found", updated.ID)
+}
+
+// IncrementAccessCount increments the access count and updates UpdatedAt for the specified memory IDs.
+func (s *Store) IncrementAccessCount(memoryIDs ...string) error {
+	if len(memoryIDs) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+
+	targetMap := make(map[string]bool, len(memoryIDs))
+	for _, id := range memoryIDs {
+		if id != "" {
+			targetMap[id] = true
+		}
+	}
+	if len(targetMap) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	changed := false
+	for i, entry := range brain.Entries {
+		if targetMap[entry.ID] {
+			brain.Entries[i].AccessCount++
+			brain.Entries[i].UpdatedAt = now
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return s.save(brain)
 }

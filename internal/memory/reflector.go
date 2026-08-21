@@ -18,14 +18,13 @@ const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于
 
 1. 提取 3～20 个便于未来检索的主题。主题应简短、具体，合并同义表达，并把别名放入 aliases
 2. 标记已经明确过时、被新事实取代或不再有保留价值的记忆 ID
-3. 为每条记忆评估重要度（0.0～1.0）
-4. 将描述同一主体、内容兼容且合并后更利于检索的记忆整合成一条
+3. 将描述同一主体、内容兼容且合并后更利于检索的记忆整合成一条
 
 主题只是检索索引，不要在主题中编造原始记忆没有的事实。不要因为两条记忆相似就擅自删除；只有明确过时或被取代时才放入 outdated_ids。
 
 时效性规则（对照当前系统时间判断）：
 - 仅在某时间点之前/当天有效、且该时间已过的记忆（如"用户明天要去极兽聚"、"用户本周在成都"、"用户预约下周一去医院"），属于已过时效性，应放入 outdated_ids 删除
-- 长期偏好仍成立、只是夹带已过去临时信息的记忆（如"用户喜欢打舞萌，下周要去参赛"），不要整条删除：用 importance_updates 适当降低重要度，可把已失效的临时部分拆出后用 outdated_ids 删除
+- 长期偏好仍成立、只是夹带已过去临时信息的记忆（如"用户喜欢打舞萌，下周要去参赛"），不要整条删除：可把已失效的临时部分拆出后用 outdated_ids 删除
 - 不要因为内容提及过去的日期就一律删除；只有当日期已过且该事实本身已失效时才删除
 
 合并规则：
@@ -40,10 +39,9 @@ const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于
 返回 JSON：
 {
   "topics": [
-    {"name": "舞萌", "aliases": ["maimai", "乌蒙"], "importance": 0.9}
+    {"name": "舞萌", "aliases": ["maimai", "乌蒙"]}
   ],
   "outdated_ids": ["mem_xxx"],
-  "importance_updates": {"mem_xxx": 0.9},
   "merges": [
     {
       "source_ids": ["mem_001", "mem_002"],
@@ -160,9 +158,8 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 	for _, entry := range entries {
 		fmt.Fprintf(
 			&memories,
-			"- [%s] (importance: %.2f, tags: %s): %s\n",
+			"- [%s] (tags: %s): %s\n",
 			entry.ID,
-			entry.Importance,
 			strings.Join(entry.Tags, ", "),
 			entry.Content,
 		)
@@ -228,10 +225,9 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 }
 
 type reflectResult struct {
-	Topics            []MemoryTopic      `json:"topics"`
-	OutdatedIDs       []string           `json:"outdated_ids"`
-	ImportanceUpdates map[string]float64 `json:"importance_updates"`
-	Merges            []reflectMerge     `json:"merges"`
+	Topics      []MemoryTopic  `json:"topics"`
+	OutdatedIDs []string       `json:"outdated_ids"`
+	Merges      []reflectMerge `json:"merges"`
 }
 
 type reflectMerge struct {
@@ -293,14 +289,7 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 		}
 	}
 
-	importance := make(map[string]float64)
-	for id, value := range result.ImportanceUpdates {
-		if allowedIDs[id] && !seenOutdated[id] {
-			importance[id] = value
-		}
-	}
-
-	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated, importance)
+	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated)
 	if err != nil {
 		return fmt.Errorf("apply reflection changes: %w", err)
 	}
@@ -467,15 +456,9 @@ func cleanTopics(topics []MemoryTopic) []MemoryTopic {
 			}
 		}
 
-		if topic.Importance < 0 {
-			topic.Importance = 0
-		} else if topic.Importance > 1 {
-			topic.Importance = 1
-		}
 		cleaned = append(cleaned, MemoryTopic{
-			Name:       name,
-			Aliases:    aliases,
-			Importance: topic.Importance,
+			Name:    name,
+			Aliases: aliases,
 		})
 		if len(cleaned) == 32 {
 			break

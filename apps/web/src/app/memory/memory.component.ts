@@ -212,7 +212,6 @@ export class MemoryComponent implements OnInit {
         result.content,
         result.tags,
         result.visibility,
-        result.importance,
       );
       if (response.success) {
         toast.success('记忆已更新', {
