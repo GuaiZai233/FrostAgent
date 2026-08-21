@@ -53,7 +53,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           ? data.tools
               .map(
                 (tool) => `
-            <article class="card p-4 flex flex-col gap-2 hover-bg transition-colors">
+            <article class="card p-3.5 flex flex-col gap-2 hover-bg transition-colors">
               <div class="flex items-center gap-2">
                 <span class="text-primary flex items-center">${icon('wrench', 'w-4 h-4')}</span>
                 <h3 class="text-xs font-semibold text-foreground">${escapeHtml(tool.name)}</h3>
@@ -97,7 +97,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
         <!-- KPI Summary Cards -->
         <section class="grid grid-cols-1 sm:grid-cols-3 gap-3.5" aria-label="Bot statistics">
-          <article class="card p-4 flex items-center gap-3.5">
+          <article class="card p-3.5 flex items-center gap-3.5">
             <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary flex-shrink-0">
               ${icon('message_square', 'w-4 h-4')}
             </div>
@@ -107,7 +107,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             </div>
           </article>
 
-          <article class="card p-4 flex items-center gap-3.5">
+          <article class="card p-3.5 flex items-center gap-3.5">
             <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary flex-shrink-0">
               ${icon('users', 'w-4 h-4')}
             </div>
@@ -117,7 +117,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             </div>
           </article>
 
-          <article class="card p-4 flex items-center gap-3.5">
+          <article class="card p-3.5 flex items-center gap-3.5">
             <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary flex-shrink-0">
               ${icon('brain', 'w-4 h-4')}
             </div>

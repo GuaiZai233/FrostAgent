@@ -46,7 +46,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       </header>
 
       <!-- Filter Card -->
-      <section class="card p-4">
+      <section class="card p-3.5">
         <div class="flex items-end gap-3 flex-wrap">
           <div class="form-group" style="width: 9rem;">
             <label class="form-label" for="logs-level-select">最低级别</label>
@@ -102,7 +102,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
         <!-- Detail Column (1 col on xl) -->
         <div class="xl:col-span-1">
-          <article class="card p-4 sticky" style="top: 1rem;">
+          <article class="card p-3.5 sticky" style="top: 1rem;">
             <div class="card-header border-b border-border pb-3 mb-3">
               <div class="flex items-center gap-2">
                 <span class="text-primary flex items-center">${icon('file_text', 'w-4 h-4')}</span>
@@ -117,7 +117,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       </div>
 
       <!-- Real-time Stream Card -->
-      <article class="card p-4">
+      <article class="card p-3.5">
         <div class="card-header flex items-center justify-between border-b border-border pb-3 mb-3">
           <div class="flex items-center gap-2">
             <span class="text-primary flex items-center">${icon('activity', 'w-4 h-4')}</span>
@@ -311,14 +311,14 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
         <div>
           <p class="text-xs font-medium mb-1.5 text-muted">请求体 (Request Body)</p>
-          <pre class="card p-3.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
+          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
             selectedEntry.requestBody || '（无请求体）',
           )}</pre>
         </div>
 
         <div>
           <p class="text-xs font-medium mb-1.5 text-muted">响应体 (Response Body)</p>
-          <pre class="card p-3.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
+          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
             selectedEntry.responseBody || '（无响应体）',
           )}</pre>
         </div>
