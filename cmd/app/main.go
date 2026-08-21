@@ -56,6 +56,14 @@ func groupSummaryPath() string {
 	return filepath.Join(filepath.Dir(brainPath()), "group_summaries.json")
 }
 
+// dialoguePath returns the path to dialogue.yml, defaulting to eval/dialogue/dialogue.yml.
+func dialoguePath() string {
+	if p := os.Getenv("DIALOGUE_PATH"); p != "" {
+		return p
+	}
+	return "eval/dialogue/dialogue.yml"
+}
+
 // ensureDataDir ensures the data directory exists for brain.json.
 func ensureDataDir() {
 	dir := filepath.Dir(brainPath())
@@ -178,6 +186,18 @@ func init() {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("计费系统初始化失败: %v", err))
 	}
 
+	// Initialize dialogue examples prompt for persona enhancement
+	var dialoguePrompt string
+	dPath := dialoguePath()
+	if prompt, err := llm.LoadDialoguePrompt(dPath); err != nil {
+		if !os.IsNotExist(err) {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("加载示例对话失败 (%s): %v", dPath, err))
+		}
+	} else if prompt != "" {
+		dialoguePrompt = prompt
+		logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 加载人设示例对话: %s", dPath))
+	}
+
 	dispatcher := core.NewDefaultDispatcher()
 
 	GlobalEngine = &llm.Engine{
@@ -202,6 +222,8 @@ func init() {
 		MemoryReflections: reflections,
 		GroupCompactor:    groupCompactor,
 		GroupSummaryStore: groupSummaryStore,
+		// Persona dialogue prompt
+		DialoguePrompt: dialoguePrompt,
 	}
 	logs.Info(
 		logs.SYSTEM,

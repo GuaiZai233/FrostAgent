@@ -76,11 +76,21 @@ type Engine struct {
 	MemoryReflections *memory.ReflectionManager
 	GroupCompactor    *GroupCompactor
 	GroupSummaryStore *groupsummary.Store
+
+	// DialoguePrompt carries formatted few-shot persona examples (optional)
+	DialoguePrompt string
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
 func (e *Engine) Run(prompt string) string {
 	systemPrompt := os.Getenv("SYSTEM_PROMPT")
+	if e.DialoguePrompt != "" {
+		if systemPrompt != "" {
+			systemPrompt += "\n\n" + e.DialoguePrompt
+		} else {
+			systemPrompt = e.DialoguePrompt
+		}
+	}
 	messages := []ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
@@ -94,6 +104,13 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 	// 如果消息数组中没有 system 提示词，添加一个
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		if e.DialoguePrompt != "" {
+			if systemPrompt != "" {
+				systemPrompt += "\n\n" + e.DialoguePrompt
+			} else {
+				systemPrompt = e.DialoguePrompt
+			}
+		}
 		messages = append([]ChatMessage{
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
@@ -126,6 +143,10 @@ func (e *Engine) RunMessagesWithContext(
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
 		systemPrompt = memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
+
+		if e.DialoguePrompt != "" {
+			systemPrompt += "\n\n" + e.DialoguePrompt
+		}
 
 		if owner != "" && e.MemoryCatalog != nil {
 			catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
@@ -169,10 +190,7 @@ func (e *Engine) EnqueueExtractionTurn(
 		return
 	}
 	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3)
-	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5)
-	if maxTurns < minTurns {
-		maxTurns = minTurns
-	}
+	maxTurns := max(positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5), minTurns)
 	batch, ready := session.EnqueuePendingTurn(items, minTurns, maxTurns)
 	if !ready {
 		return
