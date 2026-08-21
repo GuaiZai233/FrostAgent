@@ -1,4 +1,4 @@
-import type { IconNode } from 'lucide';
+import type { IconNode as LucideIconNode } from 'lucide';
 import {
   Activity,
   ArrowDown,
@@ -49,6 +49,9 @@ import {
   Users,
   X,
 } from 'lucide';
+
+export type IconChildNode = [tag: string, attrs: Record<string, string | number>];
+export type IconNode = LucideIconNode | IconChildNode[];
 
 const iconMap: Record<string, IconNode> = {
   // Navigation & Shell
@@ -134,8 +137,8 @@ const iconMap: Record<string, IconNode> = {
 };
 
 export function renderLucideIcon(iconNode: IconNode, className = '', size?: number): string {
-  const children = iconNode
-    .map(([tag, attrs]) => {
+  const children = (iconNode as IconChildNode[])
+    .map(([tag, attrs]: IconChildNode) => {
       const attrStr = Object.entries(attrs)
         .map(([k, v]) => `${k}="${v}"`)
         .join(' ');
