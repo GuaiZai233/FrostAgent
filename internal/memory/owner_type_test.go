@@ -62,3 +62,27 @@ func TestMemoryEntryZeroValueOwnerType(t *testing.T) {
 		t.Errorf("expected OwnerUser after default fill, got %q", e.OwnerType)
 	}
 }
+
+func TestOwnerForPlatform(t *testing.T) {
+	// OneBot / QQ 平台默认
+	o1, t1 := OwnerForPlatformPrivate("onebot", "123")
+	if o1 != "123" || t1 != OwnerUser {
+		t.Errorf("got (%q, %q), want (\"123\", user)", o1, t1)
+	}
+
+	o2, t2 := OwnerForPlatformGroup("qq", "456")
+	if o2 != "group:456" || t2 != OwnerGroup {
+		t.Errorf("got (%q, %q), want (\"group:456\", group)", o2, t2)
+	}
+
+	// AstrBot 多平台前缀
+	o3, t3 := OwnerForPlatformPrivate("astrbot", "user_abc")
+	if o3 != "astrbot:user:user_abc" || t3 != OwnerUser {
+		t.Errorf("got (%q, %q), want (\"astrbot:user:user_abc\", user)", o3, t3)
+	}
+
+	o4, t4 := OwnerForPlatformGroup("astrbot", "grp_xyz")
+	if o4 != "astrbot:group:grp_xyz" || t4 != OwnerGroup {
+		t.Errorf("got (%q, %q), want (\"astrbot:group:grp_xyz\", group)", o4, t4)
+	}
+}

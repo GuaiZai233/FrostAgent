@@ -110,52 +110,13 @@ func (c *wsConnection) Close() error {
 	return c.conn.Close()
 }
 
+// Deprecated: HandleWS 是遗留的 WebSocket 入口。请改用 NewAdapter(engine).Handler()。
 func HandleWS(engine *llm.Engine) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			logs.Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
-			return
-		}
-		wsConn := newWSConnection(conn)
-		defer wsConn.Close()
-
-		logs.Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
-
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
-				break
-			}
-
-			if wsConn.handleAPIResponse(message) {
-				continue
-			}
-
-			var event model.OneBotEvent
-			if err := json.Unmarshal(message, &event); err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
-				continue
-			}
-
-			if event.MetaEventType == "heartbeat" {
-				continue
-			}
-
-			// Capture group context on the WebSocket read goroutine so messages
-			// enter the compact ring in wire order, including non-mention traffic.
-			if event.PostType == "message" && event.MessageType == "group" {
-				captureGroupCompactMessage(event, engine)
-			}
-			var turn *llm.SessionTurn
-			if engine != nil && engine.SessionManager != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
-			}
-			go processEvent(wsConn, event, engine, turn)
-		}
+	adapter := NewAdapter(engine)
+	if engine != nil && engine.Dispatcher != nil {
+		engine.Dispatcher.RegisterAdapter(adapter)
 	}
+	return adapter.Handler()
 }
 
 // processEvent holds its reserved session turn until routing and reply finish.

@@ -8,6 +8,12 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
+# 适配器
+
+## Websocket
+
+在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/ws/frostagent` (端口取决于环境变量中的`WS_LISTEN_ADDR`)。
+
 ## 与 ActionsCat 协同
 
 [ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
@@ -19,6 +25,8 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 ## 与 AstrBot 等框架协同
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
+
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 快速开始
 

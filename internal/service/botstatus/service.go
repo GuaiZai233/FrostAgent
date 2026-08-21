@@ -219,7 +219,7 @@ func (s *Service) DeleteGroupSummary(
 	req *connect.Request[v1.DeleteGroupSummaryRequest],
 ) (*connect.Response[v1.DeleteGroupSummaryResponse], error) {
 	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
-	if sessionID == "" || derivePlatform(sessionID) != "group" {
+	if sessionID == "" || !isGroupSession(sessionID) {
 		return connect.NewResponse(&v1.DeleteGroupSummaryResponse{
 			Error: "a group session_id is required",
 		}), nil
@@ -242,8 +242,18 @@ func (s *Service) DeleteGroupSummary(
 	return connect.NewResponse(&v1.DeleteGroupSummaryResponse{Success: true}), nil
 }
 
+func isGroupSession(sessionID string) bool {
+	return strings.HasPrefix(sessionID, "group:") || strings.Contains(sessionID, ":group:")
+}
+
 // derivePlatform infers the platform from the session ID prefix.
 func derivePlatform(sessionID string) string {
+	if strings.HasPrefix(sessionID, "astrbot:") {
+		return "astrbot"
+	}
+	if strings.HasPrefix(sessionID, "onebot:") || strings.HasPrefix(sessionID, "qq:") {
+		return "onebot"
+	}
 	if platform, _, ok := strings.Cut(sessionID, ":"); ok {
 		return platform
 	}
