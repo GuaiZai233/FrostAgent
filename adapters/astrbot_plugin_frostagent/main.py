@@ -325,8 +325,6 @@ def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
                 if self_id and target_qq == self_id:
                     is_at = True
                     is_wake = True
-                elif target_qq == "all":
-                    is_wake = True
             elif comp_type == "reply":
                 sender_id = str(first_attr(comp, "sender_id", "user_id") or "")
                 if self_id and sender_id == self_id:
