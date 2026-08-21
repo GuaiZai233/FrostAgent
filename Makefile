@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 PNPM ?= pnpm
-NG ?= $(PNPM) --filter @frostagent/web exec ng
+VITE ?= $(PNPM) --filter @frostagent/web exec vite
 ESLINT ?= $(PNPM) exec eslint
 BUF ?= buf
 GO ?= go
@@ -13,10 +13,10 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 
 .DEFAULT_GOAL := build
 
-.PHONY: build build-api build-web build-web-dev
+.PHONY: build build-api build-web build-web-dev check-web
 .PHONY: dev serve-api serve-agent serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
-.PHONY: lint test test-api vet clean ci
+.PHONY: lint test test-api test-web vet clean ci
 
 build: build-api
 
@@ -25,16 +25,19 @@ build-api: build-web proto-generate-go
 	$(GO) build -o ./bin/app ./cmd/app
 	$(GO) build -o ./bin/agent ./cmd/agent
 
+check-web: proto-generate-web
+	$(PNPM) --filter @frostagent/web run check
+
 build-web: proto-generate-web
-	$(NG) build web
+	$(PNPM) --filter @frostagent/web run build
 
 build-web-dev: proto-generate-web
-	$(NG) build web --configuration development
+	$(VITE) build --mode development
 
 dev: proto-generate-go build-web-dev
 	@set -euo pipefail; \
 	$(GO) run ./cmd/app & api_pid=$$!; \
-	$(NG) serve web --configuration development & web_pid=$$!; \
+	$(VITE) & web_pid=$$!; \
 	trap 'kill $$api_pid $$web_pid 2>/dev/null || true' INT TERM EXIT; \
 	wait -n $$api_pid $$web_pid; \
 	status=$$?; \
@@ -48,7 +51,7 @@ serve-agent: proto-generate-go
 	$(GO) run ./cmd/agent
 
 serve-web: proto-generate-web
-	$(NG) serve web --configuration development
+	$(VITE)
 
 proto-generate: proto-generate-go proto-generate-web
 
@@ -71,15 +74,17 @@ proto-generate-web:
 lint:
 	$(ESLINT) .
 
-test: test-api
+test: test-api test-web
 
 test-api: build-web proto-generate-go
 	$(GO) test ./...
+
+test-web: check-web build-web
 
 vet: build-web proto-generate-go
 	$(GO) vet ./...
 
 clean:
-	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.angular/cache ./apps/web/.angular ./.nx ./.tools
+	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.tools ./apps/web/dist
 
-ci: build test lint vet
+ci: check-web build test lint vet
