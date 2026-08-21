@@ -21,7 +21,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <header class="flex items-center justify-between gap-4 flex-wrap">
+      <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <div class="flex items-center gap-2">
             <h1 class="page-title">人设对话示例</h1>
@@ -30,48 +30,48 @@ export function mountDialoguePage(container: HTMLElement): () => void {
           <p class="page-description">管理 Few-shot 示例库，让智能体在特定场景与人物关系下展现精准细腻的语气与性格</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <div class="tabs" style="height: 2.25rem;">
+          <div class="tabs">
             <button class="tab-item active" id="mode-visual-btn">
-              ${icon('chat', 'sm')}
+              ${icon('chat', 'w-3.5 h-3.5')}
               <span>可视化管理</span>
             </button>
             <button class="tab-item" id="mode-raw-btn">
-              ${icon('code', 'sm')}
+              ${icon('code', 'w-3.5 h-3.5')}
               <span>原始 YAML</span>
             </button>
           </div>
           <button class="btn btn-outline btn-sm" id="dialogue-export-btn">
-            ${icon('file_download')}
+            ${icon('download', 'w-3.5 h-3.5')}
             <span>导出</span>
           </button>
           <label class="btn btn-outline btn-sm" style="cursor: pointer;">
-            ${icon('file_upload')}
+            ${icon('upload', 'w-3.5 h-3.5')}
             <span>导入</span>
             <input type="file" id="dialogue-import-input" accept=".yml,.yaml" style="display: none;" />
           </label>
           <button class="btn btn-outline btn-icon-sm" id="dialogue-refresh-btn" title="刷新">
-            ${icon('refresh')}
+            ${icon('refresh', 'w-3.5 h-3.5')}
           </button>
         </div>
       </header>
 
       <!-- Prompt Preview Collapsible -->
-      <details class="card" style="padding: 0; overflow: hidden;" id="prompt-preview-details" open>
-        <summary class="flex items-center justify-between p-3 cursor-pointer select-none border-b hover-bg" style="font-weight: 500; font-size: 0.875rem;">
+      <details class="card overflow-hidden" id="prompt-preview-details" open>
+        <summary class="flex items-center justify-between p-3 cursor-pointer select-none border-b border-border hover-bg text-xs font-medium">
           <div class="flex items-center gap-2">
-            <span class="text-primary">${icon('auto_awesome', 'sm')}</span>
-            <span>注入 System Prompt 的对话示例预览</span>
+            <span class="text-primary flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
+            <span class="font-medium text-foreground">注入 System Prompt 的对话示例预览</span>
           </div>
           <div class="flex items-center gap-2">
-            <button type="button" class="btn btn-ghost btn-sm" id="copy-prompt-btn" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
-              ${icon('content_copy', 'sm')}
+            <button type="button" class="btn btn-ghost btn-sm" id="copy-prompt-btn" style="height: 1.5rem; padding: 0 0.5rem; font-size: 0.75rem;">
+              ${icon('copy', 'w-3 h-3')}
               <span>复制片段</span>
             </button>
             <span class="text-muted text-xs">点击折叠</span>
           </div>
         </summary>
         <div class="p-3 bg-muted">
-          <pre id="prompt-preview-content" class="text-xs font-mono whitespace-pre-wrap select-text leading-relaxed" style="max-height: 12rem; overflow-y: auto;">加载中...</pre>
+          <pre id="prompt-preview-content" class="text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 12rem; overflow-y: auto;">加载中...</pre>
         </div>
       </details>
 
@@ -79,19 +79,18 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <div id="visual-mode-container" class="flex flex-col gap-4">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div class="flex items-center gap-2 flex-wrap">
-            <div class="flex items-center gap-1" style="width: 14rem;">
+            <div style="width: 14rem;">
               <input
                 type="search"
                 id="dialogue-search-input"
-                class="input"
+                class="input text-xs"
                 placeholder="搜索示例对话..."
-                style="height: 2.25rem; font-size: 0.875rem;"
               />
             </div>
             <div id="relation-filters" class="flex items-center gap-1.5 flex-wrap"></div>
           </div>
           <button class="btn btn-primary btn-sm" id="dialogue-add-btn">
-            ${icon('add')}
+            ${icon('plus', 'w-3.5 h-3.5')}
             <span>添加对话示例</span>
           </button>
         </div>
@@ -111,11 +110,11 @@ export function mountDialoguePage(container: HTMLElement): () => void {
             <label class="form-label" for="raw-yaml-textarea">原始 YAML 内容编辑</label>
             <div class="flex items-center gap-2">
               <button class="btn btn-outline btn-sm" id="raw-reload-btn">
-                ${icon('refresh', 'sm')}
+                ${icon('refresh', 'w-3.5 h-3.5')}
                 <span>重新加载</span>
               </button>
               <button class="btn btn-primary btn-sm" id="raw-save-btn">
-                ${icon('save', 'sm')}
+                ${icon('save', 'w-3.5 h-3.5')}
                 <span>保存并应用</span>
               </button>
             </div>
@@ -189,13 +188,13 @@ export function mountDialoguePage(container: HTMLElement): () => void {
     // Render relation filter chips
     const relations = getAvailableRelations();
     relationFiltersEl.innerHTML = `
-      <button class="btn ${selectedRelation === '' ? 'btn-primary' : 'btn-outline'} btn-sm" data-rel="" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
+      <button class="btn ${selectedRelation === '' ? 'btn-secondary' : 'btn-outline'} btn-sm" data-rel="" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
         全部 (${dialogues.length})
       </button>
       ${relations
         .map(
           (rel) => `
-        <button class="btn ${selectedRelation === rel ? 'btn-primary' : 'btn-outline'} btn-sm" data-rel="${escapeHtml(rel)}" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
+        <button class="btn ${selectedRelation === rel ? 'btn-secondary' : 'btn-outline'} btn-sm" data-rel="${escapeHtml(rel)}" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
           ${escapeHtml(rel)}
         </button>
       `,
@@ -248,52 +247,45 @@ export function mountDialoguePage(container: HTMLElement): () => void {
         const isFirst = originalIndex === 0;
         const isLast = originalIndex === dialogues.length - 1;
 
-        const relBadgeClass =
-          item.relation === '主人'
-            ? 'badge-primary'
-            : item.relation === '熟人' || item.relation === '朋友'
-            ? 'badge-secondary'
-            : 'badge-outline';
-
         return `
-          <article class="card p-4 flex flex-col gap-3">
-            <header class="flex items-center justify-between gap-2 border-b pb-2 flex-wrap">
+          <article class="card p-3.5 flex flex-col gap-2.5">
+            <header class="flex items-center justify-between gap-2 border-b border-border pb-2 flex-wrap">
               <div class="flex items-center gap-2">
-                <span class="badge badge-outline font-mono">#${escapeHtml(item.id)}</span>
-                <span class="badge ${relBadgeClass}">${escapeHtml(item.relation || '默认')}</span>
-                ${item.scene ? `<span class="badge badge-outline text-muted">${escapeHtml(item.scene)}</span>` : ''}
+                <span class="badge badge-outline font-mono text-xs">#${escapeHtml(item.id)}</span>
+                <span class="badge badge-secondary text-xs">${escapeHtml(item.relation || '默认')}</span>
+                ${item.scene ? `<span class="badge badge-outline text-xs text-muted">${escapeHtml(item.scene)}</span>` : ''}
               </div>
               <div class="flex items-center gap-1">
                 <button class="btn btn-ghost btn-icon-sm" data-action="move-up" data-index="${originalIndex}" ${isFirst ? 'disabled' : ''} title="上移">
-                  ${icon('arrow_upward', 'sm')}
+                  ${icon('arrow_up', 'w-3.5 h-3.5')}
                 </button>
                 <button class="btn btn-ghost btn-icon-sm" data-action="move-down" data-index="${originalIndex}" ${isLast ? 'disabled' : ''} title="下移">
-                  ${icon('arrow_downward', 'sm')}
+                  ${icon('arrow_down', 'w-3.5 h-3.5')}
                 </button>
                 <button class="btn btn-ghost btn-icon-sm" data-action="edit-dialogue" data-id="${escapeHtml(item.id)}" title="编辑">
-                  ${icon('edit', 'sm')}
+                  ${icon('pencil', 'w-3.5 h-3.5')}
                 </button>
                 <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-dialogue" data-id="${escapeHtml(item.id)}" title="删除">
-                  ${icon('delete', 'sm')}
+                  ${icon('trash', 'w-3.5 h-3.5')}
                 </button>
               </div>
             </header>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div class="card p-3 bg-muted text-xs leading-relaxed flex flex-col gap-1">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div class="card p-2.5 bg-muted text-xs leading-relaxed flex flex-col gap-1">
                 <div class="flex items-center gap-1.5 font-medium text-muted">
-                  ${icon('account_circle', 'sm')}
+                  ${icon('user', 'w-3.5 h-3.5')}
                   <span>用户输入 (User)</span>
                 </div>
-                <div class="font-mono whitespace-pre-wrap select-text mt-1 text-foreground">${escapeHtml(item.user)}</div>
+                <div class="font-mono whitespace-pre-wrap select-text mt-0.5 text-foreground">${escapeHtml(item.user)}</div>
               </div>
 
-              <div class="card p-3 bg-muted text-xs leading-relaxed flex flex-col gap-1 border-primary/20">
-                <div class="flex items-center gap-1.5 font-medium text-primary">
-                  ${icon('smart_toy', 'sm')}
+              <div class="card p-2.5 bg-muted text-xs leading-relaxed flex flex-col gap-1 border-primary/20">
+                <div class="flex items-center gap-1.5 font-medium text-foreground">
+                  ${icon('bot', 'w-3.5 h-3.5 text-primary')}
                   <span>期望回复 (Assistant / Preferred)</span>
                 </div>
-                <div class="font-mono whitespace-pre-wrap select-text mt-1 text-foreground">${escapeHtml(item.preferred)}</div>
+                <div class="font-mono whitespace-pre-wrap select-text mt-0.5 text-foreground">${escapeHtml(item.preferred)}</div>
               </div>
             </div>
           </article>
@@ -393,15 +385,15 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       title: isEdit ? '编辑示例对话' : '添加示例对话',
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3.5">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div class="form-group">
               <label class="form-label" for="dlg-id">编号 (ID)</label>
-              <input id="dlg-id" class="input" value="${escapeHtml(currentId)}" placeholder="如 1, 2" />
+              <input id="dlg-id" class="input text-xs" value="${escapeHtml(currentId)}" placeholder="如 1, 2" />
             </div>
             <div class="form-group sm:col-span-2">
               <label class="form-label" for="dlg-relation">关系 (Relation)</label>
-              <input id="dlg-relation" class="input" value="${escapeHtml(currentRelation)}" placeholder="如：熟人、朋友、主人" />
+              <input id="dlg-relation" class="input text-xs" value="${escapeHtml(currentRelation)}" placeholder="如：熟人、朋友、主人" />
               <div class="flex flex-wrap gap-1 mt-1.5" id="preset-relation-btns">
                 ${presetRelations
                   .map(
@@ -418,23 +410,23 @@ export function mountDialoguePage(container: HTMLElement): () => void {
 
           <div class="form-group">
             <label class="form-label" for="dlg-scene">场景描述 (Scene，选填)</label>
-            <input id="dlg-scene" class="input" value="${escapeHtml(currentScene)}" placeholder="如：日常问候、被夸奖、情绪安抚" />
+            <input id="dlg-scene" class="input text-xs" value="${escapeHtml(currentScene)}" placeholder="如：日常问候、被夸奖、情绪安抚" />
           </div>
 
           <div class="form-group">
             <label class="form-label" for="dlg-user">用户输入 (User) <span class="text-destructive">*</span></label>
-            <textarea id="dlg-user" class="textarea" rows="3" placeholder="输入用户的提问或触发语句...">${escapeHtml(currentUser)}</textarea>
+            <textarea id="dlg-user" class="textarea text-xs" rows="3" placeholder="输入用户的提问或触发语句...">${escapeHtml(currentUser)}</textarea>
           </div>
 
           <div class="form-group">
             <label class="form-label" for="dlg-preferred">期望回复 (Preferred / Assistant) <span class="text-destructive">*</span></label>
-            <textarea id="dlg-preferred" class="textarea" rows="4" placeholder="输入智能体人设期望的回复示范...">${escapeHtml(currentPreferred)}</textarea>
+            <textarea id="dlg-preferred" class="textarea text-xs" rows="4" placeholder="输入智能体人设期望的回复示范...">${escapeHtml(currentPreferred)}</textarea>
           </div>
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline" id="dlg-cancel-btn">取消</button>
-        <button class="btn btn-primary" id="dlg-save-btn">保存</button>
+        <button class="btn btn-outline btn-sm" id="dlg-cancel-btn">取消</button>
+        <button class="btn btn-primary btn-sm" id="dlg-save-btn">保存</button>
       `,
       onMount: (dialogEl, close) => {
         const idInput = dialogEl.querySelector<HTMLInputElement>('#dlg-id')!;

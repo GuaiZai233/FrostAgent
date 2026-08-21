@@ -23,10 +23,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <header class="flex items-center justify-between gap-4 flex-wrap">
-        <div class="flex items-center gap-3">
+      <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
+        <div class="flex items-center gap-2.5">
           <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置" style="text-decoration: none;">
-            ${icon('arrow_back')}
+            ${icon('arrow_left', 'w-4 h-4')}
           </a>
           <div>
             <h1 class="page-title">Bot 服务端设置</h1>
@@ -35,11 +35,11 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         </div>
         <div class="flex items-center gap-2">
           <button class="btn btn-primary btn-sm" id="add-env-btn">
-            ${icon('add')}
+            ${icon('plus', 'w-3.5 h-3.5')}
             <span>新增环境变量</span>
           </button>
           <button class="btn btn-outline btn-icon-sm" id="backend-refresh-btn" title="刷新">
-            ${icon('refresh')}
+            ${icon('refresh', 'w-3.5 h-3.5')}
           </button>
         </div>
       </header>
@@ -47,66 +47,66 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       <!-- Tabs -->
       <div class="tabs">
         <button class="tab-item active" id="tab-table-btn">
-          ${icon('table_chart', 'sm')}
+          ${icon('table', 'w-3.5 h-3.5')}
           <span>环境变量表</span>
         </button>
         <button class="tab-item" id="tab-raw-btn">
-          ${icon('description', 'sm')}
+          ${icon('file_text', 'w-3.5 h-3.5')}
           <span>原始 .env</span>
         </button>
       </div>
 
       <!-- Table View Container -->
-      <div id="tab-table-content" class="flex flex-col gap-5">
+      <div id="tab-table-content" class="flex flex-col gap-4">
         <!-- Group Behavior Settings Card -->
-        <article class="card p-4">
-          <div class="card-header" style="padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);">
+        <article class="card p-3.5">
+          <div class="card-header border-b border-border pb-2.5 mb-2.5">
             <div class="flex items-center gap-2">
-              <span class="text-primary">${icon('groups')}</span>
-              <h2 class="card-title text-base font-semibold">群聊回复行为策略</h2>
+              <span class="text-primary flex items-center">${icon('users', 'w-4 h-4')}</span>
+              <h2 class="card-title text-sm font-semibold">群聊回复行为策略</h2>
             </div>
           </div>
-          <div class="card-content pt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <label class="card p-3 flex items-start gap-3 cursor-pointer hover-bg transition-colors">
+          <div class="card-content grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
-                <span class="text-sm font-medium">被 @ 时触发回复</span>
-                <p class="text-xs text-muted mt-0.5">GROUP_REPLY_ON_MENTION</p>
+                <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
+                <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
               </div>
             </label>
 
-            <label class="card p-3 flex items-start gap-3 cursor-pointer hover-bg transition-colors">
+            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
-                <span class="text-sm font-medium">回复时 @ 对方</span>
-                <p class="text-xs text-muted mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
+                <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
+                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
               </div>
             </label>
 
-            <label class="card p-3 flex items-start gap-3 cursor-pointer hover-bg transition-colors">
+            <label class="card p-2.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
               <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
               <div>
-                <span class="text-sm font-medium">引用/回复对方消息</span>
-                <p class="text-xs text-muted mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
+                <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
+                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
               </div>
             </label>
           </div>
         </article>
 
         <!-- Env Vars Table Card -->
-        <div class="card" style="padding: 0; overflow: hidden;">
+        <div class="card overflow-hidden">
           <div class="table-container">
             <table class="table">
               <thead>
                 <tr>
                   <th style="width: 18rem;">变量名 (Key)</th>
                   <th>变量值 (Value)</th>
-                  <th style="width: 7rem; text-align: right;">操作</th>
+                  <th style="width: 6rem; text-align: right;">操作</th>
                 </tr>
               </thead>
               <tbody id="env-table-body">
                 <tr>
-                  <td colspan="3" class="text-center text-muted" style="padding: 2rem;">
+                  <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
                     <span class="spinner"></span>
                     <span style="margin-left: 0.5rem;">加载中...</span>
                   </td>
@@ -119,11 +119,11 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
       <!-- Raw .env View Container -->
       <div id="tab-raw-content" class="flex flex-col gap-3" style="display: none;">
-        <article class="card p-4 flex flex-col gap-3">
+        <article class="card p-3.5 flex flex-col gap-3">
           <div class="flex items-center justify-between">
             <label class="form-label" for="raw-env-textarea">.env 原始文件编辑</label>
             <button class="btn btn-primary btn-sm" id="save-raw-env-btn">
-              ${icon('save', 'sm')}
+              ${icon('save', 'w-3.5 h-3.5')}
               <span>保存 .env 文件</span>
             </button>
           </div>
@@ -192,7 +192,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     if (loading && envVars.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 2rem;">
+          <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
             <span class="spinner"></span>
             <span style="margin-left: 0.5rem;">加载中...</span>
           </td>
@@ -204,7 +204,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     if (envVars.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="3" class="text-center text-muted" style="padding: 3rem;">
             暂无环境变量配置。
           </td>
         </tr>
@@ -222,7 +222,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           return `
             <tr class="bg-muted">
               <td>
-                <span class="font-mono text-sm font-semibold">${escapeHtml(item.key)}</span>
+                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>
               </td>
               <td>
                 <div class="flex items-center gap-2">
@@ -231,21 +231,21 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                     class="input font-mono text-xs"
                     id="edit-env-val-input"
                     value="${escapeHtml(editingValue)}"
-                    style="height: 2rem;"
+                    style="height: 1.875rem;"
                   />
                   <label class="flex items-center gap-1.5 cursor-pointer text-xs select-none" style="white-space: nowrap;">
                     <input type="checkbox" id="edit-env-secret-cb" class="checkbox" ${editingIsSecret ? 'checked' : ''} />
-                    <span>敏感</span>
+                    <span class="text-muted">敏感</span>
                   </label>
                 </div>
               </td>
               <td style="text-align: right;">
                 <div class="flex items-center justify-end gap-1">
-                  <button class="btn btn-primary btn-icon-sm" id="save-inline-btn" title="保存">
-                    ${icon('check', 'sm')}
+                  <button class="btn btn-primary btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="save-inline-btn" title="保存">
+                    ${icon('check', 'w-3.5 h-3.5')}
                   </button>
-                  <button class="btn btn-outline btn-icon-sm" id="cancel-inline-btn" title="取消">
-                    ${icon('close', 'sm')}
+                  <button class="btn btn-outline btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="cancel-inline-btn" title="取消">
+                    ${icon('close', 'w-3.5 h-3.5')}
                   </button>
                 </div>
               </td>
@@ -258,19 +258,21 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         return `
           <tr>
             <td>
-              <div class="flex items-center gap-2">
-                ${isSecret ? `<span class="text-muted" title="敏感配置">${icon('lock', 'sm')}</span>` : ''}
-                <span class="font-mono text-sm font-medium select-text">${escapeHtml(item.key)}</span>
+              <div class="flex items-center gap-1.5">
+                ${isSecret ? `<span class="text-muted flex items-center" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
+                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>
               </div>
             </td>
             <td>
-              <div class="flex items-center gap-2">
-                <span class="font-mono text-xs break-all select-text">${escapeHtml(displayVal || '（空）')}</span>
+              <div class="flex items-center gap-1.5">
+                <span class="font-mono text-xs break-all select-text text-foreground">${escapeHtml(displayVal || '（空）')}</span>
                 ${
                   isSecret
                     ? `
-                  <button class="btn btn-ghost btn-icon-sm text-muted" data-action="toggle-secret" data-key="${escapeHtml(item.key)}" title="${isVisible ? '隐藏' : '显示'}">
-                    ${icon(isVisible ? 'visibility_off' : 'visibility', 'sm')}
+                  <button class="btn btn-ghost btn-icon-sm text-muted" style="width: 1.5rem; height: 1.5rem; padding: 0;" data-action="toggle-secret" data-key="${escapeHtml(
+                    item.key,
+                  )}" title="${isVisible ? '隐藏' : '显示'}">
+                    ${icon(isVisible ? 'eye_off' : 'eye', 'w-3 h-3')}
                   </button>
                 `
                     : ''
@@ -279,11 +281,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             </td>
             <td style="text-align: right;">
               <div class="flex items-center justify-end gap-1">
-                <button class="btn btn-ghost btn-icon-sm" data-action="edit-env" data-key="${escapeHtml(item.key)}" title="修改">
-                  ${icon('edit', 'sm')}
+                <button class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" data-action="edit-env" data-key="${escapeHtml(
+                  item.key,
+                )}" title="修改">
+                  ${icon('pencil', 'w-3.5 h-3.5')}
                 </button>
-                <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-env" data-key="${escapeHtml(item.key)}" title="删除">
-                  ${icon('delete', 'sm')}
+                <button class="btn btn-ghost btn-icon-sm text-destructive" style="width: 1.75rem; height: 1.75rem;" data-action="delete-env" data-key="${escapeHtml(
+                  item.key,
+                )}" title="删除">
+                  ${icon('trash', 'w-3.5 h-3.5')}
                 </button>
               </div>
             </td>
@@ -392,25 +398,25 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       description: '添加或覆盖服务端使用的环境变量。',
       maxWidth: '32rem',
       bodyHtml: `
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3.5">
           <div class="form-group">
             <label class="form-label" for="add-env-key">Key <span class="text-destructive">*</span></label>
-            <input id="add-env-key" class="input font-mono" placeholder="如 MODEL_NAME, API_KEY..." autocomplete="off" />
+            <input id="add-env-key" class="input font-mono text-xs" placeholder="如 MODEL_NAME, API_KEY..." autocomplete="off" />
           </div>
           <div class="form-group">
             <label class="form-label" for="add-env-val">Value</label>
-            <input id="add-env-val" class="input font-mono" placeholder="环境变量值..." autocomplete="off" />
+            <input id="add-env-val" class="input font-mono text-xs" placeholder="环境变量值..." autocomplete="off" />
           </div>
-          <label class="flex items-center gap-2 cursor-pointer text-sm select-none">
+          <label class="flex items-center gap-2 cursor-pointer text-xs select-none">
             <input type="checkbox" id="add-env-secret-cb" class="checkbox" />
-            <span>这是敏感信息（自动脱敏显示）</span>
+            <span class="text-muted">这是敏感信息（自动脱敏显示）</span>
           </label>
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline" id="add-env-cancel">取消</button>
-        <button class="btn btn-primary" id="add-env-save">
-          ${icon('save', 'sm')}
+        <button class="btn btn-outline btn-sm" id="add-env-cancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="add-env-save">
+          ${icon('save', 'w-3.5 h-3.5')}
           <span>保存</span>
         </button>
       `,

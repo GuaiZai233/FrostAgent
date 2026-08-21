@@ -1,24 +1,25 @@
 import { themeManager, ThemeMode } from '../theme';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
+import { escapeHtml } from '../utils/formatters';
 
 export function mountFrontendSettingsPage(container: HTMLElement): () => void {
   const themeOptions: { mode: ThemeMode; icon: string; title: string; desc: string }[] = [
     {
       mode: 'system',
-      icon: 'brightness_auto',
+      icon: 'monitor',
       title: '跟随系统',
       desc: '自动匹配操作系统的浅色或深色外观偏好',
     },
     {
       mode: 'light',
-      icon: 'light_mode',
+      icon: 'sun',
       title: '明亮浅色',
-      desc: '清新明快的经典白色背景与高对比度文本',
+      desc: '清新明快的经典浅色背景与高对比度文本',
     },
     {
       mode: 'dark',
-      icon: 'dark_mode',
+      icon: 'moon',
       title: '深邃暗色',
       desc: '夜间舒适的深色背景，减少眩光与眼部疲劳',
     },
@@ -28,10 +29,10 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
     const currentMode = themeManager.getMode();
 
     container.innerHTML = `
-      <div class="page-container fade-in">
-        <header class="flex items-center gap-3 mb-6">
+      <div class="page-container fade-in" style="max-width: 680px;">
+        <header class="flex items-center gap-2.5 pb-1">
           <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置" style="text-decoration: none;">
-            ${icon('arrow_back')}
+            ${icon('arrow_left', 'w-4 h-4')}
           </a>
           <div>
             <h1 class="page-title">网页端外观设置</h1>
@@ -39,10 +40,10 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
           </div>
         </header>
 
-        <section class="card p-6 flex flex-col gap-5 max-w-2xl">
+        <section class="card p-4 flex flex-col gap-4">
           <div>
-            <h2 class="text-base font-semibold">主题模式</h2>
-            <p class="text-xs text-muted mt-1">选择最适合您当前工作环境的主题配色方案</p>
+            <h2 class="text-sm font-semibold text-foreground">主题模式</h2>
+            <p class="text-xs text-muted mt-0.5">选择最适合您当前工作环境的主题配色方案</p>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -51,19 +52,21 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
                 const isActive = currentMode === opt.mode;
                 return `
                 <button
-                  class="card p-4 text-left cursor-pointer hover-bg transition-all flex flex-col gap-2 relative ${
-                    isActive ? 'border-primary' : ''
+                  class="card p-3.5 text-left cursor-pointer hover-bg transition-all flex flex-col gap-2 relative ${
+                    isActive ? 'border-primary ring-1 ring-primary' : ''
                   }"
                   data-mode="${opt.mode}"
-                  style="${isActive ? 'border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary);' : ''}"
                 >
                   <div class="flex items-center justify-between">
-                    <span class="text-primary">${icon(opt.icon)}</span>
-                    ${isActive ? `<span class="badge badge-primary text-xs">当前</span>` : ''}
+                    <span class="${isActive ? 'text-primary' : 'text-muted'} flex items-center">${icon(
+                  opt.icon,
+                  'w-4 h-4',
+                )}</span>
+                    ${isActive ? `<span class="badge badge-primary text-[11px] px-1.5 py-0">当前</span>` : ''}
                   </div>
                   <div>
-                    <h3 class="text-sm font-semibold">${escapeHtml(opt.title)}</h3>
-                    <p class="text-xs text-muted mt-0.5 leading-relaxed">${escapeHtml(opt.desc)}</p>
+                    <h3 class="text-xs font-semibold text-foreground">${escapeHtml(opt.title)}</h3>
+                    <p class="text-[11px] text-muted mt-0.5 leading-relaxed">${escapeHtml(opt.desc)}</p>
                   </div>
                 </button>
               `;
@@ -84,15 +87,6 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
         }
       });
     });
-  }
-
-  function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 
   render();

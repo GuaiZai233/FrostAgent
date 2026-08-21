@@ -48,6 +48,18 @@ img, svg {
   vertical-align: middle;
 }
 
+/* Lucide Icon Sizing Guarantee */
+svg.lucide {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Safety class to ensure secondary/muted text is never rendered as background color */
+.text-muted {
+  color: var(--muted-foreground) !important;
+}
+
 code, pre {
   font-family: var(--font-mono);
 }
@@ -78,12 +90,12 @@ code, pre {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes modalIn {
-  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  from { opacity: 0; transform: scale(0.98) translateY(4px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 

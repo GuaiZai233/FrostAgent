@@ -29,28 +29,28 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <header class="flex items-center justify-between gap-4 flex-wrap">
+      <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">日志查询</h1>
           <p class="page-description">查看运行时日志、请求体/响应体详情与实时日志流</p>
         </div>
         <div class="flex items-center gap-2">
           <button class="btn btn-outline btn-icon-sm" id="logs-refresh-btn" title="刷新">
-            ${icon('refresh')}
+            ${icon('refresh', 'w-3.5 h-3.5')}
           </button>
           <button class="btn btn-destructive btn-sm" id="logs-clear-btn">
-            ${icon('delete_sweep')}
+            ${icon('trash', 'w-3.5 h-3.5')}
             <span>清理日志</span>
           </button>
         </div>
       </header>
 
       <!-- Filter Card -->
-      <section class="card p-4">
+      <section class="card p-3.5">
         <div class="flex items-end gap-3 flex-wrap">
-          <div class="form-group" style="width: 10rem;">
+          <div class="form-group" style="width: 9rem;">
             <label class="form-label" for="logs-level-select">最低级别</label>
-            <select id="logs-level-select" class="select" style="height: 2.25rem;">
+            <select id="logs-level-select" class="select text-xs">
               <option value="0">全部级别</option>
               <option value="1">Debug</option>
               <option value="2">Info</option>
@@ -61,11 +61,11 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
           <div class="form-group flex-1" style="min-width: 14rem;">
             <label class="form-label" for="logs-source-input">来源过滤</label>
-            <input id="logs-source-input" class="input" placeholder="输入来源模块，如 bot, onebot, llm..." style="height: 2.25rem;" />
+            <input id="logs-source-input" class="input text-xs" placeholder="输入来源模块，如 bot, onebot, llm..." />
           </div>
 
-          <button class="btn btn-outline btn-sm" id="logs-apply-filter-btn" style="height: 2.25rem;">
-            ${icon('filter_alt')}
+          <button class="btn btn-outline btn-sm" id="logs-apply-filter-btn">
+            ${icon('filter', 'w-3.5 h-3.5')}
             <span>应用过滤</span>
           </button>
         </div>
@@ -75,20 +75,20 @@ export function mountLogsPage(container: HTMLElement): () => void {
       <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <!-- Table Column (2 cols on xl) -->
         <div class="xl:col-span-2 flex flex-col">
-          <div class="card" style="padding: 0; overflow: hidden;">
+          <div class="card overflow-hidden">
             <div class="table-container">
               <table class="table">
                 <thead>
                   <tr>
-                    <th style="width: 9rem;">时间</th>
+                    <th style="width: 9.5rem;">时间</th>
                     <th style="width: 5rem;">级别</th>
-                    <th style="width: 7rem;">来源</th>
+                    <th style="width: 6.5rem;">来源</th>
                     <th>摘要</th>
                   </tr>
                 </thead>
                 <tbody id="logs-table-body">
                   <tr>
-                    <td colspan="4" class="text-center text-muted" style="padding: 2rem;">
+                    <td colspan="4" class="text-center text-muted" style="padding: 2.5rem;">
                       <span class="spinner"></span>
                       <span style="margin-left: 0.5rem;">加载中...</span>
                     </td>
@@ -102,35 +102,35 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
         <!-- Detail Column (1 col on xl) -->
         <div class="xl:col-span-1">
-          <article class="card p-4 sticky" style="top: 1rem;">
-            <div class="card-header" style="padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);">
+          <article class="card p-3.5 sticky" style="top: 1rem;">
+            <div class="card-header border-b border-border pb-2.5 mb-2.5">
               <div class="flex items-center gap-2">
-                <span class="text-primary">${icon('receipt_long')}</span>
-                <h2 class="card-title text-base">日志详情</h2>
+                <span class="text-primary flex items-center">${icon('file_text', 'w-4 h-4')}</span>
+                <h2 class="card-title text-sm font-semibold">日志详情</h2>
               </div>
             </div>
-            <div class="card-content pt-3" id="log-detail-content">
-              <p class="text-sm text-muted">选择左侧一条日志查看请求/响应体详情。</p>
+            <div class="card-content" id="log-detail-content">
+              <p class="text-xs text-muted">选择左侧一条日志查看请求/响应体详情。</p>
             </div>
           </article>
         </div>
       </div>
 
       <!-- Real-time Stream Card -->
-      <article class="card p-4">
-        <div class="card-header flex items-center justify-between border-b pb-3">
+      <article class="card p-3.5">
+        <div class="card-header flex items-center justify-between border-b border-border pb-2.5 mb-2.5">
           <div class="flex items-center gap-2">
-            <span class="text-primary">${icon('sensors')}</span>
-            <h2 class="card-title text-base">实时日志流</h2>
+            <span class="text-primary flex items-center">${icon('activity', 'w-4 h-4')}</span>
+            <h2 class="card-title text-sm font-semibold">实时日志流</h2>
           </div>
           <button class="btn btn-outline btn-sm" id="stream-toggle-btn">
-            <span id="stream-toggle-icon">${icon('play_circle')}</span>
+            <span id="stream-toggle-icon">${icon('play', 'w-3.5 h-3.5')}</span>
             <span id="stream-toggle-label">开始监听</span>
           </button>
         </div>
-        <div class="card-content pt-3">
+        <div class="card-content">
           <div id="stream-entries-container" class="flex flex-col gap-2" style="max-height: 22rem; overflow-y: auto;">
-            <p class="text-sm text-muted">实时流尚未启动，点击右上角“开始监听”以订阅实时日志。</p>
+            <p class="text-xs text-muted">实时流尚未启动，点击右上角“开始监听”以订阅实时日志。</p>
           </div>
         </div>
       </article>
@@ -186,7 +186,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     if (loading && entries.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="4" class="text-center text-muted" style="padding: 2rem;">
+          <td colspan="4" class="text-center text-muted" style="padding: 2.5rem;">
             <span class="spinner"></span>
             <span style="margin-left: 0.5rem;">加载中...</span>
           </td>
@@ -199,7 +199,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     if (entries.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="4" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="4" class="text-center text-muted" style="padding: 3rem;">
             暂无日志记录。
           </td>
         </tr>
@@ -215,14 +215,18 @@ export function mountLogsPage(container: HTMLElement): () => void {
         const levelText = formatLogLevel(entry.level);
 
         return `
-          <tr class="cursor-pointer ${isSelected ? 'row-selected' : ''}" data-id="${escapeHtml(entry.id)}" style="${isSelected ? 'background-color: var(--muted);' : ''}">
+          <tr class="cursor-pointer transition-colors ${isSelected ? 'bg-muted' : ''}" data-id="${escapeHtml(
+            entry.id,
+          )}">
             <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(entry.timestamp))}</td>
             <td>
-              <span class="badge ${levelBadge}">${escapeHtml(levelText)}</span>
+              <span class="badge ${levelBadge} text-[11px] px-1.5 py-0">${escapeHtml(levelText)}</span>
             </td>
-            <td class="text-xs font-medium">${escapeHtml(entry.source || '-')}</td>
-            <td style="max-width: 20rem;">
-              <button class="btn btn-ghost btn-sm text-left truncate block w-full" style="padding: 0.25rem 0.5rem;" data-action="view-summary" data-id="${escapeHtml(entry.id)}" title="${escapeHtml(entry.summary || '-')}">
+            <td class="text-xs font-medium text-foreground">${escapeHtml(entry.source || '-')}</td>
+            <td style="max-width: 22rem;">
+              <button class="btn btn-ghost btn-sm text-left truncate block w-full p-0 font-normal hover:text-primary text-xs" data-action="view-summary" data-id="${escapeHtml(
+                entry.id,
+              )}" title="${escapeHtml(entry.summary || '-')}">
                 ${escapeHtml(entry.summary || '-')}
               </button>
             </td>
@@ -261,7 +265,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     tbody.querySelectorAll<HTMLTableRowElement>('tr[data-id]').forEach((row) => {
       row.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        if (target.closest('[data-action="view-summary"]')) return; // Handled separately
+        if (target.closest('[data-action="view-summary"]')) return;
         const id = row.dataset.id;
         const entry = entries.find((e) => e.id === id);
         if (entry) {
@@ -290,27 +294,33 @@ export function mountLogsPage(container: HTMLElement): () => void {
   function renderDetail() {
     if (!selectedEntry) {
       detailContent.innerHTML = `
-        <p class="text-sm text-muted">选择左侧一条日志查看请求/响应体详情。</p>
+        <p class="text-xs text-muted">选择左侧一条日志查看请求/响应体详情。</p>
       `;
       return;
     }
 
     detailContent.innerHTML = `
       <div class="flex flex-col gap-3">
-        <div class="flex flex-wrap items-center gap-2 text-xs">
-          <span class="badge ${logLevelBadgeClass(selectedEntry.level)}">${escapeHtml(formatLogLevel(selectedEntry.level))}</span>
-          <span class="font-mono text-muted">${escapeHtml(formatDateTime(selectedEntry.timestamp))}</span>
-          <span class="badge badge-outline">${escapeHtml(selectedEntry.source || '-')}</span>
+        <div class="flex flex-wrap items-center gap-1.5 text-xs">
+          <span class="badge ${logLevelBadgeClass(selectedEntry.level)} text-[11px] px-1.5 py-0">${escapeHtml(
+            formatLogLevel(selectedEntry.level),
+          )}</span>
+          <span class="font-mono text-muted text-xs">${escapeHtml(formatDateTime(selectedEntry.timestamp))}</span>
+          <span class="badge badge-outline text-[11px] px-1.5 py-0">${escapeHtml(selectedEntry.source || '-')}</span>
         </div>
 
         <div>
-          <p class="text-xs font-semibold mb-1 text-muted">请求体 (Request Body)</p>
-          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(selectedEntry.requestBody || '（无请求体）')}</pre>
+          <p class="text-xs font-medium mb-1 text-muted">请求体 (Request Body)</p>
+          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
+            selectedEntry.requestBody || '（无请求体）',
+          )}</pre>
         </div>
 
         <div>
-          <p class="text-xs font-semibold mb-1 text-muted">响应体 (Response Body)</p>
-          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(selectedEntry.responseBody || '（无响应体）')}</pre>
+          <p class="text-xs font-medium mb-1 text-muted">响应体 (Response Body)</p>
+          <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
+            selectedEntry.responseBody || '（无响应体）',
+          )}</pre>
         </div>
       </div>
     `;
@@ -322,12 +332,12 @@ export function mountLogsPage(container: HTMLElement): () => void {
       description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}`,
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="card p-4 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text" style="max-height: 24rem; overflow-y: auto;">
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">
           ${escapeHtml(entry.summary || '无摘要内容')}
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline dialog-close-btn">关闭</button>
+        <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>
       `,
       onMount: (dialogEl, close) => {
         dialogEl.querySelector('.dialog-close-btn')?.addEventListener('click', () => close());
@@ -344,7 +354,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
     streaming = true;
     streamToggleLabel.textContent = '停止监听';
-    streamToggleIcon.innerHTML = icon('stop_circle');
+    streamToggleIcon.innerHTML = icon('stop', 'w-3.5 h-3.5');
     streamToggleBtn.classList.remove('btn-outline');
     streamToggleBtn.classList.add('btn-destructive');
 
@@ -373,7 +383,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     }
     streaming = false;
     streamToggleLabel.textContent = '开始监听';
-    streamToggleIcon.innerHTML = icon('play_circle');
+    streamToggleIcon.innerHTML = icon('play', 'w-3.5 h-3.5');
     streamToggleBtn.classList.remove('btn-destructive');
     streamToggleBtn.classList.add('btn-outline');
   }
@@ -381,7 +391,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
   function renderStreamEntries() {
     if (streamEntries.length === 0) {
       streamEntriesContainer.innerHTML = `
-        <p class="text-sm text-muted">实时流正在监听中，等待新日志到达...</p>
+        <p class="text-xs text-muted">实时流正在监听中，等待新日志到达...</p>
       `;
       return;
     }
@@ -392,11 +402,15 @@ export function mountLogsPage(container: HTMLElement): () => void {
         (e) => `
         <div class="card p-2.5 bg-muted text-xs flex flex-col gap-1">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-muted font-mono">${escapeHtml(formatDateTime(e.timestamp))}</span>
-            <span class="badge ${logLevelBadgeClass(e.level)}">${escapeHtml(formatLogLevel(e.level))}</span>
-            <span class="font-medium">${escapeHtml(e.source)}</span>
+            <span class="text-muted font-mono text-[11px]">${escapeHtml(formatDateTime(e.timestamp))}</span>
+            <span class="badge ${logLevelBadgeClass(e.level)} text-[11px] px-1.5 py-0">${escapeHtml(
+              formatLogLevel(e.level),
+            )}</span>
+            <span class="font-medium text-foreground">${escapeHtml(e.source)}</span>
           </div>
-          <div class="font-mono whitespace-pre-wrap select-text mt-0.5">${escapeHtml(e.summary)}</div>
+          <div class="font-mono whitespace-pre-wrap select-text mt-0.5 text-foreground leading-relaxed">${escapeHtml(
+            e.summary,
+          )}</div>
         </div>
       `,
       )

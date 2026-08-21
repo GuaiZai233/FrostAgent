@@ -24,33 +24,33 @@ export function mountSessionsPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <header class="flex items-center justify-between gap-4 flex-wrap">
+      <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">会话管理</h1>
           <p class="page-description">查看与管理 Bot 参与的所有私聊及群聊会话状态</p>
         </div>
-        <button class="btn btn-outline" id="sessions-refresh-btn">
-          ${icon('refresh')}
+        <button class="btn btn-outline btn-sm" id="sessions-refresh-btn">
+          ${icon('refresh', 'w-3.5 h-3.5')}
           <span>刷新</span>
         </button>
       </header>
 
-      <div class="card" style="padding: 0; overflow: hidden;">
+      <div class="card overflow-hidden">
         <div class="table-container">
           <table class="table">
             <thead>
               <tr>
                 <th>会话 ID</th>
-                <th>平台</th>
-                <th>消息数</th>
-                <th>创建时间</th>
-                <th>最后活跃</th>
-                <th style="width: 6rem; text-align: right;">操作</th>
+                <th style="width: 7rem;">平台</th>
+                <th style="width: 6rem;">消息数</th>
+                <th style="width: 9.5rem;">创建时间</th>
+                <th style="width: 9.5rem;">最后活跃</th>
+                <th style="width: 4.5rem; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="sessions-table-body">
               <tr>
-                <td colspan="6" class="text-center text-muted" style="padding: 2rem;">
+                <td colspan="6" class="text-center text-muted" style="padding: 2.5rem;">
                   <span class="spinner"></span>
                   <span style="margin-left: 0.5rem;">加载中...</span>
                 </td>
@@ -95,7 +95,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
     if (loading && sessions.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="6" class="text-center text-muted" style="padding: 2rem;">
+          <td colspan="6" class="text-center text-muted" style="padding: 2.5rem;">
             <span class="spinner"></span>
             <span style="margin-left: 0.5rem;">加载中...</span>
           </td>
@@ -108,7 +108,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
     if (sessions.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="6" class="text-center text-muted" style="padding: 2.5rem;">
+          <td colspan="6" class="text-center text-muted" style="padding: 3rem;">
             暂无会话记录。
           </td>
         </tr>
@@ -124,18 +124,29 @@ export function mountSessionsPage(container: HTMLElement): () => void {
 
         const idContent = isGroup
           ? `
-            <button class="btn btn-ghost btn-sm text-left flex items-center gap-1.5" data-action="view-summary" data-id="${escapeHtml(session.sessionId)}">
-              <span class="text-primary font-mono font-medium">${escapeHtml(session.sessionId)}</span>
-              ${hasSummary ? `<span class="badge badge-secondary text-xs">${icon('auto_awesome', 'sm')} 总结</span>` : ''}
+            <button class="btn btn-ghost btn-sm text-left flex items-center gap-1.5 p-0 font-normal hover:text-primary" data-action="view-summary" data-id="${escapeHtml(
+              session.sessionId,
+            )}">
+              <span class="font-mono text-xs font-medium">${escapeHtml(session.sessionId)}</span>
+              ${
+                hasSummary
+                  ? `<span class="badge badge-secondary text-[11px] px-1.5 py-0">${icon(
+                      'sparkles',
+                      'w-3 h-3 text-primary',
+                    )} 总结</span>`
+                  : ''
+              }
             </button>
           `
-          : `<span class="font-mono text-sm" style="padding-left: 0.5rem;">${escapeHtml(session.sessionId)}</span>`;
+          : `<span class="font-mono text-xs">${escapeHtml(session.sessionId)}</span>`;
 
         const deleteSummaryBtn =
           isGroup && hasSummary
             ? `
-              <button class="btn btn-ghost btn-icon-sm text-destructive" title="删除群聊总结" data-action="delete-summary" data-id="${escapeHtml(session.sessionId)}">
-                ${icon('delete', 'sm')}
+              <button class="btn btn-ghost btn-icon-sm text-destructive" style="width: 1.75rem; height: 1.75rem;" title="删除群聊总结" data-action="delete-summary" data-id="${escapeHtml(
+                session.sessionId,
+              )}">
+                ${icon('trash', 'w-3.5 h-3.5')}
               </button>
             `
             : '';
@@ -143,10 +154,10 @@ export function mountSessionsPage(container: HTMLElement): () => void {
         return `
           <tr>
             <td>${idContent}</td>
-            <td><span class="badge badge-outline">${escapeHtml(formatPlatform(session.platform))}</span></td>
-            <td><span class="font-mono">${escapeHtml(formatCount(session.messageCount))}</span></td>
-            <td class="text-xs text-muted">${escapeHtml(formatDateTime(session.createdAt))}</td>
-            <td class="text-xs text-muted">${escapeHtml(formatDateTime(session.lastActive))}</td>
+            <td><span class="badge badge-outline text-xs">${escapeHtml(formatPlatform(session.platform))}</span></td>
+            <td><span class="font-mono text-xs">${escapeHtml(formatCount(session.messageCount))}</span></td>
+            <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(session.createdAt))}</td>
+            <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(session.lastActive))}</td>
             <td style="text-align: right;">${deleteSummaryBtn}</td>
           </tr>
         `;
@@ -221,12 +232,12 @@ export function mountSessionsPage(container: HTMLElement): () => void {
       description: `平台: ${formatPlatform(session.platform)} · 消息数: ${formatCount(session.messageCount)}`,
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="card p-4 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text" style="max-height: 20rem; overflow-y: auto;">
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">
           ${escapeHtml(summary)}
         </div>
       `,
       footerHtml: `
-        <button class="btn btn-outline dialog-close-btn">关闭</button>
+        <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>
       `,
       onMount: (dialogEl, close) => {
         dialogEl.querySelector('.dialog-close-btn')?.addEventListener('click', () => close());
@@ -235,6 +246,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
   }
 
   refreshBtn.addEventListener('click', () => {
+    tokenStack.reset();
     void loadSessions();
   });
 
