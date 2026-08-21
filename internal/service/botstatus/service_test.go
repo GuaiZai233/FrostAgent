@@ -21,11 +21,16 @@ func TestDerivePlatform(t *testing.T) {
 		{"astrbot:group:123", "astrbot"},
 		{"onebot:group:123", "onebot"},
 		{"qq:group:123", "onebot"},
+		{"QQ:group:123", "onebot"},
 		{"aiocqhttp:group:370335958", "aiocqhttp"},
+		{"AIOCQHTTP:group:370335958", "aiocqhttp"},
 		{"telegram:group:999", "telegram"},
 		{"group:12345", "group"},
+		{"GROUP:12345", "group"},
 		{"private:12345", "private"},
 		{"discord_group_123", "discord"},
+		{"telegram_123", "telegram"},
+		{"some_random_id", "unknown"},
 		{"invalid", "unknown"},
 	}
 
@@ -43,13 +48,18 @@ func TestIsGroupSession(t *testing.T) {
 		want      bool
 	}{
 		{"group:12345", true},
+		{"GROUP:12345", true},
 		{"aiocqhttp:group:370335958", true},
+		{"AIOCQHTTP:GROUP:370335958", true},
 		{"astrbot:group:12345", true},
+		{"AstrBot:Group:12345", true},
 		{"onebot:group:12345", true},
 		{"private:12345", false},
+		{"PRIVATE:12345", false},
 		{"astrbot:private:12345", false},
 		{"onebot:private:12345", false},
 		{"aiocqhttp:private:12345", false},
+		{"some_random_id", false},
 		{"", false},
 	}
 

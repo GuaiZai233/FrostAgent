@@ -94,8 +94,6 @@ export function formatPlatform(platform: string): string {
       return 'Telegram';
     case 'discord':
       return 'Discord';
-    case 'qq':
-      return 'QQ';
     default:
       return platform;
   }
