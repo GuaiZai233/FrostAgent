@@ -87,7 +87,7 @@ func main() {
 			if e.Visibility == memory.VisibilityPublic {
 				vis = "🌐"
 			}
-			fmt.Printf("[%s] %s | owner=%s | imp=%.2f | %s\n", vis, e.ID, e.Owner, e.Importance, e.Content)
+			fmt.Printf("[%s] %s | owner=%s | access=%d | %s\n", vis, e.ID, e.Owner, e.AccessCount, e.Content)
 		}
 		fmt.Printf("\n共 %d 条记忆\n", len(entries))
 

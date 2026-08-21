@@ -191,14 +191,12 @@ export class FrostagentApiService {
     content: string,
     tags: string[],
     visibility: string,
-    importance: number,
   ): Promise<UpdateMemoryResponse> {
     return this.memoryClient.updateMemory({
       id,
       content,
       tags,
       visibility,
-      importance,
     });
   }
 

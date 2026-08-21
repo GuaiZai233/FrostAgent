@@ -51,7 +51,6 @@ func (w *Writer) WriteByOwner(
 		Tags:       tags,
 		Source:     SourceManual,
 		Visibility: VisibilityPrivate,
-		Importance: 0.8,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
@@ -157,7 +156,6 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 			Tags:       e.Tags,
 			Source:     SourceExtract,
 			Visibility: vis,
-			Importance: 0.6,
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}

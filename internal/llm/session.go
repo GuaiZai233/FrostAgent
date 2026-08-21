@@ -375,7 +375,8 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	}
 
 	summary := ""
-	isGroupSession := strings.HasPrefix(sessionID, "group:") || strings.Contains(sessionID, ":group:")
+	s := strings.ToLower(sessionID)
+	isGroupSession := strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:")
 	if sm.groupSummaryStore != nil && isGroupSession {
 		record, ok, err := sm.groupSummaryStore.Get(sessionID)
 		if err != nil {

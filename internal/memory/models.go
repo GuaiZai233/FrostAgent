@@ -47,7 +47,6 @@ type MemoryEntry struct {
 	Tags        []string   `json:"tags"`                  // 标签（用于精确匹配和分类）
 	Source      Source     `json:"source"`                // 来源
 	Visibility  Visibility `json:"visibility"`            // 可见性
-	Importance  float64    `json:"importance"`            // 重要度 0.0~1.0（反思时更新）
 	CreatedAt   time.Time  `json:"created_at"`            // 创建时间
 	UpdatedAt   time.Time  `json:"updated_at"`            // 最后访问/更新时间
 	AccessCount int        `json:"access_count"`          // 被召回次数

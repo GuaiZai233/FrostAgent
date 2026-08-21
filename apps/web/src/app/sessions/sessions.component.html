@@ -43,7 +43,7 @@
           @for (session of sessions(); track session.sessionId) {
             <tr hlmTr>
               <td hlmTd class="font-mono text-xs">
-                @if (session.platform === 'group') {
+                @if (isGroupSession(session)) {
                   <button
                     hlmBtn
                     variant="link"
@@ -59,7 +59,7 @@
               </td>
               <td hlmTd>{{ formatPlatform(session.platform) }}</td>
               <td hlmTd>
-                @if (session.platform === 'group') {
+                @if (isGroupSession(session)) {
                   —
                 } @else {
                   {{ session.messageCount }}
@@ -68,7 +68,7 @@
               <td hlmTd>{{ formatDateTime(session.createdAt) }}</td>
               <td hlmTd>{{ formatDateTime(session.lastActive) }}</td>
               <td hlmTd class="text-end">
-                @if (session.platform === 'group' && session.groupSummary) {
+                @if (isGroupSession(session) && session.groupSummary) {
                   <button
                     hlmBtn
                     variant="ghost"
