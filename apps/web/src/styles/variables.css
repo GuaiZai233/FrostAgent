@@ -1,0 +1,145 @@
+:root {
+  color-scheme: light;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --radius: 0.5rem;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: calc(var(--radius));
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+  --radius-full: 9999px;
+
+  /* Neutral Zinc Palette - Light */
+  --background: #ffffff;
+  --foreground: #09090b;
+
+  --card: #ffffff;
+  --card-foreground: #09090b;
+
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #18181b;
+
+  /* Status Colors */
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --success-bg: #ecfdf5;
+  --success-border: #a7f3d0;
+
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+
+  --info: #3b82f6;
+  --info-foreground: #ffffff;
+  --info-bg: #eff6ff;
+  --info-border: #bfdbfe;
+
+  --purple: #8b5cf6;
+  --purple-foreground: #ffffff;
+  --purple-bg: #f5f3ff;
+  --purple-border: #ddd6fe;
+
+  /* Sidebar */
+  --sidebar-bg: #fafafa;
+  --sidebar-foreground: #3f3f46;
+  --sidebar-border: #e4e4e7;
+  --sidebar-active-bg: #f4f4f5;
+  --sidebar-active-text: #09090b;
+  --sidebar-hover-bg: #f4f4f5;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+:root.dark {
+  color-scheme: dark;
+
+  /* Neutral Zinc Palette - Dark */
+  --background: #09090b;
+  --foreground: #fafafa;
+
+  --card: #09090b;
+  --card-foreground: #fafafa;
+
+  --popover: #09090b;
+  --popover-foreground: #fafafa;
+
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+
+  --destructive: #7f1d1d;
+  --destructive-foreground: #fee2e2;
+
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #d4d4d8;
+
+  /* Status Colors */
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-border: rgba(16, 185, 129, 0.25);
+
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-border: rgba(245, 158, 11, 0.25);
+
+  --info: #3b82f6;
+  --info-foreground: #ffffff;
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-border: rgba(59, 130, 246, 0.25);
+
+  --purple: #a78bfa;
+  --purple-foreground: #ffffff;
+  --purple-bg: rgba(167, 139, 250, 0.12);
+  --purple-border: rgba(167, 139, 250, 0.25);
+
+  /* Sidebar */
+  --sidebar-bg: #0c0c0e;
+  --sidebar-foreground: #a1a1aa;
+  --sidebar-border: #27272a;
+  --sidebar-active-bg: #27272a;
+  --sidebar-active-text: #fafafa;
+  --sidebar-hover-bg: #18181b;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.5);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5);
+}

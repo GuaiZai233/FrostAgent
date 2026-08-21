@@ -66,3 +66,22 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 包含客户端自动断线重连与周期心跳保活。
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
+
+### 管理控制台架构 (Web Dashboard Architecture)
+
+FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeScript + Vite + 原生 HTML/CSS + ConnectRPC）架构，具备极高的加载速度、极致简单的构建管道与出色的可维护性：
+
+- **轻量原生架构**：
+  - 彻底去除臃肿的前端框架运行时（零 Angular/React/Vue 依赖），直接基于原生 DOM、现代 ES 模块以及 HTML5 Web 标准原语（`<dialog>`, `<table>`, `<input type="range">`, `<details>` 等）构建；
+  - 采用模块化页面生命周期挂载与清理机制（`mount` / `cleanup` / `router.register`），保证内存管理严谨、无泄漏；
+  - 采用 Hash 路由体系（`/#overview`, `/#sessions`, `/#memory`, `/#dialogue`, `/#logs`, `/#settings`），支持页面前进后退、参数隔离与平滑过渡。
+- **类型安全 RPC 传输**：
+  - 前端基于 `@connectrpc/connect-web` 与 `@frostagent/proto`，实现端到端的 Protobuf 类型安全与请求/响应全量校验；
+  - 支持 ConnectRPC Server-Streaming 实时日志长连接订阅与动态取消；
+  - 敏感配置自动脱敏与按需显隐。
+- **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
+  - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
+  - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化。
+- **单二进制静态嵌入与开发体验**：
+  - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
+  - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。
