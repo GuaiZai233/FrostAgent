@@ -94,7 +94,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         </article>
 
         <!-- Env Vars Table Card -->
-        <div class="card overflow-hidden">
+        <div class="card table-card overflow-hidden">
           <div class="table-container">
             <table class="table">
               <thead>

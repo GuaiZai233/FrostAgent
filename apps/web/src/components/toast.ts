@@ -27,7 +27,7 @@ function showToast(message: string, type: ToastType = 'info', options: ToastOpti
   const duration = options.duration ?? (type === 'error' ? 5000 : 3000);
 
   const toastEl = document.createElement('div');
-  toastEl.className = `toast toast-${type}`;
+  toastEl.className = `fa-toast fa-toast-${type}`;
 
   const iconName =
     type === 'success'
@@ -39,22 +39,22 @@ function showToast(message: string, type: ToastType = 'info', options: ToastOpti
       : 'info';
 
   toastEl.innerHTML = `
-    <div class="toast-icon">${icon(iconName)}</div>
-    <div class="toast-content">
-      ${options.title ? `<div class="toast-title">${escapeHtml(options.title)}</div>` : ''}
-      <div class="toast-message">${escapeHtml(message)}</div>
+    <div class="fa-toast-icon">${icon(iconName)}</div>
+    <div class="fa-toast-content">
+      ${options.title ? `<div class="fa-toast-title">${escapeHtml(options.title)}</div>` : ''}
+      <div class="fa-toast-message">${escapeHtml(message)}</div>
     </div>
-    <button class="btn btn-ghost btn-icon-sm toast-close" aria-label="关闭">
+    <button class="btn btn-ghost btn-icon-sm fa-toast-close" aria-label="关闭">
       ${icon('close', 'sm')}
     </button>
   `;
 
-  const closeBtn = toastEl.querySelector('.toast-close');
+  const closeBtn = toastEl.querySelector('.fa-toast-close');
   let timeoutId: number | null = null;
 
   const dismiss = () => {
     if (timeoutId) clearTimeout(timeoutId);
-    toastEl.classList.add('toast-closing');
+    toastEl.classList.add('fa-toast-closing');
     toastEl.addEventListener('animationend', () => {
       toastEl.remove();
     }, { once: true });

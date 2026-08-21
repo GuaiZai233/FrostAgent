@@ -309,6 +309,11 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: var(--card-foreground);
 }
 
+.table-card {
+  padding-block: 0;
+  gap: 0;
+}
+
 .table-container {
   width: 100%;
   overflow-x: auto;
@@ -513,7 +518,7 @@ dialog.dialog-modal::backdrop {
   pointer-events: none;
 }
 
-.toast {
+.fa-toast {
   pointer-events: auto;
   min-width: 19rem;
   max-width: 28rem;
@@ -530,43 +535,43 @@ dialog.dialog-modal::backdrop {
   transition: all 0.2s;
 }
 
-.toast.toast-closing {
+.fa-toast.fa-toast-closing {
   animation: toastOut 0.2s ease-in forwards;
 }
 
-.toast-icon {
+.fa-toast-icon {
   flex-shrink: 0;
   margin-top: 0.125rem;
 }
-.toast-success .toast-icon { color: var(--success); }
-.toast-error .toast-icon { color: var(--destructive); }
-.toast-warning .toast-icon { color: var(--warning); }
-.toast-info .toast-icon { color: var(--info); }
+.fa-toast-success .fa-toast-icon { color: var(--success); }
+.fa-toast-error .fa-toast-icon { color: var(--destructive); }
+.fa-toast-warning .fa-toast-icon { color: var(--warning); }
+.fa-toast-info .fa-toast-icon { color: var(--info); }
 
-.toast-content {
+.fa-toast-content {
   flex: 1;
 }
 
-.toast-title {
+.fa-toast-title {
   font-size: 0.9375rem;
   font-weight: 600;
   line-height: 1.3;
 }
 
-.toast-message {
+.fa-toast-message {
   font-size: 0.875rem;
   color: var(--muted-foreground);
   margin-top: 0.1875rem;
   word-break: break-word;
 }
 
-.toast-close {
+.fa-toast-close {
   color: var(--muted-foreground);
   padding: 0;
   margin: -0.25rem -0.25rem 0 0;
   cursor: pointer;
 }
-.toast-close:hover {
+.fa-toast-close:hover {
   color: var(--foreground);
 }
 

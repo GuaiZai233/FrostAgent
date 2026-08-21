@@ -35,7 +35,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
         </button>
       </header>
 
-      <div class="card overflow-hidden">
+      <div class="card table-card overflow-hidden">
         <div class="table-container">
           <table class="table">
             <thead>

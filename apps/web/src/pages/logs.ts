@@ -75,7 +75,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <!-- Table Column (2 cols on xl) -->
         <div class="xl:col-span-2 flex flex-col">
-          <div class="card overflow-hidden">
+          <div class="card table-card overflow-hidden">
             <div class="table-container">
               <table class="table">
                 <thead>
