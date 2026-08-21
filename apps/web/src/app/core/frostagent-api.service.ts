@@ -4,10 +4,16 @@ import type { Client } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import {
   BotStatusService,
+  DialogueService,
   LogLevel,
   LogService,
   MemoryService,
   SettingsService,
+  type DialogueItem,
+  type ListDialoguesResponse,
+  type SaveDialoguesResponse,
+  type GetRawDialogueFileResponse,
+  type UpdateRawDialogueFileResponse,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
@@ -49,6 +55,10 @@ export class FrostagentApiService {
     createClient(SettingsService, this.transport);
   private readonly memoryClient: Client<typeof MemoryService> = createClient(
     MemoryService,
+    this.transport,
+  );
+  private readonly dialogueClient: Client<typeof DialogueService> = createClient(
+    DialogueService,
     this.transport,
   );
 
@@ -203,5 +213,23 @@ export class FrostagentApiService {
 
   triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
     return this.memoryClient.triggerReflection({ owner });
+  }
+
+  listDialogues(): Promise<ListDialoguesResponse> {
+    return this.dialogueClient.listDialogues({});
+  }
+
+  saveDialogues(dialogues: DialogueItem[]): Promise<SaveDialoguesResponse> {
+    return this.dialogueClient.saveDialogues({ dialogues });
+  }
+
+  getRawDialogueFile(): Promise<GetRawDialogueFileResponse> {
+    return this.dialogueClient.getRawDialogueFile({});
+  }
+
+  updateRawDialogueFile(
+    content: string,
+  ): Promise<UpdateRawDialogueFileResponse> {
+    return this.dialogueClient.updateRawDialogueFile({ content });
   }
 }

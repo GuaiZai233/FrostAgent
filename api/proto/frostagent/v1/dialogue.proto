@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+// DialogueService provides persona dialogue example configuration and few-shot prompt management.
+service DialogueService {
+  rpc ListDialogues(ListDialoguesRequest) returns (ListDialoguesResponse);
+  rpc SaveDialogues(SaveDialoguesRequest) returns (SaveDialoguesResponse);
+  rpc GetRawDialogueFile(GetRawDialogueFileRequest) returns (GetRawDialogueFileResponse);
+  rpc UpdateRawDialogueFile(UpdateRawDialogueFileRequest) returns (UpdateRawDialogueFileResponse);
+}
+
+// DialogueItem represents a single few-shot persona dialogue example.
+message DialogueItem {
+  string id = 1;
+  string scene = 2;
+  string relation = 3;
+  string user = 4;
+  string preferred = 5;
+}
+
+message ListDialoguesRequest {}
+
+message ListDialoguesResponse {
+  repeated DialogueItem dialogues = 1;
+  string prompt_preview = 2;
+  string file_path = 3;
+}
+
+message SaveDialoguesRequest {
+  repeated DialogueItem dialogues = 1;
+}
+
+message SaveDialoguesResponse {
+  bool success = 1;
+  string error = 2;
+  string prompt_preview = 3;
+}
+
+message GetRawDialogueFileRequest {}
+
+message GetRawDialogueFileResponse {
+  string content = 1;
+  string file_path = 2;
+}
+
+message UpdateRawDialogueFileRequest {
+  string content = 1;
+}
+
+message UpdateRawDialogueFileResponse {
+  bool success = 1;
+  string error = 2;
+  string prompt_preview = 3;
+}

@@ -22,6 +22,11 @@ export const appRoutes: Route[] = [
       import('./memory/memory.component').then((m) => m.MemoryComponent),
   },
   {
+    path: 'dialogue',
+    loadComponent: () =>
+      import('./dialogue/dialogue.component').then((m) => m.DialogueComponent),
+  },
+  {
     path: 'logs',
     loadComponent: () =>
       import('./logs/logs.component').then((m) => m.LogsComponent),

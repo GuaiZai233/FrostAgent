@@ -51,6 +51,11 @@ export class App implements OnDestroy {
       label: '记忆',
     },
     {
+      path: '/dialogue',
+      icon: 'chat',
+      label: '示例对话',
+    },
+    {
       path: '/logs',
       icon: 'terminal',
       label: '日志',
