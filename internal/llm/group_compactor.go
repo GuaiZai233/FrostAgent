@@ -17,7 +17,6 @@ const (
 
 {conversation}`
 
-	DefaultGroupCompactBufferSize    = 20
 	DefaultGroupCompactMaxBufferSize = 200
 	DefaultGroupCompactMinInterval   = 30 * time.Second
 	// DefaultGroupCompactRetryDelay 是异步压缩失败后的最小重试退避时间（Minimum Retry Backoff）。
@@ -52,7 +51,7 @@ type GroupCompactor struct {
 
 	pendingPersist map[string]*pendingPersistRecord
 	persistActive  map[string]bool
-	persistTimer   map[string]*time.Timer
+	persistWake    map[string]chan struct{}
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -85,7 +84,7 @@ func NewGroupCompactor(
 		scheduledTimerSeq: make(map[string]uint64),
 		pendingPersist:    make(map[string]*pendingPersistRecord),
 		persistActive:     make(map[string]bool),
-		persistTimer:      make(map[string]*time.Timer),
+		persistWake:       make(map[string]chan struct{}),
 	}
 }
 
@@ -327,26 +326,32 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 		retryCount:      0,
 	}
 
-	// Stop any pending retry timer so the latest summary can be persisted immediately
-	if timer := c.persistTimer[owner]; timer != nil {
-		timer.Stop()
-		delete(c.persistTimer, owner)
+	if c.persistActive[owner] {
+		// Worker is already running for this owner.
+		// Notify the worker so that if it is currently sleeping in a backoff timer,
+		// it wakes up immediately to process this latest pending summary.
+		wakeCh := c.persistWake[owner]
+		select {
+		case wakeCh <- struct{}{}:
+		default:
+		}
+		return
 	}
 
-	// If no worker is currently active for this owner, start one.
-	// If a worker IS currently active, it will pick up this latest pending record after its current write finishes.
-	if !c.persistActive[owner] {
-		c.persistActive[owner] = true
-		go c.persistWorker(owner)
-	}
+	// No active worker for this owner; launch one.
+	c.persistActive[owner] = true
+	wakeCh := make(chan struct{}, 1)
+	c.persistWake[owner] = wakeCh
+	go c.persistWorker(owner, wakeCh)
 }
 
-func (c *GroupCompactor) persistWorker(owner string) {
+func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 	for {
 		c.mu.Lock()
 		target := c.pendingPersist[owner]
 		if target == nil {
 			c.persistActive[owner] = false
+			delete(c.persistWake, owner)
 			c.mu.Unlock()
 			return
 		}
@@ -361,27 +366,31 @@ func (c *GroupCompactor) persistWorker(owner string) {
 			)
 
 			c.mu.Lock()
-			if cur := c.pendingPersist[owner]; cur != nil {
-				// If not replaced by a newer record while writing, increment retry count
-				if cur.summary == rec.summary && cur.storeGeneration == rec.storeGeneration {
-					cur.retryCount++
-				}
-				delay := calculatePersistRetryDelay(cur.retryCount)
+			cur := c.pendingPersist[owner]
+			if cur == nil {
 				c.persistActive[owner] = false
-				c.persistTimer[owner] = time.AfterFunc(delay, func() {
-					c.mu.Lock()
-					delete(c.persistTimer, owner)
-					if c.pendingPersist[owner] != nil && !c.persistActive[owner] {
-						c.persistActive[owner] = true
-						go c.persistWorker(owner)
-					}
-					c.mu.Unlock()
-				})
-			} else {
-				c.persistActive[owner] = false
+				delete(c.persistWake, owner)
+				c.mu.Unlock()
+				return
 			}
+			if cur.summary == rec.summary && cur.storeGeneration == rec.storeGeneration {
+				cur.retryCount++
+			}
+			delay := calculatePersistRetryDelay(cur.retryCount)
 			c.mu.Unlock()
-			return
+
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-wakeCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}
+			continue
 		}
 
 		if !applied {

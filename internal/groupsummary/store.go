@@ -121,6 +121,8 @@ func (s *Store) Generation(sessionID string) uint64 {
 }
 
 // SetSaveHook allows tests to intercept persistence writes or inject transient failures.
+// If the hook returns an error, the write fails before saving to disk.
+// If the hook returns nil, the store proceeds to save to disk normally.
 func (s *Store) SetSaveHook(hook func(records map[string]Record) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,7 +169,8 @@ func (s *Store) Upsert(
 		if err := s.saveHook(next); err != nil {
 			return false, err
 		}
-	} else if err := s.save(next); err != nil {
+	}
+	if err := s.save(next); err != nil {
 		return false, err
 	}
 	s.records = next
@@ -194,7 +197,8 @@ func (s *Store) Delete(sessionID string) error {
 		if err := s.saveHook(next); err != nil {
 			return err
 		}
-	} else if err := s.save(next); err != nil {
+	}
+	if err := s.save(next); err != nil {
 		return err
 	}
 	s.records = next

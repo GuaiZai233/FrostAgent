@@ -761,6 +761,24 @@ func ConvertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	return convertToCoreMessages(msgs)
 }
 
+// GroupRawLimit returns the maximum number of recent uncompacted group messages
+// to include in the context. This strictly matches the current GroupCompactor's buffer size.
+func (e *Engine) GroupRawLimit() int {
+	if e != nil && e.GroupCompactor != nil {
+		if size := e.GroupCompactor.BufferSize(); size > 0 {
+			return size
+		}
+	}
+	return DefaultGroupCompactBufferSize
+}
+
+// GroupRawMaxChars dynamically returns the total character budget for uncompacted
+// group messages from the current runtime environment.
+func (e *Engine) GroupRawMaxChars() int {
+	cfg := LoadGroupRawContextConfigFromEnv()
+	return cfg.MaxChars
+}
+
 // convertToCoreMessages converts internal ChatMessage to core.ChatMessage
 func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))

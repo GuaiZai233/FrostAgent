@@ -456,7 +456,13 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 	if compactor.HasPendingPersistence("test_group_persist_fail_1") {
 		t.Fatalf("expected HasPendingPersistence to be false after recovery")
 	}
-	rec, ok, err := store.Get("test_group_persist_fail_1")
+
+	// 重新从磁盘载入 Store 验证持久化真实落盘
+	reloadedStore, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to reload store from disk: %v", err)
+	}
+	rec, ok, err := reloadedStore.Get("test_group_persist_fail_1")
 	if err != nil || !ok || rec.Summary == "" {
 		t.Fatalf("expected summary successfully persisted to disk after retry, got ok=%v, err=%v, rec=%+v", ok, err, rec)
 	}
@@ -517,21 +523,32 @@ func TestGroupCompactor_NewerPersistenceOverridesPendingRetryTimer(t *testing.T)
 		t.Fatalf("expected pending persistence for v1")
 	}
 
-	// 2. 在 V1 的 retry timer 尚未触发时，V2 到来
+	// 2. 在 V1 处于重试退避等待时，V2 到来
 	compactor.queuePersistence(owner, "Summary V2", 0)
 
-	// 3. 验证 V2 即使初次失败，也绝不会被 V1 的旧 timer 吞掉或卡死，而是会由自己的 timer 持续重试并最终成功
+	// 3. 验证 V2 即使初次失败，也绝不会被 V1 的旧状态吞掉或卡死，而是会持续重试并最终成功
 	select {
 	case <-v2RecoveredChan:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for v2 retry recovery")
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	for i := 0; i < 50; i++ {
+		if !compactor.HasPendingPersistence(owner) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if compactor.HasPendingPersistence(owner) {
 		t.Fatalf("expected pending persistence cleared after v2 recovery")
 	}
-	rec, ok, _ := store.Get(owner)
+
+	// 重新从磁盘载入并断言
+	reloadedStore, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to reload store from disk: %v", err)
+	}
+	rec, ok, _ := reloadedStore.Get(owner)
 	if !ok || rec.Summary != "Summary V2" {
 		t.Fatalf("expected Summary V2 persisted on disk, got %q", rec.Summary)
 	}
@@ -596,15 +613,108 @@ func TestGroupCompactor_ConcurrentPersistenceTOCTOUOrdering(t *testing.T) {
 		t.Fatalf("timed out waiting for v2 to finish saving")
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	for i := 0; i < 50; i++ {
+		if !compactor.HasPendingPersistence(owner) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
-	// 5. 验证无论调度顺序如何，最终磁盘上的总结绝对是 Summary V2，绝不能回退到 V1
-	rec, ok, _ := store.Get(owner)
+	// 5. 重新从磁盘载入并断言：最终磁盘上的总结绝对是 Summary V2，绝不能回退到 V1
+	reloadedStore, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to reload store from disk: %v", err)
+	}
+	rec, ok, _ := reloadedStore.Get(owner)
 	if !ok || rec.Summary != "Summary V2" {
 		t.Fatalf("expected final summary on disk to be Summary V2, got %q", rec.Summary)
 	}
 	if compactor.HasPendingPersistence(owner) {
 		t.Fatalf("expected no pending persistence after V2 completed")
+	}
+}
+
+func TestGroupCompactor_PersistenceWorkerPreemptionAndBarrier(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
+	owner := "test_group_preempt_barrier_1"
+
+	v1FailedChan := make(chan struct{})
+	v2SavingChan := make(chan struct{})
+
+	store.SetSaveHook(func(records map[string]groupsummary.Record) error {
+		rec := records[owner]
+		if rec.Summary == "Summary V1" {
+			select {
+			case <-v1FailedChan:
+			default:
+				close(v1FailedChan)
+			}
+			// V1 模拟写入失败，worker 会进入重试退避 sleep
+			return errors.New("v1 simulated fail")
+		}
+		if rec.Summary == "Summary V2" {
+			select {
+			case <-v2SavingChan:
+			default:
+				close(v2SavingChan)
+			}
+			return nil
+		}
+		return nil
+	})
+
+	// 1. 提交 V1，Upsert 失败后 worker 进入退避等待
+	compactor.queuePersistence(owner, "Summary V1", 0)
+
+	select {
+	case <-v1FailedChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v1 to fail")
+	}
+
+	// 2. Worker 处于退避等待中，此时入队 V2
+	// 这必须立即通过 wakeCh 抢占唤醒 worker，而不需要等待退避定时器到期
+	start := time.Now()
+	compactor.queuePersistence(owner, "Summary V2", 0)
+
+	select {
+	case <-v2SavingChan:
+		// 成功被抢占并立即开始保存 V2
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v2 to preempt worker and start saving")
+	}
+
+	if elapsed := time.Since(start); elapsed > 1*time.Second {
+		t.Fatalf("preemption took too long (%v), backoff timer was not properly preempted", elapsed)
+	}
+
+	// 等待 pending 清除
+	for i := 0; i < 50; i++ {
+		if !compactor.HasPendingPersistence(owner) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if compactor.HasPendingPersistence(owner) {
+		t.Fatalf("expected pending persistence cleared for v2")
+	}
+
+	// 3. 重新从磁盘载入并断言
+	reloadedStore, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to reload store from disk: %v", err)
+	}
+	rec, ok, err := reloadedStore.Get(owner)
+	if err != nil || !ok || rec.Summary != "Summary V2" {
+		t.Fatalf("expected Summary V2 on disk, got ok=%v, err=%v, summary=%q", ok, err, rec.Summary)
 	}
 }
 

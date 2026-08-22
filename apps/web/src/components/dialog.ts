@@ -51,8 +51,9 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
       resolve(result);
     };
 
-    const closeBtn = dialog.querySelector('.dialog-close-btn');
-    closeBtn?.addEventListener('click', () => finish(null));
+    dialog.querySelectorAll('.dialog-close-btn').forEach((btn) => {
+      btn.addEventListener('click', () => finish(null));
+    });
 
     dialog.addEventListener('cancel', (e) => {
       e.preventDefault();

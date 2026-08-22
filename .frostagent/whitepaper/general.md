@@ -38,6 +38,20 @@
 
 雪花可以通过ActionsCat部分互动指令获得（晚安、签到等）。
 
+### 群聊上下文与压缩系统 (Group Context & Compaction System)
+
+为了让智能体兼具群聊背景记忆理解与即时群聊临场感，FrostAgent 采用双轨群聊上下文设计：
+
+- **后台滚动压缩 (`GroupCompactor`)**：
+  - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
+- **未压缩原消息即时注入 (`recent_group_messages`)**：
+  - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
+  - 自动通过 `messageID` 过滤当前轮次的触发消息，避免消息重复；
+  - 包含明确的非可信上下文防注入安全隔离边界。
+- **持久历史与临时请求上下文严格隔离 (Transient vs Durable Context)**：
+  - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
+  - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
+
 ### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
 
 为了增强智能体的人设表达（语气、口吻、句式格式），FrostAgent 支持通过 YAML 文件配置示例对话（默认为 `eval/dialogue/dialogue.yml`），并在会话执行时注入为系统提示词：
@@ -56,8 +70,9 @@
 - **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
 - **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
 - **失败容错与自动退避重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息在 safety buffer 容量范围内继续保留在内存缓冲区中；Compactor 依据 `max(retryDelay, remaining cooldown)` 延迟在后台自动重新调度压缩（其中 `retryDelay` 为最小失败退避时间，实际重试仍严格遵循 `minInterval` 冷却期），或在后续新消息到达时合并重试。
-- **异步 Dirty 持久化与单调版本重试**：LLM 压缩成功后优先提交内存状态；若磁盘持久化失败，系统标记 dirty/pending persistence 状态并在后台独立按指数退避重试落盘，无需等待后续新消息产生。通过单调 Sequence 与 Generation 校验，确保旧重试绝不会覆盖更新版本的总结数据。
-- **定时器代数令牌（Generation Token）防竞态**：为延迟触发与持久化重试的 `time.Timer` 分配单调递增的代数 Token，回调执行时严格校验 Token 归属，杜绝旧 Timer 回调误删新 Timer 的竞态条件。
+- **异步 Dirty 持久化与单 Owner 单 Writer 状态机 (Single-Owner Single-Writer Persistence)**：LLM 压缩成功后优先原子提交内存状态；若磁盘持久化失败，系统记录 `pendingPersist[owner]` 并在后台通过单 Owner 唯一 Worker 独立按指数退避重试落盘，无需阻塞对话流程。每个会话同时仅允许单一 Worker 执行落盘，且 Worker 在完成当前写入后自动接力落盘最新版本（Latest Pending），彻底消除了并发 TOCTOU 乱序竞争，确保旧版本绝不覆盖新版本。
+- **退避唤醒通道与 Timer 抢占机制 (Wake Channel & Timer Preemption)**：持久化 Worker 在重试退避期间保持唯一身份，通过 `timer + wake channel` 机制监听唤醒事件。当新的总结入队时，直接更新 `pendingPersist` 并通过通道立即打断退避 Timer 唤醒 Worker 处理最新值，既无需共享持久化 Timer Map，也杜绝了旧 Timer 回调误删新定时器的生命周期竞争。
+- **调度定时器代数令牌（Scheduled Timer Generation Token）防竞态**：对于群聊压缩冷却触发的 `time.Timer`，分配单调递增的代数 Token，回调执行时严格校验 Token 归属，杜绝旧 Timer 回调误删新注册 Timer 的竞态条件。
 - **冷却期延迟调度**：若在 `minInterval` 冷却期内累积消息达到触发阈值，系统会自动注册定时器在冷却结束瞬间自动触发压缩，避免无新消息到达时压缩任务被遗漏滞留。
 - **代数隔离与重置安全**：清空或删除群聊总结时递增 `generation`，自动失效任何处于 In-Flight 状态的异步压缩结果与持久化，防止过期数据写回覆盖。
 
