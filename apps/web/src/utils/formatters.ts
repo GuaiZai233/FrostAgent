@@ -193,10 +193,9 @@ export class PageTokenStack {
 export function formatConsoleLog(entry: LogEntry): string {
   let timeStr = '00:00:00';
   if (entry.timestamp) {
-    const d = new Date(entry.timestamp);
-    if (!Number.isNaN(d.getTime())) {
-      const pad = (n: number) => String(n).padStart(2, '0');
-      timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const match = entry.timestamp.match(/(?:T|\s|^)(\d{2}:\d{2}:\d{2})/);
+    if (match) {
+      timeStr = match[1];
     } else {
       timeStr = entry.timestamp;
     }
@@ -227,31 +226,4 @@ export function formatConsoleLog(entry: LogEntry): string {
   return `[${timeStr}][${levelStr}][${sourceStr}] ${contentStr}`;
 }
 
-export async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // fallback to execCommand
-  }
-
-  try {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    textArea.style.top = '-999999px';
-    textArea.style.opacity = '0';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    const success = document.execCommand('copy');
-    textArea.remove();
-    return success;
-  } catch {
-    return false;
-  }
-}
 

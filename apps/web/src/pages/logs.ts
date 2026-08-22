@@ -1,7 +1,6 @@
 import { api } from '../api/client';
 import { LogEntry, LogLevel } from '@frostagent/proto';
 import {
-  copyToClipboard,
   escapeHtml,
   formatConsoleLog,
   formatDateTime,
@@ -9,6 +8,7 @@ import {
   logLevelBadgeClass,
   PageTokenStack,
 } from '../utils/formatters';
+import { copyToClipboard } from '../utils/clipboard';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
