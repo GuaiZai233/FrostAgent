@@ -19,14 +19,16 @@ import (
 type mockLLMProvider struct {
 	mu        sync.Mutex
 	reqCount  int
+	requests  []core.ChatRequest
 	responses []*core.ChatResponse
 	errs      []error
 }
 
-func (m *mockLLMProvider) Chat(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.requests = append(m.requests, req)
 	idx := m.reqCount
 	m.reqCount++
 
@@ -434,5 +436,124 @@ func TestAstrBotGroupCompactAndMemoryIntegration(t *testing.T) {
 	history := sess.Snapshot()
 	if len(history) < 2 {
 		t.Errorf("期望会话历史至少 2 条消息，实际=%d", len(history))
+	}
+}
+
+func TestAstrBot_GroupRawContextAndDurableSeparation(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 发送闲聊消息进入 compact buffer
+	idleMsg := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_astr_001",
+		UserID:      "usr_charlie",
+		SenderName:  "Charlie",
+		GroupID:     "grp_test_88",
+		GroupName:   "FoxTest",
+		Content:     "大家晚上好呀",
+		Platform:    "astrbot",
+		MessageType: "group",
+		Timestamp:   time.Now().Unix(),
+	}
+	idleData, _ := json.Marshal(idleMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, idleData); err != nil {
+		t.Fatalf("发送闲聊消息失败: %v", err)
+	}
+
+	_, noopBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 noop 失败: %v", err)
+	}
+	var noopAction Action
+	_ = json.Unmarshal(noopBytes, &noopAction)
+	if noopAction.Action != "noop" {
+		t.Errorf("期望 action=noop, 实际=%s", noopAction.Action)
+	}
+
+	// 设置 running summary
+	sess := engine.SessionManager.GetOrCreate("astrbot:group:grp_test_88")
+	sess.SetGroupRunningSummary("群友互相打招呼")
+
+	// 2. 发送触发消息 (@bot)
+	wakeMsg := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_astr_002",
+		UserID:      "usr_david",
+		SenderName:  "David",
+		GroupID:     "grp_test_88",
+		GroupName:   "FoxTest",
+		Content:     "霜降 晚上好！",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	wakeData, _ := json.Marshal(wakeMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeData); err != nil {
+		t.Fatalf("发送唤醒消息失败: %v", err)
+	}
+
+	// 接收回复
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var respAction Action
+	_ = json.Unmarshal(respBytes, &respAction)
+	if respAction.Action != "send_message" {
+		t.Errorf("期望 action=send_message, 实际=%s", respAction.Action)
+	}
+
+	// 3. 验证 LLM 接收到的临时请求上下文
+	mockLLM.mu.Lock()
+	if len(mockLLM.requests) == 0 {
+		mockLLM.mu.Unlock()
+		t.Fatalf("期望 LLM 收到请求，实际未收到")
+	}
+	lastReq := mockLLM.requests[len(mockLLM.requests)-1]
+	mockLLM.mu.Unlock()
+
+	lastMsg := lastReq.Messages[len(lastReq.Messages)-1]
+	reqContent, _ := lastMsg.Content.(string)
+
+	if !strings.Contains(reqContent, "<group_running_summary>\n群友互相打招呼\n</group_running_summary>") {
+		t.Errorf("期望 LLM 请求包含 group_running_summary，实际内容: %s", reqContent)
+	}
+	if !strings.Contains(reqContent, "<recent_group_messages>") {
+		t.Errorf("期望 LLM 请求包含 recent_group_messages，实际内容: %s", reqContent)
+	}
+	if !strings.Contains(reqContent, "大家晚上好呀") {
+		t.Errorf("期望 LLM 请求包含闲聊消息，实际内容: %s", reqContent)
+	}
+	// 验证去重：当前触发消息内容不应重复出现在 recent_group_messages 中
+	if strings.Contains(reqContent, "<recent_group_messages>") {
+		recentBlock := reqContent[strings.Index(reqContent, "<recent_group_messages>"):strings.Index(reqContent, "</recent_group_messages>")]
+		if strings.Contains(recentBlock, "晚上好！") {
+			t.Errorf("触发消息文本 '晚上好！' 不应出现在 recent_group_messages 中: %s", recentBlock)
+		}
+	}
+
+	// 4. 验证持久化 Session History 并没有被污染
+	history := sess.Snapshot()
+	if len(history) < 2 {
+		t.Fatalf("期望 session 至少包含 2 条消息，实际=%d", len(history))
+	}
+	durableUserMsg := history[0].Content.(string)
+	if strings.Contains(durableUserMsg, "<group_running_summary>") {
+		t.Errorf("持久 Session History 严禁包含 <group_running_summary>: %s", durableUserMsg)
+	}
+	if strings.Contains(durableUserMsg, "<recent_group_messages>") {
+		t.Errorf("持久 Session History 严禁包含 <recent_group_messages>: %s", durableUserMsg)
 	}
 }

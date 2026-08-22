@@ -38,6 +38,20 @@
 
 雪花可以通过ActionsCat部分互动指令获得（晚安、签到等）。
 
+### 群聊上下文与压缩系统 (Group Context & Compaction System)
+
+为了让智能体兼具群聊背景记忆理解与即时群聊临场感，FrostAgent 采用双轨群聊上下文设计：
+
+- **后台滚动压缩 (`GroupCompactor`)**：
+  - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
+- **未压缩原消息即时注入 (`recent_group_messages`)**：
+  - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
+  - 自动通过 `messageID` 过滤当前轮次的触发消息，避免消息重复；
+  - 包含明确的非可信上下文防注入安全隔离边界。
+- **持久历史与临时请求上下文严格隔离 (Transient vs Durable Context)**：
+  - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
+  - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
+
 ### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
 
 为了增强智能体的人设表达（语气、口吻、句式格式），FrostAgent 支持通过 YAML 文件配置示例对话（默认为 `eval/dialogue/dialogue.yml`），并在会话执行时注入为系统提示词：

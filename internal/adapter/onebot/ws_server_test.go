@@ -24,15 +24,17 @@ import (
 type mockLLMProvider struct {
 	mu       sync.Mutex
 	reqCount int
+	requests []core.ChatRequest
 	// responses 按顺序返回，如果为空则返回默认文本
 	responses []*core.ChatResponse
 	errs      []error
 }
 
-func (m *mockLLMProvider) Chat(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.requests = append(m.requests, req)
 	idx := m.reqCount
 	m.reqCount++
 
@@ -1661,3 +1663,134 @@ func TestWSBilling_OversizedInput_EarlyAbort(t *testing.T) {
 	}
 	t.Logf("✅ 单条超大输入拒绝拦截测试通过: %s", replyMsg)
 }
+
+func TestWSGroupMessage_RawContextAndDurableSeparation(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 发送群聊前置闲聊消息
+	idleEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     30003,
+		UserID:      111222,
+		MessageID:   501,
+		Sender: &model.OneBotSender{
+			Nickname: "张三",
+			UserID:   111222,
+		},
+		Message: json.RawMessage(`[{"type":"text","data":{"text":"我们在聊原神"}}]`),
+	}
+	idleBytes, _ := json.Marshal(idleEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, idleBytes); err != nil {
+		t.Fatalf("发送闲聊消息失败: %v", err)
+	}
+
+	// 等待闲聊消息进入 session
+	time.Sleep(50 * time.Millisecond)
+
+	// 设置 running summary
+	sess := engine.SessionManager.GetOrCreate("group:30003")
+	sess.SetGroupRunningSummary("群聊正在讨论游戏")
+
+	// 2. 发送触发消息 (@bot)
+	triggerEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     30003,
+		UserID:      333444,
+		MessageID:   502,
+		Sender: &model.OneBotSender{
+			Nickname: "李四",
+			UserID:   333444,
+		},
+		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"请总结一下"}}]`),
+	}
+	triggerBytes, _ := json.Marshal(triggerEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, triggerBytes); err != nil {
+		t.Fatalf("发送触发消息失败: %v", err)
+	}
+
+	// 处理群信息响应
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+	var groupInfoAction model.OneBotAction
+	if err := json.Unmarshal(respBytes, &groupInfoAction); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if groupInfoAction.Action == "get_group_info" {
+		groupInfoResponse := map[string]interface{}{
+			"status":  "ok",
+			"retcode": 0,
+			"data": map[string]interface{}{
+				"group_id":   30003,
+				"group_name": "游戏群",
+			},
+			"echo": groupInfoAction.Echo,
+		}
+		resBytes, _ := json.Marshal(groupInfoResponse)
+		if err := conn.WriteMessage(websocket.TextMessage, resBytes); err != nil {
+			t.Fatalf("发送群信息失败: %v", err)
+		}
+
+		_, respBytes, err = conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+	}
+
+	// 3. 验证 LLM 接收到的请求包含临时群聊上下文
+	mockLLM.mu.Lock()
+	if len(mockLLM.requests) == 0 {
+		mockLLM.mu.Unlock()
+		t.Fatalf("期望 LLM 收到请求，实际未收到")
+	}
+	lastReq := mockLLM.requests[len(mockLLM.requests)-1]
+	mockLLM.mu.Unlock()
+
+	lastMsg := lastReq.Messages[len(lastReq.Messages)-1]
+	reqContent, _ := lastMsg.Content.(string)
+
+	if !strings.Contains(reqContent, "<group_running_summary>\n群聊正在讨论游戏\n</group_running_summary>") {
+		t.Errorf("期望 LLM 请求包含 group_running_summary，实际内容: %s", reqContent)
+	}
+	if !strings.Contains(reqContent, "<recent_group_messages>") {
+		t.Errorf("期望 LLM 请求包含 recent_group_messages，实际内容: %s", reqContent)
+	}
+	if !strings.Contains(reqContent, "我们在聊原神") {
+		t.Errorf("期望 LLM 请求包含前置闲聊消息，实际内容: %s", reqContent)
+	}
+	// 验证去重：当前触发消息内容不应重复出现在 recent_group_messages 中
+	if strings.Contains(reqContent, "<recent_group_messages>") {
+		recentBlock := reqContent[strings.Index(reqContent, "<recent_group_messages>"):strings.Index(reqContent, "</recent_group_messages>")]
+		if strings.Contains(recentBlock, "请总结一下") {
+			t.Errorf("触发消息文本 '请总结一下' 不应出现在 recent_group_messages 中: %s", recentBlock)
+		}
+	}
+
+	// 4. 验证持久化 Session History 并没有被污染！
+	history := sess.Snapshot()
+	if len(history) < 2 {
+		t.Fatalf("期望 session 至少包含 2 条消息，实际=%d", len(history))
+	}
+	durableUserMsg := history[0].Content.(string)
+	if strings.Contains(durableUserMsg, "<group_running_summary>") {
+		t.Errorf("持久 Session History 严禁包含 <group_running_summary>: %s", durableUserMsg)
+	}
+	if strings.Contains(durableUserMsg, "<recent_group_messages>") {
+		t.Errorf("持久 Session History 严禁包含 <recent_group_messages>: %s", durableUserMsg)
+	}
+}
+
