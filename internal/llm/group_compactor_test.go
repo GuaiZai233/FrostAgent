@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -386,13 +385,30 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 	mockLLM := &mockCompactorLLM{}
 
 	tmpDir := t.TempDir()
-	// 将 store 放在一个子目录，但故意在该位置创建一个普通文件以制造持久化写入失败
-	subDir := filepath.Join(tmpDir, "store_dir")
-	if err := os.WriteFile(subDir, []byte("blocker"), 0644); err != nil {
-		t.Fatalf("failed to create blocker file: %v", err)
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-	storePath := filepath.Join(subDir, "group_summaries.json")
-	store, _ := groupsummary.NewStore(storePath)
+
+	var saveAttempts atomic.Int32
+	firstAttemptDone := make(chan struct{})
+	recoveredChan := make(chan struct{})
+
+	// 第一次持久化失败，第二次及后续成功
+	store.SetSaveHook(func(records map[string]groupsummary.Record) error {
+		attempt := saveAttempts.Add(1)
+		if attempt == 1 {
+			close(firstAttemptDone)
+			return errors.New("simulated transient disk I/O error")
+		}
+		select {
+		case <-recoveredChan:
+		default:
+			close(recoveredChan)
+		}
+		return nil
+	})
 
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
 	s := &SessionContext{
@@ -405,7 +421,13 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 
 	// 触发 compact，LLM 会成功返回
 	compactor.Trigger(s, "test_group_persist_fail_1")
-	time.Sleep(25 * time.Millisecond)
+
+	// 等待第 1 次持久化尝试失败
+	select {
+	case <-firstAttemptDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for first persist attempt")
+	}
 
 	// 验证：内存中的 raw messages 已成功 commit 被清空，内存 summary 已更新
 	if s.GroupRunningSummary() == "" {
@@ -415,21 +437,20 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 		t.Fatalf("expected raw messages <= ThroughSequence removed from buffer, got %d", count)
 	}
 
-	// 验证：由于磁盘无法写入，处于 dirty / pending persistence 状态
+	// 验证：处于 dirty / pending persistence 状态
 	if !compactor.HasPendingPersistence("test_group_persist_fail_1") {
 		t.Fatalf("expected HasPendingPersistence to be true while disk writes fail")
 	}
 
-	// 此时解除磁盘写入阻塞：删除阻塞文件并创建实际目录
-	if err := os.Remove(subDir); err != nil {
-		t.Fatalf("failed to remove blocker file: %v", err)
-	}
-	if err := os.MkdirAll(subDir, 0755); err != nil {
-		t.Fatalf("failed to create store dir: %v", err)
+	// 等待后台独立重试定时器到期执行（第 1 次重试延迟为 50ms）
+	select {
+	case <-recoveredChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for retry recovery")
 	}
 
-	// 等待后台独立重试定时器到期执行（第 1 次重试延迟为 50ms）
-	time.Sleep(120 * time.Millisecond)
+	// 等待 worker 更新完 pending 状态
+	time.Sleep(20 * time.Millisecond)
 
 	// 验证：重试已成功落盘，dirty 状态清除
 	if compactor.HasPendingPersistence("test_group_persist_fail_1") {
@@ -441,48 +462,149 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 	}
 }
 
-func TestGroupCompactor_OlderPersistRetryDoesNotOverwriteNewer(t *testing.T) {
+func TestGroupCompactor_NewerPersistenceOverridesPendingRetryTimer(t *testing.T) {
 	mockLLM := &mockCompactorLLM{}
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "group_summaries.json")
 	store, _ := groupsummary.NewStore(storePath)
 
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
-	owner := "test_group_seq_order_1"
+	owner := "test_group_override_timer_1"
 
-	// 写入第 1 版总结 (seq 1)
+	var v1FailCount atomic.Int32
+	var v2FailCount atomic.Int32
+	v1FailedChan := make(chan struct{})
+	v2RecoveredChan := make(chan struct{})
+
+	store.SetSaveHook(func(records map[string]groupsummary.Record) error {
+		rec := records[owner]
+		if rec.Summary == "Summary V1" {
+			v1FailCount.Add(1)
+			select {
+			case <-v1FailedChan:
+			default:
+				close(v1FailedChan)
+			}
+			return errors.New("v1 disk error")
+		}
+		if rec.Summary == "Summary V2" {
+			if v2FailCount.Add(1) == 1 {
+				// V2 第一次尝试也失败
+				return errors.New("v2 initial disk error")
+			}
+			// V2 第二次（重试）成功
+			select {
+			case <-v2RecoveredChan:
+			default:
+				close(v2RecoveredChan)
+			}
+			return nil
+		}
+		return nil
+	})
+
+	// 1. 提交 V1，触发失败并启动 V1 的 retry timer
 	compactor.queuePersistence(owner, "Summary V1", 0)
-	time.Sleep(20 * time.Millisecond)
-
-	rec, ok, _ := store.Get(owner)
-	if !ok || rec.Summary != "Summary V1" {
-		t.Fatalf("expected Summary V1 persisted, got %q", rec.Summary)
+	select {
+	case <-v1FailedChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v1 failure")
 	}
 
-	// 写入第 2 版总结 (seq 2)
+	// 确保此时处于 dirty 状态且正在等待重试
+	time.Sleep(10 * time.Millisecond)
+	if !compactor.HasPendingPersistence(owner) {
+		t.Fatalf("expected pending persistence for v1")
+	}
+
+	// 2. 在 V1 的 retry timer 尚未触发时，V2 到来
 	compactor.queuePersistence(owner, "Summary V2", 0)
+
+	// 3. 验证 V2 即使初次失败，也绝不会被 V1 的旧 timer 吞掉或卡死，而是会由自己的 timer 持续重试并最终成功
+	select {
+	case <-v2RecoveredChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v2 retry recovery")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if compactor.HasPendingPersistence(owner) {
+		t.Fatalf("expected pending persistence cleared after v2 recovery")
+	}
+	rec, ok, _ := store.Get(owner)
+	if !ok || rec.Summary != "Summary V2" {
+		t.Fatalf("expected Summary V2 persisted on disk, got %q", rec.Summary)
+	}
+}
+
+func TestGroupCompactor_ConcurrentPersistenceTOCTOUOrdering(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, _ := groupsummary.NewStore(storePath)
+
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
+	owner := "test_group_toctou_1"
+
+	v1SavingChan := make(chan struct{})
+	releaseV1Chan := make(chan struct{})
+	v2DoneChan := make(chan struct{})
+
+	store.SetSaveHook(func(records map[string]groupsummary.Record) error {
+		rec := records[owner]
+		if rec.Summary == "Summary V1" {
+			// 通知测试：V1 正在执行 Upsert 写入
+			select {
+			case <-v1SavingChan:
+			default:
+				close(v1SavingChan)
+			}
+			// 阻塞等待，模拟慢速 I/O
+			<-releaseV1Chan
+			return nil
+		}
+		if rec.Summary == "Summary V2" {
+			select {
+			case <-v2DoneChan:
+			default:
+				close(v2DoneChan)
+			}
+			return nil
+		}
+		return nil
+	})
+
+	// 1. 发起 V1 持久化，worker 会进入 Upsert(V1) 并阻塞在 hook 中
+	compactor.queuePersistence(owner, "Summary V1", 0)
+
+	select {
+	case <-v1SavingChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v1 to begin saving")
+	}
+
+	// 2. 当 V1 正在 Upsert 中时，并发写入 V2
+	compactor.queuePersistence(owner, "Summary V2", 0)
+
+	// 3. 释放 V1 的写入阻塞
+	close(releaseV1Chan)
+
+	// 4. 等待 V2 持久化完成
+	select {
+	case <-v2DoneChan:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for v2 to finish saving")
+	}
+
 	time.Sleep(20 * time.Millisecond)
 
-	rec, ok, _ = store.Get(owner)
+	// 5. 验证无论调度顺序如何，最终磁盘上的总结绝对是 Summary V2，绝不能回退到 V1
+	rec, ok, _ := store.Get(owner)
 	if !ok || rec.Summary != "Summary V2" {
-		t.Fatalf("expected Summary V2 persisted, got %q", rec.Summary)
+		t.Fatalf("expected final summary on disk to be Summary V2, got %q", rec.Summary)
 	}
-
-	// 模拟一个迟到唤醒的旧版本 retry (seq 1, summary V1)
-	staleRec := &pendingPersistRecord{
-		owner:           owner,
-		summary:         "Stale Summary V1",
-		storeGeneration: 0,
-		sequence:        1,
-		retryCount:      1,
-	}
-	// 尝试执行旧版持久化
-	compactor.tryPersist(owner, staleRec)
-
-	// 验证：即使旧 retry 执行，磁盘上的最新总结依然是 V2，未被旧数据覆盖
-	rec, ok, _ = store.Get(owner)
-	if !ok || rec.Summary != "Summary V2" {
-		t.Fatalf("expected Summary V2 to remain intact and not overwritten by stale retry, got %q", rec.Summary)
+	if compactor.HasPendingPersistence(owner) {
+		t.Fatalf("expected no pending persistence after V2 completed")
 	}
 }
 

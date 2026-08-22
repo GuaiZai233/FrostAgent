@@ -29,7 +29,6 @@ type pendingPersistRecord struct {
 	owner           string
 	summary         string
 	storeGeneration uint64
-	sequence        uint64
 	retryCount      int
 }
 
@@ -51,11 +50,9 @@ type GroupCompactor struct {
 	scheduledToken    map[string]uint64
 	scheduledTimerSeq map[string]uint64
 
-	pendingPersist    map[string]*pendingPersistRecord
-	persistSeq        map[string]uint64
-	persistTimer      map[string]*time.Timer
-	persistTimerToken map[string]uint64
-	persistTimerSeq   map[string]uint64
+	pendingPersist map[string]*pendingPersistRecord
+	persistActive  map[string]bool
+	persistTimer   map[string]*time.Timer
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -87,10 +84,8 @@ func NewGroupCompactor(
 		scheduledToken:    make(map[string]uint64),
 		scheduledTimerSeq: make(map[string]uint64),
 		pendingPersist:    make(map[string]*pendingPersistRecord),
-		persistSeq:        make(map[string]uint64),
+		persistActive:     make(map[string]bool),
 		persistTimer:      make(map[string]*time.Timer),
-		persistTimerToken: make(map[string]uint64),
-		persistTimerSeq:   make(map[string]uint64),
 	}
 }
 
@@ -323,69 +318,88 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 	}
 
 	c.mu.Lock()
-	c.persistSeq[owner]++
-	seq := c.persistSeq[owner]
-	rec := &pendingPersistRecord{
+	defer c.mu.Unlock()
+
+	c.pendingPersist[owner] = &pendingPersistRecord{
 		owner:           owner,
 		summary:         summary,
 		storeGeneration: storeGeneration,
-		sequence:        seq,
 		retryCount:      0,
 	}
-	c.pendingPersist[owner] = rec
-	c.mu.Unlock()
 
-	c.tryPersist(owner, rec)
+	// Stop any pending retry timer so the latest summary can be persisted immediately
+	if timer := c.persistTimer[owner]; timer != nil {
+		timer.Stop()
+		delete(c.persistTimer, owner)
+	}
+
+	// If no worker is currently active for this owner, start one.
+	// If a worker IS currently active, it will pick up this latest pending record after its current write finishes.
+	if !c.persistActive[owner] {
+		c.persistActive[owner] = true
+		go c.persistWorker(owner)
+	}
 }
 
-func (c *GroupCompactor) tryPersist(owner string, rec *pendingPersistRecord) {
-	if c.store == nil || rec == nil {
-		return
-	}
-
-	c.mu.Lock()
-	if rec.sequence < c.persistSeq[owner] {
-		// A newer summary has already been produced or queued. Discard stale retry.
-		c.mu.Unlock()
-		return
-	}
-	c.mu.Unlock()
-
-	applied, err := c.store.Upsert(rec.owner, rec.summary, rec.storeGeneration)
-	if err == nil {
+func (c *GroupCompactor) persistWorker(owner string) {
+	for {
 		c.mu.Lock()
-		if current := c.pendingPersist[owner]; current != nil && current.sequence <= rec.sequence {
-			delete(c.pendingPersist, owner)
-			if timer := c.persistTimer[owner]; timer != nil {
-				timer.Stop()
-				delete(c.persistTimer, owner)
-				delete(c.persistTimerToken, owner)
-			}
+		target := c.pendingPersist[owner]
+		if target == nil {
+			c.persistActive[owner] = false
+			c.mu.Unlock()
+			return
 		}
+		rec := *target
 		c.mu.Unlock()
+
+		applied, err := c.store.Upsert(rec.owner, rec.summary, rec.storeGeneration)
+		if err != nil {
+			logs.Warn(
+				logs.SYSTEM,
+				fmt.Sprintf("群聊总结持久化失败，将后台独立重试 (%s, retry %d): %v", owner, rec.retryCount, err),
+			)
+
+			c.mu.Lock()
+			if cur := c.pendingPersist[owner]; cur != nil {
+				// If not replaced by a newer record while writing, increment retry count
+				if cur.summary == rec.summary && cur.storeGeneration == rec.storeGeneration {
+					cur.retryCount++
+				}
+				delay := calculatePersistRetryDelay(cur.retryCount)
+				c.persistActive[owner] = false
+				c.persistTimer[owner] = time.AfterFunc(delay, func() {
+					c.mu.Lock()
+					delete(c.persistTimer, owner)
+					if c.pendingPersist[owner] != nil && !c.persistActive[owner] {
+						c.persistActive[owner] = true
+						go c.persistWorker(owner)
+					}
+					c.mu.Unlock()
+				})
+			} else {
+				c.persistActive[owner] = false
+			}
+			c.mu.Unlock()
+			return
+		}
 
 		if !applied {
 			logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结持久化 (%s)", owner))
 		}
-		return
+
+		c.mu.Lock()
+		if cur := c.pendingPersist[owner]; cur != nil {
+			// If the record in pendingPersist hasn't been updated with a newer summary while Upsert was running,
+			// it has been successfully persisted.
+			if cur.summary == rec.summary && cur.storeGeneration == rec.storeGeneration {
+				delete(c.pendingPersist, owner)
+			}
+			// If cur was replaced by a newer summary while Upsert was executing,
+			// pendingPersist remains populated and the next loop iteration will persist it!
+		}
+		c.mu.Unlock()
 	}
-
-	logs.Warn(
-		logs.SYSTEM,
-		fmt.Sprintf("群聊总结持久化失败，将后台独立重试 (%s, seq %d, retry %d): %v", owner, rec.sequence, rec.retryCount, err),
-	)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	current := c.pendingPersist[owner]
-	if current == nil || current.sequence != rec.sequence {
-		return
-	}
-
-	current.retryCount++
-	delay := calculatePersistRetryDelay(current.retryCount)
-	c.schedulePersistRetryLocked(owner, current.sequence, delay)
 }
 
 func calculatePersistRetryDelay(retryCount int) time.Duration {
@@ -401,35 +415,6 @@ func calculatePersistRetryDelay(retryCount int) time.Duration {
 	default:
 		return 2 * time.Second
 	}
-}
-
-func (c *GroupCompactor) schedulePersistRetryLocked(owner string, seq uint64, delay time.Duration) {
-	if c.persistTimer[owner] != nil {
-		return
-	}
-	c.persistTimerSeq[owner]++
-	token := c.persistTimerSeq[owner]
-	c.persistTimerToken[owner] = token
-
-	c.persistTimer[owner] = time.AfterFunc(delay, func() {
-		c.mu.Lock()
-		if c.persistTimerToken[owner] != token {
-			c.mu.Unlock()
-			return
-		}
-		delete(c.persistTimer, owner)
-		delete(c.persistTimerToken, owner)
-
-		current := c.pendingPersist[owner]
-		if current == nil || current.sequence != seq {
-			c.mu.Unlock()
-			return
-		}
-		rec := *current
-		c.mu.Unlock()
-
-		c.tryPersist(owner, &rec)
-	})
 }
 
 func formatGroupCompactInput(snapshot GroupCompactSnapshot) string {

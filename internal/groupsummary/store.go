@@ -34,6 +34,7 @@ type Store struct {
 	records     map[string]Record
 	generations map[string]uint64
 	blockedErr  error
+	saveHook    func(records map[string]Record) error
 }
 
 // NewStore loads the summary file. A malformed file blocks writes for the
@@ -119,6 +120,13 @@ func (s *Store) Generation(sessionID string) uint64 {
 	return s.generations[sessionID]
 }
 
+// SetSaveHook allows tests to intercept persistence writes or inject transient failures.
+func (s *Store) SetSaveHook(hook func(records map[string]Record) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saveHook = hook
+}
+
 // Upsert replaces one group's latest summary when its deletion epoch still
 // matches. A false result means an administrator deleted it while compacting.
 func (s *Store) Upsert(
@@ -155,7 +163,11 @@ func (s *Store) Upsert(
 
 	next := cloneRecords(s.records)
 	next[sessionID] = record
-	if err := s.save(next); err != nil {
+	if s.saveHook != nil {
+		if err := s.saveHook(next); err != nil {
+			return false, err
+		}
+	} else if err := s.save(next); err != nil {
 		return false, err
 	}
 	s.records = next
@@ -178,7 +190,11 @@ func (s *Store) Delete(sessionID string) error {
 
 	next := cloneRecords(s.records)
 	delete(next, sessionID)
-	if err := s.save(next); err != nil {
+	if s.saveHook != nil {
+		if err := s.saveHook(next); err != nil {
+			return err
+		}
+	} else if err := s.save(next); err != nil {
 		return err
 	}
 	s.records = next
