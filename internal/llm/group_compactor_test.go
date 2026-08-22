@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -324,7 +325,7 @@ func TestGroupCompactor_AutomaticRetryOnFailure(t *testing.T) {
 		t.Errorf("expected empty summary after initial failure")
 	}
 
-	// 不追加新消息，静候失败自动重试定时器 (40ms) 到期
+	// 不追加新消息，静候失败自动重试定时器 (max(retryDelay, remaining cooldown) = 40ms) 到期
 	time.Sleep(80 * time.Millisecond)
 
 	if count := mockLLM.CallCount(); count != 2 {
@@ -335,5 +336,209 @@ func TestGroupCompactor_AutomaticRetryOnFailure(t *testing.T) {
 	}
 	if count := s.GroupCompactBufferCount(); count != 0 {
 		t.Errorf("expected buffer cleared after successful automatic retry, got %d", count)
+	}
+}
+
+func TestGroupCompactor_BufferSizeInvariant(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	store, _ := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+
+	// 1. 初始化时验证 bufferSize 与 maxBufferSize
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 20, 30*time.Second)
+	if compactor.MaxBufferSize() < compactor.BufferSize() {
+		t.Fatalf("expected initial maxBufferSize >= bufferSize, got max=%d, buf=%d", compactor.MaxBufferSize(), compactor.BufferSize())
+	}
+
+	// 2. SetMaxBufferSize 小于 bufferSize 时被自动修正为 bufferSize
+	compactor.SetBufferSize(20)
+	compactor.SetMaxBufferSize(10)
+	if compactor.MaxBufferSize() != 20 {
+		t.Fatalf("expected maxBufferSize clamped to bufferSize=20, got %d", compactor.MaxBufferSize())
+	}
+
+	// 3. SetBufferSize 增大超过 maxBufferSize 时，maxBufferSize 自动随之扩展
+	compactor.SetBufferSize(50)
+	if compactor.MaxBufferSize() < 50 {
+		t.Fatalf("expected maxBufferSize expanded to at least bufferSize=50, got %d", compactor.MaxBufferSize())
+	}
+
+	// 4. 验证在非法配置尝试下，系统依然能正常积累满 bufferSize 条消息并成功触发压缩
+	compactor.SetBufferSize(5)
+	compactor.SetMaxBufferSize(2) // 被 clamp 为 5
+	s := &SessionContext{
+		ConversationID: "test_group_invariant_1",
+	}
+	for i := 1; i <= 5; i++ {
+		s.AppendGroupCompactMessage(fmt.Sprintf("msg %d", i), compactor.MaxBufferSize())
+	}
+	if s.GroupCompactBufferCount() != 5 {
+		t.Fatalf("expected 5 messages kept in buffer, got %d", s.GroupCompactBufferCount())
+	}
+	compactor.Trigger(s, "test_group_invariant_1")
+	time.Sleep(20 * time.Millisecond)
+	if mockLLM.CallCount() != 1 {
+		t.Fatalf("expected 1 LLM call on trigger, got %d", mockLLM.CallCount())
+	}
+}
+
+func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+
+	tmpDir := t.TempDir()
+	// 将 store 放在一个子目录，但故意在该位置创建一个普通文件以制造持久化写入失败
+	subDir := filepath.Join(tmpDir, "store_dir")
+	if err := os.WriteFile(subDir, []byte("blocker"), 0644); err != nil {
+		t.Fatalf("failed to create blocker file: %v", err)
+	}
+	storePath := filepath.Join(subDir, "group_summaries.json")
+	store, _ := groupsummary.NewStore(storePath)
+
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
+	s := &SessionContext{
+		ConversationID: "test_group_persist_fail_1",
+	}
+
+	for i := 1; i <= 5; i++ {
+		s.AppendGroupCompactMessage(fmt.Sprintf("msg %d", i), 50)
+	}
+
+	// 触发 compact，LLM 会成功返回
+	compactor.Trigger(s, "test_group_persist_fail_1")
+	time.Sleep(25 * time.Millisecond)
+
+	// 验证：内存中的 raw messages 已成功 commit 被清空，内存 summary 已更新
+	if s.GroupRunningSummary() == "" {
+		t.Fatalf("expected memory summary to be updated")
+	}
+	if count := s.GroupCompactBufferCount(); count != 0 {
+		t.Fatalf("expected raw messages <= ThroughSequence removed from buffer, got %d", count)
+	}
+
+	// 验证：由于磁盘无法写入，处于 dirty / pending persistence 状态
+	if !compactor.HasPendingPersistence("test_group_persist_fail_1") {
+		t.Fatalf("expected HasPendingPersistence to be true while disk writes fail")
+	}
+
+	// 此时解除磁盘写入阻塞：删除阻塞文件并创建实际目录
+	if err := os.Remove(subDir); err != nil {
+		t.Fatalf("failed to remove blocker file: %v", err)
+	}
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create store dir: %v", err)
+	}
+
+	// 等待后台独立重试定时器到期执行（第 1 次重试延迟为 50ms）
+	time.Sleep(120 * time.Millisecond)
+
+	// 验证：重试已成功落盘，dirty 状态清除
+	if compactor.HasPendingPersistence("test_group_persist_fail_1") {
+		t.Fatalf("expected HasPendingPersistence to be false after recovery")
+	}
+	rec, ok, err := store.Get("test_group_persist_fail_1")
+	if err != nil || !ok || rec.Summary == "" {
+		t.Fatalf("expected summary successfully persisted to disk after retry, got ok=%v, err=%v, rec=%+v", ok, err, rec)
+	}
+}
+
+func TestGroupCompactor_OlderPersistRetryDoesNotOverwriteNewer(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, _ := groupsummary.NewStore(storePath)
+
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 10*time.Millisecond)
+	owner := "test_group_seq_order_1"
+
+	// 写入第 1 版总结 (seq 1)
+	compactor.queuePersistence(owner, "Summary V1", 0)
+	time.Sleep(20 * time.Millisecond)
+
+	rec, ok, _ := store.Get(owner)
+	if !ok || rec.Summary != "Summary V1" {
+		t.Fatalf("expected Summary V1 persisted, got %q", rec.Summary)
+	}
+
+	// 写入第 2 版总结 (seq 2)
+	compactor.queuePersistence(owner, "Summary V2", 0)
+	time.Sleep(20 * time.Millisecond)
+
+	rec, ok, _ = store.Get(owner)
+	if !ok || rec.Summary != "Summary V2" {
+		t.Fatalf("expected Summary V2 persisted, got %q", rec.Summary)
+	}
+
+	// 模拟一个迟到唤醒的旧版本 retry (seq 1, summary V1)
+	staleRec := &pendingPersistRecord{
+		owner:           owner,
+		summary:         "Stale Summary V1",
+		storeGeneration: 0,
+		sequence:        1,
+		retryCount:      1,
+	}
+	// 尝试执行旧版持久化
+	compactor.tryPersist(owner, staleRec)
+
+	// 验证：即使旧 retry 执行，磁盘上的最新总结依然是 V2，未被旧数据覆盖
+	rec, ok, _ = store.Get(owner)
+	if !ok || rec.Summary != "Summary V2" {
+		t.Fatalf("expected Summary V2 to remain intact and not overwritten by stale retry, got %q", rec.Summary)
+	}
+}
+
+func TestGroupCompactor_ScheduledTimerStaleCallbackRace(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	store, _ := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 5, 100*time.Millisecond)
+	s := &SessionContext{
+		ConversationID: "test_group_stale_timer_1",
+	}
+	owner := "test_group_stale_timer_1"
+	key := s.ConversationID
+
+	compactor.mu.Lock()
+	// 模拟调度了 Generation 1 的 timer
+	compactor.scheduleTriggerLocked(s, owner, 1*time.Hour)
+	token1 := compactor.scheduledToken[key]
+	timer1 := compactor.scheduled[key]
+	compactor.mu.Unlock()
+
+	if token1 == 0 || timer1 == nil {
+		t.Fatalf("expected timer 1 scheduled")
+	}
+
+	// 模拟外部事件取消并创建了 Generation 2 的 timer
+	compactor.mu.Lock()
+	compactor.cancelScheduledLocked(key)
+	compactor.scheduleTriggerLocked(s, owner, 2*time.Hour)
+	token2 := compactor.scheduledToken[key]
+	timer2 := compactor.scheduled[key]
+	compactor.mu.Unlock()
+
+	if token2 <= token1 {
+		t.Fatalf("expected token2 (%d) > token1 (%d)", token2, token1)
+	}
+	if timer2 == nil {
+		t.Fatalf("expected timer 2 scheduled")
+	}
+
+	// 模拟 timer1 的 callback 延迟唤醒并获取锁尝试清理
+	compactor.mu.Lock()
+	if compactor.scheduledToken[key] == token1 {
+		delete(compactor.scheduled, key)
+		delete(compactor.scheduledToken, key)
+	}
+	compactor.mu.Unlock()
+
+	// 验证：timer2 依然安全保留在 scheduled map 中，没有被旧 callback 误删
+	compactor.mu.Lock()
+	activeTimer := compactor.scheduled[key]
+	activeToken := compactor.scheduledToken[key]
+	compactor.mu.Unlock()
+
+	if activeTimer != timer2 || activeToken != token2 {
+		t.Fatalf("expected timer2 (token %d) to remain active, got timer=%v, token=%d", token2, activeTimer, activeToken)
 	}
 }

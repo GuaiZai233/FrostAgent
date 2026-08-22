@@ -53,11 +53,13 @@
 为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
 
 - **无感后台摄入与总结**：各平台适配器（OneBot、AstrBot）在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
-- **批次阈值与安全缓冲区解耦**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，为异步 In-Flight 请求与群聊高频并发写入提供充足的缓冲空间，彻底杜绝了并发刷屏导致的旧消息被强行提前挤出。
+- **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
 - **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
-- **失败容错与无损自动重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息不会丢失，继续保留在内存缓冲区中；Compactor 会在退避延迟（`retryDelay`）或冷却期结束后自动重新调度压缩，或在下一轮触发时将旧消息与新消息合并重试。
+- **失败容错与自动退避重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息在 safety buffer 容量范围内继续保留在内存缓冲区中；Compactor 依据 `max(retryDelay, remaining cooldown)` 延迟在后台自动重新调度压缩（其中 `retryDelay` 为最小失败退避时间，实际重试仍严格遵循 `minInterval` 冷却期），或在后续新消息到达时合并重试。
+- **异步 Dirty 持久化与单调版本重试**：LLM 压缩成功后优先提交内存状态；若磁盘持久化失败，系统标记 dirty/pending persistence 状态并在后台独立按指数退避重试落盘，无需等待后续新消息产生。通过单调 Sequence 与 Generation 校验，确保旧重试绝不会覆盖更新版本的总结数据。
+- **定时器代数令牌（Generation Token）防竞态**：为延迟触发与持久化重试的 `time.Timer` 分配单调递增的代数 Token，回调执行时严格校验 Token 归属，杜绝旧 Timer 回调误删新 Timer 的竞态条件。
 - **冷却期延迟调度**：若在 `minInterval` 冷却期内累积消息达到触发阈值，系统会自动注册定时器在冷却结束瞬间自动触发压缩，避免无新消息到达时压缩任务被遗漏滞留。
-- **代数隔离与重置安全**：清空或删除群聊总结时递增 `generation`，自动失效任何处于 In-Flight 状态的异步压缩结果，防止过期数据写回覆盖。
+- **代数隔离与重置安全**：清空或删除群聊总结时递增 `generation`，自动失效任何处于 In-Flight 状态的异步压缩结果与持久化，防止过期数据写回覆盖。
 
 ### 适配器与消息分发系统 (Adapter & Dispatcher)
 

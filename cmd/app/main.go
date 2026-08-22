@@ -150,6 +150,17 @@ func init() {
 		groupCompactMinInterval,
 	)
 	if groupCompactMaxBufferSize > 0 {
+		if groupCompactMaxBufferSize < groupCompactBufferSize {
+			logs.Warn(
+				logs.SYSTEM,
+				fmt.Sprintf(
+					"GROUP_COMPACT_MAX_BUFFER_SIZE (%d) < GROUP_COMPACT_BUFFER_SIZE (%d)，已自动修正为 %d 以确保压缩能正常触发",
+					groupCompactMaxBufferSize,
+					groupCompactBufferSize,
+					groupCompactBufferSize,
+				),
+			)
+		}
 		groupCompactor.SetMaxBufferSize(groupCompactMaxBufferSize)
 	}
 	// Gateway: owner + visibility filtering
