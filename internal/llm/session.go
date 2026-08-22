@@ -15,8 +15,16 @@ import (
 )
 
 type groupCompactItem struct {
-	sequence uint64
-	content  string
+	sequence  uint64
+	messageID string
+	content   string
+}
+
+// GroupContextSnapshot captures an atomic point-in-time view of both the
+// running summary and uncompacted recent messages from the same session state.
+type GroupContextSnapshot struct {
+	RunningSummary string
+	RecentMessages []string
 }
 
 // GroupCompactSnapshot is an immutable batch sent to the asynchronous
@@ -169,10 +177,16 @@ func (s *SessionContext) TrimHistory(max int) {
 // AppendGroupCompactMessage appends one visible group message to the running
 // compact ring. The raw-message portion is capped at bufferSize; the summary is
 // stored separately and acts as the conceptual first item.
-func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize int) int {
+// Optional messageID can be provided to support deduplication with the triggering message.
+func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize int, messageID ...string) int {
 	content = strings.TrimSpace(content)
 	if content == "" || bufferSize <= 0 {
 		return 0
+	}
+
+	var msgID string
+	if len(messageID) > 0 {
+		msgID = strings.TrimSpace(messageID[0])
 	}
 
 	s.mu.Lock()
@@ -180,8 +194,9 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize in
 
 	s.groupCompactSequence++
 	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
-		sequence: s.groupCompactSequence,
-		content:  content,
+		sequence:  s.groupCompactSequence,
+		messageID: msgID,
+		content:   content,
 	})
 	if len(s.groupCompactBuffer) > bufferSize {
 		drop := len(s.groupCompactBuffer) - bufferSize
@@ -190,6 +205,75 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize in
 	}
 	s.UpdatedAt = time.Now()
 	return len(s.groupCompactBuffer)
+}
+
+// SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
+// from the same session state while holding the session lock.
+func (s *SessionContext) SnapshotGroupContext(limit int, maxChars int, excludeMessageID string) GroupContextSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return GroupContextSnapshot{
+		RunningSummary: s.groupCompactSummary,
+		RecentMessages: s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID),
+	}
+}
+
+// recentPendingGroupMessagesLocked extracts uncompacted messages while s.mu is already held.
+func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars int, excludeMessageID string) []string {
+	if limit <= 0 || maxChars <= 0 || len(s.groupCompactBuffer) == 0 {
+		return nil
+	}
+
+	excludeID := strings.TrimSpace(excludeMessageID)
+	var selected []string
+	totalChars := 0
+
+	// Traverse from newest to oldest to prioritize latest messages
+	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
+		item := s.groupCompactBuffer[i]
+
+		if excludeID != "" && item.messageID != "" && item.messageID == excludeID {
+			continue
+		}
+
+		if len(selected) >= limit {
+			break
+		}
+
+		content := item.content
+		contentLen := len([]rune(content))
+
+		if totalChars >= maxChars {
+			break
+		}
+
+		if totalChars+contentLen > maxChars {
+			if len(selected) == 0 {
+				runes := []rune(content)
+				if maxChars < len(runes) {
+					content = string(runes[:maxChars])
+				}
+				selected = append(selected, content)
+			}
+			break
+		}
+
+		totalChars += contentLen
+		selected = append(selected, content)
+	}
+
+	if len(selected) == 0 {
+		return nil
+	}
+
+	// Reverse to restore chronological order (oldest -> newest)
+	result := make([]string, len(selected))
+	for i, j := 0, len(selected)-1; j >= 0; i, j = i+1, j-1 {
+		result[i] = selected[j]
+	}
+
+	return result
 }
 
 // SnapshotGroupCompact returns a batch once bufferSize raw messages are ready.
@@ -247,6 +331,13 @@ func (s *SessionContext) GroupRunningSummary() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.groupCompactSummary
+}
+
+// SetGroupRunningSummary sets the running summary for this session under the lock.
+func (s *SessionContext) SetGroupRunningSummary(summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupCompactSummary = summary
 }
 
 // ResetGroupCompact clears summary state and invalidates any in-flight result.
@@ -560,10 +651,7 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 		return nil
 	}
 
-	end := offset + limit
-	if end > len(entries) {
-		end = len(entries)
-	}
+	end := min(offset+limit, len(entries))
 
 	result := make([]*SessionContext, 0, end-offset)
 	for _, entry := range entries[offset:end] {
