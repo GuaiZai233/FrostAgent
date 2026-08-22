@@ -137,10 +137,13 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 		return
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
-	bufferSize := engine.GroupRawLimit()
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
 	session.AppendGroupCompactMessage(
 		formatGroupSpeakerMessage(event, visibleText),
-		bufferSize,
+		maxBufferSize,
 		event.MessageID,
 	)
 	platform := event.Platform

@@ -538,10 +538,13 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 	if event.MessageID != 0 {
 		msgID = strconv.FormatInt(int64(event.MessageID), 10)
 	}
-	bufferSize := engine.GroupRawLimit()
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
 	session.AppendGroupCompactMessage(
 		formatGroupSpeakerMessage(event, visibleText),
-		bufferSize,
+		maxBufferSize,
 		msgID,
 	)
 	if engine.GroupCompactor != nil {

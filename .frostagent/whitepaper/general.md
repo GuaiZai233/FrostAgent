@@ -62,6 +62,20 @@
 - **Web UI 与热更新**：前端控制台提供独立的「示例对话」管理页面（入口位于「记忆」下方），支持无限增删改查对话卡片、调整提示词顺序、实时提示词片段预览以及直接编辑原始 YAML。后端提供 `DialogueService` ConnectRPC 服务，修改后自动原子更新 YAML 文件并实时热重载生效至全局智能体引擎 `GlobalEngine.DialoguePrompt`，无需重启服务。
 - **可配置与优雅降级**：可通过环境变量 `DIALOGUE_PATH` 指定路径，文件不存在或解析为空时平滑跳过，不影响正常对话。
 
+### 群聊滚动总结与容错压缩系统 (Group Running Compactor)
+
+为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
+
+- **无感后台摄入与总结**：各平台适配器（OneBot、AstrBot）在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
+- **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
+- **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
+- **失败容错与自动退避重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息在 safety buffer 容量范围内继续保留在内存缓冲区中；Compactor 依据 `max(retryDelay, remaining cooldown)` 延迟在后台自动重新调度压缩（其中 `retryDelay` 为最小失败退避时间，实际重试仍严格遵循 `minInterval` 冷却期），或在后续新消息到达时合并重试。
+- **异步 Dirty 持久化与单 Owner 单 Writer 状态机 (Single-Owner Single-Writer Persistence)**：LLM 压缩成功后优先原子提交内存状态；若磁盘持久化失败，系统记录 `pendingPersist[owner]` 并在后台通过单 Owner 唯一 Worker 独立按指数退避重试落盘，无需阻塞对话流程。每个会话同时仅允许单一 Worker 执行落盘，且 Worker 在完成当前写入后自动接力落盘最新版本（Latest Pending），彻底消除了并发 TOCTOU 乱序竞争，确保旧版本绝不覆盖新版本。
+- **退避唤醒通道与 Timer 抢占机制 (Wake Channel & Timer Preemption)**：持久化 Worker 在重试退避期间保持唯一身份，通过 `timer + wake channel` 机制监听唤醒事件。当新的总结入队时，直接更新 `pendingPersist` 并通过通道立即打断退避 Timer 唤醒 Worker 处理最新值，既无需共享持久化 Timer Map，也杜绝了旧 Timer 回调误删新定时器的生命周期竞争。
+- **调度定时器代数令牌（Scheduled Timer Generation Token）防竞态**：对于群聊压缩冷却触发的 `time.Timer`，分配单调递增的代数 Token，回调执行时严格校验 Token 归属，杜绝旧 Timer 回调误删新注册 Timer 的竞态条件。
+- **冷却期延迟调度**：若在 `minInterval` 冷却期内累积消息达到触发阈值，系统会自动注册定时器在冷却结束瞬间自动触发压缩，避免无新消息到达时压缩任务被遗漏滞留。
+- **代数隔离与重置安全**：清空或删除群聊总结时递增 `generation`，自动失效任何处于 In-Flight 状态的异步压缩结果与持久化，防止过期数据写回覆盖。
+
 ### 适配器与消息分发系统 (Adapter & Dispatcher)
 
 FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与路由：

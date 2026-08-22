@@ -174,14 +174,22 @@ func (s *SessionContext) TrimHistory(max int) {
 	s.UpdatedAt = time.Now()
 }
 
+// DefaultMaxGroupCompactBufferSize 是未压缩消息缓冲区的兜底安全上限，
+// 防止在上游 LLM 长时间不可用且海量消息涌入时发生内存泄漏。
+const DefaultMaxGroupCompactBufferSize = 200
+
 // AppendGroupCompactMessage appends one visible group message to the running
-// compact ring. The raw-message portion is capped at bufferSize; the summary is
-// stored separately and acts as the conceptual first item.
+// compact buffer. The uncommitted buffer is capped at maxBufferSize (defaulting
+// to DefaultMaxGroupCompactBufferSize if <= 0) to allow in-flight compactions to
+// complete without eagerly dropping raw messages.
 // Optional messageID can be provided to support deduplication with the triggering message.
-func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize int, messageID ...string) int {
+func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize int, messageID ...string) int {
 	content = strings.TrimSpace(content)
-	if content == "" || bufferSize <= 0 {
+	if content == "" {
 		return 0
+	}
+	if maxBufferSize <= 0 {
+		maxBufferSize = DefaultMaxGroupCompactBufferSize
 	}
 
 	var msgID string
@@ -198,10 +206,10 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, bufferSize in
 		messageID: msgID,
 		content:   content,
 	})
-	if len(s.groupCompactBuffer) > bufferSize {
-		drop := len(s.groupCompactBuffer) - bufferSize
+	if len(s.groupCompactBuffer) > maxBufferSize {
+		drop := len(s.groupCompactBuffer) - maxBufferSize
 		copy(s.groupCompactBuffer, s.groupCompactBuffer[drop:])
-		s.groupCompactBuffer = s.groupCompactBuffer[:bufferSize]
+		s.groupCompactBuffer = s.groupCompactBuffer[:maxBufferSize]
 	}
 	s.UpdatedAt = time.Now()
 	return len(s.groupCompactBuffer)
@@ -356,6 +364,13 @@ func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return bufferSize > 0 && len(s.groupCompactBuffer) >= bufferSize
+}
+
+// GroupCompactBufferCount returns the number of raw messages currently buffered.
+func (s *SessionContext) GroupCompactBufferCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.groupCompactBuffer)
 }
 
 // EnqueuePendingTurn appends one completed user/assistant turn. Once the
