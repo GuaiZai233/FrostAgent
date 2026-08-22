@@ -1,4 +1,4 @@
-import { BotStatus, LogLevel } from '@frostagent/proto';
+import { BotStatus, LogEntry, LogLevel } from '@frostagent/proto';
 
 export const logLevelOptions = [
   { value: LogLevel.UNSPECIFIED, label: '全部', tone: 'neutral' },
@@ -189,3 +189,41 @@ export class PageTokenStack {
     this.nextTok = '';
   }
 }
+
+export function formatConsoleLog(entry: LogEntry): string {
+  let timeStr = '00:00:00';
+  if (entry.timestamp) {
+    const match = entry.timestamp.match(/(?:T|\s|^)(\d{2}:\d{2}:\d{2})/);
+    if (match) {
+      timeStr = match[1];
+    } else {
+      timeStr = entry.timestamp;
+    }
+  }
+
+  let levelStr = 'INFO';
+  switch (entry.level) {
+    case LogLevel.DEBUG:
+      levelStr = 'DEBUG';
+      break;
+    case LogLevel.INFO:
+      levelStr = 'INFO';
+      break;
+    case LogLevel.WARN:
+      levelStr = 'WARN';
+      break;
+    case LogLevel.ERROR:
+      levelStr = 'ERROR';
+      break;
+    default:
+      levelStr = 'INFO';
+      break;
+  }
+
+  const sourceStr = entry.source || 'SYSTEM';
+  const contentStr = entry.summary || entry.responseBody || entry.requestBody || '';
+
+  return `[${timeStr}][${levelStr}][${sourceStr}] ${contentStr}`;
+}
+
+
