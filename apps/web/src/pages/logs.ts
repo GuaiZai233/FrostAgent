@@ -1,7 +1,9 @@
 import { api } from '../api/client';
 import { LogEntry, LogLevel } from '@frostagent/proto';
 import {
+  copyToClipboard,
   escapeHtml,
+  formatConsoleLog,
   formatDateTime,
   formatLogLevel,
   logLevelBadgeClass,
@@ -335,10 +337,22 @@ export function mountLogsPage(container: HTMLElement): () => void {
         <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${escapeHtml(entry.summary || '无摘要内容')}</div>
       `,
       footerHtml: `
-        <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>
+        <button class="btn btn-outline btn-sm" id="log-summary-copy-btn">
+          ${icon('copy', 'w-3.5 h-3.5')}
+          <span>复制</span>
+        </button>
       `,
-      onMount: (dialogEl, close) => {
-        dialogEl.querySelector('.dialog-close-btn')?.addEventListener('click', () => close());
+      onMount: (dialogEl) => {
+        const copyBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-copy-btn');
+        copyBtn?.addEventListener('click', async () => {
+          const logText = formatConsoleLog(entry);
+          const success = await copyToClipboard(logText);
+          if (success) {
+            toast.success('已复制完整日志');
+          } else {
+            toast.error('复制失败，请手动复制');
+          }
+        });
       },
     });
   }

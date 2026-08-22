@@ -1,4 +1,4 @@
-import { BotStatus, LogLevel } from '@frostagent/proto';
+import { BotStatus, LogEntry, LogLevel } from '@frostagent/proto';
 
 export const logLevelOptions = [
   { value: LogLevel.UNSPECIFIED, label: '全部', tone: 'neutral' },
@@ -189,3 +189,69 @@ export class PageTokenStack {
     this.nextTok = '';
   }
 }
+
+export function formatConsoleLog(entry: LogEntry): string {
+  let timeStr = '00:00:00';
+  if (entry.timestamp) {
+    const d = new Date(entry.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    } else {
+      timeStr = entry.timestamp;
+    }
+  }
+
+  let levelStr = 'INFO';
+  switch (entry.level) {
+    case LogLevel.DEBUG:
+      levelStr = 'DEBUG';
+      break;
+    case LogLevel.INFO:
+      levelStr = 'INFO';
+      break;
+    case LogLevel.WARN:
+      levelStr = 'WARN';
+      break;
+    case LogLevel.ERROR:
+      levelStr = 'ERROR';
+      break;
+    default:
+      levelStr = 'INFO';
+      break;
+  }
+
+  const sourceStr = entry.source || 'SYSTEM';
+  const contentStr = entry.summary || entry.responseBody || entry.requestBody || '';
+
+  return `[${timeStr}][${levelStr}][${sourceStr}] ${contentStr}`;
+}
+
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fallback to execCommand
+  }
+
+  try {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const success = document.execCommand('copy');
+    textArea.remove();
+    return success;
+  } catch {
+    return false;
+  }
+}
+
