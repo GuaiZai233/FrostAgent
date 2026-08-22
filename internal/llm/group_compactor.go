@@ -11,10 +11,17 @@ import (
 	"time"
 )
 
-const groupCompactPrompt = `你是群聊上下文压缩器。请将已有总结与新群消息合并成一份简洁、可继续滚动更新的总结。删除闲聊和重复表达。
+const (
+	groupCompactPrompt = `你是群聊上下文压缩器。请将已有总结与新群消息合并成一份简洁、可继续滚动更新的总结。删除闲聊和重复表达。
 不要增加对话中没有的信息。只输出总结正文，不要 Markdown 标题或解释。
 
 {conversation}`
+
+	DefaultGroupCompactBufferSize    = 20
+	DefaultGroupCompactMaxBufferSize = 200
+	DefaultGroupCompactMinInterval   = 30 * time.Second
+	DefaultGroupCompactRetryDelay    = 5 * time.Second
+)
 
 var groupSummaryRetryDelays = [...]time.Duration{
 	0,
@@ -26,15 +33,18 @@ var groupSummaryRetryDelays = [...]time.Duration{
 // GroupCompactor asynchronously turns a bounded group-message ring into a
 // running summary. Only one request per group may be in flight.
 type GroupCompactor struct {
-	provider    core.LLMProvider
-	store       *groupsummary.Store
-	model       string
-	bufferSize  int
-	minInterval time.Duration
+	provider      core.LLMProvider
+	store         *groupsummary.Store
+	model         string
+	bufferSize    int
+	maxBufferSize int
+	minInterval   time.Duration
+	retryDelay    time.Duration
 
-	mu       sync.Mutex
-	inflight map[string]bool
-	lastRun  map[string]time.Time
+	mu        sync.Mutex
+	inflight  map[string]bool
+	lastRun   map[string]time.Time
+	scheduled map[string]*time.Timer
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -46,19 +56,26 @@ func NewGroupCompactor(
 	minInterval time.Duration,
 ) *GroupCompactor {
 	if bufferSize <= 0 {
-		bufferSize = 20
+		bufferSize = DefaultGroupCompactBufferSize
 	}
 	if minInterval <= 0 {
-		minInterval = 30 * time.Second
+		minInterval = DefaultGroupCompactMinInterval
+	}
+	maxBufferSize := bufferSize * 10
+	if maxBufferSize < DefaultGroupCompactMaxBufferSize {
+		maxBufferSize = DefaultGroupCompactMaxBufferSize
 	}
 	return &GroupCompactor{
-		provider:    provider,
-		store:       store,
-		model:       model,
-		bufferSize:  bufferSize,
-		minInterval: minInterval,
-		inflight:    make(map[string]bool),
-		lastRun:     make(map[string]time.Time),
+		provider:      provider,
+		store:         store,
+		model:         model,
+		bufferSize:    bufferSize,
+		maxBufferSize: maxBufferSize,
+		minInterval:   minInterval,
+		retryDelay:    DefaultGroupCompactRetryDelay,
+		inflight:      make(map[string]bool),
+		lastRun:       make(map[string]time.Time),
+		scheduled:     make(map[string]*time.Timer),
 	}
 }
 
@@ -67,6 +84,31 @@ func (c *GroupCompactor) BufferSize() int {
 		return 0
 	}
 	return c.bufferSize
+}
+
+func (c *GroupCompactor) MaxBufferSize() int {
+	if c == nil {
+		return 0
+	}
+	return c.maxBufferSize
+}
+
+func (c *GroupCompactor) SetMaxBufferSize(size int) {
+	if c == nil || size <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.maxBufferSize = size
+}
+
+func (c *GroupCompactor) SetRetryDelay(delay time.Duration) {
+	if c == nil || delay <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.retryDelay = delay
 }
 
 // Trigger starts compaction when a full batch is ready. Failures are logged and
@@ -78,15 +120,38 @@ func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
 	key := session.ConversationID
 
 	c.mu.Lock()
-	if c.inflight[key] || time.Since(c.lastRun[key]) < c.minInterval {
+	if c.inflight[key] {
 		c.mu.Unlock()
 		return
 	}
+
+	elapsed := time.Since(c.lastRun[key])
+	if elapsed < c.minInterval {
+		// Still in cooldown. If buffer is ready, schedule a delayed trigger when cooldown expires.
+		if session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
+			delay := c.minInterval - elapsed
+			c.scheduled[key] = time.AfterFunc(delay, func() {
+				c.mu.Lock()
+				delete(c.scheduled, key)
+				c.mu.Unlock()
+				c.Trigger(session, owner)
+			})
+		}
+		c.mu.Unlock()
+		return
+	}
+
 	snapshot, ready := session.SnapshotGroupCompact(c.bufferSize)
 	if !ready {
 		c.mu.Unlock()
 		return
 	}
+
+	if timer := c.scheduled[key]; timer != nil {
+		timer.Stop()
+		delete(c.scheduled, key)
+	}
+
 	c.inflight[key] = true
 	c.lastRun[key] = time.Now()
 	c.mu.Unlock()
@@ -107,17 +172,31 @@ func (c *GroupCompactor) compact(
 	succeeded := false
 	defer func() {
 		c.mu.Lock()
-		delete(c.inflight, session.ConversationID)
-		lastRun := c.lastRun[session.ConversationID]
-		c.mu.Unlock()
+		key := session.ConversationID
+		delete(c.inflight, key)
+		lastRun := c.lastRun[key]
 
-		if succeeded && session.GroupCompactReady(c.bufferSize) {
-			delay := c.minInterval - time.Since(lastRun)
+		if session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
+			var delay time.Duration
+			if succeeded {
+				delay = c.minInterval - time.Since(lastRun)
+			} else {
+				delay = c.retryDelay
+				if cd := c.minInterval - time.Since(lastRun); cd > delay {
+					delay = cd
+				}
+			}
 			if delay < 0 {
 				delay = 0
 			}
-			time.AfterFunc(delay, func() { c.Trigger(session, owner) })
+			c.scheduled[key] = time.AfterFunc(delay, func() {
+				c.mu.Lock()
+				delete(c.scheduled, key)
+				c.mu.Unlock()
+				c.Trigger(session, owner)
+			})
 		}
+		c.mu.Unlock()
 	}()
 
 	conversation := formatGroupCompactInput(snapshot)

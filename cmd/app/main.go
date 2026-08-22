@@ -140,6 +140,7 @@ func init() {
 	sessionManager := llm.NewSessionManager()
 	sessionManager.SetGroupSummaryStore(groupSummaryStore)
 	groupCompactBufferSize := positiveIntFromEnv("GROUP_COMPACT_BUFFER_SIZE", 20)
+	groupCompactMaxBufferSize := positiveIntFromEnv("GROUP_COMPACT_MAX_BUFFER_SIZE", 0)
 	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
 	groupCompactor := llm.NewGroupCompactor(
 		llmClient,
@@ -148,6 +149,9 @@ func init() {
 		groupCompactBufferSize,
 		groupCompactMinInterval,
 	)
+	if groupCompactMaxBufferSize > 0 {
+		groupCompactor.SetMaxBufferSize(groupCompactMaxBufferSize)
+	}
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation

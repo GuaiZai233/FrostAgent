@@ -517,7 +517,7 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 	session := engine.SessionManager.GetOrCreate(historyKey(event))
 	session.AppendGroupCompactMessage(
 		formatGroupSpeakerMessage(event, visibleText),
-		engine.GroupCompactor.BufferSize(),
+		engine.GroupCompactor.MaxBufferSize(),
 	)
 	owner, _ := memory.OwnerForGroup(event.GroupID)
 	engine.GroupCompactor.Trigger(session, owner)

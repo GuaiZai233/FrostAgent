@@ -139,7 +139,7 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
 	session.AppendGroupCompactMessage(
 		formatGroupSpeakerMessage(event, visibleText),
-		engine.GroupCompactor.BufferSize(),
+		engine.GroupCompactor.MaxBufferSize(),
 	)
 	platform := event.Platform
 	if platform == "" {
