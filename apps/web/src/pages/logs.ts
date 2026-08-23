@@ -368,7 +368,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
     const inspectBtn = detailContent.querySelector<HTMLButtonElement>('#detail-inspect-prompt-btn');
     inspectBtn?.addEventListener('click', () => {
-      openPromptInspectorDialog(promptPayload, `Prompt Inspector - ${selectedEntry?.source || 'LLM'}`);
+      openPromptInspectorDialog(promptPayload, `LLM 请求检查 — ${selectedEntry?.source || 'LLM'} · ${formatDateTime(selectedEntry?.timestamp)}`);
     });
   }
 
@@ -402,7 +402,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       onMount: (dialogEl) => {
         const inspectBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-inspect-btn');
         inspectBtn?.addEventListener('click', () => {
-          openPromptInspectorDialog(promptPayload, `Prompt Inspector - ${entry.source || 'LLM'}`);
+          openPromptInspectorDialog(promptPayload, `LLM 请求检查 — ${entry.source || 'LLM'} · ${formatDateTime(entry.timestamp)}`);
         });
 
         const copyBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-copy-btn');

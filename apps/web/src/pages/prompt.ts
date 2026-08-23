@@ -1,5 +1,5 @@
 import { api } from '../api/client';
-import { SessionInfo, LogLevel } from '@frostagent/proto';
+import { SessionInfo } from '@frostagent/proto';
 import { escapeHtml, formatDateTime, formatPlatform, isGroupSession } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -10,6 +10,9 @@ import {
   parsePrompt,
   type ParsedPrompt,
 } from '../components/prompt-inspector';
+
+// NOTE: parsePrompt / renderPromptInspector are also used by the logs page via
+// openPromptInspectorDialog — do NOT remove those exports from prompt-inspector.ts.
 
 const SAMPLE_GROUP_PROMPT = `{
   "model": "gpt-4o-mini",
@@ -52,16 +55,12 @@ export function mountPromptPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="page-title">Prompt 检查</h1>
-            <span class="badge badge-purple text-xs">Prompt Inspector</span>
+            <h1 class="page-title">会话上下文检查</h1>
+            <span class="badge badge-purple text-xs">Session Context Inspector</span>
           </div>
-          <p class="page-description">分群聊会话审查群友聊天记录、实时滚动摘要与发送给 LLM 的结构化提示词</p>
+          <p class="page-description">分群聊会话审查群友聊天记录、实时滚动摘要与当前注入上下文结构；历史真实 LLM 请求请前往「日志」页查看</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <button class="btn btn-outline btn-sm" id="prompt-load-latest-btn" title="从最新日志加载 LLM 请求">
-            ${icon('refresh', 'w-3.5 h-3.5')}
-            <span>加载最新请求</span>
-          </button>
           <button class="btn btn-outline btn-sm" id="prompt-load-sample-btn" title="加载示例群聊分组 Prompt">
             ${icon('sparkles', 'w-3.5 h-3.5')}
             <span>示例 Prompt</span>
@@ -152,7 +151,6 @@ export function mountPromptPage(container: HTMLElement): () => void {
   const sessionsRefreshBtn = container.querySelector<HTMLButtonElement>('#prompt-sessions-refresh-btn')!;
   const editorCard = container.querySelector<HTMLElement>('#prompt-editor-card')!;
   const rawInput = container.querySelector<HTMLTextAreaElement>('#prompt-raw-input')!;
-  const loadLatestBtn = container.querySelector<HTMLButtonElement>('#prompt-load-latest-btn')!;
   const loadSampleBtn = container.querySelector<HTMLButtonElement>('#prompt-load-sample-btn')!;
   const toggleEditorBtn = container.querySelector<HTMLButtonElement>('#prompt-toggle-editor-btn')!;
   const toggleEditorLabel = container.querySelector<HTMLElement>('#prompt-toggle-editor-label')!;
@@ -340,10 +338,6 @@ export function mountPromptPage(container: HTMLElement): () => void {
         <h3 class="text-sm font-semibold text-foreground mb-1">请选择群聊会话</h3>
         <p class="text-xs max-w-sm mb-4">从左侧选择一个群聊会话以查看该群内群友的聊天记录、实时滚动摘要以及发送给 LLM 的结构化提示词。</p>
         <div class="flex items-center gap-2 flex-wrap justify-center">
-          <button class="btn btn-outline btn-sm text-xs" id="prompt-empty-load-latest-btn">
-            ${icon('refresh', 'w-3 h-3')}
-            <span>加载最新 LLM 请求</span>
-          </button>
           <button class="btn btn-outline btn-sm text-xs" id="prompt-empty-load-sample-btn">
             ${icon('sparkles', 'w-3 h-3')}
             <span>查看示例 Prompt</span>
@@ -352,9 +346,6 @@ export function mountPromptPage(container: HTMLElement): () => void {
       </div>
     `;
 
-    mountEl.querySelector<HTMLButtonElement>('#prompt-empty-load-latest-btn')?.addEventListener('click', () => {
-      void loadLatestLog();
-    });
     mountEl.querySelector<HTMLButtonElement>('#prompt-empty-load-sample-btn')?.addEventListener('click', () => {
       currentPromptText = SAMPLE_GROUP_PROMPT;
       renderInspector(currentPromptText, '示例 Prompt 检查');
@@ -362,37 +353,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
     });
   }
 
-  // 7. Load latest LLM Request log from backend
-  async function loadLatestLog() {
-    try {
-      loadLatestBtn.disabled = true;
-      const resp = await api.listLogs(50, '', LogLevel.UNSPECIFIED, 'llm');
-      if (isUnmounted) return;
-      const entries = resp.entries || [];
-      const llmEntry = entries.find((e) => e.requestBody || e.source.toLowerCase().includes('llm'));
-
-      if (llmEntry && (llmEntry.requestBody || llmEntry.summary)) {
-        currentPromptText = llmEntry.requestBody || llmEntry.summary || '';
-        renderInspector(currentPromptText, '最新 LLM 请求 Prompt');
-        toast.success('已载入最新 LLM 请求日志');
-      } else {
-        toast.info('暂未找到 LLM 请求日志');
-      }
-    } catch (err) {
-      if (isUnmounted) return;
-      toast.error('加载日志失败: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      if (!isUnmounted) {
-        loadLatestBtn.disabled = false;
-      }
-    }
-  }
-
   // 8. Bind Events
-  loadLatestBtn.addEventListener('click', () => {
-    void loadLatestLog();
-  });
-
   loadSampleBtn.addEventListener('click', () => {
     currentPromptText = SAMPLE_GROUP_PROMPT;
     renderInspector(currentPromptText, '示例 Prompt 检查');
