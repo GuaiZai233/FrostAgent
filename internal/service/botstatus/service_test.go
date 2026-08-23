@@ -209,4 +209,29 @@ func TestGetSessionContext(t *testing.T) {
 	if len(resp.Msg.RecentMessages) != 1 {
 		t.Fatalf("expected 1 recent message, got %d", len(resp.Msg.RecentMessages))
 	}
+
+	// Before LLM invocation, system_prompt and model should be empty (never fabricated)
+	if resp.Msg.SystemPrompt != "" {
+		t.Errorf("expected empty system_prompt before request, got %q", resp.Msg.SystemPrompt)
+	}
+	if resp.Msg.Model != "" {
+		t.Errorf("expected empty model before request, got %q", resp.Msg.Model)
+	}
+
+	// Simulate dynamic prompt assembly and LLM request trace
+	expectedSysPrompt := "You are FrostAgent\nCurrent Time: 2026-08-23 10:00:00\nDialogue few-shots..."
+	sess.SetLastPromptTrace(expectedSysPrompt, "gpt-4o-mini")
+
+	respAfter, err := svc.GetSessionContext(context.Background(), connect.NewRequest(&v1.GetSessionContextRequest{
+		SessionId: sessionID,
+	}))
+	if err != nil {
+		t.Fatalf("GetSessionContext after trace failed: %v", err)
+	}
+	if respAfter.Msg.SystemPrompt != expectedSysPrompt {
+		t.Errorf("expected system_prompt %q, got %q", expectedSysPrompt, respAfter.Msg.SystemPrompt)
+	}
+	if respAfter.Msg.Model != "gpt-4o-mini" {
+		t.Errorf("expected model 'gpt-4o-mini', got %q", respAfter.Msg.Model)
+	}
 }
