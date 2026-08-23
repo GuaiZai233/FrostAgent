@@ -88,6 +88,28 @@ type SessionContext struct {
 	groupSummaryGroups     []SummaryGroup
 	pendingTurns           [][]memory.PendingExtractionItem
 	extractionThreshold    int
+
+	// lastSystemPrompt records the dynamically-assembled system prompt from the
+	// most recent real LLM call (time label + dialogue + memory catalog + recalled
+	// memories). Empty until the first LLM request for this session.
+	lastSystemPrompt string
+	lastModelName    string
+}
+
+// SetLastPromptTrace records the system prompt and model used in the most recent LLM call.
+func (s *SessionContext) SetLastPromptTrace(systemPrompt, modelName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSystemPrompt = systemPrompt
+	s.lastModelName = modelName
+}
+
+// LastPromptTrace returns the system prompt and model from the most recent LLM call.
+// Returns empty strings if no request has been made yet.
+func (s *SessionContext) LastPromptTrace() (systemPrompt, modelName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSystemPrompt, s.lastModelName
 }
 
 // ReserveTurn appends one complete dialogue turn to this session's FIFO chain.

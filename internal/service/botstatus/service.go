@@ -249,6 +249,10 @@ func (s *Service) GetSessionContext(
 				summaryGroups = snap.SummaryGroups
 				recentMessages = snap.RecentMessages
 
+				lastSysPrompt, lastModel := sess.LastPromptTrace()
+				resp.SystemPrompt = lastSysPrompt
+				resp.Model = lastModel
+
 				sess.Lock()
 				for _, h := range sess.History {
 					contentStr := fmt.Sprintf("%v", h.Content)

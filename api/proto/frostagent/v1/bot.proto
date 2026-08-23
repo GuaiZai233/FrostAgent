@@ -78,4 +78,8 @@ message GetSessionContextResponse {
   repeated SummaryGroupInfoProto summary_groups = 5;
   repeated SessionHistoryMessageProto history = 6;
   string prompt_text = 7;
+  // Last real system prompt sent to the LLM (dynamically assembled: time + dialogue + memory).
+  // Empty when no LLM request has occurred for this session yet.
+  string system_prompt = 8;
+  string model = 9;
 }

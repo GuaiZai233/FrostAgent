@@ -179,6 +179,19 @@ func (e *Engine) RunMessagesWithContext(
 		}, messages...)
 	}
 
+	// Persist the assembled system prompt so Session Context Inspector can show
+	// the real dynamically-built prompt (time + dialogue + memory) rather than a
+	// static reconstruction. Only written when a session can be resolved by owner.
+	if owner != "" && e.SessionManager != nil {
+		if sessCore, ok := e.SessionManager.Get(owner); ok {
+			if sess, isSess := sessCore.(*SessionContext); isSess {
+				if sysContent, ok := messages[0].Content.(string); ok {
+					sess.SetLastPromptTrace(sysContent, e.ModelName)
+				}
+			}
+		}
+	}
+
 	ctx := withRunContext(context.Background(), runContext)
 	return e.runLoopWithResult(ctx, messages)
 }

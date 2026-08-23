@@ -107,6 +107,8 @@ export function buildInspectorDataFromSessionContext(context: {
     messages?: string[];
   }>;
   promptText?: string;
+  systemPrompt?: string;
+  model?: string;
 }): ParsedPrompt {
   const summaryGroups: SummaryGroupInfo[] = (context.summaryGroups || []).map((g) => {
     const rawMsgs = g.messages || [];
@@ -134,6 +136,8 @@ export function buildInspectorDataFromSessionContext(context: {
 
   return {
     raw: context.promptText || '',
+    model: context.model,
+    systemPrompt: context.systemPrompt,
     runningSummary: context.runningSummary,
     recentMessages,
     summaryGroups,
