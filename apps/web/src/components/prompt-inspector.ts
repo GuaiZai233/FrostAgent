@@ -121,9 +121,6 @@ export function parseMessageLine(line: string): GroupMessageItem {
       }
     }
 
-    // Strip any residual role prefix from content
-    content = content.replace(/^\[(user|assistant)\]\s*/i, '');
-
     return {
       role,
       time,
@@ -143,8 +140,6 @@ export function parseMessageLine(line: string): GroupMessageItem {
       role = 'user';
     }
   }
-  // Strip any residual role prefix from content
-  text = text.replace(/^\[(user|assistant)\]\s*/i, '');
 
   return {
     role,

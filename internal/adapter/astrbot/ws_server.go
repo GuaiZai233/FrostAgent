@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -142,9 +143,15 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
 	session.AppendGroupCompactMessage(
-		formatGroupSpeakerMessage(event, visibleText),
+		llm.GroupCompactMessage{
+			Role:      "user",
+			Sender:    senderDisplayName(event),
+			SenderID:  event.UserID,
+			Content:   visibleText,
+			MessageID: event.MessageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
 		maxBufferSize,
-		event.MessageID,
 	)
 	platform := event.Platform
 	if platform == "" {
@@ -558,6 +565,8 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		replyText = replyText + "\n\n" + receiptText
 	}
 
+	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
+	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
 	if err := sendDirectReply(event, conn, replyText); err == nil {
 		if event.MessageType == "group" && engine != nil && session != nil {
 			botReply := extractBotReplyText(replyText)
@@ -571,9 +580,13 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 					maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 				}
 				session.AppendGroupCompactMessage(
-					formatGroupAssistantMessage(botName, botReply),
+					llm.GroupCompactMessage{
+						Role:    "assistant",
+						Sender:  botName,
+						Content: strings.TrimSpace(botReply),
+						Time:    time.Now().Format("15:04:05"),
+					},
 					maxBufferSize,
-					"",
 				)
 				if engine.GroupCompactor != nil {
 					platform := event.Platform
@@ -588,6 +601,9 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	}
 }
 
+// sendDirectReply sends a direct message to the AstrBot WebSocket connection.
+// Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
+// This confirms WebSocket transport write success (best-effort delivery).
 func sendDirectReply(event Event, conn *wsConn, text string) error {
 	if conn == nil || strings.TrimSpace(text) == "" {
 		return nil

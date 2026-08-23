@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
@@ -502,9 +503,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 					}
 					session.AppendGroupCompactMessage(
-						formatGroupAssistantMessage(botName, botReply),
+						llm.GroupCompactMessage{
+							Role:    "assistant",
+							Sender:  botName,
+							Content: strings.TrimSpace(botReply),
+							Time:    time.Now().Format("15:04:05"),
+						},
 						maxBufferSize,
-						"",
 					)
 					if engine.GroupCompactor != nil {
 						owner, _ := memory.OwnerForGroup(event.GroupID)
@@ -615,9 +620,15 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
 	session.AppendGroupCompactMessage(
-		formatGroupSpeakerMessage(event, visibleText),
+		llm.GroupCompactMessage{
+			Role:      "user",
+			Sender:    senderDisplayName(event),
+			SenderID:  strconv.FormatInt(event.UserID, 10),
+			Content:   strings.TrimSpace(visibleText),
+			MessageID: msgID,
+			Time:      time.Now().Format("15:04:05"),
+		},
 		maxBufferSize,
-		msgID,
 	)
 	if engine.GroupCompactor != nil {
 		owner, _ := memory.OwnerForGroup(event.GroupID)

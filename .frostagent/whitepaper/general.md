@@ -44,12 +44,12 @@
 
 - **后台滚动压缩 (`GroupCompactor`)**：
   - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
-- **角色感知与出站成功摄入 (Role-Aware Compaction & Send-Success Ingestion)**：
-  - 消息角色显式区分：原消息进入缓冲区时显式附带 `[user] <name> (<id>): <content>` 与 `[assistant] <bot_name>: <content>` 标识，杜绝角色伪造与身份混淆；
-  - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。机器人回复发送后必须通过 `SendActionAndWait` 等待 OneBot 等平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；同时，中间消息工具（`send_message`）的调用也严格同步等待平台 ACK 确认，若平台拒绝（如禁言或错误码）、ACK 超时或网络断开，则向大模型工具执行循环明确反馈真实错误原因，杜绝在发送失败时产生假成功；
+- **角色感知与结构化 JSONL 压缩 (Role-Aware JSONL Compaction & Send-Success Ingestion)**：
+  - 结构化表示与 JSONL 边界隔离：消息在内部通过 `GroupCompactMessage` 结构体（含 `Role`, `Sender`, `SenderID`, `Content`, `MessageID`, `Time`）承载，真实角色严格由后端事件路由赋予。在提交给 `GroupCompactor` 压缩时采用单行 JSONL 格式输入，用户消息正文内部哪怕包含多行内容或伪造的 `\n[assistant]` / `[user]` 标签，也会被严格 JSON 转义在 `"content"` 字段内，杜绝通过多行注入伪造角色记录或污染长期摘要；
+  - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。对于具备同步请求-响应确认机制的平台（如 OneBot v11），机器人回复发送后必须通过 `SendActionAndWait` 等待平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；同时，中间消息工具（`send_message`）的调用也严格同步等待平台 ACK 确认，若平台拒绝（如禁言或错误码）、ACK 超时或网络断开，则向大模型工具执行循环明确反馈真实错误原因，杜绝在发送失败时产生假成功；对于暂未提供端到端 ACK 响应的轻量协议（如 AstrBot WebSocket），当前通过传输层写入确认（Transport-Write Confirmation）进行尽力而为的送达控制；
   - 发送失败与防脑补隔离 (Delivery Failure Context)：当平台返回错误码（如禁言、风控、参数非法）、ACK 超时或传输层断开时，系统坚决不向 `Session.History` 与 `groupCompactBuffer` 提交该 assistant 消息，保留原始 user 输入，同步执行 `TrimSession` 防止受限历史无界膨胀，并在会话中记录瞬时 `DeliveryFailure`。在下一轮对话生成时，以一次性瞬态方式向大模型注入 `<delivery_context>`（包含平台、错误原因与 `Do not assume the user saw or received that response.` 指令）告知上次发送未送达，并在使用后原子清空，杜绝机器人“自以为发出了其实被屏蔽”的平行世界幻觉；
-  - 压缩提示词边界与事实隔离：提示词明确界定 `[assistant]` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
-  - Visual Inspector 角色渲染：Web 控制台 Prompt 检查组件支持结构化解析 `[user]` / `[assistant]` 前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮。
+  - 压缩提示词边界与事实隔离：提示词明确界定 `assistant` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
+  - Visual Inspector 角色渲染与正文不透明度保证：Web 控制台 Prompt 检查组件结构化解析角色前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮，同时保持用户原始正文的不透明度，绝不破坏性正则裁剪合法正文。
 - **未压缩原消息即时注入 (`recent_group_messages`)**：
   - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
   - 自动通过 `messageID` 过滤当前轮次的触发消息，避免消息重复；

@@ -15,21 +15,117 @@ import (
 	"time"
 )
 
+// GroupCompactMessage represents a structured group chat message for compaction and prompt inspection.
+type GroupCompactMessage struct {
+	Role      string `json:"role"`                 // "user" | "assistant"
+	Sender    string `json:"sender,omitempty"`     // Display name or nick
+	SenderID  string `json:"sender_id,omitempty"`  // User ID or bot ID
+	Content   string `json:"content"`              // Message body (opaque payload)
+	MessageID string `json:"message_id,omitempty"` // Message ID for deduplication
+	Time      string `json:"time,omitempty"`       // Timestamp string e.g. "15:04:05"
+	raw       string `json:"-"`                    // Preserved raw string if ingested from text
+}
+
+// FormatDisplay renders the message as a single-line display string.
+func (m GroupCompactMessage) FormatDisplay() string {
+	if m.raw != "" {
+		return m.raw
+	}
+	if m.Role == "assistant" {
+		botName := m.Sender
+		if botName == "" {
+			botName = "霜降"
+		}
+		return fmt.Sprintf("[assistant] %s: %s", botName, m.Content)
+	}
+	sender := m.Sender
+	if sender == "" {
+		sender = "user"
+	}
+	if m.SenderID != "" {
+		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, m.Content)
+	}
+	return fmt.Sprintf("[user] %s: %s", sender, m.Content)
+}
+
+// ParseGroupCompactMessage parses a text line into a GroupCompactMessage while preserving the raw text.
+func ParseGroupCompactMessage(content string, messageID ...string) GroupCompactMessage {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return GroupCompactMessage{}
+	}
+
+	var msgID string
+	if len(messageID) > 0 {
+		msgID = strings.TrimSpace(messageID[0])
+	}
+	if msgID == "" {
+		if start := strings.Index(content, "[msg_"); start != -1 {
+			if end := strings.Index(content[start:], "]"); end != -1 {
+				msgID = content[start+1 : start+end]
+			}
+		}
+	}
+
+	role := "user"
+	text := content
+
+	if strings.HasPrefix(strings.ToLower(text), "[assistant]") {
+		role = "assistant"
+		text = strings.TrimSpace(text[len("[assistant]"):])
+	} else if strings.HasPrefix(strings.ToLower(text), "[user]") {
+		role = "user"
+		text = strings.TrimSpace(text[len("[user]"):])
+	}
+
+	colonIdx := strings.Index(text, ":")
+	if colonIdx != -1 {
+		senderPart := strings.TrimSpace(text[:colonIdx])
+		msgBody := strings.TrimSpace(text[colonIdx+1:])
+
+		sender := senderPart
+		var senderID string
+
+		if openParen := strings.Index(senderPart, "("); openParen != -1 {
+			if closeParen := strings.Index(senderPart[openParen:], ")"); closeParen != -1 {
+				sender = strings.TrimSpace(senderPart[:openParen])
+				senderID = strings.TrimSpace(senderPart[openParen+1 : openParen+closeParen])
+			}
+		}
+
+		return GroupCompactMessage{
+			Role:      role,
+			Sender:    sender,
+			SenderID:  senderID,
+			Content:   msgBody,
+			MessageID: msgID,
+			raw:       content,
+		}
+	}
+
+	return GroupCompactMessage{
+		Role:      role,
+		Content:   content,
+		MessageID: msgID,
+		raw:       content,
+	}
+}
+
 type groupCompactItem struct {
-	sequence  uint64
-	messageID string
-	content   string
+	sequence uint64
+	message  GroupCompactMessage
 }
 
 // SummaryGroup represents a mapping between a group summary and the messages/message IDs it summarizes.
 type SummaryGroup struct {
-	Summary        string   `json:"summary"`
-	MessageIDs     []string `json:"message_ids,omitempty"`
-	StartMessageID string   `json:"start_message_id,omitempty"`
-	EndMessageID   string   `json:"end_message_id,omitempty"`
-	StartIndex     int      `json:"start_index,omitempty"`
-	EndIndex       int      `json:"end_index,omitempty"`
-	Messages       []string `json:"messages,omitempty"`
+	Summary        string                `json:"summary"`
+	MessageIDs     []string              `json:"message_ids,omitempty"`
+	StartMessageID string                `json:"start_message_id,omitempty"`
+	EndMessageID   string                `json:"end_message_id,omitempty"`
+	StartIndex     int                   `json:"start_index,omitempty"`
+	EndIndex       int                   `json:"end_index,omitempty"`
+	Messages       []string              `json:"messages,omitempty"`
+	StructuredMsgs []GroupCompactMessage `json:"structured_messages,omitempty"`
 }
 
 // GroupContextSnapshot captures an atomic point-in-time view of both the
@@ -45,7 +141,7 @@ type GroupContextSnapshot struct {
 // by this summary while preserving messages that arrived during the LLM call.
 type GroupCompactSnapshot struct {
 	Summary         string
-	Messages        []string
+	Messages        []GroupCompactMessage
 	MessageIDs      []string
 	ThroughSequence uint64
 	Generation      uint64
@@ -275,29 +371,41 @@ func (s *SessionContext) TrimHistory(max int) {
 const DefaultMaxGroupCompactBufferSize = 200
 
 // AppendGroupCompactMessage appends one visible group message to the running
-// compact buffer. The uncommitted buffer is capped at maxBufferSize (defaulting
-// to DefaultMaxGroupCompactBufferSize if <= 0) to allow in-flight compactions to
-// complete without eagerly dropping raw messages.
+// compact buffer. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
+// The uncommitted buffer is capped at maxBufferSize (defaulting to DefaultMaxGroupCompactBufferSize if <= 0)
+// to allow in-flight compactions to complete without eagerly dropping raw messages.
 // Optional messageID can be provided to support deduplication with the triggering message.
-func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize int, messageID ...string) int {
-	content = strings.TrimSpace(content)
-	if content == "" {
+func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	var msg GroupCompactMessage
+	switch v := item.(type) {
+	case GroupCompactMessage:
+		msg = v
+		if len(messageID) > 0 && msg.MessageID == "" {
+			msg.MessageID = strings.TrimSpace(messageID[0])
+		}
+	case *GroupCompactMessage:
+		if v != nil {
+			msg = *v
+			if len(messageID) > 0 && msg.MessageID == "" {
+				msg.MessageID = strings.TrimSpace(messageID[0])
+			}
+		}
+	case string:
+		msg = ParseGroupCompactMessage(v, messageID...)
+	case fmt.Stringer:
+		msg = ParseGroupCompactMessage(v.String(), messageID...)
+	default:
 		return 0
+	}
+
+	if strings.TrimSpace(msg.Content) == "" {
+		return 0
+	}
+	if msg.Role == "" {
+		msg.Role = "user"
 	}
 	if maxBufferSize <= 0 {
 		maxBufferSize = DefaultMaxGroupCompactBufferSize
-	}
-
-	var msgID string
-	if len(messageID) > 0 {
-		msgID = strings.TrimSpace(messageID[0])
-	}
-	if msgID == "" {
-		if start := strings.Index(content, "[msg_"); start != -1 {
-			if end := strings.Index(content[start:], "]"); end != -1 {
-				msgID = content[start+1 : start+end]
-			}
-		}
 	}
 
 	s.mu.Lock()
@@ -305,9 +413,8 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize
 
 	s.groupCompactSequence++
 	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
-		sequence:  s.groupCompactSequence,
-		messageID: msgID,
-		content:   content,
+		sequence: s.groupCompactSequence,
+		message:  msg,
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
 		drop := len(s.groupCompactBuffer) - maxBufferSize
@@ -316,6 +423,11 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize
 	}
 	s.UpdatedAt = time.Now()
 	return len(s.groupCompactBuffer)
+}
+
+// AppendGroupCompactString parses a raw message string and appends it to the compact buffer.
+func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize int, messageID ...string) int {
+	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -345,7 +457,7 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
 
-		if excludeID != "" && item.messageID != "" && item.messageID == excludeID {
+		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
 		}
 
@@ -353,7 +465,7 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 			break
 		}
 
-		content := item.content
+		content := item.message.FormatDisplay()
 		contentLen := len([]rune(content))
 
 		if totalChars >= maxChars {
@@ -398,15 +510,15 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
 		return GroupCompactSnapshot{}, false
 	}
-	items := make([]string, len(s.groupCompactBuffer))
+	msgs := make([]GroupCompactMessage, len(s.groupCompactBuffer))
 	msgIDs := make([]string, len(s.groupCompactBuffer))
 	for i, item := range s.groupCompactBuffer {
-		items[i] = item.content
-		msgIDs[i] = item.messageID
+		msgs[i] = item.message
+		msgIDs[i] = item.message.MessageID
 	}
 	return GroupCompactSnapshot{
 		Summary:         s.groupCompactSummary,
-		Messages:        items,
+		Messages:        msgs,
 		MessageIDs:      msgIDs,
 		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
 		Generation:      s.groupCompactGeneration,
@@ -434,13 +546,18 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 		firstID = snapshot.MessageIDs[0]
 		lastID = snapshot.MessageIDs[len(snapshot.MessageIDs)-1]
 	}
+	formattedMsgs := make([]string, len(snapshot.Messages))
+	for i, m := range snapshot.Messages {
+		formattedMsgs[i] = m.FormatDisplay()
+	}
 	s.groupSummaryGroups = []SummaryGroup{
 		{
 			Summary:        summary,
 			MessageIDs:     snapshot.MessageIDs,
 			StartMessageID: firstID,
 			EndMessageID:   lastID,
-			Messages:       snapshot.Messages,
+			Messages:       formattedMsgs,
+			StructuredMsgs: snapshot.Messages,
 		},
 	}
 
