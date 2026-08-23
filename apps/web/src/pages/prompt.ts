@@ -54,10 +54,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
     <div class="page-container fade-in">
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
-          <div class="flex items-center gap-2">
-            <h1 class="page-title">会话上下文检查</h1>
-            <span class="badge badge-purple text-xs">Session Context Inspector</span>
-          </div>
+          <h1 class="page-title">会话上下文检查</h1>
           <p class="page-description">分群聊会话审查群友聊天记录、实时滚动摘要与当前注入上下文结构；历史真实 LLM 请求请前往「日志」页查看</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
