@@ -142,7 +142,7 @@ func (e *Engine) RunMessagesWithContext(
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
-		systemPrompt = memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
+		systemPrompt = "当前系统时间：" + memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
 
 		if e.DialoguePrompt != "" {
 			systemPrompt += "\n\n" + e.DialoguePrompt

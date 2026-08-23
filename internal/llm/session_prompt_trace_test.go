@@ -80,6 +80,9 @@ func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	if !strings.Contains(savedSys, "Few-shot dialogue examples") {
 		t.Errorf("expected saved system prompt to contain 'Few-shot dialogue examples', got %q", savedSys)
 	}
+	if !strings.Contains(savedSys, "当前系统时间：") {
+		t.Errorf("expected saved system prompt to start with '当前系统时间：', got %q", savedSys)
+	}
 	if !strings.Contains(savedSys, "星期") {
 		t.Errorf("expected saved system prompt to contain dynamic time, got %q", savedSys)
 	}
