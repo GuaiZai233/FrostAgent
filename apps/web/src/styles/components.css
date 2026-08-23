@@ -674,11 +674,20 @@ dialog.dialog-modal::backdrop {
   border-bottom-color: rgba(59, 130, 246, 0.08);
 }
 
+.summary-group-wrapper .group-msg-row.is-assistant {
+  background-color: rgba(168, 85, 247, 0.04);
+}
+
 .group-msg-row.is-uncompacted {
   background-color: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   margin-bottom: 0.375rem;
+}
+
+.group-msg-row.is-uncompacted.is-assistant {
+  border-color: rgba(168, 85, 247, 0.25);
+  background-color: rgba(168, 85, 247, 0.03);
 }
 
 .msg-meta {

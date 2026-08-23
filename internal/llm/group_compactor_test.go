@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -551,6 +552,72 @@ func TestGroupCompactor_NewerPersistenceOverridesPendingRetryTimer(t *testing.T)
 	rec, ok, _ := reloadedStore.Get(owner)
 	if !ok || rec.Summary != "Summary V2" {
 		t.Fatalf("expected Summary V2 persisted on disk, got %q", rec.Summary)
+	}
+}
+
+func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
+	var receivedPrompt string
+	mockLLM := &mockCompactorLLM{
+		customReply: func(req core.ChatRequest) (string, error) {
+			if len(req.Messages) > 0 {
+				receivedPrompt = req.Messages[0].Content.(string)
+			}
+			return "群聊确认周末聚餐在川菜馆，霜降推荐了招牌毛血旺并被大家采纳。", nil
+		},
+	}
+
+	tmpDir := t.TempDir()
+	store, _ := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 3, 10*time.Millisecond)
+
+	s := &SessionContext{
+		ConversationID: "test_group_dialogue_flow",
+	}
+
+	// 模拟群聊真实消息流：群友提问 -> Bot 回答 -> 群友确认
+	s.AppendGroupCompactMessage("[user] 张三 (10001): 周末聚餐定哪家餐厅？", 50)
+	s.AppendGroupCompactMessage("[assistant] 霜降: 推荐尝试市中心的蜀香园川菜馆，招牌毛血旺评价很好~", 50)
+	s.AppendGroupCompactMessage("[user] 李四 (10002): 赞成蜀香园！那就定周六晚上！", 50)
+
+	compactor.Trigger(s, "test_group_dialogue_flow")
+
+	time.Sleep(30 * time.Millisecond)
+
+	if mockLLM.CallCount() != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", mockLLM.CallCount())
+	}
+
+	// 验证请求提示词完整包含 [user] 和 [assistant] 的角色区分
+	if !strings.Contains(receivedPrompt, "[群消息] [user] 张三 (10001): 周末聚餐定哪家餐厅？") {
+		t.Errorf("expected prompt to contain user message 1, got: %s", receivedPrompt)
+	}
+	if !strings.Contains(receivedPrompt, "[群消息] [assistant] 霜降: 推荐尝试市中心的蜀香园川菜馆，招牌毛血旺评价很好~") {
+		t.Errorf("expected prompt to contain assistant message, got: %s", receivedPrompt)
+	}
+	if !strings.Contains(receivedPrompt, "[群消息] [user] 李四 (10002): 赞成蜀香园！那就定周六晚上！") {
+		t.Errorf("expected prompt to contain user message 2, got: %s", receivedPrompt)
+	}
+
+	// 验证总结成功更新
+	expectedSummary := "群聊确认周末聚餐在川菜馆，霜降推荐了招牌毛血旺并被大家采纳。"
+	if s.GroupRunningSummary() != expectedSummary {
+		t.Errorf("expected summary %q, got %q", expectedSummary, s.GroupRunningSummary())
+	}
+}
+
+func TestGroupCompactor_PromptConstraintsIntegrity(t *testing.T) {
+	// 验证 groupCompactPrompt 包含完整的角色说明与事实性/共识边界约束
+	if !strings.Contains(groupCompactPrompt, "[user] 为群友发言，[assistant] 为机器人回复") {
+		t.Errorf("expected prompt to contain role definitions")
+	}
+	if !strings.Contains(groupCompactPrompt, "[assistant] 的发言仅作为对话背景和上下文参考") {
+		t.Errorf("expected prompt to specify assistant messages as background context")
+	}
+	if !strings.Contains(groupCompactPrompt, "严禁将 [assistant] 单方面的声明、推测、承诺或事实性陈述直接升级为群友事实或群内共识") {
+		t.Errorf("expected prompt to prohibit upgrading assistant claims without confirmation")
+	}
+	if !strings.Contains(groupCompactPrompt, "当群友针对 [assistant] 的回复提出质疑、纠正、反驳或追问时") {
+		t.Errorf("expected prompt to handle user corrections towards assistant")
 	}
 }
 

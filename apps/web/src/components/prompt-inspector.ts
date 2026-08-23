@@ -9,6 +9,7 @@ export interface GroupMessageItem {
   time?: string;
   sender?: string;
   senderId?: string;
+  role?: 'user' | 'assistant';
   content: string;
   rawText: string;
   isSummarized?: boolean;
@@ -47,44 +48,73 @@ export function parseMessageLine(line: string): GroupMessageItem {
     return { content: '', rawText: '' };
   }
 
-  // Regex 1: [10:00:00] 张三 (123456) [msg_1]: 周末爬山路线定了吗？
-  // Regex 2: [10:00:00] 张三 [msg_1]: 周末爬山路线定了吗？
-  // Regex 3: [10:00:00] 张三 (123456): 周末爬山路线定了吗？
-  // Regex 4: [10:00:00] 张三: 周末爬山路线定了吗？
-  const timeSenderIdMatch = line.match(
-    /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
-  );
-  if (timeSenderIdMatch) {
-    return {
-      time: timeSenderIdMatch[1],
-      sender: timeSenderIdMatch[2].trim(),
-      senderId: timeSenderIdMatch[3]?.trim(),
-      id: timeSenderIdMatch[4]?.trim(),
-      content: timeSenderIdMatch[5],
-      rawText: line,
-    };
+  let text = line.trim();
+  let role: 'user' | 'assistant' | undefined = undefined;
+
+  // 1. Check for leading [user] / [assistant] tag
+  const roleMatch = text.match(/^\[(user|assistant)\]\s*/i);
+  if (roleMatch) {
+    role = roleMatch[1].toLowerCase() as 'user' | 'assistant';
+    text = text.slice(roleMatch[0].length);
   }
 
-  // Regex 5: 张三 (123456) [msg_1]: 周末爬山路线定了吗？
-  // Regex 6: 张三 [msg_1]: 周末爬山路线定了吗？
-  // Regex 7: 张三 (123456): 周末爬山路线定了吗？
-  // Regex 8: 张三: 周末爬山路线定了吗？
-  const senderIdMatch = line.match(
+  // 2. Check if timestamp comes next: [10:00:00]
+  let time: string | undefined = undefined;
+  const timeMatch = text.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*/);
+  if (timeMatch) {
+    time = timeMatch[1];
+    text = text.slice(timeMatch[0].length);
+
+    // Also check if [user]/[assistant] tag was placed AFTER timestamp: [10:00:00] [assistant]
+    if (!role) {
+      const innerRoleMatch = text.match(/^\[(user|assistant)\]\s*/i);
+      if (innerRoleMatch) {
+        role = innerRoleMatch[1].toLowerCase() as 'user' | 'assistant';
+        text = text.slice(innerRoleMatch[0].length);
+      }
+    }
+  }
+
+  // 3. Sender / ID / Content extraction
+  // Handles:
+  // - 张三 (123456) [msg_1]: ...
+  // - 霜降 [msg_2]: ...
+  // - 张三 (123456): ...
+  // - 霜降: ...
+  const senderMatch = text.match(
     /^([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
   );
-  if (senderIdMatch) {
+  if (senderMatch) {
+    const sender = senderMatch[1].trim();
+    const senderId = senderMatch[2]?.trim();
+    const id = senderMatch[3]?.trim();
+    const content = senderMatch[4];
+
+    // Infer role if not explicitly tagged
+    if (!role) {
+      if (/^(?:assistant|bot|霜降|frostagent)/i.test(sender)) {
+        role = 'assistant';
+      } else {
+        role = 'user';
+      }
+    }
+
     return {
-      sender: senderIdMatch[1].trim(),
-      senderId: senderIdMatch[2]?.trim(),
-      id: senderIdMatch[3]?.trim(),
-      content: senderIdMatch[4],
+      role,
+      time,
+      sender,
+      senderId,
+      id,
+      content,
       rawText: line,
     };
   }
 
   // Fallback for plain message line
   return {
-    content: line,
+    role,
+    time,
+    content: text,
     rawText: line,
   };
 }
@@ -725,12 +755,19 @@ function renderSummaryGroupBlock(
  */
 function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): string {
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
+  const isAssistant = msg.role === 'assistant';
+  const roleClass = isAssistant ? 'is-assistant' : 'is-user';
 
   return `
-    <div class="group-msg-row ${uncompactedClass}" ${msg.id ? `data-msg-id="${escapeHtml(msg.id)}"` : ''}>
+    <div class="group-msg-row ${uncompactedClass} ${roleClass}" ${msg.id ? `data-msg-id="${escapeHtml(msg.id)}"` : ''}>
       <div class="msg-meta">
+        ${
+          isAssistant
+            ? `<span class="badge badge-purple text-[10px] py-0 px-1 font-medium">Assistant / Bot</span>`
+            : ''
+        }
         ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
-        <span class="msg-sender">${escapeHtml(msg.sender || '用户')}</span>
+        <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(msg.sender || (isAssistant ? '霜降' : '用户'))}</span>
         ${
           msg.senderId
             ? `<span class="text-[10px] text-muted font-mono">(${escapeHtml(msg.senderId)})</span>`
@@ -738,7 +775,7 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
         }
         ${msg.id ? `<span class="msg-id">#${escapeHtml(msg.id)}</span>` : ''}
       </div>
-      <div class="msg-content select-text">${escapeHtml(msg.content)}</div>
+      <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${escapeHtml(msg.content)}</div>
     </div>
   `;
 }

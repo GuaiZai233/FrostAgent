@@ -488,6 +488,27 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送消息失败: %v", err))
+	} else if event.MessageType == "group" && engine != nil && session != nil {
+		botReply := extractBotReplyText(replyText)
+		if strings.TrimSpace(botReply) != "" {
+			botName := os.Getenv("BOT_NAME")
+			if botName == "" {
+				botName = defaultBotName
+			}
+			var maxBufferSize int
+			if engine.GroupCompactor != nil {
+				maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+			}
+			session.AppendGroupCompactMessage(
+				formatGroupAssistantMessage(botName, botReply),
+				maxBufferSize,
+				"",
+			)
+			if engine.GroupCompactor != nil {
+				owner, _ := memory.OwnerForGroup(event.GroupID)
+				engine.GroupCompactor.Trigger(session, owner)
+			}
+		}
 	}
 }
 
@@ -554,7 +575,32 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 }
 
 func formatGroupSpeakerMessage(event model.OneBotEvent, text string) string {
-	return fmt.Sprintf("%s (%d): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
+	return fmt.Sprintf("[user] %s (%d): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
+}
+
+func formatGroupAssistantMessage(botName, text string) string {
+	if botName == "" {
+		botName = defaultBotName
+	}
+	return fmt.Sprintf("[assistant] %s: %s", botName, strings.TrimSpace(text))
+}
+
+func extractBotReplyText(replyText string) string {
+	var toolOutput struct {
+		Messages []tools.Msg `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
+		var texts []string
+		for _, m := range toolOutput.Messages {
+			if m.Type == "plain" && strings.TrimSpace(m.Text) != "" {
+				texts = append(texts, strings.TrimSpace(m.Text))
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, " ")
+		}
+	}
+	return strings.TrimSpace(replyText)
 }
 
 // wrapGroupReply 按 env 开关为群聊回复前置 reply 段（引用原消息）与 at 段。

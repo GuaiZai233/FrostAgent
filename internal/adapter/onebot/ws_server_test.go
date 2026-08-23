@@ -1794,3 +1794,162 @@ func TestWSGroupMessage_RawContextAndDurableSeparation(t *testing.T) {
 	}
 }
 
+func TestWSGroupMessage_AssistantReplyAppendedOnSendSuccess(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "你好呀！我是霜降，很高兴认识大家~",
+				},
+				Usage: &core.Usage{
+					PromptTokens:     100,
+					CompletionTokens: 50,
+					TotalTokens:      150,
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 发送群聊消息 (@bot)
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     40001,
+		UserID:      1234567,
+		MessageID:   601,
+		Sender: &model.OneBotSender{
+			Nickname: "测试群友",
+			UserID:   1234567,
+		},
+		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"你好呀"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送群聊消息失败: %v", err)
+	}
+
+	// 接收并处理群信息请求 (get_group_info)
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if action.Action == "get_group_info" {
+		groupInfoResponse := map[string]interface{}{
+			"status":  "ok",
+			"retcode": 0,
+			"data": map[string]interface{}{
+				"group_id":   40001,
+				"group_name": "测试群",
+			},
+			"echo": action.Echo,
+		}
+		resBytes, _ := json.Marshal(groupInfoResponse)
+		if err := conn.WriteMessage(websocket.TextMessage, resBytes); err != nil {
+			t.Fatalf("发送群信息失败: %v", err)
+		}
+
+		_, respBytes, err = conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+	}
+
+	// 稍作等待确保 goroutine 处理完成
+	time.Sleep(50 * time.Millisecond)
+
+	sess := engine.SessionManager.GetOrCreate("group:40001")
+	snap := sess.SnapshotGroupContext(20, 4000, "")
+
+	// 验证 recent_group_messages 中包含带有 [user] 和 [assistant] 角色标签的消息
+	foundUser := false
+	foundAssistant := false
+	for _, m := range snap.RecentMessages {
+		if strings.Contains(m, "[user] 测试群友 (1234567):") && strings.Contains(m, "你好呀") {
+			foundUser = true
+		}
+		if strings.Contains(m, "[assistant] 霜降狐: 你好呀！我是霜降，很高兴认识大家~") {
+			foundAssistant = true
+		}
+	}
+
+	if !foundUser {
+		t.Errorf("期望 compact buffer 包含带有 [user] 前缀的用户消息，实际 buffer: %+v", snap.RecentMessages)
+	}
+	if !foundAssistant {
+		t.Errorf("期望 compact buffer 包含发送成功的 [assistant] 回复，实际 buffer: %+v", snap.RecentMessages)
+	}
+}
+
+func TestWSGroupMessage_SendFailureDoesNotPolluteCompactBuffer(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是一条发送失败的回复草稿",
+				},
+				Usage: &core.Usage{
+					PromptTokens:     100,
+					CompletionTokens: 50,
+					TotalTokens:      150,
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+
+	// 发送群聊消息
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     40002,
+		UserID:      999888,
+		MessageID:   701,
+		Sender: &model.OneBotSender{
+			Nickname: "断网用户",
+			UserID:   999888,
+		},
+		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"马上断开"}}]`),
+	}
+
+	// 立即关闭 WebSocket 连接以造成后续发送失败 (conn.WriteMessage -> error)
+	conn.Close()
+
+	// 直接调用 captureGroupCompactMessage 模拟摄入用户消息
+	captureGroupCompactMessage(event, engine)
+
+	time.Sleep(50 * time.Millisecond)
+
+	sess := engine.SessionManager.GetOrCreate("group:40002")
+	snap := sess.SnapshotGroupContext(20, 4000, "")
+
+	for _, m := range snap.RecentMessages {
+		if strings.Contains(m, "这是一条发送失败的回复草稿") {
+			t.Errorf("发送失败的消息严禁进入 compact buffer! 实际 buffer: %+v", snap.RecentMessages)
+		}
+	}
+}
+

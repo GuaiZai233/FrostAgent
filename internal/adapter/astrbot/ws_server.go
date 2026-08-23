@@ -157,7 +157,32 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 }
 
 func formatGroupSpeakerMessage(event Event, text string) string {
-	return fmt.Sprintf("%s (%s): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
+	return fmt.Sprintf("[user] %s (%s): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
+}
+
+func formatGroupAssistantMessage(botName, text string) string {
+	if botName == "" {
+		botName = "霜降"
+	}
+	return fmt.Sprintf("[assistant] %s: %s", botName, strings.TrimSpace(text))
+}
+
+func extractBotReplyText(replyText string) string {
+	var toolOutput struct {
+		Messages []tools.Msg `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
+		var texts []string
+		for _, m := range toolOutput.Messages {
+			if m.Type == "plain" && strings.TrimSpace(m.Text) != "" {
+				texts = append(texts, strings.TrimSpace(m.Text))
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, " ")
+		}
+	}
+	return strings.TrimSpace(replyText)
 }
 
 func isBotNameMentioned(text string) bool {
@@ -531,12 +556,39 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		replyText = replyText + "\n\n" + receiptText
 	}
 
-	sendDirectReply(event, conn, replyText)
+	if err := sendDirectReply(event, conn, replyText); err == nil {
+		if event.MessageType == "group" && engine != nil && session != nil {
+			botReply := extractBotReplyText(replyText)
+			if strings.TrimSpace(botReply) != "" {
+				botName := os.Getenv("BOT_NAME")
+				if botName == "" {
+					botName = "霜降"
+				}
+				var maxBufferSize int
+				if engine.GroupCompactor != nil {
+					maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+				}
+				session.AppendGroupCompactMessage(
+					formatGroupAssistantMessage(botName, botReply),
+					maxBufferSize,
+					"",
+				)
+				if engine.GroupCompactor != nil {
+					platform := event.Platform
+					if platform == "" {
+						platform = "astrbot"
+					}
+					owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
+					engine.GroupCompactor.Trigger(session, owner)
+				}
+			}
+		}
+	}
 }
 
-func sendDirectReply(event Event, conn *wsConn, text string) {
+func sendDirectReply(event Event, conn *wsConn, text string) error {
 	if conn == nil || strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	targetID := event.UserID
 	if event.MessageType == "group" {
@@ -556,5 +608,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) {
 	}
 	if err := conn.WriteJSON(action); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
+		return err
 	}
+	return nil
 }

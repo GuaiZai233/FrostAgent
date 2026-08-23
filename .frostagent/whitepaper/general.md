@@ -44,6 +44,11 @@
 
 - **后台滚动压缩 (`GroupCompactor`)**：
   - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
+- **角色感知与出站成功摄入 (Role-Aware Compaction & Send-Success Ingestion)**：
+  - 消息角色显式区分：原消息进入缓冲区时显式附带 `[user] <name> (<id>): <content>` 与 `[assistant] <bot_name>: <content>` 标识，杜绝角色伪造与身份混淆；
+  - 出站成功门禁 (Send-Success Gating)：机器人自身回复仅在出站 WebSocket 发送成功（`WriteMessage` / `WriteJSON` 返回 `nil`）后才摄入 `groupCompactBuffer`；发送失败、中间工具调用（`sendHook`）、内部推理与草稿绝不摄入，杜绝网络异常与未发出内容污染群聊长期摘要；
+  - 压缩提示词边界与事实隔离：提示词明确界定 `[assistant]` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
+  - Visual Inspector 角色渲染：Web 控制台 Prompt 检查组件支持结构化解析 `[user]` / `[assistant]` 前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮。
 - **未压缩原消息即时注入 (`recent_group_messages`)**：
   - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
   - 自动通过 `messageID` 过滤当前轮次的触发消息，避免消息重复；
