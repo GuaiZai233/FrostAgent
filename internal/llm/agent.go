@@ -666,8 +666,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			// 只有校验通过的 send_message 才能触发实际发送。
 			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && toolSucceeded && ok && runContext.SendHook != nil {
-				runContext.SendHook(toolResult)
-				toolResult = "消息已发送"
+				if err := runContext.SendHook(toolResult); err != nil {
+					toolResult = fmt.Sprintf("消息发送失败：%v", err)
+				} else {
+					toolResult = "消息已发送"
+				}
 			}
 
 			toolMsg := ChatMessage{

@@ -23,7 +23,7 @@ type BillingRunState struct {
 type RunContext struct {
 	Owner     string
 	OwnerType memory.OwnerType
-	SendHook  func(toolResultJSON string)
+	SendHook  func(toolResultJSON string) error
 	Billing   *BillingRunState
 }
 

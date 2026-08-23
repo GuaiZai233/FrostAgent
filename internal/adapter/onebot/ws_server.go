@@ -327,17 +327,17 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			messages[len(messages)-1].Content = requestPrompt
 		}
 
-		sendHook := func(toolResultJSON string) {
+		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages []tools.Msg `json:"messages"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
-				return
+				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
 			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
 			if len(oneBotSegments) == 0 {
-				return
+				return fmt.Errorf("消息内容为空")
 			}
 			if event.MessageType == "group" {
 				oneBotSegments = wrapGroupReply(oneBotSegments, event)
@@ -350,10 +350,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				},
 				Echo: echo,
 			}
-			actionBytes, _ := json.Marshal(botAction)
-			if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 发送消息失败: %v", err))
+			ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout())
+			if err != nil {
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 消息发送未送达: action=%s retcode=%d err=%v", action, ackResp.RetCode, err))
+				reason := strings.TrimSpace(ackResp.Wording)
+				if reason == "" {
+					reason = strings.TrimSpace(ackResp.Message)
+				}
+				if reason == "" && ackResp.RetCode != 0 {
+					reason = fmt.Sprintf("retcode %d", ackResp.RetCode)
+				}
+				if reason == "" {
+					reason = err.Error()
+				}
+				return fmt.Errorf("%s", reason)
 			}
+			return nil
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
@@ -543,6 +555,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Message:  ackResp.Message,
 					Wording:  reason,
 				})
+				if engine != nil {
+					engine.TrimSession(session)
+				}
 			}
 			logs.Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 		}

@@ -429,13 +429,13 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			targetID = event.GroupID
 		}
 
-		sendHook := func(toolResultJSON string) {
+		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages []tools.Msg `json:"messages"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
-				return
+				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
 			for _, m := range toolOutput.Messages {
 				var attachments []core.Attachment
@@ -488,8 +488,10 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 				}
 				if err := conn.WriteJSON(action); err != nil {
 					logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
+					return err
 				}
 			}
+			return nil
 		}
 
 		runResult := engine.RunMessagesWithContext(messages, llm.RunContext{
