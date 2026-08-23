@@ -20,11 +20,23 @@ type groupCompactItem struct {
 	content   string
 }
 
+// SummaryGroup represents a mapping between a group summary and the messages/message IDs it summarizes.
+type SummaryGroup struct {
+	Summary        string   `json:"summary"`
+	MessageIDs     []string `json:"message_ids,omitempty"`
+	StartMessageID string   `json:"start_message_id,omitempty"`
+	EndMessageID   string   `json:"end_message_id,omitempty"`
+	StartIndex     int      `json:"start_index,omitempty"`
+	EndIndex       int      `json:"end_index,omitempty"`
+	Messages       []string `json:"messages,omitempty"`
+}
+
 // GroupContextSnapshot captures an atomic point-in-time view of both the
 // running summary and uncompacted recent messages from the same session state.
 type GroupContextSnapshot struct {
-	RunningSummary string
-	RecentMessages []string
+	RunningSummary string         `json:"running_summary"`
+	RecentMessages []string       `json:"recent_messages"`
+	SummaryGroups  []SummaryGroup `json:"summary_groups,omitempty"`
 }
 
 // GroupCompactSnapshot is an immutable batch sent to the asynchronous
@@ -33,6 +45,7 @@ type GroupContextSnapshot struct {
 type GroupCompactSnapshot struct {
 	Summary         string
 	Messages        []string
+	MessageIDs      []string
 	ThroughSequence uint64
 	Generation      uint64
 }
@@ -72,6 +85,7 @@ type SessionContext struct {
 	groupCompactBuffer     []groupCompactItem
 	groupCompactSequence   uint64
 	groupCompactGeneration uint64
+	groupSummaryGroups     []SummaryGroup
 	pendingTurns           [][]memory.PendingExtractionItem
 	extractionThreshold    int
 }
@@ -224,6 +238,7 @@ func (s *SessionContext) SnapshotGroupContext(limit int, maxChars int, excludeMe
 	return GroupContextSnapshot{
 		RunningSummary: s.groupCompactSummary,
 		RecentMessages: s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID),
+		SummaryGroups:  s.groupSummaryGroups,
 	}
 }
 
@@ -295,12 +310,15 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 		return GroupCompactSnapshot{}, false
 	}
 	items := make([]string, len(s.groupCompactBuffer))
+	msgIDs := make([]string, len(s.groupCompactBuffer))
 	for i, item := range s.groupCompactBuffer {
 		items[i] = item.content
+		msgIDs[i] = item.messageID
 	}
 	return GroupCompactSnapshot{
 		Summary:         s.groupCompactSummary,
 		Messages:        items,
+		MessageIDs:      msgIDs,
 		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
 		Generation:      s.groupCompactGeneration,
 	}, true
@@ -321,6 +339,22 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 	}
 
 	s.groupCompactSummary = summary
+
+	var firstID, lastID string
+	if len(snapshot.MessageIDs) > 0 {
+		firstID = snapshot.MessageIDs[0]
+		lastID = snapshot.MessageIDs[len(snapshot.MessageIDs)-1]
+	}
+	s.groupSummaryGroups = []SummaryGroup{
+		{
+			Summary:        summary,
+			MessageIDs:     snapshot.MessageIDs,
+			StartMessageID: firstID,
+			EndMessageID:   lastID,
+			Messages:       snapshot.Messages,
+		},
+	}
+
 	firstNew := 0
 	for firstNew < len(s.groupCompactBuffer) &&
 		s.groupCompactBuffer[firstNew].sequence <= snapshot.ThroughSequence {
@@ -341,6 +375,18 @@ func (s *SessionContext) GroupRunningSummary() string {
 	return s.groupCompactSummary
 }
 
+// SummaryGroups returns a copy of the current summary groups mappings.
+func (s *SessionContext) SummaryGroups() []SummaryGroup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.groupSummaryGroups) == 0 {
+		return nil
+	}
+	groups := make([]SummaryGroup, len(s.groupSummaryGroups))
+	copy(groups, s.groupSummaryGroups)
+	return groups
+}
+
 // SetGroupRunningSummary sets the running summary for this session under the lock.
 func (s *SessionContext) SetGroupRunningSummary(summary string) {
 	s.mu.Lock()
@@ -356,6 +402,7 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.groupCompactGeneration++
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
 	s.UpdatedAt = time.Now()
 }
 

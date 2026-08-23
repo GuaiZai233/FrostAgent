@@ -14,6 +14,7 @@ import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 import { renderPagination, attachPaginationEvents } from '../components/pagination';
+import { openPromptInspectorDialog } from '../components/prompt-inspector';
 
 export function mountLogsPage(container: HTMLElement): () => void {
   let isUnmounted = false;
@@ -215,6 +216,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
         const isSelected = selectedEntry?.id === entry.id;
         const levelBadge = logLevelBadgeClass(entry.level);
         const levelText = formatLogLevel(entry.level);
+        const hasPrompt = isPromptEntry(entry);
 
         return `
           <tr class="cursor-pointer transition-colors ${isSelected ? 'bg-muted' : ''}" data-id="${escapeHtml(
@@ -224,7 +226,16 @@ export function mountLogsPage(container: HTMLElement): () => void {
             <td>
               <span class="badge ${levelBadge} text-[11px] px-1.5 py-0">${escapeHtml(levelText)}</span>
             </td>
-            <td class="text-xs font-medium text-foreground">${escapeHtml(entry.source || '-')}</td>
+            <td class="text-xs font-medium text-foreground">
+              <div class="flex items-center gap-1.5">
+                <span>${escapeHtml(entry.source || '-')}</span>
+                ${
+                  hasPrompt
+                    ? `<span class="text-info" title="包含 LLM Prompt">${icon('sparkles', 'w-3 h-3')}</span>`
+                    : ''
+                }
+              </div>
+            </td>
             <td style="max-width: 22rem;">
               <button class="btn btn-ghost btn-sm text-left truncate block w-full p-0 font-normal hover:text-primary text-xs" data-action="view-summary" data-id="${escapeHtml(
                 entry.id,
@@ -293,6 +304,19 @@ export function mountLogsPage(container: HTMLElement): () => void {
     });
   }
 
+  function isPromptEntry(entry: LogEntry): boolean {
+    const src = (entry.source || '').toLowerCase();
+    const content = entry.requestBody || entry.summary || '';
+    return (
+      src === 'llm' ||
+      src === 'llm.request' ||
+      src.startsWith('llm') ||
+      content.includes('<recent_group_messages>') ||
+      content.includes('<group_running_summary>') ||
+      (content.startsWith('{') && content.includes('"messages"'))
+    );
+  }
+
   function renderDetail() {
     if (!selectedEntry) {
       detailContent.innerHTML = `
@@ -300,6 +324,9 @@ export function mountLogsPage(container: HTMLElement): () => void {
       `;
       return;
     }
+
+    const hasPrompt = isPromptEntry(selectedEntry);
+    const promptPayload = selectedEntry.requestBody || selectedEntry.summary || '';
 
     detailContent.innerHTML = `
       <div class="flex flex-col gap-3.5">
@@ -312,7 +339,19 @@ export function mountLogsPage(container: HTMLElement): () => void {
         </div>
 
         <div>
-          <p class="text-xs font-medium mb-1.5 text-muted">请求体 (Request Body)</p>
+          <div class="flex items-center justify-between gap-2 mb-1.5">
+            <p class="text-xs font-medium text-muted">请求体 (Request Body)</p>
+            ${
+              hasPrompt && promptPayload
+                ? `
+              <button class="btn btn-outline btn-sm text-[11px] h-6 px-2 text-info border-info/40 hover:bg-info-bg/30" id="detail-inspect-prompt-btn">
+                ${icon('sparkles', 'w-3 h-3')}
+                <span>Prompt Inspector</span>
+              </button>
+            `
+                : ''
+            }
+          </div>
           <pre class="card p-2.5 bg-muted text-xs font-mono whitespace-pre-wrap select-text leading-relaxed text-foreground" style="max-height: 14rem; overflow-y: auto;">${escapeHtml(
             selectedEntry.requestBody || '（无请求体）',
           )}</pre>
@@ -326,23 +365,46 @@ export function mountLogsPage(container: HTMLElement): () => void {
         </div>
       </div>
     `;
+
+    const inspectBtn = detailContent.querySelector<HTMLButtonElement>('#detail-inspect-prompt-btn');
+    inspectBtn?.addEventListener('click', () => {
+      openPromptInspectorDialog(promptPayload, `Prompt Inspector - ${selectedEntry?.source || 'LLM'}`);
+    });
   }
 
   function openSummaryDialog(entry: LogEntry) {
+    const hasPrompt = isPromptEntry(entry);
+    const promptPayload = entry.requestBody || entry.summary || '';
+
     openDialog({
       title: `日志摘要 - ${entry.source || '日志'}`,
       description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}`,
-      maxWidth: '36rem',
+      maxWidth: '38rem',
       bodyHtml: `
         <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${escapeHtml(entry.summary || '无摘要内容')}</div>
       `,
       footerHtml: `
+        ${
+          hasPrompt && promptPayload
+            ? `
+          <button class="btn btn-outline btn-sm text-info border-info/40 hover:bg-info-bg/30" id="log-summary-inspect-btn">
+            ${icon('sparkles', 'w-3.5 h-3.5')}
+            <span>Prompt Inspector</span>
+          </button>
+        `
+            : ''
+        }
         <button class="btn btn-outline btn-sm" id="log-summary-copy-btn">
           ${icon('copy', 'w-3.5 h-3.5')}
           <span>复制</span>
         </button>
       `,
       onMount: (dialogEl) => {
+        const inspectBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-inspect-btn');
+        inspectBtn?.addEventListener('click', () => {
+          openPromptInspectorDialog(promptPayload, `Prompt Inspector - ${entry.source || 'LLM'}`);
+        });
+
         const copyBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-copy-btn');
         copyBtn?.addEventListener('click', async () => {
           const logText = formatConsoleLog(entry);

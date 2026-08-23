@@ -586,3 +586,287 @@ dialog.dialog-modal::backdrop {
 .hover-bg:hover {
   background-color: var(--muted);
 }
+
+/* ==================== PROMPT INSPECTOR & SUMMARY GROUP ==================== */
+.prompt-inspector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.prompt-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.prompt-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.prompt-section-body {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--card);
+  overflow: hidden;
+}
+
+/* Message List Container */
+.group-messages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem;
+}
+
+/* Summary Group Wrapper */
+.summary-group-wrapper {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background-color: var(--summary-group-bg);
+  border: 1px solid var(--summary-group-border);
+  border-radius: var(--radius-md);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.summary-group-wrapper:hover,
+.summary-group-wrapper.is-hovered {
+  background-color: var(--summary-group-bg-hover);
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 2px 8px -2px rgba(59, 130, 246, 0.12);
+}
+
+.summary-group-messages {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Message Row Entry */
+.group-msg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  transition: background-color 0.12s ease;
+}
+
+.group-msg-row:last-child {
+  border-bottom: none;
+}
+
+.summary-group-wrapper .group-msg-row {
+  border-bottom-color: rgba(59, 130, 246, 0.08);
+}
+
+.group-msg-row.is-uncompacted {
+  background-color: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.375rem;
+}
+
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.msg-time {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.msg-sender {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.msg-id {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.msg-content {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--foreground);
+  word-break: break-word;
+}
+
+/* Auto-stretching Curly Brace Container */
+.summary-brace-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 2rem;
+  min-width: 2rem;
+  padding: 0.375rem 0.125rem;
+  cursor: pointer;
+  color: var(--summary-group-brace);
+  transition: color 0.15s ease;
+  user-select: none;
+}
+
+.summary-group-wrapper:hover .summary-brace-container,
+.summary-group-wrapper.is-hovered .summary-brace-container {
+  color: var(--summary-group-brace-hover);
+}
+
+.summary-brace-svg {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+.summary-brace-badge {
+  position: absolute;
+  right: -0.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--card);
+  border: 1px solid var(--summary-group-border);
+  border-radius: var(--radius-full);
+  padding: 0.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-xs);
+  color: var(--info);
+  pointer-events: none;
+}
+
+/* Floating Summary Card (Popover) */
+.summary-popover-card {
+  position: absolute;
+  left: calc(100% + 0.625rem);
+  top: 50%;
+  transform: translateY(-50%) scale(0.97);
+  width: 22rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 0.875rem;
+  z-index: 60;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+}
+
+.summary-group-wrapper:hover .summary-popover-card,
+.summary-group-wrapper.is-hovered .summary-popover-card,
+.summary-popover-card:hover,
+.summary-popover-card.is-active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(-50%) scale(1);
+}
+
+/* Left position when right side has collision */
+.summary-popover-card.position-left {
+  left: auto;
+  right: calc(100% + 0.625rem);
+}
+
+/* Bottom position fallback for mobile / narrow viewports */
+.summary-popover-card.position-bottom {
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  transform: translateY(0) scale(0.97);
+  width: 100%;
+  max-width: 100%;
+}
+
+.summary-group-wrapper:hover .summary-popover-card.position-bottom,
+.summary-group-wrapper.is-hovered .summary-popover-card.position-bottom,
+.summary-popover-card.position-bottom:hover,
+.summary-popover-card.position-bottom.is-active {
+  transform: translateY(0) scale(1);
+}
+
+.summary-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-popover-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.summary-popover-icon {
+  display: flex;
+  align-items: center;
+  color: var(--info);
+}
+
+.summary-popover-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.summary-popover-count {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 0.125rem 0.4375rem;
+  border-radius: var(--radius-full);
+}
+
+.summary-popover-body {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--foreground);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  .summary-popover-card {
+    position: static;
+    transform: none !important;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 0.5rem;
+    box-shadow: var(--shadow-sm);
+  }
+}
+

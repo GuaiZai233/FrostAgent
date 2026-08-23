@@ -61,10 +61,7 @@ func (s *Service) ListLogs(
 		}), nil
 	}
 
-	end := offset + pageSize
-	if end > total {
-		end = total
-	}
+	end := min(offset+pageSize, total)
 
 	var pbEntries []*v1.LogEntry
 	for i := offset; i < end; i++ {
@@ -129,7 +126,7 @@ func (s *Service) ClearLogs(
 
 // convertEntry maps internal LogEntry → proto LogEntry.
 func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
-	return &v1.LogEntry{
+	entry := &v1.LogEntry{
 		Id:        fmt.Sprintf("%d", e.Timestamp.UnixNano()),
 		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
 		Level:     toProtoLevel(e.Level),
@@ -137,6 +134,13 @@ func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 		Summary:   e.Content,
 		HasDetail: strings.TrimSpace(e.Content) != "",
 	}
+	switch e.Category {
+	case logspkg.LLM_REQUEST:
+		entry.RequestBody = e.Content
+	case logspkg.LLM_RESPONSE:
+		entry.ResponseBody = e.Content
+	}
+	return entry
 }
 
 // levelPasses checks whether an internal Level meets the minimum proto LogLevel.

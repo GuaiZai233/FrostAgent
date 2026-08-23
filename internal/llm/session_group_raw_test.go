@@ -153,3 +153,46 @@ func TestSnapshotGroupContext_RingBufferOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotGroupContext_SummaryGroups(t *testing.T) {
+	s := &SessionContext{}
+	s.AppendGroupCompactMessage("UserA: 路线定了吗？", 20, "msg_1")
+	s.AppendGroupCompactMessage("UserB: 推荐走龙脊线", 20, "msg_2")
+	s.AppendGroupCompactMessage("UserA: 周六上午9点集合", 20, "msg_3")
+
+	compactSnap, ready := s.SnapshotGroupCompact(3)
+	if !ready {
+		t.Fatalf("expected compact snapshot to be ready")
+	}
+	if len(compactSnap.MessageIDs) != 3 || compactSnap.MessageIDs[0] != "msg_1" || compactSnap.MessageIDs[2] != "msg_3" {
+		t.Fatalf("unexpected message IDs in snapshot: %v", compactSnap.MessageIDs)
+	}
+
+	summaryText := "群里确认路线为龙脊线，集合时间为周六上午9点。"
+	ok := s.CommitGroupCompact(compactSnap, summaryText)
+	if !ok {
+		t.Fatalf("expected CommitGroupCompact to succeed")
+	}
+
+	// Now append a new uncompacted message
+	s.AppendGroupCompactMessage("UserC: 我也去！", 20, "msg_4")
+
+	snap := s.SnapshotGroupContext(10, 10000, "")
+	if snap.RunningSummary != summaryText {
+		t.Errorf("expected running summary %q, got %q", summaryText, snap.RunningSummary)
+	}
+	if len(snap.RecentMessages) != 1 || snap.RecentMessages[0] != "UserC: 我也去！" {
+		t.Errorf("expected 1 recent uncompacted message, got %v", snap.RecentMessages)
+	}
+	if len(snap.SummaryGroups) != 1 {
+		t.Fatalf("expected 1 summary group, got %d", len(snap.SummaryGroups))
+	}
+	group := snap.SummaryGroups[0]
+	if group.Summary != summaryText {
+		t.Errorf("expected group summary %q, got %q", summaryText, group.Summary)
+	}
+	if len(group.MessageIDs) != 3 || group.StartMessageID != "msg_1" || group.EndMessageID != "msg_3" {
+		t.Errorf("unexpected summary group metadata: %+v", group)
+	}
+}
+
