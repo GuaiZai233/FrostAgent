@@ -46,7 +46,8 @@
   - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
 - **角色感知与出站成功摄入 (Role-Aware Compaction & Send-Success Ingestion)**：
   - 消息角色显式区分：原消息进入缓冲区时显式附带 `[user] <name> (<id>): <content>` 与 `[assistant] <bot_name>: <content>` 标识，杜绝角色伪造与身份混淆；
-  - 出站成功门禁 (Send-Success Gating)：机器人自身回复仅在出站 WebSocket 发送成功（`WriteMessage` / `WriteJSON` 返回 `nil`）后才摄入 `groupCompactBuffer`；发送失败、中间工具调用（`sendHook`）、内部推理与草稿绝不摄入，杜绝网络异常与未发出内容污染群聊长期摘要；
+  - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。机器人回复发送后必须通过 `SendActionAndWait` 等待 OneBot 等平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；
+  - 发送失败与防脑补隔离 (Delivery Failure Context)：当平台返回错误码（如禁言、风控、参数非法）、ACK 超时或传输层断开时，系统坚决不向 `Session.History` 与 `groupCompactBuffer` 提交该 assistant 消息，保留原始 user 输入，并在会话中记录瞬时 `DeliveryFailure`。在下一轮对话生成时，以一次性瞬态方式向大模型注入 `<delivery_context>`（包含平台、错误原因与 `Do not assume the user saw or received that response.` 指令）告知上次发送未送达，并在使用后原子清空，杜绝机器人“自以为发出了其实被屏蔽”的平行世界幻觉；
   - 压缩提示词边界与事实隔离：提示词明确界定 `[assistant]` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
   - Visual Inspector 角色渲染：Web 控制台 Prompt 检查组件支持结构化解析 `[user]` / `[assistant]` 前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮。
 - **未压缩原消息即时注入 (`recent_group_messages`)**：

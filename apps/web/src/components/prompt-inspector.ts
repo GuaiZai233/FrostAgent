@@ -36,12 +36,13 @@ export interface ParsedPrompt {
   responseContext?: string;
   systemContext?: string;
   replyContext?: string;
+  deliveryContext?: string;
   raw: string;
   hasGroupMessages: boolean;
 }
 
 /**
- * Parses a single message line into time, sender, id, and content.
+ * Parses a single message line into role, time, sender, id, and content.
  */
 export function parseMessageLine(line: string): GroupMessageItem {
   if (!line || typeof line !== 'string') {
@@ -50,45 +51,66 @@ export function parseMessageLine(line: string): GroupMessageItem {
 
   let text = line.trim();
   let role: 'user' | 'assistant' | undefined = undefined;
-
-  // 1. Check for leading [user] / [assistant] tag
-  const roleMatch = text.match(/^\[(user|assistant)\]\s*/i);
-  if (roleMatch) {
-    role = roleMatch[1].toLowerCase() as 'user' | 'assistant';
-    text = text.slice(roleMatch[0].length);
-  }
-
-  // 2. Check if timestamp comes next: [10:00:00]
   let time: string | undefined = undefined;
-  const timeMatch = text.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*/);
-  if (timeMatch) {
-    time = timeMatch[1];
-    text = text.slice(timeMatch[0].length);
+  let id: string | undefined = undefined;
 
-    // Also check if [user]/[assistant] tag was placed AFTER timestamp: [10:00:00] [assistant]
-    if (!role) {
-      const innerRoleMatch = text.match(/^\[(user|assistant)\]\s*/i);
-      if (innerRoleMatch) {
-        role = innerRoleMatch[1].toLowerCase() as 'user' | 'assistant';
-        text = text.slice(innerRoleMatch[0].length);
+  // Extract role, time, id, and system prefix tags in any order at the beginning of the line
+  let matchedTag = true;
+  while (matchedTag) {
+    matchedTag = false;
+    const tagMatch = text.match(/^\[([^\]]+)\]\s*/);
+    if (!tagMatch) break;
+
+    const tagContent = tagMatch[1].trim();
+    if (/^(?:user|assistant)$/i.test(tagContent)) {
+      if (!role) {
+        role = tagContent.toLowerCase() as 'user' | 'assistant';
       }
+      text = text.slice(tagMatch[0].length);
+      matchedTag = true;
+    } else if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
+      if (!time) {
+        time = tagContent;
+      }
+      text = text.slice(tagMatch[0].length);
+      matchedTag = true;
+    } else if (/^(?:群消息|group|群聊)$/i.test(tagContent)) {
+      text = text.slice(tagMatch[0].length);
+      matchedTag = true;
+    } else if (/^(?:msg_|id_)[a-zA-Z0-9_-]+$/i.test(tagContent)) {
+      if (!id) {
+        id = tagContent;
+      }
+      text = text.slice(tagMatch[0].length);
+      matchedTag = true;
     }
   }
 
-  // 3. Sender / ID / Content extraction
+  // Sender / ID / Content extraction
   // Handles:
-  // - 张三 (123456) [msg_1]: ...
-  // - 霜降 [msg_2]: ...
-  // - 张三 (123456): ...
-  // - 霜降: ...
+  // - 怪哉GuaiZai (3127306807): 笨笨
+  // - 霜降狐: 嗷呜主人...
+  // - 张三 (123456) [msg_1]: 周末爬山路线定了吗？
+  // - 霜降 [msg_2]: 好的
   const senderMatch = text.match(
-    /^([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
+    /^([^:\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*([\s\S]*)$/,
   );
   if (senderMatch) {
-    const sender = senderMatch[1].trim();
+    let sender = senderMatch[1].trim();
     const senderId = senderMatch[2]?.trim();
-    const id = senderMatch[3]?.trim();
-    const content = senderMatch[4];
+    if (!id && senderMatch[3]) {
+      id = senderMatch[3].trim();
+    }
+    let content = senderMatch[4].trim();
+
+    // In case sender still has [user]/[assistant] inside it
+    const innerSenderRole = sender.match(/^\[(user|assistant)\]\s*/i);
+    if (innerSenderRole) {
+      if (!role) {
+        role = innerSenderRole[1].toLowerCase() as 'user' | 'assistant';
+      }
+      sender = sender.slice(innerSenderRole[0].length).trim();
+    }
 
     // Infer role if not explicitly tagged
     if (!role) {
@@ -98,6 +120,9 @@ export function parseMessageLine(line: string): GroupMessageItem {
         role = 'user';
       }
     }
+
+    // Strip any residual role prefix from content
+    content = content.replace(/^\[(user|assistant)\]\s*/i, '');
 
     return {
       role,
@@ -111,9 +136,20 @@ export function parseMessageLine(line: string): GroupMessageItem {
   }
 
   // Fallback for plain message line
+  if (!role) {
+    if (/^(?:assistant|bot|霜降|frostagent)/i.test(text)) {
+      role = 'assistant';
+    } else {
+      role = 'user';
+    }
+  }
+  // Strip any residual role prefix from content
+  text = text.replace(/^\[(user|assistant)\]\s*/i, '');
+
   return {
     role,
     time,
+    id,
     content: text,
     rawText: line,
   };
@@ -265,6 +301,13 @@ export function parsePrompt(raw: string): ParsedPrompt {
     result.replyContext = replyContextMatch[1].trim();
   }
 
+  const deliveryContextMatch = textToParse.match(
+    /<delivery_context>([\s\S]*?)<\/delivery_context>/i,
+  );
+  if (deliveryContextMatch) {
+    result.deliveryContext = deliveryContextMatch[1].trim();
+  }
+
   const summaryGroupsMatch = textToParse.match(
     /<summary_groups>([\s\S]*?)<\/summary_groups>/i,
   );
@@ -281,7 +324,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
 
   // Extract User Message if formatted with header
   const userMsgMatch = textToParse.match(
-    /(?:^|\n)(?:User Message|User|用户消息):\s*([\s\S]*?)(?=\n\s*<(?:group_running_summary|recent_group_messages|response_context|system_context|reply_context)|$)/i,
+    /(?:^|\n)(?:User Message|User|用户消息):\s*([\s\S]*?)(?=\n\s*<(?:group_running_summary|recent_group_messages|response_context|system_context|reply_context|delivery_context)|$)/i,
   );
   if (userMsgMatch) {
     result.userMessage = userMsgMatch[1].trim();
@@ -507,6 +550,25 @@ export function renderPromptInspector(
                 ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false)).join('')}
               </div>
             </div>
+          </div>
+        `
+            : ''
+        }
+
+        <!-- Delivery Context (if previous assistant message failed to deliver) -->
+        ${
+          parsed.deliveryContext
+            ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">
+                <span class="text-amber-500 flex items-center">${icon('alert_circle', 'w-3.5 h-3.5')}</span>
+                <span>未送达上下文 (delivery_context)</span>
+              </div>
+            </div>
+            <div class="card p-3 text-xs leading-relaxed select-text bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200 whitespace-pre-wrap">${escapeHtml(
+              parsed.deliveryContext,
+            )}</div>
           </div>
         `
             : ''
@@ -757,6 +819,8 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';
+  const defaultSender = isAssistant ? '霜降' : '用户';
+  const displaySender = msg.sender || defaultSender;
 
   return `
     <div class="group-msg-row ${uncompactedClass} ${roleClass}" ${msg.id ? `data-msg-id="${escapeHtml(msg.id)}"` : ''}>
@@ -764,10 +828,10 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
         ${
           isAssistant
             ? `<span class="badge badge-purple text-[10px] py-0 px-1 font-medium">Assistant / Bot</span>`
-            : ''
+            : `<span class="badge badge-outline text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
         ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
-        <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(msg.sender || (isAssistant ? '霜降' : '用户'))}</span>
+        <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(displaySender)}</span>
         ${
           msg.senderId
             ? `<span class="text-[10px] text-muted font-mono">(${escapeHtml(msg.senderId)})</span>`

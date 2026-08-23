@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/model"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +13,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const replyLookupTimeout = time.Second
+const (
+	replyLookupTimeout      = time.Second
+	defaultActionACKTimeout = 10 * time.Second
+)
+
+func actionACKTimeout() time.Duration {
+	if s := strings.TrimSpace(os.Getenv("ONEBOT_ACTION_TIMEOUT")); s != "" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultActionACKTimeout
+}
 
 type oneBotAPIResponse struct {
 	PostType string          `json:"post_type"`
@@ -22,6 +35,70 @@ type oneBotAPIResponse struct {
 	Echo     json.RawMessage `json:"echo"`
 	Message  string          `json:"message"`
 	Wording  string          `json:"wording"`
+}
+
+// SendActionAndWait sends a OneBot action and waits for the matching ACK response (via echo).
+// It distinguishes between websocket write failures, platform ACK timeout, and platform errors (retcode != 0).
+func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time.Duration) (oneBotAPIResponse, error) {
+	if c == nil || c.conn == nil {
+		return oneBotAPIResponse{}, fmt.Errorf("websocket connection is nil")
+	}
+	if timeout <= 0 {
+		timeout = defaultActionACKTimeout
+	}
+
+	echo, responseChannel := c.registerActionRequest(action.Action, action.Echo)
+	action.Echo = echo
+
+	actionBytes, err := json.Marshal(action)
+	if err != nil {
+		c.clearMessageRequest(echo, responseChannel)
+		return oneBotAPIResponse{}, fmt.Errorf("marshal action failed: %w", err)
+	}
+
+	if err := c.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+		c.clearMessageRequest(echo, responseChannel)
+		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", err)
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case response := <-responseChannel:
+		if response.RetCode != 0 || (response.Status != "" && response.Status != "ok") {
+			detail := strings.TrimSpace(response.Wording)
+			if detail == "" {
+				detail = strings.TrimSpace(response.Message)
+			}
+			if detail == "" {
+				detail = fmt.Sprintf("retcode=%d", response.RetCode)
+			}
+			return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
+		}
+		return response, nil
+	case <-timer.C:
+		c.clearMessageRequest(echo, responseChannel)
+		return oneBotAPIResponse{}, fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
+	}
+}
+
+func (c *wsConnection) registerActionRequest(actionName, existingEcho string) (string, chan oneBotAPIResponse) {
+	c.messageMu.Lock()
+	defer c.messageMu.Unlock()
+	if c.pendingMessage == nil {
+		c.pendingMessage = make(map[string]chan oneBotAPIResponse)
+	}
+	c.nextMessageEcho++
+	var echo string
+	if existingEcho != "" && !strings.HasPrefix(existingEcho, "echo_") {
+		echo = existingEcho
+	} else {
+		echo = fmt.Sprintf("frost_action_%s_%d", actionName, c.nextMessageEcho)
+	}
+	responseChannel := make(chan oneBotAPIResponse, 1)
+	c.pendingMessage[echo] = responseChannel
+	return echo, responseChannel
 }
 
 type resolvedReplyContext struct {

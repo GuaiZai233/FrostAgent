@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"sort"
@@ -71,6 +72,39 @@ func (t *SessionTurn) Done() {
 	}
 }
 
+// DeliveryFailure records a transient failure when an assistant response could not be delivered to the platform.
+type DeliveryFailure struct {
+	Platform string `json:"platform"`
+	Action   string `json:"action"`
+	RetCode  int    `json:"retcode"`
+	Message  string `json:"message"`
+	Wording  string `json:"wording"`
+}
+
+// FormatDeliveryContext renders the DeliveryFailure as an XML tag for prompt injection.
+func (f *DeliveryFailure) FormatDeliveryContext() string {
+	if f == nil {
+		return ""
+	}
+	reason := strings.TrimSpace(f.Wording)
+	if reason == "" {
+		reason = strings.TrimSpace(f.Message)
+	}
+	if reason == "" && f.RetCode != 0 {
+		reason = fmt.Sprintf("retcode %d", f.RetCode)
+	}
+	if reason == "" {
+		reason = "unknown delivery error"
+	}
+
+	platform := strings.TrimSpace(f.Platform)
+	if platform == "" {
+		platform = "onebot"
+	}
+
+	return fmt.Sprintf("<delivery_context>\nYour previous assistant response was not delivered to the user/group.\nPlatform: %s\nReason: %s\nDo not assume the user saw or received that response.\n</delivery_context>", platform, reason)
+}
+
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
 	ConversationID string
@@ -88,12 +122,38 @@ type SessionContext struct {
 	groupSummaryGroups     []SummaryGroup
 	pendingTurns           [][]memory.PendingExtractionItem
 	extractionThreshold    int
+	deliveryFailure        *DeliveryFailure
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
 	// memories). Empty until the first LLM request for this session.
 	lastSystemPrompt string
 	lastModelName    string
+}
+
+// SetDeliveryFailure records a transient delivery failure on the session.
+func (s *SessionContext) SetDeliveryFailure(failure DeliveryFailure) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deliveryFailure = &failure
+}
+
+// TakeDeliveryFailure atomically retrieves and clears the pending delivery failure.
+func (s *SessionContext) TakeDeliveryFailure() *DeliveryFailure {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deliveryFailure == nil {
+		return nil
+	}
+	f := s.deliveryFailure
+	s.deliveryFailure = nil
+	return f
 }
 
 // SetLastPromptTrace records the system prompt and model used in the most recent LLM call.
