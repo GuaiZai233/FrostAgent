@@ -199,7 +199,7 @@ function parseMessageLine(line: string): GroupMessageItem {
   // Regex 3: [10:00:00] 张三 (123456): 周末爬山路线定了吗？
   // Regex 4: [10:00:00] 张三: 周末爬山路线定了吗？
   const timeSenderIdMatch = line.match(
-    /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:\[\(\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_\-]+)\])?\s*:\s*(.*)$/,
+    /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
   );
   if (timeSenderIdMatch) {
     return {
@@ -217,7 +217,7 @@ function parseMessageLine(line: string): GroupMessageItem {
   // Regex 7: 张三 (123456): 周末爬山路线定了吗？
   // Regex 8: 张三: 周末爬山路线定了吗？
   const senderIdMatch = line.match(
-    /^([^:\[\(\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_\-]+)\])?\s*:\s*(.*)$/,
+    /^([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
   );
   if (senderIdMatch) {
     return {
