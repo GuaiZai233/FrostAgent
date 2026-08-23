@@ -51,9 +51,10 @@
 - **持久历史与临时请求上下文严格隔离 (Transient vs Durable Context)**：
   - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
   - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
-- **摘要分组显式关联与 Prompt Inspector 调试审查 (Summary Groups & Inspector Visualizer)**：
-  - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时显式记录已压缩总结所对应的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 Prompt 调试视图中输出，彻底消除前端文本模糊匹配；
-  - 结构化 Prompt Inspector：Web 控制台提供结构化 Prompt 审查器，条目化展示群聊历史消息（时间、发送者、ID、内容）；已摘要消息段视觉呈现统一浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示对应 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力，同时支持原始 Prompt 与结构化视图快速切换。
+- **摘要分组显式关联与会话级 Prompt Inspector (Summary Groups & Session Prompt Inspector)**：
+  - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时显式记录已压缩总结所对应的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出，彻底消除前端文本模糊匹配；
+  - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`)，采用分群聊会话视图（支持按 `aiohttp_group`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录与 Prompt 结构化预览；
+  - 结构化视觉呈现：条目化展示群聊历史消息（时间、发送者、ID、内容）；已摘要消息段视觉呈现统一浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示对应 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；同时支持最新 LLM 请求日志载入、自定义 Prompt 编辑输入与原始文本无缝切换。
 
 ### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
 

@@ -153,3 +153,60 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 		t.Errorf("expected summary for astrbot:group:999999 to be deleted")
 	}
 }
+
+func TestGetSessionContext(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to create group summary store: %v", err)
+	}
+
+	sessionManager := llm.NewSessionManager()
+	sessionManager.SetGroupSummaryStore(store)
+
+	engine := &llm.Engine{
+		SessionManager:    sessionManager,
+		GroupSummaryStore: store,
+		StartedAt:         time.Now(),
+		ModelName:         "test-model",
+	}
+
+	svc := New(engine, "test-v1")
+
+	sessionID := "aiohttp:group:100001"
+	sess := sessionManager.GetOrCreate(sessionID)
+	sess.AppendGroupCompactMessage("[09:30] User1 (101) [msg_1]: 早上好", 20)
+	sess.AppendGroupCompactMessage("[09:31] User2 (102) [msg_2]: 今天天气真好", 20)
+
+	snap, ok := sess.SnapshotGroupCompact(2)
+	if !ok {
+		t.Fatalf("expected SnapshotGroupCompact to succeed")
+	}
+	sess.CommitGroupCompact(snap, "群友互道早安并讨论天气很好")
+	sess.AppendGroupCompactMessage("[09:35] User3 (103) [msg_3]: 中午去吃什么？", 20)
+
+	resp, err := svc.GetSessionContext(context.Background(), connect.NewRequest(&v1.GetSessionContextRequest{
+		SessionId:   sessionID,
+		RecentLimit: 20,
+	}))
+	if err != nil {
+		t.Fatalf("GetSessionContext failed: %v", err)
+	}
+
+	if resp.Msg.SessionId != sessionID {
+		t.Errorf("expected session_id %s, got %s", sessionID, resp.Msg.SessionId)
+	}
+	if resp.Msg.RunningSummary != "群友互道早安并讨论天气很好" {
+		t.Errorf("expected running_summary %q, got %q", "群友互道早安并讨论天气很好", resp.Msg.RunningSummary)
+	}
+	if len(resp.Msg.SummaryGroups) != 1 {
+		t.Fatalf("expected 1 summary group, got %d", len(resp.Msg.SummaryGroups))
+	}
+	if resp.Msg.SummaryGroups[0].StartMessageId != "msg_1" || resp.Msg.SummaryGroups[0].EndMessageId != "msg_2" {
+		t.Errorf("unexpected summary group range: %v -> %v", resp.Msg.SummaryGroups[0].StartMessageId, resp.Msg.SummaryGroups[0].EndMessageId)
+	}
+	if len(resp.Msg.RecentMessages) != 1 {
+		t.Fatalf("expected 1 recent message, got %d", len(resp.Msg.RecentMessages))
+	}
+}

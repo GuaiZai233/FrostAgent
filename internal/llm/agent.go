@@ -494,8 +494,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			Tools:     modelTools,
 			MaxTokens: e.BillingConfig.MaxOutputTokens,
 		}
+		if reqBytes, mErr := json.Marshal(chatReq); mErr == nil {
+			logs.Info(logs.LLM_REQUEST, string(reqBytes))
+		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
+			logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			if billingActive && reservationID != "" {
 				rCtx, rCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
 				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
@@ -509,6 +513,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				Usage:         totalUsage,
 				Error:         err,
 			}
+		}
+
+		if respBytes, mErr := json.Marshal(resp); mErr == nil {
+			logs.Info(logs.LLM_RESPONSE, string(respBytes))
 		}
 
 		if resp.Usage != nil {

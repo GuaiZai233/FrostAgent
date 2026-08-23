@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -289,10 +290,17 @@ func (c *GroupCompactor) compact(
 		MaxTokens:   1024,
 		Temperature: 0.2,
 	}
+	if reqBytes, mErr := json.Marshal(request); mErr == nil {
+		logs.Info(logs.LLM_REQUEST, string(reqBytes))
+	}
 	response, err := c.provider.Chat(context.Background(), request)
 	if err != nil {
+		logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("群聊 running compact LLM调用失败 (%s): %v", owner, err))
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 失败 (%s): %v", owner, err))
 		return
+	}
+	if respBytes, mErr := json.Marshal(response); mErr == nil {
+		logs.Info(logs.LLM_RESPONSE, string(respBytes))
 	}
 	summary, ok := response.Message.Content.(string)
 	summary = strings.TrimSpace(summary)

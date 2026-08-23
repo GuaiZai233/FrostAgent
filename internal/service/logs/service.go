@@ -170,8 +170,16 @@ func matchesFilter(e logspkg.LogEntry, minLevel v1.LogLevel, sourceFilter string
 		return false
 	}
 	// 2. 来源/分类过滤
-	if sourceFilter != "" && string(e.Category) != sourceFilter {
-		return false
+	if sourceFilter != "" {
+		sf := strings.ToLower(sourceFilter)
+		cat := strings.ToLower(string(e.Category))
+		if sf == "llm" {
+			if !strings.HasPrefix(cat, "llm") {
+				return false
+			}
+		} else if cat != sf && string(e.Category) != sourceFilter {
+			return false
+		}
 	}
 	return true
 }

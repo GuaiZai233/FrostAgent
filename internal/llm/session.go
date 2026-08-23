@@ -210,6 +210,13 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize
 	if len(messageID) > 0 {
 		msgID = strings.TrimSpace(messageID[0])
 	}
+	if msgID == "" {
+		if start := strings.Index(content, "[msg_"); start != -1 {
+			if end := strings.Index(content[start:], "]"); end != -1 {
+				msgID = content[start+1 : start+end]
+			}
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -4,6 +4,8 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -209,6 +211,105 @@ func (s *Service) GetSessions(
 			Total:     int32(total),
 		},
 	}
+
+	return connect.NewResponse(resp), nil
+}
+
+// GetSessionContext returns the group session's active running summary, recent group chat messages,
+// summary groups mapping, and formatted prompt text.
+func (s *Service) GetSessionContext(
+	ctx context.Context,
+	req *connect.Request[v1.GetSessionContextRequest],
+) (*connect.Response[v1.GetSessionContextResponse], error) {
+	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	if sessionID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
+	}
+
+	limit := int(req.Msg.GetRecentLimit())
+	if limit <= 0 {
+		limit = 50
+	}
+
+	platform := derivePlatform(sessionID)
+	resp := &v1.GetSessionContextResponse{
+		SessionId: sessionID,
+		Platform:  platform,
+	}
+
+	var runningSummary string
+	var summaryGroups []llm.SummaryGroup
+	var recentMessages []string
+	var historyMsgs []*v1.SessionHistoryMessageProto
+
+	if s.engine.SessionManager != nil {
+		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				snap := sess.SnapshotGroupContext(limit, 100000, "")
+				runningSummary = snap.RunningSummary
+				summaryGroups = snap.SummaryGroups
+				recentMessages = snap.RecentMessages
+
+				sess.Lock()
+				for _, h := range sess.History {
+					contentStr := fmt.Sprintf("%v", h.Content)
+					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
+						Role:    h.Role,
+						Content: contentStr,
+					})
+				}
+				sess.Unlock()
+			}
+		}
+	}
+
+	// Fallback to durable summary store if active summary is empty
+	if runningSummary == "" && s.engine.GroupSummaryStore != nil {
+		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
+			runningSummary = rec.Summary
+		}
+	}
+
+	resp.RunningSummary = runningSummary
+	resp.RecentMessages = recentMessages
+	resp.History = historyMsgs
+
+	for _, g := range summaryGroups {
+		resp.SummaryGroups = append(resp.SummaryGroups, &v1.SummaryGroupInfoProto{
+			Summary:        g.Summary,
+			MessageIds:     g.MessageIDs,
+			StartMessageId: g.StartMessageID,
+			EndMessageId:   g.EndMessageID,
+			StartIndex:     int32(g.StartIndex),
+			EndIndex:       int32(g.EndIndex),
+			Messages:       g.Messages,
+		})
+	}
+
+	// Construct prompt text preview with XML tags
+	var promptBuilder strings.Builder
+	if runningSummary != "" {
+		promptBuilder.WriteString("<group_running_summary>\n")
+		promptBuilder.WriteString(runningSummary)
+		promptBuilder.WriteString("\n</group_running_summary>\n\n")
+	}
+	if len(recentMessages) > 0 {
+		promptBuilder.WriteString("<recent_group_messages>\n")
+		for _, msg := range recentMessages {
+			promptBuilder.WriteString(msg)
+			promptBuilder.WriteString("\n")
+		}
+		promptBuilder.WriteString("</recent_group_messages>\n\n")
+	}
+	if len(summaryGroups) > 0 {
+		if sgBytes, err := json.MarshalIndent(summaryGroups, "", "  "); err == nil {
+			promptBuilder.WriteString("<summary_groups>\n")
+			promptBuilder.WriteString(string(sgBytes))
+			promptBuilder.WriteString("\n</summary_groups>\n\n")
+		}
+	}
+	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
+	resp.PromptText = promptBuilder.String()
 
 	return connect.NewResponse(resp), nil
 }
