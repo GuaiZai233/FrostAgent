@@ -12,7 +12,6 @@ export interface GroupMessageItem {
   content: string;
   rawText: string;
   isSummarized?: boolean;
-  summaryIndex?: number;
 }
 
 export interface SummaryGroupInfo {
@@ -23,6 +22,7 @@ export interface SummaryGroupInfo {
   startIndex?: number;
   endIndex?: number;
   messages?: string[];
+  parsedMessages?: GroupMessageItem[];
 }
 
 export interface ParsedPrompt {
@@ -37,6 +37,109 @@ export interface ParsedPrompt {
   replyContext?: string;
   raw: string;
   hasGroupMessages: boolean;
+}
+
+/**
+ * Parses a single message line into time, sender, id, and content.
+ */
+export function parseMessageLine(line: string): GroupMessageItem {
+  if (!line || typeof line !== 'string') {
+    return { content: '', rawText: '' };
+  }
+
+  // Regex 1: [10:00:00] 张三 (123456) [msg_1]: 周末爬山路线定了吗？
+  // Regex 2: [10:00:00] 张三 [msg_1]: 周末爬山路线定了吗？
+  // Regex 3: [10:00:00] 张三 (123456): 周末爬山路线定了吗？
+  // Regex 4: [10:00:00] 张三: 周末爬山路线定了吗？
+  const timeSenderIdMatch = line.match(
+    /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
+  );
+  if (timeSenderIdMatch) {
+    return {
+      time: timeSenderIdMatch[1],
+      sender: timeSenderIdMatch[2].trim(),
+      senderId: timeSenderIdMatch[3]?.trim(),
+      id: timeSenderIdMatch[4]?.trim(),
+      content: timeSenderIdMatch[5],
+      rawText: line,
+    };
+  }
+
+  // Regex 5: 张三 (123456) [msg_1]: 周末爬山路线定了吗？
+  // Regex 6: 张三 [msg_1]: 周末爬山路线定了吗？
+  // Regex 7: 张三 (123456): 周末爬山路线定了吗？
+  // Regex 8: 张三: 周末爬山路线定了吗？
+  const senderIdMatch = line.match(
+    /^([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
+  );
+  if (senderIdMatch) {
+    return {
+      sender: senderIdMatch[1].trim(),
+      senderId: senderIdMatch[2]?.trim(),
+      id: senderIdMatch[3]?.trim(),
+      content: senderIdMatch[4],
+      rawText: line,
+    };
+  }
+
+  // Fallback for plain message line
+  return {
+    content: line,
+    rawText: line,
+  };
+}
+
+/**
+ * Builds a structured ParsedPrompt from backend GetSessionContext response.
+ */
+export function buildInspectorDataFromSessionContext(context: {
+  sessionId: string;
+  platform?: string;
+  runningSummary?: string;
+  recentMessages?: string[];
+  summaryGroups?: Array<{
+    summary: string;
+    messageIds?: string[];
+    startMessageId?: string;
+    endMessageId?: string;
+    startIndex?: number;
+    endIndex?: number;
+    messages?: string[];
+  }>;
+  promptText?: string;
+}): ParsedPrompt {
+  const summaryGroups: SummaryGroupInfo[] = (context.summaryGroups || []).map((g) => {
+    const rawMsgs = g.messages || [];
+    return {
+      summary: g.summary,
+      messageIds: g.messageIds,
+      startMessageId: g.startMessageId,
+      endMessageId: g.endMessageId,
+      startIndex: g.startIndex,
+      endIndex: g.endIndex,
+      messages: rawMsgs,
+      parsedMessages: rawMsgs.map((line) => {
+        const item = parseMessageLine(line);
+        item.isSummarized = true;
+        return item;
+      }),
+    };
+  });
+
+  const recentMessages: GroupMessageItem[] = (context.recentMessages || []).map((line) => {
+    const item = parseMessageLine(line);
+    item.isSummarized = false;
+    return item;
+  });
+
+  return {
+    raw: context.promptText || '',
+    runningSummary: context.runningSummary,
+    recentMessages,
+    summaryGroups,
+    hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.messages?.length ?? 0) > 0),
+    responseContext: `当前会话: ${context.sessionId}\n平台: ${context.platform || 'unknown'}`,
+  };
 }
 
 /**
@@ -152,7 +255,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
     result.userMessage = textToParse;
   }
 
-  // 3. Extract and parse recent_group_messages
+  // 3. Extract and parse recent_group_messages (these are UNCOMPACTED recent messages)
   const recentMessagesMatch = textToParse.match(
     /<recent_group_messages>([\s\S]*?)<\/recent_group_messages>/i,
   );
@@ -176,125 +279,27 @@ export function parsePrompt(raw: string): ParsedPrompt {
       }
 
       const item = parseMessageLine(line);
+      item.isSummarized = false;
       parsedItems.push(item);
     }
 
     result.recentMessages = parsedItems;
   }
 
-  // 4. Map messages to summary groups
-  if (result.recentMessages.length > 0) {
-    mapMessagesToSummaryGroups(result);
-  }
+  // 4. Ensure each summaryGroup has its messages parsed
+  result.summaryGroups.forEach((group) => {
+    if (!group.parsedMessages) {
+      if (group.messages && group.messages.length > 0) {
+        group.parsedMessages = group.messages.map((line) => {
+          const item = parseMessageLine(line);
+          item.isSummarized = true;
+          return item;
+        });
+      }
+    }
+  });
 
   return result;
-}
-
-/**
- * Parses a single message line into time, sender, id, and content.
- */
-function parseMessageLine(line: string): GroupMessageItem {
-  // Regex 1: [10:00:00] 张三 (123456) [msg_1]: 周末爬山路线定了吗？
-  // Regex 2: [10:00:00] 张三 [msg_1]: 周末爬山路线定了吗？
-  // Regex 3: [10:00:00] 张三 (123456): 周末爬山路线定了吗？
-  // Regex 4: [10:00:00] 张三: 周末爬山路线定了吗？
-  const timeSenderIdMatch = line.match(
-    /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
-  );
-  if (timeSenderIdMatch) {
-    return {
-      time: timeSenderIdMatch[1],
-      sender: timeSenderIdMatch[2].trim(),
-      senderId: timeSenderIdMatch[3]?.trim(),
-      id: timeSenderIdMatch[4]?.trim(),
-      content: timeSenderIdMatch[5],
-      rawText: line,
-    };
-  }
-
-  // Regex 5: 张三 (123456) [msg_1]: 周末爬山路线定了吗？
-  // Regex 6: 张三 [msg_1]: 周末爬山路线定了吗？
-  // Regex 7: 张三 (123456): 周末爬山路线定了吗？
-  // Regex 8: 张三: 周末爬山路线定了吗？
-  const senderIdMatch = line.match(
-    /^([^:([\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*(.*)$/,
-  );
-  if (senderIdMatch) {
-    return {
-      sender: senderIdMatch[1].trim(),
-      senderId: senderIdMatch[2]?.trim(),
-      id: senderIdMatch[3]?.trim(),
-      content: senderIdMatch[4],
-      rawText: line,
-    };
-  }
-
-  // Fallback for plain message line
-  return {
-    content: line,
-    rawText: line,
-  };
-}
-
-/**
- * Maps message items to summary groups using explicit IDs, index ranges, or fallback running summary.
- */
-function mapMessagesToSummaryGroups(result: ParsedPrompt) {
-  const { recentMessages, summaryGroups, runningSummary } = result;
-
-  if (summaryGroups.length > 0) {
-    // We have explicit summary groups from backend / trace data
-    summaryGroups.forEach((group, gIdx) => {
-      if (group.messageIds && group.messageIds.length > 0) {
-        const idSet = new Set(group.messageIds);
-        recentMessages.forEach((msg) => {
-          if (msg.id && idSet.has(msg.id)) {
-            msg.isSummarized = true;
-            msg.summaryIndex = gIdx;
-          }
-        });
-      } else if (
-        group.startIndex !== undefined &&
-        group.endIndex !== undefined &&
-        group.startIndex >= 0 &&
-        group.endIndex < recentMessages.length
-      ) {
-        for (let i = group.startIndex; i <= group.endIndex; i++) {
-          recentMessages[i].isSummarized = true;
-          recentMessages[i].summaryIndex = gIdx;
-        }
-      } else if (group.startMessageId || group.endMessageId) {
-        let inRange = !group.startMessageId;
-        for (const msg of recentMessages) {
-          if (group.startMessageId && msg.id === group.startMessageId) {
-            inRange = true;
-          }
-          if (inRange) {
-            msg.isSummarized = true;
-            msg.summaryIndex = gIdx;
-          }
-          if (group.endMessageId && msg.id === group.endMessageId) {
-            inRange = false;
-          }
-        }
-      }
-    });
-  } else if (runningSummary) {
-    // If only a single runningSummary exists without explicit sub-groups,
-    // all historical messages in this context window belong to this summary
-    result.summaryGroups = [
-      {
-        summary: runningSummary,
-        startIndex: 0,
-        endIndex: recentMessages.length - 1,
-        messageIds: recentMessages.map((m) => m.id).filter(Boolean) as string[],
-      },
-    ];
-    recentMessages.forEach((msg) => {
-      msg.isSummarized = true;
-      msg.summaryIndex = 0;
-    });
-  }
 }
 
 /**
@@ -303,7 +308,7 @@ function mapMessagesToSummaryGroups(result: ParsedPrompt) {
 export function renderPromptInspector(
   container: HTMLElement,
   dataOrRaw: ParsedPrompt | string,
-  options: { showRawToggle?: boolean } = {},
+  options: { showRawToggle?: boolean; title?: string } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw) : dataOrRaw;
   let viewMode: 'visual' | 'raw' = 'visual';
@@ -315,7 +320,7 @@ export function renderPromptInspector(
           <div class="prompt-section-header">
             <div class="prompt-section-title">
               <span class="text-primary flex items-center">${icon('code', 'w-4 h-4')}</span>
-              <span>原始 Prompt 内容</span>
+              <span>${options.title || '原始 Prompt 内容'}</span>
             </div>
             <div class="flex items-center gap-2">
               <button class="btn btn-ghost btn-sm" id="pi-copy-btn">
@@ -343,6 +348,11 @@ export function renderPromptInspector(
       return;
     }
 
+    const totalSummarizedMsgs = parsed.summaryGroups.reduce(
+      (acc, g) => acc + (g.parsedMessages?.length || g.messages?.length || 0),
+      0,
+    );
+
     container.innerHTML = `
       <div class="prompt-inspector-card">
         <!-- Top Toolbar / Badges -->
@@ -358,18 +368,18 @@ export function renderPromptInspector(
                 : ''
             }
             ${
-              parsed.recentMessages.length > 0
-                ? `<span class="badge badge-info text-xs">${parsed.recentMessages.length} 条群消息</span>`
+              parsed.summaryGroups.length > 0
+                ? `<span class="badge badge-outline text-xs text-info border-info/30 bg-info/5">${parsed.summaryGroups.length} 个摘要分组 (${totalSummarizedMsgs} 条历史)</span>`
                 : ''
             }
             ${
-              parsed.summaryGroups.length > 0
-                ? `<span class="badge badge-outline text-xs text-info border-info/30 bg-info/5">${parsed.summaryGroups.length} 个摘要分组</span>`
+              parsed.recentMessages.length > 0
+                ? `<span class="badge badge-info text-xs">${parsed.recentMessages.length} 条未压缩消息</span>`
                 : ''
             }
           </div>
           <div class="flex items-center gap-2">
-            <button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制完整 Prompt">
+            <button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制 Prompt">
               ${icon('copy', 'w-3.5 h-3.5')}
               <span>复制</span>
             </button>
@@ -405,21 +415,21 @@ export function renderPromptInspector(
             : ''
         }
 
-        <!-- Group Messages Section with Summary Groups and Curly Brackets -->
+        <!-- Section 1: Summarized History Groups (With Pale Blue Background & Right SVG Curly Brace) -->
         ${
-          parsed.hasGroupMessages && parsed.recentMessages.length > 0
+          parsed.summaryGroups.length > 0
             ? `
           <div class="prompt-section">
             <div class="prompt-section-header">
               <div class="prompt-section-title">
-                <span class="text-info flex items-center">${icon('users', 'w-3.5 h-3.5')}</span>
-                <span>群聊上下文消息 (recent_group_messages)</span>
+                <span class="text-info flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
+                <span>已压缩历史消息 (已滚动总结)</span>
               </div>
-              <span class="text-xs text-muted">悬停淡蓝色消息或右侧大括号查看摘要</span>
+              <span class="text-xs text-muted">悬停浅蓝消息行或右侧大括号查看摘要</span>
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${renderGroupMessagesWithSummary(parsed)}
+                ${renderSummaryGroups(parsed.summaryGroups)}
               </div>
             </div>
           </div>
@@ -427,9 +437,9 @@ export function renderPromptInspector(
             : ''
         }
 
-        <!-- Fallback Running Summary (if no group messages tag found but summary exists) -->
+        <!-- Section 2: Fallback Running Summary (If running summary exists but no explicit groups) -->
         ${
-          !parsed.hasGroupMessages && parsed.runningSummary
+          parsed.summaryGroups.length === 0 && parsed.runningSummary
             ? `
           <div class="prompt-section">
             <div class="prompt-section-header">
@@ -441,6 +451,28 @@ export function renderPromptInspector(
             <div class="card p-3 text-xs leading-relaxed select-text bg-info-bg/30 border-info-border/40 text-foreground whitespace-pre-wrap">${escapeHtml(
               parsed.runningSummary,
             )}</div>
+          </div>
+        `
+            : ''
+        }
+
+        <!-- Section 3: Pending / Uncompacted Recent Group Messages (Standard Background, No Braces) -->
+        ${
+          parsed.recentMessages.length > 0
+            ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">
+                <span class="text-primary flex items-center">${icon('users', 'w-3.5 h-3.5')}</span>
+                <span>当前未压缩消息 (recent_group_messages)</span>
+              </div>
+              <span class="text-xs text-muted">待进入下一次滚动压缩的最新群消息</span>
+            </div>
+            <div class="prompt-section-body">
+              <div class="group-messages-container">
+                ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false)).join('')}
+              </div>
+            </div>
           </div>
         `
             : ''
@@ -628,40 +660,15 @@ function positionPopover(wrapper: HTMLElement, popover: HTMLElement) {
 }
 
 /**
- * Renders messages broken down into summary groups and uncompacted rows.
+ * Renders all summary groups with their respective curly braces and hover popovers.
  */
-function renderGroupMessagesWithSummary(parsed: ParsedPrompt): string {
-  const { recentMessages, summaryGroups } = parsed;
-  const htmlParts: string[] = [];
-
-  let i = 0;
-  while (i < recentMessages.length) {
-    const current = recentMessages[i];
-
-    if (current.isSummarized && current.summaryIndex !== undefined) {
-      const gIdx = current.summaryIndex;
-      const groupInfo = summaryGroups[gIdx] || { summary: parsed.runningSummary || '' };
-
-      // Gather all consecutive messages belonging to this same summary group
-      const groupItems: GroupMessageItem[] = [];
-      while (
-        i < recentMessages.length &&
-        recentMessages[i].isSummarized &&
-        recentMessages[i].summaryIndex === gIdx
-      ) {
-        groupItems.push(recentMessages[i]);
-        i++;
-      }
-
-      htmlParts.push(renderSummaryGroupBlock(groupItems, groupInfo, gIdx));
-    } else {
-      // Individual uncompacted message row
-      htmlParts.push(renderSingleMessageRow(current, false));
-      i++;
-    }
-  }
-
-  return htmlParts.join('');
+function renderSummaryGroups(summaryGroups: SummaryGroupInfo[]): string {
+  return summaryGroups
+    .map((group, idx) => {
+      const messages = group.parsedMessages || (group.messages || []).map(parseMessageLine);
+      return renderSummaryGroupBlock(messages, group, idx);
+    })
+    .join('');
 }
 
 /**
@@ -749,11 +756,9 @@ export function openPromptInspectorDialog(raw: string, title = 'Prompt Inspector
     onMount: (dialogEl, close) => {
       const mountEl = dialogEl.querySelector<HTMLElement>('#dialog-prompt-inspector-mount');
       if (mountEl) {
-        renderPromptInspector(mountEl, raw, { showRawToggle: true });
+        renderPromptInspector(mountEl, raw, { showRawToggle: true, title });
       }
-
-      const closeBtn = dialogEl.querySelector<HTMLButtonElement>('#pi-dialog-close-btn');
-      closeBtn?.addEventListener('click', () => close());
+      dialogEl.querySelector('#pi-dialog-close-btn')?.addEventListener('click', close);
     },
   });
 }
