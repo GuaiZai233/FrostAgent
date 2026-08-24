@@ -181,9 +181,16 @@ func (e *Engine) RunMessagesWithContext(
 
 	// Persist the assembled system prompt so Session Context Inspector can show
 	// the real dynamically-built prompt (time + dialogue + memory) rather than a
-	// static reconstruction. Only written when a session can be resolved by owner.
-	if owner != "" && e.SessionManager != nil {
-		if sessCore, ok := e.SessionManager.Get(owner); ok {
+	// static reconstruction. SessionID is intentionally separate from the memory
+	// owner namespace (for example private:123 versus owner 123).
+	sessionID := strings.TrimSpace(runContext.SessionID)
+	if sessionID == "" {
+		// Backward compatibility for direct callers whose owner is also the
+		// session key. Adapters should always provide SessionID explicitly.
+		sessionID = owner
+	}
+	if sessionID != "" && e.SessionManager != nil {
+		if sessCore, ok := e.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*SessionContext); isSess {
 				if sysContent, ok := messages[0].Content.(string); ok {
 					sess.SetLastPromptTrace(sysContent, e.ModelName)

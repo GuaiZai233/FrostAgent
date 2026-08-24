@@ -367,6 +367,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
+			SessionID: historyKey(event),
 			Owner:     owner,
 			OwnerType: ownerType,
 			SendHook:  sendHook,
