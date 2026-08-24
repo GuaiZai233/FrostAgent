@@ -329,6 +329,136 @@ func TestAstrBotGroupMessage(t *testing.T) {
 	}
 }
 
+func TestAstrBotMentionOnlyUsesRecentGroupContext(t *testing.T) {
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	precedingEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mention_context",
+		UserID:      "usr_mention",
+		SenderName:  "用户A",
+		GroupID:     "grp_mention",
+		GroupName:   "提及测试群",
+		Content:     "今晚吃什么？",
+		Platform:    "astrbot",
+		MessageType: "group",
+		Timestamp:   time.Now().Unix(),
+	}
+	precedingData, _ := json.Marshal(precedingEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, precedingData); err != nil {
+		t.Fatalf("发送前置群聊消息失败: %v", err)
+	}
+
+	_, noopBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取前置消息 noop 失败: %v", err)
+	}
+	var noopAction Action
+	if err := json.Unmarshal(noopBytes, &noopAction); err != nil {
+		t.Fatalf("解析前置消息 noop 失败: %v", err)
+	}
+	if noopAction.Action != "noop" {
+		t.Fatalf("前置未唤醒消息期望 action=noop, 实际=%s", noopAction.Action)
+	}
+
+	mentionEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mention_only",
+		UserID:      "usr_mention",
+		SenderName:  "用户A",
+		GroupID:     "grp_mention",
+		GroupName:   "提及测试群",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	mentionData, _ := json.Marshal(mentionEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, mentionData); err != nil {
+		t.Fatalf("发送 mention-only 事件失败: %v", err)
+	}
+
+	_, replyBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 mention-only 回复失败: %v", err)
+	}
+	var replyAction Action
+	if err := json.Unmarshal(replyBytes, &replyAction); err != nil {
+		t.Fatalf("解析 mention-only 回复失败: %v", err)
+	}
+	if replyAction.Action != "send_message" {
+		t.Fatalf("mention-only 事件应触发回复, 实际 action=%s", replyAction.Action)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) == 0 {
+		provider.mu.Unlock()
+		t.Fatal("mention-only 事件应触发 LLM 请求")
+	}
+	lastRequest := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+
+	lastMessage := lastRequest.Messages[len(lastRequest.Messages)-1]
+	requestContent, _ := lastMessage.Content.(string)
+	if !strings.HasPrefix(requestContent, "User Message: \n\n") {
+		t.Fatalf("mention-only 事件不应伪造用户文本, 实际: %s", requestContent)
+	}
+	if !strings.Contains(requestContent, "今晚吃什么？") {
+		t.Fatalf("mention-only 请求应包含前置群聊上下文, 实际: %s", requestContent)
+	}
+	if !strings.Contains(requestContent, "<recent_group_messages>") {
+		t.Fatalf("mention-only 请求应包含 recent_group_messages, 实际: %s", requestContent)
+	}
+
+	const systemContextStart = "<system_context>\n"
+	start := strings.Index(requestContent, systemContextStart)
+	end := strings.Index(requestContent, "\n</system_context>")
+	if start == -1 || end <= start {
+		t.Fatalf("mention-only 请求缺少完整 system_context: %s", requestContent)
+	}
+	var systemContext map[string]any
+	if err := json.Unmarshal([]byte(requestContent[start+len(systemContextStart):end]), &systemContext); err != nil {
+		t.Fatalf("解析 mention-only system_context 失败: %v", err)
+	}
+	for _, key := range []string{"is_wake", "is_at", "mention_only"} {
+		if value, ok := systemContext[key].(bool); !ok || !value {
+			t.Errorf("system_context.%s 应为 true, 实际=%v", key, systemContext[key])
+		}
+	}
+	guidance, _ := systemContext["interaction_guidance"].(string)
+	if !strings.Contains(guidance, "recent_group_messages") {
+		t.Errorf("mention-only 指引应要求结合 recent_group_messages, 实际=%q", guidance)
+	}
+
+	groupContext := engine.SessionManager.
+		GetOrCreate("astrbot:group:grp_mention").
+		SnapshotGroupContext(10, 1000, "")
+	precedingMessageFound := false
+	for _, message := range groupContext.RecentStructuredMessages {
+		if strings.TrimSpace(message.Content) == "" || message.MessageID == mentionEvent.MessageID {
+			t.Fatalf("mention-only 空事件不应进入群聊 compact 历史: %+v", message)
+		}
+		if message.MessageID == precedingEvent.MessageID && message.Content == precedingEvent.Content {
+			precedingMessageFound = true
+		}
+	}
+	if !precedingMessageFound {
+		t.Fatalf("群聊 compact 历史应保留前置消息, 实际=%+v", groupContext.RecentStructuredMessages)
+	}
+}
+
 func TestAstrBotSendHook(t *testing.T) {
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
