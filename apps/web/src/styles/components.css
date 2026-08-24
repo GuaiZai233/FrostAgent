@@ -743,6 +743,11 @@ dialog.dialog-modal::backdrop {
   flex-wrap: wrap;
 }
 
+.msg-role-badge {
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 .msg-time {
   font-size: 0.6875rem;
   color: var(--muted-foreground);

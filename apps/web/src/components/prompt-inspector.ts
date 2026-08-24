@@ -872,8 +872,8 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
       <div class="msg-meta">
         ${
           isAssistant
-            ? `<span class="badge badge-purple text-[10px] py-0 px-1 font-medium">Assistant / Bot</span>`
-            : `<span class="badge badge-outline text-[10px] py-0 px-1 font-medium text-muted">User</span>`
+            ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium">Assistant / Bot</span>`
+            : `<span class="badge badge-outline msg-role-badge text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
         ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
         <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(displaySender)}</span>
