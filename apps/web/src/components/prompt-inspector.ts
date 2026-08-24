@@ -537,7 +537,7 @@ export function renderPromptInspector(
             : ''
         }
 
-        <!-- Section 1: Summarized History Groups (With Pale Blue Background & Right SVG Curly Brace) -->
+        <!-- Section 1: Latest summarized message batch and current compact content -->
         ${
           parsed.summaryGroups.length > 0
             ? `
@@ -547,7 +547,7 @@ export function renderPromptInspector(
                 <span class="text-info flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
                 <span>最新压缩批次 (最近一次滚动总结)</span>
               </div>
-              <span class="text-xs text-muted">悬停浅蓝消息行或右侧大括号查看批次处理后的累计摘要</span>
+              <span class="text-xs text-muted">在右侧卡片展开查看当前群聊 compact 内容</span>
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
@@ -578,7 +578,7 @@ export function renderPromptInspector(
             : ''
         }
 
-        <!-- Section 3: Pending / Uncompacted Recent Group Messages (Standard Background, No Braces) -->
+        <!-- Section 3: Pending / Uncompacted Recent Group Messages -->
         ${
           parsed.recentMessages.length > 0
             ? `
@@ -728,37 +728,6 @@ export function renderPromptInspector(
       render();
     });
 
-    // Attach summary group hover & collision handling
-    const wrappers = container.querySelectorAll<HTMLElement>('.summary-group-wrapper');
-    wrappers.forEach((wrapper) => {
-      const popover = wrapper.querySelector<HTMLElement>('.summary-popover-card');
-      if (!popover) return;
-
-      let leaveTimer: ReturnType<typeof setTimeout> | null = null;
-
-      const activate = () => {
-        if (leaveTimer) {
-          clearTimeout(leaveTimer);
-          leaveTimer = null;
-        }
-        wrapper.classList.add('is-hovered');
-        popover.classList.add('is-active');
-        positionPopover(wrapper, popover);
-      };
-
-      const deactivate = () => {
-        if (leaveTimer) clearTimeout(leaveTimer);
-        leaveTimer = setTimeout(() => {
-          wrapper.classList.remove('is-hovered');
-          popover.classList.remove('is-active');
-        }, 120);
-      };
-
-      wrapper.addEventListener('mouseenter', activate);
-      wrapper.addEventListener('mouseleave', deactivate);
-      popover.addEventListener('mouseenter', activate);
-      popover.addEventListener('mouseleave', deactivate);
-    });
   }
 
   render();
@@ -769,39 +738,7 @@ export function renderPromptInspector(
 }
 
 /**
- * Calculates popover positioning and prevents viewport edge collision.
- */
-function positionPopover(wrapper: HTMLElement, popover: HTMLElement) {
-  const isNarrowScreen = window.innerWidth <= 640;
-  if (isNarrowScreen) {
-    popover.classList.add('position-bottom');
-    popover.classList.remove('position-left');
-    return;
-  }
-
-  // Check right edge overflow
-  const wrapperRect = wrapper.getBoundingClientRect();
-  const popoverWidth = popover.offsetWidth || 352; // ~22rem
-  const spaceOnRight = window.innerWidth - wrapperRect.right;
-
-  if (spaceOnRight < popoverWidth + 24) {
-    const spaceOnLeft = wrapperRect.left;
-    if (spaceOnLeft >= popoverWidth + 24) {
-      popover.classList.add('position-left');
-      popover.classList.remove('position-bottom');
-    } else {
-      // Neither side fits well, position bottom
-      popover.classList.add('position-bottom');
-      popover.classList.remove('position-left');
-    }
-  } else {
-    popover.classList.remove('position-left');
-    popover.classList.remove('position-bottom');
-  }
-}
-
-/**
- * Renders all summary groups with their respective curly braces and hover popovers.
+ * Renders all summary groups with their current compact content.
  */
 function renderSummaryGroups(summaryGroups: SummaryGroupInfo[]): string {
   return summaryGroups
@@ -813,7 +750,7 @@ function renderSummaryGroups(summaryGroups: SummaryGroupInfo[]): string {
 }
 
 /**
- * Renders a single summary group block with right-side scalable curly brace and hover popover card.
+ * Renders a single summary group block with an expandable compact card.
  */
 function renderSummaryGroupBlock(
   messages: GroupMessageItem[],
@@ -824,35 +761,25 @@ function renderSummaryGroupBlock(
 
   return `
     <div class="summary-group-wrapper" data-group-index="${groupIdx}">
-      <!-- Message rows with light blue background -->
+      <!-- Latest compacted message batch -->
       <div class="summary-group-messages">
         ${rowsHtml}
       </div>
 
-      <!-- Auto-stretching SVG Curly Brace -->
-      <div class="summary-brace-container" title="悬停查看群聊摘要">
-        <svg class="summary-brace-svg" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true">
-          <path d="M 2,2 C 10,2 11,44 18,48 C 20,49.2 20,50.8 18,52 C 11,56 10,98 2,98"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.2"
-                stroke-linecap="round"
-                vector-effect="non-scaling-stroke" />
-        </svg>
-        <span class="summary-brace-badge" aria-hidden="true">${icon('sparkles', 'w-3 h-3')}</span>
-      </div>
-
-      <!-- Floating Summary Popover Card -->
-      <div class="summary-popover-card" role="tooltip" aria-hidden="true">
-        <div class="summary-popover-header">
-          <div class="summary-popover-title-wrap">
-            <span class="summary-popover-icon">${icon('sparkles', 'w-3.5 h-3.5')}</span>
-            <span class="summary-popover-title">批次处理后的累计摘要</span>
-          </div>
-          <span class="summary-popover-count">${messages.length} 条消息</span>
-        </div>
-        <div class="summary-popover-body select-text">${escapeHtml(group.summary || '暂无摘要内容')}</div>
-      </div>
+      <!-- Expandable current group compact content -->
+      <details class="summary-compact-card">
+        <summary class="summary-compact-card-header">
+          <span class="summary-compact-card-title-wrap">
+            <span class="summary-compact-card-icon">${icon('sparkles', 'w-3.5 h-3.5')}</span>
+            <span class="summary-compact-card-title">当前群聊 compact 内容</span>
+          </span>
+          <span class="summary-compact-card-meta">
+            <span>${messages.length} 条消息</span>
+            <span class="summary-compact-card-chevron" aria-hidden="true">${icon('chevron_down', 'w-3.5 h-3.5')}</span>
+          </span>
+        </summary>
+        <div class="summary-compact-card-body select-text">${escapeHtml(group.summary || '暂无 compact 内容')}</div>
+      </details>
     </div>
   `;
 }

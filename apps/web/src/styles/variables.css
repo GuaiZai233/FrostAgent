@@ -65,8 +65,6 @@
   --summary-group-bg: #f2f7fd;
   --summary-group-bg-hover: #e8f2fc;
   --summary-group-border: rgba(37, 99, 235, 0.18);
-  --summary-group-brace: #60a5fa;
-  --summary-group-brace-hover: #2563eb;
 
   /* Sidebar */
   --sidebar-bg: #fafafa;
@@ -141,8 +139,6 @@
   --summary-group-bg: rgba(59, 130, 246, 0.07);
   --summary-group-bg-hover: rgba(59, 130, 246, 0.13);
   --summary-group-border: rgba(59, 130, 246, 0.24);
-  --summary-group-brace: #60a5fa;
-  --summary-group-brace-hover: #93c5fd;
 
   /* Sidebar */
   --sidebar-bg: #0c0c0e;
