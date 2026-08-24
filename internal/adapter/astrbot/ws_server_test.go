@@ -661,6 +661,11 @@ func TestAstrBot_GroupRawContextAndDurableSeparation(t *testing.T) {
 
 	// 4. 验证持久化 Session History 并没有被污染
 	history := sess.Snapshot()
+	deadline := time.Now().Add(time.Second)
+	for len(history) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		history = sess.Snapshot()
+	}
 	if len(history) < 2 {
 		t.Fatalf("期望 session 至少包含 2 条消息，实际=%d", len(history))
 	}
