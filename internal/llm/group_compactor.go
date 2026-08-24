@@ -222,7 +222,55 @@ func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
 	if c.store != nil {
 		storeGeneration = c.store.Generation(owner)
 	}
-	go c.compact(session, owner, snapshot, storeGeneration)
+	go func() {
+		_ = c.compact(context.Background(), session, owner, snapshot, storeGeneration)
+	}()
+}
+
+// CompactNow immediately compacts every pending message for one active group,
+// bypassing the automatic batch threshold and cooldown. It waits until the
+// running summary has been committed before returning.
+func (c *GroupCompactor) CompactNow(
+	ctx context.Context,
+	session *SessionContext,
+	owner string,
+) (int, error) {
+	if c == nil || c.provider == nil || c.model == "" {
+		return 0, fmt.Errorf("group compactor is unavailable")
+	}
+	if session == nil || owner == "" {
+		return 0, fmt.Errorf("an active group session is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	key := session.ConversationID
+	c.mu.Lock()
+	if c.inflight[key] {
+		c.mu.Unlock()
+		return 0, fmt.Errorf("group compact is already in progress")
+	}
+
+	snapshot, ready := session.SnapshotGroupCompact(1)
+	if !ready {
+		c.mu.Unlock()
+		return 0, fmt.Errorf("there are no pending group messages to compact")
+	}
+
+	c.cancelScheduledLocked(key)
+	c.inflight[key] = true
+	c.lastRun[key] = time.Now()
+	c.mu.Unlock()
+
+	storeGeneration := uint64(0)
+	if c.store != nil {
+		storeGeneration = c.store.Generation(owner)
+	}
+	if err := c.compact(ctx, session, owner, snapshot, storeGeneration); err != nil {
+		return 0, err
+	}
+	return len(snapshot.Messages), nil
 }
 
 func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, delay time.Duration) {
@@ -260,11 +308,12 @@ func (c *GroupCompactor) cancelScheduledLocked(key string) {
 }
 
 func (c *GroupCompactor) compact(
+	ctx context.Context,
 	session *SessionContext,
 	owner string,
 	snapshot GroupCompactSnapshot,
 	storeGeneration uint64,
-) {
+) error {
 	succeeded := false
 	defer func() {
 		c.mu.Lock()
@@ -301,27 +350,28 @@ func (c *GroupCompactor) compact(
 		MaxTokens:   1024,
 		Temperature: 0.2,
 	}
-	response, err := c.provider.Chat(context.Background(), request)
+	response, err := c.provider.Chat(ctx, request)
 	if err != nil {
 		logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("群聊 running compact LLM调用失败 (%s): %v", owner, err))
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 失败 (%s): %v", owner, err))
-		return
+		return fmt.Errorf("group compact LLM call failed: %w", err)
 	}
 	summary, ok := response.Message.Content.(string)
 	summary = strings.TrimSpace(summary)
 	if !ok || summary == "" {
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 返回空总结 (%s)", owner))
-		return
+		return fmt.Errorf("group compact returned an empty summary")
 	}
 
 	if !session.CommitGroupCompact(snapshot, summary) {
 		logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
-		return
+		return fmt.Errorf("group compact result was invalidated")
 	}
 	logs.Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
+	return nil
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {

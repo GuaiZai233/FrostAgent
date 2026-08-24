@@ -12,6 +12,7 @@ import {
   type GetOverviewResponse,
   type GetSessionsResponse,
   type GetSessionContextResponse,
+  type CompactGroupContextResponse,
   type DeleteGroupSummaryResponse,
   type ListLogsResponse,
   type LogEntry,
@@ -86,6 +87,10 @@ export const api = {
       sessionId,
       recentLimit,
     });
+  },
+
+  compactGroupContext(sessionId: string): Promise<CompactGroupContextResponse> {
+    return botClient.compactGroupContext({ sessionId });
   },
 
   deleteGroupSummary(sessionId: string): Promise<DeleteGroupSummaryResponse> {

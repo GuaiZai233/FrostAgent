@@ -426,7 +426,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
 export function renderPromptInspector(
   container: HTMLElement,
   dataOrRaw: ParsedPrompt | string,
-  options: { showRawToggle?: boolean; title?: string } = {},
+  options: { showRawToggle?: boolean; title?: string; onCompact?: () => Promise<void> } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw) : dataOrRaw;
   let viewMode: 'visual' | 'raw' = 'visual';
@@ -542,10 +542,23 @@ export function renderPromptInspector(
           parsed.summaryGroups.length > 0
             ? `
           <div class="prompt-section">
-            <div class="prompt-section-header">
-              <div class="prompt-section-title">
+            <div class="prompt-section-header flex-wrap">
+              <div class="prompt-section-title flex-wrap">
                 <span class="text-info flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
                 <span>最新压缩批次 (最近一次滚动总结)</span>
+                ${
+                  options.onCompact
+                    ? `<button
+                        class="btn btn-outline btn-sm text-xs h-7 px-2.5 ml-1"
+                        id="pi-compact-now-btn"
+                        title="立即将当前未压缩消息合并到滚动总结"
+                        ${parsed.recentMessages.length === 0 ? 'disabled' : ''}
+                      >
+                        ${icon('play', 'w-3 h-3')}
+                        <span>立即 compact 上下文</span>
+                      </button>`
+                    : ''
+                }
               </div>
               <span class="text-xs text-muted">在右侧卡片展开查看当前群聊 compact 内容</span>
             </div>
@@ -726,6 +739,23 @@ export function renderPromptInspector(
     toggleBtn?.addEventListener('click', () => {
       viewMode = 'raw';
       render();
+    });
+
+    const compactBtn = container.querySelector<HTMLButtonElement>('#pi-compact-now-btn');
+    compactBtn?.addEventListener('click', async () => {
+      if (!options.onCompact || compactBtn.disabled) return;
+
+      compactBtn.disabled = true;
+      compactBtn.innerHTML = `<span class="spinner"></span><span>compact 中...</span>`;
+      try {
+        await options.onCompact();
+      } catch (err) {
+        toast.error('立即 compact 失败: ' + (err instanceof Error ? err.message : String(err)));
+        if (compactBtn.isConnected) {
+          compactBtn.disabled = false;
+          compactBtn.innerHTML = `${icon('play', 'w-3 h-3')}<span>立即 compact 上下文</span>`;
+        }
+      }
     });
 
   }

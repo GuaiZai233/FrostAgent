@@ -326,6 +326,50 @@ func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoPr
 	}
 }
 
+// CompactGroupContext immediately folds every pending message into the active
+// group's running summary and waits for the in-memory commit to complete.
+func (s *Service) CompactGroupContext(
+	ctx context.Context,
+	req *connect.Request[v1.CompactGroupContextRequest],
+) (*connect.Response[v1.CompactGroupContextResponse], error) {
+	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	if sessionID == "" || !isGroupSession(sessionID) {
+		return connect.NewResponse(&v1.CompactGroupContextResponse{
+			Error: "a group session_id is required",
+		}), nil
+	}
+	if s.engine.GroupCompactor == nil || s.engine.SessionManager == nil {
+		return connect.NewResponse(&v1.CompactGroupContextResponse{
+			Error: "group compactor is unavailable",
+		}), nil
+	}
+
+	sessCore, ok := s.engine.SessionManager.Get(sessionID)
+	if !ok {
+		return connect.NewResponse(&v1.CompactGroupContextResponse{
+			Error: "group session is not active",
+		}), nil
+	}
+	session, ok := sessCore.(*llm.SessionContext)
+	if !ok {
+		return connect.NewResponse(&v1.CompactGroupContextResponse{
+			Error: "group session context is unavailable",
+		}), nil
+	}
+
+	count, err := s.engine.GroupCompactor.CompactNow(ctx, session, sessionID)
+	if err != nil {
+		return connect.NewResponse(&v1.CompactGroupContextResponse{
+			Error: err.Error(),
+		}), nil
+	}
+	logs.Info(logs.SYSTEM, fmt.Sprintf("已手动 compact 群聊上下文 (%s, %d 条消息)", sessionID, count))
+	return connect.NewResponse(&v1.CompactGroupContextResponse{
+		Success:               true,
+		CompactedMessageCount: int32(count),
+	}), nil
+}
+
 // DeleteGroupSummary resets active compact state and removes its durable copy.
 func (s *Service) DeleteGroupSummary(
 	ctx context.Context,

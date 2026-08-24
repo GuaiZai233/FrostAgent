@@ -9,6 +9,7 @@ service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
+  rpc CompactGroupContext(CompactGroupContextRequest) returns (CompactGroupContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
@@ -48,6 +49,16 @@ message DeleteGroupSummaryRequest {
 message DeleteGroupSummaryResponse {
   bool success = 1;
   string error = 2;
+}
+
+message CompactGroupContextRequest {
+  string session_id = 1;
+}
+
+message CompactGroupContextResponse {
+  bool success = 1;
+  string error = 2;
+  int32 compacted_message_count = 3;
 }
 
 message GetSessionContextRequest {

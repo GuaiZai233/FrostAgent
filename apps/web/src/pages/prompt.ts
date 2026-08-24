@@ -307,7 +307,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
       currentPromptText = resp.promptText || '';
       const parsed = buildInspectorDataFromSessionContext(resp);
-      renderInspector(parsed, `会话上下文预览 (${escapeHtml(sessionId)})`);
+      renderInspector(parsed, `会话上下文预览 (${escapeHtml(sessionId)})`, sessionId);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
       toast.error('加载群聊上下文失败: ' + (err instanceof Error ? err.message : String(err)));
@@ -316,14 +316,31 @@ export function mountPromptPage(container: HTMLElement): () => void {
   }
 
   // 5. Render Inspector
-  function renderInspector(dataOrRaw: ParsedPrompt | string, title?: string) {
+  function renderInspector(dataOrRaw: ParsedPrompt | string, title?: string, sessionId?: string) {
     if (inspectorCleanup) {
       inspectorCleanup();
       inspectorCleanup = null;
     }
     const rawVal = typeof dataOrRaw === 'string' ? dataOrRaw : dataOrRaw.raw;
     rawInput.value = rawVal;
-    inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, { showRawToggle: true, title });
+    inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
+      showRawToggle: true,
+      title,
+      onCompact: sessionId
+        ? async () => {
+            const resp = await api.compactGroupContext(sessionId);
+            if (!resp.success) {
+              throw new Error(resp.error || '后端未能完成 compact');
+            }
+            if (isUnmounted || sessionId !== selectedSessionId) return;
+
+            await Promise.all([loadSessionContext(sessionId), loadSessions()]);
+            if (!isUnmounted) {
+              toast.success(`已 compact ${resp.compactedMessageCount} 条群消息`);
+            }
+          }
+        : undefined,
+    });
   }
 
   // 6. Render Clean Empty State
