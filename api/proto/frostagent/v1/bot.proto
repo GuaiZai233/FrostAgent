@@ -63,6 +63,16 @@ message SummaryGroupInfoProto {
   int32 start_index = 5;
   int32 end_index = 6;
   repeated string messages = 7;
+  repeated GroupMessageInfoProto structured_messages = 8;
+}
+
+message GroupMessageInfoProto {
+  string role = 1;
+  string sender = 2;
+  string sender_id = 3;
+  string content = 4;
+  string message_id = 5;
+  string time = 6;
 }
 
 message SessionHistoryMessageProto {
@@ -82,4 +92,5 @@ message GetSessionContextResponse {
   // Empty when no LLM request has occurred for this session yet.
   string system_prompt = 8;
   string model = 9;
+  repeated GroupMessageInfoProto recent_structured_messages = 10;
 }
