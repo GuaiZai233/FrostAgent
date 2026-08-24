@@ -130,6 +130,74 @@ func TestAstrBotPrivateMessage(t *testing.T) {
 	}
 }
 
+func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:   "call_silent",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      llm.StaySilentToolName,
+							Arguments: `{}`,
+						},
+					}},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "第二轮正常回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	staySilent := tools.StaySilentTool()
+	engine.ToolRegistry[staySilent.Name()] = staySilent
+	conn := newWSConn(nil)
+	privateEvent := func(messageID, text string) Event {
+		return Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   messageID,
+			UserID:      "usr_silent",
+			SenderName:  "SilentUser",
+			Content:     text,
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+	}
+
+	reply(privateEvent("msg_silent_1", "第一轮无需回复"), engine, conn)
+	firstHistory := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+	if len(firstHistory) != 1 || firstHistory[0].Role != "user" {
+		t.Fatalf("静默轮次应只保留 user message，实际=%+v", firstHistory)
+	}
+	if content, ok := firstHistory[0].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+		t.Fatal("静默轮次不应写入 AssistantSilentMarker")
+	}
+
+	reply(privateEvent("msg_silent_2", "第二轮请回复"), engine, conn)
+
+	history := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+	if len(history) != 3 {
+		t.Fatalf("期望历史为 user/user/assistant 三条，实际=%d: %+v", len(history), history)
+	}
+	wantRoles := []string{"user", "user", "assistant"}
+	for i, want := range wantRoles {
+		if history[i].Role != want {
+			t.Fatalf("history[%d] role 期望=%s，实际=%s", i, want, history[i].Role)
+		}
+		if content, ok := history[i].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+			t.Fatalf("history[%d] 不应包含静默标记", i)
+		}
+	}
+}
+
 func TestAstrBotGroupMessage(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
 	srv, _, wsURL := startWSTestServer(engine)
