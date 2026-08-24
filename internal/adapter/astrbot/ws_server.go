@@ -290,6 +290,13 @@ func shouldReply(event Event) bool {
 	return true
 }
 
+func isMentionOnlyInteraction(event Event) bool {
+	return event.MessageType == "group" &&
+		strings.TrimSpace(event.Content) == "" &&
+		len(event.Attachments) == 0 &&
+		event.IsAt
+}
+
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn) {
 	if turn != nil {
 		turn.Wait()
@@ -426,6 +433,13 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	if event.MessageType == "group" {
 		contextData["group_id"] = event.GroupID
 		contextData["group_name"] = event.GroupName
+		contextData["is_wake"] = event.IsWake
+		contextData["is_at"] = event.IsAt
+		mentionOnly := isMentionOnlyInteraction(event)
+		contextData["mention_only"] = mentionOnly
+		if mentionOnly {
+			contextData["interaction_guidance"] = "This is an explicit mention-only invitation to respond. Infer the relevant preceding discussion from group_running_summary and recent_group_messages; if no useful context exists, acknowledge naturally and ask what the sender needs."
+		}
 	}
 	contextBytes, _ := json.Marshal(contextData)
 
