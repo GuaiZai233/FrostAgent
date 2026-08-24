@@ -2341,6 +2341,12 @@ func TestWS_SendActionAndWait_Direct(t *testing.T) {
 						"echo":    act.Echo,
 					})
 					_ = c.WriteMessage(websocket.TextMessage, resp)
+				} else if act.Action == "test_missing_status" {
+					resp, _ := json.Marshal(map[string]any{
+						"retcode": 0,
+						"echo":    act.Echo,
+					})
+					_ = c.WriteMessage(websocket.TextMessage, resp)
 				}
 				// test_timeout: 不回复
 			}
@@ -2393,6 +2399,19 @@ func TestWS_SendActionAndWait_Direct(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timeout") {
 		t.Errorf("期望错误信息包含 timeout，实际: %v", err)
+	}
+
+	// 4. 缺失 status 的畸形 ACK 必须 fail-closed
+	_, err = ws.SendActionAndWait(model.OneBotAction{Action: "test_missing_status"}, 500*time.Millisecond)
+	if err == nil {
+		t.Fatalf("期望缺失 status 的 ACK 返回错误，实际无错误")
+	}
+}
+
+func TestExtractBotReplyText_MediaOnlyDoesNotReturnToolJSON(t *testing.T) {
+	mediaOnlyJSON := `{"messages":[{"type":"image","url":"https://example.com/image.png"}]}`
+	if got := extractBotReplyText(mediaOnlyJSON); got != "" {
+		t.Fatalf("expected media-only reply to produce no compact text, got %q", got)
 	}
 }
 
@@ -3037,5 +3056,4 @@ func TestWSGroupMessage_MultilineRoleSpoofingSafe(t *testing.T) {
 		t.Errorf("expected role 'assistant', got %q", botMsg.Role)
 	}
 }
-
 

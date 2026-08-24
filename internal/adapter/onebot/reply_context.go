@@ -66,7 +66,7 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 
 	select {
 	case response := <-responseChannel:
-		if response.RetCode != 0 || (response.Status != "" && response.Status != "ok") {
+		if response.RetCode != 0 || response.Status != "ok" {
 			detail := strings.TrimSpace(response.Wording)
 			if detail == "" {
 				detail = strings.TrimSpace(response.Message)

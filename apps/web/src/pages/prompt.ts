@@ -50,6 +50,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
   let searchQuery = '';
   let inspectorCleanup: (() => void) | null = null;
   let isEditorExpanded = false;
+  let sessionContextRequestSeq = 0;
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -290,6 +291,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
   // 4. Load Session Context
   async function loadSessionContext(sessionId: string) {
     if (isUnmounted) return;
+    const requestSeq = ++sessionContextRequestSeq;
     mountEl.innerHTML = `
       <div class="text-center text-muted p-12">
         <span class="spinner"></span>
@@ -299,13 +301,13 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
     try {
       const resp = await api.getSessionContext(sessionId, 60);
-      if (isUnmounted) return;
+      if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
 
       currentPromptText = resp.promptText || '';
       const parsed = buildInspectorDataFromSessionContext(resp);
       renderInspector(parsed, `会话上下文预览 (${escapeHtml(sessionId)})`);
     } catch (err) {
-      if (isUnmounted) return;
+      if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
       toast.error('加载群聊上下文失败: ' + (err instanceof Error ? err.message : String(err)));
       renderEmptyState();
     }
@@ -345,6 +347,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
     `;
 
     mountEl.querySelector<HTMLButtonElement>('#prompt-empty-load-sample-btn')?.addEventListener('click', () => {
+      sessionContextRequestSeq += 1;
       currentPromptText = SAMPLE_GROUP_PROMPT;
       renderInspector(currentPromptText, '示例 Prompt 检查');
       toast.success('已载入示例 Prompt');
@@ -353,6 +356,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
   // 8. Bind Events
   loadSampleBtn.addEventListener('click', () => {
+    sessionContextRequestSeq += 1;
     currentPromptText = SAMPLE_GROUP_PROMPT;
     renderInspector(currentPromptText, '示例 Prompt 检查');
     toast.success('已载入示例群聊 Prompt');
@@ -394,6 +398,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
       toast.info('输入为空');
       return;
     }
+    sessionContextRequestSeq += 1;
     currentPromptText = val;
     renderInspector(parsePrompt(currentPromptText), '自定义输入 Prompt');
     toast.success('已更新 Prompt 检查视图');

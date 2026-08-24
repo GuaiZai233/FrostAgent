@@ -118,6 +118,11 @@ func TestAstrBot_ExtractBotReplyText(t *testing.T) {
 	if got := extractBotReplyText(toolJSON); got != "第一段回复 第二段回复" {
 		t.Errorf("expected combined plain text, got %q", got)
 	}
+
+	mediaOnlyJSON := `{"messages":[{"type":"image","url":"https://example.com/image.png"}]}`
+	if got := extractBotReplyText(mediaOnlyJSON); got != "" {
+		t.Errorf("expected media-only reply to produce no compact text, got %q", got)
+	}
 }
 
 func TestAstrBot_CaptureGroupCompactMessage(t *testing.T) {

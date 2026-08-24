@@ -116,7 +116,9 @@ type groupCompactItem struct {
 	message  GroupCompactMessage
 }
 
-// SummaryGroup represents a mapping between a group summary and the messages/message IDs it summarizes.
+// SummaryGroup maps the latest compact batch to the cumulative running summary
+// produced after processing that batch. SessionContext retains only this latest
+// bounded batch mapping; it is not a complete archive of all summarized source messages.
 type SummaryGroup struct {
 	Summary        string                `json:"summary"`
 	MessageIDs     []string              `json:"message_ids,omitempty"`
@@ -131,9 +133,10 @@ type SummaryGroup struct {
 // GroupContextSnapshot captures an atomic point-in-time view of both the
 // running summary and uncompacted recent messages from the same session state.
 type GroupContextSnapshot struct {
-	RunningSummary string         `json:"running_summary"`
-	RecentMessages []string       `json:"recent_messages"`
-	SummaryGroups  []SummaryGroup `json:"summary_groups,omitempty"`
+	RunningSummary           string                `json:"running_summary"`
+	RecentMessages           []string              `json:"recent_messages"`
+	RecentStructuredMessages []GroupCompactMessage `json:"recent_structured_messages,omitempty"`
+	SummaryGroups            []SummaryGroup        `json:"summary_groups,omitempty"`
 }
 
 // GroupCompactSnapshot is an immutable batch sent to the asynchronous
@@ -435,12 +438,67 @@ func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize 
 func (s *SessionContext) SnapshotGroupContext(limit int, maxChars int, excludeMessageID string) GroupContextSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	recentMessages := s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID)
 
 	return GroupContextSnapshot{
-		RunningSummary: s.groupCompactSummary,
-		RecentMessages: s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID),
-		SummaryGroups:  s.groupSummaryGroups,
+		RunningSummary:           s.groupCompactSummary,
+		RecentMessages:           recentMessages,
+		RecentStructuredMessages: s.recentPendingStructuredGroupMessagesLocked(limit, maxChars, excludeMessageID),
+		SummaryGroups:            s.groupSummaryGroups,
 	}
+}
+
+// recentPendingStructuredGroupMessagesLocked returns the same bounded recent
+// message window as recentPendingGroupMessagesLocked while preserving trusted
+// role/sender metadata. Callers can serialize these records without flattening
+// untrusted multi-line content back into apparent chat-role boundaries.
+func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, maxChars int, excludeMessageID string) []GroupCompactMessage {
+	if limit <= 0 || maxChars <= 0 || len(s.groupCompactBuffer) == 0 {
+		return nil
+	}
+
+	excludeID := strings.TrimSpace(excludeMessageID)
+	selected := make([]GroupCompactMessage, 0, min(limit, len(s.groupCompactBuffer)))
+	totalChars := 0
+
+	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
+		item := s.groupCompactBuffer[i]
+		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
+			continue
+		}
+		if len(selected) >= limit {
+			break
+		}
+
+		message := item.message
+		displayLen := len([]rune(message.FormatDisplay()))
+		if totalChars >= maxChars {
+			break
+		}
+		if totalChars+displayLen > maxChars {
+			if len(selected) == 0 {
+				contentRunes := []rune(message.Content)
+				if maxChars < len(contentRunes) {
+					message.Content = string(contentRunes[:maxChars])
+				}
+				message.raw = ""
+				selected = append(selected, message)
+			}
+			break
+		}
+
+		totalChars += displayLen
+		selected = append(selected, message)
+	}
+
+	if len(selected) == 0 {
+		return nil
+	}
+	result := make([]GroupCompactMessage, len(selected))
+	for i, j := 0, len(selected)-1; j >= 0; i, j = i+1, j-1 {
+		result[i] = selected[j]
+	}
+	return result
 }
 
 // recentPendingGroupMessagesLocked extracts uncompacted messages while s.mu is already held.
@@ -550,6 +608,9 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 	for i, m := range snapshot.Messages {
 		formattedMsgs[i] = m.FormatDisplay()
 	}
+	// Keep one bounded mapping for the latest compact batch. The summary is the
+	// cumulative running summary after this batch, so callers must not present
+	// this mapping as the complete set of all historical source messages.
 	s.groupSummaryGroups = []SummaryGroup{
 		{
 			Summary:        summary,

@@ -52,16 +52,17 @@
   - Visual Inspector 角色渲染与正文不透明度保证：Web 控制台 Prompt 检查组件结构化解析角色前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮，同时保持用户原始正文的不透明度，绝不破坏性正则裁剪合法正文。
 - **未压缩原消息即时注入 (`recent_group_messages`)**：
   - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
+  - 注入主 Agent 时同样使用单行 JSONL 记录承载可信 `role` / `sender` 元数据，并将正文保留为不透明 `content` 字符串；正文中的换行和伪造角色标签不会再生成额外历史消息边界；
   - 自动通过 `messageID` 过滤当前轮次的触发消息，避免消息重复；
   - 包含明确的非可信上下文防注入安全隔离边界。
 - **持久历史与临时请求上下文严格隔离 (Transient vs Durable Context)**：
   - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
   - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
-  - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时显式记录已压缩总结所对应的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出，彻底消除前端文本模糊匹配；
+  - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
   - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
   - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
-  - 结构化视觉呈现：条目化展示群聊历史消息（时间、发送者、ID、内容）；已摘要消息段视觉呈现统一浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示对应 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
+  - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 
 ### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
 
