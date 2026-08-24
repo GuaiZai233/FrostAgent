@@ -60,6 +60,11 @@ type Client struct {
 
 const defaultHTTPTimeout = 120 * time.Second
 
+const (
+	staySilentFallbackToolName   = "stay_silent"
+	staySilentFallbackToolCallID = "fallback_stay_silent"
+)
+
 func NewClient(baseURL, apiKey string) *Client {
 	return NewClientWithTimeout(baseURL, apiKey, defaultHTTPTimeout)
 }
@@ -169,7 +174,36 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("API returned error: %s", openAIResp.Error.Message)
 	}
 
+	var usage *core.Usage
+	if openAIResp.Usage != nil {
+		usage = &core.Usage{
+			PromptTokens:     openAIResp.Usage.PromptTokens,
+			CompletionTokens: openAIResp.Usage.CompletionTokens,
+			TotalTokens:      openAIResp.Usage.TotalTokens,
+		}
+	}
+
 	if len(openAIResp.Choices) == 0 {
+		for _, tool := range req.Tools {
+			if tool.Name != staySilentFallbackToolName {
+				continue
+			}
+			logs.Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:   staySilentFallbackToolCallID,
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      tool.Name,
+							Arguments: "{}",
+						},
+					}},
+				},
+				Usage: usage,
+			}, nil
+		}
 		return nil, fmt.Errorf("no choices in response")
 	}
 
@@ -188,14 +222,6 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 				Arguments: tc.Function.Arguments,
 			},
 		})
-	}
-	var usage *core.Usage
-	if openAIResp.Usage != nil {
-		usage = &core.Usage{
-			PromptTokens:     openAIResp.Usage.PromptTokens,
-			CompletionTokens: openAIResp.Usage.CompletionTokens,
-			TotalTokens:      openAIResp.Usage.TotalTokens,
-		}
 	}
 	return &core.ChatResponse{
 		Message: coreMsg,

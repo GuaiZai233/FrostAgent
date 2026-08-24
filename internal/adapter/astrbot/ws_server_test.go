@@ -939,8 +939,13 @@ func TestAstrBotGroupCompactAndMemoryIntegration(t *testing.T) {
 
 	// 验证会话历史中已包含该轮对话
 	history := sess.Snapshot()
+	deadline := time.Now().Add(time.Second)
+	for len(history) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		history = sess.Snapshot()
+	}
 	if len(history) < 2 {
-		t.Errorf("期望会话历史至少 2 条消息，实际=%d", len(history))
+		t.Fatalf("期望会话历史至少 2 条消息，实际=%d", len(history))
 	}
 }
 

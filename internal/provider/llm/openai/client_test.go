@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"FrostAgent/internal/core"
@@ -79,6 +80,66 @@ func TestClient_Chat_NilUsageGraceful(t *testing.T) {
 
 	if resp.Usage != nil {
 		t.Errorf("expected nil Usage, got %+v", resp.Usage)
+	}
+}
+
+func TestClient_Chat_EmptyChoicesFallsBackToStaySilent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{},
+			"usage": map[string]any{
+				"prompt_tokens":     1957,
+				"completion_tokens": 0,
+				"total_tokens":      1957,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-api-key")
+	resp, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "gemini-3.7-flash",
+		Tools: []core.Tool{{
+			Name: staySilentFallbackToolName,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Message.Role != core.RoleAssistant {
+		t.Fatalf("expected assistant fallback, got role=%q", resp.Message.Role)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("expected one fallback tool call, got %+v", resp.Message.ToolCalls)
+	}
+	toolCall := resp.Message.ToolCalls[0]
+	if toolCall.ID != staySilentFallbackToolCallID || toolCall.Type != "function" {
+		t.Fatalf("unexpected fallback tool call metadata: %+v", toolCall)
+	}
+	if toolCall.Function.Name != staySilentFallbackToolName || toolCall.Function.Arguments != "{}" {
+		t.Fatalf("unexpected fallback tool call function: %+v", toolCall.Function)
+	}
+	if resp.Usage == nil || resp.Usage.PromptTokens != 1957 || resp.Usage.CompletionTokens != 0 || resp.Usage.TotalTokens != 1957 {
+		t.Fatalf("unexpected fallback usage: %+v", resp.Usage)
+	}
+}
+
+func TestClient_Chat_EmptyChoicesWithoutStaySilentReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-api-key")
+	resp, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "background-model",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no choices in response") {
+		t.Fatalf("expected no choices error, got response=%+v err=%v", resp, err)
 	}
 }
 
