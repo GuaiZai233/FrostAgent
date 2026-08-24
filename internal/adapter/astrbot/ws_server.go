@@ -193,6 +193,44 @@ func extractBotReplyText(replyText string) string {
 	return strings.TrimSpace(replyText)
 }
 
+func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, owner, replyText string) {
+	replyText = strings.TrimSpace(replyText)
+	if session == nil || engine == nil || replyText == "" {
+		return
+	}
+
+	botName := os.Getenv("BOT_NAME")
+	if botName == "" {
+		botName = "霜降"
+	}
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	session.AppendGroupCompactMessage(
+		llm.GroupCompactMessage{
+			Role:    "assistant",
+			Sender:  botName,
+			Content: replyText,
+			Time:    time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+	)
+	if engine.GroupCompactor != nil {
+		engine.GroupCompactor.Trigger(session, owner)
+	}
+}
+
+func composeReplyWithReceipt(replyText, receiptText string) string {
+	if receiptText == "" {
+		return replyText
+	}
+	if strings.TrimSpace(replyText) == "" {
+		return receiptText
+	}
+	return replyText + "\n\n" + receiptText
+}
+
 func isBotNameMentioned(text string) bool {
 	if text == "" {
 		return false
@@ -414,9 +452,10 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	var (
-		replyText   string
-		receiptText string
-		runResult   llm.AgentRunResult
+		replyText            string
+		receiptText          string
+		deliveredToolReplies []string
+		runResult            llm.AgentRunResult
 	)
 
 	if engine != nil && session != nil {
@@ -505,6 +544,12 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 					return err
 				}
 			}
+			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
+				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
+				if event.MessageType == "group" {
+					appendAssistantGroupMessage(session, engine, owner, deliveredReply)
+				}
+			}
 			return nil
 		}
 
@@ -542,19 +587,26 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		replyText = "智能体引擎未就绪"
 	}
 
-	sentReplyText := replyText
-	if receiptText != "" {
-		sentReplyText += "\n\n" + receiptText
+	historyReplyText := replyText
+	if strings.TrimSpace(historyReplyText) == "" && len(deliveredToolReplies) > 0 {
+		historyReplyText = strings.Join(deliveredToolReplies, "\n")
 	}
+	sentReplyText := composeReplyWithReceipt(replyText, receiptText)
 
 	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
 	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
-	if err := sendDirectReply(event, conn, sentReplyText); err != nil {
+	var sendErr error
+	if strings.TrimSpace(sentReplyText) == "" {
+		sendErr = sendTerminalNoop(event, conn)
+	} else {
+		sendErr = sendDirectReply(event, conn, sentReplyText)
+	}
+	if sendErr != nil {
 		if session != nil {
 			session.SetDeliveryFailure(llm.DeliveryFailure{
 				Platform: platform,
 				Action:   "send_message",
-				Wording:  err.Error(),
+				Wording:  sendErr.Error(),
 			})
 			if engine != nil {
 				engine.TrimSession(session)
@@ -567,12 +619,14 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		return
 	}
 
-	session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
+	if strings.TrimSpace(historyReplyText) != "" {
+		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
+	}
 	engine.TrimSession(session)
 
 	if runResult.MemoryWritten {
 		logs.Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
+	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
 		pendingUserText := userText
 		if event.MessageType == "group" {
 			pendingUserText = formatGroupSpeakerMessage(event, userText)
@@ -586,37 +640,26 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			{
 				Owner:     owner,
 				OwnerType: ownerType,
-				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
 			},
 		})
 	}
 
 	if event.MessageType == "group" {
-		botReply := extractBotReplyText(sentReplyText)
-		if strings.TrimSpace(botReply) != "" {
-			botName := os.Getenv("BOT_NAME")
-			if botName == "" {
-				botName = "霜降"
-			}
-			var maxBufferSize int
-			if engine.GroupCompactor != nil {
-				maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-			}
-			session.AppendGroupCompactMessage(
-				llm.GroupCompactMessage{
-					Role:    "assistant",
-					Sender:  botName,
-					Content: strings.TrimSpace(botReply),
-					Time:    time.Now().Format("15:04:05"),
-				},
-				maxBufferSize,
-			)
-			if engine.GroupCompactor != nil {
-				owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
-				engine.GroupCompactor.Trigger(session, owner)
-			}
-		}
+		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText))
 	}
+}
+
+func sendTerminalNoop(event Event, conn *wsConn) error {
+	if conn == nil {
+		return errors.New("connection is nil")
+	}
+	return conn.WriteJSON(Action{
+		Type:      "action",
+		Action:    "noop",
+		SessionID: sessionKey(event),
+		Echo:      "reply_" + event.MessageID,
+	})
 }
 
 // sendDirectReply sends a direct message to the AstrBot WebSocket connection.

@@ -418,6 +418,129 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 }
 
+func TestAstrBotSendHookEmptyFinalKeepsDeliveredReply(t *testing.T) {
+	toolProvider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_empty_final",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"messages":[{"type":"plain","text":"工具已发送的实际回复"}]}`,
+							},
+						},
+					},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: nil,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(toolProvider)
+	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_empty_final",
+		UserID:      "usr_empty_final",
+		SenderName:  "测试用户",
+		GroupID:     "grp_empty_final",
+		GroupName:   "空最终回复测试群",
+		Content:     "请通过工具回复",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	_, hookBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取工具回复失败: %v", err)
+	}
+	var hookAction Action
+	if err := json.Unmarshal(hookBytes, &hookAction); err != nil {
+		t.Fatalf("解析工具回复失败: %v", err)
+	}
+	if !hookAction.IsIntermediate || hookAction.Content != "工具已发送的实际回复" {
+		t.Fatalf("工具回复不正确: %+v", hookAction)
+	}
+
+	_, terminalBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取终止动作失败: %v", err)
+	}
+	var terminalAction Action
+	if err := json.Unmarshal(terminalBytes, &terminalAction); err != nil {
+		t.Fatalf("解析终止动作失败: %v", err)
+	}
+	if terminalAction.Action != "noop" {
+		t.Fatalf("空最终回复不应再次发送空消息，实际 action=%+v", terminalAction)
+	}
+
+	session := engine.SessionManager.GetOrCreate("astrbot:group:grp_empty_final")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history := session.Snapshot()
+		if len(history) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	history := session.Snapshot()
+	if len(history) != 2 {
+		t.Fatalf("期望历史包含 user 和实际工具回复，实际=%+v", history)
+	}
+	if history[1].Role != "assistant" || history[1].Content != "工具已发送的实际回复" {
+		t.Fatalf("工具回复未提升为最终 assistant 历史: %+v", history[1])
+	}
+
+	groupContext := session.SnapshotGroupContext(10, 1000, "")
+	assistantMessages := 0
+	for _, message := range groupContext.RecentStructuredMessages {
+		if message.Role != "assistant" {
+			continue
+		}
+		assistantMessages++
+		if message.Content != "工具已发送的实际回复" {
+			t.Fatalf("Prompt Inspector 中的 assistant 内容不正确: %+v", message)
+		}
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("Prompt Inspector 应保留一条实际工具回复，实际=%+v", groupContext.RecentStructuredMessages)
+	}
+}
+
+func TestComposeReplyWithReceiptAvoidsLeadingBlankLines(t *testing.T) {
+	if got := composeReplyWithReceipt("", "计费回执"); got != "计费回执" {
+		t.Fatalf("空最终回复拼接计费回执不应产生前导空行，实际=%q", got)
+	}
+	if got := composeReplyWithReceipt("最终回复", "计费回执"); got != "最终回复\n\n计费回执" {
+		t.Fatalf("非空最终回复应与计费回执分段，实际=%q", got)
+	}
+}
+
 func TestAstrBotDispatcherSend(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
 	srv, _, wsURL := startWSTestServer(engine)
