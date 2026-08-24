@@ -504,12 +504,21 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
+			actionMessages := make([]ActionMessage, 0, len(toolOutput.Messages))
+			var plainTexts []string
+			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
-				var attachments []core.Attachment
-				text := ""
+				actionMessages = append(actionMessages, ActionMessage{
+					Type:          m.Type,
+					Text:          m.Text,
+					MentionUserID: m.MentionUserID,
+					MessageID:     m.MessageID,
+					Path:          m.Path,
+					URL:           m.URL,
+				})
 				switch m.Type {
 				case "plain":
-					text = m.Text
+					plainTexts = append(plainTexts, m.Text)
 				case "image":
 					url := m.URL
 					if url == "" {
@@ -537,26 +546,25 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 						Type: core.AttachmentTypeVideo,
 						URL:  url,
 					})
-				default:
-					text = m.Text
 				}
-				action := Action{
-					Type:           "action",
-					Action:         "send_message",
-					SessionID:      sessionKey(event),
-					TargetID:       targetID,
-					MessageType:    event.MessageType,
-					GroupID:        event.GroupID,
-					UserID:         event.UserID,
-					Content:        text,
-					Attachments:    attachments,
-					IsIntermediate: true,
-					Echo:           fmt.Sprintf("hook_%s", event.MessageID),
-				}
-				if err := conn.WriteJSON(action); err != nil {
-					logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
-					return err
-				}
+			}
+			action := Action{
+				Type:           "action",
+				Action:         "send_message",
+				SessionID:      sessionKey(event),
+				TargetID:       targetID,
+				MessageType:    event.MessageType,
+				GroupID:        event.GroupID,
+				UserID:         event.UserID,
+				Content:        strings.Join(plainTexts, ""),
+				Messages:       actionMessages,
+				Attachments:    attachments,
+				IsIntermediate: true,
+				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
+			}
+			if err := conn.WriteJSON(action); err != nil {
+				logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
+				return err
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)

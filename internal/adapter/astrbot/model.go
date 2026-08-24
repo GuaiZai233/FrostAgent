@@ -26,16 +26,27 @@ type Event struct {
 	Metadata    map[string]any    `json:"metadata,omitempty"`     // 扩展元数据
 }
 
+// ActionMessage represents one ordered component in an outbound AstrBot message chain.
+type ActionMessage struct {
+	Type          string `json:"type"`
+	Text          string `json:"text,omitempty"`
+	MentionUserID string `json:"mention_user_id,omitempty"`
+	MessageID     string `json:"message_id,omitempty"`
+	Path          string `json:"path,omitempty"`
+	URL           string `json:"url,omitempty"`
+}
+
 // Action 表示 FrostAgent 发送给 AstrBot 插件的出站动作。
 type Action struct {
-	Type           string            `json:"type"`                       // 默认为 "action"
-	Action         string            `json:"action"`                     // "send_message"
-	SessionID      string            `json:"session_id,omitempty"`       // 目标会话 ID
-	TargetID       string            `json:"target_id,omitempty"`        // 目标群 ID 或用户 ID
-	MessageType    string            `json:"message_type,omitempty"`     // "group" 或 "private"
+	Type           string            `json:"type"`                      // 默认为 "action"
+	Action         string            `json:"action"`                    // "send_message"
+	SessionID      string            `json:"session_id,omitempty"`      // 目标会话 ID
+	TargetID       string            `json:"target_id,omitempty"`       // 目标群 ID 或用户 ID
+	MessageType    string            `json:"message_type,omitempty"`    // "group" 或 "private"
 	GroupID        string            `json:"group_id,omitempty"`        // 群 ID
 	UserID         string            `json:"user_id,omitempty"`         // 用户 ID
 	Content        string            `json:"content,omitempty"`         // 回复文本内容
+	Messages       []ActionMessage   `json:"messages,omitempty"`        // 有序消息链（plain、mention_user、媒体等）
 	Attachments    []core.Attachment `json:"attachments,omitempty"`     // 附件列表 (图片等)
 	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 是否为工具调用产生的中间消息 (sendHook)
 	Echo           string            `json:"echo,omitempty"`            // 回显标识

@@ -142,8 +142,6 @@ class FrostAgentWSClient:
             await self._dispatch_proactive_action(action)
 
     async def _dispatch_proactive_action(self, action: dict) -> None:
-        content = action.get("content", "")
-        attachments = action.get("attachments") or []
         group_id = str(action.get("group_id") or "")
         user_id = str(action.get("user_id") or "")
         platform = str(action.get("platform") or "")
@@ -157,16 +155,9 @@ class FrostAgentWSClient:
             return
 
         try:
-            from astrbot.api.message_components import Image, Plain
             from astrbot.api.message import MessageChain
 
-            parts: list = []
-            if content:
-                parts.append(Plain(content))
-            for att in attachments:
-                if att.get("type") == "image" and att.get("url"):
-                    parts.append(Image(att["url"]))
-
+            parts = action_to_message_components(action)
             if not parts:
                 return
 
@@ -394,6 +385,11 @@ def extract_attachments(event: AstrMessageEvent) -> list[dict[str, Any]]:
 
 
 def action_to_astrbot_result(event: AstrMessageEvent, action: dict[str, Any]) -> list[Any]:
+    messages = action.get("messages") or []
+    if messages:
+        parts = action_to_message_components(action)
+        return [event.chain_result(parts)] if parts else []
+
     content = action.get("content", "")
     attachments = action.get("attachments") or []
 
@@ -407,6 +403,39 @@ def action_to_astrbot_result(event: AstrMessageEvent, action: dict[str, Any]) ->
         elif att_type in ("audio", "video"):
             logger.debug(f"[frostagent-adapter] 跳过不支持的附件类型: {att_type}")
     return results
+
+
+def action_to_message_components(action: dict[str, Any]) -> list[Any]:
+    from astrbot.api.message_components import At, Image, Plain
+
+    messages = action.get("messages") or []
+    parts: list[Any] = []
+    if messages:
+        for message in messages:
+            message_type = str(message.get("type") or "")
+            if message_type == "mention_user":
+                mention_user_id = str(message.get("mention_user_id") or "")
+                if mention_user_id:
+                    parts.append(At(qq=mention_user_id))
+            elif message_type == "plain":
+                text = str(message.get("text") or "")
+                if text:
+                    parts.append(Plain(text))
+            elif message_type == "image":
+                source = str(message.get("url") or message.get("path") or "")
+                if source:
+                    parts.append(Image(source))
+            elif message_type in ("record", "video", "file", "quote"):
+                logger.debug(f"[frostagent-adapter] 跳过暂不支持的消息组件: {message_type}")
+        return parts
+
+    content = action.get("content", "")
+    if content:
+        parts.append(Plain(str(content)))
+    for attachment in action.get("attachments") or []:
+        if attachment.get("type") == "image" and attachment.get("url"):
+            parts.append(Image(str(attachment["url"])))
+    return parts
 
 
 def call_noargs(obj: Any, name: str) -> Any:

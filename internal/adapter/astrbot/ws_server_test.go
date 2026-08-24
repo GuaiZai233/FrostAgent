@@ -591,6 +591,100 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 }
 
+func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
+	toolProvider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_mention_user",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"messages":[{"type":"mention_user","mention_user_id":"114514"},{"type":"plain","text":" 一起来聊天吧"}]}`,
+							},
+						},
+					},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "已邀请对方。",
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(toolProvider)
+	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mention_user",
+		UserID:      "usr_mention_user",
+		SenderName:  "测试用户",
+		GroupID:     "grp_mention_user",
+		GroupName:   "工具调用测试群",
+		Content:     "艾特对方聊聊天",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	_, hookBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取工具回复失败: %v", err)
+	}
+	var hookAction Action
+	if err := json.Unmarshal(hookBytes, &hookAction); err != nil {
+		t.Fatalf("解析工具回复失败: %v", err)
+	}
+	if len(hookAction.Messages) != 2 {
+		t.Fatalf("期望一个 action 保留两段有序消息，实际=%+v", hookAction.Messages)
+	}
+	if hookAction.Messages[0].Type != "mention_user" || hookAction.Messages[0].MentionUserID != "114514" {
+		t.Fatalf("第一段应为 mention_user，实际=%+v", hookAction.Messages[0])
+	}
+	if hookAction.Messages[1].Type != "plain" || hookAction.Messages[1].Text != " 一起来聊天吧" {
+		t.Fatalf("第二段应为 plain，实际=%+v", hookAction.Messages[1])
+	}
+	if hookAction.Content != " 一起来聊天吧" {
+		t.Fatalf("兼容回退正文不正确，实际=%q", hookAction.Content)
+	}
+	if hookAction.MessageType != "group" || hookAction.GroupID != "grp_mention_user" {
+		t.Fatalf("工具消息应发往原群聊，实际=%+v", hookAction)
+	}
+
+	_, finalBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取最终回复失败: %v", err)
+	}
+	var finalAction Action
+	if err := json.Unmarshal(finalBytes, &finalAction); err != nil {
+		t.Fatalf("解析最终回复失败: %v", err)
+	}
+	if finalAction.Content != "已邀请对方。" {
+		t.Fatalf("最终回复内容不正确，实际=%q", finalAction.Content)
+	}
+}
+
 func TestAstrBotSendHookEmptyFinalKeepsDeliveredReply(t *testing.T) {
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
