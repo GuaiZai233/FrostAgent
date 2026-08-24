@@ -598,6 +598,7 @@ dialog.dialog-modal::backdrop {
   display: block;
   flex-shrink: 0;
   gap: 0;
+  overflow: visible;
   padding: 0.625rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -620,13 +621,20 @@ dialog.dialog-modal::backdrop {
 }
 
 .prompt-session-summary {
+  display: block;
+  width: 100%;
   margin-top: 0.375rem;
   padding: 0.125rem 0.375rem;
+  border: 0;
   border-radius: var(--radius-sm);
   color: var(--info);
   background-color: var(--info-bg);
+  font-family: inherit;
   font-size: 0.625rem;
   line-height: 1rem;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

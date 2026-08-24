@@ -2,6 +2,7 @@ import { api } from '../api/client';
 import { SessionInfo } from '@frostagent/proto';
 import { escapeHtml, formatDateTime, formatPlatform, isGroupSession } from '../utils/formatters';
 import { icon } from '../components/icons';
+import { openDialog } from '../components/dialog';
 import { toast } from '../components/toast';
 import { copyToClipboard } from '../utils/clipboard';
 import {
@@ -158,19 +159,21 @@ export function mountPromptPage(container: HTMLElement): () => void {
   const applyInputBtn = container.querySelector<HTMLButtonElement>('#prompt-apply-input-btn')!;
 
   // 1. Fetch Session List
-  async function loadSessions() {
-    if (isUnmounted) return;
+  async function loadSessions(): Promise<boolean> {
+    if (isUnmounted) return false;
     sessionsLoading = true;
     renderSessionList();
 
     try {
       const res = await api.getSessions(100);
-      if (isUnmounted) return;
+      if (isUnmounted) return false;
       sessions = res.sessions || [];
+      return true;
     } catch (err) {
-      if (isUnmounted) return;
+      if (isUnmounted) return false;
       toast.error('加载会话列表失败: ' + (err instanceof Error ? err.message : String(err)));
       sessions = [];
+      return false;
     } finally {
       if (!isUnmounted) {
         sessionsLoading = false;
@@ -206,6 +209,23 @@ export function mountPromptPage(container: HTMLElement): () => void {
       }
 
       return true;
+    });
+  }
+
+  function showSessionSummary(session: SessionInfo) {
+    openDialog({
+      title: `群聊摘要 - ${session.sessionId}`,
+      description: `平台: ${formatPlatform(session.platform)} · 消息数: ${session.messageCount}`,
+      maxWidth: '36rem',
+      bodyHtml: `
+        <div class="p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(
+          session.groupSummary || '暂无群聊摘要内容。',
+        )}</div>
+      `,
+      footerHtml: '<button class="btn btn-outline btn-sm prompt-summary-close-btn">关闭</button>',
+      onMount: (dialogEl, close) => {
+        dialogEl.querySelector('.prompt-summary-close-btn')?.addEventListener('click', () => close());
+      },
     });
   }
 
@@ -261,9 +281,15 @@ export function mountPromptPage(container: HTMLElement): () => void {
             ${
               s.groupSummary
                 ? `
-              <div class="prompt-session-summary" title="${escapeHtml(s.groupSummary)}">
+              <button
+                type="button"
+                class="prompt-session-summary"
+                data-summary-session-id="${escapeHtml(s.sessionId)}"
+                title="${escapeHtml(s.groupSummary)}"
+                aria-label="查看 ${escapeHtml(s.sessionId)} 的完整群聊摘要"
+              >
                 摘要: ${escapeHtml(s.groupSummary)}
-              </div>
+              </button>
             `
                 : ''
             }
@@ -272,8 +298,17 @@ export function mountPromptPage(container: HTMLElement): () => void {
       })
       .join('');
 
-    // Attach click events
-    sessionListEl.querySelectorAll<HTMLElement>('[data-session-id]').forEach((card) => {
+    sessionListEl.querySelectorAll<HTMLButtonElement>('[data-summary-session-id]').forEach((summaryButton) => {
+      summaryButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const sessionId = summaryButton.getAttribute('data-summary-session-id');
+        const session = sessions.find((item) => item.sessionId === sessionId);
+        if (session) showSessionSummary(session);
+      });
+    });
+
+    // Attach card click events
+    sessionListEl.querySelectorAll<HTMLElement>('.prompt-session-card').forEach((card) => {
       card.addEventListener('click', () => {
         const sessionId = card.getAttribute('data-session-id');
         if (sessionId) {
@@ -359,8 +394,18 @@ export function mountPromptPage(container: HTMLElement): () => void {
     toast.success('已载入示例群聊 Prompt');
   });
 
-  sessionsRefreshBtn.addEventListener('click', () => {
-    void loadSessions();
+  sessionsRefreshBtn.addEventListener('click', async () => {
+    const loaded = await loadSessions();
+    if (!loaded || !selectedSessionId || isUnmounted) return;
+
+    if (sessions.some((session) => session.sessionId === selectedSessionId)) {
+      await loadSessionContext(selectedSessionId);
+      return;
+    }
+
+    selectedSessionId = '';
+    currentPromptText = '';
+    renderEmptyState();
   });
 
   searchInput.addEventListener('input', () => {
