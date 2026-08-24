@@ -412,7 +412,7 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
             if message_type == "mention_user":
                 mention_user_id = str(message.get("mention_user_id") or "")
                 if mention_user_id:
-                    parts.append(At(mention_user_id))
+                    parts.append(At(qq=mention_user_id))
             elif message_type == "plain":
                 text = str(message.get("text") or "")
                 if text:

@@ -461,9 +461,13 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 		EventType:   "message",
 		MessageID:   "msg_mention_user",
 		UserID:      "usr_mention_user",
+		SenderName:  "测试用户",
+		GroupID:     "grp_mention_user",
+		GroupName:   "工具调用测试群",
 		Content:     "艾特对方聊聊天",
 		Platform:    "astrbot",
-		MessageType: "private",
+		MessageType: "group",
+		IsWake:      true,
 		Timestamp:   time.Now().Unix(),
 	}
 	data, _ := json.Marshal(event)
@@ -490,6 +494,9 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 	}
 	if hookAction.Content != " 一起来聊天吧" {
 		t.Fatalf("兼容回退正文不正确，实际=%q", hookAction.Content)
+	}
+	if hookAction.MessageType != "group" || hookAction.GroupID != "grp_mention_user" {
+		t.Fatalf("工具消息应发往原群聊，实际=%+v", hookAction)
 	}
 
 	_, finalBytes, err := conn.ReadMessage()
