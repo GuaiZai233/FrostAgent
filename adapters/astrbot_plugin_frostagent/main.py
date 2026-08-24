@@ -183,7 +183,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.0",
+    "0.1.1",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
