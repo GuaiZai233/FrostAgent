@@ -101,7 +101,7 @@ export function parseMessageLine(line: string): GroupMessageItem {
     if (!id && senderMatch[3]) {
       id = senderMatch[3].trim();
     }
-    let content = senderMatch[4].trim();
+    const content = senderMatch[4].trim();
 
     // In case sender still has [user]/[assistant] inside it
     const innerSenderRole = sender.match(/^\[(user|assistant)\]\s*/i);
