@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ func (s *Service) ListLogs(
 
 	// Sort by timestamp descending
 	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+			return filtered[i].ID > filtered[j].ID
+		}
 		return filtered[i].Timestamp.After(filtered[j].Timestamp)
 	})
 
@@ -127,7 +131,7 @@ func (s *Service) ClearLogs(
 // convertEntry maps internal LogEntry → proto LogEntry.
 func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 	entry := &v1.LogEntry{
-		Id:        fmt.Sprintf("%d", e.Timestamp.UnixNano()),
+		Id:        strconv.FormatUint(e.ID, 10),
 		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
 		Level:     toProtoLevel(e.Level),
 		Source:    string(e.Category),
