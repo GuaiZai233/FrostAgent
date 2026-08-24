@@ -52,6 +52,7 @@ sys.modules["astrbot"] = astrbot_module
 sys.modules["astrbot.api"] = api_module
 sys.modules["astrbot.api.event"] = event_module
 sys.modules["astrbot.api.star"] = star_module
+sys.modules["websockets"] = types.ModuleType("websockets")
 
 FrostAgentAdapter = importlib.import_module(
     "adapters.astrbot_plugin_frostagent.main"
