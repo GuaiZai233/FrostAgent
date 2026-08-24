@@ -30,6 +30,17 @@ func TestAdapterSendNoConns(t *testing.T) {
 	}
 }
 
+func TestSendDirectReplyRejectsInvalidInput(t *testing.T) {
+	event := Event{UserID: "usr_123", MessageType: "private"}
+
+	if err := sendDirectReply(event, nil, "hello"); err == nil || err.Error() != "connection is nil" {
+		t.Fatalf("expected nil connection error, got %v", err)
+	}
+	if err := sendDirectReply(event, &wsConn{}, "   "); err == nil || err.Error() != "message content is empty" {
+		t.Fatalf("expected empty message error, got %v", err)
+	}
+}
+
 func TestToIncomingMessage(t *testing.T) {
 	now := time.Now().Unix()
 	event := Event{

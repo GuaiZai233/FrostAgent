@@ -48,7 +48,7 @@ func TestSessionContext_PromptTrace(t *testing.T) {
 
 func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	sessionManager := NewSessionManager()
-	sessionID := "mock_platform:group:10001"
+	sessionID := "private:10001"
 	sess := sessionManager.GetOrCreate(sessionID)
 
 	provider := &mockTraceProvider{}
@@ -64,7 +64,8 @@ func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	}
 
 	runCtx := RunContext{
-		Owner: sessionID,
+		SessionID: sessionID,
+		Owner:     "10001",
 	}
 
 	res := engine.RunMessagesWithContext(msgs, runCtx)

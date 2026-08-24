@@ -509,6 +509,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
+			SessionID: sessionKey(event),
 			Owner:     owner,
 			OwnerType: ownerType,
 			SendHook:  sendHook,
@@ -626,8 +627,11 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
 func sendDirectReply(event Event, conn *wsConn, text string) error {
-	if conn == nil || strings.TrimSpace(text) == "" {
-		return nil
+	if conn == nil {
+		return errors.New("connection is nil")
+	}
+	if strings.TrimSpace(text) == "" {
+		return errors.New("message content is empty")
 	}
 	targetID := event.UserID
 	if event.MessageType == "group" {
