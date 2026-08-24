@@ -599,7 +599,7 @@ func TestAstrBotTransportWriteFailureDoesNotCommitAssistantState(t *testing.T) {
 	if len(history) != 1 {
 		t.Fatalf("传输写入失败后只应保留 user 历史，实际消息数=%d", len(history))
 	}
-	if history[0].Role != core.RoleUser {
+	if history[0].Role != "user" {
 		t.Fatalf("传输写入失败后历史只应包含 user，实际 role=%s", history[0].Role)
 	}
 	if content, _ := history[0].Content.(string); strings.Contains(content, "这是一条发送失败的回复") {
