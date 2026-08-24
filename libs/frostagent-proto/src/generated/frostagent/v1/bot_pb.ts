@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/bot.proto.
  */
 export const file_frostagent_v1_bot: GenFile = /*@__PURE__*/
-  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi9AEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iLwoZRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJIjwKGkRlbGV0ZUdyb3VwU3VtbWFyeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiRAoYR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSFAoMcmVjZW50X2xpbWl0GAIgASgFIqkBChVTdW1tYXJ5R3JvdXBJbmZvUHJvdG8SDwoHc3VtbWFyeRgBIAEoCRITCgttZXNzYWdlX2lkcxgCIAMoCRIYChBzdGFydF9tZXNzYWdlX2lkGAMgASgJEhYKDmVuZF9tZXNzYWdlX2lkGAQgASgJEhMKC3N0YXJ0X2luZGV4GAUgASgFEhEKCWVuZF9pbmRleBgGIAEoBRIQCghtZXNzYWdlcxgHIAMoCSI7ChpTZXNzaW9uSGlzdG9yeU1lc3NhZ2VQcm90bxIMCgRyb2xlGAEgASgJEg8KB2NvbnRlbnQYAiABKAkiqAIKGUdldFNlc3Npb25Db250ZXh0UmVzcG9uc2USEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIXCg9ydW5uaW5nX3N1bW1hcnkYAyABKAkSFwoPcmVjZW50X21lc3NhZ2VzGAQgAygJEjwKDnN1bW1hcnlfZ3JvdXBzGAUgAygLMiQuZnJvc3RhZ2VudC52MS5TdW1tYXJ5R3JvdXBJbmZvUHJvdG8SOgoHaGlzdG9yeRgGIAMoCzIpLmZyb3N0YWdlbnQudjEuU2Vzc2lvbkhpc3RvcnlNZXNzYWdlUHJvdG8SEwoLcHJvbXB0X3RleHQYByABKAkSFQoNc3lzdGVtX3Byb21wdBgIIAEoCRINCgVtb2RlbBgJIAEoCSpyCglCb3RTdGF0dXMSGgoWQk9UX1NUQVRVU19VTlNQRUNJRklFRBAAEhsKF0JPVF9TVEFUVVNfSU5JVElBTElaSU5HEAESFgoSQk9UX1NUQVRVU19SVU5OSU5HEAISFAoQQk9UX1NUQVRVU19FUlJPUhADMpEDChBCb3RTdGF0dXNTZXJ2aWNlElQKC0dldE92ZXJ2aWV3EiEuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldE92ZXJ2aWV3UmVzcG9uc2USVAoLR2V0U2Vzc2lvbnMSIS5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbnNSZXNwb25zZRJmChFHZXRTZXNzaW9uQ29udGV4dBInLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0GiguZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uQ29udGV4dFJlc3BvbnNlEmkKEkRlbGV0ZUdyb3VwU3VtbWFyeRIoLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBopLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
+  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3Qi9AEKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iLwoZRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJIjwKGkRlbGV0ZUdyb3VwU3VtbWFyeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiRAoYR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSFAoMcmVjZW50X2xpbWl0GAIgASgFIuwBChVTdW1tYXJ5R3JvdXBJbmZvUHJvdG8SDwoHc3VtbWFyeRgBIAEoCRITCgttZXNzYWdlX2lkcxgCIAMoCRIYChBzdGFydF9tZXNzYWdlX2lkGAMgASgJEhYKDmVuZF9tZXNzYWdlX2lkGAQgASgJEhMKC3N0YXJ0X2luZGV4GAUgASgFEhEKCWVuZF9pbmRleBgGIAEoBRIQCghtZXNzYWdlcxgHIAMoCRJBChNzdHJ1Y3R1cmVkX21lc3NhZ2VzGAggAygLMiQuZnJvc3RhZ2VudC52MS5Hcm91cE1lc3NhZ2VJbmZvUHJvdG8iewoVR3JvdXBNZXNzYWdlSW5mb1Byb3RvEgwKBHJvbGUYASABKAkSDgoGc2VuZGVyGAIgASgJEhEKCXNlbmRlcl9pZBgDIAEoCRIPCgdjb250ZW50GAQgASgJEhIKCm1lc3NhZ2VfaWQYBSABKAkSDAoEdGltZRgGIAEoCSI7ChpTZXNzaW9uSGlzdG9yeU1lc3NhZ2VQcm90bxIMCgRyb2xlGAEgASgJEg8KB2NvbnRlbnQYAiABKAki8gIKGUdldFNlc3Npb25Db250ZXh0UmVzcG9uc2USEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIXCg9ydW5uaW5nX3N1bW1hcnkYAyABKAkSFwoPcmVjZW50X21lc3NhZ2VzGAQgAygJEjwKDnN1bW1hcnlfZ3JvdXBzGAUgAygLMiQuZnJvc3RhZ2VudC52MS5TdW1tYXJ5R3JvdXBJbmZvUHJvdG8SOgoHaGlzdG9yeRgGIAMoCzIpLmZyb3N0YWdlbnQudjEuU2Vzc2lvbkhpc3RvcnlNZXNzYWdlUHJvdG8SEwoLcHJvbXB0X3RleHQYByABKAkSFQoNc3lzdGVtX3Byb21wdBgIIAEoCRINCgVtb2RlbBgJIAEoCRJIChpyZWNlbnRfc3RydWN0dXJlZF9tZXNzYWdlcxgKIAMoCzIkLmZyb3N0YWdlbnQudjEuR3JvdXBNZXNzYWdlSW5mb1Byb3RvKnIKCUJvdFN0YXR1cxIaChZCT1RfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGwoXQk9UX1NUQVRVU19JTklUSUFMSVpJTkcQARIWChJCT1RfU1RBVFVTX1JVTk5JTkcQAhIUChBCT1RfU1RBVFVTX0VSUk9SEAMykQMKEEJvdFN0YXR1c1NlcnZpY2USVAoLR2V0T3ZlcnZpZXcSIS5mcm9zdGFnZW50LnYxLkdldE92ZXJ2aWV3UmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuR2V0T3ZlcnZpZXdSZXNwb25zZRJUCgtHZXRTZXNzaW9ucxIhLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbnNSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uc1Jlc3BvbnNlEmYKEUdldFNlc3Npb25Db250ZXh0EicuZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uQ29udGV4dFJlcXVlc3QaKC5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25Db250ZXh0UmVzcG9uc2USaQoSRGVsZXRlR3JvdXBTdW1tYXJ5EiguZnJvc3RhZ2VudC52MS5EZWxldGVHcm91cFN1bW1hcnlSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5EZWxldGVHcm91cFN1bW1hcnlSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.GetOverviewRequest
@@ -217,6 +217,11 @@ export type SummaryGroupInfoProto = Message<"frostagent.v1.SummaryGroupInfoProto
    * @generated from field: repeated string messages = 7;
    */
   messages: string[];
+
+  /**
+   * @generated from field: repeated frostagent.v1.GroupMessageInfoProto structured_messages = 8;
+   */
+  structuredMessages: GroupMessageInfoProto[];
 };
 
 /**
@@ -225,6 +230,48 @@ export type SummaryGroupInfoProto = Message<"frostagent.v1.SummaryGroupInfoProto
  */
 export const SummaryGroupInfoProtoSchema: GenMessage<SummaryGroupInfoProto> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_bot, 7);
+
+/**
+ * @generated from message frostagent.v1.GroupMessageInfoProto
+ */
+export type GroupMessageInfoProto = Message<"frostagent.v1.GroupMessageInfoProto"> & {
+  /**
+   * @generated from field: string role = 1;
+   */
+  role: string;
+
+  /**
+   * @generated from field: string sender = 2;
+   */
+  sender: string;
+
+  /**
+   * @generated from field: string sender_id = 3;
+   */
+  senderId: string;
+
+  /**
+   * @generated from field: string content = 4;
+   */
+  content: string;
+
+  /**
+   * @generated from field: string message_id = 5;
+   */
+  messageId: string;
+
+  /**
+   * @generated from field: string time = 6;
+   */
+  time: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GroupMessageInfoProto.
+ * Use `create(GroupMessageInfoProtoSchema)` to create a new message.
+ */
+export const GroupMessageInfoProtoSchema: GenMessage<GroupMessageInfoProto> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 8);
 
 /**
  * @generated from message frostagent.v1.SessionHistoryMessageProto
@@ -246,7 +293,7 @@ export type SessionHistoryMessageProto = Message<"frostagent.v1.SessionHistoryMe
  * Use `create(SessionHistoryMessageProtoSchema)` to create a new message.
  */
 export const SessionHistoryMessageProtoSchema: GenMessage<SessionHistoryMessageProto> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_bot, 8);
+  messageDesc(file_frostagent_v1_bot, 9);
 
 /**
  * @generated from message frostagent.v1.GetSessionContextResponse
@@ -299,6 +346,11 @@ export type GetSessionContextResponse = Message<"frostagent.v1.GetSessionContext
    * @generated from field: string model = 9;
    */
   model: string;
+
+  /**
+   * @generated from field: repeated frostagent.v1.GroupMessageInfoProto recent_structured_messages = 10;
+   */
+  recentStructuredMessages: GroupMessageInfoProto[];
 };
 
 /**
@@ -306,7 +358,7 @@ export type GetSessionContextResponse = Message<"frostagent.v1.GetSessionContext
  * Use `create(GetSessionContextResponseSchema)` to create a new message.
  */
 export const GetSessionContextResponseSchema: GenMessage<GetSessionContextResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_bot, 9);
+  messageDesc(file_frostagent_v1_bot, 10);
 
 /**
  * @generated from enum frostagent.v1.BotStatus

@@ -176,15 +176,36 @@ func TestGetSessionContext(t *testing.T) {
 
 	sessionID := "aiohttp:group:100001"
 	sess := sessionManager.GetOrCreate(sessionID)
-	sess.AppendGroupCompactMessage("[09:30] User1 (101) [msg_1]: 早上好", 20)
-	sess.AppendGroupCompactMessage("[09:31] User2 (102) [msg_2]: 今天天气真好", 20)
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User1",
+		SenderID:  "101",
+		Content:   "早上好",
+		MessageID: "msg_1",
+		Time:      "09:30",
+	}, 20)
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User2",
+		SenderID:  "102",
+		Content:   "今天天气真好",
+		MessageID: "msg_2",
+		Time:      "09:31",
+	}, 20)
 
 	snap, ok := sess.SnapshotGroupCompact(2)
 	if !ok {
 		t.Fatalf("expected SnapshotGroupCompact to succeed")
 	}
 	sess.CommitGroupCompact(snap, "群友互道早安并讨论天气很好")
-	sess.AppendGroupCompactMessage("[09:35] User3 (103) [msg_3]: 中午去吃什么？", 20)
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User3",
+		SenderID:  "103",
+		Content:   "中午去吃什么？",
+		MessageID: "msg_3",
+		Time:      "09:35",
+	}, 20)
 
 	resp, err := svc.GetSessionContext(context.Background(), connect.NewRequest(&v1.GetSessionContextRequest{
 		SessionId:   sessionID,
@@ -206,8 +227,22 @@ func TestGetSessionContext(t *testing.T) {
 	if resp.Msg.SummaryGroups[0].StartMessageId != "msg_1" || resp.Msg.SummaryGroups[0].EndMessageId != "msg_2" {
 		t.Errorf("unexpected summary group range: %v -> %v", resp.Msg.SummaryGroups[0].StartMessageId, resp.Msg.SummaryGroups[0].EndMessageId)
 	}
+	if len(resp.Msg.SummaryGroups[0].StructuredMessages) != 2 {
+		t.Fatalf("expected 2 structured summary messages, got %d", len(resp.Msg.SummaryGroups[0].StructuredMessages))
+	}
+	firstStructured := resp.Msg.SummaryGroups[0].StructuredMessages[0]
+	if firstStructured.SenderId != "101" || firstStructured.MessageId != "msg_1" || firstStructured.Time != "09:30" {
+		t.Errorf("unexpected structured summary metadata: %+v", firstStructured)
+	}
 	if len(resp.Msg.RecentMessages) != 1 {
 		t.Fatalf("expected 1 recent message, got %d", len(resp.Msg.RecentMessages))
+	}
+	if len(resp.Msg.RecentStructuredMessages) != 1 {
+		t.Fatalf("expected 1 recent structured message, got %d", len(resp.Msg.RecentStructuredMessages))
+	}
+	recentStructured := resp.Msg.RecentStructuredMessages[0]
+	if recentStructured.SenderId != "103" || recentStructured.MessageId != "msg_3" || recentStructured.Time != "09:35" {
+		t.Errorf("unexpected recent structured metadata: %+v", recentStructured)
 	}
 
 	// Before LLM invocation, system_prompt and model should be empty (never fabricated)

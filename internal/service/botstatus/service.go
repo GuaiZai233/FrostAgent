@@ -280,7 +280,7 @@ func (s *Service) GetSessionContext(
 	resp.History = historyMsgs
 
 	for _, g := range summaryGroups {
-		resp.SummaryGroups = append(resp.SummaryGroups, &v1.SummaryGroupInfoProto{
+		groupInfo := &v1.SummaryGroupInfoProto{
 			Summary:        g.Summary,
 			MessageIds:     g.MessageIDs,
 			StartMessageId: g.StartMessageID,
@@ -288,7 +288,14 @@ func (s *Service) GetSessionContext(
 			StartIndex:     int32(g.StartIndex),
 			EndIndex:       int32(g.EndIndex),
 			Messages:       g.Messages,
-		})
+		}
+		for _, message := range g.StructuredMsgs {
+			groupInfo.StructuredMessages = append(groupInfo.StructuredMessages, groupMessageToProto(message))
+		}
+		resp.SummaryGroups = append(resp.SummaryGroups, groupInfo)
+	}
+	for _, message := range recentStructuredMessages {
+		resp.RecentStructuredMessages = append(resp.RecentStructuredMessages, groupMessageToProto(message))
 	}
 
 	// Construct session context preview with XML tags (reflecting actual prompt structure)
@@ -306,6 +313,17 @@ func (s *Service) GetSessionContext(
 	resp.PromptText = promptBuilder.String()
 
 	return connect.NewResponse(resp), nil
+}
+
+func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoProto {
+	return &v1.GroupMessageInfoProto{
+		Role:      message.Role,
+		Sender:    message.Sender,
+		SenderId:  message.SenderID,
+		Content:   message.Content,
+		MessageId: message.MessageID,
+		Time:      message.Time,
+	}
 }
 
 // DeleteGroupSummary resets active compact state and removes its durable copy.

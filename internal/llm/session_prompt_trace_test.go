@@ -46,6 +46,43 @@ func TestSessionContext_PromptTrace(t *testing.T) {
 	}
 }
 
+func TestSessionContext_ClearResetsDerivedState(t *testing.T) {
+	sess := &SessionContext{
+		History: []ChatMessage{{Role: "user", Content: "hello"}},
+	}
+	sess.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Content:   "group message",
+		MessageID: "msg_1",
+	}, 20)
+	snapshot, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatal("expected group compact snapshot")
+	}
+	if !sess.CommitGroupCompact(snapshot, "summary") {
+		t.Fatal("expected group compact commit")
+	}
+	sess.SetDeliveryFailure(DeliveryFailure{Platform: "onebot", Message: "failed"})
+	sess.SetLastPromptTrace("system prompt", "model")
+
+	sess.Clear()
+
+	if len(sess.History) != 0 {
+		t.Fatalf("expected history to be cleared, got %d entries", len(sess.History))
+	}
+	groupContext := sess.SnapshotGroupContext(20, 4096, "")
+	if groupContext.RunningSummary != "" || len(groupContext.SummaryGroups) != 0 || len(groupContext.RecentMessages) != 0 {
+		t.Fatalf("expected group context to be cleared, got %+v", groupContext)
+	}
+	if failure := sess.TakeDeliveryFailure(); failure != nil {
+		t.Fatalf("expected delivery failure to be cleared, got %+v", failure)
+	}
+	systemPrompt, model := sess.LastPromptTrace()
+	if systemPrompt != "" || model != "" {
+		t.Fatalf("expected prompt trace to be cleared, got system=%q model=%q", systemPrompt, model)
+	}
+}
+
 func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	sessionManager := NewSessionManager()
 	sessionID := "mock_platform:group:10001"

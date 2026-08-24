@@ -23,7 +23,17 @@ export interface SummaryGroupInfo {
   startIndex?: number;
   endIndex?: number;
   messages?: string[];
+  structuredMessages?: StructuredGroupMessage[];
   parsedMessages?: GroupMessageItem[];
+}
+
+export interface StructuredGroupMessage {
+  role: string;
+  sender: string;
+  senderId: string;
+  content: string;
+  messageId: string;
+  time: string;
 }
 
 export interface ParsedPrompt {
@@ -170,6 +180,18 @@ function parseStructuredMessageJSONLine(line: string): GroupMessageItem | null {
   }
 }
 
+function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessageItem {
+  return {
+    role: record.role === 'assistant' ? 'assistant' : 'user',
+    sender: record.sender || undefined,
+    senderId: record.senderId || undefined,
+    id: record.messageId || undefined,
+    time: record.time || undefined,
+    content: record.content,
+    rawText: JSON.stringify(record),
+  };
+}
+
 /**
  * Builds a structured ParsedPrompt from backend GetSessionContext response.
  */
@@ -186,10 +208,12 @@ export function buildInspectorDataFromSessionContext(context: {
     startIndex?: number;
     endIndex?: number;
     messages?: string[];
+    structuredMessages?: StructuredGroupMessage[];
   }>;
   promptText?: string;
   systemPrompt?: string;
   model?: string;
+  recentStructuredMessages?: StructuredGroupMessage[];
 }): ParsedPrompt {
   const summaryGroups: SummaryGroupInfo[] = (context.summaryGroups || []).map((g) => {
     const rawMsgs = g.messages || [];
@@ -201,19 +225,18 @@ export function buildInspectorDataFromSessionContext(context: {
       startIndex: g.startIndex,
       endIndex: g.endIndex,
       messages: rawMsgs,
-      parsedMessages: rawMsgs.map((line) => {
-        const item = parseMessageLine(line);
-        item.isSummarized = true;
-        return item;
-      }),
+      structuredMessages: g.structuredMessages,
+      parsedMessages: (g.structuredMessages?.length
+        ? g.structuredMessages.map(groupMessageFromStructured)
+        : rawMsgs.map(parseMessageLine)
+      ).map((item) => ({ ...item, isSummarized: true })),
     };
   });
 
-  const recentMessages: GroupMessageItem[] = (context.recentMessages || []).map((line) => {
-    const item = parseMessageLine(line);
-    item.isSummarized = false;
-    return item;
-  });
+  const recentMessages: GroupMessageItem[] = (context.recentStructuredMessages?.length
+    ? context.recentStructuredMessages.map(groupMessageFromStructured)
+    : (context.recentMessages || []).map(parseMessageLine)
+  ).map((item) => ({ ...item, isSummarized: false }));
 
   return {
     raw: context.promptText || '',
@@ -222,7 +245,7 @@ export function buildInspectorDataFromSessionContext(context: {
     runningSummary: context.runningSummary,
     recentMessages,
     summaryGroups,
-    hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.messages?.length ?? 0) > 0),
+    hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.parsedMessages?.length ?? 0) > 0),
     responseContext: `当前会话: ${context.sessionId}\n平台: ${context.platform || 'unknown'}`,
   };
 }

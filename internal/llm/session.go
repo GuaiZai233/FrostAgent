@@ -889,9 +889,13 @@ func (s *SessionContext) Clear() {
 	s.History = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
 	s.groupCompactGeneration++
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
+	s.deliveryFailure = nil
+	s.lastSystemPrompt = ""
+	s.lastModelName = ""
 	s.UpdatedAt = time.Now()
 }
 
