@@ -41,5 +41,8 @@ jobs:
       - name: Install buf
         run: go install github.com/bufbuild/buf/cmd/buf@latest
 
+      - name: Run AstrBot plugin unit tests
+        run: python3 -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
+
       - name: Run checks
         run: make ci
