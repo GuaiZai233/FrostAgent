@@ -3,6 +3,7 @@ package astrbot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -555,5 +556,74 @@ func TestAstrBot_GroupRawContextAndDurableSeparation(t *testing.T) {
 	}
 	if strings.Contains(durableUserMsg, "<recent_group_messages>") {
 		t.Errorf("持久 Session History 严禁包含 <recent_group_messages>: %s", durableUserMsg)
+	}
+}
+
+func TestAstrBotTransportWriteFailureDoesNotCommitAssistantState(t *testing.T) {
+	t.Setenv("MEMORY_EXTRACT_BATCH_MIN", "3")
+	t.Setenv("MEMORY_EXTRACT_BATCH_MAX", "3")
+
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是一条发送失败的回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.MemoryWriter = memory.NewWriter(nil)
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_failed_write_001",
+		UserID:      "usr_failed_write",
+		SenderName:  "测试用户",
+		GroupID:     "grp_failed_write",
+		GroupName:   "传输失败测试群",
+		Content:     "请回复这条消息",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	captureGroupCompactMessage(event, engine)
+
+	reply(event, engine, &wsConn{})
+
+	sess := engine.SessionManager.GetOrCreate("astrbot:group:grp_failed_write")
+	history := sess.Snapshot()
+	if len(history) != 1 {
+		t.Fatalf("传输写入失败后只应保留 user 历史，实际消息数=%d", len(history))
+	}
+	if history[0].Role != core.RoleUser {
+		t.Fatalf("传输写入失败后历史只应包含 user，实际 role=%s", history[0].Role)
+	}
+	if content, _ := history[0].Content.(string); strings.Contains(content, "这是一条发送失败的回复") {
+		t.Fatalf("失败的 assistant 回复严禁进入历史: %s", content)
+	}
+	if pending := sess.PendingTurnCount(); pending != 0 {
+		t.Fatalf("传输写入失败后不应累计自动记忆提取，实际 pending=%d", pending)
+	}
+
+	groupContext := sess.SnapshotGroupContext(10, 1000, "")
+	for _, message := range groupContext.RecentStructuredMessages {
+		if message.Role == "assistant" || strings.Contains(message.Content, "这是一条发送失败的回复") {
+			t.Fatalf("失败的 assistant 回复严禁进入 compact buffer: %+v", message)
+		}
+	}
+
+	failure := sess.TakeDeliveryFailure()
+	if failure == nil {
+		t.Fatal("传输写入失败后应记录 DeliveryFailure")
+	}
+	if failure.Platform != "astrbot" || failure.Action != "send_message" {
+		t.Fatalf("DeliveryFailure 元数据不正确: %+v", failure)
+	}
+	if !strings.Contains(failure.Wording, "connection closed") {
+		t.Fatalf("DeliveryFailure 应包含传输错误，实际: %+v", failure)
 	}
 }

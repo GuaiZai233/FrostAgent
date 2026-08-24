@@ -305,16 +305,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
   }
 
   function isPromptEntry(entry: LogEntry): boolean {
-    const src = (entry.source || '').toLowerCase();
-    const content = entry.requestBody || entry.summary || '';
-    return (
-      src === 'llm' ||
-      src === 'llm.request' ||
-      src.startsWith('llm') ||
-      content.includes('<recent_group_messages>') ||
-      content.includes('<group_running_summary>') ||
-      (content.startsWith('{') && content.includes('"messages"'))
-    );
+    return Boolean(entry.requestBody?.trim());
   }
 
   function renderDetail() {
@@ -326,7 +317,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     }
 
     const hasPrompt = isPromptEntry(selectedEntry);
-    const promptPayload = selectedEntry.requestBody || selectedEntry.summary || '';
+    const promptPayload = selectedEntry.requestBody || '';
 
     detailContent.innerHTML = `
       <div class="flex flex-col gap-3.5">
@@ -374,7 +365,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
   function openSummaryDialog(entry: LogEntry) {
     const hasPrompt = isPromptEntry(entry);
-    const promptPayload = entry.requestBody || entry.summary || '';
+    const promptPayload = entry.requestBody || '';
 
     openDialog({
       title: `日志摘要 - ${entry.source || '日志'}`,

@@ -394,6 +394,14 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
+	if session != nil {
+		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
+			deliveryTag := deliveryFailure.FormatDeliveryContext()
+			if deliveryTag != "" {
+				requestPrompt += fmt.Sprintf("\n\n%s", deliveryTag)
+			}
+		}
+	}
 	if groupSnapshot.RunningSummary != "" {
 		requestPrompt += fmt.Sprintf(
 			"\n\n<group_running_summary>\n%s\n</group_running_summary>",
@@ -408,6 +416,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	var (
 		replyText   string
 		receiptText string
+		runResult   llm.AgentRunResult
 	)
 
 	if engine != nil && session != nil {
@@ -499,7 +508,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			return nil
 		}
 
-		runResult := engine.RunMessagesWithContext(messages, llm.RunContext{
+		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Owner:     owner,
 			OwnerType: ownerType,
 			SendHook:  sendHook,
@@ -532,68 +541,82 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			return
 		}
 
-		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
-		engine.TrimSession(session)
-
-		if runResult.MemoryWritten {
-			logs.Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-		} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
-			pendingUserText := userText
-			if event.MessageType == "group" {
-				pendingUserText = formatGroupSpeakerMessage(event, userText)
-			}
-			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-				{
-					Owner:     owner,
-					OwnerType: ownerType,
-					Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-				},
-				{
-					Owner:     owner,
-					OwnerType: ownerType,
-					Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-				},
-			})
-		}
 	} else {
 		replyText = "智能体引擎未就绪"
 	}
 
+	sentReplyText := replyText
 	if receiptText != "" {
-		replyText = replyText + "\n\n" + receiptText
+		sentReplyText += "\n\n" + receiptText
 	}
 
 	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
 	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
-	if err := sendDirectReply(event, conn, replyText); err == nil {
-		if event.MessageType == "group" && engine != nil && session != nil {
-			botReply := extractBotReplyText(replyText)
-			if strings.TrimSpace(botReply) != "" {
-				botName := os.Getenv("BOT_NAME")
-				if botName == "" {
-					botName = "霜降"
-				}
-				var maxBufferSize int
-				if engine.GroupCompactor != nil {
-					maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-				}
-				session.AppendGroupCompactMessage(
-					llm.GroupCompactMessage{
-						Role:    "assistant",
-						Sender:  botName,
-						Content: strings.TrimSpace(botReply),
-						Time:    time.Now().Format("15:04:05"),
-					},
-					maxBufferSize,
-				)
-				if engine.GroupCompactor != nil {
-					platform := event.Platform
-					if platform == "" {
-						platform = "astrbot"
-					}
-					owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
-					engine.GroupCompactor.Trigger(session, owner)
-				}
+	if err := sendDirectReply(event, conn, sentReplyText); err != nil {
+		if session != nil {
+			session.SetDeliveryFailure(llm.DeliveryFailure{
+				Platform: platform,
+				Action:   "send_message",
+				Wording:  err.Error(),
+			})
+			if engine != nil {
+				engine.TrimSession(session)
+			}
+		}
+		return
+	}
+
+	if engine == nil || session == nil {
+		return
+	}
+
+	session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
+	engine.TrimSession(session)
+
+	if runResult.MemoryWritten {
+		logs.Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
+		pendingUserText := userText
+		if event.MessageType == "group" {
+			pendingUserText = formatGroupSpeakerMessage(event, userText)
+		}
+		engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+			{
+				Owner:     owner,
+				OwnerType: ownerType,
+				Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
+			},
+			{
+				Owner:     owner,
+				OwnerType: ownerType,
+				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+			},
+		})
+	}
+
+	if event.MessageType == "group" {
+		botReply := extractBotReplyText(sentReplyText)
+		if strings.TrimSpace(botReply) != "" {
+			botName := os.Getenv("BOT_NAME")
+			if botName == "" {
+				botName = "霜降"
+			}
+			var maxBufferSize int
+			if engine.GroupCompactor != nil {
+				maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+			}
+			session.AppendGroupCompactMessage(
+				llm.GroupCompactMessage{
+					Role:    "assistant",
+					Sender:  botName,
+					Content: strings.TrimSpace(botReply),
+					Time:    time.Now().Format("15:04:05"),
+				},
+				maxBufferSize,
+			)
+			if engine.GroupCompactor != nil {
+				owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
+				engine.GroupCompactor.Trigger(session, owner)
 			}
 		}
 	}

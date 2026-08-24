@@ -259,7 +259,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
       }
 
       if (Array.isArray(json.messages)) {
-        const parts: string[] = [];
+        let lastUserContent: string | undefined;
         for (const m of json.messages as Array<{ role?: string; content?: unknown }>) {
           const role = m.role || 'unknown';
           let contentStr = '';
@@ -277,10 +277,10 @@ export function parsePrompt(raw: string): ParsedPrompt {
               ? `${result.systemPrompt}\n\n${contentStr}`
               : contentStr;
           } else if (role === 'user') {
-            parts.push(contentStr);
+            lastUserContent = contentStr;
           }
         }
-        textToParse = parts.join('\n\n');
+        textToParse = lastUserContent ?? '';
       }
     } catch {
       // Not valid JSON, continue with raw text parsing
