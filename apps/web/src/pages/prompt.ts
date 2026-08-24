@@ -241,9 +241,8 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
         return `
           <div
-            class="card prompt-session-card p-2.5 cursor-pointer ${isSelected ? 'is-selected' : ''}"
+            class="prompt-session-card ${isSelected ? 'is-selected' : ''}"
             data-session-id="${escapeHtml(s.sessionId)}"
-            style="user-select: none;"
           >
             <div class="flex items-center justify-between gap-1 mb-1">
               <div class="flex items-center gap-1.5 overflow-hidden">
@@ -262,7 +261,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
             ${
               s.groupSummary
                 ? `
-              <div class="text-[10px] text-info bg-info/10 rounded px-1.5 py-0.5 mt-1.5 truncate" title="${escapeHtml(s.groupSummary)}">
+              <div class="prompt-session-summary" title="${escapeHtml(s.groupSummary)}">
                 摘要: ${escapeHtml(s.groupSummary)}
               </div>
             `

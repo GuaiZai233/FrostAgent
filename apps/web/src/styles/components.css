@@ -595,9 +595,17 @@ dialog.dialog-modal::backdrop {
 }
 
 .prompt-session-card {
-  border-color: var(--border);
+  display: block;
+  flex-shrink: 0;
+  gap: 0;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background-color: var(--card);
+  color: var(--card-foreground);
   box-shadow: none;
+  cursor: pointer;
+  user-select: none;
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -609,6 +617,19 @@ dialog.dialog-modal::backdrop {
 .prompt-session-card.is-selected {
   border-color: var(--primary);
   background-color: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+
+.prompt-session-summary {
+  margin-top: 0.375rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  color: var(--info);
+  background-color: var(--info-bg);
+  font-size: 0.625rem;
+  line-height: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prompt-section {
