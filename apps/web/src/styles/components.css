@@ -594,6 +594,23 @@ dialog.dialog-modal::backdrop {
   gap: 1rem;
 }
 
+.prompt-session-card {
+  border-color: var(--border);
+  background-color: var(--card);
+  box-shadow: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.prompt-session-card:hover {
+  border-color: var(--ring);
+  background-color: color-mix(in srgb, var(--muted) 50%, var(--card));
+}
+
+.prompt-session-card.is-selected {
+  border-color: var(--primary);
+  background-color: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+
 .prompt-section {
   display: flex;
   flex-direction: column;

@@ -125,7 +125,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
           </div>
 
           <!-- Session List Items Container -->
-          <div class="flex flex-col gap-1.5 overflow-y-auto pr-1" id="prompt-session-list" style="min-height: 12rem; max-height: 32rem;">
+          <div class="flex flex-col gap-2 overflow-y-auto pr-1" id="prompt-session-list" style="min-height: 12rem; max-height: 32rem;">
             <div class="text-center text-muted text-xs p-6">
               <span class="spinner"></span>
               <div class="mt-2">加载会话列表中...</div>
@@ -241,9 +241,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
         return `
           <div
-            class="card p-2.5 cursor-pointer transition-all hover-border ${
-              isSelected ? 'border-primary bg-primary/5 shadow-xs' : 'border-border'
-            }"
+            class="card prompt-session-card p-2.5 cursor-pointer ${isSelected ? 'is-selected' : ''}"
             data-session-id="${escapeHtml(s.sessionId)}"
             style="user-select: none;"
           >
