@@ -153,6 +153,91 @@ func TestHandleWSPrivateMessage(t *testing.T) {
 	t.Logf("✅ 私聊消息测试通过，回复内容: %v", params["message"])
 }
 
+func TestReplySilentTurnKeepsConsecutiveUserHistory(t *testing.T) {
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:   "call_silent",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      llm.StaySilentToolName,
+							Arguments: `{}`,
+						},
+					}},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "第二轮正常回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	staySilent := tools.StaySilentTool()
+	engine.ToolRegistry[staySilent.Name()] = staySilent
+	conn := newWSConnection(nil)
+	privateEvent := func(messageID int32, text string) model.OneBotEvent {
+		message, err := json.Marshal([]map[string]any{{
+			"type": "text",
+			"data": map[string]string{"text": text},
+		}})
+		if err != nil {
+			t.Fatalf("序列化消息失败: %v", err)
+		}
+		return model.OneBotEvent{
+			MessageType: "private",
+			UserID:      987654,
+			MessageID:   messageID,
+			Message:     message,
+		}
+	}
+
+	reply("send_private_msg", "user_id", "987654", "silent_1", privateEvent(201, "第一轮无需回复"), engine, conn, "", "")
+	firstHistory := engine.SessionManager.GetOrCreate("private:987654").Snapshot()
+	if len(firstHistory) != 1 || firstHistory[0].Role != "user" {
+		t.Fatalf("静默轮次应只保留 user message，实际=%+v", firstHistory)
+	}
+	if content, ok := firstHistory[0].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+		t.Fatal("静默轮次不应写入 AssistantSilentMarker")
+	}
+
+	reply("send_private_msg", "user_id", "987654", "silent_2", privateEvent(202, "第二轮请回复"), engine, conn, "", "")
+
+	history := engine.SessionManager.GetOrCreate("private:987654").Snapshot()
+	if len(history) != 3 {
+		t.Fatalf("期望历史为 user/user/assistant 三条，实际=%d: %+v", len(history), history)
+	}
+	wantRoles := []string{"user", "user", "assistant"}
+	for i, want := range wantRoles {
+		if history[i].Role != want {
+			t.Fatalf("history[%d] role 期望=%s，实际=%s", i, want, history[i].Role)
+		}
+		if content, ok := history[i].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+			t.Fatalf("history[%d] 不应包含静默标记", i)
+		}
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) < 2 {
+		provider.mu.Unlock()
+		t.Fatalf("期望至少两次 LLM 请求，实际=%d", len(provider.requests))
+	}
+	secondRequest := provider.requests[1]
+	provider.mu.Unlock()
+	if len(secondRequest.Messages) < 2 {
+		t.Fatalf("第二次请求历史过短: %+v", secondRequest.Messages)
+	}
+	last := len(secondRequest.Messages) - 1
+	if secondRequest.Messages[last-1].Role != core.RoleUser || secondRequest.Messages[last].Role != core.RoleUser {
+		t.Fatalf("第二次请求应保留连续 user role，实际尾部=%s/%s", secondRequest.Messages[last-1].Role, secondRequest.Messages[last].Role)
+	}
+}
+
 func TestHandleWSGroupMessageMentioned(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
 	srv, wsURL := startWSTestServer(engine)
@@ -1793,4 +1878,3 @@ func TestWSGroupMessage_RawContextAndDurableSeparation(t *testing.T) {
 		t.Errorf("持久 Session History 严禁包含 <recent_group_messages>: %s", durableUserMsg)
 	}
 }
-

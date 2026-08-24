@@ -40,8 +40,9 @@ const (
 )
 
 // AgentRunResult carries the final content and side-effect decisions from one
-// agent loop. Silent is true only when the model explicitly and successfully
-// invokes the terminal stay_silent tool; provider failures never set it.
+// agent loop. Silent is true when the model successfully invokes the terminal
+// stay_silent tool or returns the standalone internal silence marker. Provider
+// failures never set it.
 type AgentRunResult struct {
 	Content       string
 	MemoryWritten bool
@@ -575,8 +576,16 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
-			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			contentStr, _ := responseMsg.Content.(string)
+			if isStandaloneAssistantSilentMarker(contentStr) {
+				logs.Warn(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理")
+				return AgentRunResult{
+					MemoryWritten: memoryWritten,
+					Silent:        true,
+					Usage:         totalUsage,
+				}
+			}
+			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
@@ -662,6 +671,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		MemoryWritten: memoryWritten,
 		Usage:         totalUsage,
 	}
+}
+
+// isStandaloneAssistantSilentMarker prevents the internal history marker from
+// leaking to adapters when a model imitates a previous silent assistant turn.
+// Embedded references remain ordinary user-visible content.
+func isStandaloneAssistantSilentMarker(content string) bool {
+	return strings.TrimSpace(content) == AssistantSilentMarker
 }
 
 // staySilentConflict rejects ambiguous parallel tool batches before any tool

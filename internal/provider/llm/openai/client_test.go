@@ -81,3 +81,43 @@ func TestClient_Chat_NilUsageGraceful(t *testing.T) {
 		t.Errorf("expected nil Usage, got %+v", resp.Usage)
 	}
 }
+
+func TestClient_Chat_PreservesConsecutiveUserRoles(t *testing.T) {
+	var received chatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "收到",
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-api-key")
+	_, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "test-model",
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: "message A"},
+			{Role: core.RoleUser, Content: "message B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+
+	if len(received.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(received.Messages))
+	}
+	for i, want := range []string{"message A", "message B"} {
+		if received.Messages[i].Role != "user" || received.Messages[i].Content != want {
+			t.Fatalf("message[%d] expected user %q, got role=%s content=%v", i, want, received.Messages[i].Role, received.Messages[i].Content)
+		}
+	}
+}

@@ -83,3 +83,27 @@ func TestEngineTrimSession(t *testing.T) {
 	// nil 会话不 panic。
 	e.TrimSession(nil)
 }
+
+func TestEngineTrimSessionPreservesConsecutiveUserMessages(t *testing.T) {
+	t.Setenv("MAX_CONTEXT_MESSAGES", "")
+	sm := NewSessionManager()
+	sm.MaxHistory = 2
+	session := &SessionContext{
+		History: []ChatMessage{
+			{Role: "assistant", Content: "旧回复"},
+			{Role: "user", Content: "message A"},
+			{Role: "user", Content: "message B"},
+		},
+	}
+
+	(&Engine{SessionManager: sm}).TrimSession(session)
+
+	if len(session.History) != 2 {
+		t.Fatalf("expected 2 messages after trim, got %d", len(session.History))
+	}
+	for i, want := range []string{"message A", "message B"} {
+		if session.History[i].Role != "user" || session.History[i].Content != want {
+			t.Fatalf("history[%d] expected user %q, got role=%s content=%v", i, want, session.History[i].Role, session.History[i].Content)
+		}
+	}
+}
