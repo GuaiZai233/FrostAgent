@@ -59,6 +59,21 @@ make build-web    # Build frontend only
 
 Create a `.env` file or set the corresponding fields in your system environment variables.
 
+By default, the management UI and adapter WebSockets listen only on
+`127.0.0.1`. If either listener is changed to a non-loopback address, configure
+its access token as well:
+
+- `ADMIN_API_TOKEN` protects the management UI and ConnectRPC APIs. Browser
+  access uses HTTP Basic authentication; enter any username and the token as the
+  password. API clients may send `Authorization: Bearer <token>`.
+- `WS_ACCESS_TOKEN` protects the OneBot and AstrBot WebSocket endpoints. The
+  upstream client must send `Authorization: Bearer <token>` during the upgrade.
+- `HTTP_ALLOWED_ORIGINS` optionally permits exact cross-origin management UI
+  origins as a comma-separated list. Same-origin access is always allowed.
+
+Use TLS or an authenticated reverse proxy when exposing either listener outside
+the local machine.
+
 ### 3. Start the Service
 
 ```bash

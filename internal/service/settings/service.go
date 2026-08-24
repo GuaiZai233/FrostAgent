@@ -24,8 +24,11 @@ var knownEnvVars = map[string]envEntry{
 	"UPSTREAM_ENDPOINT":           {"上游 API 端点 URL，支持 OpenAI 兼容服务", false, true},
 	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true},
 	"CODER_API_KEY":               {"Coder API 密钥", true, true},
+	"ADMIN_API_TOKEN":             {"远程管理面访问 Token（非回环监听时必填）", true, true},
+	"WS_ACCESS_TOKEN":             {"远程 WebSocket 访问 Token（非回环监听时必填）", true, true},
 	"LISTEN_ADDR":                 {"HTTP 监听地址", false, true},
 	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true},
+	"HTTP_ALLOWED_ORIGINS":        {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true},
 	"SYSTEM_PROMPT":               {"系统提示词", false, false},
 	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true},
 	"MODEL_NAME":                  {"模型名称", false, true},
@@ -155,7 +158,7 @@ func (s *Service) UpdateRawEnvFile(
 	content := req.Msg.GetContent()
 
 	tmpPath := s.envPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
 			Error:   fmt.Sprintf("write temp file: %v", err),
@@ -240,7 +243,7 @@ func readEnvLines(path string) ([]string, error) {
 func writeEnvAtomic(path string, lines []string) error {
 	tmpPath := path + ".tmp"
 
-	f, err := os.Create(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
@@ -268,5 +271,5 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	return os.WriteFile(dst, data, 0600)
 }

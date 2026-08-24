@@ -59,6 +59,19 @@ make build-web    # 仅构建前端
 
 创建 `.env` 文件或在系统环境变量中设置相关字段。
 
+管理面与适配器 WebSocket 默认只监听 `127.0.0.1`。若将任一监听地址改为
+非回环地址，必须同时配置对应访问 Token：
+
+- `ADMIN_API_TOKEN` 保护管理页面与 ConnectRPC API。浏览器访问时会弹出
+  HTTP Basic 登录框，用户名可任意填写，密码填写该 Token；API 客户端也可发送
+  `Authorization: Bearer <token>`。
+- `WS_ACCESS_TOKEN` 保护 OneBot 与 AstrBot WebSocket，连接方必须在升级请求中发送
+  `Authorization: Bearer <token>`。
+- `HTTP_ALLOWED_ORIGINS` 可按英文逗号分隔配置允许跨域访问管理面的精确 Origin；
+  同源访问始终允许。
+
+若需要从其他机器访问，请同时使用 TLS 或带鉴权的反向代理。
+
 ### 3. 启动服务
 
 ```bash
