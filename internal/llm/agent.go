@@ -143,7 +143,7 @@ func (e *Engine) RunMessagesWithContext(
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
 		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
-		systemPrompt = memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
+		systemPrompt = "当前系统时间：" + memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
 
 		if e.DialoguePrompt != "" {
 			systemPrompt += "\n\n" + e.DialoguePrompt
@@ -178,6 +178,26 @@ func (e *Engine) RunMessagesWithContext(
 		messages = append([]ChatMessage{
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
+	}
+
+	// Persist the assembled system prompt so Session Context Inspector can show
+	// the real dynamically-built prompt (time + dialogue + memory) rather than a
+	// static reconstruction. SessionID is intentionally separate from the memory
+	// owner namespace (for example private:123 versus owner 123).
+	sessionID := strings.TrimSpace(runContext.SessionID)
+	if sessionID == "" {
+		// Backward compatibility for direct callers whose owner is also the
+		// session key. Adapters should always provide SessionID explicitly.
+		sessionID = owner
+	}
+	if sessionID != "" && e.SessionManager != nil {
+		if sessCore, ok := e.SessionManager.Get(sessionID); ok {
+			if sess, isSess := sessCore.(*SessionContext); isSess {
+				if sysContent, ok := messages[0].Content.(string); ok {
+					sess.SetLastPromptTrace(sysContent, e.ModelName)
+				}
+			}
+		}
 	}
 
 	ctx := withRunContext(context.Background(), runContext)
@@ -497,6 +517,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
+			logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			if billingActive && reservationID != "" {
 				rCtx, rCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
 				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
@@ -654,8 +675,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			// 只有校验通过的 send_message 才能触发实际发送。
 			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && toolSucceeded && ok && runContext.SendHook != nil {
-				runContext.SendHook(toolResult)
-				toolResult = "消息已发送"
+				if err := runContext.SendHook(toolResult); err != nil {
+					toolResult = fmt.Sprintf("消息发送失败：%v", err)
+				} else {
+					toolResult = "消息已发送"
+				}
 			}
 
 			toolMsg := ChatMessage{

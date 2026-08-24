@@ -586,3 +586,281 @@ dialog.dialog-modal::backdrop {
 .hover-bg:hover {
   background-color: var(--muted);
 }
+
+/* ==================== PROMPT INSPECTOR & SUMMARY GROUP ==================== */
+.prompt-inspector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.prompt-session-card {
+  display: block;
+  flex-shrink: 0;
+  gap: 0;
+  overflow: visible;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--card);
+  color: var(--card-foreground);
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.prompt-session-card:hover {
+  border-color: var(--ring);
+  background-color: color-mix(in srgb, var(--muted) 50%, var(--card));
+}
+
+.prompt-session-card.is-selected {
+  border-color: var(--primary);
+  background-color: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+
+.prompt-session-summary {
+  display: block;
+  width: 100%;
+  margin-top: 0.375rem;
+  padding: 0.125rem 0.375rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--info);
+  background-color: var(--info-bg);
+  font-family: inherit;
+  font-size: 0.625rem;
+  line-height: 1rem;
+  text-align: left;
+  appearance: none;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.prompt-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.prompt-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.prompt-section-body {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--card);
+  overflow: hidden;
+}
+
+/* Message List Container */
+.group-messages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem;
+}
+
+/* Summary Group Wrapper */
+.summary-group-wrapper {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 0.55fr);
+  align-items: start;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  background-color: var(--summary-group-bg);
+  border: 1px solid var(--summary-group-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease;
+}
+
+.summary-group-wrapper:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.summary-group-messages {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--summary-group-border);
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--summary-group-bg) 55%, var(--card));
+}
+
+/* Message Row Entry */
+.group-msg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  transition: background-color 0.12s ease;
+}
+
+.group-msg-row:last-child {
+  border-bottom: none;
+}
+
+.summary-group-wrapper .group-msg-row {
+  border-bottom-color: rgba(59, 130, 246, 0.08);
+}
+
+.summary-group-wrapper .group-msg-row.is-assistant {
+  background-color: rgba(168, 85, 247, 0.04);
+}
+
+.group-msg-row.is-uncompacted {
+  background-color: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.375rem;
+}
+
+.group-msg-row.is-uncompacted.is-assistant {
+  border-color: rgba(168, 85, 247, 0.25);
+  background-color: rgba(168, 85, 247, 0.03);
+}
+
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.msg-role-badge {
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.msg-time {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.msg-sender {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.msg-id {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.msg-content {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--foreground);
+  word-break: break-word;
+}
+
+/* Expandable current group compact card */
+.summary-compact-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--info-bg) 82%, var(--card));
+}
+
+.summary-compact-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.summary-compact-card-header::-webkit-details-marker {
+  display: none;
+}
+
+.summary-compact-card-header:hover {
+  background-color: var(--summary-group-bg-hover);
+}
+
+.summary-compact-card-title-wrap,
+.summary-compact-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.summary-compact-card-title-wrap {
+  min-width: 0;
+}
+
+.summary-compact-card-icon,
+.summary-compact-card-chevron {
+  display: flex;
+  align-items: center;
+  color: var(--info);
+}
+
+.summary-compact-card-title {
+  min-width: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.summary-compact-card-meta {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+
+.summary-compact-card-chevron {
+  transition: transform 0.15s ease;
+}
+
+.summary-compact-card[open] .summary-compact-card-chevron {
+  transform: rotate(180deg);
+}
+
+.summary-compact-card-body {
+  padding: 0.75rem;
+  border-top: 1px solid var(--info-border);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--foreground);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .summary-group-wrapper {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+

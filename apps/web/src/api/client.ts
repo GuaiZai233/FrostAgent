@@ -11,6 +11,7 @@ import {
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
+  type GetSessionContextResponse,
   type DeleteGroupSummaryResponse,
   type ListLogsResponse,
   type LogEntry,
@@ -77,6 +78,13 @@ export const api = {
         pageSize,
         pageToken,
       },
+    });
+  },
+
+  getSessionContext(sessionId: string, recentLimit = 50): Promise<GetSessionContextResponse> {
+    return botClient.getSessionContext({
+      sessionId,
+      recentLimit,
     });
   },
 

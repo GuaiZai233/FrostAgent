@@ -12,6 +12,7 @@ const scopeTo = (configs, files) =>
 export default tseslint.config(
   {
     ignores: [
+      '.claude/**',
       '**/dist/**',
       '**/out-tsc/**',
       'bin/**',

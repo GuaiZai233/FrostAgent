@@ -25,9 +25,9 @@ func TestDerivePlatform(t *testing.T) {
 		{"aiocqhttp:group:100001", "aiocqhttp"},
 		{"AIOCQHTTP:group:100001", "aiocqhttp"},
 		{"telegram:group:999", "telegram"},
-		{"group:12345", "group"},
-		{"GROUP:12345", "group"},
-		{"private:12345", "private"},
+		{"group:12345", "onebot"},
+		{"GROUP:12345", "onebot"},
+		{"private:12345", "onebot"},
 		{"discord_group_123", "discord"},
 		{"telegram_123", "telegram"},
 		{"some_random_id", "unknown"},
@@ -151,5 +151,122 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	_, exists, _ := store.Get("astrbot:group:999999")
 	if exists {
 		t.Errorf("expected summary for astrbot:group:999999 to be deleted")
+	}
+}
+
+func TestGetSessionContext(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to create group summary store: %v", err)
+	}
+
+	sessionManager := llm.NewSessionManager()
+	sessionManager.SetGroupSummaryStore(store)
+
+	engine := &llm.Engine{
+		SessionManager:    sessionManager,
+		GroupSummaryStore: store,
+		StartedAt:         time.Now(),
+		ModelName:         "test-model",
+	}
+
+	svc := New(engine, "test-v1")
+
+	sessionID := "aiohttp:group:100001"
+	sess := sessionManager.GetOrCreate(sessionID)
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User1",
+		SenderID:  "101",
+		Content:   "早上好",
+		MessageID: "msg_1",
+		Time:      "09:30",
+	}, 20)
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User2",
+		SenderID:  "102",
+		Content:   "今天天气真好",
+		MessageID: "msg_2",
+		Time:      "09:31",
+	}, 20)
+
+	snap, ok := sess.SnapshotGroupCompact(2)
+	if !ok {
+		t.Fatalf("expected SnapshotGroupCompact to succeed")
+	}
+	sess.CommitGroupCompact(snap, "群友互道早安并讨论天气很好")
+	sess.AppendGroupCompactMessage(llm.GroupCompactMessage{
+		Role:      "user",
+		Sender:    "User3",
+		SenderID:  "103",
+		Content:   "中午去吃什么？",
+		MessageID: "msg_3",
+		Time:      "09:35",
+	}, 20)
+
+	resp, err := svc.GetSessionContext(context.Background(), connect.NewRequest(&v1.GetSessionContextRequest{
+		SessionId:   sessionID,
+		RecentLimit: 20,
+	}))
+	if err != nil {
+		t.Fatalf("GetSessionContext failed: %v", err)
+	}
+
+	if resp.Msg.SessionId != sessionID {
+		t.Errorf("expected session_id %s, got %s", sessionID, resp.Msg.SessionId)
+	}
+	if resp.Msg.RunningSummary != "群友互道早安并讨论天气很好" {
+		t.Errorf("expected running_summary %q, got %q", "群友互道早安并讨论天气很好", resp.Msg.RunningSummary)
+	}
+	if len(resp.Msg.SummaryGroups) != 1 {
+		t.Fatalf("expected 1 summary group, got %d", len(resp.Msg.SummaryGroups))
+	}
+	if resp.Msg.SummaryGroups[0].StartMessageId != "msg_1" || resp.Msg.SummaryGroups[0].EndMessageId != "msg_2" {
+		t.Errorf("unexpected summary group range: %v -> %v", resp.Msg.SummaryGroups[0].StartMessageId, resp.Msg.SummaryGroups[0].EndMessageId)
+	}
+	if len(resp.Msg.SummaryGroups[0].StructuredMessages) != 2 {
+		t.Fatalf("expected 2 structured summary messages, got %d", len(resp.Msg.SummaryGroups[0].StructuredMessages))
+	}
+	firstStructured := resp.Msg.SummaryGroups[0].StructuredMessages[0]
+	if firstStructured.SenderId != "101" || firstStructured.MessageId != "msg_1" || firstStructured.Time != "09:30" {
+		t.Errorf("unexpected structured summary metadata: %+v", firstStructured)
+	}
+	if len(resp.Msg.RecentMessages) != 1 {
+		t.Fatalf("expected 1 recent message, got %d", len(resp.Msg.RecentMessages))
+	}
+	if len(resp.Msg.RecentStructuredMessages) != 1 {
+		t.Fatalf("expected 1 recent structured message, got %d", len(resp.Msg.RecentStructuredMessages))
+	}
+	recentStructured := resp.Msg.RecentStructuredMessages[0]
+	if recentStructured.SenderId != "103" || recentStructured.MessageId != "msg_3" || recentStructured.Time != "09:35" {
+		t.Errorf("unexpected recent structured metadata: %+v", recentStructured)
+	}
+
+	// Before LLM invocation, system_prompt and model should be empty (never fabricated)
+	if resp.Msg.SystemPrompt != "" {
+		t.Errorf("expected empty system_prompt before request, got %q", resp.Msg.SystemPrompt)
+	}
+	if resp.Msg.Model != "" {
+		t.Errorf("expected empty model before request, got %q", resp.Msg.Model)
+	}
+
+	// Simulate dynamic prompt assembly and LLM request trace
+	expectedSysPrompt := "You are FrostAgent\nCurrent Time: 2026-08-23 10:00:00\nDialogue few-shots..."
+	sess.SetLastPromptTrace(expectedSysPrompt, "gpt-4o-mini")
+
+	respAfter, err := svc.GetSessionContext(context.Background(), connect.NewRequest(&v1.GetSessionContextRequest{
+		SessionId: sessionID,
+	}))
+	if err != nil {
+		t.Fatalf("GetSessionContext after trace failed: %v", err)
+	}
+	if respAfter.Msg.SystemPrompt != expectedSysPrompt {
+		t.Errorf("expected system_prompt %q, got %q", expectedSysPrompt, respAfter.Msg.SystemPrompt)
+	}
+	if respAfter.Msg.Model != "gpt-4o-mini" {
+		t.Errorf("expected model 'gpt-4o-mini', got %q", respAfter.Msg.Model)
 	}
 }

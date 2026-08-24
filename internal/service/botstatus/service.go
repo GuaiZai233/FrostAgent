@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -213,6 +214,118 @@ func (s *Service) GetSessions(
 	return connect.NewResponse(resp), nil
 }
 
+// GetSessionContext returns the group session's active running summary, recent
+// group chat messages, latest compact-batch mapping, and formatted prompt text.
+func (s *Service) GetSessionContext(
+	ctx context.Context,
+	req *connect.Request[v1.GetSessionContextRequest],
+) (*connect.Response[v1.GetSessionContextResponse], error) {
+	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	if sessionID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
+	}
+
+	limit := int(req.Msg.GetRecentLimit())
+	if limit <= 0 {
+		limit = 50
+	}
+
+	platform := derivePlatform(sessionID)
+	resp := &v1.GetSessionContextResponse{
+		SessionId: sessionID,
+		Platform:  platform,
+	}
+
+	var runningSummary string
+	var summaryGroups []llm.SummaryGroup
+	var recentMessages []string
+	var recentStructuredMessages []llm.GroupCompactMessage
+	var historyMsgs []*v1.SessionHistoryMessageProto
+
+	if s.engine.SessionManager != nil {
+		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				snap := sess.SnapshotGroupContext(limit, 100000, "")
+				runningSummary = snap.RunningSummary
+				summaryGroups = snap.SummaryGroups
+				recentMessages = snap.RecentMessages
+				recentStructuredMessages = snap.RecentStructuredMessages
+
+				lastSysPrompt, lastModel := sess.LastPromptTrace()
+				resp.SystemPrompt = lastSysPrompt
+				resp.Model = lastModel
+
+				sess.Lock()
+				for _, h := range sess.History {
+					contentStr := fmt.Sprintf("%v", h.Content)
+					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
+						Role:    h.Role,
+						Content: contentStr,
+					})
+				}
+				sess.Unlock()
+			}
+		}
+	}
+
+	// Fallback to durable summary store if active summary is empty
+	if runningSummary == "" && s.engine.GroupSummaryStore != nil {
+		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
+			runningSummary = rec.Summary
+		}
+	}
+
+	resp.RunningSummary = runningSummary
+	resp.RecentMessages = recentMessages
+	resp.History = historyMsgs
+
+	for _, g := range summaryGroups {
+		groupInfo := &v1.SummaryGroupInfoProto{
+			Summary:        g.Summary,
+			MessageIds:     g.MessageIDs,
+			StartMessageId: g.StartMessageID,
+			EndMessageId:   g.EndMessageID,
+			StartIndex:     int32(g.StartIndex),
+			EndIndex:       int32(g.EndIndex),
+			Messages:       g.Messages,
+		}
+		for _, message := range g.StructuredMsgs {
+			groupInfo.StructuredMessages = append(groupInfo.StructuredMessages, groupMessageToProto(message))
+		}
+		resp.SummaryGroups = append(resp.SummaryGroups, groupInfo)
+	}
+	for _, message := range recentStructuredMessages {
+		resp.RecentStructuredMessages = append(resp.RecentStructuredMessages, groupMessageToProto(message))
+	}
+
+	// Construct session context preview with XML tags (reflecting actual prompt structure)
+	var promptBuilder strings.Builder
+	if runningSummary != "" {
+		promptBuilder.WriteString("<group_running_summary>\n")
+		promptBuilder.WriteString(runningSummary)
+		promptBuilder.WriteString("\n</group_running_summary>\n\n")
+	}
+	if len(recentStructuredMessages) > 0 {
+		promptBuilder.WriteString(llm.FormatRecentGroupMessagesContext(recentStructuredMessages))
+		promptBuilder.WriteString("\n\n")
+	}
+	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
+	resp.PromptText = promptBuilder.String()
+
+	return connect.NewResponse(resp), nil
+}
+
+func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoProto {
+	return &v1.GroupMessageInfoProto{
+		Role:      message.Role,
+		Sender:    message.Sender,
+		SenderId:  message.SenderID,
+		Content:   message.Content,
+		MessageId: message.MessageID,
+		Time:      message.Time,
+	}
+}
+
 // DeleteGroupSummary resets active compact state and removes its durable copy.
 func (s *Service) DeleteGroupSummary(
 	ctx context.Context,
@@ -254,6 +367,12 @@ func derivePlatform(sessionID string) string {
 		return "astrbot"
 	}
 	if strings.HasPrefix(s, "onebot:") || strings.HasPrefix(s, "qq:") {
+		return "onebot"
+	}
+	// Native OneBot sessions predate platform-prefixed keys and use
+	// group:<id> / private:<id>. Preserve their adapter identity so the web
+	// inspector can filter them as OneBot sessions.
+	if strings.HasPrefix(s, "group:") || strings.HasPrefix(s, "private:") {
 		return "onebot"
 	}
 	if platform, _, ok := strings.Cut(s, ":"); ok {

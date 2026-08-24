@@ -153,3 +153,76 @@ func TestSnapshotGroupContext_RingBufferOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotGroupContext_SummaryGroups(t *testing.T) {
+	s := &SessionContext{}
+	s.AppendGroupCompactMessage("UserA: 路线定了吗？", 20, "msg_1")
+	s.AppendGroupCompactMessage("UserB: 推荐走龙脊线", 20, "msg_2")
+	s.AppendGroupCompactMessage("UserA: 周六上午9点集合", 20, "msg_3")
+
+	compactSnap, ready := s.SnapshotGroupCompact(3)
+	if !ready {
+		t.Fatalf("expected compact snapshot to be ready")
+	}
+	if len(compactSnap.MessageIDs) != 3 || compactSnap.MessageIDs[0] != "msg_1" || compactSnap.MessageIDs[2] != "msg_3" {
+		t.Fatalf("unexpected message IDs in snapshot: %v", compactSnap.MessageIDs)
+	}
+
+	summaryText := "群里确认路线为龙脊线，集合时间为周六上午9点。"
+	ok := s.CommitGroupCompact(compactSnap, summaryText)
+	if !ok {
+		t.Fatalf("expected CommitGroupCompact to succeed")
+	}
+
+	// Now append a new uncompacted message
+	s.AppendGroupCompactMessage("UserC: 我也去！", 20, "msg_4")
+
+	snap := s.SnapshotGroupContext(10, 10000, "")
+	if snap.RunningSummary != summaryText {
+		t.Errorf("expected running summary %q, got %q", summaryText, snap.RunningSummary)
+	}
+	if len(snap.RecentMessages) != 1 || snap.RecentMessages[0] != "UserC: 我也去！" {
+		t.Errorf("expected 1 recent uncompacted message, got %v", snap.RecentMessages)
+	}
+	if len(snap.SummaryGroups) != 1 {
+		t.Fatalf("expected 1 summary group, got %d", len(snap.SummaryGroups))
+	}
+	group := snap.SummaryGroups[0]
+	if group.Summary != summaryText {
+		t.Errorf("expected group summary %q, got %q", summaryText, group.Summary)
+	}
+	if len(group.MessageIDs) != 3 || group.StartMessageID != "msg_1" || group.EndMessageID != "msg_3" {
+		t.Errorf("unexpected summary group metadata: %+v", group)
+	}
+
+	// A later compact replaces the inspected source batch while preserving the
+	// cumulative summary produced after that batch.
+	s.AppendGroupCompactMessage("UserD: 记得带水", 20, "msg_5")
+	latestCompactSnap, latestReady := s.SnapshotGroupCompact(2)
+	if !latestReady {
+		t.Fatalf("expected latest compact snapshot to be ready")
+	}
+	updatedSummary := "群里确认路线为龙脊线，集合时间为周六上午9点；UserC 和 UserD 也会参加。"
+	if !s.CommitGroupCompact(latestCompactSnap, updatedSummary) {
+		t.Fatalf("expected latest CommitGroupCompact to succeed")
+	}
+
+	latest := s.SnapshotGroupContext(10, 10000, "")
+	if latest.RunningSummary != updatedSummary {
+		t.Errorf("expected updated running summary %q, got %q", updatedSummary, latest.RunningSummary)
+	}
+	if len(latest.RecentMessages) != 0 {
+		t.Errorf("expected no uncompacted messages, got %v", latest.RecentMessages)
+	}
+	if len(latest.SummaryGroups) != 1 {
+		t.Fatalf("expected exactly 1 latest summary group, got %d", len(latest.SummaryGroups))
+	}
+	latestGroup := latest.SummaryGroups[0]
+	if latestGroup.Summary != updatedSummary {
+		t.Errorf("expected latest group summary %q, got %q", updatedSummary, latestGroup.Summary)
+	}
+	if len(latestGroup.MessageIDs) != 2 || latestGroup.StartMessageID != "msg_4" || latestGroup.EndMessageID != "msg_5" {
+		t.Errorf("unexpected latest summary group metadata: %+v", latestGroup)
+	}
+}
+

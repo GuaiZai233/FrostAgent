@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"sort"
@@ -14,17 +15,128 @@ import (
 	"time"
 )
 
+// GroupCompactMessage represents a structured group chat message for compaction and prompt inspection.
+type GroupCompactMessage struct {
+	Role      string `json:"role"`                 // "user" | "assistant"
+	Sender    string `json:"sender,omitempty"`     // Display name or nick
+	SenderID  string `json:"sender_id,omitempty"`  // User ID or bot ID
+	Content   string `json:"content"`              // Message body (opaque payload)
+	MessageID string `json:"message_id,omitempty"` // Message ID for deduplication
+	Time      string `json:"time,omitempty"`       // Timestamp string e.g. "15:04:05"
+	raw       string `json:"-"`                    // Preserved raw string if ingested from text
+}
+
+// FormatDisplay renders the message as a single-line display string.
+func (m GroupCompactMessage) FormatDisplay() string {
+	if m.raw != "" {
+		return m.raw
+	}
+	if m.Role == "assistant" {
+		botName := m.Sender
+		if botName == "" {
+			botName = "霜降"
+		}
+		return fmt.Sprintf("[assistant] %s: %s", botName, m.Content)
+	}
+	sender := m.Sender
+	if sender == "" {
+		sender = "user"
+	}
+	if m.SenderID != "" {
+		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, m.Content)
+	}
+	return fmt.Sprintf("[user] %s: %s", sender, m.Content)
+}
+
+// ParseGroupCompactMessage parses a text line into a GroupCompactMessage while preserving the raw text.
+func ParseGroupCompactMessage(content string, messageID ...string) GroupCompactMessage {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return GroupCompactMessage{}
+	}
+
+	var msgID string
+	if len(messageID) > 0 {
+		msgID = strings.TrimSpace(messageID[0])
+	}
+	if msgID == "" {
+		if start := strings.Index(content, "[msg_"); start != -1 {
+			if end := strings.Index(content[start:], "]"); end != -1 {
+				msgID = content[start+1 : start+end]
+			}
+		}
+	}
+
+	role := "user"
+	text := content
+
+	if strings.HasPrefix(strings.ToLower(text), "[assistant]") {
+		role = "assistant"
+		text = strings.TrimSpace(text[len("[assistant]"):])
+	} else if strings.HasPrefix(strings.ToLower(text), "[user]") {
+		role = "user"
+		text = strings.TrimSpace(text[len("[user]"):])
+	}
+
+	colonIdx := strings.Index(text, ":")
+	if colonIdx != -1 {
+		senderPart := strings.TrimSpace(text[:colonIdx])
+		msgBody := strings.TrimSpace(text[colonIdx+1:])
+
+		sender := senderPart
+		var senderID string
+
+		if openParen := strings.Index(senderPart, "("); openParen != -1 {
+			if closeParen := strings.Index(senderPart[openParen:], ")"); closeParen != -1 {
+				sender = strings.TrimSpace(senderPart[:openParen])
+				senderID = strings.TrimSpace(senderPart[openParen+1 : openParen+closeParen])
+			}
+		}
+
+		return GroupCompactMessage{
+			Role:      role,
+			Sender:    sender,
+			SenderID:  senderID,
+			Content:   msgBody,
+			MessageID: msgID,
+			raw:       content,
+		}
+	}
+
+	return GroupCompactMessage{
+		Role:      role,
+		Content:   content,
+		MessageID: msgID,
+		raw:       content,
+	}
+}
+
 type groupCompactItem struct {
-	sequence  uint64
-	messageID string
-	content   string
+	sequence uint64
+	message  GroupCompactMessage
+}
+
+// SummaryGroup maps the latest compact batch to the cumulative running summary
+// produced after processing that batch. SessionContext retains only this latest
+// bounded batch mapping; it is not a complete archive of all summarized source messages.
+type SummaryGroup struct {
+	Summary        string                `json:"summary"`
+	MessageIDs     []string              `json:"message_ids,omitempty"`
+	StartMessageID string                `json:"start_message_id,omitempty"`
+	EndMessageID   string                `json:"end_message_id,omitempty"`
+	StartIndex     int                   `json:"start_index,omitempty"`
+	EndIndex       int                   `json:"end_index,omitempty"`
+	Messages       []string              `json:"messages,omitempty"`
+	StructuredMsgs []GroupCompactMessage `json:"structured_messages,omitempty"`
 }
 
 // GroupContextSnapshot captures an atomic point-in-time view of both the
 // running summary and uncompacted recent messages from the same session state.
 type GroupContextSnapshot struct {
-	RunningSummary string
-	RecentMessages []string
+	RunningSummary           string                `json:"running_summary"`
+	RecentMessages           []string              `json:"recent_messages"`
+	RecentStructuredMessages []GroupCompactMessage `json:"recent_structured_messages,omitempty"`
+	SummaryGroups            []SummaryGroup        `json:"summary_groups,omitempty"`
 }
 
 // GroupCompactSnapshot is an immutable batch sent to the asynchronous
@@ -32,7 +144,8 @@ type GroupContextSnapshot struct {
 // by this summary while preserving messages that arrived during the LLM call.
 type GroupCompactSnapshot struct {
 	Summary         string
-	Messages        []string
+	Messages        []GroupCompactMessage
+	MessageIDs      []string
 	ThroughSequence uint64
 	Generation      uint64
 }
@@ -58,6 +171,39 @@ func (t *SessionTurn) Done() {
 	}
 }
 
+// DeliveryFailure records a transient failure when an assistant response could not be delivered to the platform.
+type DeliveryFailure struct {
+	Platform string `json:"platform"`
+	Action   string `json:"action"`
+	RetCode  int    `json:"retcode"`
+	Message  string `json:"message"`
+	Wording  string `json:"wording"`
+}
+
+// FormatDeliveryContext renders the DeliveryFailure as an XML tag for prompt injection.
+func (f *DeliveryFailure) FormatDeliveryContext() string {
+	if f == nil {
+		return ""
+	}
+	reason := strings.TrimSpace(f.Wording)
+	if reason == "" {
+		reason = strings.TrimSpace(f.Message)
+	}
+	if reason == "" && f.RetCode != 0 {
+		reason = fmt.Sprintf("retcode %d", f.RetCode)
+	}
+	if reason == "" {
+		reason = "unknown delivery error"
+	}
+
+	platform := strings.TrimSpace(f.Platform)
+	if platform == "" {
+		platform = "onebot"
+	}
+
+	return fmt.Sprintf("<delivery_context>\nYour previous assistant response was not delivered to the user/group.\nPlatform: %s\nReason: %s\nDo not assume the user saw or received that response.\n</delivery_context>", platform, reason)
+}
+
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
 	ConversationID string
@@ -72,8 +218,57 @@ type SessionContext struct {
 	groupCompactBuffer     []groupCompactItem
 	groupCompactSequence   uint64
 	groupCompactGeneration uint64
+	groupSummaryGroups     []SummaryGroup
 	pendingTurns           [][]memory.PendingExtractionItem
 	extractionThreshold    int
+	deliveryFailure        *DeliveryFailure
+
+	// lastSystemPrompt records the dynamically-assembled system prompt from the
+	// most recent real LLM call (time label + dialogue + memory catalog + recalled
+	// memories). Empty until the first LLM request for this session.
+	lastSystemPrompt string
+	lastModelName    string
+}
+
+// SetDeliveryFailure records a transient delivery failure on the session.
+func (s *SessionContext) SetDeliveryFailure(failure DeliveryFailure) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deliveryFailure = &failure
+}
+
+// TakeDeliveryFailure atomically retrieves and clears the pending delivery failure.
+func (s *SessionContext) TakeDeliveryFailure() *DeliveryFailure {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deliveryFailure == nil {
+		return nil
+	}
+	f := s.deliveryFailure
+	s.deliveryFailure = nil
+	return f
+}
+
+// SetLastPromptTrace records the system prompt and model used in the most recent LLM call.
+func (s *SessionContext) SetLastPromptTrace(systemPrompt, modelName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSystemPrompt = systemPrompt
+	s.lastModelName = modelName
+}
+
+// LastPromptTrace returns the system prompt and model from the most recent LLM call.
+// Returns empty strings if no request has been made yet.
+func (s *SessionContext) LastPromptTrace() (systemPrompt, modelName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSystemPrompt, s.lastModelName
 }
 
 // ReserveTurn appends one complete dialogue turn to this session's FIFO chain.
@@ -179,22 +374,41 @@ func (s *SessionContext) TrimHistory(max int) {
 const DefaultMaxGroupCompactBufferSize = 200
 
 // AppendGroupCompactMessage appends one visible group message to the running
-// compact buffer. The uncommitted buffer is capped at maxBufferSize (defaulting
-// to DefaultMaxGroupCompactBufferSize if <= 0) to allow in-flight compactions to
-// complete without eagerly dropping raw messages.
+// compact buffer. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
+// The uncommitted buffer is capped at maxBufferSize (defaulting to DefaultMaxGroupCompactBufferSize if <= 0)
+// to allow in-flight compactions to complete without eagerly dropping raw messages.
 // Optional messageID can be provided to support deduplication with the triggering message.
-func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize int, messageID ...string) int {
-	content = strings.TrimSpace(content)
-	if content == "" {
+func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	var msg GroupCompactMessage
+	switch v := item.(type) {
+	case GroupCompactMessage:
+		msg = v
+		if len(messageID) > 0 && msg.MessageID == "" {
+			msg.MessageID = strings.TrimSpace(messageID[0])
+		}
+	case *GroupCompactMessage:
+		if v != nil {
+			msg = *v
+			if len(messageID) > 0 && msg.MessageID == "" {
+				msg.MessageID = strings.TrimSpace(messageID[0])
+			}
+		}
+	case string:
+		msg = ParseGroupCompactMessage(v, messageID...)
+	case fmt.Stringer:
+		msg = ParseGroupCompactMessage(v.String(), messageID...)
+	default:
 		return 0
+	}
+
+	if strings.TrimSpace(msg.Content) == "" {
+		return 0
+	}
+	if msg.Role == "" {
+		msg.Role = "user"
 	}
 	if maxBufferSize <= 0 {
 		maxBufferSize = DefaultMaxGroupCompactBufferSize
-	}
-
-	var msgID string
-	if len(messageID) > 0 {
-		msgID = strings.TrimSpace(messageID[0])
 	}
 
 	s.mu.Lock()
@@ -202,9 +416,8 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize
 
 	s.groupCompactSequence++
 	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
-		sequence:  s.groupCompactSequence,
-		messageID: msgID,
-		content:   content,
+		sequence: s.groupCompactSequence,
+		message:  msg,
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
 		drop := len(s.groupCompactBuffer) - maxBufferSize
@@ -215,16 +428,77 @@ func (s *SessionContext) AppendGroupCompactMessage(content string, maxBufferSize
 	return len(s.groupCompactBuffer)
 }
 
+// AppendGroupCompactString parses a raw message string and appends it to the compact buffer.
+func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize int, messageID ...string) int {
+	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
+}
+
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
 // from the same session state while holding the session lock.
 func (s *SessionContext) SnapshotGroupContext(limit int, maxChars int, excludeMessageID string) GroupContextSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	recentMessages := s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID)
 
 	return GroupContextSnapshot{
-		RunningSummary: s.groupCompactSummary,
-		RecentMessages: s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID),
+		RunningSummary:           s.groupCompactSummary,
+		RecentMessages:           recentMessages,
+		RecentStructuredMessages: s.recentPendingStructuredGroupMessagesLocked(limit, maxChars, excludeMessageID),
+		SummaryGroups:            s.groupSummaryGroups,
 	}
+}
+
+// recentPendingStructuredGroupMessagesLocked returns the same bounded recent
+// message window as recentPendingGroupMessagesLocked while preserving trusted
+// role/sender metadata. Callers can serialize these records without flattening
+// untrusted multi-line content back into apparent chat-role boundaries.
+func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, maxChars int, excludeMessageID string) []GroupCompactMessage {
+	if limit <= 0 || maxChars <= 0 || len(s.groupCompactBuffer) == 0 {
+		return nil
+	}
+
+	excludeID := strings.TrimSpace(excludeMessageID)
+	selected := make([]GroupCompactMessage, 0, min(limit, len(s.groupCompactBuffer)))
+	totalChars := 0
+
+	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
+		item := s.groupCompactBuffer[i]
+		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
+			continue
+		}
+		if len(selected) >= limit {
+			break
+		}
+
+		message := item.message
+		displayLen := len([]rune(message.FormatDisplay()))
+		if totalChars >= maxChars {
+			break
+		}
+		if totalChars+displayLen > maxChars {
+			if len(selected) == 0 {
+				contentRunes := []rune(message.Content)
+				if maxChars < len(contentRunes) {
+					message.Content = string(contentRunes[:maxChars])
+				}
+				message.raw = ""
+				selected = append(selected, message)
+			}
+			break
+		}
+
+		totalChars += displayLen
+		selected = append(selected, message)
+	}
+
+	if len(selected) == 0 {
+		return nil
+	}
+	result := make([]GroupCompactMessage, len(selected))
+	for i, j := 0, len(selected)-1; j >= 0; i, j = i+1, j-1 {
+		result[i] = selected[j]
+	}
+	return result
 }
 
 // recentPendingGroupMessagesLocked extracts uncompacted messages while s.mu is already held.
@@ -241,7 +515,7 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
 
-		if excludeID != "" && item.messageID != "" && item.messageID == excludeID {
+		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
 		}
 
@@ -249,7 +523,7 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 			break
 		}
 
-		content := item.content
+		content := item.message.FormatDisplay()
 		contentLen := len([]rune(content))
 
 		if totalChars >= maxChars {
@@ -294,13 +568,16 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
 		return GroupCompactSnapshot{}, false
 	}
-	items := make([]string, len(s.groupCompactBuffer))
+	msgs := make([]GroupCompactMessage, len(s.groupCompactBuffer))
+	msgIDs := make([]string, len(s.groupCompactBuffer))
 	for i, item := range s.groupCompactBuffer {
-		items[i] = item.content
+		msgs[i] = item.message
+		msgIDs[i] = item.message.MessageID
 	}
 	return GroupCompactSnapshot{
 		Summary:         s.groupCompactSummary,
-		Messages:        items,
+		Messages:        msgs,
+		MessageIDs:      msgIDs,
 		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
 		Generation:      s.groupCompactGeneration,
 	}, true
@@ -321,6 +598,30 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 	}
 
 	s.groupCompactSummary = summary
+
+	var firstID, lastID string
+	if len(snapshot.MessageIDs) > 0 {
+		firstID = snapshot.MessageIDs[0]
+		lastID = snapshot.MessageIDs[len(snapshot.MessageIDs)-1]
+	}
+	formattedMsgs := make([]string, len(snapshot.Messages))
+	for i, m := range snapshot.Messages {
+		formattedMsgs[i] = m.FormatDisplay()
+	}
+	// Keep one bounded mapping for the latest compact batch. The summary is the
+	// cumulative running summary after this batch, so callers must not present
+	// this mapping as the complete set of all historical source messages.
+	s.groupSummaryGroups = []SummaryGroup{
+		{
+			Summary:        summary,
+			MessageIDs:     snapshot.MessageIDs,
+			StartMessageID: firstID,
+			EndMessageID:   lastID,
+			Messages:       formattedMsgs,
+			StructuredMsgs: snapshot.Messages,
+		},
+	}
+
 	firstNew := 0
 	for firstNew < len(s.groupCompactBuffer) &&
 		s.groupCompactBuffer[firstNew].sequence <= snapshot.ThroughSequence {
@@ -341,6 +642,18 @@ func (s *SessionContext) GroupRunningSummary() string {
 	return s.groupCompactSummary
 }
 
+// SummaryGroups returns a copy of the current summary groups mappings.
+func (s *SessionContext) SummaryGroups() []SummaryGroup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.groupSummaryGroups) == 0 {
+		return nil
+	}
+	groups := make([]SummaryGroup, len(s.groupSummaryGroups))
+	copy(groups, s.groupSummaryGroups)
+	return groups
+}
+
 // SetGroupRunningSummary sets the running summary for this session under the lock.
 func (s *SessionContext) SetGroupRunningSummary(summary string) {
 	s.mu.Lock()
@@ -356,6 +669,7 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.groupCompactGeneration++
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
 	s.UpdatedAt = time.Now()
 }
 
@@ -575,9 +889,13 @@ func (s *SessionContext) Clear() {
 	s.History = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
 	s.groupCompactGeneration++
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
+	s.deliveryFailure = nil
+	s.lastSystemPrompt = ""
+	s.lastModelName = ""
 	s.UpdatedAt = time.Now()
 }
 

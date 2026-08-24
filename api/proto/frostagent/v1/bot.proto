@@ -8,6 +8,7 @@ import "frostagent/v1/common.proto";
 service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
+  rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
@@ -47,4 +48,49 @@ message DeleteGroupSummaryRequest {
 message DeleteGroupSummaryResponse {
   bool success = 1;
   string error = 2;
+}
+
+message GetSessionContextRequest {
+  string session_id = 1;
+  int32 recent_limit = 2;
+}
+
+message SummaryGroupInfoProto {
+  string summary = 1;
+  repeated string message_ids = 2;
+  string start_message_id = 3;
+  string end_message_id = 4;
+  int32 start_index = 5;
+  int32 end_index = 6;
+  repeated string messages = 7;
+  repeated GroupMessageInfoProto structured_messages = 8;
+}
+
+message GroupMessageInfoProto {
+  string role = 1;
+  string sender = 2;
+  string sender_id = 3;
+  string content = 4;
+  string message_id = 5;
+  string time = 6;
+}
+
+message SessionHistoryMessageProto {
+  string role = 1;
+  string content = 2;
+}
+
+message GetSessionContextResponse {
+  string session_id = 1;
+  string platform = 2;
+  string running_summary = 3;
+  repeated string recent_messages = 4;
+  repeated SummaryGroupInfoProto summary_groups = 5;
+  repeated SessionHistoryMessageProto history = 6;
+  string prompt_text = 7;
+  // Last real system prompt sent to the LLM (dynamically assembled: time + dialogue + memory).
+  // Empty when no LLM request has occurred for this session yet.
+  string system_prompt = 8;
+  string model = 9;
+  repeated GroupMessageInfoProto recent_structured_messages = 10;
 }

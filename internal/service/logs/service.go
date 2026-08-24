@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ func (s *Service) ListLogs(
 
 	// Sort by timestamp descending
 	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+			return filtered[i].ID > filtered[j].ID
+		}
 		return filtered[i].Timestamp.After(filtered[j].Timestamp)
 	})
 
@@ -61,10 +65,7 @@ func (s *Service) ListLogs(
 		}), nil
 	}
 
-	end := offset + pageSize
-	if end > total {
-		end = total
-	}
+	end := min(offset+pageSize, total)
 
 	var pbEntries []*v1.LogEntry
 	for i := offset; i < end; i++ {
@@ -129,14 +130,21 @@ func (s *Service) ClearLogs(
 
 // convertEntry maps internal LogEntry → proto LogEntry.
 func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
-	return &v1.LogEntry{
-		Id:        fmt.Sprintf("%d", e.Timestamp.UnixNano()),
+	entry := &v1.LogEntry{
+		Id:        strconv.FormatUint(e.ID, 10),
 		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
 		Level:     toProtoLevel(e.Level),
 		Source:    string(e.Category),
 		Summary:   e.Content,
 		HasDetail: strings.TrimSpace(e.Content) != "",
 	}
+	switch e.Category {
+	case logspkg.LLM_REQUEST:
+		entry.RequestBody = e.Content
+	case logspkg.LLM_RESPONSE:
+		entry.ResponseBody = e.Content
+	}
+	return entry
 }
 
 // levelPasses checks whether an internal Level meets the minimum proto LogLevel.
@@ -166,8 +174,16 @@ func matchesFilter(e logspkg.LogEntry, minLevel v1.LogLevel, sourceFilter string
 		return false
 	}
 	// 2. 来源/分类过滤
-	if sourceFilter != "" && string(e.Category) != sourceFilter {
-		return false
+	if sourceFilter != "" {
+		sf := strings.ToLower(sourceFilter)
+		cat := strings.ToLower(string(e.Category))
+		if sf == "llm" {
+			if !strings.HasPrefix(cat, "llm") {
+				return false
+			}
+		} else if cat != sf && string(e.Category) != sourceFilter {
+			return false
+		}
 	}
 	return true
 }

@@ -25,6 +25,7 @@ const (
 )
 
 type LogEntry struct {
+	ID        uint64    `json:"id"`
 	TraceID   string    `json:"trace_id"`
 	Timestamp time.Time `json:"timestamp"`
 	Direction string    `json:"direction"` // INBOUND / OUTBOUND / INTERNAL
@@ -46,12 +47,17 @@ var (
 	subscribers = make(map[int]*subscriber)
 	nextSubID   int
 	subMu       sync.Mutex
+	nextEntryID uint64
 )
 
 // Init 初始化日志系统，指定环形缓冲区大小
 func Init(s int) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	size = s
 	buffer = ring.New(size)
+	nextEntryID = 0
 }
 
 func log(level Level, category Category, content string, traceID string, direction string) {
@@ -62,7 +68,9 @@ func log(level Level, category Category, content string, traceID string, directi
 		return
 	}
 
+	nextEntryID++
 	entry := LogEntry{
+		ID:        nextEntryID,
 		TraceID:   traceID,
 		Timestamp: time.Now(),
 		Direction: direction,

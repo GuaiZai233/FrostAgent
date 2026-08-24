@@ -61,6 +61,11 @@
   --purple-bg: #f5f3ff;
   --purple-border: #ddd6fe;
 
+  /* Summary Group */
+  --summary-group-bg: #f2f7fd;
+  --summary-group-bg-hover: #e8f2fc;
+  --summary-group-border: rgba(37, 99, 235, 0.18);
+
   /* Sidebar */
   --sidebar-bg: #fafafa;
   --sidebar-foreground: #3f3f46;
@@ -129,6 +134,11 @@
   --purple-foreground: #ffffff;
   --purple-bg: rgba(167, 139, 250, 0.12);
   --purple-border: rgba(167, 139, 250, 0.28);
+
+  /* Summary Group */
+  --summary-group-bg: rgba(59, 130, 246, 0.07);
+  --summary-group-bg-hover: rgba(59, 130, 246, 0.13);
+  --summary-group-border: rgba(59, 130, 246, 0.24);
 
   /* Sidebar */
   --sidebar-bg: #0c0c0e;

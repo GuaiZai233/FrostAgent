@@ -3,6 +3,7 @@ package astrbot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -157,7 +158,6 @@ func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
 	engine := newTestEngine(provider)
 	staySilent := tools.StaySilentTool()
 	engine.ToolRegistry[staySilent.Name()] = staySilent
-	conn := newWSConn(nil)
 	privateEvent := func(messageID, text string) Event {
 		return Event{
 			Type:        "event",
@@ -172,8 +172,35 @@ func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
 		}
 	}
 
-	reply(privateEvent("msg_silent_1", "第一轮无需回复"), engine, conn)
-	firstHistory := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	waitHistory := func(want int) []llm.ChatMessage {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			history := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+			if len(history) >= want {
+				return history
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("等待 session history 达到 %d 条超时", want)
+		return nil
+	}
+
+	firstEvent, err := json.Marshal(privateEvent("msg_silent_1", "第一轮无需回复"))
+	if err != nil {
+		t.Fatalf("序列化第一轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, firstEvent); err != nil {
+		t.Fatalf("发送第一轮事件失败: %v", err)
+	}
+	firstHistory := waitHistory(1)
 	if len(firstHistory) != 1 || firstHistory[0].Role != "user" {
 		t.Fatalf("静默轮次应只保留 user message，实际=%+v", firstHistory)
 	}
@@ -181,9 +208,29 @@ func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
 		t.Fatal("静默轮次不应写入 AssistantSilentMarker")
 	}
 
-	reply(privateEvent("msg_silent_2", "第二轮请回复"), engine, conn)
+	secondEvent, err := json.Marshal(privateEvent("msg_silent_2", "第二轮请回复"))
+	if err != nil {
+		t.Fatalf("序列化第二轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, secondEvent); err != nil {
+		t.Fatalf("发送第二轮事件失败: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置读取超时失败: %v", err)
+	}
+	_, responseBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取第二轮回复失败: %v", err)
+	}
+	var action Action
+	if err := json.Unmarshal(responseBytes, &action); err != nil {
+		t.Fatalf("解析第二轮回复失败: %v", err)
+	}
+	if action.Content != "第二轮正常回复" {
+		t.Fatalf("第二轮回复内容不符: %q", action.Content)
+	}
 
-	history := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+	history := waitHistory(3)
 	if len(history) != 3 {
 		t.Fatalf("期望历史为 user/user/assistant 三条，实际=%d: %+v", len(history), history)
 	}
@@ -368,6 +415,129 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 	if finalAction.Content != "搜索完成，这是最终回答。" {
 		t.Errorf("期望最终回复为 '搜索完成，这是最终回答。', 实际=%s", finalAction.Content)
+	}
+}
+
+func TestAstrBotSendHookEmptyFinalKeepsDeliveredReply(t *testing.T) {
+	toolProvider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_empty_final",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"messages":[{"type":"plain","text":"工具已发送的实际回复"}]}`,
+							},
+						},
+					},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: nil,
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(toolProvider)
+	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_empty_final",
+		UserID:      "usr_empty_final",
+		SenderName:  "测试用户",
+		GroupID:     "grp_empty_final",
+		GroupName:   "空最终回复测试群",
+		Content:     "请通过工具回复",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	_, hookBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取工具回复失败: %v", err)
+	}
+	var hookAction Action
+	if err := json.Unmarshal(hookBytes, &hookAction); err != nil {
+		t.Fatalf("解析工具回复失败: %v", err)
+	}
+	if !hookAction.IsIntermediate || hookAction.Content != "工具已发送的实际回复" {
+		t.Fatalf("工具回复不正确: %+v", hookAction)
+	}
+
+	_, terminalBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取终止动作失败: %v", err)
+	}
+	var terminalAction Action
+	if err := json.Unmarshal(terminalBytes, &terminalAction); err != nil {
+		t.Fatalf("解析终止动作失败: %v", err)
+	}
+	if terminalAction.Action != "noop" {
+		t.Fatalf("空最终回复不应再次发送空消息，实际 action=%+v", terminalAction)
+	}
+
+	session := engine.SessionManager.GetOrCreate("astrbot:group:grp_empty_final")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history := session.Snapshot()
+		if len(history) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	history := session.Snapshot()
+	if len(history) != 2 {
+		t.Fatalf("期望历史包含 user 和实际工具回复，实际=%+v", history)
+	}
+	if history[1].Role != "assistant" || history[1].Content != "工具已发送的实际回复" {
+		t.Fatalf("工具回复未提升为最终 assistant 历史: %+v", history[1])
+	}
+
+	groupContext := session.SnapshotGroupContext(10, 1000, "")
+	assistantMessages := 0
+	for _, message := range groupContext.RecentStructuredMessages {
+		if message.Role != "assistant" {
+			continue
+		}
+		assistantMessages++
+		if message.Content != "工具已发送的实际回复" {
+			t.Fatalf("Prompt Inspector 中的 assistant 内容不正确: %+v", message)
+		}
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("Prompt Inspector 应保留一条实际工具回复，实际=%+v", groupContext.RecentStructuredMessages)
+	}
+}
+
+func TestComposeReplyWithReceiptAvoidsLeadingBlankLines(t *testing.T) {
+	if got := composeReplyWithReceipt("", "计费回执"); got != "计费回执" {
+		t.Fatalf("空最终回复拼接计费回执不应产生前导空行，实际=%q", got)
+	}
+	if got := composeReplyWithReceipt("最终回复", "计费回执"); got != "最终回复\n\n计费回执" {
+		t.Fatalf("非空最终回复应与计费回执分段，实际=%q", got)
 	}
 }
 
@@ -614,6 +784,11 @@ func TestAstrBot_GroupRawContextAndDurableSeparation(t *testing.T) {
 
 	// 4. 验证持久化 Session History 并没有被污染
 	history := sess.Snapshot()
+	deadline := time.Now().Add(time.Second)
+	for len(history) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		history = sess.Snapshot()
+	}
 	if len(history) < 2 {
 		t.Fatalf("期望 session 至少包含 2 条消息，实际=%d", len(history))
 	}
@@ -623,5 +798,74 @@ func TestAstrBot_GroupRawContextAndDurableSeparation(t *testing.T) {
 	}
 	if strings.Contains(durableUserMsg, "<recent_group_messages>") {
 		t.Errorf("持久 Session History 严禁包含 <recent_group_messages>: %s", durableUserMsg)
+	}
+}
+
+func TestAstrBotTransportWriteFailureDoesNotCommitAssistantState(t *testing.T) {
+	t.Setenv("MEMORY_EXTRACT_BATCH_MIN", "3")
+	t.Setenv("MEMORY_EXTRACT_BATCH_MAX", "3")
+
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是一条发送失败的回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.MemoryWriter = memory.NewWriter(nil)
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_failed_write_001",
+		UserID:      "usr_failed_write",
+		SenderName:  "测试用户",
+		GroupID:     "grp_failed_write",
+		GroupName:   "传输失败测试群",
+		Content:     "请回复这条消息",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	captureGroupCompactMessage(event, engine)
+
+	reply(event, engine, &wsConn{})
+
+	sess := engine.SessionManager.GetOrCreate("astrbot:group:grp_failed_write")
+	history := sess.Snapshot()
+	if len(history) != 1 {
+		t.Fatalf("传输写入失败后只应保留 user 历史，实际消息数=%d", len(history))
+	}
+	if history[0].Role != "user" {
+		t.Fatalf("传输写入失败后历史只应包含 user，实际 role=%s", history[0].Role)
+	}
+	if content, _ := history[0].Content.(string); strings.Contains(content, "这是一条发送失败的回复") {
+		t.Fatalf("失败的 assistant 回复严禁进入历史: %s", content)
+	}
+	if pending := sess.PendingTurnCount(); pending != 0 {
+		t.Fatalf("传输写入失败后不应累计自动记忆提取，实际 pending=%d", pending)
+	}
+
+	groupContext := sess.SnapshotGroupContext(10, 1000, "")
+	for _, message := range groupContext.RecentStructuredMessages {
+		if message.Role == "assistant" || strings.Contains(message.Content, "这是一条发送失败的回复") {
+			t.Fatalf("失败的 assistant 回复严禁进入 compact buffer: %+v", message)
+		}
+	}
+
+	failure := sess.TakeDeliveryFailure()
+	if failure == nil {
+		t.Fatal("传输写入失败后应记录 DeliveryFailure")
+	}
+	if failure.Platform != "astrbot" || failure.Action != "send_message" {
+		t.Fatalf("DeliveryFailure 元数据不正确: %+v", failure)
+	}
+	if !strings.Contains(failure.Wording, "connection closed") {
+		t.Fatalf("DeliveryFailure 应包含传输错误，实际: %+v", failure)
 	}
 }
