@@ -533,10 +533,6 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 		}
 
 		if runResult.Silent {
-			session.AddMessage(core.ChatMessage{
-				Role:    core.RoleAssistant,
-				Content: llm.AssistantSilentMarker,
-			})
 			engine.TrimSession(session)
 			logs.Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", sessionKey(event)))
 			return

@@ -392,14 +392,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			)
 		}
 
-		// A deliberate terminal silence keeps the user turn and an assistant
-		// marker in history, but never emits an empty OneBot message or feeds the
-		// turn into automatic memory extraction.
+		// A deliberate terminal silence keeps only the user turn in history. It
+		// never emits an empty OneBot message or feeds the turn into automatic
+		// memory extraction.
 		if runResult.Silent {
-			session.AddMessage(core.ChatMessage{
-				Role:    core.RoleAssistant,
-				Content: llm.AssistantSilentMarker,
-			})
 			engine.TrimSession(session)
 			logs.Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", historyKey(event)))
 			return

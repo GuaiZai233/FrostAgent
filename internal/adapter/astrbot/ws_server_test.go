@@ -131,6 +131,120 @@ func TestAstrBotPrivateMessage(t *testing.T) {
 	}
 }
 
+func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:   "call_silent",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      llm.StaySilentToolName,
+							Arguments: `{}`,
+						},
+					}},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "第二轮正常回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	staySilent := tools.StaySilentTool()
+	engine.ToolRegistry[staySilent.Name()] = staySilent
+	privateEvent := func(messageID, text string) Event {
+		return Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   messageID,
+			UserID:      "usr_silent",
+			SenderName:  "SilentUser",
+			Content:     text,
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+	}
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	waitHistory := func(want int) []llm.ChatMessage {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			history := engine.SessionManager.GetOrCreate("astrbot:private:usr_silent").Snapshot()
+			if len(history) >= want {
+				return history
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("等待 session history 达到 %d 条超时", want)
+		return nil
+	}
+
+	firstEvent, err := json.Marshal(privateEvent("msg_silent_1", "第一轮无需回复"))
+	if err != nil {
+		t.Fatalf("序列化第一轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, firstEvent); err != nil {
+		t.Fatalf("发送第一轮事件失败: %v", err)
+	}
+	firstHistory := waitHistory(1)
+	if len(firstHistory) != 1 || firstHistory[0].Role != "user" {
+		t.Fatalf("静默轮次应只保留 user message，实际=%+v", firstHistory)
+	}
+	if content, ok := firstHistory[0].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+		t.Fatal("静默轮次不应写入 AssistantSilentMarker")
+	}
+
+	secondEvent, err := json.Marshal(privateEvent("msg_silent_2", "第二轮请回复"))
+	if err != nil {
+		t.Fatalf("序列化第二轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, secondEvent); err != nil {
+		t.Fatalf("发送第二轮事件失败: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置读取超时失败: %v", err)
+	}
+	_, responseBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取第二轮回复失败: %v", err)
+	}
+	var action Action
+	if err := json.Unmarshal(responseBytes, &action); err != nil {
+		t.Fatalf("解析第二轮回复失败: %v", err)
+	}
+	if action.Content != "第二轮正常回复" {
+		t.Fatalf("第二轮回复内容不符: %q", action.Content)
+	}
+
+	history := waitHistory(3)
+	if len(history) != 3 {
+		t.Fatalf("期望历史为 user/user/assistant 三条，实际=%d: %+v", len(history), history)
+	}
+	wantRoles := []string{"user", "user", "assistant"}
+	for i, want := range wantRoles {
+		if history[i].Role != want {
+			t.Fatalf("history[%d] role 期望=%s，实际=%s", i, want, history[i].Role)
+		}
+		if content, ok := history[i].Content.(string); ok && strings.TrimSpace(content) == llm.AssistantSilentMarker {
+			t.Fatalf("history[%d] 不应包含静默标记", i)
+		}
+	}
+}
+
 func TestAstrBotGroupMessage(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
 	srv, _, wsURL := startWSTestServer(engine)
