@@ -206,13 +206,12 @@ class FrostAgentAdapter(Star):
         payload = build_frostagent_payload(event)
         msg_id = payload["message_id"]
 
-        if (
-            not payload.get("content")
-            and not payload.get("attachments")
-            and not payload.get("is_wake")
-            and not payload.get("is_at")
-        ):
-            return
+        if not payload.get("content") and not payload.get("attachments"):
+            is_group_interaction = payload.get("message_type") == "group" and (
+                payload.get("is_wake") or payload.get("is_at")
+            )
+            if not is_group_interaction:
+                return
 
         if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
             if not payload.get("is_wake") and not payload.get("is_at"):

@@ -329,6 +329,49 @@ func TestAstrBotGroupMessage(t *testing.T) {
 	}
 }
 
+func TestAstrBotMentionOnlyInteractionRequiresAt(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		want  bool
+	}{
+		{
+			name:  "mention only",
+			event: Event{MessageType: "group", IsAt: true},
+			want:  true,
+		},
+		{
+			name:  "wake only",
+			event: Event{MessageType: "group", IsWake: true},
+		},
+		{
+			name:  "mention with text",
+			event: Event{MessageType: "group", Content: "你好", IsWake: true, IsAt: true},
+		},
+		{
+			name: "mention with attachment",
+			event: Event{
+				MessageType: "group",
+				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage}},
+				IsWake:      true,
+				IsAt:        true,
+			},
+		},
+		{
+			name:  "private mention",
+			event: Event{MessageType: "private", IsWake: true, IsAt: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isMentionOnlyInteraction(tt.event); got != tt.want {
+				t.Fatalf("isMentionOnlyInteraction()=%v, want=%v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAstrBotMentionOnlyUsesRecentGroupContext(t *testing.T) {
 	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)

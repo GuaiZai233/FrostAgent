@@ -294,7 +294,7 @@ func isMentionOnlyInteraction(event Event) bool {
 	return event.MessageType == "group" &&
 		strings.TrimSpace(event.Content) == "" &&
 		len(event.Attachments) == 0 &&
-		(event.IsWake || event.IsAt)
+		event.IsAt
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn) {
