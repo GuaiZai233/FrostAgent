@@ -634,7 +634,7 @@ dialog.dialog-modal::backdrop {
   line-height: 1rem;
   text-align: left;
   appearance: none;
-  cursor: pointer;
+  cursor: default;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

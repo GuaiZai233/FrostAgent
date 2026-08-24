@@ -2,7 +2,6 @@ import { api } from '../api/client';
 import { SessionInfo } from '@frostagent/proto';
 import { escapeHtml, formatDateTime, formatPlatform, isGroupSession } from '../utils/formatters';
 import { icon } from '../components/icons';
-import { openDialog } from '../components/dialog';
 import { toast } from '../components/toast';
 import { copyToClipboard } from '../utils/clipboard';
 import {
@@ -212,23 +211,6 @@ export function mountPromptPage(container: HTMLElement): () => void {
     });
   }
 
-  function showSessionSummary(session: SessionInfo) {
-    openDialog({
-      title: `群聊摘要 - ${session.sessionId}`,
-      description: `平台: ${formatPlatform(session.platform)} · 消息数: ${session.messageCount}`,
-      maxWidth: '36rem',
-      bodyHtml: `
-        <div class="p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(
-          session.groupSummary || '暂无群聊摘要内容。',
-        )}</div>
-      `,
-      footerHtml: '<button class="btn btn-outline btn-sm prompt-summary-close-btn">关闭</button>',
-      onMount: (dialogEl, close) => {
-        dialogEl.querySelector('.prompt-summary-close-btn')?.addEventListener('click', () => close());
-      },
-    });
-  }
-
   // 3. Render Session List
   function renderSessionList() {
     if (sessionsLoading && sessions.length === 0) {
@@ -281,15 +263,12 @@ export function mountPromptPage(container: HTMLElement): () => void {
             ${
               s.groupSummary
                 ? `
-              <button
-                type="button"
+              <div
                 class="prompt-session-summary"
-                data-summary-session-id="${escapeHtml(s.sessionId)}"
                 title="${escapeHtml(s.groupSummary)}"
-                aria-label="查看 ${escapeHtml(s.sessionId)} 的完整群聊摘要"
               >
                 摘要: ${escapeHtml(s.groupSummary)}
-              </button>
+              </div>
             `
                 : ''
             }
@@ -297,15 +276,6 @@ export function mountPromptPage(container: HTMLElement): () => void {
         `;
       })
       .join('');
-
-    sessionListEl.querySelectorAll<HTMLButtonElement>('[data-summary-session-id]').forEach((summaryButton) => {
-      summaryButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const sessionId = summaryButton.getAttribute('data-summary-session-id');
-        const session = sessions.find((item) => item.sessionId === sessionId);
-        if (session) showSessionSummary(session);
-      });
-    });
 
     // Attach card click events
     sessionListEl.querySelectorAll<HTMLElement>('.prompt-session-card').forEach((card) => {
