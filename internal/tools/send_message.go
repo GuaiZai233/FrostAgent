@@ -25,20 +25,22 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "**注意！在调用工具之前，请使用send_message工具输出反馈，表示自己要调用工具了。",
+		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. After successful delivery, do not repeat the message in the final response. Return ordinary text-only replies directly without this tool.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"messages": map[string]any{
 					"type":        "array",
-					"description": "A sequence of message payload objects. Include a `mention_user` component to ping a specific user.",
+					"description": "The ordered sequence of message components.",
+					"minItems":    1,
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"type": map[string]any{
 								"type":        "string",
-								"description": "The payload format. Allowed values: plain, image, record (voice audio), video, file, mention_user.",
+								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote"},
+								"description": "The component type. Use `mention_user` for a platform-native user mention.",
 							},
 							"text": map[string]any{
 								"type":        "string",
@@ -54,7 +56,7 @@ func SendMsgTool() Tool {
 							},
 							"mention_user_id": map[string]any{
 								"type":        "string",
-								"description": "The identifier of the user to ping (used with `mention_user` type).",
+								"description": "The exact platform user ID to mention when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name or invent an ID.",
 							},
 							"message_id": map[string]any{
 								"type":        "string",
