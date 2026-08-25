@@ -2,9 +2,33 @@ package tools
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
+	tool := SendMsgTool()
+	for _, rule := range []string{
+		"every response that should create a platform-native @ mention",
+		"cannot be produced with plain text",
+		"`mention_user` component using the exact user ID",
+	} {
+		if !strings.Contains(tool.Description(), rule) {
+			t.Fatalf("send_message description is missing mention rule %q: %s", rule, tool.Description())
+		}
+	}
+
+	properties := tool.Parameters()["properties"].(map[string]any)
+	messages := properties["messages"].(map[string]any)
+	items := messages["items"].(map[string]any)
+	messageProperties := items["properties"].(map[string]any)
+	typeSchema := messageProperties["type"].(map[string]any)
+	allowedTypes := typeSchema["enum"].([]string)
+	if !slices.Contains(allowedTypes, "mention_user") {
+		t.Fatalf("send_message type enum does not include mention_user: %v", allowedTypes)
+	}
+}
 
 func TestSendMsgToolExecuteNormalizesValidPayload(t *testing.T) {
 	tool := SendMsgTool()

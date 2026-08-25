@@ -25,20 +25,22 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "**注意！在调用工具之前，请使用send_message工具输出反馈，表示自己要调用工具了。",
+		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, and every response that should create a platform-native @ mention. A real mention cannot be produced with plain text: encode each target as a `mention_user` component using the exact user ID, and put surrounding text in `plain` components. Never substitute `@name`, `@ID`, or `name(ID)` text for `mention_user`. After the tool reports success, do not repeat the same message in the final response. Return ordinary text-only replies directly without this tool.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"messages": map[string]any{
 					"type":        "array",
-					"description": "A sequence of message payload objects. Include a `mention_user` component to ping a specific user.",
+					"description": "The complete ordered message chain. To ping a user, place a `mention_user` component at the intended position and use `plain` components for surrounding text.",
+					"minItems":    1,
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"type": map[string]any{
 								"type":        "string",
-								"description": "The payload format. Allowed values: plain, image, record (voice audio), video, file, mention_user.",
+								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote"},
+								"description": "The payload format. Use `mention_user` for a real platform mention; `plain` text cannot ping a user.",
 							},
 							"text": map[string]any{
 								"type":        "string",
@@ -54,7 +56,7 @@ func SendMsgTool() Tool {
 							},
 							"mention_user_id": map[string]any{
 								"type":        "string",
-								"description": "The identifier of the user to ping (used with `mention_user` type).",
+								"description": "The exact platform user ID to ping when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name or invent an ID.",
 							},
 							"message_id": map[string]any{
 								"type":        "string",
