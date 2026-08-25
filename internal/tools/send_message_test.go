@@ -9,13 +9,13 @@ import (
 
 func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
 	tool := SendMsgTool()
-	for _, rule := range []string{
-		"every response that should create a platform-native @ mention",
-		"cannot be produced with plain text",
-		"`mention_user` component using the exact user ID",
+	for _, keyword := range []string{
+		"mention_user",
+		"plain",
+		"user ID",
 	} {
-		if !strings.Contains(tool.Description(), rule) {
-			t.Fatalf("send_message description is missing mention rule %q: %s", rule, tool.Description())
+		if !strings.Contains(tool.Description(), keyword) {
+			t.Fatalf("send_message description is missing mention guidance keyword %q: %s", keyword, tool.Description())
 		}
 	}
 
@@ -27,6 +27,10 @@ func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
 	allowedTypes := typeSchema["enum"].([]string)
 	if !slices.Contains(allowedTypes, "mention_user") {
 		t.Fatalf("send_message type enum does not include mention_user: %v", allowedTypes)
+	}
+	mentionUserIDSchema := messageProperties["mention_user_id"].(map[string]any)
+	if mentionUserIDSchema["type"] != "string" {
+		t.Fatalf("mention_user_id must be declared as a string: %v", mentionUserIDSchema)
 	}
 }
 

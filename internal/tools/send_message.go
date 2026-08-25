@@ -25,14 +25,14 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, and every response that should create a platform-native @ mention. A real mention cannot be produced with plain text: encode each target as a `mention_user` component using the exact user ID, and put surrounding text in `plain` components. Never substitute `@name`, `@ID`, or `name(ID)` text for `mention_user`. After the tool reports success, do not repeat the same message in the final response. Return ordinary text-only replies directly without this tool.",
+		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. After successful delivery, do not repeat the message in the final response. Return ordinary text-only replies directly without this tool.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"messages": map[string]any{
 					"type":        "array",
-					"description": "The complete ordered message chain. To ping a user, place a `mention_user` component at the intended position and use `plain` components for surrounding text.",
+					"description": "The ordered sequence of message components.",
 					"minItems":    1,
 					"items": map[string]any{
 						"type": "object",
@@ -40,7 +40,7 @@ func SendMsgTool() Tool {
 							"type": map[string]any{
 								"type":        "string",
 								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote"},
-								"description": "The payload format. Use `mention_user` for a real platform mention; `plain` text cannot ping a user.",
+								"description": "The component type. Use `mention_user` for a platform-native user mention.",
 							},
 							"text": map[string]any{
 								"type":        "string",
@@ -56,7 +56,7 @@ func SendMsgTool() Tool {
 							},
 							"mention_user_id": map[string]any{
 								"type":        "string",
-								"description": "The exact platform user ID to ping when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name or invent an ID.",
+								"description": "The exact platform user ID to mention when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name or invent an ID.",
 							},
 							"message_id": map[string]any{
 								"type":        "string",
