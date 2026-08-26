@@ -441,21 +441,29 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}"><button class="btn btn-outline btn-sm" id="fetch-models">获取列表</button></div><select class="select mt-2" id="upstream-model-options" style="display:none"><option value="">请选择获取到的模型</option></select></div>
+        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><details class="dropdown" id="upstream-model-picker" style="display:none"><summary class="btn btn-outline btn-icon-sm" title="选择获取到的模型" aria-label="选择获取到的模型">${icon('chevron_down', 'w-3.5 h-3.5')}</summary><div class="dropdown-menu" id="upstream-model-options" style="max-height:16rem;min-width:min(24rem,calc(100vw - 4rem));overflow-y:auto"></div></details><button class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
         <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存到草稿</button>`,
       onMount: (dialog, close) => {
         const endpointSelect = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!;
         const upstreamInput = dialog.querySelector<HTMLInputElement>('#model-upstream')!;
-        const upstreamOptions = dialog.querySelector<HTMLSelectElement>('#upstream-model-options')!;
+        const upstreamPicker = dialog.querySelector<HTMLDetailsElement>('#upstream-model-picker')!;
+        const upstreamOptions = dialog.querySelector<HTMLElement>('#upstream-model-options')!;
         const fetchButton = dialog.querySelector<HTMLButtonElement>('#fetch-models')!;
+        let fetchedModels: string[] = [];
         endpointSelect.addEventListener('change', () => {
-          upstreamOptions.style.display = 'none';
-          upstreamOptions.innerHTML = '<option value="">请选择获取到的模型</option>';
+          fetchedModels = [];
+          upstreamPicker.open = false;
+          upstreamPicker.style.display = 'none';
+          upstreamOptions.innerHTML = '';
         });
-        upstreamOptions.addEventListener('change', () => {
-          if (upstreamOptions.value) upstreamInput.value = upstreamOptions.value;
+        upstreamOptions.addEventListener('click', (event) => {
+          const option = (event.target as HTMLElement).closest<HTMLElement>('[data-model-index]');
+          if (!option) return;
+          const selected = fetchedModels[Number(option.dataset.modelIndex)];
+          if (selected !== undefined) upstreamInput.value = selected;
+          upstreamPicker.open = false;
         });
         fetchButton.addEventListener('click', async () => {
           if (fetchButton.disabled) return;
@@ -470,15 +478,17 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               toast.error(response.error);
               return;
             }
-            upstreamOptions.innerHTML = `<option value="">请选择（${response.models.length} 个模型）</option>${response.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
-            upstreamOptions.style.display = 'block';
+            fetchedModels = [...response.models];
+            upstreamOptions.innerHTML = fetchedModels.map((name, index) => `<button type="button" class="dropdown-item font-mono" data-model-index="${index}">${escapeHtml(name)}</button>`).join('');
+            upstreamPicker.open = false;
+            upstreamPicker.style.display = fetchedModels.length ? 'inline-block' : 'none';
             toast.success(`已获取 ${response.models.length} 个模型`);
           } catch (err) {
             toast.error('获取模型列表失败: ' + errorText(err));
           } finally {
             fetchButton.disabled = false;
             fetchButton.removeAttribute('aria-busy');
-            fetchButton.textContent = '获取列表';
+            fetchButton.textContent = '获取名称';
           }
         });
         dialog.querySelector('#model-confirm')?.addEventListener('click', () => {
