@@ -351,7 +351,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       const endpoint = draft.endpoints.find((item) => item.id === id);
       if (!endpoint) return;
       const visible = !revealedKeys.has(id);
-      visible ? revealedKeys.add(id) : revealedKeys.delete(id);
+      if (visible) revealedKeys.add(id);
+      else revealedKeys.delete(id);
       const key = element.closest('tr')?.querySelector<HTMLElement>('[data-endpoint-key]');
       if (key) key.textContent = visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权';
       element.innerHTML = icon(visible ? 'eye_off' : 'eye');
