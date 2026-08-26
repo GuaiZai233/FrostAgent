@@ -155,7 +155,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
         const modelRouterBtn =
           isGroup && groupId
             ? `
-              <a class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" title="配置群模型" href="#/settings/model-router?platform=${encodeURIComponent(
+              <a class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" title="配置群模型" href="#/model-router?platform=${encodeURIComponent(
                 session.platform || 'onebot',
               )}&group_id=${encodeURIComponent(groupId)}">
                 ${icon('settings', 'w-3.5 h-3.5')}

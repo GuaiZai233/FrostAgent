@@ -147,13 +147,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       <div class="page-container fade-in">
         <header class="page-header">
           <div>
-            <div class="flex items-center gap-2">
-              <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置">${icon('arrow_left')}</a>
-              <div>
-                <h1 class="page-title">模型路由器</h1>
-                <p class="page-description">可视化管理 OpenAI 兼容 Endpoint、模型和群级路由</p>
-              </div>
-            </div>
+            <h1 class="page-title">模型路由器</h1>
+            <p class="page-description">可视化管理 OpenAI 兼容 Endpoint、模型和群级路由</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <span class="badge badge-outline">活动 revision ${activeRevision}</span>
