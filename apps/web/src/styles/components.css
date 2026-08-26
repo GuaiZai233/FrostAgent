@@ -480,8 +480,12 @@ dialog.dialog-modal::backdrop {
 /* ==================== TOAST NOTIFICATIONS ==================== */
 #toast-container {
   position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
+  inset: auto 1.5rem 1.5rem auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;

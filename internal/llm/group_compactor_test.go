@@ -3,6 +3,7 @@ package llm
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
 	"errors"
@@ -800,7 +801,7 @@ func TestGroupCompactor_ScheduledTimerStaleCallbackRace(t *testing.T) {
 
 	compactor.mu.Lock()
 	// 模拟调度了 Generation 1 的 timer
-	compactor.scheduleTriggerLocked(s, owner, 1*time.Hour)
+	compactor.scheduleTriggerLocked(s, owner, modelrouter.Scope{}, 1*time.Hour)
 	token1 := compactor.scheduledToken[key]
 	timer1 := compactor.scheduled[key]
 	compactor.mu.Unlock()
@@ -812,7 +813,7 @@ func TestGroupCompactor_ScheduledTimerStaleCallbackRace(t *testing.T) {
 	// 模拟外部事件取消并创建了 Generation 2 的 timer
 	compactor.mu.Lock()
 	compactor.cancelScheduledLocked(key)
-	compactor.scheduleTriggerLocked(s, owner, 2*time.Hour)
+	compactor.scheduleTriggerLocked(s, owner, modelrouter.Scope{}, 2*time.Hour)
 	token2 := compactor.scheduledToken[key]
 	timer2 := compactor.scheduled[key]
 	compactor.mu.Unlock()

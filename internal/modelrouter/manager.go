@@ -232,8 +232,10 @@ func normalizeConfiguration(cfg *Configuration) {
 	}
 	for _, workload := range Workloads {
 		binding, ok := cfg.GlobalBindings[workload]
-		if workload == WorkloadReflection && (!ok || binding.Mode == "") {
-			cfg.GlobalBindings[workload] = Binding{Mode: BindingInherit}
+		if workload == WorkloadReflection {
+			if !ok || binding.Mode == "" || binding.Mode == BindingInherit {
+				cfg.GlobalBindings[workload] = Binding{Mode: BindingInherit}
+			}
 			continue
 		}
 		if !ok || binding.Mode == "" || binding.Mode == BindingInherit {

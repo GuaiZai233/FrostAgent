@@ -19,6 +19,15 @@ function getContainer(): HTMLElement {
       document.body.appendChild(container);
     }
   }
+  container.setAttribute('popover', 'manual');
+  if ('showPopover' in container) {
+    try {
+      if (container.matches(':popover-open')) container.hidePopover();
+      container.showPopover();
+    } catch {
+      // Older browsers keep the fixed-position fallback.
+    }
+  }
   return container;
 }
 
