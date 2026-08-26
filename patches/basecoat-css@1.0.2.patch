@@ -1,0 +1,9 @@
+diff --git a/dist/styles/vega.css b/dist/styles/vega.css
+index 4b19547..e5c7d8a 100644
+--- a/dist/styles/vega.css
++++ b/dist/styles/vega.css
+@@ -1336,3 +1336,3 @@
+   [data-tooltip]::before {
+-    @apply bg-foreground text-background inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs has-[.kbd]:pe-1.5 [&_.kbd]:relative [&_.kbd]:isolate [&_.kbd]:z-50 [&_.kbd]:rounded-sm;
++    @apply bg-foreground text-background inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs;
+   }

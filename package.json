@@ -30,5 +30,10 @@
     "prettier": "~3.6.2",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.62.0"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "basecoat-css@1.0.2": "patches/basecoat-css@1.0.2.patch"
+    }
   }
 }

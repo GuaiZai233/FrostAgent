@@ -43,6 +43,7 @@ gen/
 
 __screenshots__/
 node_modules
+.pnpm-store/
 .tools/
 
 .claude/worktrees
