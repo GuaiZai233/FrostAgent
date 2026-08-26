@@ -56,6 +56,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   let draft = create(ModelRouterConfigurationSchema, { version: 1 });
   let activeRevision = 0n;
   let loadError = '';
+  let testingModelId = '';
   const revealedKeys = new Set<string>();
 
   async function load() {
@@ -80,9 +81,11 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
   }
 
-  async function saveDraft(showSuccess = true): Promise<boolean> {
-    busy = true;
-    render();
+  async function saveDraft(showSuccess = true, updatePage = true): Promise<boolean> {
+    if (updatePage) {
+      busy = true;
+      render();
+    }
     try {
       const response = await api.saveModelRouterDraft(draft);
       if (!response.success || !response.draft) {
@@ -96,8 +99,10 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       toast.error('保存草稿失败: ' + errorText(err));
       return false;
     } finally {
-      busy = false;
-      render();
+      if (updatePage) {
+        busy = false;
+        render();
+      }
     }
   }
 
@@ -243,17 +248,20 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <thead><tr><th>显示名称</th><th>Endpoint</th><th>上游模型</th><th>能力标签</th><th style="text-align:right">操作</th></tr></thead>
         <tbody>${
           draft.models.length
-            ? draft.models.map((model) => `<tr>
+            ? draft.models.map((model) => {
+              const testing = testingModelId === model.id;
+              return `<tr>
                 <td class="font-medium">${escapeHtml(model.displayName)}</td>
                 <td>${escapeHtml(draft.endpoints.find((item) => item.id === model.endpointId)?.displayName || '缺失')}</td>
                 <td class="font-mono text-xs">${escapeHtml(model.upstreamModel)}</td>
                 <td>${model.capabilities.length ? model.capabilities.map((cap) => `<span class="badge badge-outline mr-1">${escapeHtml(cap)}</span>`).join('') : '<span class="text-muted text-xs">未标记</span>'}</td>
                 <td style="text-align:right"><div class="flex justify-end gap-1">
-                  <button class="btn btn-ghost btn-sm" data-action="test-model" data-id="${escapeHtml(model.id)}">${icon('play', 'w-3.5 h-3.5')} 测试</button>
+                  <button class="btn btn-ghost btn-sm" data-action="test-model" data-id="${escapeHtml(model.id)}" ${testingModelId ? 'disabled' : ''} aria-busy="${testing}">${testing ? '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 测试中...' : `${icon('play', 'w-3.5 h-3.5')} 测试`}</button>
                   <button class="btn btn-ghost btn-icon-sm" data-action="edit-model" data-id="${escapeHtml(model.id)}">${icon('edit')}</button>
                   <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-model" data-id="${escapeHtml(model.id)}">${icon('trash')}</button>
                 </div></td>
-              </tr>`).join('')
+              </tr>`;
+            }).join('')
             : `<tr><td colspan="5" class="text-center text-muted" style="padding:2.5rem">尚未配置 Model。</td></tr>`
         }</tbody>
       </table></div></div>`;
@@ -433,21 +441,45 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" list="upstream-models" value="${escapeHtml(model.upstreamModel)}"><button class="btn btn-outline btn-sm" id="fetch-models">获取列表</button></div><datalist id="upstream-models"></datalist></div>
+        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}"><button class="btn btn-outline btn-sm" id="fetch-models">获取列表</button></div><select class="select mt-2" id="upstream-model-options" style="display:none"><option value="">请选择获取到的模型</option></select></div>
         <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存到草稿</button>`,
       onMount: (dialog, close) => {
-        dialog.querySelector('#fetch-models')?.addEventListener('click', async () => {
-          const endpointId = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!.value;
-          if (!(await saveDraft(false))) return;
-          const response = await api.listUpstreamModels(endpointId);
-          if (response.error) {
-            toast.error(response.error);
-            return;
+        const endpointSelect = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!;
+        const upstreamInput = dialog.querySelector<HTMLInputElement>('#model-upstream')!;
+        const upstreamOptions = dialog.querySelector<HTMLSelectElement>('#upstream-model-options')!;
+        const fetchButton = dialog.querySelector<HTMLButtonElement>('#fetch-models')!;
+        endpointSelect.addEventListener('change', () => {
+          upstreamOptions.style.display = 'none';
+          upstreamOptions.innerHTML = '<option value="">请选择获取到的模型</option>';
+        });
+        upstreamOptions.addEventListener('change', () => {
+          if (upstreamOptions.value) upstreamInput.value = upstreamOptions.value;
+        });
+        fetchButton.addEventListener('click', async () => {
+          if (fetchButton.disabled) return;
+          const endpointId = endpointSelect.value;
+          fetchButton.disabled = true;
+          fetchButton.setAttribute('aria-busy', 'true');
+          fetchButton.innerHTML = '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 获取中...';
+          try {
+            if (!(await saveDraft(false, false))) return;
+            const response = await api.listUpstreamModels(endpointId);
+            if (response.error) {
+              toast.error(response.error);
+              return;
+            }
+            upstreamOptions.innerHTML = `<option value="">请选择（${response.models.length} 个模型）</option>${response.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+            upstreamOptions.style.display = 'block';
+            toast.success(`已获取 ${response.models.length} 个模型`);
+          } catch (err) {
+            toast.error('获取模型列表失败: ' + errorText(err));
+          } finally {
+            fetchButton.disabled = false;
+            fetchButton.removeAttribute('aria-busy');
+            fetchButton.textContent = '获取列表';
           }
-          dialog.querySelector<HTMLDataListElement>('#upstream-models')!.innerHTML = response.models.map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
-          toast.success(`已获取 ${response.models.length} 个模型`);
         });
         dialog.querySelector('#model-confirm')?.addEventListener('click', () => {
           model.displayName = dialog.querySelector<HTMLInputElement>('#model-name')!.value;
@@ -519,17 +551,38 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   }
 
   async function testModel(modelId: string) {
-    if (!(await saveDraft(false))) return;
-    const response = await api.testModel(modelId);
-    if (!response.success) {
-      toast.error(response.error || '测试失败');
-      return;
+    if (testingModelId) return;
+    testingModelId = modelId;
+    updateModelTestButtons();
+    try {
+      if (!(await saveDraft(false, false))) return;
+      const response = await api.testModel(modelId);
+      if (!response.success) {
+        toast.error(response.error || '测试失败');
+        return;
+      }
+      void openDialog({
+        title: '模型测试成功',
+        description: `耗时 ${response.durationMs} ms · 提示词：Introduce yourself in one sentence.`,
+        bodyHtml: `<div class="card p-3 whitespace-pre-wrap select-text">${escapeHtml(response.content)}</div>`,
+        footerHtml: `<button class="btn btn-primary btn-sm dialog-close-btn">关闭</button>`,
+      });
+    } catch (err) {
+      toast.error('测试失败: ' + errorText(err));
+    } finally {
+      testingModelId = '';
+      updateModelTestButtons();
     }
-    void openDialog({
-      title: '模型测试成功',
-      description: `耗时 ${response.durationMs} ms · 提示词：Introduce yourself in one sentence.`,
-      bodyHtml: `<div class="card p-3 whitespace-pre-wrap select-text">${escapeHtml(response.content)}</div>`,
-      footerHtml: `<button class="btn btn-primary btn-sm dialog-close-btn">关闭</button>`,
+  }
+
+  function updateModelTestButtons() {
+    container.querySelectorAll<HTMLButtonElement>('[data-action="test-model"]').forEach((button) => {
+      const testing = testingModelId === button.dataset.id;
+      button.disabled = testingModelId !== '';
+      button.setAttribute('aria-busy', String(testing));
+      button.innerHTML = testing
+        ? '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 测试中...'
+        : `${icon('play', 'w-3.5 h-3.5')} 测试`;
     });
   }
 
