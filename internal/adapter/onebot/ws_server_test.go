@@ -1673,6 +1673,7 @@ func TestWSBilling_Vision_InsufficientBalance_EarlyAbort(t *testing.T) {
 
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
+	engine.VisionProvider = mockLLM
 	billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
 	engine.BillingClient = billingClient
 	engine.BillingConfig = billing.Config{
