@@ -217,10 +217,10 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
                     return `<tr>
                       <td class="font-medium">${escapeHtml(endpoint.displayName)}</td>
                       <td class="font-mono text-xs">${escapeHtml(endpoint.baseUrl)}</td>
-                      <td class="font-mono text-xs">${escapeHtml(visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权')}</td>
+                      <td class="font-mono text-xs"><span data-endpoint-key>${escapeHtml(visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权')}</span></td>
                       <td><span class="badge ${endpoint.enabled ? 'badge-success' : 'badge-outline'}">${endpoint.enabled ? '启用' : '停用'}</span></td>
                       <td style="text-align:right"><div class="flex justify-end gap-1">
-                        <button class="btn btn-ghost btn-icon-sm" data-action="reveal-endpoint" data-id="${escapeHtml(endpoint.id)}" title="${visible ? '隐藏 Key' : '查看 Key'}">${icon(visible ? 'eye_off' : 'eye')}</button>
+                        <button class="btn btn-ghost btn-icon-sm" data-action="reveal-endpoint" data-id="${escapeHtml(endpoint.id)}" title="${visible ? '隐藏 Key' : '查看 Key'}" aria-label="${visible ? '隐藏 API Key' : '查看 API Key'}" aria-pressed="${visible}">${icon(visible ? 'eye_off' : 'eye')}</button>
                         <button class="btn btn-ghost btn-icon-sm" data-action="edit-endpoint" data-id="${escapeHtml(endpoint.id)}" title="编辑">${icon('edit')}</button>
                         <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-endpoint" data-id="${escapeHtml(endpoint.id)}" title="删除">${icon('trash')}</button>
                       </div></td>
@@ -348,8 +348,16 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     const action = element.dataset.action;
     const id = element.dataset.id || '';
     if (action === 'reveal-endpoint') {
-      revealedKeys.has(id) ? revealedKeys.delete(id) : revealedKeys.add(id);
-      render();
+      const endpoint = draft.endpoints.find((item) => item.id === id);
+      if (!endpoint) return;
+      const visible = !revealedKeys.has(id);
+      visible ? revealedKeys.add(id) : revealedKeys.delete(id);
+      const key = element.closest('tr')?.querySelector<HTMLElement>('[data-endpoint-key]');
+      if (key) key.textContent = visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权';
+      element.innerHTML = icon(visible ? 'eye_off' : 'eye');
+      element.title = visible ? '隐藏 Key' : '查看 Key';
+      element.setAttribute('aria-label', visible ? '隐藏 API Key' : '查看 API Key');
+      element.setAttribute('aria-pressed', String(visible));
     } else if (action === 'edit-endpoint') {
       editEndpoint(id);
     } else if (action === 'delete-endpoint') {
