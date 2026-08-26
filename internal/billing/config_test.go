@@ -12,7 +12,6 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	os.Setenv("ALCYONE_BASE_URL", "http://127.0.0.1:9090")
 	os.Setenv("ALCYONE_SERVICE_TOKEN", "secret-token-123")
 	os.Setenv("ALCYONE_TIMEOUT", "10s")
-	os.Setenv("MODEL_NAME", "deepseek-v4-flash")
 	os.Setenv("BILLING_MAX_OUTPUT_TOKENS", "4096")
 	os.Setenv("BILLING_SAFETY_MULTIPLIER", "1.5")
 	os.Setenv("BILLING_PROMPT_PRICE_PER_MILLION", "1500")
@@ -22,7 +21,6 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		os.Unsetenv("ALCYONE_BASE_URL")
 		os.Unsetenv("ALCYONE_SERVICE_TOKEN")
 		os.Unsetenv("ALCYONE_TIMEOUT")
-		os.Unsetenv("MODEL_NAME")
 		os.Unsetenv("BILLING_MAX_OUTPUT_TOKENS")
 		os.Unsetenv("BILLING_SAFETY_MULTIPLIER")
 		os.Unsetenv("BILLING_PROMPT_PRICE_PER_MILLION")
@@ -43,7 +41,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	if cfg.Timeout != 10*time.Second {
 		t.Errorf("unexpected Timeout: %v", cfg.Timeout)
 	}
-	if cfg.ModelName != "deepseek-v4-flash" {
+	if cfg.ModelName != DefaultModelName {
 		t.Errorf("unexpected ModelName: %s", cfg.ModelName)
 	}
 	if cfg.MaxOutputTokens != 4096 {

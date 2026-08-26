@@ -1,21 +1,30 @@
 package subagent
 
 import (
-	"FrostAgent/internal/llm"
+	"FrostAgent/internal/core"
+	"context"
+	"errors"
 	"testing"
 )
+
+type failingProvider struct{}
+
+func (failingProvider) Chat(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+	return nil, errors.New("test provider failure")
+}
 
 func TestCallCoder(t *testing.T) {
 	// 准备数据
 	content := "使用golang写一个 Hello World"
 
 	// 调用函数
-	result := CallCoder(&llm.Client{}, "", "", "", content)
+	result, err := CallCoder(context.Background(), failingProvider{}, core.RouteContext{}, content)
 
-	// 断言：因为我们用了假的 key，预期应该返回错误信息
-	if result == "" {
-		t.Error("预期返回错误信息，但得到了空字符串")
+	if err == nil {
+		t.Fatal("预期返回错误，但得到了 nil")
 	}
 
-	t.Logf("测试结果: %s", result)
+	if result != "" {
+		t.Errorf("预期空结果，但得到了 %q", result)
+	}
 }

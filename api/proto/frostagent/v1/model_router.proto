@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+service ModelRouterService {
+  rpc GetState(GetStateRequest) returns (GetStateResponse);
+  rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc DiscardDraft(DiscardDraftRequest) returns (DiscardDraftResponse);
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc ListUpstreamModels(ListUpstreamModelsRequest) returns (ListUpstreamModelsResponse);
+  rpc TestModel(TestModelRequest) returns (TestModelResponse);
+}
+
+enum ModelWorkload {
+  MODEL_WORKLOAD_UNSPECIFIED = 0;
+  MODEL_WORKLOAD_DIALOGUE = 1;
+  MODEL_WORKLOAD_SUBAGENT = 2;
+  MODEL_WORKLOAD_VISION = 3;
+  MODEL_WORKLOAD_REFLECTION = 4;
+  MODEL_WORKLOAD_MEMORY_EXTRACT = 5;
+  MODEL_WORKLOAD_GROUP_COMPACT = 6;
+}
+
+enum ModelBindingMode {
+  MODEL_BINDING_MODE_UNSPECIFIED = 0;
+  MODEL_BINDING_MODE_INHERIT = 1;
+  MODEL_BINDING_MODE_MODEL = 2;
+  MODEL_BINDING_MODE_DISABLED = 3;
+}
+
+message ModelEndpoint {
+  string id = 1;
+  string display_name = 2;
+  string base_url = 3;
+  string api_key = 4;
+  bool enabled = 5;
+}
+
+message ModelTarget {
+  string id = 1;
+  string display_name = 2;
+  string endpoint_id = 3;
+  string upstream_model = 4;
+  bool enabled = 5;
+  repeated string capabilities = 6;
+}
+
+message ModelBinding {
+  ModelWorkload workload = 1;
+  ModelBindingMode mode = 2;
+  string model_id = 3;
+}
+
+message GroupModelOverride {
+  string platform = 1;
+  string group_id = 2;
+  repeated ModelBinding bindings = 3;
+}
+
+message ModelRouterConfiguration {
+  int32 version = 1;
+  int64 revision = 2;
+  repeated ModelEndpoint endpoints = 3;
+  repeated ModelTarget models = 4;
+  repeated ModelBinding global_bindings = 5;
+  repeated GroupModelOverride group_overrides = 6;
+}
+
+message GetStateRequest {}
+
+message GetStateResponse {
+  ModelRouterConfiguration active = 1;
+  ModelRouterConfiguration draft = 2;
+  string load_error = 3;
+}
+
+message SaveDraftRequest {
+  ModelRouterConfiguration configuration = 1;
+}
+
+message SaveDraftResponse {
+  bool success = 1;
+  string error = 2;
+  ModelRouterConfiguration draft = 3;
+}
+
+message DiscardDraftRequest {}
+
+message DiscardDraftResponse {
+  ModelRouterConfiguration draft = 1;
+}
+
+message PublishRequest {}
+
+message PublishResponse {
+  bool success = 1;
+  string error = 2;
+  ModelRouterConfiguration active = 3;
+}
+
+message ListUpstreamModelsRequest {
+  string endpoint_id = 1;
+}
+
+message ListUpstreamModelsResponse {
+  repeated string models = 1;
+  string error = 2;
+}
+
+message TestModelRequest {
+  string model_id = 1;
+}
+
+message TestModelResponse {
+  bool success = 1;
+  string content = 2;
+  string error = 3;
+  int64 duration_ms = 4;
+}

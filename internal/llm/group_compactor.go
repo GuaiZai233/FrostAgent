@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -181,6 +182,10 @@ func (c *GroupCompactor) HasPendingPersistence(owner string) bool {
 // Trigger starts compaction when a full batch is ready. Failures are logged and
 // never block OneBot event processing.
 func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
+	c.TriggerWithScope(session, owner, modelrouter.Scope{})
+}
+
+func (c *GroupCompactor) TriggerWithScope(session *SessionContext, owner string, routeScope modelrouter.Scope) {
 	if c == nil || session == nil || c.provider == nil || c.model == "" || owner == "" {
 		return
 	}
@@ -199,7 +204,7 @@ func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
 		if elapsed+5*time.Millisecond < c.minInterval {
 			if session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
 				delay := c.minInterval - elapsed + 5*time.Millisecond
-				c.scheduleTriggerLocked(session, owner, delay)
+				c.scheduleTriggerLocked(session, owner, routeScope, delay)
 			}
 			c.mu.Unlock()
 			return
@@ -222,10 +227,10 @@ func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {
 	if c.store != nil {
 		storeGeneration = c.store.Generation(owner)
 	}
-	go c.compact(session, owner, snapshot, storeGeneration)
+	go c.compact(session, owner, routeScope, snapshot, storeGeneration)
 }
 
-func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, delay time.Duration) {
+func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, routeScope modelrouter.Scope, delay time.Duration) {
 	key := session.ConversationID
 	if c.scheduled[key] != nil {
 		return
@@ -247,7 +252,7 @@ func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner st
 		delete(c.scheduled, key)
 		delete(c.scheduledToken, key)
 		c.mu.Unlock()
-		c.Trigger(session, owner)
+		c.TriggerWithScope(session, owner, routeScope)
 	})
 }
 
@@ -262,6 +267,7 @@ func (c *GroupCompactor) cancelScheduledLocked(key string) {
 func (c *GroupCompactor) compact(
 	session *SessionContext,
 	owner string,
+	routeScope modelrouter.Scope,
 	snapshot GroupCompactSnapshot,
 	storeGeneration uint64,
 ) {
@@ -286,7 +292,7 @@ func (c *GroupCompactor) compact(
 			if delay > 0 {
 				delay += 5 * time.Millisecond
 			}
-			c.scheduleTriggerLocked(session, owner, delay)
+			c.scheduleTriggerLocked(session, owner, routeScope, delay)
 		}
 		c.mu.Unlock()
 	}()
@@ -300,6 +306,10 @@ func (c *GroupCompactor) compact(
 		}},
 		MaxTokens:   1024,
 		Temperature: 0.2,
+		Route: core.RouteContext{
+			Platform: routeScope.Platform,
+			GroupID:  routeScope.GroupID,
+		},
 	}
 	response, err := c.provider.Chat(context.Background(), request)
 	if err != nil {

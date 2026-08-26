@@ -7,6 +7,7 @@ import {
   LogLevel,
   LogService,
   MemoryService,
+  ModelRouterService,
   SettingsService,
   type EnvVar,
   type GetOverviewResponse,
@@ -24,6 +25,11 @@ import {
   type ExportMemoriesResponse,
   type ImportMemoriesResponse,
   type TriggerReflectionResponse,
+  type ModelRouterConfiguration,
+  type GetStateResponse,
+  type SaveDraftResponse,
+  type PublishResponse,
+  type TestModelResponse,
   type DialogueItem,
   type ListDialoguesResponse,
   type SaveDialoguesResponse,
@@ -58,6 +64,11 @@ const settingsClient: Client<typeof SettingsService> = createClient(
 
 const memoryClient: Client<typeof MemoryService> = createClient(
   MemoryService,
+  transport,
+);
+
+const modelRouterClient: Client<typeof ModelRouterService> = createClient(
+  ModelRouterService,
   transport,
 );
 
@@ -152,6 +163,31 @@ export const api = {
 
   updateRawEnvFile(content: string): Promise<{ success: boolean; error: string }> {
     return settingsClient.updateRawEnvFile({ content });
+  },
+
+  // Model Router
+  getModelRouterState(): Promise<GetStateResponse> {
+    return modelRouterClient.getState({});
+  },
+
+  saveModelRouterDraft(configuration: ModelRouterConfiguration): Promise<SaveDraftResponse> {
+    return modelRouterClient.saveDraft({ configuration });
+  },
+
+  discardModelRouterDraft(): Promise<ModelRouterConfiguration | undefined> {
+    return modelRouterClient.discardDraft({}).then((res) => res.draft);
+  },
+
+  publishModelRouter(): Promise<PublishResponse> {
+    return modelRouterClient.publish({});
+  },
+
+  listUpstreamModels(endpointId: string): Promise<{ models: string[]; error: string }> {
+    return modelRouterClient.listUpstreamModels({ endpointId });
+  },
+
+  testModel(modelId: string): Promise<TestModelResponse> {
+    return modelRouterClient.testModel({ modelId });
   },
 
   // Memory

@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,17 @@ const (
 	MaxToolOutputBytes   = 65536 // 64KB
 )
 
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
 // AgentRunResult carries the final content and side-effect decisions from one
 // agent loop. Silent is true when the model successfully invokes the terminal
 // stay_silent tool or returns the standalone internal silence marker. Provider
@@ -59,7 +71,9 @@ type Engine struct {
 	BaseURL                string           // API 地址
 	APIKey                 string           // API 密钥
 	ModelName              string           // 模型名称
-	SessionManager         *SessionManager  // 会话上下文管理器
+	ModelRouter            *modelrouter.Manager
+	VisionProvider         core.LLMProvider
+	SessionManager         *SessionManager // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
 	StartedAt              time.Time // 引擎启动时间
 	Version                string    // 版本号
@@ -96,7 +110,7 @@ func (e *Engine) Run(prompt string) string {
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	result := e.runLoop(context.Background(), messages)
+	result := e.runLoop(e.newRoutingContext(), messages)
 	return result
 }
 
@@ -116,7 +130,17 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 			{Role: "system", Content: systemPrompt},
 		}, messages...)
 	}
-	return e.runLoop(context.Background(), messages)
+	return e.runLoop(e.newRoutingContext(), messages)
+}
+
+func (e *Engine) newRoutingContext() context.Context {
+	ctx := context.Background()
+	if e.ModelRouter == nil {
+		return ctx
+	}
+	snapshot := e.ModelRouter.Snapshot()
+	ctx = e.ModelRouter.WithSnapshot(ctx, snapshot)
+	return withRunContext(ctx, RunContext{RouteSnapshot: snapshot})
 }
 
 // RunMessagesWithUser 执行智能体的主循环（带记忆上下文）。
@@ -139,6 +163,14 @@ func (e *Engine) RunMessagesWithContext(
 	runContext RunContext,
 ) AgentRunResult {
 	owner := runContext.Owner
+	ctx := context.Background()
+	if e.ModelRouter != nil {
+		if runContext.RouteSnapshot == nil {
+			runContext.RouteSnapshot = e.ModelRouter.Snapshot()
+		}
+		ctx = e.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
+	}
+	ctx = withRunContext(ctx, runContext)
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := os.Getenv("SYSTEM_PROMPT")
@@ -194,13 +226,18 @@ func (e *Engine) RunMessagesWithContext(
 		if sessCore, ok := e.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*SessionContext); isSess {
 				if sysContent, ok := messages[0].Content.(string); ok {
-					sess.SetLastPromptTrace(sysContent, e.ModelName)
+					modelName := e.ModelName
+					if e.ModelRouter != nil {
+						if target, err := runContext.RouteSnapshot.Resolve(modelrouter.WorkloadDialogue, runContext.RouteScope); err == nil {
+							modelName = target.UpstreamModel
+						}
+					}
+					sess.SetLastPromptTrace(sysContent, modelName)
 				}
 			}
 		}
 	}
 
-	ctx := withRunContext(context.Background(), runContext)
 	return e.runLoopWithResult(ctx, messages)
 }
 
@@ -375,6 +412,27 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
 	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	modelName := e.ModelName
+	if e.ModelRouter != nil {
+		var snapshot *modelrouter.Snapshot
+		if hasRunCtx {
+			snapshot = runCtx.RouteSnapshot
+		}
+		if snapshot == nil {
+			snapshot = e.ModelRouter.Snapshot()
+		}
+		target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, runCtx.RouteScope)
+		if err != nil {
+			if errors.Is(err, modelrouter.ErrDisabled) {
+				return AgentRunResult{Silent: true}
+			}
+			return AgentRunResult{
+				Content: fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Error:   err,
+			}
+		}
+		modelName = target.UpstreamModel
+	}
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
@@ -401,7 +459,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		var reservationID string
 		if billingActive {
 			amountMinor, err := billing.EstimateReservationAmount(
-				e.ModelName,
+				modelName,
 				coreMsgs,
 				modelTools,
 				e.BillingConfig.MaxOutputTokens,
@@ -510,10 +568,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
 		chatReq := core.ChatRequest{
-			Model:     e.ModelName,
+			Model:     modelName,
 			Messages:  coreMsgs,
 			Tools:     modelTools,
 			MaxTokens: e.BillingConfig.MaxOutputTokens,
+			Route: core.RouteContext{
+				Platform: runCtx.RouteScope.Platform,
+				GroupID:  runCtx.RouteScope.GroupID,
+			},
 		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
@@ -526,7 +588,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				rCancel()
 			}
 			return AgentRunResult{
-				Content:       fmt.Sprintf("FrostAgent错误：LLM调用失败: %v", err),
+				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         err,
@@ -566,7 +628,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				promptTok = resp.Usage.PromptTokens
 				compTok = resp.Usage.CompletionTokens
 			}
-			price, _ := billing.GetPrice(e.ModelName)
+			price, _ := billing.GetPrice(modelName)
 			actualMinor := billing.CalculateMinorUnits(promptTok, compTok, price)
 
 			cCtx, cCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)

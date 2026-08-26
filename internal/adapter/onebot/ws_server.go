@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/modelrouter"
 	"github.com/gorilla/websocket"
 )
 
@@ -121,7 +122,7 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 }
 
 // processEvent holds its reserved session turn until routing and reply finish.
-func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn) {
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
@@ -152,7 +153,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			return
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt, responseContext)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt, responseContext, routeSnapshot)
 
 	} else if event.MessageType == "private" {
 		logs.Info(
@@ -166,12 +167,20 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		)
 		replyContext := conn.lookupReplyContext(event)
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt, responseContext)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt, responseContext, routeSnapshot)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string, responseContext string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+	routeScope := oneBotRouteScope(event)
+	if routeSnapshot == nil && engine != nil && engine.ModelRouter != nil {
+		routeSnapshot = engine.ModelRouter.Snapshot()
+	}
+	routeCtx := context.Background()
+	if engine != nil && engine.ModelRouter != nil {
+		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
+	}
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
 	segments = []content.MessageSegment{}
@@ -182,29 +191,39 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	userText := extractUserText(segments, event.Message)
 	if content.IsContainImage(segments) {
-		// Fast-fail balance check before downloading images or calling vision LLM
-		if engine != nil && engine.BillingClient != nil && engine.BillingConfig.Enabled {
-			bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
-			bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
-			bCancel()
-			if err != nil {
-				if errors.Is(err, billing.ErrInsufficientFunds) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+		visionEnabled := engine != nil && engine.VisionProvider != nil
+		if visionEnabled && routeSnapshot != nil {
+			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+		}
+		if !visionEnabled {
+			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
+		} else {
+			// Fast-fail balance check before downloading images or calling vision LLM
+			if engine != nil && engine.BillingClient != nil && engine.BillingConfig.Enabled {
+				bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+				bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
+				bCancel()
+				if err != nil {
+					if errors.Is(err, billing.ErrInsufficientFunds) {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
+						sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+						return
+					}
+					logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
 					return
 				}
-				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
-				return
+				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
+					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
+					return
+				}
 			}
-			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
-				return
+			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			if imageDesc != "" {
+				userText = userText + " 【图片内容】：" + imageDesc
 			}
 		}
-		imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
-		userText = userText + " 【图片内容】：" + imageDesc
 	}
 
 	// 检查单条用户消息输入上限保护
@@ -367,11 +386,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID: historyKey(event),
-			Owner:     owner,
-			OwnerType: ownerType,
-			SendHook:  sendHook,
-			Billing:   billingState,
+			SessionID:     historyKey(event),
+			Owner:         owner,
+			OwnerType:     ownerType,
+			SendHook:      sendHook,
+			Billing:       billingState,
+			RouteScope:    routeScope,
+			RouteSnapshot: routeSnapshot,
 		})
 		replyText = runResult.Content
 
@@ -405,161 +426,161 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		logs.Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
 	}
 
-		// 5. Prepare the final message for OneBot by parsing the engine's response
-		var finalMessage any
+	// 5. Prepare the final message for OneBot by parsing the engine's response
+	var finalMessage any
 
-		var toolOutput struct {
-			Messages []tools.Msg `json:"messages"`
-		}
+	var toolOutput struct {
+		Messages []tools.Msg `json:"messages"`
+	}
 
-		if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
-			// A. It's a tool call JSON
-			logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
-			if len(oneBotSegments) > 0 {
-				if receiptText != "" {
-					oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
-						Type: "text",
-						Data: map[string]any{"text": "\n\n" + receiptText},
-					})
-				}
-				if event.MessageType == "group" {
-					oneBotSegments = wrapGroupReply(oneBotSegments, event)
-				}
-				finalMessage = oneBotSegments
-			} else {
-				displayText := replyText
-				if receiptText != "" {
-					displayText = displayText + "\n\n" + receiptText
-				}
-				finalMessage = displayText
+	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
+		// A. It's a tool call JSON
+		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
+		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+		if len(oneBotSegments) > 0 {
+			if receiptText != "" {
+				oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]any{"text": "\n\n" + receiptText},
+				})
 			}
+			if event.MessageType == "group" {
+				oneBotSegments = wrapGroupReply(oneBotSegments, event)
+			}
+			finalMessage = oneBotSegments
 		} else {
-			// B. It's plain text
 			displayText := replyText
 			if receiptText != "" {
-				if strings.TrimSpace(displayText) == "" {
-					displayText = receiptText
-				} else {
-					displayText = displayText + "\n\n" + receiptText
-				}
+				displayText = displayText + "\n\n" + receiptText
 			}
-
-			if event.MessageType == "group" {
-				// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
-				enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
-				enableReply := os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
-				if enableAt || enableReply {
-					textSeg := tools.OneBotSegment{
-						Type: "text",
-						Data: map[string]any{"text": " " + displayText},
-					}
-					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
-				} else {
-					finalMessage = displayText
-				}
-
+			finalMessage = displayText
+		}
+	} else {
+		// B. It's plain text
+		displayText := replyText
+		if receiptText != "" {
+			if strings.TrimSpace(displayText) == "" {
+				displayText = receiptText
 			} else {
-				// Just plain text for private messages
+				displayText = displayText + "\n\n" + receiptText
+			}
+		}
+
+		if event.MessageType == "group" {
+			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
+			enableAt := os.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+			enableReply := os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+			if enableAt || enableReply {
+				textSeg := tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]any{"text": " " + displayText},
+				}
+				finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event)
+			} else {
 				finalMessage = displayText
 			}
-		}
 
-		// 6. Build and send the final OneBot Action, waiting for platform ACK response
-		botAction := model.OneBotAction{
-			Action: action,
-			Params: map[string]any{
-				type1:     id,
-				"message": finalMessage, // Use the processed finalMessage
-			},
-			Echo: echo,
-		}
-
-		ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout())
-		if err == nil {
-			// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
-			if session != nil {
-				session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
-				if engine != nil {
-					engine.TrimSession(session)
-				}
-			}
-
-			if event.MessageType == "group" && engine != nil && session != nil {
-				botReply := extractBotReplyText(replyText)
-				if strings.TrimSpace(botReply) != "" {
-					botName := os.Getenv("BOT_NAME")
-					if botName == "" {
-						botName = defaultBotName
-					}
-					var maxBufferSize int
-					if engine.GroupCompactor != nil {
-						maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-					}
-					session.AppendGroupCompactMessage(
-						llm.GroupCompactMessage{
-							Role:    "assistant",
-							Sender:  botName,
-							Content: strings.TrimSpace(botReply),
-							Time:    time.Now().Format("15:04:05"),
-						},
-						maxBufferSize,
-					)
-					if engine.GroupCompactor != nil {
-						owner, _ := memory.OwnerForGroup(event.GroupID)
-						engine.GroupCompactor.Trigger(session, owner)
-					}
-				}
-			}
-
-			if engine != nil && session != nil {
-				if runResult.MemoryWritten {
-					logs.Info(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-				} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
-					pendingUserText := userText
-					if event.MessageType == "group" {
-						pendingUserText = formatGroupSpeakerMessage(event, userText)
-					}
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-						{
-							Owner:     owner,
-							OwnerType: ownerType,
-							Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-						},
-						{
-							Owner:     owner,
-							OwnerType: ownerType,
-							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-						},
-					})
-				}
-			}
 		} else {
-			// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
-			reason := strings.TrimSpace(ackResp.Wording)
-			if reason == "" {
-				reason = strings.TrimSpace(ackResp.Message)
+			// Just plain text for private messages
+			finalMessage = displayText
+		}
+	}
+
+	// 6. Build and send the final OneBot Action, waiting for platform ACK response
+	botAction := model.OneBotAction{
+		Action: action,
+		Params: map[string]any{
+			type1:     id,
+			"message": finalMessage, // Use the processed finalMessage
+		},
+		Echo: echo,
+	}
+
+	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout())
+	if err == nil {
+		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
+		if session != nil {
+			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
+			if engine != nil {
+				engine.TrimSession(session)
 			}
-			if reason == "" && ackResp.RetCode != 0 {
-				reason = fmt.Sprintf("retcode %d", ackResp.RetCode)
-			}
-			if reason == "" {
-				reason = err.Error()
-			}
-			if session != nil {
-				session.SetDeliveryFailure(llm.DeliveryFailure{
-					Platform: "onebot",
-					Action:   action,
-					RetCode:  ackResp.RetCode,
-					Message:  ackResp.Message,
-					Wording:  reason,
-				})
-				if engine != nil {
-					engine.TrimSession(session)
+		}
+
+		if event.MessageType == "group" && engine != nil && session != nil {
+			botReply := extractBotReplyText(replyText)
+			if strings.TrimSpace(botReply) != "" {
+				botName := os.Getenv("BOT_NAME")
+				if botName == "" {
+					botName = defaultBotName
+				}
+				var maxBufferSize int
+				if engine.GroupCompactor != nil {
+					maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+				}
+				session.AppendGroupCompactMessage(
+					llm.GroupCompactMessage{
+						Role:    "assistant",
+						Sender:  botName,
+						Content: strings.TrimSpace(botReply),
+						Time:    time.Now().Format("15:04:05"),
+					},
+					maxBufferSize,
+				)
+				if engine.GroupCompactor != nil {
+					owner, _ := memory.OwnerForGroup(event.GroupID)
+					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			logs.Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 		}
+
+		if engine != nil && session != nil {
+			if runResult.MemoryWritten {
+				logs.Info(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+			} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
+				pendingUserText := userText
+				if event.MessageType == "group" {
+					pendingUserText = formatGroupSpeakerMessage(event, userText)
+				}
+				engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					{
+						Owner:     owner,
+						OwnerType: ownerType,
+						Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
+					},
+					{
+						Owner:     owner,
+						OwnerType: ownerType,
+						Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+					},
+				})
+			}
+		}
+	} else {
+		// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
+		reason := strings.TrimSpace(ackResp.Wording)
+		if reason == "" {
+			reason = strings.TrimSpace(ackResp.Message)
+		}
+		if reason == "" && ackResp.RetCode != 0 {
+			reason = fmt.Sprintf("retcode %d", ackResp.RetCode)
+		}
+		if reason == "" {
+			reason = err.Error()
+		}
+		if session != nil {
+			session.SetDeliveryFailure(llm.DeliveryFailure{
+				Platform: "onebot",
+				Action:   action,
+				RetCode:  ackResp.RetCode,
+				Message:  ackResp.Message,
+				Wording:  reason,
+			})
+			if engine != nil {
+				engine.TrimSession(session)
+			}
+		}
+		logs.Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
+	}
 }
 
 func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string) {
@@ -626,7 +647,7 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 	)
 	if engine.GroupCompactor != nil {
 		owner, _ := memory.OwnerForGroup(event.GroupID)
-		engine.GroupCompactor.Trigger(session, owner)
+		engine.GroupCompactor.TriggerWithScope(session, owner, oneBotRouteScope(event))
 	}
 }
 
@@ -690,7 +711,12 @@ func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []l
 		segments := ParseMessageSegments(raw)
 		userText := extractUserText(segments, raw)
 		if content.IsContainImage(segments) {
-			imageDesc := content.ProcessImage(segments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
+			provider := engine.VisionProvider
+			if provider == nil {
+				provider = engine.Provider
+			}
+			scope := oneBotRouteScope(event)
+			imageDesc := content.ProcessImage(context.Background(), segments, provider, core.RouteContext{Platform: scope.Platform, GroupID: scope.GroupID})
 			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 		}
 		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
@@ -704,6 +730,14 @@ func historyKey(event model.OneBotEvent) string {
 		return fmt.Sprintf("group:%d", event.GroupID)
 	}
 	return fmt.Sprintf("private:%d", event.UserID)
+}
+
+func oneBotRouteScope(event model.OneBotEvent) modelrouter.Scope {
+	scope := modelrouter.Scope{Platform: "onebot"}
+	if event.MessageType == "group" && event.GroupID != 0 {
+		scope.GroupID = strconv.FormatInt(event.GroupID, 10)
+	}
+	return scope
 }
 
 // extractUserText 从消息段中提取纯文本内容

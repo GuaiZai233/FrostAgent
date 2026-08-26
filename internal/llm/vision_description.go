@@ -5,11 +5,10 @@ import (
 	"FrostAgent/internal/logs"
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 )
 
-func CallVisionModel(provider core.LLMProvider, baseURL, apiKey, _, contentBlocks string) string {
+func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.RouteContext, contentBlocks string) string {
 	systemPrompt := "请用中文描述图片："
 
 	// 将传入的 JSON 字符串格式反序列化为真正的对象数组
@@ -32,22 +31,22 @@ func CallVisionModel(provider core.LLMProvider, baseURL, apiKey, _, contentBlock
 	}
 
 	chatReq := core.ChatRequest{
-		Model: os.Getenv("VISUAL_MODEL_NAME"), // 从环境变量拿视觉模型名
 		Messages: []core.ChatMessage{
 			// 系统提示词：告诉模型它是来干嘛的
 			{Role: core.RoleSystem, Content: systemPrompt},
 			// 用户内容：这里就是你传入的包含文字和图片 Base64 的 parsedContent
 			{Role: core.RoleUser, Content: parsedContent},
 		},
+		Route: route,
 	}
 
 	logs.Info(logs.SYSTEM, "即将传递消息给视觉模型")
 
 	// 调用 LLMProvider 接口
-	resp, err := provider.Chat(context.Background(), chatReq)
+	resp, err := provider.Chat(ctx, chatReq)
 	if err != nil {
 		logs.Error(logs.SYSTEM, "视觉模型调用失败: "+err.Error())
-		return err.Error()
+		return ""
 	}
 
 	// 更加健壮地处理大模型的返回值，防止强转失败变成空字符串

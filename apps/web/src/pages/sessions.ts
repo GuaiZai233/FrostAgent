@@ -45,7 +45,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
                 <th style="width: 6rem;">消息数</th>
                 <th style="width: 9.5rem;">创建时间</th>
                 <th style="width: 9.5rem;">最后活跃</th>
-                <th style="width: 4.5rem; text-align: right;">操作</th>
+                <th style="width: 8rem; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="sessions-table-body">
@@ -151,6 +151,18 @@ export function mountSessionsPage(container: HTMLElement): () => void {
             `
             : '';
 
+        const groupId = isGroup ? groupIdFromSessionId(session.sessionId) : '';
+        const modelRouterBtn =
+          isGroup && groupId
+            ? `
+              <a class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" title="配置群模型" href="#/settings/model-router?platform=${encodeURIComponent(
+                session.platform || 'onebot',
+              )}&group_id=${encodeURIComponent(groupId)}">
+                ${icon('settings', 'w-3.5 h-3.5')}
+              </a>
+            `
+            : '';
+
         return `
           <tr>
             <td>${idContent}</td>
@@ -158,7 +170,7 @@ export function mountSessionsPage(container: HTMLElement): () => void {
             <td><span class="font-mono text-xs">${escapeHtml(formatCount(session.messageCount))}</span></td>
             <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(session.createdAt))}</td>
             <td class="text-xs text-muted font-mono">${escapeHtml(formatDateTime(session.lastActive))}</td>
-            <td style="text-align: right;">${deleteSummaryBtn}</td>
+            <td><div class="flex items-center justify-end gap-1">${modelRouterBtn}${deleteSummaryBtn}</div></td>
           </tr>
         `;
       })
@@ -253,4 +265,12 @@ export function mountSessionsPage(container: HTMLElement): () => void {
   return () => {
     isUnmounted = true;
   };
+}
+
+function groupIdFromSessionId(sessionId: string): string {
+  const lower = sessionId.toLowerCase();
+  if (lower.startsWith('group:')) return sessionId.slice('group:'.length);
+  const marker = ':group:';
+  const index = lower.lastIndexOf(marker);
+  return index >= 0 ? sessionId.slice(index + marker.length) : '';
 }

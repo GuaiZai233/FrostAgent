@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -159,7 +160,7 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	}
 	if engine.GroupCompactor != nil {
 		owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
-		engine.GroupCompactor.Trigger(session, owner)
+		engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
 	}
 }
 
@@ -193,7 +194,7 @@ func extractBotReplyText(replyText string) string {
 	return strings.TrimSpace(replyText)
 }
 
-func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, owner, replyText string) {
+func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, owner, replyText string, routeScope modelrouter.Scope) {
 	replyText = strings.TrimSpace(replyText)
 	if session == nil || engine == nil || replyText == "" {
 		return
@@ -217,7 +218,7 @@ func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine
 		maxBufferSize,
 	)
 	if engine.GroupCompactor != nil {
-		engine.GroupCompactor.Trigger(session, owner)
+		engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 	}
 }
 
@@ -297,7 +298,7 @@ func isMentionOnlyInteraction(event Event) bool {
 		event.IsAt
 }
 
-func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn) {
+func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
@@ -349,10 +350,23 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		),
 	)
 
-	reply(event, engine, conn)
+	replyWithSnapshot(event, engine, conn, routeSnapshot)
 }
 
 func reply(event Event, engine *llm.Engine, conn *wsConn) {
+	var snapshot *modelrouter.Snapshot
+	if engine != nil && engine.ModelRouter != nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	replyWithSnapshot(event, engine, conn, snapshot)
+}
+
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+	routeScope := astrBotRouteScope(event)
+	routeCtx := context.Background()
+	if engine != nil && engine.ModelRouter != nil {
+		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
+	}
 	userText := event.Content
 
 	// 处理图片等多模态内容描述
@@ -367,35 +381,43 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	}
 
 	if len(imageSegments) > 0 && engine != nil {
-		// 计费检查 (视觉处理前检查)
-		platform := event.Platform
-		if platform == "" {
-			platform = "astrbot"
+		visionEnabled := engine.VisionProvider != nil
+		if visionEnabled && routeSnapshot != nil {
+			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 		}
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-			bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
-			bal, err := engine.BillingClient.Balance(bCtx, platform, event.UserID)
-			bCancel()
-			if err != nil {
-				if errors.Is(err, billing.ErrInsufficientFunds) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
+		if !visionEnabled {
+			imageSegments = nil
+		} else {
+			// 计费检查 (视觉处理前检查)
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+				bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+				bal, err := engine.BillingClient.Balance(bCtx, platform, event.UserID)
+				bCancel()
+				if err != nil {
+					if errors.Is(err, billing.ErrInsufficientFunds) {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
+						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
+						return
+					}
+					logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
+					return
+				}
+				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
 					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
 					return
 				}
-				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-				sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
-				return
 			}
-			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
-				sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
-				return
-			}
-		}
 
-		imageDesc := content.ProcessImage(imageSegments, engine.Provider, engine.BaseURL, engine.APIKey, engine.ModelName)
-		if imageDesc != "" {
-			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			if imageDesc != "" {
+				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			}
 		}
 	}
 
@@ -569,18 +591,20 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 				if event.MessageType == "group" {
-					appendAssistantGroupMessage(session, engine, owner, deliveredReply)
+					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
 				}
 			}
 			return nil
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID: sessionKey(event),
-			Owner:     owner,
-			OwnerType: ownerType,
-			SendHook:  sendHook,
-			Billing:   billingState,
+			SessionID:     sessionKey(event),
+			Owner:         owner,
+			OwnerType:     ownerType,
+			SendHook:      sendHook,
+			Billing:       billingState,
+			RouteScope:    routeScope,
+			RouteSnapshot: routeSnapshot,
 		})
 		replyText = runResult.Content
 
@@ -668,8 +692,20 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	}
 
 	if event.MessageType == "group" {
-		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText))
+		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
 	}
+}
+
+func astrBotRouteScope(event Event) modelrouter.Scope {
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
+	scope := modelrouter.Scope{Platform: platform}
+	if event.MessageType == "group" {
+		scope.GroupID = event.GroupID
+	}
+	return scope
 }
 
 func sendTerminalNoop(event Event, conn *wsConn) error {

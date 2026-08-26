@@ -10,11 +10,12 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
-	"FrostAgent/internal/provider/llm/openai"
+	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
 	memsvc "FrostAgent/internal/service/memory"
+	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -55,6 +56,10 @@ func catalogPath() string {
 // them into the memory store.
 func groupSummaryPath() string {
 	return filepath.Join(filepath.Dir(brainPath()), "group_summaries.json")
+}
+
+func modelRouterPath() string {
+	return filepath.Join(filepath.Dir(brainPath()), "model_router.json")
 }
 
 // dialoguePath returns the path to dialogue.yml, defaulting to eval/dialogue/dialogue.yml.
@@ -114,25 +119,31 @@ func init() {
 	// Ensure data directory exists
 	ensureDataDir()
 
-	// Initialize LLM clients
-	llmHTTPClient := llm.NewClient() // HTTP client wrapper for SubAgentTool
-	llmClient := openai.NewClient(os.Getenv("UPSTREAM_ENDPOINT"), os.Getenv("UPSTREAM_API_KEY"))
+	// Model endpoint, key and model selection are owned exclusively by the
+	// runtime router. Legacy model environment variables are intentionally not
+	// imported or read.
+	routerManager := modelrouter.New(modelRouterPath())
+	if err := routerManager.LoadError(); err != nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("模型路由配置不可用，已进入未配置状态: %v", err))
+	}
+	foregroundProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 120*time.Second)
+	visionProvider := routerManager.Provider(modelrouter.WorkloadVision, false, 120*time.Second)
+	subagentProvider := routerManager.Provider(modelrouter.WorkloadSubagent, false, 120*time.Second)
+	// Memory extraction and reflection deliberately keep using the global main
+	// model until the memory subsystem is redesigned.
+	memoryProvider := routerManager.Provider(modelrouter.WorkloadDialogue, true, 120*time.Second)
 	memoryConfig := memory.DefaultConfig()
 	memoryConfig.ReflectTimeout = durationFromEnv(
 		"MEMORY_REFLECTION_TIMEOUT",
 		memoryConfig.ReflectTimeout,
 	)
-	reflectionLLMClient := openai.NewClientWithTimeout(
-		os.Getenv("UPSTREAM_ENDPOINT"),
-		os.Getenv("UPSTREAM_API_KEY"),
-		memoryConfig.ReflectTimeout,
-	)
+	reflectionProvider := routerManager.Provider(modelrouter.WorkloadDialogue, true, memoryConfig.ReflectTimeout)
 
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
 	reader := memory.NewReader(globalStore, 20)
 	writer := memory.NewWriter(globalStore)
-	writer.SetLLM(llmClient, os.Getenv("MODEL_NAME"))
+	writer.SetLLM(memoryProvider, "model-router-global-dialogue")
 	groupSummaryStore, err := groupsummary.NewStore(groupSummaryPath())
 	if err != nil {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("群聊总结存储不可用，已保护原文件: %v", err))
@@ -143,9 +154,9 @@ func init() {
 	groupCompactMaxBufferSize := positiveIntFromEnv("GROUP_COMPACT_MAX_BUFFER_SIZE", 0)
 	groupCompactMinInterval := durationFromEnv("GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
 	groupCompactor := llm.NewGroupCompactor(
-		llmClient,
+		routerManager.Provider(modelrouter.WorkloadGroupCompact, false, 120*time.Second),
 		groupSummaryStore,
-		os.Getenv("MODEL_NAME"),
+		"model-router-group-compact",
 		groupCompactBufferSize,
 		groupCompactMinInterval,
 	)
@@ -170,8 +181,8 @@ func init() {
 	reflector := memory.NewReflector(
 		globalStore,
 		catalog,
-		reflectionLLMClient,
-		os.Getenv("MODEL_NAME"),
+		reflectionProvider,
+		"model-router-global-dialogue",
 		memoryConfig,
 	)
 	logs.Info(
@@ -187,7 +198,7 @@ func init() {
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
 
-	subAgentTool := tools.SubAgentTool(llmHTTPClient)
+	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
 
 	executorMap := make(map[string]llm.ToolExecutor)
@@ -219,10 +230,10 @@ func init() {
 	GlobalEngine = &llm.Engine{
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
-		Provider:       llmClient,
-		BaseURL:        os.Getenv("UPSTREAM_ENDPOINT"),
-		APIKey:         os.Getenv("UPSTREAM_API_KEY"),
-		ModelName:      os.Getenv("MODEL_NAME"),
+		Provider:       foregroundProvider,
+		VisionProvider: visionProvider,
+		ModelRouter:    routerManager,
+		ModelName:      "model-router",
 		SessionManager: sessionManager,
 		Dispatcher:     dispatcher,
 		StartedAt:      time.Now(),
@@ -265,6 +276,9 @@ func main() {
 
 	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.New(".env"))
 	mux.Handle(settingsPath, settingsHandler)
+
+	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(GlobalEngine.ModelRouter))
+	mux.Handle(routerPath, routerHandler)
 
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)

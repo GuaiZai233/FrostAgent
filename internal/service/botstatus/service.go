@@ -3,6 +3,7 @@ package botstatus
 import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"errors"
 	"fmt"
@@ -75,12 +76,23 @@ func (s *Service) GetOverview(
 		UptimeSeconds:          uptime,
 		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
 		ActiveSessions:         activeSessions,
-		CurrentModel:           s.engine.ModelName,
+		CurrentModel:           currentModelName(s.engine),
 		Status:                 status,
 		Tools:                  toolInfos,
 	}
 
 	return connect.NewResponse(resp), nil
+}
+
+func currentModelName(engine *llm.Engine) string {
+	if engine == nil || engine.ModelRouter == nil {
+		return "未配置"
+	}
+	target, err := engine.ModelRouter.Resolve(modelrouter.WorkloadDialogue, modelrouter.Scope{})
+	if err != nil {
+		return "已禁用"
+	}
+	return target.UpstreamModel
 }
 
 // GetSessions merges active sessions with durable group summaries before
