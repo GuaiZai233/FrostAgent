@@ -68,6 +68,9 @@ func (m *Manager) load() error {
 	if err := validateConfiguration(cfg); err != nil {
 		return fmt.Errorf("模型路由配置无效: %w", err)
 	}
+	if err := loadWindowsCredentials(&cfg); err != nil {
+		return err
+	}
 	m.active = cfg
 	return nil
 }
@@ -124,7 +127,14 @@ func (m *Manager) Publish() (Configuration, error) {
 		return Configuration{}, err
 	}
 	cfg.Revision = m.active.Revision + 1
+	rollbackCredentials, err := persistWindowsCredentials(m.active, cfg)
+	if err != nil {
+		return Configuration{}, err
+	}
 	if err := writeAtomic(m.path, cfg); err != nil {
+		if rollbackErr := rollbackCredentials(); rollbackErr != nil {
+			return Configuration{}, fmt.Errorf("写入模型路由配置失败: %v；恢复 Windows 凭据失败: %w", err, rollbackErr)
+		}
 		return Configuration{}, err
 	}
 	m.active = cloneConfiguration(cfg)
@@ -267,7 +277,7 @@ func normalizeConfiguration(cfg *Configuration) {
 			cfg.Endpoints[i].APIKeyStorage = APIKeyStorageManual
 		}
 		switch cfg.Endpoints[i].APIKeyStorage {
-		case APIKeyStorageManual:
+		case APIKeyStorageManual, APIKeyStorageWindowsCredentialManager:
 			cfg.Endpoints[i].SecretFile = ""
 		case APIKeyStorageEnv:
 			cfg.Endpoints[i].APIKey = ""
@@ -322,7 +332,7 @@ func validateConfiguration(cfg Configuration) error {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
 		}
 		switch endpoint.APIKeyStorage {
-		case APIKeyStorageManual, APIKeyStorageEnv:
+		case APIKeyStorageManual, APIKeyStorageEnv, APIKeyStorageWindowsCredentialManager:
 		case APIKeyStorageSecretFile:
 			if endpoint.SecretFile == "" {
 				return fmt.Errorf("endpoint %q secret file path is required", endpoint.DisplayName)
@@ -445,6 +455,12 @@ func cloneConfiguration(cfg Configuration) Configuration {
 }
 
 func writeAtomic(path string, cfg Configuration) error {
+	stored := cloneConfiguration(cfg)
+	for i := range stored.Endpoints {
+		if stored.Endpoints[i].APIKeyStorage == APIKeyStorageWindowsCredentialManager {
+			stored.Endpoints[i].APIKey = ""
+		}
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("创建模型路由配置目录失败: %w", err)
@@ -461,7 +477,7 @@ func writeAtomic(path string, cfg Configuration) error {
 	}
 	encoder := json.NewEncoder(tmp)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(cfg); err != nil {
+	if err := encoder.Encode(stored); err != nil {
 		tmp.Close()
 		return fmt.Errorf("序列化模型路由配置失败: %w", err)
 	}

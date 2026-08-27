@@ -287,6 +287,8 @@ func apiKeyStorageToProto(storage router.APIKeyStorage) v1.ModelAPIKeyStorage {
 		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_ENV
 	case router.APIKeyStorageSecretFile:
 		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_SECRET_FILE
+	case router.APIKeyStorageWindowsCredentialManager:
+		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER
 	default:
 		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_UNSPECIFIED
 	}
@@ -298,6 +300,8 @@ func apiKeyStorageFromProto(storage v1.ModelAPIKeyStorage) router.APIKeyStorage 
 		return router.APIKeyStorageEnv
 	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_SECRET_FILE:
 		return router.APIKeyStorageSecretFile
+	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER:
+		return router.APIKeyStorageWindowsCredentialManager
 	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_MANUAL,
 		v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_UNSPECIFIED:
 		return router.APIKeyStorageManual

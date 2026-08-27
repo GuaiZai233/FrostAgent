@@ -30,6 +30,15 @@ func resolveEndpointAPIKey(endpoint Endpoint) (string, error) {
 			return "", fmt.Errorf("Secret 文件为空")
 		}
 		return apiKey, nil
+	case APIKeyStorageWindowsCredentialManager:
+		if endpoint.APIKey != "" {
+			return endpoint.APIKey, nil
+		}
+		apiKey, _, err := readWindowsCredential(endpoint.ID)
+		if err != nil {
+			return "", err
+		}
+		return apiKey, nil
 	default:
 		return "", fmt.Errorf("未知存储格式 %q", endpoint.APIKeyStorage)
 	}

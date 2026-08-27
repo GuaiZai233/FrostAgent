@@ -9,4 +9,9 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	github.com/danieljoos/wincred v1.2.3
+	gopkg.in/yaml.v3 v3.0.1
+)
+
+require golang.org/x/sys v0.20.0 // indirect

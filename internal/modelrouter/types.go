@@ -39,10 +39,11 @@ var ErrDisabled = errors.New("model workload is disabled")
 type APIKeyStorage string
 
 const (
-	APIKeyStorageManual     APIKeyStorage = "manual"
-	APIKeyStorageEnv        APIKeyStorage = "env"
-	APIKeyStorageSecretFile APIKeyStorage = "secret_file"
-	APIKeyEnvironment                     = "UPSTREAM_API_KEY"
+	APIKeyStorageManual                   APIKeyStorage = "manual"
+	APIKeyStorageEnv                      APIKeyStorage = "env"
+	APIKeyStorageSecretFile               APIKeyStorage = "secret_file"
+	APIKeyStorageWindowsCredentialManager APIKeyStorage = "windows_credential_manager"
+	APIKeyEnvironment                                   = "UPSTREAM_API_KEY"
 )
 
 type Endpoint struct {
