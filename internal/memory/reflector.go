@@ -198,6 +198,7 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 		},
 		MaxTokens:   4096,
 		Temperature: 0.2,
+		Route:       r.store.RouteForOwner(owner),
 	})
 	if err != nil {
 		return fmt.Errorf(

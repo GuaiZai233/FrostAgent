@@ -681,11 +681,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			{
 				Owner:     owner,
 				OwnerType: ownerType,
+				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 				Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
 			},
 			{
 				Owner:     owner,
 				OwnerType: ownerType,
+				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
 			},
 		})

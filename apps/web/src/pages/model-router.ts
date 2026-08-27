@@ -19,12 +19,12 @@ import { toast } from '../components/toast';
 import { escapeHtml, maskSecret } from '../utils/formatters';
 
 const workloads = [
-  { value: ModelWorkload.DIALOGUE, label: '主对话', applied: true },
-  { value: ModelWorkload.SUBAGENT, label: '子 Agent', applied: true },
-  { value: ModelWorkload.VISION, label: '多模态（图片）', applied: true },
-  { value: ModelWorkload.REFLECTION, label: '反思', applied: false },
-  { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取', applied: false },
-  { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩', applied: true },
+  { value: ModelWorkload.DIALOGUE, label: '主对话' },
+  { value: ModelWorkload.SUBAGENT, label: '子 Agent' },
+  { value: ModelWorkload.VISION, label: '多模态（图片）' },
+  { value: ModelWorkload.REFLECTION, label: '反思' },
+  { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取' },
+  { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩' },
 ] as const;
 
 function newId(prefix: string): string {
@@ -290,9 +290,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           return `<div class="card p-4">
             <div class="flex items-center justify-between gap-2 mb-3">
               <strong class="text-sm">${workload.label}</strong>
-              ${workload.applied ? '<span class="badge badge-success">运行时生效</span>' : '<span class="badge badge-warning">预留，当前不生效</span>'}
+              <span class="badge badge-success">运行时生效</span>
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, workload.value === ModelWorkload.REFLECTION, workload.value === ModelWorkload.REFLECTION ? '跟随主对话（当前行为）' : '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, workload.value === ModelWorkload.REFLECTION, workload.value === ModelWorkload.REFLECTION ? '跟随主对话' : '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -569,7 +569,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong>${workload.applied ? '' : '<span class="badge badge-warning">预留，当前不生效</span>'}</div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {

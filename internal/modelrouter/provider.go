@@ -3,6 +3,7 @@ package modelrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,6 +57,11 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 		scope = Scope{}
 	}
 	target, err := snapshot.Resolve(p.workload, scope)
+	if errors.Is(err, ErrDisabled) && p.workload == WorkloadReflection {
+		// Reflection cannot be disabled. Its global inherit mode follows the
+		// global dialogue binding unless a reflection model is selected.
+		target, err = snapshot.Resolve(WorkloadDialogue, Scope{})
+	}
 	if err != nil {
 		return nil, err
 	}

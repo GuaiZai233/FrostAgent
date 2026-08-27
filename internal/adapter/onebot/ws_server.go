@@ -545,11 +545,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					{
 						Owner:     owner,
 						OwnerType: ownerType,
+						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 						Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
 					},
 					{
 						Owner:     owner,
 						OwnerType: ownerType,
+						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 						Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
 					},
 				})

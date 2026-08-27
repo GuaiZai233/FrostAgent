@@ -3,10 +3,12 @@ package memory
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,6 +31,14 @@ func NewWriter(store *Store) *Writer {
 func (w *Writer) SetLLM(provider core.LLMProvider, model string) {
 	w.provider = provider
 	w.model = model
+}
+
+// RememberRoute records the current owner's transient routing scope.
+func (w *Writer) RememberRoute(owner string, route core.RouteContext) {
+	if w == nil || w.store == nil {
+		return
+	}
+	w.store.RememberRoute(owner, route)
 }
 
 // Write directly saves a memory entry (user explicitly said "remember this").
@@ -69,6 +79,21 @@ func (w *Writer) ExtractByOwner(
 	ownerType OwnerType,
 	messages []core.ChatMessage,
 ) error {
+	route := core.RouteContext{}
+	if w != nil && w.store != nil {
+		route = w.store.RouteForOwner(owner)
+	}
+	return w.ExtractByOwnerWithRoute(owner, ownerType, route, messages)
+}
+
+// ExtractByOwnerWithRoute extracts memories with an explicit model route.
+func (w *Writer) ExtractByOwnerWithRoute(
+	owner string,
+	ownerType OwnerType,
+	route core.RouteContext,
+	messages []core.ChatMessage,
+) error {
+	w.RememberRoute(owner, route)
 	if w.provider == nil || w.model == "" {
 		return nil // LLM not configured, skip extraction
 	}
@@ -98,10 +123,14 @@ func (w *Writer) ExtractByOwner(
 		},
 		MaxTokens:   1024,
 		Temperature: 0.3,
+		Route:       route,
 	}
 
 	resp, err := w.provider.Chat(context.Background(), req)
 	if err != nil {
+		if errors.Is(err, modelrouter.ErrDisabled) {
+			return nil
+		}
 		logs.Error(logs.SYSTEM, fmt.Sprintf("记忆提取LLM调用失败: %v", err))
 		return err
 	}

@@ -129,21 +129,19 @@ func init() {
 	foregroundProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 120*time.Second)
 	visionProvider := routerManager.Provider(modelrouter.WorkloadVision, false, 120*time.Second)
 	subagentProvider := routerManager.Provider(modelrouter.WorkloadSubagent, false, 120*time.Second)
-	// Memory extraction and reflection deliberately keep using the global main
-	// model until the memory subsystem is redesigned.
-	memoryProvider := routerManager.Provider(modelrouter.WorkloadDialogue, true, 120*time.Second)
+	memoryProvider := routerManager.Provider(modelrouter.WorkloadMemoryExtract, false, 120*time.Second)
 	memoryConfig := memory.DefaultConfig()
 	memoryConfig.ReflectTimeout = durationFromEnv(
 		"MEMORY_REFLECTION_TIMEOUT",
 		memoryConfig.ReflectTimeout,
 	)
-	reflectionProvider := routerManager.Provider(modelrouter.WorkloadDialogue, true, memoryConfig.ReflectTimeout)
+	reflectionProvider := routerManager.Provider(modelrouter.WorkloadReflection, false, memoryConfig.ReflectTimeout)
 
 	// Initialize memory system
 	globalStore = memory.NewStore(brainPath())
 	reader := memory.NewReader(globalStore, 20)
 	writer := memory.NewWriter(globalStore)
-	writer.SetLLM(memoryProvider, "model-router-global-dialogue")
+	writer.SetLLM(memoryProvider, "model-router-memory-extract")
 	groupSummaryStore, err := groupsummary.NewStore(groupSummaryPath())
 	if err != nil {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("群聊总结存储不可用，已保护原文件: %v", err))
@@ -182,7 +180,7 @@ func init() {
 		globalStore,
 		catalog,
 		reflectionProvider,
-		"model-router-global-dialogue",
+		"model-router-reflection",
 		memoryConfig,
 	)
 	logs.Info(

@@ -163,6 +163,12 @@ func (e *Engine) RunMessagesWithContext(
 	runContext RunContext,
 ) AgentRunResult {
 	owner := runContext.Owner
+	if owner != "" && e.MemoryWriter != nil {
+		e.MemoryWriter.RememberRoute(owner, core.RouteContext{
+			Platform: runContext.RouteScope.Platform,
+			GroupID:  runContext.RouteScope.GroupID,
+		})
+	}
 	ctx := context.Background()
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
@@ -262,7 +268,9 @@ func (e *Engine) EnqueueExtractionTurn(
 
 func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 	type ownerBatch struct {
+		owner     string
 		ownerType memory.OwnerType
+		route     core.RouteContext
 		messages  []core.ChatMessage
 	}
 	groups := make(map[string]*ownerBatch)
@@ -271,10 +279,14 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 		if item.Owner == "" {
 			continue
 		}
-		key := string(item.OwnerType) + "\x00" + item.Owner
+		key := string(item.OwnerType) + "\x00" + item.Owner + "\x00" + item.Route.Platform + "\x00" + item.Route.GroupID
 		group := groups[key]
 		if group == nil {
-			group = &ownerBatch{ownerType: memory.NormalizeOwnerType(item.OwnerType)}
+			group = &ownerBatch{
+				owner:     item.Owner,
+				ownerType: memory.NormalizeOwnerType(item.OwnerType),
+				route:     item.Route,
+			}
 			groups[key] = group
 			order = append(order, key)
 		}
@@ -282,9 +294,8 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 	}
 	for _, key := range order {
 		group := groups[key]
-		owner := strings.SplitN(key, "\x00", 2)[1]
-		if err := e.MemoryWriter.ExtractByOwner(owner, group.ownerType, group.messages); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", owner, err))
+		if err := e.MemoryWriter.ExtractByOwnerWithRoute(group.owner, group.ownerType, group.route, group.messages); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
 		}
 	}
 }
