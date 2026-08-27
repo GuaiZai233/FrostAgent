@@ -102,6 +102,6 @@ type EffectiveBinding struct {
 	Target         *Target
 }
 
-func RuntimeApplied(workload Workload) bool {
-	return workload != WorkloadReflection && workload != WorkloadMemoryExtract
+func RuntimeApplied(Workload) bool {
+	return true
 }
