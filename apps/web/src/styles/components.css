@@ -280,6 +280,12 @@ input[type="checkbox"].checkbox:indeterminate::after {
   color: var(--card-foreground);
 }
 
+.card.router-unsaved-warning {
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+  background-color: color-mix(in srgb, var(--destructive) 10%, transparent);
+  color: var(--destructive);
+}
+
 .table-card {
   padding-block: 0;
   gap: 0;

@@ -1,4 +1,4 @@
-import { create } from '@bufbuild/protobuf';
+import { create, toJsonString } from '@bufbuild/protobuf';
 import {
   GroupModelOverrideSchema,
   ModelBindingMode,
@@ -35,6 +35,10 @@ function cloneConfiguration(config: ModelRouterConfiguration): ModelRouterConfig
   return structuredClone(config);
 }
 
+function configurationFingerprint(config: ModelRouterConfiguration): string {
+  return toJsonString(ModelRouterConfigurationSchema, config);
+}
+
 function endpointWarns(baseUrl: string): boolean {
   return baseUrl.trim().replace(/\/+$/, '').toLowerCase().endsWith('/chat/completions');
 }
@@ -53,7 +57,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   let loading = true;
   let busy = false;
   let tab: 'endpoints' | 'models' | 'global' | 'groups' = 'endpoints';
-  let draft = create(ModelRouterConfigurationSchema, { version: 1 });
+  let activeConfiguration = create(ModelRouterConfigurationSchema, { version: 1 });
+  let draft = cloneConfiguration(activeConfiguration);
   let activeRevision = 0n;
   let loadError = '';
   let testingModelId = '';
@@ -65,9 +70,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     try {
       const state = await api.getModelRouterState();
       if (unmounted) return;
-      draft = state.draft
-        ? cloneConfiguration(state.draft)
-        : create(ModelRouterConfigurationSchema, { version: 1 });
+      const published = state.active ?? state.draft ?? create(ModelRouterConfigurationSchema, { version: 1 });
+      activeConfiguration = cloneConfiguration(published);
+      draft = cloneConfiguration(published);
       activeRevision = state.active?.revision ?? 0n;
       loadError = state.loadError;
       loading = false;
@@ -81,7 +86,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
   }
 
-  async function saveDraft(showSuccess = true, updatePage = true): Promise<boolean> {
+  async function saveDraft(updatePage = true): Promise<boolean> {
     if (updatePage) {
       busy = true;
       render();
@@ -89,14 +94,13 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     try {
       const response = await api.saveModelRouterDraft(draft);
       if (!response.success || !response.draft) {
-        toast.error(response.error || '保存草稿失败');
+        toast.error(response.error || '同步配置失败');
         return false;
       }
       draft = cloneConfiguration(response.draft);
-      if (showSuccess) toast.success('草稿已保存到当前进程');
       return true;
     } catch (err) {
-      toast.error('保存草稿失败: ' + errorText(err));
+      toast.error('同步配置失败: ' + errorText(err));
       return false;
     } finally {
       if (updatePage) {
@@ -107,7 +111,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   }
 
   async function publish() {
-    if (!(await saveDraft(false))) return;
+    if (!(await saveDraft())) return;
     busy = true;
     render();
     try {
@@ -117,6 +121,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         return;
       }
       activeRevision = response.active.revision;
+      activeConfiguration = cloneConfiguration(response.active);
       draft = cloneConfiguration(response.active);
       toast.success(`模型路由配置已发布（revision ${activeRevision}）`);
     } catch (err) {
@@ -132,7 +137,13 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     render();
     try {
       const discarded = await api.discardModelRouterDraft();
-      if (discarded) draft = cloneConfiguration(discarded);
+      if (discarded) {
+        activeConfiguration = cloneConfiguration(discarded);
+        draft = cloneConfiguration(discarded);
+        activeRevision = discarded.revision;
+      } else {
+        draft = cloneConfiguration(activeConfiguration);
+      }
       toast.info('内存草稿已恢复为活动配置');
     } catch (err) {
       toast.error('放弃草稿失败: ' + errorText(err));
@@ -148,6 +159,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       return;
     }
 
+    const dirty = configurationFingerprint(draft) !== configurationFingerprint(activeConfiguration);
+
     container.innerHTML = `
       <div class="page-container fade-in">
         <header class="page-header">
@@ -158,7 +171,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           <div class="flex items-center gap-2 flex-wrap">
             <span class="badge badge-outline">活动 revision ${activeRevision}</span>
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
-            <button class="btn btn-secondary btn-sm" id="router-save" ${busy ? 'disabled' : ''}>${icon('save', 'w-3.5 h-3.5')} 保存草稿</button>
             <button class="btn btn-primary btn-sm" id="router-publish" ${busy ? 'disabled' : ''}>${icon('play', 'w-3.5 h-3.5')} 发布配置</button>
           </div>
         </header>
@@ -169,9 +181,11 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             : ''
         }
 
-        <div class="card p-3 badge-warning text-xs">
-          API Key 以明文写入 data/model_router.json，且当前管理面没有鉴权。记忆提取与反思槽仅预留接口，当前运行时不采用。
-        </div>
+        ${
+          dirty
+            ? `<div class="card router-unsaved-warning p-3 text-xs flex items-center gap-2">${icon('circle_alert', 'w-4 h-4')}<span>当前配置尚未保存，请点击“发布配置”以应用，离开页面即丢弃。</span></div>`
+            : ''
+        }
 
         <div class="tabs" role="tablist">
           ${tabButton('endpoints', 'Endpoint Accounts')}
@@ -332,7 +346,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         render();
       });
     });
-    container.querySelector('#router-save')?.addEventListener('click', () => void saveDraft());
     container.querySelector('#router-publish')?.addEventListener('click', () => void publish());
     container.querySelector('#router-discard')?.addEventListener('click', () => void discardDraft());
     container.querySelector('#add-endpoint')?.addEventListener('click', () => editEndpoint());
@@ -410,7 +423,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <div class="form-group"><label class="form-label">Base URL</label><input class="input font-mono" id="endpoint-url" value="${escapeHtml(endpoint.baseUrl)}" placeholder="https://example.com/v1"><p class="form-hint text-destructive" id="endpoint-url-warning" style="display:${endpointWarns(endpoint.baseUrl) ? 'block' : 'none'}">这里建议填写 Base URL，也就是不以 /chat/completions 结尾。如果执意继续，很可能引起错误。</p></div>
         <div class="form-group"><label class="form-label">API Key（允许为空）</label><input class="input font-mono" id="endpoint-key" value="${escapeHtml(endpoint.apiKey)}"></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="endpoint-enabled" ${endpoint.enabled ? 'checked' : ''}>启用 Endpoint</label>`,
-      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="endpoint-confirm">保存到草稿</button>`,
+      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="endpoint-confirm">保存</button>`,
       onMount: (dialog, close) => {
         const urlInput = dialog.querySelector<HTMLInputElement>('#endpoint-url')!;
         const warning = dialog.querySelector<HTMLElement>('#endpoint-url-warning')!;
@@ -444,7 +457,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
         <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
-      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存到草稿</button>`,
+      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存</button>`,
       onMount: (dialog, close) => {
         const endpointSelect = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!;
         const upstreamInput = dialog.querySelector<HTMLInputElement>('#model-upstream')!;
@@ -510,7 +523,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           fetchButton.setAttribute('aria-busy', 'true');
           fetchButton.innerHTML = '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 获取中...';
           try {
-            if (!(await saveDraft(false, false))) return;
+            if (!(await saveDraft(false))) return;
             const response = await api.listUpstreamModels(endpointId);
             if (response.error) {
               toast.error(response.error);
@@ -557,7 +570,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
         ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong>${workload.applied ? '' : '<span class="badge badge-warning">预留，当前不生效</span>'}</div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select></div>`).join('')}`,
-      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存到草稿</button>`,
+      footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {
           const oldPlatform = group.platform;
@@ -603,7 +616,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     testingModelId = modelId;
     updateModelTestButtons();
     try {
-      if (!(await saveDraft(false, false))) return;
+      if (!(await saveDraft(false))) return;
       const response = await api.testModel(modelId);
       if (!response.success) {
         toast.error(response.error || '测试失败');
