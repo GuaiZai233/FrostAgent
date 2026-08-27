@@ -286,9 +286,15 @@ input[type="checkbox"].checkbox:indeterminate::after {
 }
 
 .card.router-unsaved-warning {
+  flex-direction: row;
+  align-items: center;
   border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
   background-color: color-mix(in srgb, var(--destructive) 10%, transparent);
   color: var(--destructive);
+}
+
+.card.router-unsaved-warning > svg {
+  flex-shrink: 0;
 }
 
 .table-card {

@@ -47,6 +47,14 @@ function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBin
   return bindings.find((binding) => binding.workload === workload);
 }
 
+function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload): boolean {
+  const binding = bindingFor(bindings, workload);
+  if (workload === ModelWorkload.REFLECTION && (!binding || binding.mode === ModelBindingMode.INHERIT)) {
+    return bindingFor(bindings, ModelWorkload.DIALOGUE)?.mode !== ModelBindingMode.MODEL;
+  }
+  return binding?.mode !== ModelBindingMode.MODEL;
+}
+
 function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
   const endpoint = endpoints.find((item) => item.id === model.endpointId);
   return `${model.displayName} · ${endpoint?.displayName || '未知 Endpoint'} · ${model.upstreamModel}`;
@@ -287,10 +295,11 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(19rem,1fr));gap:.75rem">
         ${workloads.map((workload) => {
           const binding = bindingFor(draft.globalBindings, workload.value);
+          const disabled = globalBindingDisabled(draft.globalBindings, workload.value);
           return `<div class="card p-4">
             <div class="flex items-center justify-between gap-2 mb-3">
               <strong class="text-sm">${workload.label}</strong>
-              <span class="badge badge-success">运行时生效</span>
+              ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
             <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, workload.value === ModelWorkload.REFLECTION, workload.value === ModelWorkload.REFLECTION ? '跟随主对话' : '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select>
           </div>`;
