@@ -14,6 +14,7 @@ type Msg struct {
 	MessageID     string `json:"message_id,omitempty"`
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
+	IsSticker     bool   `json:"is_sticker,omitempty"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
@@ -150,10 +151,13 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 				fileData = fmt.Sprintf("file://%s", Msg.Path)
 			}
 
-			// OneBot 协议中图片、语音、视频的 type 名称与工具定义的正好一致
+			segData := map[string]interface{}{"file": fileData}
+			if Msg.Type == "image" && Msg.IsSticker {
+				segData["sub_type"] = 1
+			}
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: Msg.Type,
-				Data: map[string]interface{}{"file": fileData},
+				Data: segData,
 			})
 		}
 	}

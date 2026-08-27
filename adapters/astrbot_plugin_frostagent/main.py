@@ -376,11 +376,21 @@ def extract_attachments(event: AstrMessageEvent) -> list[dict[str, Any]]:
             comp_type = type(comp).__name__.lower()
             if "image" in comp_type:
                 url = first_attr(comp, "url", "file", "path")
+                sub_type = first_attr(comp, "sub_type", "subtype")
+                raw_data = getattr(comp, "raw", None) or getattr(comp, "data", None)
+                if isinstance(raw_data, dict) and sub_type is None:
+                    sub_type = raw_data.get("sub_type") or raw_data.get("subtype")
                 if url:
-                    attachments.append({
+                    att: dict[str, Any] = {
                         "type": "image",
                         "url": str(url),
-                    })
+                    }
+                    if sub_type is not None:
+                        try:
+                            att["sub_type"] = int(sub_type)
+                        except (ValueError, TypeError):
+                            pass
+                    attachments.append(att)
     return attachments
 
 

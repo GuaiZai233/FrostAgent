@@ -8,6 +8,7 @@ import {
   LogService,
   MemoryService,
   SettingsService,
+  StickerService,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
@@ -29,6 +30,12 @@ import {
   type SaveDialoguesResponse,
   type GetRawDialogueFileResponse,
   type UpdateRawDialogueFileResponse,
+  type ListStickersResponse,
+  type DeleteStickerResponse,
+  type UpdateStickerKeywordsResponse,
+  type UploadStickerResponse,
+  type RetryAllUnsummarizedResponse,
+  type GetStickerStatsResponse,
 } from '@frostagent/proto';
 
 export interface EnvVarUpdate {
@@ -63,6 +70,11 @@ const memoryClient: Client<typeof MemoryService> = createClient(
 
 const dialogueClient: Client<typeof DialogueService> = createClient(
   DialogueService,
+  transport,
+);
+
+const stickerClient: Client<typeof StickerService> = createClient(
+  StickerService,
   transport,
 );
 
@@ -238,5 +250,43 @@ export const api = {
 
   updateRawDialogueFile(content: string): Promise<UpdateRawDialogueFileResponse> {
     return dialogueClient.updateRawDialogueFile({ content });
+  },
+
+  // Sticker
+  listStickers(
+    pageSize: number,
+    pageToken = '',
+    statusFilter = '',
+    search = '',
+  ): Promise<ListStickersResponse> {
+    return stickerClient.listStickers({
+      pagination: { pageSize, pageToken },
+      statusFilter,
+      search,
+    });
+  },
+
+  deleteSticker(id: string): Promise<DeleteStickerResponse> {
+    return stickerClient.deleteSticker({ id });
+  },
+
+  updateStickerKeywords(
+    id: string,
+    description: string,
+    keywords: string[],
+  ): Promise<UpdateStickerKeywordsResponse> {
+    return stickerClient.updateStickerKeywords({ id, description, keywords });
+  },
+
+  uploadSticker(fileContent: Uint8Array, filename: string): Promise<UploadStickerResponse> {
+    return stickerClient.uploadSticker({ fileContent, filename });
+  },
+
+  retryAllUnsummarized(): Promise<RetryAllUnsummarizedResponse> {
+    return stickerClient.retryAllUnsummarized({});
+  },
+
+  getStickerStats(): Promise<GetStickerStatsResponse> {
+    return stickerClient.getStickerStats({});
   },
 };

@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -20,9 +21,10 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
-	engine *llm.Engine
-	mu     sync.RWMutex
-	conns  map[*wsConnection]struct{}
+	engine  *llm.Engine
+	stealer *sticker.Stealer
+	mu      sync.RWMutex
+	conns   map[*wsConnection]struct{}
 }
 
 // NewAdapter 创建一个新的 OneBot 适配器实例。
@@ -31,6 +33,10 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 		engine: engine,
 		conns:  make(map[*wsConnection]struct{}),
 	}
+}
+
+func (a *Adapter) SetStealer(s *sticker.Stealer) {
+	a.stealer = s
 }
 
 // ID 返回平台唯一标识 "onebot"
@@ -207,6 +213,30 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.PostType == "message" && event.MessageType == "group" {
 				captureGroupCompactMessage(event, a.engine)
+			}
+
+			if a.stealer != nil && event.PostType == "message" {
+				segments := ParseMessageSegments(event.Message)
+				for _, seg := range segments {
+					if seg.Type == "image" {
+						isSticker := false
+						switch st := seg.Data["sub_type"].(type) {
+						case int:
+							isSticker = (st == 1)
+						case float64:
+							isSticker = (st == 1)
+						case string:
+							isSticker = (st == "1")
+						case json.Number:
+							isSticker = (st.String() == "1")
+						}
+						if isSticker {
+							if url, ok := seg.Data["url"].(string); ok && url != "" {
+								a.stealer.TrySteal(url)
+							}
+						}
+					}
+				}
 			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&

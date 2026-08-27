@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,9 +18,10 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
-	engine *llm.Engine
-	mu     sync.RWMutex
-	conns  map[*wsConn]struct{}
+	engine  *llm.Engine
+	stealer *sticker.Stealer
+	mu      sync.RWMutex
+	conns   map[*wsConn]struct{}
 }
 
 // NewAdapter 创建一个新的 AstrBot 适配器实例。
@@ -28,6 +30,10 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 		engine: engine,
 		conns:  make(map[*wsConn]struct{}),
 	}
+}
+
+func (a *Adapter) SetStealer(s *sticker.Stealer) {
+	a.stealer = s
 }
 
 // ID 返回平台唯一标识 "astrbot"
@@ -162,6 +168,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.MessageType == "group" {
 				captureGroupCompactMessage(event, a.engine)
+			}
+
+			if a.stealer != nil {
+				for _, att := range event.Attachments {
+					if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
+						a.stealer.TrySteal(att.URL)
+					}
+				}
 			}
 
 			var turn *llm.SessionTurn

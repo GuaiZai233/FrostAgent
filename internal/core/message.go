@@ -32,6 +32,7 @@ const (
 // Attachment 消息附件（内容/URL/MIME）
 type Attachment struct {
 	Type     AttachmentType `json:"type"`
+	SubType  int            `json:"sub_type,omitempty"`
 	Content  []byte         `json:"content,omitempty"`
 	MimeType string         `json:"mime_type,omitempty"`
 	URL      string         `json:"url,omitempty"`

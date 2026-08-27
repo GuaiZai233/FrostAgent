@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+import "frostagent/v1/common.proto";
+
+service StickerService {
+  rpc ListStickers(ListStickersRequest) returns (ListStickersResponse);
+  rpc DeleteSticker(DeleteStickerRequest) returns (DeleteStickerResponse);
+  rpc UpdateStickerKeywords(UpdateStickerKeywordsRequest) returns (UpdateStickerKeywordsResponse);
+  rpc UploadSticker(UploadStickerRequest) returns (UploadStickerResponse);
+  rpc RetryAllUnsummarized(RetryAllUnsummarizedRequest) returns (RetryAllUnsummarizedResponse);
+  rpc GetStickerStats(GetStickerStatsRequest) returns (GetStickerStatsResponse);
+  rpc GetStickerImage(GetStickerImageRequest) returns (GetStickerImageResponse);
+}
+
+message StickerItem {
+  string id = 1;
+  string file_name = 2;
+  string description = 3;
+  repeated string keywords = 4;
+  int32 weight = 5;
+  string status = 6;
+  int64 created_at = 7;
+  int64 updated_at = 8;
+}
+
+message ListStickersRequest {
+  Pagination pagination = 1;
+  string status_filter = 2;
+  string search = 3;
+}
+
+message ListStickersResponse {
+  repeated StickerItem stickers = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message DeleteStickerRequest {
+  string id = 1;
+}
+
+message DeleteStickerResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateStickerKeywordsRequest {
+  string id = 1;
+  string description = 2;
+  repeated string keywords = 3;
+}
+
+message UpdateStickerKeywordsResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UploadStickerRequest {
+  bytes file_content = 1;
+  string filename = 2;
+}
+
+message UploadStickerResponse {
+  bool success = 1;
+  string error = 2;
+  StickerItem sticker = 3;
+}
+
+message RetryAllUnsummarizedRequest {}
+
+message RetryAllUnsummarizedResponse {
+  int32 enqueued_count = 1;
+}
+
+message GetStickerStatsRequest {}
+
+message GetStickerStatsResponse {
+  int32 total = 1;
+  int32 ready = 2;
+  int32 unsummarized = 3;
+}
+
+message GetStickerImageRequest {
+  string id = 1;
+}
+
+message GetStickerImageResponse {
+  bytes content = 1;
+  string content_type = 2;
+}
