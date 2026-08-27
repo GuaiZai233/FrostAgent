@@ -507,6 +507,7 @@ dialog.dialog-modal::backdrop {
   margin: 0;
   padding: 0;
   border: 0;
+  overflow: visible;
   background: transparent;
   color: inherit;
   display: flex;
