@@ -253,6 +253,8 @@ func bindingModeToProto(mode router.BindingMode) v1.ModelBindingMode {
 		return v1.ModelBindingMode_MODEL_BINDING_MODE_MODEL
 	case router.BindingDisabled:
 		return v1.ModelBindingMode_MODEL_BINDING_MODE_DISABLED
+	case router.BindingFollowDialogue:
+		return v1.ModelBindingMode_MODEL_BINDING_MODE_FOLLOW_DIALOGUE
 	default:
 		return v1.ModelBindingMode_MODEL_BINDING_MODE_UNSPECIFIED
 	}
@@ -266,6 +268,8 @@ func bindingModeFromProto(mode v1.ModelBindingMode) router.BindingMode {
 		return router.BindingModel
 	case v1.ModelBindingMode_MODEL_BINDING_MODE_DISABLED:
 		return router.BindingDisabled
+	case v1.ModelBindingMode_MODEL_BINDING_MODE_FOLLOW_DIALOGUE:
+		return router.BindingFollowDialogue
 	default:
 		return ""
 	}

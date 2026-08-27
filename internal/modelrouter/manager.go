@@ -39,7 +39,7 @@ func defaultConfiguration() Configuration {
 	for _, workload := range Workloads {
 		mode := BindingDisabled
 		if workload == WorkloadReflection {
-			mode = BindingInherit
+			mode = BindingFollowDialogue
 		}
 		bindings[workload] = Binding{Mode: mode}
 	}
@@ -206,21 +206,34 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 
 func effectiveBinding(cfg Configuration, workload Workload, scope Scope) (Binding, bool) {
 	scope = scope.Normalized()
+	binding, inherited := globalBinding(cfg, workload, scope.GroupID != "")
 	if scope.GroupID != "" {
 		for _, override := range cfg.GroupOverrides {
 			if strings.EqualFold(strings.TrimSpace(override.Platform), scope.Platform) && strings.TrimSpace(override.GroupID) == scope.GroupID {
 				if binding, ok := override.Bindings[workload]; ok && binding.Mode != "" && binding.Mode != BindingInherit {
+					if workload != WorkloadDialogue && binding.Mode == BindingFollowDialogue {
+						dialogue, _ := effectiveBinding(cfg, WorkloadDialogue, scope)
+						return dialogue, true
+					}
 					return binding, false
 				}
 				break
 			}
 		}
 	}
+	if workload != WorkloadDialogue && binding.Mode == BindingFollowDialogue {
+		dialogue, _ := effectiveBinding(cfg, WorkloadDialogue, scope)
+		return dialogue, true
+	}
+	return binding, inherited
+}
+
+func globalBinding(cfg Configuration, workload Workload, inherited bool) (Binding, bool) {
 	binding, ok := cfg.GlobalBindings[workload]
 	if !ok || binding.Mode == "" || binding.Mode == BindingInherit {
 		return Binding{Mode: BindingDisabled}, true
 	}
-	return binding, scope.GroupID != ""
+	return binding, inherited
 }
 
 func normalizeConfiguration(cfg *Configuration) {
@@ -234,7 +247,7 @@ func normalizeConfiguration(cfg *Configuration) {
 		binding, ok := cfg.GlobalBindings[workload]
 		if workload == WorkloadReflection {
 			if !ok || binding.Mode == "" || binding.Mode == BindingInherit {
-				cfg.GlobalBindings[workload] = Binding{Mode: BindingInherit}
+				cfg.GlobalBindings[workload] = Binding{Mode: BindingFollowDialogue}
 			}
 			continue
 		}
@@ -322,7 +335,7 @@ func validateConfiguration(cfg Configuration) error {
 		if workload == WorkloadReflection && binding.Mode == BindingDisabled {
 			return fmt.Errorf("global reflection binding cannot be disabled")
 		}
-		if err := validateBinding(binding, modelIDs, endpointIDs, workload == WorkloadReflection); err != nil {
+		if err := validateBinding(binding, modelIDs, endpointIDs, false, workload != WorkloadDialogue); err != nil {
 			return fmt.Errorf("global %s binding: %w", workload, err)
 		}
 	}
@@ -343,7 +356,7 @@ func validateConfiguration(cfg Configuration) error {
 			if workload == WorkloadReflection && binding.Mode == BindingDisabled {
 				return fmt.Errorf("group %s/%s reflection binding cannot be disabled", group.Platform, group.GroupID)
 			}
-			if err := validateBinding(binding, modelIDs, endpointIDs, true); err != nil {
+			if err := validateBinding(binding, modelIDs, endpointIDs, true, workload != WorkloadDialogue); err != nil {
 				return fmt.Errorf("group %s/%s %s binding: %w", group.Platform, group.GroupID, workload, err)
 			}
 		}
@@ -351,7 +364,7 @@ func validateConfiguration(cfg Configuration) error {
 	return nil
 }
 
-func validateBinding(binding Binding, models map[string]Model, endpoints map[string]Endpoint, allowInherit bool) error {
+func validateBinding(binding Binding, models map[string]Model, endpoints map[string]Endpoint, allowInherit, allowFollowDialogue bool) error {
 	switch binding.Mode {
 	case BindingDisabled:
 		if binding.ModelID != "" {
@@ -365,6 +378,11 @@ func validateBinding(binding Binding, models map[string]Model, endpoints map[str
 			return nil
 		}
 		return fmt.Errorf("inherit is not valid globally")
+	case BindingFollowDialogue:
+		if allowFollowDialogue {
+			return nil
+		}
+		return fmt.Errorf("dialogue cannot follow itself")
 	case BindingModel:
 		model, ok := models[binding.ModelID]
 		if !ok {

@@ -28,9 +28,10 @@ var Workloads = []Workload{
 type BindingMode string
 
 const (
-	BindingInherit  BindingMode = "inherit"
-	BindingModel    BindingMode = "model"
-	BindingDisabled BindingMode = "disabled"
+	BindingInherit        BindingMode = "inherit"
+	BindingModel          BindingMode = "model"
+	BindingDisabled       BindingMode = "disabled"
+	BindingFollowDialogue BindingMode = "follow_dialogue"
 )
 
 var ErrDisabled = errors.New("model workload is disabled")

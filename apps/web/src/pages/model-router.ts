@@ -49,7 +49,13 @@ function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBin
 
 function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload): boolean {
   const binding = bindingFor(bindings, workload);
-  if (workload === ModelWorkload.REFLECTION && (!binding || binding.mode === ModelBindingMode.INHERIT)) {
+  if (
+    workload !== ModelWorkload.DIALOGUE
+    && (
+      binding?.mode === ModelBindingMode.FOLLOW_DIALOGUE
+      || (workload === ModelWorkload.REFLECTION && (!binding || binding.mode === ModelBindingMode.INHERIT))
+    )
+  ) {
     return bindingFor(bindings, ModelWorkload.DIALOGUE)?.mode !== ModelBindingMode.MODEL;
   }
   return binding?.mode !== ModelBindingMode.MODEL;
@@ -67,7 +73,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   let tab: 'endpoints' | 'models' | 'global' | 'groups' = 'endpoints';
   let activeConfiguration = create(ModelRouterConfigurationSchema, { version: 1 });
   let draft = cloneConfiguration(activeConfiguration);
-  let activeRevision = 0n;
   let loadError = '';
   let testingModelId = '';
   const revealedKeys = new Set<string>();
@@ -81,7 +86,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       const published = state.active ?? state.draft ?? create(ModelRouterConfigurationSchema, { version: 1 });
       activeConfiguration = cloneConfiguration(published);
       draft = cloneConfiguration(published);
-      activeRevision = state.active?.revision ?? 0n;
       loadError = state.loadError;
       loading = false;
       render();
@@ -128,10 +132,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         toast.error(response.error || '发布配置失败');
         return;
       }
-      activeRevision = response.active.revision;
       activeConfiguration = cloneConfiguration(response.active);
       draft = cloneConfiguration(response.active);
-      toast.success(`模型路由配置已发布（revision ${activeRevision}）`);
+      toast.success('模型路由配置已发布');
     } catch (err) {
       toast.error('发布配置失败: ' + errorText(err));
     } finally {
@@ -148,7 +151,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       if (discarded) {
         activeConfiguration = cloneConfiguration(discarded);
         draft = cloneConfiguration(discarded);
-        activeRevision = discarded.revision;
       } else {
         draft = cloneConfiguration(activeConfiguration);
       }
@@ -177,7 +179,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             <p class="page-description">可视化管理 OpenAI 兼容 Endpoint、模型和群级路由</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="badge badge-outline">活动 revision ${activeRevision}</span>
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
             <button class="btn btn-primary btn-sm" id="router-publish" ${busy ? 'disabled' : ''}>${icon('play', 'w-3.5 h-3.5')} 发布配置</button>
           </div>
@@ -301,7 +302,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               <strong class="text-sm">${workload.label}</strong>
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, workload.value === ModelWorkload.REFLECTION, workload.value === ModelWorkload.REFLECTION ? '跟随主对话' : '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -336,11 +337,19 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     allowInherit: boolean,
     inheritLabel = '继承全局',
     allowDisabled = true,
+    allowFollowDialogue = false,
   ): string {
-    const selectedMode = binding?.mode ?? (allowInherit ? ModelBindingMode.INHERIT : ModelBindingMode.DISABLED);
+    const selectedMode = binding?.mode ?? (
+      allowInherit
+        ? ModelBindingMode.INHERIT
+        : allowFollowDialogue && !allowDisabled
+          ? ModelBindingMode.FOLLOW_DIALOGUE
+          : ModelBindingMode.DISABLED
+    );
     const selectedModel = binding?.modelId || '';
     const items: string[] = [];
     if (allowInherit) items.push(`<option value="inherit" ${selectedMode === ModelBindingMode.INHERIT ? 'selected' : ''}>${inheritLabel}</option>`);
+    if (allowFollowDialogue) items.push(`<option value="follow-dialogue" ${selectedMode === ModelBindingMode.FOLLOW_DIALOGUE ? 'selected' : ''}>跟随主对话</option>`);
     if (allowDisabled) items.push(`<option value="disabled" ${selectedMode === ModelBindingMode.DISABLED ? 'selected' : ''}>Disabled</option>`);
     for (const model of draft.models) {
       items.push(`<option value="model:${escapeHtml(model.id)}" ${selectedMode === ModelBindingMode.MODEL && selectedModel === model.id ? 'selected' : ''}>${escapeHtml(modelLabel(model, draft.endpoints))}</option>`);
@@ -364,7 +373,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     container.querySelectorAll<HTMLSelectElement>('[data-global-workload]').forEach((select) => {
       select.addEventListener('change', () => {
         const workload = Number(select.dataset.globalWorkload) as ModelWorkload;
-        setBinding(draft.globalBindings, workload, select.value, workload === ModelWorkload.REFLECTION);
+        setBinding(draft.globalBindings, workload, select.value, false);
         render();
       });
     });
@@ -578,7 +587,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {
@@ -608,8 +617,12 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
     const binding = create(ModelBindingSchema, {
       workload,
-      mode: value === 'disabled' ? ModelBindingMode.DISABLED : ModelBindingMode.MODEL,
-      modelId: value.startsWith('model:') ? value.slice(6) : bindings[index]?.modelId || '',
+      mode: value === 'disabled'
+        ? ModelBindingMode.DISABLED
+        : value === 'follow-dialogue'
+          ? ModelBindingMode.FOLLOW_DIALOGUE
+          : ModelBindingMode.MODEL,
+      modelId: value.startsWith('model:') ? value.slice(6) : '',
     });
     if (index >= 0) bindings[index] = binding;
     else bindings.push(binding);
