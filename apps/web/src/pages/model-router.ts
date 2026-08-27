@@ -441,20 +441,58 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><details class="dropdown" id="upstream-model-picker" style="display:none"><summary class="btn btn-outline btn-icon-sm" title="选择获取到的模型" aria-label="选择获取到的模型">${icon('chevron_down', 'w-3.5 h-3.5')}</summary><div class="dropdown-menu" id="upstream-model-options" style="max-height:16rem;min-width:min(24rem,calc(100vw - 4rem));overflow-y:auto"></div></details><button class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
+        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
         <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存到草稿</button>`,
       onMount: (dialog, close) => {
         const endpointSelect = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!;
         const upstreamInput = dialog.querySelector<HTMLInputElement>('#model-upstream')!;
-        const upstreamPicker = dialog.querySelector<HTMLDetailsElement>('#upstream-model-picker')!;
+        const upstreamPicker = dialog.querySelector<HTMLButtonElement>('#upstream-model-picker')!;
         const upstreamOptions = dialog.querySelector<HTMLElement>('#upstream-model-options')!;
         const fetchButton = dialog.querySelector<HTMLButtonElement>('#fetch-models')!;
         let fetchedModels: string[] = [];
+        const closeUpstreamOptions = () => {
+          if (upstreamOptions.matches(':popover-open')) upstreamOptions.hidePopover();
+        };
+        const positionUpstreamOptions = () => {
+          const inputRect = upstreamInput.getBoundingClientRect();
+          const pickerRect = upstreamPicker.getBoundingClientRect();
+          const viewportPadding = 8;
+          const gap = 4;
+          const desiredHeight = Math.min(320, fetchedModels.length * 34 + 8);
+          const spaceBelow = window.innerHeight - pickerRect.bottom - gap - viewportPadding;
+          const spaceAbove = pickerRect.top - gap - viewportPadding;
+          const openBelow = spaceBelow >= Math.min(desiredHeight, 192) || spaceBelow >= spaceAbove;
+          const availableHeight = Math.max(96, openBelow ? spaceBelow : spaceAbove);
+          const menuHeight = Math.min(desiredHeight, availableHeight);
+          const menuWidth = Math.min(
+            Math.max(240, inputRect.width + pickerRect.width + gap),
+            window.innerWidth - viewportPadding * 2,
+          );
+          const left = Math.min(
+            Math.max(viewportPadding, inputRect.left),
+            window.innerWidth - menuWidth - viewportPadding,
+          );
+          upstreamOptions.style.left = `${left}px`;
+          upstreamOptions.style.top = `${openBelow ? pickerRect.bottom + gap : pickerRect.top - menuHeight - gap}px`;
+          upstreamOptions.style.width = `${menuWidth}px`;
+          upstreamOptions.style.maxHeight = `${availableHeight}px`;
+        };
+        upstreamPicker.addEventListener('click', () => {
+          if (upstreamOptions.matches(':popover-open')) {
+            closeUpstreamOptions();
+            return;
+          }
+          positionUpstreamOptions();
+          upstreamOptions.showPopover();
+        });
+        upstreamOptions.addEventListener('toggle', () => {
+          upstreamPicker.setAttribute('aria-expanded', String(upstreamOptions.matches(':popover-open')));
+        });
         endpointSelect.addEventListener('change', () => {
           fetchedModels = [];
-          upstreamPicker.open = false;
+          closeUpstreamOptions();
           upstreamPicker.style.display = 'none';
           upstreamOptions.innerHTML = '';
         });
@@ -463,7 +501,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           if (!option) return;
           const selected = fetchedModels[Number(option.dataset.modelIndex)];
           if (selected !== undefined) upstreamInput.value = selected;
-          upstreamPicker.open = false;
+          closeUpstreamOptions();
         });
         fetchButton.addEventListener('click', async () => {
           if (fetchButton.disabled) return;
@@ -479,9 +517,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               return;
             }
             fetchedModels = [...response.models];
-            upstreamOptions.innerHTML = fetchedModels.map((name, index) => `<button type="button" class="dropdown-item font-mono" data-model-index="${index}">${escapeHtml(name)}</button>`).join('');
-            upstreamPicker.open = false;
-            upstreamPicker.style.display = fetchedModels.length ? 'inline-block' : 'none';
+            upstreamOptions.innerHTML = fetchedModels.map((name, index) => `<button type="button" class="dropdown-item font-mono" role="option" data-model-index="${index}">${escapeHtml(name)}</button>`).join('');
+            closeUpstreamOptions();
+            upstreamPicker.style.display = fetchedModels.length ? 'inline-flex' : 'none';
             toast.success(`已获取 ${response.models.length} 个模型`);
           } catch (err) {
             toast.error('获取模型列表失败: ' + errorText(err));
