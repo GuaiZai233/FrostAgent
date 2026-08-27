@@ -119,9 +119,9 @@ func init() {
 	// Ensure data directory exists
 	ensureDataDir()
 
-	// Model endpoint, key and model selection are owned exclusively by the
-	// runtime router. Legacy model environment variables are intentionally not
-	// imported or read.
+	// Model endpoint, key source and model selection are owned by the runtime
+	// router. UPSTREAM_API_KEY is read only for endpoints that explicitly select
+	// the environment-variable key source.
 	routerManager := modelrouter.New(modelRouterPath())
 	if err := routerManager.LoadError(); err != nil {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("模型路由配置不可用，已进入未配置状态: %v", err))

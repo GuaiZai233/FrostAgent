@@ -1,6 +1,7 @@
 import { create, toJsonString } from '@bufbuild/protobuf';
 import {
   GroupModelOverrideSchema,
+  ModelAPIKeyStorage,
   ModelBindingMode,
   ModelBindingSchema,
   ModelEndpointSchema,
@@ -27,6 +28,11 @@ const workloads = [
   { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩' },
 ] as const;
 
+const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
+const apiKeyStorageManual = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_MANUAL;
+const apiKeyStorageEnv = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_ENV;
+const apiKeyStorageSecretFile = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_SECRET_FILE;
+
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
 }
@@ -45,6 +51,24 @@ function endpointWarns(baseUrl: string): boolean {
 
 function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBinding | undefined {
   return bindings.find((binding) => binding.workload === workload);
+}
+
+function endpointAPIKeyStorage(endpoint: ModelEndpoint): ModelAPIKeyStorage {
+  return endpoint.apiKeyStorage === apiKeyStorageUnspecified
+    ? apiKeyStorageManual
+    : endpoint.apiKeyStorage;
+}
+
+function endpointCredentialText(endpoint: ModelEndpoint, visible: boolean): string {
+  switch (endpointAPIKeyStorage(endpoint)) {
+    case apiKeyStorageEnv:
+      return '环境变量：UPSTREAM_API_KEY';
+    case apiKeyStorageSecretFile:
+      return `secret_file：${endpoint.secretFile}`;
+    case apiKeyStorageManual:
+    default:
+      return visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权';
+  }
 }
 
 function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload): boolean {
@@ -242,13 +266,14 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               draft.endpoints.length
                 ? draft.endpoints.map((endpoint) => {
                     const visible = revealedKeys.has(endpoint.id);
+                    const manualKey = endpointAPIKeyStorage(endpoint) === apiKeyStorageManual;
                     return `<tr>
                       <td class="font-medium">${escapeHtml(endpoint.displayName)}</td>
                       <td class="font-mono text-xs">${escapeHtml(endpoint.baseUrl)}</td>
-                      <td class="font-mono text-xs"><span data-endpoint-key>${escapeHtml(visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权')}</span></td>
+                      <td class="font-mono text-xs"><span data-endpoint-key>${escapeHtml(endpointCredentialText(endpoint, visible))}</span></td>
                       <td><span class="badge ${endpoint.enabled ? 'badge-success' : 'badge-outline'}">${endpoint.enabled ? '启用' : '停用'}</span></td>
                       <td style="text-align:right"><div class="flex justify-end gap-1">
-                        <button class="btn btn-ghost btn-icon-sm" data-action="reveal-endpoint" data-id="${escapeHtml(endpoint.id)}" title="${visible ? '隐藏 Key' : '查看 Key'}" aria-label="${visible ? '隐藏 API Key' : '查看 API Key'}" aria-pressed="${visible}">${icon(visible ? 'eye_off' : 'eye')}</button>
+                        ${manualKey ? `<button class="btn btn-ghost btn-icon-sm" data-action="reveal-endpoint" data-id="${escapeHtml(endpoint.id)}" title="${visible ? '隐藏 Key' : '查看 Key'}" aria-label="${visible ? '隐藏 API Key' : '查看 API Key'}" aria-pressed="${visible}">${icon(visible ? 'eye_off' : 'eye')}</button>` : ''}
                         <button class="btn btn-ghost btn-icon-sm" data-action="edit-endpoint" data-id="${escapeHtml(endpoint.id)}" title="编辑">${icon('edit')}</button>
                         <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-endpoint" data-id="${escapeHtml(endpoint.id)}" title="删除">${icon('trash')}</button>
                       </div></td>
@@ -388,12 +413,12 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     const id = element.dataset.id || '';
     if (action === 'reveal-endpoint') {
       const endpoint = draft.endpoints.find((item) => item.id === id);
-      if (!endpoint) return;
+      if (!endpoint || endpointAPIKeyStorage(endpoint) !== apiKeyStorageManual) return;
       const visible = !revealedKeys.has(id);
       if (visible) revealedKeys.add(id);
       else revealedKeys.delete(id);
       const key = element.closest('tr')?.querySelector<HTMLElement>('[data-endpoint-key]');
-      if (key) key.textContent = visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权';
+      if (key) key.textContent = endpointCredentialText(endpoint, visible);
       element.innerHTML = icon(visible ? 'eye_off' : 'eye');
       element.title = visible ? '隐藏 Key' : '查看 Key';
       element.setAttribute('aria-label', visible ? '隐藏 API Key' : '查看 API Key');
@@ -432,24 +457,63 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     const existing = draft.endpoints.find((item) => item.id === id);
     const endpoint = existing
       ? structuredClone(existing)
-      : create(ModelEndpointSchema, { id: newId('endpoint'), enabled: true });
+      : create(ModelEndpointSchema, {
+          id: newId('endpoint'),
+          enabled: true,
+          apiKeyStorage: apiKeyStorageManual,
+        });
+    let keyStorage = endpointAPIKeyStorage(endpoint);
+    let manualKey = endpoint.apiKey;
+    let secretFile = endpoint.secretFile;
+    const keyStorageDetails = () => {
+      switch (keyStorage) {
+        case apiKeyStorageEnv:
+          return '<p class="form-hint">编辑.env文件或在当前shell会话中临时指定。</p>';
+        case apiKeyStorageSecretFile:
+          return `<p class="form-hint">推荐Docker用户使用，路径类似/run/secrets/xxx。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}" placeholder="/run/secrets/xxx"></div>`;
+        case apiKeyStorageManual:
+        default:
+          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input class="input font-mono" id="endpoint-key" value="${escapeHtml(manualKey)}"></div>`;
+      }
+    };
     void openDialog({
       title: existing ? '编辑 Endpoint' : '新增 Endpoint',
       maxWidth: '34rem',
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="endpoint-name" value="${escapeHtml(endpoint.displayName)}"></div>
         <div class="form-group"><label class="form-label">Base URL</label><input class="input font-mono" id="endpoint-url" value="${escapeHtml(endpoint.baseUrl)}" placeholder="https://example.com/v1"><p class="form-hint text-destructive" id="endpoint-url-warning" style="display:${endpointWarns(endpoint.baseUrl) ? 'block' : 'none'}">这里建议填写 Base URL，也就是不以 /chat/completions 结尾。如果执意继续，很可能引起错误。</p></div>
-        <div class="form-group"><label class="form-label">API Key（允许为空）</label><input class="input font-mono" id="endpoint-key" value="${escapeHtml(endpoint.apiKey)}"></div>
+        <div class="form-group"><label class="form-label">API Key 存储格式（必选）</label><select class="select" id="endpoint-key-storage" required><option value="${apiKeyStorageManual}" ${keyStorage === apiKeyStorageManual ? 'selected' : ''}>手动填写</option><option value="${apiKeyStorageEnv}" ${keyStorage === apiKeyStorageEnv ? 'selected' : ''}>从环境变量读取</option><option value="${apiKeyStorageSecretFile}" ${keyStorage === apiKeyStorageSecretFile ? 'selected' : ''}>secret_file</option></select><div id="endpoint-key-storage-details">${keyStorageDetails()}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="endpoint-enabled" ${endpoint.enabled ? 'checked' : ''}>启用 Endpoint</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="endpoint-confirm">保存</button>`,
       onMount: (dialog, close) => {
         const urlInput = dialog.querySelector<HTMLInputElement>('#endpoint-url')!;
         const warning = dialog.querySelector<HTMLElement>('#endpoint-url-warning')!;
+        const storageSelect = dialog.querySelector<HTMLSelectElement>('#endpoint-key-storage')!;
+        const storageDetails = dialog.querySelector<HTMLElement>('#endpoint-key-storage-details')!;
+        const captureStorageValue = () => {
+          if (keyStorage === apiKeyStorageManual) {
+            manualKey = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? manualKey;
+          } else if (keyStorage === apiKeyStorageSecretFile) {
+            secretFile = dialog.querySelector<HTMLInputElement>('#endpoint-secret-file')?.value ?? secretFile;
+          }
+        };
         urlInput.addEventListener('input', () => warning.style.display = endpointWarns(urlInput.value) ? 'block' : 'none');
+        storageSelect.addEventListener('change', () => {
+          captureStorageValue();
+          keyStorage = Number(storageSelect.value) as ModelAPIKeyStorage;
+          storageDetails.innerHTML = keyStorageDetails();
+        });
         dialog.querySelector('#endpoint-confirm')?.addEventListener('click', () => {
+          captureStorageValue();
+          if (keyStorage === apiKeyStorageSecretFile && !secretFile.trim()) {
+            toast.error('请填写 Secret 文件路径');
+            return;
+          }
           endpoint.displayName = dialog.querySelector<HTMLInputElement>('#endpoint-name')!.value;
           endpoint.baseUrl = urlInput.value;
-          endpoint.apiKey = dialog.querySelector<HTMLInputElement>('#endpoint-key')!.value;
+          endpoint.apiKeyStorage = keyStorage;
+          endpoint.apiKey = keyStorage === apiKeyStorageManual ? manualKey : '';
+          endpoint.secretFile = keyStorage === apiKeyStorageSecretFile ? secretFile.trim() : '';
           endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;
           const index = draft.endpoints.findIndex((item) => item.id === endpoint.id);
           if (index >= 0) draft.endpoints[index] = endpoint;

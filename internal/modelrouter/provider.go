@@ -70,6 +70,10 @@ func (m *Manager) ListUpstreamModels(endpointID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	apiKey, err := resolveEndpointAPIKey(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
+	}
 	fullURL, err := url.JoinPath(endpoint.BaseURL, "models")
 	if err != nil {
 		return nil, err
@@ -78,8 +82,8 @@ func (m *Manager) ListUpstreamModels(endpointID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if endpoint.APIKey != "" {
-		request.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
+	if apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	response, err := client.Do(request)
@@ -125,7 +129,11 @@ func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	client := openai.NewClient(endpoint.BaseURL, endpoint.APIKey)
+	apiKey, err := resolveEndpointAPIKey(endpoint)
+	if err != nil {
+		return "", 0, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
+	}
+	client := openai.NewClient(endpoint.BaseURL, apiKey)
 	started := time.Now()
 	response, err := client.Chat(context.Background(), core.ChatRequest{
 		Model: model.UpstreamModel,

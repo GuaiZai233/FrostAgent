@@ -193,13 +193,17 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 	if endpoint == nil || !endpoint.Enabled {
 		return Target{}, fmt.Errorf("endpoint %q is unavailable", model.EndpointID)
 	}
+	apiKey, err := resolveEndpointAPIKey(*endpoint)
+	if err != nil {
+		return Target{}, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
+	}
 	return Target{
 		EndpointID:          endpoint.ID,
 		EndpointDisplayName: endpoint.DisplayName,
 		ModelID:             model.ID,
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
-		APIKey:              endpoint.APIKey,
+		APIKey:              apiKey,
 		UpstreamModel:       model.UpstreamModel,
 	}, nil
 }
@@ -258,6 +262,19 @@ func normalizeConfiguration(cfg *Configuration) {
 	for i := range cfg.Endpoints {
 		cfg.Endpoints[i].DisplayName = strings.TrimSpace(cfg.Endpoints[i].DisplayName)
 		cfg.Endpoints[i].BaseURL = strings.TrimSpace(cfg.Endpoints[i].BaseURL)
+		cfg.Endpoints[i].SecretFile = strings.TrimSpace(cfg.Endpoints[i].SecretFile)
+		if cfg.Endpoints[i].APIKeyStorage == "" {
+			cfg.Endpoints[i].APIKeyStorage = APIKeyStorageManual
+		}
+		switch cfg.Endpoints[i].APIKeyStorage {
+		case APIKeyStorageManual:
+			cfg.Endpoints[i].SecretFile = ""
+		case APIKeyStorageEnv:
+			cfg.Endpoints[i].APIKey = ""
+			cfg.Endpoints[i].SecretFile = ""
+		case APIKeyStorageSecretFile:
+			cfg.Endpoints[i].APIKey = ""
+		}
 	}
 	for i := range cfg.Models {
 		cfg.Models[i].DisplayName = strings.TrimSpace(cfg.Models[i].DisplayName)
@@ -303,6 +320,15 @@ func validateConfiguration(cfg Configuration) error {
 		}
 		if parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
+		}
+		switch endpoint.APIKeyStorage {
+		case APIKeyStorageManual, APIKeyStorageEnv:
+		case APIKeyStorageSecretFile:
+			if endpoint.SecretFile == "" {
+				return fmt.Errorf("endpoint %q secret file path is required", endpoint.DisplayName)
+			}
+		default:
+			return fmt.Errorf("endpoint %q has unknown api key storage %q", endpoint.DisplayName, endpoint.APIKeyStorage)
 		}
 		endpointIDs[endpoint.ID] = endpoint
 	}

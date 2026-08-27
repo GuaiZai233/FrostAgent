@@ -36,12 +36,23 @@ const (
 
 var ErrDisabled = errors.New("model workload is disabled")
 
+type APIKeyStorage string
+
+const (
+	APIKeyStorageManual     APIKeyStorage = "manual"
+	APIKeyStorageEnv        APIKeyStorage = "env"
+	APIKeyStorageSecretFile APIKeyStorage = "secret_file"
+	APIKeyEnvironment                     = "UPSTREAM_API_KEY"
+)
+
 type Endpoint struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	BaseURL     string `json:"base_url"`
-	APIKey      string `json:"api_key"`
-	Enabled     bool   `json:"enabled"`
+	ID            string        `json:"id"`
+	DisplayName   string        `json:"display_name"`
+	BaseURL       string        `json:"base_url"`
+	APIKey        string        `json:"api_key,omitempty"`
+	APIKeyStorage APIKeyStorage `json:"api_key_storage"`
+	SecretFile    string        `json:"secret_file,omitempty"`
+	Enabled       bool          `json:"enabled"`
 }
 
 type Model struct {

@@ -111,11 +111,13 @@ func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration
 	}
 	for _, endpoint := range cfg.Endpoints {
 		result.Endpoints = append(result.Endpoints, &v1.ModelEndpoint{
-			Id:          endpoint.ID,
-			DisplayName: endpoint.DisplayName,
-			BaseUrl:     endpoint.BaseURL,
-			ApiKey:      endpoint.APIKey,
-			Enabled:     endpoint.Enabled,
+			Id:            endpoint.ID,
+			DisplayName:   endpoint.DisplayName,
+			BaseUrl:       endpoint.BaseURL,
+			ApiKey:        endpoint.APIKey,
+			Enabled:       endpoint.Enabled,
+			ApiKeyStorage: apiKeyStorageToProto(endpoint.APIKeyStorage),
+			SecretFile:    endpoint.SecretFile,
 		})
 	}
 	for _, model := range cfg.Models {
@@ -152,11 +154,13 @@ func configurationFromProto(cfg *v1.ModelRouterConfiguration) router.Configurati
 	}
 	for _, endpoint := range cfg.GetEndpoints() {
 		result.Endpoints = append(result.Endpoints, router.Endpoint{
-			ID:          endpoint.GetId(),
-			DisplayName: endpoint.GetDisplayName(),
-			BaseURL:     endpoint.GetBaseUrl(),
-			APIKey:      endpoint.GetApiKey(),
-			Enabled:     endpoint.GetEnabled(),
+			ID:            endpoint.GetId(),
+			DisplayName:   endpoint.GetDisplayName(),
+			BaseURL:       endpoint.GetBaseUrl(),
+			APIKey:        endpoint.GetApiKey(),
+			APIKeyStorage: apiKeyStorageFromProto(endpoint.GetApiKeyStorage()),
+			SecretFile:    endpoint.GetSecretFile(),
+			Enabled:       endpoint.GetEnabled(),
 		})
 	}
 	for _, model := range cfg.GetModels() {
@@ -270,6 +274,33 @@ func bindingModeFromProto(mode v1.ModelBindingMode) router.BindingMode {
 		return router.BindingDisabled
 	case v1.ModelBindingMode_MODEL_BINDING_MODE_FOLLOW_DIALOGUE:
 		return router.BindingFollowDialogue
+	default:
+		return ""
+	}
+}
+
+func apiKeyStorageToProto(storage router.APIKeyStorage) v1.ModelAPIKeyStorage {
+	switch storage {
+	case router.APIKeyStorageManual, "":
+		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_MANUAL
+	case router.APIKeyStorageEnv:
+		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_ENV
+	case router.APIKeyStorageSecretFile:
+		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_SECRET_FILE
+	default:
+		return v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_UNSPECIFIED
+	}
+}
+
+func apiKeyStorageFromProto(storage v1.ModelAPIKeyStorage) router.APIKeyStorage {
+	switch storage {
+	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_ENV:
+		return router.APIKeyStorageEnv
+	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_SECRET_FILE:
+		return router.APIKeyStorageSecretFile
+	case v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_MANUAL,
+		v1.ModelAPIKeyStorage_MODEL_API_KEY_STORAGE_UNSPECIFIED:
+		return router.APIKeyStorageManual
 	default:
 		return ""
 	}
