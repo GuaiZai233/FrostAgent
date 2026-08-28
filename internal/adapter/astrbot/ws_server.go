@@ -508,15 +508,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 			var plainTexts []string
 			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
-				actionMessages = append(actionMessages, ActionMessage{
-					Type:          m.Type,
-					Text:          m.Text,
-					MentionUserID: m.MentionUserID,
-					MessageID:     m.MessageID,
-					Path:          m.Path,
-					URL:           m.URL,
-					IsSticker:     m.IsSticker,
-				})
+				actionMessages = append(actionMessages, actionMessageFromToolMessage(m))
 				switch m.Type {
 				case "plain":
 					plainTexts = append(plainTexts, m.Text)
@@ -674,6 +666,24 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 
 	if event.MessageType == "group" {
 		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText))
+	}
+}
+
+func actionMessageFromToolMessage(m tools.Msg) ActionMessage {
+	path := m.Path
+	if m.IsSticker {
+		// Sticker files belong to FrostAgent's private storage. AstrBot receives
+		// the HTTP endpoint instead and resolves it into OneBot-compatible data.
+		path = ""
+	}
+	return ActionMessage{
+		Type:          m.Type,
+		Text:          m.Text,
+		MentionUserID: m.MentionUserID,
+		MessageID:     m.MessageID,
+		Path:          path,
+		URL:           m.URL,
+		IsSticker:     m.IsSticker,
 	}
 }
 

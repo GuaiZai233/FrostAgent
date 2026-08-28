@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"strings"
 )
 
@@ -70,6 +71,7 @@ func SendStickerTool(store *sticker.Store) Tool {
 			if !ok {
 				return `{"error":"sticker file not found"}`, nil
 			}
+			imageURL := fmt.Sprintf("/api/sticker/%s/image", url.PathEscape(selected.entry.ID))
 
 			result := struct {
 				Messages []Msg `json:"messages"`
@@ -78,6 +80,7 @@ func SendStickerTool(store *sticker.Store) Tool {
 					{
 						Type:      "image",
 						Path:      filePath,
+						URL:       imageURL,
 						IsSticker: true,
 					},
 				},

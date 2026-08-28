@@ -4,6 +4,11 @@
         "type": "string",
         "default": "ws://127.0.0.1:1234/ws/astrbot"
     },
+    "http_base_url": {
+        "description": "FrostAgent HTTP API 根地址，用于跨容器获取表情包图片",
+        "type": "string",
+        "default": "http://127.0.0.1:8080"
+    },
     "forward_all_group_messages": {
         "description": "是否将所有群消息发送给 FrostAgent (用于群聊无感总结与记忆反思)",
         "type": "bool",

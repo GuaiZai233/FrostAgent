@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
+from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen
 
 import websockets
 from astrbot.api import logger
@@ -21,6 +24,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 @dataclass(frozen=True)
 class Settings:
     ws_url: str
+    http_base_url: str
     forward_all_group_messages: bool
     heartbeat_interval: int
     reconnect_interval: int
@@ -30,6 +34,8 @@ def load_settings(config: dict = None) -> Settings:
     config = config or {}
     return Settings(
         ws_url=config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "ws://127.0.0.1:1234/ws/astrbot"),
+        http_base_url=config.get("http_base_url")
+        or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
         heartbeat_interval=int(config.get("heartbeat_interval", 30)),
         reconnect_interval=int(config.get("reconnect_interval", 5)),
@@ -71,6 +77,85 @@ class StickerImage:
 
     async def to_dict(self) -> dict:
         return self.toDict()
+
+
+class StickerFetchError(RuntimeError):
+    """Raised when a FrostAgent sticker cannot be safely loaded."""
+
+
+MAX_STICKER_DOWNLOAD_BYTES = 10 * 1024 * 1024
+STICKER_IMAGE_PATH_PREFIX = "/api/sticker/"
+
+
+def sticker_download_url(source: str, http_base_url: str) -> str:
+    base = urlparse(http_base_url)
+    if base.scheme not in ("http", "https") or not base.netloc:
+        raise StickerFetchError("FrostAgent http_base_url must be an absolute HTTP(S) URL")
+
+    parsed_source = urlparse(source)
+    if parsed_source.scheme:
+        if parsed_source.scheme not in ("http", "https"):
+            raise StickerFetchError("sticker source must use HTTP(S) or base64")
+        absolute_url = source
+    else:
+        if not source.startswith(STICKER_IMAGE_PATH_PREFIX):
+            raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
+        absolute_url = urljoin(http_base_url.rstrip("/") + "/", source)
+
+    target = urlparse(absolute_url)
+    if (target.scheme, target.netloc) != (base.scheme, base.netloc):
+        raise StickerFetchError("sticker source origin does not match FrostAgent http_base_url")
+    if not target.path.startswith(STICKER_IMAGE_PATH_PREFIX):
+        raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
+    return absolute_url
+
+
+def download_sticker_as_base64(image_url: str) -> str:
+    request = Request(image_url, headers={"Accept": "image/*"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            status = getattr(response, "status", None)
+            if status is None:
+                status = response.getcode()
+            if status < 200 or status >= 300:
+                raise StickerFetchError(f"sticker endpoint returned HTTP {status}")
+            data = response.read(MAX_STICKER_DOWNLOAD_BYTES + 1)
+    except StickerFetchError:
+        raise
+    except Exception as exc:
+        raise StickerFetchError(f"failed to fetch sticker: {exc}") from exc
+
+    if not data:
+        raise StickerFetchError("sticker endpoint returned an empty file")
+    if len(data) > MAX_STICKER_DOWNLOAD_BYTES:
+        raise StickerFetchError("sticker endpoint response exceeds 10 MiB")
+    return "base64://" + base64.b64encode(data).decode("ascii")
+
+
+async def resolve_sticker_sources(action: dict[str, Any], http_base_url: str) -> dict[str, Any]:
+    messages = action.get("messages") or []
+    if not messages:
+        return action
+
+    resolved_messages = []
+    for message in messages:
+        resolved = dict(message)
+        if str(message.get("type") or "") == "image" and message.get("is_sticker"):
+            source = str(message.get("url") or message.get("path") or "")
+            if not source:
+                raise StickerFetchError("sticker message has no image source")
+            if source.startswith("base64://"):
+                encoded = source
+            else:
+                image_url = sticker_download_url(source, http_base_url)
+                encoded = await asyncio.to_thread(download_sticker_as_base64, image_url)
+            resolved["url"] = encoded
+            resolved.pop("path", None)
+        resolved_messages.append(resolved)
+
+    resolved_action = dict(action)
+    resolved_action["messages"] = resolved_messages
+    return resolved_action
 
 
 class FrostAgentWSClient:
@@ -178,6 +263,7 @@ class FrostAgentWSClient:
         try:
             from astrbot.api.message import MessageChain
 
+            action = await resolve_sticker_sources(action, self.settings.http_base_url)
             parts = action_to_message_components(action)
             if not parts:
                 return
@@ -245,6 +331,14 @@ class FrostAgentAdapter(Star):
                 # 如果收到 noop 动作，说明后端已将该群聊消息捕获进 compact 但无需回复，结束等待
                 if action.get("action") == "noop":
                     break
+
+                try:
+                    action = await resolve_sticker_sources(action, self.settings.http_base_url)
+                except StickerFetchError as e:
+                    logger.error(f"[frostagent-adapter] 表情包获取失败，已取消发送: {e}")
+                    if not action.get("is_intermediate", False):
+                        break
+                    continue
 
                 for response in action_to_astrbot_result(event, action):
                     yield response

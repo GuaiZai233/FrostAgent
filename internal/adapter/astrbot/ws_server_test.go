@@ -591,6 +591,30 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 }
 
+func TestAstrBotStickerActionDoesNotExposeLocalPath(t *testing.T) {
+	message := actionMessageFromToolMessage(tools.Msg{
+		Type:      "image",
+		Path:      `data/sticker/private.png`,
+		URL:       "/api/sticker/sticker-id/image",
+		IsSticker: true,
+	})
+
+	if message.Path != "" {
+		t.Fatalf("sticker action exposed FrostAgent local path %q", message.Path)
+	}
+	if message.URL != "/api/sticker/sticker-id/image" || !message.IsSticker {
+		t.Fatalf("unexpected sticker action message: %+v", message)
+	}
+
+	regular := actionMessageFromToolMessage(tools.Msg{
+		Type: "image",
+		Path: `data/images/regular.png`,
+	})
+	if regular.Path != `data/images/regular.png` {
+		t.Fatalf("regular image path changed unexpectedly: %+v", regular)
+	}
+}
+
 func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{

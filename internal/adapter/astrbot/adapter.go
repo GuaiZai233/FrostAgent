@@ -19,9 +19,15 @@ import (
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
 	engine  *llm.Engine
-	stealer *sticker.Stealer
+	stealer stickerStealer
 	mu      sync.RWMutex
 	conns   map[*wsConn]struct{}
+}
+
+const astrBotQQPlatform = "aiocqhttp"
+
+type stickerStealer interface {
+	TrySteal(imageURL string)
 }
 
 // NewAdapter 创建一个新的 AstrBot 适配器实例。
@@ -34,6 +40,17 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 
 func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
+}
+
+func (a *Adapter) trySteal(event Event) {
+	if a.stealer == nil || event.MessageType != "group" || event.Platform != astrBotQQPlatform {
+		return
+	}
+	for _, att := range event.Attachments {
+		if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
+			a.stealer.TrySteal(att.URL)
+		}
+	}
 }
 
 // ID 返回平台唯一标识 "astrbot"
@@ -170,13 +187,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			if a.stealer != nil && event.MessageType == "group" {
-				for _, att := range event.Attachments {
-					if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
-						a.stealer.TrySteal(att.URL)
-					}
-				}
-			}
+			a.trySteal(event)
 
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&

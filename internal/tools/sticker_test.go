@@ -77,6 +77,10 @@ func TestSendStickerTool(t *testing.T) {
 	if !strings.Contains(msg.Path, hashA) {
 		t.Errorf("expected matched image path to contain hashA %s, got %s", hashA, msg.Path)
 	}
+	expectedURL := "/api/sticker/" + hashA + "/image"
+	if msg.URL != expectedURL {
+		t.Errorf("expected sticker image URL %q, got %q", expectedURL, msg.URL)
+	}
 
 	// Test case: verify unsummarized sticker C is never matched
 	out, err = tool.Execute(`{"query": "unsummarized"}`)

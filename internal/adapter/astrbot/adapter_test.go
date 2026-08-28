@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+type recordingStickerStealer struct {
+	urls []string
+}
+
+func (s *recordingStickerStealer) TrySteal(imageURL string) {
+	s.urls = append(s.urls, imageURL)
+}
+
 func TestAdapterID(t *testing.T) {
 	adapter := NewAdapter(nil)
 	if adapter.ID() != "astrbot" {
@@ -27,6 +35,62 @@ func TestAdapterSendNoConns(t *testing.T) {
 	err := adapter.Send(context.Background(), msg)
 	if err == nil {
 		t.Fatalf("expected error when sending with no active connections, got nil")
+	}
+}
+
+func TestAdapterTryStealOnlyQQGroupStickers(t *testing.T) {
+	tests := []struct {
+		name      string
+		event     Event
+		wantCalls int
+	}{
+		{
+			name: "aiocqhttp group sticker",
+			event: Event{
+				Platform:    astrBotQQPlatform,
+				MessageType: "group",
+				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
+			},
+			wantCalls: 1,
+		},
+		{
+			name: "aiocqhttp private sticker",
+			event: Event{
+				Platform:    astrBotQQPlatform,
+				MessageType: "private",
+				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
+			},
+		},
+		{
+			name: "non aiocqhttp group sticker",
+			event: Event{
+				Platform:    "telegram",
+				MessageType: "group",
+				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
+			},
+		},
+		{
+			name: "aiocqhttp group regular image",
+			event: Event{
+				Platform:    astrBotQQPlatform,
+				MessageType: "group",
+				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/image.png"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stealer := &recordingStickerStealer{}
+			adapter := NewAdapter(nil)
+			adapter.stealer = stealer
+
+			adapter.trySteal(tt.event)
+
+			if len(stealer.urls) != tt.wantCalls {
+				t.Fatalf("TrySteal calls = %d, want %d", len(stealer.urls), tt.wantCalls)
+			}
+		})
 	}
 }
 

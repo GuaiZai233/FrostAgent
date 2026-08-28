@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import importlib.util
 import sys
 import types
@@ -22,6 +24,24 @@ class FakePlain:
 class FakeImage:
     def __init__(self, source: str) -> None:
         self.source = source
+
+
+class FakeHTTPResponse:
+    def __init__(self, data: bytes, status: int = 200) -> None:
+        self.data = data
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, limit: int = -1) -> bytes:
+        return self.data if limit < 0 else self.data[:limit]
 
 
 class FakeLogger:
@@ -105,13 +125,13 @@ class MessageComponentTests(unittest.TestCase):
     def test_sticker_image_serializes_sub_type(self) -> None:
         """StickerImage.toDict() must produce a OneBot segment with sub_type=1."""
         with load_plugin_module() as module:
-            sticker = module.StickerImage("http://example.com/sticker.png")
+            sticker = module.StickerImage("base64://c3RpY2tlcg==")
             result = sticker.toDict()
 
             self.assertEqual(result, {
                 "type": "image",
                 "data": {
-                    "file": "http://example.com/sticker.png",
+                    "file": "base64://c3RpY2tlcg==",
                     "sub_type": 1,
                 },
             })
@@ -120,24 +140,93 @@ class MessageComponentTests(unittest.TestCase):
         """StickerImage must NOT be an instance of Image to bypass aiocqhttp
         base64 conversion."""
         with load_plugin_module() as module:
-            sticker = module.StickerImage("/data/sticker/abc.png")
+            sticker = module.StickerImage("base64://c3RpY2tlcg==")
             self.assertNotIsInstance(sticker, FakeImage)
 
-    def test_is_sticker_uses_sticker_image_component(self) -> None:
-        """action_to_message_components uses StickerImage for is_sticker messages."""
+    def test_sticker_endpoint_is_fetched_as_base64_with_sub_type(self) -> None:
         action = {
             "messages": [
-                {"type": "image", "path": "/data/sticker/abc.png", "is_sticker": True},
+                {
+                    "type": "image",
+                    "url": "/api/sticker/abc/image",
+                    "is_sticker": True,
+                },
+            ]
+        }
+        image_data = b"fake-png-data"
+
+        with load_plugin_module() as module:
+            with patch.object(
+                module,
+                "urlopen",
+                return_value=FakeHTTPResponse(image_data),
+            ) as mocked_urlopen:
+                resolved = asyncio.run(
+                    module.resolve_sticker_sources(action, "http://frostagent:8080")
+                )
+            parts = module.action_to_message_components(resolved)
+
+            self.assertEqual(len(parts), 1)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            payload = parts[0].toDict()
+            self.assertEqual(payload["data"]["sub_type"], 1)
+            self.assertEqual(
+                payload["data"]["file"],
+                "base64://" + base64.b64encode(image_data).decode("ascii"),
+            )
+            self.assertNotIn("data/sticker", payload["data"]["file"])
+            request = mocked_urlopen.call_args.args[0]
+            self.assertEqual(
+                request.full_url,
+                "http://frostagent:8080/api/sticker/abc/image",
+            )
+
+    def test_sticker_http_failure_does_not_create_payload(self) -> None:
+        action = {
+            "messages": [
+                {
+                    "type": "image",
+                    "url": "/api/sticker/missing/image",
+                    "is_sticker": True,
+                },
             ]
         }
 
         with load_plugin_module() as module:
-            parts = module.action_to_message_components(action)
+            with patch.object(
+                module,
+                "urlopen",
+                return_value=FakeHTTPResponse(b"not found", status=404),
+            ):
+                with self.assertRaises(module.StickerFetchError):
+                    asyncio.run(
+                        module.resolve_sticker_sources(
+                            action,
+                            "http://frostagent:8080",
+                        )
+                    )
 
-            self.assertEqual(len(parts), 1)
-            self.assertIsInstance(parts[0], module.StickerImage)
-            self.assertEqual(parts[0].toDict()["data"]["sub_type"], 1)
-            self.assertEqual(parts[0].toDict()["data"]["file"], "/data/sticker/abc.png")
+    def test_sticker_local_path_is_rejected(self) -> None:
+        action = {
+            "messages": [
+                {
+                    "type": "image",
+                    "path": "data/sticker/private.png",
+                    "is_sticker": True,
+                },
+            ]
+        }
+
+        with load_plugin_module() as module:
+            with patch.object(module, "urlopen") as mocked_urlopen:
+                with self.assertRaises(module.StickerFetchError):
+                    asyncio.run(
+                        module.resolve_sticker_sources(
+                            action,
+                            "http://frostagent:8080",
+                        )
+                    )
+                mocked_urlopen.assert_not_called()
 
     def test_regular_image_uses_image_component(self) -> None:
         """Non-sticker images still use the standard Image component."""
@@ -148,10 +237,15 @@ class MessageComponentTests(unittest.TestCase):
         }
 
         with load_plugin_module() as module:
-            parts = module.action_to_message_components(action)
+            with patch.object(module, "urlopen") as mocked_urlopen:
+                resolved = asyncio.run(
+                    module.resolve_sticker_sources(action, "http://frostagent:8080")
+                )
+            parts = module.action_to_message_components(resolved)
 
             self.assertEqual(len(parts), 1)
             self.assertIsInstance(parts[0], FakeImage)
+            mocked_urlopen.assert_not_called()
 
 
 if __name__ == "__main__":
