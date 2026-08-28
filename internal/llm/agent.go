@@ -705,9 +705,9 @@ func isStandaloneAssistantSilentMarker(content string) bool {
 
 func looksLikeMessagePayload(toolResult string) bool {
 	var probe struct {
-		Messages json.RawMessage `json:"messages"`
+		Messages []json.RawMessage `json:"messages"`
 	}
-	return json.Unmarshal([]byte(toolResult), &probe) == nil && len(probe.Messages) > 2
+	return json.Unmarshal([]byte(toolResult), &probe) == nil && len(probe.Messages) > 0
 }
 
 // staySilentConflict rejects ambiguous parallel tool batches before any tool

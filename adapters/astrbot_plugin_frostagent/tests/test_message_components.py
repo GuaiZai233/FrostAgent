@@ -102,6 +102,57 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
 
+    def test_sticker_image_serializes_sub_type(self) -> None:
+        """StickerImage.toDict() must produce a OneBot segment with sub_type=1."""
+        with load_plugin_module() as module:
+            sticker = module.StickerImage("http://example.com/sticker.png")
+            result = sticker.toDict()
+
+            self.assertEqual(result, {
+                "type": "image",
+                "data": {
+                    "file": "http://example.com/sticker.png",
+                    "sub_type": 1,
+                },
+            })
+
+    def test_sticker_image_is_not_astrbot_image(self) -> None:
+        """StickerImage must NOT be an instance of Image to bypass aiocqhttp
+        base64 conversion."""
+        with load_plugin_module() as module:
+            sticker = module.StickerImage("/data/sticker/abc.png")
+            self.assertNotIsInstance(sticker, FakeImage)
+
+    def test_is_sticker_uses_sticker_image_component(self) -> None:
+        """action_to_message_components uses StickerImage for is_sticker messages."""
+        action = {
+            "messages": [
+                {"type": "image", "path": "/data/sticker/abc.png", "is_sticker": True},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 1)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            self.assertEqual(parts[0].toDict()["data"]["sub_type"], 1)
+            self.assertEqual(parts[0].toDict()["data"]["file"], "/data/sticker/abc.png")
+
+    def test_regular_image_uses_image_component(self) -> None:
+        """Non-sticker images still use the standard Image component."""
+        action = {
+            "messages": [
+                {"type": "image", "url": "http://example.com/pic.png"},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 1)
+            self.assertIsInstance(parts[0], FakeImage)
+
 
 if __name__ == "__main__":
     unittest.main()

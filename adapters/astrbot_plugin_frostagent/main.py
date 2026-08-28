@@ -13,7 +13,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-__all__ = ["FrostAgentAdapter"]
+__all__ = ["FrostAgentAdapter", "StickerImage"]
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 
@@ -50,6 +50,27 @@ def is_ws_open(ws: Any) -> bool:
     if hasattr(ws, "closed"):
         return not bool(ws.closed)
     return True
+
+
+class StickerImage:
+    """OneBot image segment with sub_type=1 (sticker).
+
+    NOT a subclass of AstrBot's Image: aiocqhttp's _from_segment_to_dict
+    checks isinstance(segment, Image) and force-converts to base64 with only
+    ``file`` in data, discarding any extra fields.  By being a plain class we
+    bypass that branch and land in the generic ``segment.toDict()`` fallback,
+    which preserves sub_type in the serialized OneBot segment.
+    """
+
+    def __init__(self, file: str):
+        self.file = file
+        self.type = "image"
+
+    def toDict(self) -> dict:
+        return {"type": "image", "data": {"file": self.file, "sub_type": 1}}
+
+    async def to_dict(self) -> dict:
+        return self.toDict()
 
 
 class FrostAgentWSClient:
@@ -434,12 +455,10 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
             elif message_type == "image":
                 source = str(message.get("url") or message.get("path") or "")
                 if source:
-                    img = Image(source)
                     if message.get("is_sticker"):
-                        raw = getattr(img, "raw", None) or getattr(img, "data", None)
-                        if isinstance(raw, dict):
-                            raw["sub_type"] = 1
-                    parts.append(img)
+                        parts.append(StickerImage(source))
+                    else:
+                        parts.append(Image(source))
             elif message_type in ("record", "video", "file", "quote"):
                 logger.debug(f"[frostagent-adapter] 跳过暂不支持的消息组件: {message_type}")
         return parts
