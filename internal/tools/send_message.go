@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -120,7 +122,7 @@ func SendMsgTool() Tool {
 	}
 }
 
-func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
+func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 	var oneBotChain []OneBotSegment
 
 	for _, Msg := range toolMessages {
@@ -145,10 +147,9 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 			})
 
 		case "image", "record", "video", "file":
-			// 确定文件来源：URL 优先，如果有本地路径则拼接 file:// 前缀
-			fileData := Msg.URL
-			if Msg.Path != "" {
-				fileData = fmt.Sprintf("file://%s", Msg.Path)
+			fileData, err := buildOneBotMediaFile(Msg)
+			if err != nil {
+				return nil, err
 			}
 
 			segData := map[string]interface{}{"file": fileData}
@@ -162,5 +163,23 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 		}
 	}
 
-	return oneBotChain
+	return oneBotChain, nil
+}
+
+func buildOneBotMediaFile(msg Msg) (string, error) {
+	if msg.Type == "image" && msg.IsSticker && msg.Path != "" {
+		content, err := os.ReadFile(msg.Path)
+		if err != nil {
+			return "", fmt.Errorf("读取贴纸文件 %q 失败: %w", msg.Path, err)
+		}
+		if len(content) == 0 {
+			return "", fmt.Errorf("贴纸文件 %q 为空", msg.Path)
+		}
+		return "base64://" + base64.StdEncoding.EncodeToString(content), nil
+	}
+
+	if msg.Path != "" {
+		return fmt.Sprintf("file://%s", msg.Path), nil
+	}
+	return msg.URL, nil
 }

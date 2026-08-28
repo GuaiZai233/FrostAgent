@@ -146,7 +146,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 注册 `send_sticker` 工具供大模型在合适语境下调用；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；
-  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
+  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
   - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
 - **Web 控制台表情包管理 (Web Dashboard Management)**：
   - Web 控制台在「Prompt 检查」下方提供「表情包摘取」独立管理页面（`/#stickers`）；

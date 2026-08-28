@@ -352,7 +352,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
-			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+			oneBotSegments, err := tools.BuildOneBotMessage(toolOutput.Messages)
+			if err != nil {
+				return fmt.Errorf("组装 OneBot 消息失败: %w", err)
+			}
 			if len(oneBotSegments) == 0 {
 				return fmt.Errorf("消息内容为空")
 			}
@@ -436,7 +439,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
+		if buildErr != nil {
+			logs.Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error())
+			return
+		}
 		if len(oneBotSegments) > 0 {
 			if receiptText != "" {
 				oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
