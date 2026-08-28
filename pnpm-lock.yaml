@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  basecoat-css@1.0.2:
+    hash: b3126f702ef3e32d461e338407308da77a3da15f97f8ea10be9112375ca5d5b0
+    path: patches/basecoat-css@1.0.2.patch
+
 importers:
 
   .:
@@ -52,7 +57,7 @@ importers:
         version: link:../../libs/frostagent-proto
       basecoat-css:
         specifier: ^1.0.2
-        version: 1.0.2
+        version: 1.0.2(patch_hash=b3126f702ef3e32d461e338407308da77a3da15f97f8ea10be9112375ca5d5b0)
       lucide:
         specifier: ^1.33.0
         version: 1.33.0
@@ -2034,7 +2039,7 @@ snapshots:
 
   balanced-match@4.0.4: {}
 
-  basecoat-css@1.0.2: {}
+  basecoat-css@1.0.2(patch_hash=b3126f702ef3e32d461e338407308da77a3da15f97f8ea10be9112375ca5d5b0): {}
 
   brace-expansion@1.1.15:
     dependencies:

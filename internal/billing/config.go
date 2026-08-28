@@ -50,10 +50,9 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
-	modelName := strings.TrimSpace(os.Getenv("MODEL_NAME"))
-	if modelName == "" {
-		modelName = DefaultModelName
-	}
+	// Model selection is owned by the runtime router. This fallback remains
+	// only for startup price logging and legacy custom-price registration.
+	modelName := DefaultModelName
 
 	maxOutputTokens := DefaultMaxOutputTokens
 	if maxOutputStr := strings.TrimSpace(os.Getenv("BILLING_MAX_OUTPUT_TOKENS")); maxOutputStr != "" {

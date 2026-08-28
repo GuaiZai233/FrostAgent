@@ -43,6 +43,7 @@ gen/
 
 __screenshots__/
 node_modules
+.pnpm-store/
 .tools/
 
 .claude/worktrees
@@ -52,6 +53,7 @@ node_modules
 /data/brain.json
 /data/memory_catalog.json
 /data/group_summaries.json
+/data/model_router.json
 
 # Python artifacts
 __pycache__/

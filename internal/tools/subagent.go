@@ -1,15 +1,17 @@
 package tools
 
 import (
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/subagent"
+	"context"
 	"encoding/json"
 	"fmt"
 )
 
 const SubAgentManagerPrompt = "你是子Agent的调度和管理工具。"
 
-func SubAgentTool(client *llm.Client) Tool {
+func SubAgentTool(provider core.LLMProvider) Tool {
 	return Tool{
 		name:        "use_subagent",
 		description: "调用子agent。有下面几个子agent可调用：【Coder】用于生成代码。**在调用子agent之前，请使用send_message工具输出反馈，表示已指派子agent工作了。**",
@@ -30,7 +32,7 @@ func SubAgentTool(client *llm.Client) Tool {
 		},
 
 		//工具执行逻辑
-		execute: func(args string) (string, error) {
+		executeContext: func(ctx context.Context, args string) (string, error) {
 			var params struct {
 				SubagentName string `json:"subagent_name"`
 				Content      string `json:"content"`
@@ -40,10 +42,12 @@ func SubAgentTool(client *llm.Client) Tool {
 			}
 
 			if params.SubagentName == "Coder" {
-				// 有的参数没用，估计要改一下函数的签名
-				result := subagent.CallCoder(client, "", "", "", params.Content)
-				// 然后指派Coder执行Context
-				return result, nil
+				route := core.RouteContext{}
+				if runContext, ok := llm.RunContextFromContext(ctx); ok {
+					route.Platform = runContext.RouteScope.Platform
+					route.GroupID = runContext.RouteScope.GroupID
+				}
+				return subagent.CallCoder(ctx, provider, route, params.Content)
 			}
 			return "", nil
 		},

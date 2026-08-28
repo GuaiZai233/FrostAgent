@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
 	"context"
 )
 
@@ -21,11 +22,13 @@ type BillingRunState struct {
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
-	SessionID string
-	Owner     string
-	OwnerType memory.OwnerType
-	SendHook  func(toolResultJSON string) error
-	Billing   *BillingRunState
+	SessionID     string
+	Owner         string
+	OwnerType     memory.OwnerType
+	SendHook      func(toolResultJSON string) error
+	Billing       *BillingRunState
+	RouteScope    modelrouter.Scope
+	RouteSnapshot *modelrouter.Snapshot
 }
 
 type runContextKey struct{}

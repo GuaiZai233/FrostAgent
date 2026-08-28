@@ -62,6 +62,7 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
 
     // Close when clicking on the backdrop
     dialog.addEventListener('click', (e) => {
+      if (e.target !== dialog) return;
       const rect = dialog.getBoundingClientRect();
       const isInDialog =
         rect.top <= e.clientY &&

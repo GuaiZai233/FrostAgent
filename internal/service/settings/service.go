@@ -21,15 +21,10 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
-	"UPSTREAM_ENDPOINT":           {"上游 API 端点 URL，支持 OpenAI 兼容服务", false, true},
-	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true},
-	"CODER_API_KEY":               {"Coder API 密钥", true, true},
 	"LISTEN_ADDR":                 {"HTTP 监听地址", false, true},
 	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true},
 	"SYSTEM_PROMPT":               {"系统提示词", false, false},
 	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true},
-	"MODEL_NAME":                  {"模型名称", false, true},
-	"VISUAL_MODEL_NAME":           {"视觉模型名称（留空则采用默认模型）", false, true},
 	"MAX_CONTEXT_MESSAGES":        {"最多保留的消息数", false, false},
 	"MAX_CONTEXT_CHARS":           {"近似字符上限", false, false},
 	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true},
