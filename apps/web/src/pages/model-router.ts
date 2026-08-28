@@ -461,6 +461,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     let keyStorage = endpointAPIKeyStorage(endpoint);
     let secretInput = '';
     let clearSecret = false;
+    let envVarName = keyStorage === apiKeyStorageEnv && endpoint.apiKeyRef
+      ? endpoint.apiKeyRef
+      : 'UPSTREAM_API_KEY';
     let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
     const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
       ? `<button type="button" class="btn btn-outline btn-sm text-destructive mt-2" id="endpoint-clear-secret">${clearSecret ? '取消清除 API Key' : '清除已保存的 API Key'}</button>${clearSecret ? '<p class="form-hint text-destructive">发布配置后将明确删除现有 Secret。</p>' : ''}`
@@ -468,7 +471,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     const keyStorageDetails = () => {
       switch (keyStorage) {
         case apiKeyStorageEnv:
-          return '<p class="form-hint">编辑 .env 文件或在当前 shell 会话中临时指定。</p>';
+          return `<p class="form-hint">编辑 .env 文件或在当前 shell 会话中临时指定。</p><div class="form-group mt-2"><label class="form-label">环境变量名称</label><input class="input font-mono" id="endpoint-env-var" value="${escapeHtml(envVarName)}"></div>`;
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
@@ -495,6 +498,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         const captureStorageValue = () => {
           if (endpointUsesAPIKeyInput(keyStorage)) {
             secretInput = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? secretInput;
+          } else if (keyStorage === apiKeyStorageEnv) {
+            envVarName = dialog.querySelector<HTMLInputElement>('#endpoint-env-var')?.value ?? envVarName;
           } else if (keyStorage === apiKeyStorageSecretFile) {
             secretFile = dialog.querySelector<HTMLInputElement>('#endpoint-secret-file')?.value ?? secretFile;
           }
@@ -523,6 +528,10 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             toast.error('请填写 Secret 文件路径');
             return;
           }
+          if (keyStorage === apiKeyStorageEnv && !envVarName.trim()) {
+            toast.error('请填写环境变量名称');
+            return;
+          }
           const confirmButton = event.currentTarget as HTMLButtonElement;
           confirmButton.disabled = true;
           confirmButton.setAttribute('aria-busy', 'true');
@@ -533,7 +542,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
             ? secretFile.trim()
             : keyStorage === apiKeyStorageEnv
-              ? 'UPSTREAM_API_KEY'
+              ? envVarName.trim()
               : keyStorage === apiKeyStorageWindowsCredentialManager
                 ? `guaitech.frostagent/endpoint/${endpoint.id}`
                 : `endpoint/${endpoint.id}`;
