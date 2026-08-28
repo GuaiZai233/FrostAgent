@@ -673,8 +673,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
 
-			// 只有校验通过的 send_message 才能触发实际发送。
-			if runContext, ok := RunContextFromContext(ctx); tc.Function.Name == "send_message" && toolSucceeded && ok && runContext.SendHook != nil {
+			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
 				if err := runContext.SendHook(toolResult); err != nil {
 					toolResult = fmt.Sprintf("消息发送失败：%v", err)
 				} else {
@@ -702,6 +701,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 // Embedded references remain ordinary user-visible content.
 func isStandaloneAssistantSilentMarker(content string) bool {
 	return strings.TrimSpace(content) == AssistantSilentMarker
+}
+
+func looksLikeMessagePayload(toolResult string) bool {
+	var probe struct {
+		Messages json.RawMessage `json:"messages"`
+	}
+	return json.Unmarshal([]byte(toolResult), &probe) == nil && len(probe.Messages) > 2
 }
 
 // staySilentConflict rejects ambiguous parallel tool batches before any tool

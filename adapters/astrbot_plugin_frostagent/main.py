@@ -434,7 +434,12 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
             elif message_type == "image":
                 source = str(message.get("url") or message.get("path") or "")
                 if source:
-                    parts.append(Image(source))
+                    img = Image(source)
+                    if message.get("is_sticker"):
+                        raw = getattr(img, "raw", None) or getattr(img, "data", None)
+                        if isinstance(raw, dict):
+                            raw["sub_type"] = 1
+                    parts.append(img)
             elif message_type in ("record", "video", "file", "quote"):
                 logger.debug(f"[frostagent-adapter] 跳过暂不支持的消息组件: {message_type}")
         return parts

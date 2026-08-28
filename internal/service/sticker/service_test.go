@@ -2,6 +2,7 @@ package stickersvc
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -99,5 +100,76 @@ func TestStickerService_CRUD(t *testing.T) {
 	statsAfter, _ := svc.GetStickerStats(ctx, connect.NewRequest(&v1.GetStickerStatsRequest{}))
 	if statsAfter.Msg.GetTotal() != 0 {
 		t.Errorf("expected 0 stickers after deletion, got %d", statsAfter.Msg.GetTotal())
+	}
+}
+
+func TestStickerService_Pagination(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := sticker.NewStore(filepath.Join(tempDir, "stickers"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		data := []byte(fmt.Sprintf("image_data_%d", i))
+		hash := sticker.HashBytes(data)
+		if err := store.Add(hash, hash+".jpg", data); err != nil {
+			t.Fatalf("Add %d failed: %v", i, err)
+		}
+	}
+
+	svc := New(store, nil)
+	ctx := context.Background()
+
+	resp1, err := svc.ListStickers(ctx, connect.NewRequest(&v1.ListStickersRequest{
+		Pagination: &v1.Pagination{PageSize: 2},
+	}))
+	if err != nil {
+		t.Fatalf("page 1 failed: %v", err)
+	}
+	if len(resp1.Msg.GetStickers()) != 2 {
+		t.Fatalf("page 1: expected 2 items, got %d", len(resp1.Msg.GetStickers()))
+	}
+	if resp1.Msg.GetTotalCount() != 5 {
+		t.Errorf("expected total_count=5, got %d", resp1.Msg.GetTotalCount())
+	}
+	tok := resp1.Msg.GetNextPageToken()
+	if tok == "" {
+		t.Fatal("expected next_page_token, got empty")
+	}
+
+	resp2, err := svc.ListStickers(ctx, connect.NewRequest(&v1.ListStickersRequest{
+		Pagination: &v1.Pagination{PageSize: 2, PageToken: tok},
+	}))
+	if err != nil {
+		t.Fatalf("page 2 failed: %v", err)
+	}
+	if len(resp2.Msg.GetStickers()) != 2 {
+		t.Fatalf("page 2: expected 2 items, got %d", len(resp2.Msg.GetStickers()))
+	}
+
+	for _, s1 := range resp1.Msg.GetStickers() {
+		for _, s2 := range resp2.Msg.GetStickers() {
+			if s1.GetId() == s2.GetId() {
+				t.Errorf("duplicate sticker across pages: %s", s1.GetId())
+			}
+		}
+	}
+
+	tok2 := resp2.Msg.GetNextPageToken()
+	if tok2 == "" {
+		t.Fatal("expected next_page_token for page 3")
+	}
+	resp3, err := svc.ListStickers(ctx, connect.NewRequest(&v1.ListStickersRequest{
+		Pagination: &v1.Pagination{PageSize: 2, PageToken: tok2},
+	}))
+	if err != nil {
+		t.Fatalf("page 3 failed: %v", err)
+	}
+	if len(resp3.Msg.GetStickers()) != 1 {
+		t.Fatalf("page 3: expected 1 item, got %d", len(resp3.Msg.GetStickers()))
+	}
+	if resp3.Msg.GetNextPageToken() != "" {
+		t.Errorf("expected empty next_page_token on last page, got %q", resp3.Msg.GetNextPageToken())
 	}
 }

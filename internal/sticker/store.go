@@ -68,7 +68,10 @@ func (s *Store) save() error {
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := os.Rename(tmp, s.indexPath()); err != nil {
-		_ = os.WriteFile(s.indexPath(), data, 0644)
+		if wErr := os.WriteFile(s.indexPath(), data, 0644); wErr != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("persist index: %w", wErr)
+		}
 		os.Remove(tmp)
 	}
 	return nil

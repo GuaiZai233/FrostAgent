@@ -515,6 +515,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 					MessageID:     m.MessageID,
 					Path:          m.Path,
 					URL:           m.URL,
+					IsSticker:     m.IsSticker,
 				})
 				switch m.Type {
 				case "plain":
@@ -524,10 +525,14 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 					if url == "" {
 						url = m.Path
 					}
-					attachments = append(attachments, core.Attachment{
+					att := core.Attachment{
 						Type: core.AttachmentTypeImage,
 						URL:  url,
-					})
+					}
+					if m.IsSticker {
+						att.SubType = 1
+					}
+					attachments = append(attachments, att)
 				case "record":
 					url := m.URL
 					if url == "" {

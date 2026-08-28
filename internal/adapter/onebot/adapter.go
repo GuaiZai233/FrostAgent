@@ -215,7 +215,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			if a.stealer != nil && event.PostType == "message" {
+			if a.stealer != nil && event.PostType == "message" && event.MessageType == "group" {
 				segments := ParseMessageSegments(event.Message)
 				for _, seg := range segments {
 					if seg.Type == "image" {

@@ -1,9 +1,11 @@
 package sticker
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -131,4 +133,55 @@ func TestStealer_ConcurrentTheft(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestDownloadImage_RejectsOversized(t *testing.T) {
+	oversized := bytes.Repeat([]byte{0xFF}, maxImageSize+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(oversized)
+	}))
+	defer server.Close()
+
+	_, err := downloadImage(server.URL + "/big.jpg")
+	if err == nil {
+		t.Fatal("expected error for oversized image, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("expected 'too large' error, got: %v", err)
+	}
+}
+
+func TestDownloadImage_AcceptsExactLimit(t *testing.T) {
+	exact := bytes.Repeat([]byte{0xFF}, maxImageSize)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(exact)
+	}))
+	defer server.Close()
+
+	data, err := downloadImage(server.URL + "/exact.jpg")
+	if err != nil {
+		t.Fatalf("expected success for exact-limit image, got: %v", err)
+	}
+	if len(data) != maxImageSize {
+		t.Errorf("expected %d bytes, got %d", maxImageSize, len(data))
+	}
+}
+
+func TestDownloadImage_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	saved := httpClient.Timeout
+	httpClient.Timeout = 100 * time.Millisecond
+	defer func() { httpClient.Timeout = saved }()
+
+	_, err := downloadImage(server.URL + "/slow.jpg")
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
 }

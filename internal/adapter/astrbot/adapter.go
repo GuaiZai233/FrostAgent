@@ -170,7 +170,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			if a.stealer != nil {
+			if a.stealer != nil && event.MessageType == "group" {
 				for _, att := range event.Attachments {
 					if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
 						a.stealer.TrySteal(att.URL)

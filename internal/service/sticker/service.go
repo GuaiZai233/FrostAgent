@@ -2,10 +2,12 @@ package stickersvc
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -59,18 +61,38 @@ func (s *Service) ListStickers(
 		pageSize = 50
 	}
 
-	items := make([]*v1.StickerItem, 0, len(filtered))
-	for _, e := range filtered {
+	offset := 0
+	if tok := req.Msg.GetPagination().GetPageToken(); tok != "" {
+		if raw, err := base64.StdEncoding.DecodeString(tok); err == nil {
+			if v, err := strconv.Atoi(string(raw)); err == nil && v >= 0 {
+				offset = v
+			}
+		}
+	}
+
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := offset + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	page := filtered[offset:end]
+	items := make([]*v1.StickerItem, 0, len(page))
+	for _, e := range page {
 		items = append(items, entryToProto(e))
 	}
 
-	if len(items) > pageSize {
-		items = items[:pageSize]
+	var nextPageToken string
+	if end < len(filtered) {
+		nextPageToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(end)))
 	}
 
 	return connect.NewResponse(&v1.ListStickersResponse{
-		Stickers:   items,
-		TotalCount: int32(len(filtered)),
+		Stickers:      items,
+		TotalCount:    int32(len(filtered)),
+		NextPageToken: nextPageToken,
 	}), nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"context"
 	"fmt"
+	"time"
 )
 
 type LLMVisionCaller struct {
@@ -43,7 +44,10 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 		},
 	}
 
-	resp, err := v.Provider.Chat(context.Background(), req)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := v.Provider.Chat(ctx, req)
 	if err != nil {
 		return "", nil, fmt.Errorf("vision call: %w", err)
 	}

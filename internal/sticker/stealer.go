@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -78,8 +79,12 @@ func (s *Stealer) doSteal(imageURL string) {
 	}
 }
 
+const maxImageSize = 10 << 20 // 10 MiB
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
 func downloadImage(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -87,9 +92,12 @@ func downloadImage(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > maxImageSize {
+		return nil, fmt.Errorf("image too large (>%d bytes)", maxImageSize)
 	}
 	return data, nil
 }
