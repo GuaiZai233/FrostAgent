@@ -13,6 +13,14 @@ type ChatRequest struct {
 	ToolChoice  string // "auto", "none", or a specific tool name
 	MaxTokens   int
 	Temperature float64
+	Route       RouteContext
+}
+
+// RouteContext carries non-wire routing metadata. Providers must never encode
+// it into an OpenAI request body.
+type RouteContext struct {
+	Platform string
+	GroupID  string
 }
 
 // ChatResponse represents a response from an LLM.

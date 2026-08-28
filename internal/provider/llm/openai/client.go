@@ -58,6 +58,23 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
+// HTTPError preserves the upstream response body so the agent can relay the
+// provider's original error text according to the current product contract.
+type HTTPError struct {
+	Status string
+	Body   string
+}
+
+func (e *HTTPError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Body != "" {
+		return e.Body
+	}
+	return e.Status
+}
+
 const defaultHTTPTimeout = 120 * time.Second
 
 const (
@@ -149,14 +166,14 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		logs.Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, &HTTPError{Status: resp.Status, Body: string(body)}
 	}
 
 	respBody, err := io.ReadAll(resp.Body)

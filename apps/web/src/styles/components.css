@@ -239,7 +239,12 @@ input[type="checkbox"].checkbox:indeterminate::after {
 /* ==================== TABS ==================== */
 .tabs {
   display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
   background-color: var(--secondary);
   padding: 0.25rem;
   border-radius: var(--radius-md);
@@ -278,6 +283,18 @@ input[type="checkbox"].checkbox:indeterminate::after {
   border-radius: var(--radius-md);
   background-color: var(--card);
   color: var(--card-foreground);
+}
+
+.card.router-unsaved-warning {
+  flex-direction: row;
+  align-items: center;
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+  background-color: color-mix(in srgb, var(--destructive) 10%, transparent);
+  color: var(--destructive);
+}
+
+.card.router-unsaved-warning > svg {
+  flex-shrink: 0;
 }
 
 .table-card {
@@ -394,7 +411,8 @@ details.dropdown .dropdown-menu {
   gap: 0.125rem;
   animation: fadeIn 0.1s ease-out;
 }
-details.dropdown .dropdown-item {
+details.dropdown .dropdown-item,
+.router-model-options .dropdown-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -409,8 +427,30 @@ details.dropdown .dropdown-item {
   border: none;
   background: transparent;
 }
-details.dropdown .dropdown-item:hover {
+details.dropdown .dropdown-item:hover,
+.router-model-options .dropdown-item:hover {
   background-color: var(--muted);
+}
+
+.router-model-options {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0.25rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-md);
+}
+
+.router-model-options:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  animation: fadeIn 0.1s ease-out;
 }
 
 /* ==================== DIALOG / MODAL ==================== */
@@ -480,8 +520,13 @@ dialog.dialog-modal::backdrop {
 /* ==================== TOAST NOTIFICATIONS ==================== */
 #toast-container {
   position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
+  inset: auto 1.5rem 1.5rem auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;

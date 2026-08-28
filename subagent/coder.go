@@ -1,26 +1,29 @@
 package subagent
 
 import (
-	"FrostAgent/internal/llm"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"context"
 	"encoding/json"
-	"os"
 )
 
 const CoderPrompt = "你是编程助手。"
 
-func CallCoder(client *llm.Client, baseURL, apiKey, _, contentBlocks string) string {
-	// 这边先硬编码，到时候我回来改
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: CoderPrompt},
-		{Role: "user", Content: contentBlocks},
-	}
-	responseMsg, err := client.CallAPI("https://dashscope.aliyuncs.com/compatible-mode/v1", os.Getenv("CODER_API_KEY"), "qwen-coder-plus", messages, nil)
+func CallCoder(ctx context.Context, provider core.LLMProvider, route core.RouteContext, contentBlocks string) (string, error) {
+	responseMsg, err := provider.Chat(ctx, core.ChatRequest{
+		Messages: []core.ChatMessage{
+			{Role: core.RoleSystem, Content: CoderPrompt},
+			{Role: core.RoleUser, Content: contentBlocks},
+		},
+		Route: route,
+	})
 	if err != nil {
 		logs.Error(logs.SYSTEM, err.Error())
-		return err.Error()
+		return "", err
 	}
-
-	bytes, _ := json.Marshal(responseMsg.Content)
-	return string(bytes)
+	if content, ok := responseMsg.Message.Content.(string); ok {
+		return content, nil
+	}
+	bytes, _ := json.Marshal(responseMsg.Message.Content)
+	return string(bytes), nil
 }

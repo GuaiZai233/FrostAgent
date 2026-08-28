@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
@@ -211,6 +212,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				continue
 			}
 
+			var routeSnapshot *modelrouter.Snapshot
+			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				routeSnapshot = a.engine.ModelRouter.Snapshot()
+				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event)) {
+					continue
+				}
+			}
+
 			if event.PostType == "message" && event.MessageType == "group" {
 				captureGroupCompactMessage(event, a.engine)
 			}
@@ -243,7 +253,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
 			}
-			go processEvent(wsConn, event, a.engine, turn)
+			go processEvent(wsConn, event, a.engine, turn, routeSnapshot)
 		}
 	}
 }

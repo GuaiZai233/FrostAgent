@@ -401,7 +401,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         <div class="flex flex-col gap-3.5">
           <div class="form-group">
             <label class="form-label" for="add-env-key">Key <span class="text-destructive">*</span></label>
-            <input id="add-env-key" class="input font-mono text-xs" placeholder="如 MODEL_NAME, API_KEY..." autocomplete="off" />
+            <input id="add-env-key" class="input font-mono text-xs" placeholder="如 SYSTEM_PROMPT, BOT_NAME..." autocomplete="off" />
           </div>
           <div class="form-group">
             <label class="form-label" for="add-env-val">Value</label>

@@ -18,12 +18,14 @@ import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
+import { mountModelRouterPage } from './pages/model-router';
 
 // Initialize Theme
 themeManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
+  { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/sessions', label: '会话管理', iconName: 'forum' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人设对话', iconName: 'chat' },
@@ -228,6 +230,7 @@ function initAppShell(): void {
   router.register('/settings', '系统设置', mountSettingsPage);
   router.register('/settings/backend', 'Bot 服务端设置', mountBackendSettingsPage);
   router.register('/settings/frontend', '网页端外观设置', mountFrontendSettingsPage);
+  router.register('/model-router', '模型路由器', mountModelRouterPage);
 
   // Initialize Router
   if (pageContainer) {

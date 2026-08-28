@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"FrostAgent/internal/core"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,8 +15,10 @@ import (
 // Store implements a file-based unified memory store.
 // All memories are stored in a single brain.json file.
 type Store struct {
-	path string
-	mu   sync.RWMutex
+	path    string
+	mu      sync.RWMutex
+	routeMu sync.RWMutex
+	routes  map[string]core.RouteContext
 }
 
 // NewStore creates a new file-based memory store.
