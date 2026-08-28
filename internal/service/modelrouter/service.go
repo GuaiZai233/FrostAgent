@@ -27,9 +27,10 @@ func (s *Service) GetState(
 		loadError = err.Error()
 	}
 	return connect.NewResponse(&v1.GetStateResponse{
-		Active:    configurationToProto(s.manager.Active()),
-		Draft:     configurationToProto(s.manager.Draft()),
-		LoadError: loadError,
+		Active:                configurationToProto(s.manager.Active()),
+		Draft:                 configurationToProto(s.manager.Draft()),
+		LoadError:             loadError,
+		HasDraftSecretChanges: s.manager.HasDraftSecretChanges(),
 	}), nil
 }
 
@@ -49,6 +50,37 @@ func (s *Service) SaveDraft(
 	return connect.NewResponse(&v1.SaveDraftResponse{
 		Success: true,
 		Draft:   configurationToProto(s.manager.Draft()),
+	}), nil
+}
+
+func (s *Service) SetDraftEndpointSecret(
+	_ context.Context,
+	req *connect.Request[v1.SetDraftEndpointSecretRequest],
+) (*connect.Response[v1.SetDraftEndpointSecretResponse], error) {
+	configured, err := s.manager.SetDraftEndpointSecret(
+		strings.TrimSpace(req.Msg.GetEndpointId()),
+		req.Msg.GetApiKey(),
+	)
+	if err != nil {
+		return connect.NewResponse(&v1.SetDraftEndpointSecretResponse{Error: err.Error()}), nil
+	}
+	return connect.NewResponse(&v1.SetDraftEndpointSecretResponse{
+		Success:    true,
+		Configured: configured,
+	}), nil
+}
+
+func (s *Service) ClearDraftEndpointSecret(
+	_ context.Context,
+	req *connect.Request[v1.ClearDraftEndpointSecretRequest],
+) (*connect.Response[v1.ClearDraftEndpointSecretResponse], error) {
+	configured, err := s.manager.ClearDraftEndpointSecret(strings.TrimSpace(req.Msg.GetEndpointId()))
+	if err != nil {
+		return connect.NewResponse(&v1.ClearDraftEndpointSecretResponse{Error: err.Error()}), nil
+	}
+	return connect.NewResponse(&v1.ClearDraftEndpointSecretResponse{
+		Success:    true,
+		Configured: configured,
 	}), nil
 }
 
@@ -111,13 +143,13 @@ func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration
 	}
 	for _, endpoint := range cfg.Endpoints {
 		result.Endpoints = append(result.Endpoints, &v1.ModelEndpoint{
-			Id:            endpoint.ID,
-			DisplayName:   endpoint.DisplayName,
-			BaseUrl:       endpoint.BaseURL,
-			ApiKey:        endpoint.APIKey,
-			Enabled:       endpoint.Enabled,
-			ApiKeyStorage: apiKeyStorageToProto(endpoint.APIKeyStorage),
-			SecretFile:    endpoint.SecretFile,
+			Id:               endpoint.ID,
+			DisplayName:      endpoint.DisplayName,
+			BaseUrl:          endpoint.BaseURL,
+			Enabled:          endpoint.Enabled,
+			ApiKeySource:     apiKeyStorageToProto(endpoint.APIKeySource),
+			ApiKeyRef:        endpoint.APIKeyRef,
+			ApiKeyConfigured: endpoint.APIKeyConfigured,
 		})
 	}
 	for _, model := range cfg.Models {
@@ -154,13 +186,13 @@ func configurationFromProto(cfg *v1.ModelRouterConfiguration) router.Configurati
 	}
 	for _, endpoint := range cfg.GetEndpoints() {
 		result.Endpoints = append(result.Endpoints, router.Endpoint{
-			ID:            endpoint.GetId(),
-			DisplayName:   endpoint.GetDisplayName(),
-			BaseURL:       endpoint.GetBaseUrl(),
-			APIKey:        endpoint.GetApiKey(),
-			APIKeyStorage: apiKeyStorageFromProto(endpoint.GetApiKeyStorage()),
-			SecretFile:    endpoint.GetSecretFile(),
-			Enabled:       endpoint.GetEnabled(),
+			ID:               endpoint.GetId(),
+			DisplayName:      endpoint.GetDisplayName(),
+			BaseURL:          endpoint.GetBaseUrl(),
+			APIKeySource:     apiKeyStorageFromProto(endpoint.GetApiKeySource()),
+			APIKeyRef:        endpoint.GetApiKeyRef(),
+			APIKeyConfigured: endpoint.GetApiKeyConfigured(),
+			Enabled:          endpoint.GetEnabled(),
 		})
 	}
 	for _, model := range cfg.GetModels() {

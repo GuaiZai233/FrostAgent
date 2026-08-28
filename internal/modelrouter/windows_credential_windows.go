@@ -8,8 +8,8 @@ import (
 	"github.com/danieljoos/wincred"
 )
 
-func readWindowsCredential(endpointID string) (string, bool, error) {
-	credential, err := wincred.GetGenericCredential(windowsCredentialTarget(endpointID))
+func readWindowsCredential(target string) (string, bool, error) {
+	credential, err := wincred.GetGenericCredential(target)
 	if errors.Is(err, wincred.ErrElementNotFound) {
 		return "", false, nil
 	}
@@ -19,8 +19,8 @@ func readWindowsCredential(endpointID string) (string, bool, error) {
 	return string(credential.CredentialBlob), true, nil
 }
 
-func writeWindowsCredential(endpointID, apiKey string) error {
-	credential := wincred.NewGenericCredential(windowsCredentialTarget(endpointID))
+func writeWindowsCredential(target, apiKey string) error {
+	credential := wincred.NewGenericCredential(target)
 	if apiKey == "" {
 		err := credential.Delete()
 		if errors.Is(err, wincred.ErrElementNotFound) {

@@ -47,13 +47,13 @@ const (
 )
 
 type Endpoint struct {
-	ID            string        `json:"id"`
-	DisplayName   string        `json:"display_name"`
-	BaseURL       string        `json:"base_url"`
-	APIKey        string        `json:"api_key,omitempty"`
-	APIKeyStorage APIKeyStorage `json:"api_key_storage"`
-	SecretFile    string        `json:"secret_file,omitempty"`
-	Enabled       bool          `json:"enabled"`
+	ID               string        `json:"id"`
+	DisplayName      string        `json:"display_name"`
+	BaseURL          string        `json:"base_url"`
+	APIKeySource     APIKeyStorage `json:"api_key_source"`
+	APIKeyRef        string        `json:"api_key_ref,omitempty"`
+	APIKeyConfigured bool          `json:"api_key_configured"`
+	Enabled          bool          `json:"enabled"`
 }
 
 type Model struct {
@@ -100,10 +100,11 @@ func (s Scope) Normalized() Scope {
 type Target struct {
 	EndpointID          string
 	EndpointDisplayName string
+	APIKeySource        APIKeyStorage
+	APIKeyRef           string
 	ModelID             string
 	ModelDisplayName    string
 	BaseURL             string
-	APIKey              string
 	UpstreamModel       string
 }
 

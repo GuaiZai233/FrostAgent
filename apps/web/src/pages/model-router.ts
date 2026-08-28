@@ -17,7 +17,7 @@ import { api } from '../api/client';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
-import { escapeHtml, maskSecret } from '../utils/formatters';
+import { escapeHtml } from '../utils/formatters';
 
 const workloads = [
   { value: ModelWorkload.DIALOGUE, label: '主对话' },
@@ -55,21 +55,23 @@ function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBin
 }
 
 function endpointAPIKeyStorage(endpoint: ModelEndpoint): ModelAPIKeyStorage {
-  return endpoint.apiKeyStorage === apiKeyStorageUnspecified
+  return endpoint.apiKeySource === apiKeyStorageUnspecified
     ? apiKeyStorageManual
-    : endpoint.apiKeyStorage;
+    : endpoint.apiKeySource;
 }
 
-function endpointCredentialText(endpoint: ModelEndpoint, visible: boolean): string {
+function endpointCredentialText(endpoint: ModelEndpoint): string {
+  const status = endpoint.apiKeyConfigured ? '已配置' : '未配置';
   switch (endpointAPIKeyStorage(endpoint)) {
     case apiKeyStorageEnv:
-      return '环境变量：UPSTREAM_API_KEY';
+      return `环境变量：${endpoint.apiKeyRef || 'UPSTREAM_API_KEY'} · ${status}`;
     case apiKeyStorageSecretFile:
-      return `secret_file：${endpoint.secretFile}`;
-    case apiKeyStorageManual:
+      return `secret_file：${endpoint.apiKeyRef} · ${status}`;
     case apiKeyStorageWindowsCredentialManager:
+      return `Windows Credential Manager · ${status}`;
+    case apiKeyStorageManual:
     default:
-      return visible ? endpoint.apiKey || '无鉴权' : endpoint.apiKey ? maskSecret(endpoint.apiKey) : '无鉴权';
+      return `手动存储 · ${status}`;
   }
 }
 
@@ -105,7 +107,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   let draft = cloneConfiguration(activeConfiguration);
   let loadError = '';
   let testingModelId = '';
-  const revealedKeys = new Set<string>();
+  let hasDraftSecretChanges = false;
 
   async function load() {
     loading = true;
@@ -117,6 +119,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       activeConfiguration = cloneConfiguration(published);
       draft = cloneConfiguration(published);
       loadError = state.loadError;
+      hasDraftSecretChanges = state.hasDraftSecretChanges;
       loading = false;
       render();
       openRequestedGroup();
@@ -164,6 +167,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       }
       activeConfiguration = cloneConfiguration(response.active);
       draft = cloneConfiguration(response.active);
+      hasDraftSecretChanges = false;
       toast.success('模型路由配置已发布');
     } catch (err) {
       toast.error('发布配置失败: ' + errorText(err));
@@ -184,6 +188,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       } else {
         draft = cloneConfiguration(activeConfiguration);
       }
+      hasDraftSecretChanges = false;
       toast.info('内存草稿已恢复为活动配置');
     } catch (err) {
       toast.error('放弃草稿失败: ' + errorText(err));
@@ -199,7 +204,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       return;
     }
 
-    const dirty = configurationFingerprint(draft) !== configurationFingerprint(activeConfiguration);
+    const dirty = hasDraftSecretChanges || configurationFingerprint(draft) !== configurationFingerprint(activeConfiguration);
 
     container.innerHTML = `
       <div class="page-container fade-in">
@@ -271,15 +276,12 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             ${
               draft.endpoints.length
                 ? draft.endpoints.map((endpoint) => {
-                    const visible = revealedKeys.has(endpoint.id);
-                    const editableKey = endpointUsesAPIKeyInput(endpointAPIKeyStorage(endpoint));
                     return `<tr>
                       <td class="font-medium">${escapeHtml(endpoint.displayName)}</td>
                       <td class="font-mono text-xs">${escapeHtml(endpoint.baseUrl)}</td>
-                      <td class="font-mono text-xs"><span data-endpoint-key>${escapeHtml(endpointCredentialText(endpoint, visible))}</span></td>
+                      <td class="font-mono text-xs">${escapeHtml(endpointCredentialText(endpoint))}</td>
                       <td><span class="badge ${endpoint.enabled ? 'badge-success' : 'badge-outline'}">${endpoint.enabled ? '启用' : '停用'}</span></td>
                       <td style="text-align:right"><div class="flex justify-end gap-1">
-                        ${editableKey ? `<button class="btn btn-ghost btn-icon-sm" data-action="reveal-endpoint" data-id="${escapeHtml(endpoint.id)}" title="${visible ? '隐藏 Key' : '查看 Key'}" aria-label="${visible ? '隐藏 API Key' : '查看 API Key'}" aria-pressed="${visible}">${icon(visible ? 'eye_off' : 'eye')}</button>` : ''}
                         <button class="btn btn-ghost btn-icon-sm" data-action="edit-endpoint" data-id="${escapeHtml(endpoint.id)}" title="编辑">${icon('edit')}</button>
                         <button class="btn btn-ghost btn-icon-sm text-destructive" data-action="delete-endpoint" data-id="${escapeHtml(endpoint.id)}" title="删除">${icon('trash')}</button>
                       </div></td>
@@ -417,19 +419,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function handleAction(element: HTMLElement) {
     const action = element.dataset.action;
     const id = element.dataset.id || '';
-    if (action === 'reveal-endpoint') {
-      const endpoint = draft.endpoints.find((item) => item.id === id);
-      if (!endpoint || !endpointUsesAPIKeyInput(endpointAPIKeyStorage(endpoint))) return;
-      const visible = !revealedKeys.has(id);
-      if (visible) revealedKeys.add(id);
-      else revealedKeys.delete(id);
-      const key = element.closest('tr')?.querySelector<HTMLElement>('[data-endpoint-key]');
-      if (key) key.textContent = endpointCredentialText(endpoint, visible);
-      element.innerHTML = icon(visible ? 'eye_off' : 'eye');
-      element.title = visible ? '隐藏 Key' : '查看 Key';
-      element.setAttribute('aria-label', visible ? '隐藏 API Key' : '查看 API Key');
-      element.setAttribute('aria-pressed', String(visible));
-    } else if (action === 'edit-endpoint') {
+    if (action === 'edit-endpoint') {
       editEndpoint(id);
     } else if (action === 'delete-endpoint') {
       if (draft.models.some((model) => model.endpointId === id)) {
@@ -466,11 +456,15 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       : create(ModelEndpointSchema, {
           id: newId('endpoint'),
           enabled: true,
-          apiKeyStorage: apiKeyStorageManual,
+          apiKeySource: apiKeyStorageManual,
         });
     let keyStorage = endpointAPIKeyStorage(endpoint);
-    let manualKey = endpoint.apiKey;
-    let secretFile = endpoint.secretFile;
+    let secretInput = '';
+    let clearSecret = false;
+    let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
+    const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
+      ? `<button type="button" class="btn btn-outline btn-sm text-destructive mt-2" id="endpoint-clear-secret">${clearSecret ? '取消清除 API Key' : '清除已保存的 API Key'}</button>${clearSecret ? '<p class="form-hint text-destructive">发布配置后将明确删除现有 Secret。</p>' : ''}`
+      : '';
     const keyStorageDetails = () => {
       switch (keyStorage) {
         case apiKeyStorageEnv:
@@ -478,10 +472,10 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
-          return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input class="input font-mono" id="endpoint-key" value="${escapeHtml(manualKey)}"></div>`;
+          return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret"></div>${secretAction()}`;
         case apiKeyStorageManual:
         default:
-          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input class="input font-mono" id="endpoint-key" value="${escapeHtml(manualKey)}"></div>`;
+          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router_secrets.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret"></div>${secretAction()}`;
       }
     };
     void openDialog({
@@ -500,32 +494,85 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         const storageDetails = dialog.querySelector<HTMLElement>('#endpoint-key-storage-details')!;
         const captureStorageValue = () => {
           if (endpointUsesAPIKeyInput(keyStorage)) {
-            manualKey = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? manualKey;
+            secretInput = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? secretInput;
           } else if (keyStorage === apiKeyStorageSecretFile) {
             secretFile = dialog.querySelector<HTMLInputElement>('#endpoint-secret-file')?.value ?? secretFile;
           }
+        };
+        const renderStorageDetails = () => {
+          storageDetails.innerHTML = keyStorageDetails();
+          dialog.querySelector('#endpoint-clear-secret')?.addEventListener('click', () => {
+            captureStorageValue();
+            clearSecret = !clearSecret;
+            if (clearSecret) secretInput = '';
+            renderStorageDetails();
+          });
         };
         urlInput.addEventListener('input', () => warning.style.display = endpointWarns(urlInput.value) ? 'block' : 'none');
         storageSelect.addEventListener('change', () => {
           captureStorageValue();
           keyStorage = Number(storageSelect.value) as ModelAPIKeyStorage;
-          storageDetails.innerHTML = keyStorageDetails();
+          secretInput = '';
+          clearSecret = false;
+          renderStorageDetails();
         });
-        dialog.querySelector('#endpoint-confirm')?.addEventListener('click', () => {
+        renderStorageDetails();
+        dialog.querySelector('#endpoint-confirm')?.addEventListener('click', async (event) => {
           captureStorageValue();
           if (keyStorage === apiKeyStorageSecretFile && !secretFile.trim()) {
             toast.error('请填写 Secret 文件路径');
             return;
           }
+          const confirmButton = event.currentTarget as HTMLButtonElement;
+          confirmButton.disabled = true;
+          confirmButton.setAttribute('aria-busy', 'true');
+          confirmButton.innerHTML = '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 保存中...';
           endpoint.displayName = dialog.querySelector<HTMLInputElement>('#endpoint-name')!.value;
           endpoint.baseUrl = urlInput.value;
-          endpoint.apiKeyStorage = keyStorage;
-          endpoint.apiKey = endpointUsesAPIKeyInput(keyStorage) ? manualKey : '';
-          endpoint.secretFile = keyStorage === apiKeyStorageSecretFile ? secretFile.trim() : '';
+          endpoint.apiKeySource = keyStorage;
+          endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
+            ? secretFile.trim()
+            : keyStorage === apiKeyStorageEnv
+              ? 'UPSTREAM_API_KEY'
+              : keyStorage === apiKeyStorageWindowsCredentialManager
+                ? `guaitech.frostagent/endpoint/${endpoint.id}`
+                : `endpoint/${endpoint.id}`;
           endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;
           const index = draft.endpoints.findIndex((item) => item.id === endpoint.id);
           if (index >= 0) draft.endpoints[index] = endpoint;
           else draft.endpoints.push(endpoint);
+          if (!(await saveDraft(false))) {
+            confirmButton.disabled = false;
+            confirmButton.removeAttribute('aria-busy');
+            confirmButton.textContent = '保存';
+            return;
+          }
+          let secretResponse: { success: boolean; error: string; configured: boolean } | undefined;
+          try {
+            if (clearSecret) {
+              secretResponse = await api.clearDraftEndpointSecret(endpoint.id);
+            } else if (secretInput !== '') {
+              secretResponse = await api.setDraftEndpointSecret(endpoint.id, secretInput);
+            }
+          } catch (err) {
+            toast.error('保存 API Key 失败: ' + errorText(err));
+            confirmButton.disabled = false;
+            confirmButton.removeAttribute('aria-busy');
+            confirmButton.textContent = '保存';
+            return;
+          }
+          if (secretResponse && !secretResponse.success) {
+            toast.error(secretResponse.error || '保存 API Key 失败');
+            confirmButton.disabled = false;
+            confirmButton.removeAttribute('aria-busy');
+            confirmButton.textContent = '保存';
+            return;
+          }
+          if (secretResponse) {
+            const savedEndpoint = draft.endpoints.find((item) => item.id === endpoint.id);
+            if (savedEndpoint) savedEndpoint.apiKeyConfigured = secretResponse.configured;
+            hasDraftSecretChanges = true;
+          }
           close();
           render();
         });

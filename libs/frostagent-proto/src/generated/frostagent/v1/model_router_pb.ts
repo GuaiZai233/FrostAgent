@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/model_router.proto.
  */
 export const file_frostagent_v1_model_router: GenFile = /*@__PURE__*/
-  fileDesc("CiBmcm9zdGFnZW50L3YxL21vZGVsX3JvdXRlci5wcm90bxINZnJvc3RhZ2VudC52MSK2AQoNTW9kZWxFbmRwb2ludBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEAoIYmFzZV91cmwYAyABKAkSDwoHYXBpX2tleRgEIAEoCRIPCgdlbmFibGVkGAUgASgIEjoKD2FwaV9rZXlfc3RvcmFnZRgGIAEoDjIhLmZyb3N0YWdlbnQudjEuTW9kZWxBUElLZXlTdG9yYWdlEhMKC3NlY3JldF9maWxlGAcgASgJIoMBCgtNb2RlbFRhcmdldBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEwoLZW5kcG9pbnRfaWQYAyABKAkSFgoOdXBzdHJlYW1fbW9kZWwYBCABKAkSDwoHZW5hYmxlZBgFIAEoCBIUCgxjYXBhYmlsaXRpZXMYBiADKAkifwoMTW9kZWxCaW5kaW5nEi4KCHdvcmtsb2FkGAEgASgOMhwuZnJvc3RhZ2VudC52MS5Nb2RlbFdvcmtsb2FkEi0KBG1vZGUYAiABKA4yHy5mcm9zdGFnZW50LnYxLk1vZGVsQmluZGluZ01vZGUSEAoIbW9kZWxfaWQYAyABKAkiZwoSR3JvdXBNb2RlbE92ZXJyaWRlEhAKCHBsYXRmb3JtGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJEi0KCGJpbmRpbmdzGAMgAygLMhsuZnJvc3RhZ2VudC52MS5Nb2RlbEJpbmRpbmcijAIKGE1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhIPCgd2ZXJzaW9uGAEgASgFEhAKCHJldmlzaW9uGAIgASgDEi8KCWVuZHBvaW50cxgDIAMoCzIcLmZyb3N0YWdlbnQudjEuTW9kZWxFbmRwb2ludBIqCgZtb2RlbHMYBCADKAsyGi5mcm9zdGFnZW50LnYxLk1vZGVsVGFyZ2V0EjQKD2dsb2JhbF9iaW5kaW5ncxgFIAMoCzIbLmZyb3N0YWdlbnQudjEuTW9kZWxCaW5kaW5nEjoKD2dyb3VwX292ZXJyaWRlcxgGIAMoCzIhLmZyb3N0YWdlbnQudjEuR3JvdXBNb2RlbE92ZXJyaWRlIhEKD0dldFN0YXRlUmVxdWVzdCKXAQoQR2V0U3RhdGVSZXNwb25zZRI3CgZhY3RpdmUYASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhI2CgVkcmFmdBgCIAEoCzInLmZyb3N0YWdlbnQudjEuTW9kZWxSb3V0ZXJDb25maWd1cmF0aW9uEhIKCmxvYWRfZXJyb3IYAyABKAkiUgoQU2F2ZURyYWZ0UmVxdWVzdBI+Cg1jb25maWd1cmF0aW9uGAEgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24iawoRU2F2ZURyYWZ0UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI2CgVkcmFmdBgDIAEoCzInLmZyb3N0YWdlbnQudjEuTW9kZWxSb3V0ZXJDb25maWd1cmF0aW9uIhUKE0Rpc2NhcmREcmFmdFJlcXVlc3QiTgoURGlzY2FyZERyYWZ0UmVzcG9uc2USNgoFZHJhZnQYASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiIQCg5QdWJsaXNoUmVxdWVzdCJqCg9QdWJsaXNoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI3CgZhY3RpdmUYAyABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiIwChlMaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0EhMKC2VuZHBvaW50X2lkGAEgASgJIjsKGkxpc3RVcHN0cmVhbU1vZGVsc1Jlc3BvbnNlEg4KBm1vZGVscxgBIAMoCRINCgVlcnJvchgCIAEoCSIkChBUZXN0TW9kZWxSZXF1ZXN0EhAKCG1vZGVsX2lkGAEgASgJIlkKEVRlc3RNb2RlbFJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDwoHY29udGVudBgCIAEoCRINCgVlcnJvchgDIAEoCRITCgtkdXJhdGlvbl9tcxgEIAEoAyroAQoNTW9kZWxXb3JrbG9hZBIeChpNT0RFTF9XT1JLTE9BRF9VTlNQRUNJRklFRBAAEhsKF01PREVMX1dPUktMT0FEX0RJQUxPR1VFEAESGwoXTU9ERUxfV09SS0xPQURfU1VCQUdFTlQQAhIZChVNT0RFTF9XT1JLTE9BRF9WSVNJT04QAxIdChlNT0RFTF9XT1JLTE9BRF9SRUZMRUNUSU9OEAQSIQodTU9ERUxfV09SS0xPQURfTUVNT1JZX0VYVFJBQ1QQBRIgChxNT0RFTF9XT1JLTE9BRF9HUk9VUF9DT01QQUNUEAYqvQEKEE1vZGVsQmluZGluZ01vZGUSIgoeTU9ERUxfQklORElOR19NT0RFX1VOU1BFQ0lGSUVEEAASHgoaTU9ERUxfQklORElOR19NT0RFX0lOSEVSSVQQARIcChhNT0RFTF9CSU5ESU5HX01PREVfTU9ERUwQAhIfChtNT0RFTF9CSU5ESU5HX01PREVfRElTQUJMRUQQAxImCiJNT0RFTF9CSU5ESU5HX01PREVfRk9MTE9XX0RJQUxPR1VFEAQq2QEKEk1vZGVsQVBJS2V5U3RvcmFnZRIlCiFNT0RFTF9BUElfS0VZX1NUT1JBR0VfVU5TUEVDSUZJRUQQABIgChxNT0RFTF9BUElfS0VZX1NUT1JBR0VfTUFOVUFMEAESHQoZTU9ERUxfQVBJX0tFWV9TVE9SQUdFX0VOVhACEiUKIU1PREVMX0FQSV9LRVlfU1RPUkFHRV9TRUNSRVRfRklMRRADEjQKME1PREVMX0FQSV9LRVlfU1RPUkFHRV9XSU5ET1dTX0NSRURFTlRJQUxfTUFOQUdFUhAEMo8EChJNb2RlbFJvdXRlclNlcnZpY2USSwoIR2V0U3RhdGUSHi5mcm9zdGFnZW50LnYxLkdldFN0YXRlUmVxdWVzdBofLmZyb3N0YWdlbnQudjEuR2V0U3RhdGVSZXNwb25zZRJOCglTYXZlRHJhZnQSHy5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlc3BvbnNlElcKDERpc2NhcmREcmFmdBIiLmZyb3N0YWdlbnQudjEuRGlzY2FyZERyYWZ0UmVxdWVzdBojLmZyb3N0YWdlbnQudjEuRGlzY2FyZERyYWZ0UmVzcG9uc2USSAoHUHVibGlzaBIdLmZyb3N0YWdlbnQudjEuUHVibGlzaFJlcXVlc3QaHi5mcm9zdGFnZW50LnYxLlB1Ymxpc2hSZXNwb25zZRJpChJMaXN0VXBzdHJlYW1Nb2RlbHMSKC5mcm9zdGFnZW50LnYxLkxpc3RVcHN0cmVhbU1vZGVsc1JlcXVlc3QaKS5mcm9zdGFnZW50LnYxLkxpc3RVcHN0cmVhbU1vZGVsc1Jlc3BvbnNlEk4KCVRlc3RNb2RlbBIfLmZyb3N0YWdlbnQudjEuVGVzdE1vZGVsUmVxdWVzdBogLmZyb3N0YWdlbnQudjEuVGVzdE1vZGVsUmVzcG9uc2ViBnByb3RvMw");
+  fileDesc("CiBmcm9zdGFnZW50L3YxL21vZGVsX3JvdXRlci5wcm90bxINZnJvc3RhZ2VudC52MSLPAQoNTW9kZWxFbmRwb2ludBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEAoIYmFzZV91cmwYAyABKAkSDwoHZW5hYmxlZBgFIAEoCBI5Cg5hcGlfa2V5X3NvdXJjZRgGIAEoDjIhLmZyb3N0YWdlbnQudjEuTW9kZWxBUElLZXlTdG9yYWdlEhMKC2FwaV9rZXlfcmVmGAcgASgJEhoKEmFwaV9rZXlfY29uZmlndXJlZBgIIAEoCEoECAQQBVIHYXBpX2tleSKDAQoLTW9kZWxUYXJnZXQSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhMKC2VuZHBvaW50X2lkGAMgASgJEhYKDnVwc3RyZWFtX21vZGVsGAQgASgJEg8KB2VuYWJsZWQYBSABKAgSFAoMY2FwYWJpbGl0aWVzGAYgAygJIn8KDE1vZGVsQmluZGluZxIuCgh3b3JrbG9hZBgBIAEoDjIcLmZyb3N0YWdlbnQudjEuTW9kZWxXb3JrbG9hZBItCgRtb2RlGAIgASgOMh8uZnJvc3RhZ2VudC52MS5Nb2RlbEJpbmRpbmdNb2RlEhAKCG1vZGVsX2lkGAMgASgJImcKEkdyb3VwTW9kZWxPdmVycmlkZRIQCghwbGF0Zm9ybRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRItCghiaW5kaW5ncxgDIAMoCzIbLmZyb3N0YWdlbnQudjEuTW9kZWxCaW5kaW5nIowCChhNb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24SDwoHdmVyc2lvbhgBIAEoBRIQCghyZXZpc2lvbhgCIAEoAxIvCgllbmRwb2ludHMYAyADKAsyHC5mcm9zdGFnZW50LnYxLk1vZGVsRW5kcG9pbnQSKgoGbW9kZWxzGAQgAygLMhouZnJvc3RhZ2VudC52MS5Nb2RlbFRhcmdldBI0Cg9nbG9iYWxfYmluZGluZ3MYBSADKAsyGy5mcm9zdGFnZW50LnYxLk1vZGVsQmluZGluZxI6Cg9ncm91cF9vdmVycmlkZXMYBiADKAsyIS5mcm9zdGFnZW50LnYxLkdyb3VwTW9kZWxPdmVycmlkZSIRCg9HZXRTdGF0ZVJlcXVlc3QiuQEKEEdldFN0YXRlUmVzcG9uc2USNwoGYWN0aXZlGAEgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24SNgoFZHJhZnQYAiABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhISCgpsb2FkX2Vycm9yGAMgASgJEiAKGGhhc19kcmFmdF9zZWNyZXRfY2hhbmdlcxgEIAEoCCJSChBTYXZlRHJhZnRSZXF1ZXN0Ej4KDWNvbmZpZ3VyYXRpb24YASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiJrChFTYXZlRHJhZnRSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEjYKBWRyYWZ0GAMgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24iRQodU2V0RHJhZnRFbmRwb2ludFNlY3JldFJlcXVlc3QSEwoLZW5kcG9pbnRfaWQYASABKAkSDwoHYXBpX2tleRgCIAEoCSJUCh5TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRISCgpjb25maWd1cmVkGAMgASgIIjYKH0NsZWFyRHJhZnRFbmRwb2ludFNlY3JldFJlcXVlc3QSEwoLZW5kcG9pbnRfaWQYASABKAkiVgogQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRISCgpjb25maWd1cmVkGAMgASgIIhUKE0Rpc2NhcmREcmFmdFJlcXVlc3QiTgoURGlzY2FyZERyYWZ0UmVzcG9uc2USNgoFZHJhZnQYASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiIQCg5QdWJsaXNoUmVxdWVzdCJqCg9QdWJsaXNoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI3CgZhY3RpdmUYAyABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiIwChlMaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0EhMKC2VuZHBvaW50X2lkGAEgASgJIjsKGkxpc3RVcHN0cmVhbU1vZGVsc1Jlc3BvbnNlEg4KBm1vZGVscxgBIAMoCRINCgVlcnJvchgCIAEoCSIkChBUZXN0TW9kZWxSZXF1ZXN0EhAKCG1vZGVsX2lkGAEgASgJIlkKEVRlc3RNb2RlbFJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDwoHY29udGVudBgCIAEoCRINCgVlcnJvchgDIAEoCRITCgtkdXJhdGlvbl9tcxgEIAEoAyroAQoNTW9kZWxXb3JrbG9hZBIeChpNT0RFTF9XT1JLTE9BRF9VTlNQRUNJRklFRBAAEhsKF01PREVMX1dPUktMT0FEX0RJQUxPR1VFEAESGwoXTU9ERUxfV09SS0xPQURfU1VCQUdFTlQQAhIZChVNT0RFTF9XT1JLTE9BRF9WSVNJT04QAxIdChlNT0RFTF9XT1JLTE9BRF9SRUZMRUNUSU9OEAQSIQodTU9ERUxfV09SS0xPQURfTUVNT1JZX0VYVFJBQ1QQBRIgChxNT0RFTF9XT1JLTE9BRF9HUk9VUF9DT01QQUNUEAYqvQEKEE1vZGVsQmluZGluZ01vZGUSIgoeTU9ERUxfQklORElOR19NT0RFX1VOU1BFQ0lGSUVEEAASHgoaTU9ERUxfQklORElOR19NT0RFX0lOSEVSSVQQARIcChhNT0RFTF9CSU5ESU5HX01PREVfTU9ERUwQAhIfChtNT0RFTF9CSU5ESU5HX01PREVfRElTQUJMRUQQAxImCiJNT0RFTF9CSU5ESU5HX01PREVfRk9MTE9XX0RJQUxPR1VFEAQq2QEKEk1vZGVsQVBJS2V5U3RvcmFnZRIlCiFNT0RFTF9BUElfS0VZX1NUT1JBR0VfVU5TUEVDSUZJRUQQABIgChxNT0RFTF9BUElfS0VZX1NUT1JBR0VfTUFOVUFMEAESHQoZTU9ERUxfQVBJX0tFWV9TVE9SQUdFX0VOVhACEiUKIU1PREVMX0FQSV9LRVlfU1RPUkFHRV9TRUNSRVRfRklMRRADEjQKME1PREVMX0FQSV9LRVlfU1RPUkFHRV9XSU5ET1dTX0NSRURFTlRJQUxfTUFOQUdFUhAEMoMGChJNb2RlbFJvdXRlclNlcnZpY2USSwoIR2V0U3RhdGUSHi5mcm9zdGFnZW50LnYxLkdldFN0YXRlUmVxdWVzdBofLmZyb3N0YWdlbnQudjEuR2V0U3RhdGVSZXNwb25zZRJOCglTYXZlRHJhZnQSHy5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlc3BvbnNlEnUKFlNldERyYWZ0RW5kcG9pbnRTZWNyZXQSLC5mcm9zdGFnZW50LnYxLlNldERyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi0uZnJvc3RhZ2VudC52MS5TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USewoYQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0Ei4uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi8uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXNwb25zZRJXCgxEaXNjYXJkRHJhZnQSIi5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlc3BvbnNlEkgKB1B1Ymxpc2gSHS5mcm9zdGFnZW50LnYxLlB1Ymxpc2hSZXF1ZXN0Gh4uZnJvc3RhZ2VudC52MS5QdWJsaXNoUmVzcG9uc2USaQoSTGlzdFVwc3RyZWFtTW9kZWxzEiguZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXNwb25zZRJOCglUZXN0TW9kZWwSHy5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlc3BvbnNlYgZwcm90bzM");
 
 /**
  * @generated from message frostagent.v1.ModelEndpoint
@@ -32,24 +32,24 @@ export type ModelEndpoint = Message<"frostagent.v1.ModelEndpoint"> & {
   baseUrl: string;
 
   /**
-   * @generated from field: string api_key = 4;
-   */
-  apiKey: string;
-
-  /**
    * @generated from field: bool enabled = 5;
    */
   enabled: boolean;
 
   /**
-   * @generated from field: frostagent.v1.ModelAPIKeyStorage api_key_storage = 6;
+   * @generated from field: frostagent.v1.ModelAPIKeyStorage api_key_source = 6;
    */
-  apiKeyStorage: ModelAPIKeyStorage;
+  apiKeySource: ModelAPIKeyStorage;
 
   /**
-   * @generated from field: string secret_file = 7;
+   * @generated from field: string api_key_ref = 7;
    */
-  secretFile: string;
+  apiKeyRef: string;
+
+  /**
+   * @generated from field: bool api_key_configured = 8;
+   */
+  apiKeyConfigured: boolean;
 };
 
 /**
@@ -228,6 +228,11 @@ export type GetStateResponse = Message<"frostagent.v1.GetStateResponse"> & {
    * @generated from field: string load_error = 3;
    */
   loadError: string;
+
+  /**
+   * @generated from field: bool has_draft_secret_changes = 4;
+   */
+  hasDraftSecretChanges: boolean;
 };
 
 /**
@@ -282,6 +287,99 @@ export const SaveDraftResponseSchema: GenMessage<SaveDraftResponse> = /*@__PURE_
   messageDesc(file_frostagent_v1_model_router, 8);
 
 /**
+ * @generated from message frostagent.v1.SetDraftEndpointSecretRequest
+ */
+export type SetDraftEndpointSecretRequest = Message<"frostagent.v1.SetDraftEndpointSecretRequest"> & {
+  /**
+   * @generated from field: string endpoint_id = 1;
+   */
+  endpointId: string;
+
+  /**
+   * @generated from field: string api_key = 2;
+   */
+  apiKey: string;
+};
+
+/**
+ * Describes the message frostagent.v1.SetDraftEndpointSecretRequest.
+ * Use `create(SetDraftEndpointSecretRequestSchema)` to create a new message.
+ */
+export const SetDraftEndpointSecretRequestSchema: GenMessage<SetDraftEndpointSecretRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 9);
+
+/**
+ * @generated from message frostagent.v1.SetDraftEndpointSecretResponse
+ */
+export type SetDraftEndpointSecretResponse = Message<"frostagent.v1.SetDraftEndpointSecretResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+
+  /**
+   * @generated from field: bool configured = 3;
+   */
+  configured: boolean;
+};
+
+/**
+ * Describes the message frostagent.v1.SetDraftEndpointSecretResponse.
+ * Use `create(SetDraftEndpointSecretResponseSchema)` to create a new message.
+ */
+export const SetDraftEndpointSecretResponseSchema: GenMessage<SetDraftEndpointSecretResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 10);
+
+/**
+ * @generated from message frostagent.v1.ClearDraftEndpointSecretRequest
+ */
+export type ClearDraftEndpointSecretRequest = Message<"frostagent.v1.ClearDraftEndpointSecretRequest"> & {
+  /**
+   * @generated from field: string endpoint_id = 1;
+   */
+  endpointId: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ClearDraftEndpointSecretRequest.
+ * Use `create(ClearDraftEndpointSecretRequestSchema)` to create a new message.
+ */
+export const ClearDraftEndpointSecretRequestSchema: GenMessage<ClearDraftEndpointSecretRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 11);
+
+/**
+ * @generated from message frostagent.v1.ClearDraftEndpointSecretResponse
+ */
+export type ClearDraftEndpointSecretResponse = Message<"frostagent.v1.ClearDraftEndpointSecretResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+
+  /**
+   * @generated from field: bool configured = 3;
+   */
+  configured: boolean;
+};
+
+/**
+ * Describes the message frostagent.v1.ClearDraftEndpointSecretResponse.
+ * Use `create(ClearDraftEndpointSecretResponseSchema)` to create a new message.
+ */
+export const ClearDraftEndpointSecretResponseSchema: GenMessage<ClearDraftEndpointSecretResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 12);
+
+/**
  * @generated from message frostagent.v1.DiscardDraftRequest
  */
 export type DiscardDraftRequest = Message<"frostagent.v1.DiscardDraftRequest"> & {
@@ -292,7 +390,7 @@ export type DiscardDraftRequest = Message<"frostagent.v1.DiscardDraftRequest"> &
  * Use `create(DiscardDraftRequestSchema)` to create a new message.
  */
 export const DiscardDraftRequestSchema: GenMessage<DiscardDraftRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 9);
+  messageDesc(file_frostagent_v1_model_router, 13);
 
 /**
  * @generated from message frostagent.v1.DiscardDraftResponse
@@ -309,7 +407,7 @@ export type DiscardDraftResponse = Message<"frostagent.v1.DiscardDraftResponse">
  * Use `create(DiscardDraftResponseSchema)` to create a new message.
  */
 export const DiscardDraftResponseSchema: GenMessage<DiscardDraftResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 10);
+  messageDesc(file_frostagent_v1_model_router, 14);
 
 /**
  * @generated from message frostagent.v1.PublishRequest
@@ -322,7 +420,7 @@ export type PublishRequest = Message<"frostagent.v1.PublishRequest"> & {
  * Use `create(PublishRequestSchema)` to create a new message.
  */
 export const PublishRequestSchema: GenMessage<PublishRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 11);
+  messageDesc(file_frostagent_v1_model_router, 15);
 
 /**
  * @generated from message frostagent.v1.PublishResponse
@@ -349,7 +447,7 @@ export type PublishResponse = Message<"frostagent.v1.PublishResponse"> & {
  * Use `create(PublishResponseSchema)` to create a new message.
  */
 export const PublishResponseSchema: GenMessage<PublishResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 12);
+  messageDesc(file_frostagent_v1_model_router, 16);
 
 /**
  * @generated from message frostagent.v1.ListUpstreamModelsRequest
@@ -366,7 +464,7 @@ export type ListUpstreamModelsRequest = Message<"frostagent.v1.ListUpstreamModel
  * Use `create(ListUpstreamModelsRequestSchema)` to create a new message.
  */
 export const ListUpstreamModelsRequestSchema: GenMessage<ListUpstreamModelsRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 13);
+  messageDesc(file_frostagent_v1_model_router, 17);
 
 /**
  * @generated from message frostagent.v1.ListUpstreamModelsResponse
@@ -388,7 +486,7 @@ export type ListUpstreamModelsResponse = Message<"frostagent.v1.ListUpstreamMode
  * Use `create(ListUpstreamModelsResponseSchema)` to create a new message.
  */
 export const ListUpstreamModelsResponseSchema: GenMessage<ListUpstreamModelsResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 14);
+  messageDesc(file_frostagent_v1_model_router, 18);
 
 /**
  * @generated from message frostagent.v1.TestModelRequest
@@ -405,7 +503,7 @@ export type TestModelRequest = Message<"frostagent.v1.TestModelRequest"> & {
  * Use `create(TestModelRequestSchema)` to create a new message.
  */
 export const TestModelRequestSchema: GenMessage<TestModelRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 15);
+  messageDesc(file_frostagent_v1_model_router, 19);
 
 /**
  * @generated from message frostagent.v1.TestModelResponse
@@ -437,7 +535,7 @@ export type TestModelResponse = Message<"frostagent.v1.TestModelResponse"> & {
  * Use `create(TestModelResponseSchema)` to create a new message.
  */
 export const TestModelResponseSchema: GenMessage<TestModelResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_model_router, 16);
+  messageDesc(file_frostagent_v1_model_router, 20);
 
 /**
  * @generated from enum frostagent.v1.ModelWorkload
@@ -576,6 +674,22 @@ export const ModelRouterService: GenService<{
     methodKind: "unary";
     input: typeof SaveDraftRequestSchema;
     output: typeof SaveDraftResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.ModelRouterService.SetDraftEndpointSecret
+   */
+  setDraftEndpointSecret: {
+    methodKind: "unary";
+    input: typeof SetDraftEndpointSecretRequestSchema;
+    output: typeof SetDraftEndpointSecretResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.ModelRouterService.ClearDraftEndpointSecret
+   */
+  clearDraftEndpointSecret: {
+    methodKind: "unary";
+    input: typeof ClearDraftEndpointSecretRequestSchema;
+    output: typeof ClearDraftEndpointSecretResponseSchema;
   },
   /**
    * @generated from rpc frostagent.v1.ModelRouterService.DiscardDraft

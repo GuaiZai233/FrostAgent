@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -22,12 +23,20 @@ type Manager struct {
 	path    string
 	active  Configuration
 	draft   Configuration
+	secrets *SecretBackend
 	loadErr error
 }
 
 func New(path string) *Manager {
-	m := &Manager{path: path, active: defaultConfiguration()}
-	if err := m.load(); err != nil {
+	secrets, secretErr := newSecretBackend(path)
+	m := &Manager{
+		path:    path,
+		active:  defaultConfiguration(),
+		secrets: secrets,
+	}
+	if secretErr != nil {
+		m.loadErr = secretErr
+	} else if err := m.load(); err != nil {
 		m.loadErr = err
 	}
 	m.draft = cloneConfiguration(m.active)
@@ -64,14 +73,64 @@ func (m *Manager) load() error {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("解析模型路由配置失败: %w", err)
 	}
+	var legacy struct {
+		Endpoints []struct {
+			ID            string        `json:"id"`
+			APIKey        string        `json:"api_key"`
+			APIKeyStorage APIKeyStorage `json:"api_key_storage"`
+			SecretFile    string        `json:"secret_file"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return fmt.Errorf("解析旧版模型路由配置失败: %w", err)
+	}
+	legacyByID := make(map[string]struct {
+		APIKey        string
+		APIKeyStorage APIKeyStorage
+		SecretFile    string
+	}, len(legacy.Endpoints))
+	for _, endpoint := range legacy.Endpoints {
+		legacyByID[endpoint.ID] = struct {
+			APIKey        string
+			APIKeyStorage APIKeyStorage
+			SecretFile    string
+		}{endpoint.APIKey, endpoint.APIKeyStorage, endpoint.SecretFile}
+	}
+	for i := range cfg.Endpoints {
+		legacyEndpoint := legacyByID[cfg.Endpoints[i].ID]
+		if cfg.Endpoints[i].APIKeySource == "" && legacyEndpoint.APIKeyStorage != "" {
+			cfg.Endpoints[i].APIKeySource = legacyEndpoint.APIKeyStorage
+		}
+		if cfg.Endpoints[i].APIKeyRef == "" && cfg.Endpoints[i].APIKeySource == APIKeyStorageSecretFile {
+			cfg.Endpoints[i].APIKeyRef = legacyEndpoint.SecretFile
+		}
+	}
 	normalizeConfiguration(&cfg)
+	for i := range cfg.Endpoints {
+		legacyEndpoint := legacyByID[cfg.Endpoints[i].ID]
+		if err := m.secrets.StoreForMigration(cfg.Endpoints[i], legacyEndpoint.APIKey); err != nil {
+			return fmt.Errorf("迁移 Endpoint %q 的 API Key 失败: %w", cfg.Endpoints[i].DisplayName, err)
+		}
+		switch cfg.Endpoints[i].APIKeySource {
+		case APIKeyStorageManual:
+			cfg.Endpoints[i].APIKeyConfigured = m.secrets.Configured(cfg.Endpoints[i])
+		case APIKeyStorageWindowsCredentialManager:
+			if legacyEndpoint.APIKey != "" {
+				cfg.Endpoints[i].APIKeyConfigured = true
+			}
+		case APIKeyStorageEnv, APIKeyStorageSecretFile:
+			cfg.Endpoints[i].APIKeyConfigured = cfg.Endpoints[i].APIKeyRef != ""
+		}
+	}
 	if err := validateConfiguration(cfg); err != nil {
 		return fmt.Errorf("模型路由配置无效: %w", err)
 	}
-	if err := loadWindowsCredentials(&cfg); err != nil {
-		return err
-	}
 	m.active = cfg
+	if bytes.Contains(data, []byte(`"api_key"`)) || bytes.Contains(data, []byte(`"api_key_storage"`)) || bytes.Contains(data, []byte(`"secret_file"`)) {
+		if err := writeAtomic(m.path, cfg); err != nil {
+			return fmt.Errorf("清理旧版 API Key 配置失败: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -106,15 +165,78 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := make(map[string]Endpoint, len(m.draft.Endpoints))
+	for _, endpoint := range m.draft.Endpoints {
+		previous[endpoint.ID] = endpoint
+	}
+	m.secrets.ReconcileDraft(cfg)
+	for i := range cfg.Endpoints {
+		endpoint := &cfg.Endpoints[i]
+		old, sameReference := previous[endpoint.ID]
+		sameReference = sameReference && old.APIKeySource == endpoint.APIKeySource && old.APIKeyRef == endpoint.APIKeyRef
+		if sameReference {
+			endpoint.APIKeyConfigured = old.APIKeyConfigured
+		} else {
+			switch endpoint.APIKeySource {
+			case APIKeyStorageManual:
+				endpoint.APIKeyConfigured = m.secrets.Configured(*endpoint)
+			case APIKeyStorageEnv, APIKeyStorageSecretFile:
+				endpoint.APIKeyConfigured = endpoint.APIKeyRef != ""
+			case APIKeyStorageWindowsCredentialManager:
+				endpoint.APIKeyConfigured = false
+			}
+		}
+		if mutation, ok := m.secrets.DraftMutation(*endpoint); ok {
+			endpoint.APIKeyConfigured = !mutation.Clear
+		}
+	}
 	cfg.Revision = m.active.Revision
 	m.draft = cloneConfiguration(cfg)
 	return nil
+}
+
+func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return false, fmt.Errorf("API Key 为空；留空表示保留原 Secret")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
+	if err != nil {
+		return false, err
+	}
+	if !persistentSecretSource(endpoint.APIKeySource) {
+		return false, fmt.Errorf("Endpoint %q 的 Secret 来源不接受手动写入", endpoint.DisplayName)
+	}
+	m.secrets.Stage(endpoint, apiKey, false)
+	setEndpointConfigured(&m.draft, endpoint.ID, true)
+	return true, nil
+}
+
+func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
+	if err != nil {
+		return false, err
+	}
+	if !persistentSecretSource(endpoint.APIKeySource) {
+		return false, fmt.Errorf("Endpoint %q 的 Secret 来源不支持清除操作", endpoint.DisplayName)
+	}
+	m.secrets.Stage(endpoint, "", true)
+	setEndpointConfigured(&m.draft, endpoint.ID, false)
+	return false, nil
+}
+
+func (m *Manager) HasDraftSecretChanges() bool {
+	return m.secrets.HasDraftChanges()
 }
 
 func (m *Manager) DiscardDraft() Configuration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.draft = cloneConfiguration(m.active)
+	m.secrets.DiscardDraft()
 	return cloneConfiguration(m.draft)
 }
 
@@ -127,18 +249,19 @@ func (m *Manager) Publish() (Configuration, error) {
 		return Configuration{}, err
 	}
 	cfg.Revision = m.active.Revision + 1
-	rollbackCredentials, err := persistWindowsCredentials(m.active, cfg)
+	rollbackSecrets, err := m.secrets.Apply(m.active, cfg)
 	if err != nil {
 		return Configuration{}, err
 	}
 	if err := writeAtomic(m.path, cfg); err != nil {
-		if rollbackErr := rollbackCredentials(); rollbackErr != nil {
-			return Configuration{}, fmt.Errorf("写入模型路由配置失败: %v；恢复 Windows 凭据失败: %w", err, rollbackErr)
+		if rollbackErr := rollbackSecrets(); rollbackErr != nil {
+			return Configuration{}, fmt.Errorf("写入模型路由配置失败: %v；恢复 Secret Backend 失败: %w", err, rollbackErr)
 		}
 		return Configuration{}, err
 	}
 	m.active = cloneConfiguration(cfg)
 	m.draft = cloneConfiguration(cfg)
+	m.secrets.DiscardDraft()
 	m.loadErr = nil
 	return cloneConfiguration(cfg), nil
 }
@@ -203,17 +326,14 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 	if endpoint == nil || !endpoint.Enabled {
 		return Target{}, fmt.Errorf("endpoint %q is unavailable", model.EndpointID)
 	}
-	apiKey, err := resolveEndpointAPIKey(*endpoint)
-	if err != nil {
-		return Target{}, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
-	}
 	return Target{
 		EndpointID:          endpoint.ID,
 		EndpointDisplayName: endpoint.DisplayName,
+		APIKeySource:        endpoint.APIKeySource,
+		APIKeyRef:           endpoint.APIKeyRef,
 		ModelID:             model.ID,
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
-		APIKey:              apiKey,
 		UpstreamModel:       model.UpstreamModel,
 	}, nil
 }
@@ -272,18 +392,19 @@ func normalizeConfiguration(cfg *Configuration) {
 	for i := range cfg.Endpoints {
 		cfg.Endpoints[i].DisplayName = strings.TrimSpace(cfg.Endpoints[i].DisplayName)
 		cfg.Endpoints[i].BaseURL = strings.TrimSpace(cfg.Endpoints[i].BaseURL)
-		cfg.Endpoints[i].SecretFile = strings.TrimSpace(cfg.Endpoints[i].SecretFile)
-		if cfg.Endpoints[i].APIKeyStorage == "" {
-			cfg.Endpoints[i].APIKeyStorage = APIKeyStorageManual
+		cfg.Endpoints[i].APIKeyRef = strings.TrimSpace(cfg.Endpoints[i].APIKeyRef)
+		if cfg.Endpoints[i].APIKeySource == "" {
+			cfg.Endpoints[i].APIKeySource = APIKeyStorageManual
 		}
-		switch cfg.Endpoints[i].APIKeyStorage {
-		case APIKeyStorageManual, APIKeyStorageWindowsCredentialManager:
-			cfg.Endpoints[i].SecretFile = ""
-		case APIKeyStorageEnv:
-			cfg.Endpoints[i].APIKey = ""
-			cfg.Endpoints[i].SecretFile = ""
+		switch cfg.Endpoints[i].APIKeySource {
+		case APIKeyStorageManual, APIKeyStorageWindowsCredentialManager, APIKeyStorageEnv:
+			if cfg.Endpoints[i].APIKeyRef == "" {
+				cfg.Endpoints[i].APIKeyRef = defaultAPIKeyRef(cfg.Endpoints[i].APIKeySource, cfg.Endpoints[i].ID)
+			}
 		case APIKeyStorageSecretFile:
-			cfg.Endpoints[i].APIKey = ""
+		}
+		if cfg.Endpoints[i].APIKeySource == APIKeyStorageEnv || cfg.Endpoints[i].APIKeySource == APIKeyStorageSecretFile {
+			cfg.Endpoints[i].APIKeyConfigured = cfg.Endpoints[i].APIKeyRef != ""
 		}
 	}
 	for i := range cfg.Models {
@@ -331,14 +452,17 @@ func validateConfiguration(cfg Configuration) error {
 		if parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
 		}
-		switch endpoint.APIKeyStorage {
+		switch endpoint.APIKeySource {
 		case APIKeyStorageManual, APIKeyStorageEnv, APIKeyStorageWindowsCredentialManager:
 		case APIKeyStorageSecretFile:
-			if endpoint.SecretFile == "" {
+			if endpoint.APIKeyRef == "" {
 				return fmt.Errorf("endpoint %q secret file path is required", endpoint.DisplayName)
 			}
 		default:
-			return fmt.Errorf("endpoint %q has unknown api key storage %q", endpoint.DisplayName, endpoint.APIKeyStorage)
+			return fmt.Errorf("endpoint %q has unknown api key source %q", endpoint.DisplayName, endpoint.APIKeySource)
+		}
+		if endpoint.APIKeyRef == "" {
+			return fmt.Errorf("endpoint %q api key reference is required", endpoint.DisplayName)
 		}
 		endpointIDs[endpoint.ID] = endpoint
 	}
@@ -454,42 +578,49 @@ func cloneConfiguration(cfg Configuration) Configuration {
 	return cloned
 }
 
-func writeAtomic(path string, cfg Configuration) error {
-	stored := cloneConfiguration(cfg)
-	for i := range stored.Endpoints {
-		if stored.Endpoints[i].APIKeyStorage == APIKeyStorageWindowsCredentialManager {
-			stored.Endpoints[i].APIKey = ""
+func setEndpointConfigured(cfg *Configuration, endpointID string, configured bool) {
+	for i := range cfg.Endpoints {
+		if cfg.Endpoints[i].ID == endpointID {
+			cfg.Endpoints[i].APIKeyConfigured = configured
+			return
 		}
 	}
+}
+
+func writeAtomic(path string, cfg Configuration) error {
+	return writeJSONAtomic(path, cloneConfiguration(cfg), "模型路由配置")
+}
+
+func writeJSONAtomic(path string, value any, label string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("创建模型路由配置目录失败: %w", err)
+		return fmt.Errorf("创建%s目录失败: %w", label, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".model-router-*.tmp")
 	if err != nil {
-		return fmt.Errorf("创建模型路由临时文件失败: %w", err)
+		return fmt.Errorf("创建%s临时文件失败: %w", label, err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
-		return fmt.Errorf("设置模型路由配置权限失败: %w", err)
+		return fmt.Errorf("设置%s权限失败: %w", label, err)
 	}
 	encoder := json.NewEncoder(tmp)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(stored); err != nil {
+	if err := encoder.Encode(value); err != nil {
 		tmp.Close()
-		return fmt.Errorf("序列化模型路由配置失败: %w", err)
+		return fmt.Errorf("序列化%s失败: %w", label, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("同步模型路由配置失败: %w", err)
+		return fmt.Errorf("同步%s失败: %w", label, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("关闭模型路由临时文件失败: %w", err)
+		return fmt.Errorf("关闭%s临时文件失败: %w", label, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("原子替换模型路由配置失败: %w", err)
+		return fmt.Errorf("原子替换%s失败: %w", label, err)
 	}
 	return nil
 }

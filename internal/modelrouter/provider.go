@@ -59,8 +59,17 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	if err != nil {
 		return nil, err
 	}
+	apiKey, err := resolveEndpointAPIKey(p.manager.secrets, Endpoint{
+		ID:           target.EndpointID,
+		DisplayName:  target.EndpointDisplayName,
+		APIKeySource: target.APIKeySource,
+		APIKeyRef:    target.APIKeyRef,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", target.EndpointDisplayName, err)
+	}
 	req.Model = target.UpstreamModel
-	client := openai.NewClientWithTimeout(target.BaseURL, target.APIKey, p.timeout)
+	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
 	return client.Chat(ctx, req)
 }
 
@@ -70,7 +79,7 @@ func (m *Manager) ListUpstreamModels(endpointID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiKey, err := resolveEndpointAPIKey(endpoint)
+	apiKey, err := m.resolveDraftEndpointAPIKey(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}
@@ -129,7 +138,7 @@ func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	apiKey, err := resolveEndpointAPIKey(endpoint)
+	apiKey, err := m.resolveDraftEndpointAPIKey(endpoint)
 	if err != nil {
 		return "", 0, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}
@@ -151,6 +160,10 @@ func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
 	}
 	body, _ := json.Marshal(response.Message.Content)
 	return string(body), duration, nil
+}
+
+func (m *Manager) resolveDraftEndpointAPIKey(endpoint Endpoint) (string, error) {
+	return m.secrets.ResolveDraft(endpoint)
 }
 
 func endpointByID(cfg Configuration, id string) (Endpoint, error) {

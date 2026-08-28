@@ -174,6 +174,14 @@ export const api = {
     return modelRouterClient.saveDraft({ configuration });
   },
 
+  setDraftEndpointSecret(endpointId: string, apiKey: string): Promise<{ success: boolean; error: string; configured: boolean }> {
+    return modelRouterClient.setDraftEndpointSecret({ endpointId, apiKey });
+  },
+
+  clearDraftEndpointSecret(endpointId: string): Promise<{ success: boolean; error: string; configured: boolean }> {
+    return modelRouterClient.clearDraftEndpointSecret({ endpointId });
+  },
+
   discardModelRouterDraft(): Promise<ModelRouterConfiguration | undefined> {
     return modelRouterClient.discardDraft({}).then((res) => res.draft);
   },

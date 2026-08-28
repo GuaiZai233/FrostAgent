@@ -5,6 +5,8 @@ package frostagent.v1;
 service ModelRouterService {
   rpc GetState(GetStateRequest) returns (GetStateResponse);
   rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc SetDraftEndpointSecret(SetDraftEndpointSecretRequest) returns (SetDraftEndpointSecretResponse);
+  rpc ClearDraftEndpointSecret(ClearDraftEndpointSecretRequest) returns (ClearDraftEndpointSecretResponse);
   rpc DiscardDraft(DiscardDraftRequest) returns (DiscardDraftResponse);
   rpc Publish(PublishRequest) returns (PublishResponse);
   rpc ListUpstreamModels(ListUpstreamModelsRequest) returns (ListUpstreamModelsResponse);
@@ -38,13 +40,15 @@ enum ModelAPIKeyStorage {
 }
 
 message ModelEndpoint {
+  reserved 4;
+  reserved "api_key";
   string id = 1;
   string display_name = 2;
   string base_url = 3;
-  string api_key = 4;
   bool enabled = 5;
-  ModelAPIKeyStorage api_key_storage = 6;
-  string secret_file = 7;
+  ModelAPIKeyStorage api_key_source = 6;
+  string api_key_ref = 7;
+  bool api_key_configured = 8;
 }
 
 message ModelTarget {
@@ -83,6 +87,7 @@ message GetStateResponse {
   ModelRouterConfiguration active = 1;
   ModelRouterConfiguration draft = 2;
   string load_error = 3;
+  bool has_draft_secret_changes = 4;
 }
 
 message SaveDraftRequest {
@@ -93,6 +98,27 @@ message SaveDraftResponse {
   bool success = 1;
   string error = 2;
   ModelRouterConfiguration draft = 3;
+}
+
+message SetDraftEndpointSecretRequest {
+  string endpoint_id = 1;
+  string api_key = 2;
+}
+
+message SetDraftEndpointSecretResponse {
+  bool success = 1;
+  string error = 2;
+  bool configured = 3;
+}
+
+message ClearDraftEndpointSecretRequest {
+  string endpoint_id = 1;
+}
+
+message ClearDraftEndpointSecretResponse {
+  bool success = 1;
+  string error = 2;
+  bool configured = 3;
 }
 
 message DiscardDraftRequest {}
