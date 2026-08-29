@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
@@ -226,26 +227,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if a.stealer != nil && event.PostType == "message" && event.MessageType == "group" {
-				segments := ParseMessageSegments(event.Message)
-				for _, seg := range segments {
-					if seg.Type == "image" {
-						isSticker := false
-						switch st := seg.Data["sub_type"].(type) {
-						case int:
-							isSticker = (st == 1)
-						case float64:
-							isSticker = (st == 1)
-						case string:
-							isSticker = (st == "1")
-						case json.Number:
-							isSticker = (st.String() == "1")
-						}
-						if isSticker {
-							if url, ok := seg.Data["url"].(string); ok && url != "" {
-								a.stealer.TrySteal(url)
-							}
-						}
-					}
+				for _, stickerURL := range stickerURLsFromSegments(ParseMessageSegments(event.Message)) {
+					a.stealer.TrySteal(stickerURL)
 				}
 			}
 			var turn *llm.SessionTurn
@@ -255,5 +238,33 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			go processEvent(wsConn, event, a.engine, turn, routeSnapshot)
 		}
+	}
+}
+
+func stickerURLsFromSegments(segments []content.MessageSegment) []string {
+	var urls []string
+	for _, seg := range segments {
+		if seg.Type != "image" || !isStickerSubType(seg.Data["sub_type"]) {
+			continue
+		}
+		if imageURL, ok := seg.Data["url"].(string); ok && imageURL != "" {
+			urls = append(urls, imageURL)
+		}
+	}
+	return urls
+}
+
+func isStickerSubType(value any) bool {
+	switch stickerType := value.(type) {
+	case int:
+		return stickerType == 1
+	case float64:
+		return stickerType == 1
+	case string:
+		return stickerType == "1"
+	case json.Number:
+		return stickerType.String() == "1"
+	default:
+		return false
 	}
 }

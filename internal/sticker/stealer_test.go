@@ -2,6 +2,7 @@ package sticker
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -112,6 +113,42 @@ func TestStealer_DownloadAndDeduplication(t *testing.T) {
 	}
 	if entry.Weight != 2 {
 		t.Errorf("expected weight 2, got %d", entry.Weight)
+	}
+}
+
+func TestStealer_ExplicitStealIsDeterministicAndDeduplicates(t *testing.T) {
+	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(imageBytes)
+	}))
+	defer server.Close()
+
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	stealer := NewStealer(store, nil)
+
+	first, err := stealer.Steal(context.Background(), server.URL+"/explicit.png")
+	if err != nil {
+		t.Fatalf("explicit Steal returned error: %v", err)
+	}
+	wantID := HashBytes(imageBytes)
+	if first.ID != wantID || first.Duplicate {
+		t.Fatalf("first result = %+v, want ID %s and non-duplicate", first, wantID)
+	}
+
+	second, err := stealer.Steal(context.Background(), server.URL+"/explicit.png")
+	if err != nil {
+		t.Fatalf("duplicate Steal returned error: %v", err)
+	}
+	if second.ID != wantID || !second.Duplicate {
+		t.Fatalf("second result = %+v, want duplicate ID %s", second, wantID)
+	}
+	entry, ok := store.Get(wantID)
+	if !ok || entry.Weight != 2 {
+		t.Fatalf("stored entry = %+v, found=%v; want weight 2", entry, ok)
 	}
 }
 

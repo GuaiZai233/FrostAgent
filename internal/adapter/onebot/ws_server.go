@@ -392,6 +392,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			SessionID:     historyKey(event),
 			Owner:         owner,
 			OwnerType:     ownerType,
+			ActorUserID:   strconv.FormatInt(event.UserID, 10),
+			StickerURLs:   stickerURLsFromSegments(segments),
 			SendHook:      sendHook,
 			Billing:       billingState,
 			RouteScope:    routeScope,

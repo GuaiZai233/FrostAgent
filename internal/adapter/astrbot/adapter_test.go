@@ -94,6 +94,26 @@ func TestAdapterTryStealOnlyQQGroupStickers(t *testing.T) {
 	}
 }
 
+func TestStickerURLsForEventOnlyTrustsQQStickerAttachments(t *testing.T) {
+	qqEvent := Event{
+		Platform:    astrBotQQPlatform,
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.png", SubType: 1},
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/regular.png"},
+		},
+	}
+	urls := stickerURLsForEvent(qqEvent)
+	if len(urls) != 1 || urls[0] != "https://example.com/sticker.png" {
+		t.Fatalf("QQ sticker URLs = %v", urls)
+	}
+
+	qqEvent.Platform = "telegram"
+	if urls := stickerURLsForEvent(qqEvent); len(urls) != 0 {
+		t.Fatalf("non-QQ sticker URLs = %v, want none", urls)
+	}
+}
+
 func TestSendDirectReplyRejectsInvalidInput(t *testing.T) {
 	event := Event{UserID: "usr_123", MessageType: "private"}
 

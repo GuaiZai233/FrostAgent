@@ -598,6 +598,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			SessionID:     sessionKey(event),
 			Owner:         owner,
 			OwnerType:     ownerType,
+			ActorUserID:   event.UserID,
+			StickerURLs:   stickerURLsForEvent(event),
 			SendHook:      sendHook,
 			Billing:       billingState,
 			RouteScope:    routeScope,

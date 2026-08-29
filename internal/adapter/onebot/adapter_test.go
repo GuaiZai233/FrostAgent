@@ -65,3 +65,16 @@ func TestToIncomingMessage(t *testing.T) {
 		t.Errorf("expected MessageType 'group', got %s", inMsg.MessageType)
 	}
 }
+
+func TestStickerURLsFromSegmentsOnlyReturnsStickerImages(t *testing.T) {
+	segments := ParseMessageSegments([]byte(`[
+		{"type":"image","data":{"url":"https://example.com/a.png","sub_type":1}},
+		{"type":"image","data":{"url":"https://example.com/b.png","sub_type":"1"}},
+		{"type":"image","data":{"url":"https://example.com/regular.png","sub_type":0}},
+		{"type":"text","data":{"text":"hello"}}
+	]`))
+	urls := stickerURLsFromSegments(segments)
+	if len(urls) != 2 || urls[0] != "https://example.com/a.png" || urls[1] != "https://example.com/b.png" {
+		t.Fatalf("sticker URLs = %v, want only a.png and b.png", urls)
+	}
+}

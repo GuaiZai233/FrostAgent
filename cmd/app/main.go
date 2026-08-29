@@ -224,6 +224,8 @@ func init() {
 		globalStickerStealer = sticker.NewStealer(globalStickerStore, globalStickerSummarizer)
 		stickerTool := tools.SendStickerTool(globalStickerStore)
 		registry[stickerTool.Name()] = stickerTool
+		stealStickerTool := tools.StealStickerTool(globalStickerStealer)
+		registry[stealStickerTool.Name()] = stealStickerTool
 		logs.Info(logs.SYSTEM, "✓ 表情包摘取子系统已初始化")
 		globalStickerSummarizer.EnqueueUnsummarized()
 	}

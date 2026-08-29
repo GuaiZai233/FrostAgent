@@ -47,11 +47,26 @@ func (a *Adapter) trySteal(event Event) {
 	if a.stealer == nil || event.MessageType != "group" || event.Platform != astrBotQQPlatform {
 		return
 	}
-	for _, att := range event.Attachments {
+	for _, stickerURL := range stickerURLsFromAttachments(event.Attachments) {
+		a.stealer.TrySteal(stickerURL)
+	}
+}
+
+func stickerURLsForEvent(event Event) []string {
+	if event.Platform != astrBotQQPlatform {
+		return nil
+	}
+	return stickerURLsFromAttachments(event.Attachments)
+}
+
+func stickerURLsFromAttachments(attachments []core.Attachment) []string {
+	var urls []string
+	for _, att := range attachments {
 		if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
-			a.stealer.TrySteal(att.URL)
+			urls = append(urls, att.URL)
 		}
 	}
+	return urls
 }
 
 // ID 返回平台唯一标识 "astrbot"
