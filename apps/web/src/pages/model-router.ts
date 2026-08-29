@@ -465,6 +465,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       ? endpoint.apiKeyRef
       : 'UPSTREAM_API_KEY';
     let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
+    const secretInputField = () => `<div style="position:relative"><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret" style="padding-right:2.5rem"><button type="button" class="btn btn-ghost btn-icon-sm text-muted" id="endpoint-key-reveal" title="短暂显示 API Key" aria-label="短暂显示 API Key" aria-pressed="false" style="position:absolute;right:0.125rem;top:50%;transform:translateY(-50%);width:2rem;height:2rem">${icon('eye', 'w-3.5 h-3.5')}</button></div>`;
     const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
       ? `<button type="button" class="btn btn-outline btn-sm text-destructive mt-2" id="endpoint-clear-secret">${clearSecret ? '取消清除 API Key' : '清除已保存的 API Key'}</button>${clearSecret ? '<p class="form-hint text-destructive">发布配置后将明确删除现有 Secret。</p>' : ''}`
       : '';
@@ -475,10 +476,10 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
-          return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret"></div>${secretAction()}`;
+          return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
         case apiKeyStorageManual:
         default:
-          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router_secrets.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret"></div>${secretAction()}`;
+          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router_secrets.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
       }
     };
     void openDialog({
@@ -506,6 +507,33 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         };
         const renderStorageDetails = () => {
           storageDetails.innerHTML = keyStorageDetails();
+          const secretInputElement = dialog.querySelector<HTMLInputElement>('#endpoint-key');
+          const revealButton = dialog.querySelector<HTMLButtonElement>('#endpoint-key-reveal');
+          if (secretInputElement && revealButton) {
+            let hideTimer: number | undefined;
+            const hideSecret = () => {
+              if (hideTimer !== undefined) window.clearTimeout(hideTimer);
+              hideTimer = undefined;
+              secretInputElement.type = 'password';
+              revealButton.title = '短暂显示 API Key';
+              revealButton.setAttribute('aria-label', '短暂显示 API Key');
+              revealButton.setAttribute('aria-pressed', 'false');
+              revealButton.innerHTML = icon('eye', 'w-3.5 h-3.5');
+            };
+            revealButton.addEventListener('click', () => {
+              if (secretInputElement.type === 'text') {
+                hideSecret();
+                return;
+              }
+              secretInputElement.type = 'text';
+              revealButton.title = '隐藏 API Key';
+              revealButton.setAttribute('aria-label', '隐藏 API Key');
+              revealButton.setAttribute('aria-pressed', 'true');
+              revealButton.innerHTML = icon('eye_off', 'w-3.5 h-3.5');
+              hideTimer = window.setTimeout(hideSecret, 3000);
+            });
+            revealButton.addEventListener('blur', hideSecret);
+          }
           dialog.querySelector('#endpoint-clear-secret')?.addEventListener('click', () => {
             captureStorageValue();
             clearSecret = !clearSecret;
