@@ -61,13 +61,13 @@ def is_ws_open(ws: Any) -> bool:
 
 
 class StickerImage:
-    """OneBot image segment with sub_type=1 (sticker).
+    """OneBot image segment with compatible sticker subtype fields.
 
     NOT a subclass of AstrBot's Image: aiocqhttp's _from_segment_to_dict
     checks isinstance(segment, Image) and force-converts to base64 with only
     ``file`` in data, discarding any extra fields.  By being a plain class we
     bypass that branch and land in the generic ``segment.toDict()`` fallback,
-    which preserves sub_type in the serialized OneBot segment.
+    which preserves both NapCat's sub_type and LLBot's subType fields.
     """
 
     def __init__(self, file: str):
@@ -75,7 +75,14 @@ class StickerImage:
         self.type = "image"
 
     def toDict(self) -> dict:
-        return {"type": "image", "data": {"file": self.file, "sub_type": 1}}
+        return {
+            "type": "image",
+            "data": {
+                "file": self.file,
+                "sub_type": 1,
+                "subType": 1,
+            },
+        }
 
     async def to_dict(self) -> dict:
         return self.toDict()
@@ -872,7 +879,7 @@ async def deliver_action_to_astrbot(
 
     # AstrBot's RespondStage treats unregistered custom component classes as an
     # empty chain. Send StickerImage directly so aiocqhttp can serialize its
-    # OneBot sub_type=1 payload instead of dropping it before platform delivery.
+    # OneBot sticker subtype payload instead of dropping it before delivery.
     try:
         await event.send(MessageChain(parts))
         logger.info("[frostagent-adapter] 表情包已交付平台发送")

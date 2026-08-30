@@ -339,8 +339,8 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
 
-    def test_sticker_image_serializes_sub_type(self) -> None:
-        """StickerImage.toDict() must produce a OneBot segment with sub_type=1."""
+    def test_sticker_image_serializes_compatible_sub_types(self) -> None:
+        """StickerImage must support snake-case and LLBot camel-case fields."""
         with load_plugin_module() as module:
             sticker = module.StickerImage("base64://c3RpY2tlcg==")
             result = sticker.toDict()
@@ -350,6 +350,7 @@ class MessageComponentTests(unittest.TestCase):
                 "data": {
                     "file": "base64://c3RpY2tlcg==",
                     "sub_type": 1,
+                    "subType": 1,
                 },
             })
 
@@ -387,6 +388,7 @@ class MessageComponentTests(unittest.TestCase):
             self.assertIsInstance(parts[0], module.StickerImage)
             payload = parts[0].toDict()
             self.assertEqual(payload["data"]["sub_type"], 1)
+            self.assertEqual(payload["data"]["subType"], 1)
             self.assertEqual(
                 payload["data"]["file"],
                 "base64://" + base64.b64encode(image_data).decode("ascii"),
@@ -419,6 +421,7 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(len(event.sent[0].chain), 1)
             self.assertIsInstance(event.sent[0].chain[0], module.StickerImage)
             self.assertEqual(event.sent[0].chain[0].toDict()["data"]["sub_type"], 1)
+            self.assertEqual(event.sent[0].chain[0].toDict()["data"]["subType"], 1)
 
     def test_sticker_http_failure_does_not_create_payload(self) -> None:
         action = {

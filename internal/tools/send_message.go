@@ -155,6 +155,7 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 			segData := map[string]interface{}{"file": fileData}
 			if Msg.Type == "image" && Msg.IsSticker {
 				segData["sub_type"] = 1
+				segData["subType"] = 1
 			}
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: Msg.Type,

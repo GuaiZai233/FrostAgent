@@ -107,6 +107,9 @@ func TestBuildOneBotMessageEncodesStickerPathAsBase64(t *testing.T) {
 	if got := segments[0].Data["sub_type"]; got != 1 {
 		t.Fatalf("sticker sub_type = %v, want 1", got)
 	}
+	if got := segments[0].Data["subType"]; got != 1 {
+		t.Fatalf("sticker subType = %v, want 1", got)
+	}
 }
 
 func TestBuildOneBotMessageReturnsStickerReadError(t *testing.T) {
@@ -134,5 +137,8 @@ func TestBuildOneBotMessageKeepsRegularImagePath(t *testing.T) {
 	}
 	if _, ok := segments[0].Data["sub_type"]; ok {
 		t.Fatalf("regular image unexpectedly has sticker subtype: %+v", segments[0])
+	}
+	if _, ok := segments[0].Data["subType"]; ok {
+		t.Fatalf("regular image unexpectedly has LLBot sticker subtype: %+v", segments[0])
 	}
 }
