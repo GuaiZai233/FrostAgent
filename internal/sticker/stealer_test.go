@@ -160,6 +160,15 @@ func TestStealer_ConcurrentTheft(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+
+	// TrySteal returns after scheduling accepted work. Occupying every semaphore
+	// slot waits for those workers before t.TempDir starts removing the store.
+	for i := 0; i < cap(stealer.sem); i++ {
+		stealer.sem <- struct{}{}
+	}
+	for i := 0; i < cap(stealer.sem); i++ {
+		<-stealer.sem
+	}
 }
 
 func TestDownloadImage_RejectsOversized(t *testing.T) {
