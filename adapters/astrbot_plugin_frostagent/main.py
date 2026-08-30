@@ -5,6 +5,7 @@ import base64
 import inspect
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +87,8 @@ class StickerFetchError(RuntimeError):
 
 MAX_STICKER_DOWNLOAD_BYTES = 10 * 1024 * 1024
 STICKER_IMAGE_PATH_PREFIX = "/api/sticker/"
+MARKET_FACE_URL_PREFIX = "https://gxh.vip.qq.com/club/item/parcel/item/"
+MARKET_FACE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{2,128}")
 
 
 def sticker_download_url(source: str, http_base_url: str) -> str:
@@ -500,33 +503,63 @@ def extract_reply_message_id(event: AstrMessageEvent) -> str:
     return ""
 
 
-async def image_attachment(comp: Any, message_id: str) -> dict[str, Any] | None:
-    sub_type = first_attr(comp, "sub_type", "subtype", "subType")
-    raw_data = getattr(comp, "raw", None) or getattr(comp, "data", None)
-    if isinstance(raw_data, dict) and sub_type is None:
-        sub_type = raw_data.get("sub_type") or raw_data.get("subtype")
+def market_face_url(emoji_id: Any) -> str:
+    value = str(emoji_id or "").strip()
+    if not MARKET_FACE_ID_PATTERN.fullmatch(value):
+        return ""
+    return f"{MARKET_FACE_URL_PREFIX}{value[:2]}/{value}/raw300.gif"
 
-    encoded = ""
-    converter = getattr(comp, "convert_to_base64", None)
+
+def image_source_from_data(data: Any) -> str:
+    for name in ("url", "file", "path"):
+        source = str(first_attr(data, name) or "").strip()
+        if source.startswith(("http://", "https://", "base64://", "data:")):
+            return source
+    return market_face_url(first_attr(data, "emoji_id", "emojiId"))
+
+
+def is_market_face_data(data: Any, segment_type: str = "image") -> bool:
+    if segment_type == "mface":
+        return True
+    if segment_type != "image":
+        return False
+    if first_attr(data, "emoji_id", "emojiId", "emoji_package_id", "emojiPackageId") is not None:
+        return True
+    if str(first_attr(data, "file") or "").strip().lower() == "marketface":
+        return True
+    source = str(first_attr(data, "url", "path") or "").strip().lower()
+    return source.startswith(MARKET_FACE_URL_PREFIX)
+
+
+def is_sticker_sub_type(value: Any) -> bool:
     try:
-        if callable(converter):
-            converted = converter()
-            if inspect.isawaitable(converted):
-                converted = await converted
-            encoded = str(converted or "")
-        else:
-            source = str(first_attr(comp, "url", "file", "path") or "")
-            if source.startswith("base64://"):
-                encoded = source.removeprefix("base64://")
-            elif source.startswith("data:") and ";base64," in source:
-                encoded = source.split(",", 1)[1]
-            elif source.startswith(("http://", "https://")):
-                encoded = await asyncio.to_thread(download_sticker_as_base64, source)
-                encoded = encoded.removeprefix("base64://")
-    except Exception as exc:
-        logger.warning(f"[frostagent-adapter] 入站图片转换 Base64 失败: {exc}")
-        return None
+        return int(value) == 1
+    except (TypeError, ValueError):
+        return False
 
+
+async def source_image_attachment(
+    source: str,
+    message_id: str,
+    sub_type: int,
+) -> dict[str, Any] | None:
+    source = source.strip()
+    encoded = ""
+    if source.startswith("base64://"):
+        encoded = source.removeprefix("base64://")
+    elif source.startswith("data:") and ";base64," in source:
+        encoded = source.split(",", 1)[1]
+    elif source.startswith(("http://", "https://")):
+        encoded = await asyncio.to_thread(download_sticker_as_base64, source)
+        encoded = encoded.removeprefix("base64://")
+    return encoded_image_attachment(encoded, message_id, sub_type)
+
+
+def encoded_image_attachment(
+    encoded: str,
+    message_id: str,
+    sub_type: Any,
+) -> dict[str, Any] | None:
     encoded = encoded.removeprefix("base64://")
     if not encoded:
         return None
@@ -552,28 +585,150 @@ async def image_attachment(comp: Any, message_id: str) -> dict[str, Any] | None:
     return attachment
 
 
+def component_image_data(comp: Any) -> dict[str, Any]:
+    raw_data = first_attr(comp, "raw", "data")
+    data = dict(raw_data) if isinstance(raw_data, dict) else {}
+    aliases = {
+        "url": ("url",),
+        "file": ("file",),
+        "path": ("path",),
+        "sub_type": ("sub_type", "subtype", "subType"),
+        "emoji_id": ("emoji_id", "emojiId"),
+        "emoji_package_id": ("emoji_package_id", "emojiPackageId"),
+    }
+    for target, names in aliases.items():
+        value = first_attr(comp, *names)
+        if value is not None and target not in data:
+            data[target] = value
+    return data
+
+
+async def image_attachment(comp: Any, message_id: str) -> dict[str, Any] | None:
+    data = component_image_data(comp)
+    sub_type = first_attr(data, "sub_type", "subtype", "subType")
+    source = image_source_from_data(data)
+    comp_type = type(comp).__name__.lower()
+    if is_market_face_data(data, "mface" if comp_type == "mface" else "image"):
+        sub_type = 1
+
+    encoded = ""
+    converter = getattr(comp, "convert_to_base64", None)
+    try:
+        if callable(converter):
+            converted = converter()
+            if inspect.isawaitable(converted):
+                converted = await converted
+            encoded = str(converted or "")
+        elif source:
+            return await source_image_attachment(source, message_id, int(sub_type or 0))
+    except Exception as exc:
+        logger.warning(f"[frostagent-adapter] 入站图片转换 Base64 失败: {exc}")
+        return None
+
+    return encoded_image_attachment(encoded, message_id, sub_type)
+
+
+def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
+    message_obj = getattr_chain(event, "message_obj")
+    raw_event = first_attr(message_obj, "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    segments = first_attr(raw_event, "message")
+    if isinstance(segments, str):
+        try:
+            segments = json.loads(segments)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(segments, list):
+        return []
+    return [segment for segment in segments if isinstance(segment, dict)]
+
+
+async def raw_sticker_attachments(
+    event: AstrMessageEvent,
+    message_id: str,
+    handled_sources: set[str],
+) -> list[dict[str, Any]]:
+    attachments = []
+    for segment in raw_onebot_segments(event):
+        segment_type = str(first_attr(segment, "type") or "").lower()
+        data = first_attr(segment, "data")
+        if not isinstance(data, dict):
+            continue
+        is_sticker = segment_type == "mface" or (
+            segment_type == "image"
+            and (
+                is_sticker_sub_type(first_attr(data, "sub_type", "subtype", "subType"))
+                or is_market_face_data(data, segment_type)
+            )
+        )
+        if not is_sticker:
+            continue
+        source = image_source_from_data(data)
+        if not source:
+            logger.warning("[frostagent-adapter] mface 消息缺少可读取的数据，已忽略")
+            continue
+        if source in handled_sources:
+            continue
+        try:
+            attachment = await source_image_attachment(source, message_id, 1)
+        except Exception as exc:
+            logger.warning(f"[frostagent-adapter] mface 转换 Base64 失败: {exc}")
+            continue
+        if attachment:
+            attachments.append(attachment)
+    return attachments
+
+
+def append_unique_attachment(
+    attachments: list[dict[str, Any]],
+    attachment: dict[str, Any] | None,
+) -> None:
+    if attachment is None:
+        return
+    for existing in attachments:
+        if (
+            existing.get("message_id") == attachment.get("message_id")
+            and existing.get("content") == attachment.get("content")
+        ):
+            if attachment.get("sub_type") == 1:
+                existing["sub_type"] = 1
+            return
+    attachments.append(attachment)
+
+
 async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
     attachments = []
+    handled_sticker_sources: set[str] = set()
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
-            if "image" in comp_type:
+            if "image" in comp_type or comp_type == "mface":
                 attachment = await image_attachment(comp, message_id)
-                if attachment:
-                    attachments.append(attachment)
+                append_unique_attachment(attachments, attachment)
+                if attachment and attachment.get("sub_type") == 1:
+                    source = image_source_from_data(component_image_data(comp))
+                    if source:
+                        handled_sticker_sources.add(source)
             elif comp_type == "reply":
                 reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
                 chain = first_attr(comp, "chain", "message", "origin", "content")
                 if not reply_id or not isinstance(chain, list):
                     continue
                 for quoted_comp in chain:
-                    if "image" not in type(quoted_comp).__name__.lower():
+                    quoted_type = type(quoted_comp).__name__.lower()
+                    if "image" not in quoted_type and quoted_type != "mface":
                         continue
                     attachment = await image_attachment(quoted_comp, reply_id)
-                    if attachment:
-                        attachments.append(attachment)
+                    append_unique_attachment(attachments, attachment)
+    for attachment in await raw_sticker_attachments(
+        event,
+        message_id,
+        handled_sticker_sources,
+    ):
+        append_unique_attachment(attachments, attachment)
     return attachments
 
 
@@ -648,6 +803,10 @@ def first_attr(obj: Any, *names: str) -> Any:
     if obj is None:
         return None
     for name in names:
+        if isinstance(obj, dict) and name in obj:
+            value = obj[name]
+            if value is not None:
+                return value
         if hasattr(obj, name):
             value = getattr(obj, name)
             if value is not None:

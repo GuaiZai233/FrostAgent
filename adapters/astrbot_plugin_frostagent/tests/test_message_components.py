@@ -27,9 +27,10 @@ class FakeImage:
 
 
 class InboundImage:
-    def __init__(self, data: bytes, sub_type: int = 1) -> None:
+    def __init__(self, data: bytes, sub_type: int = 1, url: str = "") -> None:
         self.data_bytes = data
         self.subType = sub_type
+        self.url = url
 
     async def convert_to_base64(self) -> str:
         return base64.b64encode(self.data_bytes).decode("ascii")
@@ -42,13 +43,15 @@ class Reply:
 
 
 class MessageObject:
-    def __init__(self, message: list[object]) -> None:
+    def __init__(self, message: list[object], raw_message: object = None) -> None:
         self.message = message
+        self.raw_message = raw_message
 
 
 class InboundEvent:
-    def __init__(self, message: list[object]) -> None:
-        self.message_obj = MessageObject(message)
+    def __init__(self, message: list[object], raw_segments: list[dict] = None) -> None:
+        raw_message = {"message": raw_segments} if raw_segments is not None else None
+        self.message_obj = MessageObject(message, raw_message)
 
 
 class FakeHTTPResponse:
@@ -150,6 +153,50 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(attachments[0]["content"]), current_data)
             self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
             self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
+
+    def test_market_face_image_without_sub_type_is_a_sticker(self) -> None:
+        image_data = b"market-face"
+        market_url = (
+            "https://gxh.vip.qq.com/club/item/parcel/item/ab/abcdef/raw300.gif"
+        )
+        event = InboundEvent([InboundImage(image_data, sub_type=0, url=market_url)])
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_market"))
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["sub_type"], 1)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), image_data)
+
+    def test_raw_mface_is_derived_and_forwarded_as_base64(self) -> None:
+        image_data = b"native-mface"
+        event = InboundEvent([], raw_segments=[{
+            "type": "mface",
+            "data": {
+                "emoji_id": "abcdef",
+                "emoji_package_id": "123",
+                "key": "key",
+            },
+        }])
+
+        with load_plugin_module() as module:
+            with patch.object(
+                module,
+                "urlopen",
+                return_value=FakeHTTPResponse(image_data),
+            ) as mocked_urlopen:
+                attachments = asyncio.run(
+                    module.extract_attachments(event, "msg_mface")
+                )
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["sub_type"], 1)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), image_data)
+            request = mocked_urlopen.call_args.args[0]
+            self.assertEqual(
+                request.full_url,
+                "https://gxh.vip.qq.com/club/item/parcel/item/ab/abcdef/raw300.gif",
+            )
 
     def test_mention_user_and_plain_build_ordered_chain(self) -> None:
         action = {

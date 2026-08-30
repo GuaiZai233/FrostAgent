@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -257,16 +256,12 @@ func (a *Adapter) Handler() http.HandlerFunc {
 func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
 	var sources []string
 	for _, seg := range segments {
-		if seg.Type != "image" || !isStickerSubType(seg.Data["sub_type"]) {
+		if seg.Type != "mface" &&
+			(seg.Type != "image" || (!isStickerSubType(seg.Data["sub_type"]) && !content.IsMarketFaceSegment(seg))) {
 			continue
 		}
-		if file, ok := seg.Data["file"].(string); ok &&
-			(strings.HasPrefix(file, "base64://") || strings.HasPrefix(file, "data:")) {
-			sources = append(sources, file)
-			continue
-		}
-		if imageURL, ok := seg.Data["url"].(string); ok && imageURL != "" {
-			sources = append(sources, imageURL)
+		if source := content.SegmentImageSource(seg); source != "" {
+			sources = append(sources, source)
 		}
 	}
 	return sources
