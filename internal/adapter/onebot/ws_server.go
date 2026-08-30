@@ -153,7 +153,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			return
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext.Prompt, responseContext, routeSnapshot)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
 
 	} else if event.MessageType == "private" {
 		logs.Info(
@@ -167,12 +167,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		)
 		replyContext := conn.lookupReplyContext(event)
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt, responseContext, routeSnapshot)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext string, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot) {
 	routeScope := oneBotRouteScope(event)
 	if routeSnapshot == nil && engine != nil && engine.ModelRouter != nil {
 		routeSnapshot = engine.ModelRouter.Snapshot()
@@ -190,40 +190,48 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	userText := extractUserText(segments, event.Message)
-	if content.IsContainImage(segments) {
-		visionEnabled := engine != nil && engine.VisionProvider != nil
-		if visionEnabled && routeSnapshot != nil {
-			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	currentHasImage := content.IsContainImage(segments)
+	replyHasImage := content.IsContainImage(replyContext.Segments)
+	visionEnabled := engine != nil && engine.VisionProvider != nil
+	if visionEnabled && routeSnapshot != nil {
+		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	}
+
+	// Fast-fail once before downloading or processing either current or quoted images.
+	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled {
+		bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+		bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
+		bCancel()
+		if err != nil {
+			if errors.Is(err, billing.ErrInsufficientFunds) {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+				return
+			}
+			logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+			return
 		}
+		if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
+			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
+			return
+		}
+	}
+
+	if currentHasImage {
 		if !visionEnabled {
 			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
 		} else {
-			// Fast-fail balance check before downloading images or calling vision LLM
-			if engine != nil && engine.BillingClient != nil && engine.BillingConfig.Enabled {
-				bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
-				bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
-				bCancel()
-				if err != nil {
-					if errors.Is(err, billing.ErrInsufficientFunds) {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-						sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
-						return
-					}
-					logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
-					return
-				}
-				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-					sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
-					return
-				}
-			}
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
 				userText = userText + " 【图片内容】：" + imageDesc
 			}
 		}
+	}
+	if replyHasImage && visionEnabled {
+		imageDesc := content.ProcessImage(routeCtx, replyContext.Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+		replyContext.addImageDescription(imageDesc)
 	}
 
 	// 检查单条用户消息输入上限保护
@@ -304,8 +312,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
-	if replyContext != "" {
-		requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", replyContext)
+	if replyContext.Prompt != "" {
+		requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", replyContext.Prompt)
 	}
 
 	// 4. Call the agent engine with history

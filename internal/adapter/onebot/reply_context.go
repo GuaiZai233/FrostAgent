@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"encoding/json"
@@ -104,6 +105,7 @@ func (c *wsConnection) registerActionRequest(actionName, existingEcho string) (s
 type resolvedReplyContext struct {
 	Prompt      string
 	MentionsBot bool
+	Segments    []content.MessageSegment
 }
 
 type oneBotMessageData struct {
@@ -210,7 +212,8 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 		return resolvedReplyContext{}
 	}
 
-	visibleText := extractUserText(ParseMessageSegments(data.Message), data.Message)
+	segments := ParseMessageSegments(data.Message)
+	visibleText := extractUserText(segments, data.Message)
 	context := map[string]interface{}{
 		"message_id": messageID,
 		"message":    visibleText,
@@ -236,7 +239,29 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 	return resolvedReplyContext{
 		Prompt:      string(prompt),
 		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames()),
+		Segments:    segments,
 	}
+}
+
+func (r *resolvedReplyContext) addImageDescription(description string) {
+	description = strings.TrimSpace(description)
+	if r == nil || r.Prompt == "" || description == "" {
+		return
+	}
+
+	var context map[string]interface{}
+	if err := json.Unmarshal([]byte(r.Prompt), &context); err != nil {
+		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("解析引用上下文失败: %v", err))
+		return
+	}
+	context["image_description"] = description
+
+	prompt, err := json.Marshal(context)
+	if err != nil {
+		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用图片描述失败: %v", err))
+		return
+	}
+	r.Prompt = string(prompt)
 }
 
 func replyMessageID(event model.OneBotEvent) (int64, bool) {
