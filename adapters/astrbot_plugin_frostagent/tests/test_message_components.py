@@ -137,15 +137,14 @@ def load_plugin_module():
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
     event = types.ModuleType("astrbot.api.event")
-    message = types.ModuleType("astrbot.api.message")
     star = types.ModuleType("astrbot.api.star")
     components = types.ModuleType("astrbot.api.message_components")
     websockets = types.ModuleType("websockets")
 
     api.logger = FakeLogger()
     event.AstrMessageEvent = type("AstrMessageEvent", (), {})
+    event.MessageChain = FakeMessageChain
     event.filter = FakeFilter()
-    message.MessageChain = FakeMessageChain
     star.Context = type("Context", (), {})
     star.Star = type("Star", (), {})
     star.register = fake_register
@@ -157,7 +156,6 @@ def load_plugin_module():
         "astrbot": astrbot,
         "astrbot.api": api,
         "astrbot.api.event": event,
-        "astrbot.api.message": message,
         "astrbot.api.star": star,
         "astrbot.api.message_components": components,
         "websockets": websockets,

@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 import websockets
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, register
 
 __all__ = ["FrostAgentAdapter", "StickerImage"]
@@ -266,8 +266,6 @@ class FrostAgentWSClient:
             return
 
         try:
-            from astrbot.api.message import MessageChain
-
             action = await resolve_sticker_sources(action, self.settings.http_base_url)
             parts = action_to_message_components(action)
             if not parts:
@@ -846,8 +844,6 @@ async def deliver_action_to_astrbot(
     # empty chain. Send StickerImage directly so aiocqhttp can serialize its
     # OneBot sub_type=1 payload instead of dropping it before platform delivery.
     try:
-        from astrbot.api.message import MessageChain
-
         await event.send(MessageChain(parts))
         logger.info("[frostagent-adapter] 表情包已交付平台发送")
     except Exception as e:
