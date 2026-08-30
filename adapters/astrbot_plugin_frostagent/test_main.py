@@ -64,6 +64,11 @@ class At:
         self.qq = qq
 
 
+class Image:
+    def __init__(self, url: str):
+        self.url = url
+
+
 class FakeEvent:
     def __init__(
         self,
@@ -72,11 +77,16 @@ class FakeEvent:
         content: str = "",
         is_wake: bool = False,
         mention_bot: bool = False,
+        image_url: str = "",
     ):
         components = [At("bot_self")] if mention_bot else []
+        if image_url:
+            components.append(Image(image_url))
         self.message_id = "msg_test"
         self.platform = "test"
         self.is_at_or_wake_command = is_wake
+        self.call_llm = False
+        self.should_call_llm_calls: list[bool] = []
         self.message_obj = SimpleNamespace(
             message=components,
             sender=SimpleNamespace(nickname="测试用户", card=""),
@@ -97,11 +107,19 @@ class FakeEvent:
     def get_self_id(self) -> str:
         return "bot_self"
 
+    def plain_result(self, content: str) -> dict[str, str]:
+        return {"content": content}
+
+    def should_call_llm(self, call_llm: bool) -> None:
+        self.call_llm = call_llm
+        self.should_call_llm_calls.append(call_llm)
+
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, actions: list[dict[str, Any]] | None = None):
         self.sent_events: list[dict[str, Any]] = []
         self.queue: asyncio.Queue | None = None
+        self.actions = actions or [{"action": "noop"}]
 
     def register_waiter(self, _msg_id: str) -> asyncio.Queue:
         self.queue = asyncio.Queue()
@@ -113,7 +131,8 @@ class FakeClient:
     async def send_event(self, payload: dict[str, Any]) -> None:
         self.sent_events.append(payload)
         assert self.queue is not None
-        await self.queue.put({"action": "noop"})
+        for action in self.actions:
+            await self.queue.put(action)
 
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
@@ -158,6 +177,34 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
     async def test_empty_private_wake_event_is_dropped(self):
         sent = await self.forward(FakeEvent(is_wake=True))
         self.assertEqual(sent, [])
+
+    async def test_image_reply_disables_astrbot_default_llm(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.client = FakeClient([{"action": "reply", "content": "FrostAgent 回复"}])
+        event = FakeEvent(image_url="https://example.com/image.png")
+
+        results = [
+            result async for result in adapter.forward_to_frostagent(event)
+        ]
+
+        self.assertEqual(results, [{"content": "FrostAgent 回复"}])
+        self.assertTrue(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [True])
+
+    async def test_noop_keeps_event_propagation_unchanged(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.client = FakeClient()
+        event = FakeEvent(group_id="group_test", content="普通群聊消息")
+
+        results = [
+            result async for result in adapter.forward_to_frostagent(event)
+        ]
+
+        self.assertEqual(results, [])
+        self.assertFalse(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [])
 
 
 if __name__ == "__main__":

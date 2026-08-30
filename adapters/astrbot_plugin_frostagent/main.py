@@ -183,7 +183,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.0",
+    "0.1.1",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -225,7 +225,12 @@ class FrostAgentAdapter(Star):
                 if action.get("action") == "noop":
                     break
 
-                for response in action_to_astrbot_result(event, action):
+                responses = action_to_astrbot_result(event, action)
+                if responses:
+                    # FrostAgent 已接管本次回复，仅阻止 AstrBot 默认 LLM 再处理同一事件。
+                    event.should_call_llm(True)
+
+                for response in responses:
                     yield response
 
                 # 如果不是中间消息（即最终回复），则本次交互轮次结束
