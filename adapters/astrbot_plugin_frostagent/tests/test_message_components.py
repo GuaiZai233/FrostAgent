@@ -193,6 +193,60 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
             self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
 
+    def test_raw_image_sticker_sub_type_is_preserved_without_downloadable_source(self) -> None:
+        image_data = b"custom-sticker"
+        event = InboundEvent(
+            [InboundImage(image_data, sub_type=0)],
+            raw_segments=[{
+                "type": "image",
+                "data": {"file": "cached-image-token", "sub_type": 1},
+            }],
+        )
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_sticker"))
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["sub_type"], 1)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), image_data)
+
+    def test_raw_regular_image_remains_non_sticker(self) -> None:
+        image_data = b"regular-image"
+        event = InboundEvent(
+            [InboundImage(image_data, sub_type=0)],
+            raw_segments=[{
+                "type": "image",
+                "data": {"file": "cached-image-token", "sub_type": 0},
+            }],
+        )
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_image"))
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["sub_type"], 0)
+
+    def test_quoted_raw_image_sticker_sub_type_is_preserved(self) -> None:
+        image_data = b"quoted-custom-sticker"
+        bot = FakeBot({
+            "message": [{
+                "type": "image",
+                "data": {"file": "quoted-cache-token", "sub_type": 1},
+            }],
+        })
+        event = InboundEvent(
+            [Reply("42", [InboundImage(image_data, sub_type=0)])],
+            bot=bot,
+        )
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current"))
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["message_id"], "42")
+            self.assertEqual(attachments[0]["sub_type"], 1)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), image_data)
+
     def test_market_face_image_without_sub_type_is_a_sticker(self) -> None:
         image_data = b"market-face"
         market_url = (
