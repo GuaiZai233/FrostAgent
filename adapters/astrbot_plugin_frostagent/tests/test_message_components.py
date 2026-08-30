@@ -49,9 +49,29 @@ class MessageObject:
 
 
 class InboundEvent:
-    def __init__(self, message: list[object], raw_segments: list[dict] = None) -> None:
-        raw_message = {"message": raw_segments} if raw_segments is not None else None
+    def __init__(
+        self,
+        message: list[object],
+        raw_segments: list[dict] = None,
+        bot: object = None,
+    ) -> None:
+        raw_message = (
+            {"message": raw_segments, "self_id": "bot_self"}
+            if raw_segments is not None
+            else None
+        )
         self.message_obj = MessageObject(message, raw_message)
+        self.bot = bot
+
+
+class FakeBot:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.calls: list[dict] = []
+
+    async def call_action(self, **params) -> dict:
+        self.calls.append(params)
+        return self.response
 
 
 class FakeHTTPResponse:
@@ -197,6 +217,39 @@ class MessageComponentTests(unittest.TestCase):
                 request.full_url,
                 "https://gxh.vip.qq.com/club/item/parcel/item/ab/abcdef/raw300.gif",
             )
+
+    def test_quoted_mface_is_recovered_from_onebot_get_msg(self) -> None:
+        image_data = b"quoted-native-mface"
+        bot = FakeBot({
+            "message": [{
+                "type": "mface",
+                "data": {
+                    "emoji_id": "abcdef",
+                    "emoji_package_id": "123",
+                    "key": "key",
+                },
+            }],
+        })
+        event = InboundEvent([Reply("42", [])], bot=bot)
+
+        with load_plugin_module() as module:
+            with patch.object(
+                module,
+                "urlopen",
+                return_value=FakeHTTPResponse(image_data),
+            ):
+                attachments = asyncio.run(
+                    module.extract_attachments(event, "msg_current")
+                )
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["message_id"], "42")
+            self.assertEqual(attachments[0]["sub_type"], 1)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), image_data)
+            self.assertEqual(bot.calls, [{
+                "action": "get_msg",
+                "message_id": 42,
+            }])
 
     def test_mention_user_and_plain_build_ordered_chain(self) -> None:
         action = {

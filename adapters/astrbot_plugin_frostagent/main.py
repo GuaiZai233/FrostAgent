@@ -86,6 +86,7 @@ class StickerFetchError(RuntimeError):
 
 
 MAX_STICKER_DOWNLOAD_BYTES = 10 * 1024 * 1024
+REPLY_LOOKUP_TIMEOUT_SECONDS = 5
 STICKER_IMAGE_PATH_PREFIX = "/api/sticker/"
 MARKET_FACE_URL_PREFIX = "https://gxh.vip.qq.com/club/item/parcel/item/"
 MARKET_FACE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{2,128}")
@@ -628,12 +629,10 @@ async def image_attachment(comp: Any, message_id: str) -> dict[str, Any] | None:
     return encoded_image_attachment(encoded, message_id, sub_type)
 
 
-def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
-    message_obj = getattr_chain(event, "message_obj")
-    raw_event = first_attr(message_obj, "raw_message", "raw_msg")
-    if raw_event is None:
-        raw_event = first_attr(event, "raw_message", "raw_msg")
-    segments = first_attr(raw_event, "message")
+def onebot_segments_from_payload(payload: Any) -> list[dict[str, Any]]:
+    segments = first_attr(payload, "message")
+    if segments is None:
+        segments = first_attr(first_attr(payload, "data"), "message")
     if isinstance(segments, str):
         try:
             segments = json.loads(segments)
@@ -644,13 +643,59 @@ def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
     return [segment for segment in segments if isinstance(segment, dict)]
 
 
-async def raw_sticker_attachments(
+def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
+    message_obj = getattr_chain(event, "message_obj")
+    raw_event = first_attr(message_obj, "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    return onebot_segments_from_payload(raw_event)
+
+
+async def lookup_reply_onebot_segments(
     event: AstrMessageEvent,
+    message_id: str,
+) -> list[dict[str, Any]]:
+    bot = first_attr(event, "bot")
+    call_action = getattr(bot, "call_action", None)
+    if not callable(call_action):
+        return []
+
+    lookup_id: int | str = message_id
+    if re.fullmatch(r"-?\d+", message_id):
+        lookup_id = int(message_id)
+    params: dict[str, Any] = {
+        "action": "get_msg",
+        "message_id": lookup_id,
+    }
+    message_obj = getattr_chain(event, "message_obj")
+    raw_event = first_attr(message_obj, "raw_message", "raw_msg")
+    self_id = first_attr(raw_event, "self_id") or call_noargs(event, "get_self_id")
+    if self_id is not None and str(self_id).strip():
+        params["self_id"] = self_id
+
+    try:
+        response = call_action(**params)
+        if inspect.isawaitable(response):
+            response = await asyncio.wait_for(
+                response,
+                timeout=REPLY_LOOKUP_TIMEOUT_SECONDS,
+            )
+    except Exception as exc:
+        logger.warning(
+            f"[frostagent-adapter] 回查引用消息 {message_id} 失败，"
+            f"无法恢复可能被 AstrBot 丢弃的 mface: {exc}"
+        )
+        return []
+    return onebot_segments_from_payload(response)
+
+
+async def sticker_attachments_from_segments(
+    segments: list[dict[str, Any]],
     message_id: str,
     handled_sources: set[str],
 ) -> list[dict[str, Any]]:
     attachments = []
-    for segment in raw_onebot_segments(event):
+    for segment in segments:
         segment_type = str(first_attr(segment, "type") or "").lower()
         data = first_attr(segment, "data")
         if not isinstance(data, dict):
@@ -680,6 +725,18 @@ async def raw_sticker_attachments(
     return attachments
 
 
+async def raw_sticker_attachments(
+    event: AstrMessageEvent,
+    message_id: str,
+    handled_sources: set[str],
+) -> list[dict[str, Any]]:
+    return await sticker_attachments_from_segments(
+        raw_onebot_segments(event),
+        message_id,
+        handled_sources,
+    )
+
+
 def append_unique_attachment(
     attachments: list[dict[str, Any]],
     attachment: dict[str, Any] | None,
@@ -700,6 +757,7 @@ def append_unique_attachment(
 async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
     attachments = []
     handled_sticker_sources: set[str] = set()
+    reply_sticker_sources: dict[str, set[str]] = {}
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
     if isinstance(components, list):
@@ -714,8 +772,11 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                         handled_sticker_sources.add(source)
             elif comp_type == "reply":
                 reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
+                if not reply_id:
+                    continue
+                quoted_sources = reply_sticker_sources.setdefault(reply_id, set())
                 chain = first_attr(comp, "chain", "message", "origin", "content")
-                if not reply_id or not isinstance(chain, list):
+                if not isinstance(chain, list):
                     continue
                 for quoted_comp in chain:
                     quoted_type = type(quoted_comp).__name__.lower()
@@ -723,12 +784,24 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                         continue
                     attachment = await image_attachment(quoted_comp, reply_id)
                     append_unique_attachment(attachments, attachment)
+                    if attachment and attachment.get("sub_type") == 1:
+                        source = image_source_from_data(component_image_data(quoted_comp))
+                        if source:
+                            quoted_sources.add(source)
     for attachment in await raw_sticker_attachments(
         event,
         message_id,
         handled_sticker_sources,
     ):
         append_unique_attachment(attachments, attachment)
+    for reply_id, handled_sources in reply_sticker_sources.items():
+        reply_segments = await lookup_reply_onebot_segments(event, reply_id)
+        for attachment in await sticker_attachments_from_segments(
+            reply_segments,
+            reply_id,
+            handled_sources,
+        ):
+            append_unique_attachment(attachments, attachment)
     return attachments
 
 
