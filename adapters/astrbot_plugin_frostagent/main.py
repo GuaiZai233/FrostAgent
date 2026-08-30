@@ -227,15 +227,11 @@ class FrostAgentAdapter(Star):
 
                 responses = action_to_astrbot_result(event, action)
                 if responses:
-                    # FrostAgent 已接管本次回复，阻止 AstrBot 默认 LLM 再处理同一事件。
-                    event.stop_event()
+                    # FrostAgent 已接管本次回复，仅阻止 AstrBot 默认 LLM 再处理同一事件。
+                    event.should_call_llm(True)
 
                 for response in responses:
                     yield response
-
-                if responses:
-                    # 部分 AstrBot 版本会在发送结果后清理事件状态，需要再次确认终止传播。
-                    event.stop_event()
 
                 # 如果不是中间消息（即最终回复），则本次交互轮次结束
                 if not action.get("is_intermediate", False):

@@ -85,7 +85,8 @@ class FakeEvent:
         self.message_id = "msg_test"
         self.platform = "test"
         self.is_at_or_wake_command = is_wake
-        self.stop_calls = 0
+        self.call_llm = False
+        self.should_call_llm_calls: list[bool] = []
         self.message_obj = SimpleNamespace(
             message=components,
             sender=SimpleNamespace(nickname="测试用户", card=""),
@@ -109,8 +110,9 @@ class FakeEvent:
     def plain_result(self, content: str) -> dict[str, str]:
         return {"content": content}
 
-    def stop_event(self) -> None:
-        self.stop_calls += 1
+    def should_call_llm(self, call_llm: bool) -> None:
+        self.call_llm = call_llm
+        self.should_call_llm_calls.append(call_llm)
 
 
 class FakeClient:
@@ -176,7 +178,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         sent = await self.forward(FakeEvent(is_wake=True))
         self.assertEqual(sent, [])
 
-    async def test_image_reply_stops_astrbot_default_llm(self):
+    async def test_image_reply_disables_astrbot_default_llm(self):
         adapter = object.__new__(FrostAgentAdapter)
         adapter.settings = SimpleNamespace(forward_all_group_messages=True)
         adapter.client = FakeClient([{"action": "reply", "content": "FrostAgent 回复"}])
@@ -187,7 +189,8 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.assertEqual(results, [{"content": "FrostAgent 回复"}])
-        self.assertGreaterEqual(event.stop_calls, 1)
+        self.assertTrue(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [True])
 
     async def test_noop_keeps_event_propagation_unchanged(self):
         adapter = object.__new__(FrostAgentAdapter)
@@ -200,7 +203,8 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.assertEqual(results, [])
-        self.assertEqual(event.stop_calls, 0)
+        self.assertFalse(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [])
 
 
 if __name__ == "__main__":
