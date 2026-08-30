@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import sys
 import types
@@ -73,6 +74,9 @@ class At:
 class Image:
     def __init__(self, url: str):
         self.url = url
+
+    async def convert_to_base64(self) -> str:
+        return base64.b64encode(self.url.encode("utf-8")).decode("ascii")
 
 
 class FakeEvent:
