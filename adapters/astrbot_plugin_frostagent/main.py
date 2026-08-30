@@ -293,7 +293,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.0",
+    "0.1.1",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -324,6 +324,7 @@ class FrostAgentAdapter(Star):
             await self.client.send_event(payload)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
+            frostagent_replied = False
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)
@@ -343,7 +344,14 @@ class FrostAgentAdapter(Star):
                         break
                     continue
 
-                for response in await deliver_action_to_astrbot(event, action):
+                contains_sticker = action_contains_sticker(action)
+                responses = await deliver_action_to_astrbot(event, action)
+                if (responses or contains_sticker) and not frostagent_replied:
+                    # FrostAgent 已接管本次回复，仅阻止 AstrBot 默认 LLM 再处理同一事件。
+                    event.should_call_llm(True)
+                    frostagent_replied = True
+
+                for response in responses:
                     yield response
 
                 # 如果不是中间消息（即最终回复），则本次交互轮次结束
@@ -828,12 +836,7 @@ async def deliver_action_to_astrbot(
     event: AstrMessageEvent,
     action: dict[str, Any],
 ) -> list[Any]:
-    messages = action.get("messages") or []
-    contains_sticker = any(
-        str(message.get("type") or "") == "image" and message.get("is_sticker")
-        for message in messages
-    )
-    if not contains_sticker:
+    if not action_contains_sticker(action):
         return action_to_astrbot_result(event, action)
 
     parts = action_to_message_components(action)
@@ -849,6 +852,13 @@ async def deliver_action_to_astrbot(
     except Exception as e:
         logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
     return []
+
+
+def action_contains_sticker(action: dict[str, Any]) -> bool:
+    return any(
+        str(message.get("type") or "") == "image" and message.get("is_sticker")
+        for message in action.get("messages") or []
+    )
 
 
 def action_to_message_components(action: dict[str, Any]) -> list[Any]:
