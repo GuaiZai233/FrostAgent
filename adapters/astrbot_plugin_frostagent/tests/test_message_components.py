@@ -26,6 +26,24 @@ class FakeImage:
         self.source = source
 
 
+class FakeMessageChain:
+    def __init__(self, chain: list[object]) -> None:
+        self.chain = chain
+
+
+class OutboundEvent:
+    def __init__(self) -> None:
+        self.sent: list[FakeMessageChain] = []
+        self.chain_results: list[list[object]] = []
+
+    async def send(self, chain: FakeMessageChain) -> None:
+        self.sent.append(chain)
+
+    def chain_result(self, parts: list[object]) -> object:
+        self.chain_results.append(parts)
+        return parts
+
+
 class InboundImage:
     def __init__(self, data: bytes, sub_type: int = 1, url: str = "") -> None:
         self.data_bytes = data
@@ -119,6 +137,7 @@ def load_plugin_module():
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
     event = types.ModuleType("astrbot.api.event")
+    message = types.ModuleType("astrbot.api.message")
     star = types.ModuleType("astrbot.api.star")
     components = types.ModuleType("astrbot.api.message_components")
     websockets = types.ModuleType("websockets")
@@ -126,6 +145,7 @@ def load_plugin_module():
     api.logger = FakeLogger()
     event.AstrMessageEvent = type("AstrMessageEvent", (), {})
     event.filter = FakeFilter()
+    message.MessageChain = FakeMessageChain
     star.Context = type("Context", (), {})
     star.Star = type("Star", (), {})
     star.register = fake_register
@@ -137,6 +157,7 @@ def load_plugin_module():
         "astrbot": astrbot,
         "astrbot.api": api,
         "astrbot.api.event": event,
+        "astrbot.api.message": message,
         "astrbot.api.star": star,
         "astrbot.api.message_components": components,
         "websockets": websockets,
@@ -324,6 +345,28 @@ class MessageComponentTests(unittest.TestCase):
                 request.full_url,
                 "http://frostagent:8080/api/sticker/abc/image",
             )
+
+    def test_sticker_action_bypasses_astrbot_result_pipeline(self) -> None:
+        action = {
+            "messages": [
+                {
+                    "type": "image",
+                    "url": "base64://c3RpY2tlcg==",
+                    "is_sticker": True,
+                },
+            ]
+        }
+        event = OutboundEvent()
+
+        with load_plugin_module() as module:
+            responses = asyncio.run(module.deliver_action_to_astrbot(event, action))
+
+            self.assertEqual(responses, [])
+            self.assertEqual(event.chain_results, [])
+            self.assertEqual(len(event.sent), 1)
+            self.assertEqual(len(event.sent[0].chain), 1)
+            self.assertIsInstance(event.sent[0].chain[0], module.StickerImage)
+            self.assertEqual(event.sent[0].chain[0].toDict()["data"]["sub_type"], 1)
 
     def test_sticker_http_failure_does_not_create_payload(self) -> None:
         action = {

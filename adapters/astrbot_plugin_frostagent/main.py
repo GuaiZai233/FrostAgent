@@ -345,7 +345,7 @@ class FrostAgentAdapter(Star):
                         break
                     continue
 
-                for response in action_to_astrbot_result(event, action):
+                for response in await deliver_action_to_astrbot(event, action):
                     yield response
 
                 # 如果不是中间消息（即最终回复），则本次交互轮次结束
@@ -824,6 +824,35 @@ def action_to_astrbot_result(event: AstrMessageEvent, action: dict[str, Any]) ->
         elif att_type in ("audio", "video"):
             logger.debug(f"[frostagent-adapter] 跳过不支持的附件类型: {att_type}")
     return results
+
+
+async def deliver_action_to_astrbot(
+    event: AstrMessageEvent,
+    action: dict[str, Any],
+) -> list[Any]:
+    messages = action.get("messages") or []
+    contains_sticker = any(
+        str(message.get("type") or "") == "image" and message.get("is_sticker")
+        for message in messages
+    )
+    if not contains_sticker:
+        return action_to_astrbot_result(event, action)
+
+    parts = action_to_message_components(action)
+    if not parts:
+        return []
+
+    # AstrBot's RespondStage treats unregistered custom component classes as an
+    # empty chain. Send StickerImage directly so aiocqhttp can serialize its
+    # OneBot sub_type=1 payload instead of dropping it before platform delivery.
+    try:
+        from astrbot.api.message import MessageChain
+
+        await event.send(MessageChain(parts))
+        logger.info("[frostagent-adapter] 表情包已交付平台发送")
+    except Exception as e:
+        logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
+    return []
 
 
 def action_to_message_components(action: dict[str, Any]) -> list[Any]:
