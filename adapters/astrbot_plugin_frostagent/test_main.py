@@ -31,6 +31,11 @@ class _Star:
         pass
 
 
+class _MessageChain:
+    def __init__(self, chain: list[object]):
+        self.chain = chain
+
+
 def _register(*_args: object, **_kwargs: object):
     return lambda cls: cls
 
@@ -41,6 +46,7 @@ event_module = types.ModuleType("astrbot.api.event")
 star_module = types.ModuleType("astrbot.api.star")
 api_module.logger = _Logger()
 event_module.AstrMessageEvent = object
+event_module.MessageChain = _MessageChain
 event_module.filter = _Filter()
 star_module.Context = object
 star_module.Star = _Star
