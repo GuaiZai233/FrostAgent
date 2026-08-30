@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -75,6 +76,7 @@ func checkWebSocketOrigin(r *http.Request) bool {
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	conn               *websocket.Conn
+	stealer            *sticker.Stealer
 	writeMu            sync.Mutex
 	messageMu          sync.Mutex
 	pendingMessage     map[string]chan oneBotAPIResponse
@@ -149,6 +151,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		}
 		wakeSignals := DetectGroupWakeSignals(event)
 		replyContext := conn.lookupReplyContext(event)
+		conn.observeResolvedReply(event, replyContext)
 		if !wakeSignals.Any() && !replyContext.MentionsBot {
 			return
 		}
@@ -166,6 +169,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			),
 		)
 		replyContext := conn.lookupReplyContext(event)
+		conn.observeResolvedReply(event, replyContext)
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
 		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext.Prompt, responseContext, routeSnapshot)
 	}
@@ -393,7 +397,6 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Owner:         owner,
 			OwnerType:     ownerType,
 			ActorUserID:   strconv.FormatInt(event.UserID, 10),
-			StickerURLs:   stickerURLsFromSegments(segments),
 			SendHook:      sendHook,
 			Billing:       billingState,
 			RouteScope:    routeScope,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import json
 import os
 import time
@@ -301,7 +302,7 @@ class FrostAgentAdapter(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        payload = build_frostagent_payload(event)
+        payload = await build_frostagent_payload(event)
         msg_id = payload["message_id"]
 
         if not payload.get("content") and not payload.get("attachments"):
@@ -353,16 +354,17 @@ class FrostAgentAdapter(Star):
         await self.client.stop()
 
 
-def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
+async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     """从 AstrBot 事件中构造符合 FrostAgent 专有协议的 Event 结构。"""
     user_id = extract_sender_id(event)
     group_id = extract_group_id(event)
     message_type = "group" if group_id else "private"
     content = extract_message_text(event)
-    attachments = extract_attachments(event)
     is_wake, is_at = check_is_at_or_wake(event)
 
     msg_id = str(getattr(event, "message_id", "") or f"ast_{int(time.time() * 1000)}")
+    attachments = await extract_attachments(event, msg_id)
+    reply_message_id = extract_reply_message_id(event)
     platform = _extract_platform_name(event)
 
     sender_name = ""
@@ -380,7 +382,7 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
 
     session_id = f"{platform}:group:{group_id}" if message_type == "group" else f"{platform}:private:{user_id}"
 
-    return {
+    payload = {
         "type": "event",
         "event_type": "message",
         "message_id": msg_id,
@@ -398,6 +400,9 @@ def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "is_at": is_at,
         "timestamp": int(time.time()),
     }
+    if reply_message_id:
+        payload["metadata"] = {"reply_message_id": reply_message_id}
+    return payload
 
 
 def _extract_platform_name(event: AstrMessageEvent) -> str:
@@ -481,31 +486,94 @@ def extract_message_text(event: AstrMessageEvent) -> str:
     return ""
 
 
-def extract_attachments(event: AstrMessageEvent) -> list[dict[str, Any]]:
+def extract_reply_message_id(event: AstrMessageEvent) -> str:
+    message_obj = getattr_chain(event, "message_obj")
+    components = getattr(message_obj, "message", []) or getattr(event, "message", [])
+    if not isinstance(components, list):
+        return ""
+    for comp in components:
+        if type(comp).__name__.lower() != "reply":
+            continue
+        value = first_attr(comp, "id", "message_id")
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+async def image_attachment(comp: Any, message_id: str) -> dict[str, Any] | None:
+    sub_type = first_attr(comp, "sub_type", "subtype", "subType")
+    raw_data = getattr(comp, "raw", None) or getattr(comp, "data", None)
+    if isinstance(raw_data, dict) and sub_type is None:
+        sub_type = raw_data.get("sub_type") or raw_data.get("subtype")
+
+    encoded = ""
+    converter = getattr(comp, "convert_to_base64", None)
+    try:
+        if callable(converter):
+            converted = converter()
+            if inspect.isawaitable(converted):
+                converted = await converted
+            encoded = str(converted or "")
+        else:
+            source = str(first_attr(comp, "url", "file", "path") or "")
+            if source.startswith("base64://"):
+                encoded = source.removeprefix("base64://")
+            elif source.startswith("data:") and ";base64," in source:
+                encoded = source.split(",", 1)[1]
+            elif source.startswith(("http://", "https://")):
+                encoded = await asyncio.to_thread(download_sticker_as_base64, source)
+                encoded = encoded.removeprefix("base64://")
+    except Exception as exc:
+        logger.warning(f"[frostagent-adapter] 入站图片转换 Base64 失败: {exc}")
+        return None
+
+    encoded = encoded.removeprefix("base64://")
+    if not encoded:
+        return None
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except Exception:
+        logger.warning("[frostagent-adapter] 入站图片包含非法 Base64，已忽略")
+        return None
+    if not image_bytes or len(image_bytes) > MAX_STICKER_DOWNLOAD_BYTES:
+        logger.warning("[frostagent-adapter] 入站图片为空或超过 10 MiB，已忽略")
+        return None
+
+    attachment: dict[str, Any] = {
+        "type": "image",
+        "message_id": message_id,
+        "content": base64.b64encode(image_bytes).decode("ascii"),
+    }
+    if sub_type is not None:
+        try:
+            attachment["sub_type"] = int(sub_type)
+        except (ValueError, TypeError):
+            pass
+    return attachment
+
+
+async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
     attachments = []
-    # 提取图片等组件
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
             if "image" in comp_type:
-                url = first_attr(comp, "url", "file", "path")
-                sub_type = first_attr(comp, "sub_type", "subtype")
-                raw_data = getattr(comp, "raw", None) or getattr(comp, "data", None)
-                if isinstance(raw_data, dict) and sub_type is None:
-                    sub_type = raw_data.get("sub_type") or raw_data.get("subtype")
-                if url:
-                    att: dict[str, Any] = {
-                        "type": "image",
-                        "url": str(url),
-                    }
-                    if sub_type is not None:
-                        try:
-                            att["sub_type"] = int(sub_type)
-                        except (ValueError, TypeError):
-                            pass
-                    attachments.append(att)
+                attachment = await image_attachment(comp, message_id)
+                if attachment:
+                    attachments.append(attachment)
+            elif comp_type == "reply":
+                reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
+                chain = first_attr(comp, "chain", "message", "origin", "content")
+                if not reply_id or not isinstance(chain, list):
+                    continue
+                for quoted_comp in chain:
+                    if "image" not in type(quoted_comp).__name__.lower():
+                        continue
+                    attachment = await image_attachment(quoted_comp, reply_id)
+                    if attachment:
+                        attachments.append(attachment)
     return attachments
 
 

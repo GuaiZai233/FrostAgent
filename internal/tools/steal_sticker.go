@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,18 +17,24 @@ const adminQQIDsEnv = "ADMIN_QQ_IDS"
 func StealStickerTool(stealer *sticker.Stealer) Tool {
 	return Tool{
 		name: "steal_sticker",
-		description: "Explicitly collect a QQ sticker attached to the current message. " +
+		description: "Explicitly collect a QQ sticker from the trusted current-session message context. " +
 			"Only use this when the current user explicitly asks to collect/steal the sticker and is a configured administrator. " +
-			"The sticker_index is zero-based among sticker attachments in the current message; omit it when there is only one.",
+			"Use message_id to select a current, replied-to, or recent message shown in trusted context. " +
+			"If message_id is omitted, the latest sticker-bearing message is selected. sticker_index is zero-based within that message.",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"message_id": map[string]any{
+					"type":        "string",
+					"description": "Message ID from system_context, reply_context, or recent_group_messages. Omit to use the latest sticker-bearing message.",
+				},
 				"sticker_index": map[string]any{
 					"type":        "integer",
 					"minimum":     0,
-					"description": "Zero-based index of the sticker attachment in the current message. Defaults to 0.",
+					"description": "Zero-based index of the sticker attachment within the selected message. Defaults to 0.",
 				},
 			},
+			"additionalProperties": false,
 		},
 		executeContext: func(ctx context.Context, args string) (string, error) {
 			if stealer == nil {
@@ -39,7 +46,8 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 			}
 
 			var payload struct {
-				StickerIndex int `json:"sticker_index"`
+				MessageID    string `json:"message_id"`
+				StickerIndex int    `json:"sticker_index"`
 			}
 			if strings.TrimSpace(args) != "" {
 				decoder := json.NewDecoder(strings.NewReader(args))
@@ -48,22 +56,39 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 					return "", fmt.Errorf("steal_sticker 参数不是合法 JSON: %w", err)
 				}
 			}
-			if payload.StickerIndex < 0 || payload.StickerIndex >= len(runContext.StickerURLs) {
-				return "", fmt.Errorf("当前消息中不存在索引为 %d 的可偷取 QQ 表情包", payload.StickerIndex)
+			if payload.StickerIndex < 0 {
+				return "", fmt.Errorf("sticker_index 不能小于 0")
 			}
 
-			result, err := stealer.Steal(ctx, runContext.StickerURLs[payload.StickerIndex])
+			result, resolvedMessageID, err := stealer.StealObserved(
+				ctx,
+				runContext.SessionID,
+				strings.TrimSpace(payload.MessageID),
+				payload.StickerIndex,
+			)
 			if err != nil {
+				if errors.Is(err, sticker.ErrStickerNotInScope) {
+					if strings.TrimSpace(payload.MessageID) == "" {
+						return "", fmt.Errorf("当前会话上下文中不存在可偷取的 QQ 表情包")
+					}
+					return "", fmt.Errorf(
+						"当前会话上下文的消息 %s 中不存在索引为 %d 的可偷取 QQ 表情包",
+						strings.TrimSpace(payload.MessageID),
+						payload.StickerIndex,
+					)
+				}
 				return "", fmt.Errorf("偷取表情包失败: %w", err)
 			}
 			response := struct {
 				Success   bool   `json:"success"`
 				StickerID string `json:"sticker_id"`
+				MessageID string `json:"message_id"`
 				Duplicate bool   `json:"duplicate"`
 				Message   string `json:"message"`
 			}{
 				Success:   true,
 				StickerID: result.ID,
+				MessageID: resolvedMessageID,
 				Duplicate: result.Duplicate,
 				Message:   "sticker collected and queued for summary",
 			}

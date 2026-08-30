@@ -102,8 +102,10 @@ func (c *wsConnection) registerActionRequest(actionName, existingEcho string) (s
 }
 
 type resolvedReplyContext struct {
-	Prompt      string
-	MentionsBot bool
+	Prompt         string
+	MentionsBot    bool
+	MessageID      string
+	StickerSources []string
 }
 
 type oneBotMessageData struct {
@@ -147,7 +149,7 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	defer timer.Stop()
 	select {
 	case response := <-responseChannel:
-		return resolveReplyResponse(messageID, response)
+		return resolveReplyResponse(event, messageID, response)
 	case <-timer.C:
 		c.clearMessageRequest(echo, responseChannel)
 		logReplyLookupFailure(messageID, "查询超时")
@@ -190,7 +192,7 @@ func (c *wsConnection) deliverMessageResponse(echo string, response oneBotAPIRes
 	return true
 }
 
-func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedReplyContext {
+func resolveReplyResponse(event model.OneBotEvent, messageID int64, response oneBotAPIResponse) resolvedReplyContext {
 	if response.RetCode != 0 || (response.Status != "" && response.Status != "ok") {
 		detail := strings.TrimSpace(response.Wording)
 		if detail == "" {
@@ -209,8 +211,13 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 		logReplyLookupFailure(messageID, fmt.Sprintf("响应消息 ID 不匹配: %d", data.MessageID))
 		return resolvedReplyContext{}
 	}
+	if !replyMessageMatchesEvent(event, data) {
+		logReplyLookupFailure(messageID, "引用消息不属于当前会话")
+		return resolvedReplyContext{}
+	}
 
-	visibleText := extractUserText(ParseMessageSegments(data.Message), data.Message)
+	segments := ParseMessageSegments(data.Message)
+	visibleText := extractUserText(segments, data.Message)
 	context := map[string]interface{}{
 		"message_id": messageID,
 		"message":    visibleText,
@@ -234,9 +241,38 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 	}
 
 	return resolvedReplyContext{
-		Prompt:      string(prompt),
-		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames()),
+		Prompt:         string(prompt),
+		MentionsBot:    rawMessageMentionsBot(data.Message, configuredBotNames()),
+		MessageID:      strconv.FormatInt(messageID, 10),
+		StickerSources: stickerSourcesFromSegments(segments),
 	}
+}
+
+func replyMessageMatchesEvent(event model.OneBotEvent, data oneBotMessageData) bool {
+	switch event.MessageType {
+	case "group":
+		if data.MessageType != "" && data.MessageType != "group" {
+			return false
+		}
+		return data.GroupID == 0 || data.GroupID == event.GroupID
+	case "private":
+		return data.MessageType == "" || data.MessageType == "private"
+	default:
+		return false
+	}
+}
+
+func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resolvedReplyContext) {
+	if c == nil || c.stealer == nil || reply.MessageID == "" || len(reply.StickerSources) == 0 {
+		return
+	}
+	observeStickerSources(
+		c.stealer,
+		historyKey(event),
+		reply.MessageID,
+		reply.StickerSources,
+		false,
+	)
 }
 
 func replyMessageID(event model.OneBotEvent) (int64, bool) {

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,21 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 
 func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
+}
+
+func (a *Adapter) observeStickers(event model.OneBotEvent) {
+	if a.stealer == nil || event.PostType != "message" ||
+		(event.MessageType != "group" && event.MessageType != "private") {
+		return
+	}
+	messageID := strconv.FormatInt(int64(event.MessageID), 10)
+	observeStickerSources(
+		a.stealer,
+		historyKey(event),
+		messageID,
+		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		event.MessageType == "group",
+	)
 }
 
 // ID 返回平台唯一标识 "onebot"
@@ -184,6 +200,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			return
 		}
 		wsConn := newWSConnection(conn)
+		wsConn.stealer = a.stealer
 		a.registerConn(wsConn)
 		defer func() {
 			a.unregisterConn(wsConn)
@@ -226,11 +243,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			if a.stealer != nil && event.PostType == "message" && event.MessageType == "group" {
-				for _, stickerURL := range stickerURLsFromSegments(ParseMessageSegments(event.Message)) {
-					a.stealer.TrySteal(stickerURL)
-				}
-			}
+			a.observeStickers(event)
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -241,17 +254,43 @@ func (a *Adapter) Handler() http.HandlerFunc {
 	}
 }
 
-func stickerURLsFromSegments(segments []content.MessageSegment) []string {
-	var urls []string
+func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
+	var sources []string
 	for _, seg := range segments {
 		if seg.Type != "image" || !isStickerSubType(seg.Data["sub_type"]) {
 			continue
 		}
+		if file, ok := seg.Data["file"].(string); ok &&
+			(strings.HasPrefix(file, "base64://") || strings.HasPrefix(file, "data:")) {
+			sources = append(sources, file)
+			continue
+		}
 		if imageURL, ok := seg.Data["url"].(string); ok && imageURL != "" {
-			urls = append(urls, imageURL)
+			sources = append(sources, imageURL)
 		}
 	}
-	return urls
+	return sources
+}
+
+func observeStickerSources(
+	stealer *sticker.Stealer,
+	sessionID string,
+	messageID string,
+	sources []string,
+	autoCollect bool,
+) {
+	for index, source := range sources {
+		source := source
+		stealer.Observe(
+			sessionID,
+			messageID,
+			index,
+			func(ctx context.Context) ([]byte, error) {
+				return sticker.LoadImageSource(ctx, source)
+			},
+			autoCollect,
+		)
+	}
 }
 
 func isStickerSubType(value any) bool {

@@ -14,23 +14,19 @@ import (
 
 func TestStealer_GuessExtension(t *testing.T) {
 	tests := []struct {
-		url      string
 		data     []byte
 		expected string
 	}{
-		{"http://example.com/test.png", []byte{0x89, 'P', 'N', 'G'}, ".png"},
-		{"http://example.com/test.gif", []byte("GIF89a"), ".gif"},
-		{"http://example.com/test.webp", []byte("RIFF1234WEBP"), ".webp"},
-		{"http://example.com/test.jpg", []byte{0xFF, 0xD8, 0xFF}, ".jpg"},
-		{"http://example.com/unknown", []byte{0x89, 'P', 'N', 'G'}, ".png"},
-		{"http://example.com/unknown", []byte("GIF87a"), ".gif"},
-		{"http://example.com/unknown", []byte{0xFF, 0xD8}, ".jpg"},
+		{[]byte{0x89, 'P', 'N', 'G'}, ".png"},
+		{[]byte("GIF89a"), ".gif"},
+		{[]byte("RIFF1234WEBP"), ".webp"},
+		{[]byte{0xFF, 0xD8, 0xFF}, ".jpg"},
 	}
 
 	for _, tt := range tests {
-		got := guessExtension(tt.url, tt.data)
+		got := guessExtension(tt.data)
 		if got != tt.expected {
-			t.Errorf("guessExtension(%q, %v) = %q, want %q", tt.url, tt.data, got, tt.expected)
+			t.Errorf("guessExtension(%v) = %q, want %q", tt.data, got, tt.expected)
 		}
 	}
 }
@@ -52,7 +48,7 @@ func TestStealer_ConcurrencyLimiting(t *testing.T) {
 	// Any additional TrySteal should immediately drop without blocking
 	done := make(chan struct{})
 	go func() {
-		stealer.TrySteal("http://example.com/test.png")
+		stealer.TrySteal([]byte("GIF89a"))
 		close(done)
 	}()
 
@@ -118,19 +114,13 @@ func TestStealer_DownloadAndDeduplication(t *testing.T) {
 
 func TestStealer_ExplicitStealIsDeterministicAndDeduplicates(t *testing.T) {
 	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(imageBytes)
-	}))
-	defer server.Close()
-
 	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	stealer := NewStealer(store, nil)
 
-	first, err := stealer.Steal(context.Background(), server.URL+"/explicit.png")
+	first, err := stealer.Steal(context.Background(), imageBytes)
 	if err != nil {
 		t.Fatalf("explicit Steal returned error: %v", err)
 	}
@@ -139,7 +129,7 @@ func TestStealer_ExplicitStealIsDeterministicAndDeduplicates(t *testing.T) {
 		t.Fatalf("first result = %+v, want ID %s and non-duplicate", first, wantID)
 	}
 
-	second, err := stealer.Steal(context.Background(), server.URL+"/explicit.png")
+	second, err := stealer.Steal(context.Background(), imageBytes)
 	if err != nil {
 		t.Fatalf("duplicate Steal returned error: %v", err)
 	}
@@ -166,7 +156,7 @@ func TestStealer_ConcurrentTheft(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stealer.TrySteal("http://127.0.0.1:9999/dummy.png")
+			stealer.TrySteal([]byte("GIF89a concurrent"))
 		}()
 	}
 	wg.Wait()

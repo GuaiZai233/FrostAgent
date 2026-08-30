@@ -25,8 +25,7 @@ type RunContext struct {
 	SessionID     string
 	Owner         string
 	OwnerType     memory.OwnerType
-	ActorUserID   string   // Trusted sender ID supplied by the platform adapter.
-	StickerURLs   []string // Trusted current-message QQ sticker URLs supplied by the adapter.
+	ActorUserID   string // Trusted sender ID supplied by the platform adapter.
 	SendHook      func(toolResultJSON string) error
 	Billing       *BillingRunState
 	RouteScope    modelrouter.Scope

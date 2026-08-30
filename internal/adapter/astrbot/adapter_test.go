@@ -3,18 +3,13 @@ package astrbot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/sticker"
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
-
-type recordingStickerStealer struct {
-	urls []string
-}
-
-func (s *recordingStickerStealer) TrySteal(imageURL string) {
-	s.urls = append(s.urls, imageURL)
-}
 
 func TestAdapterID(t *testing.T) {
 	adapter := NewAdapter(nil)
@@ -38,79 +33,39 @@ func TestAdapterSendNoConns(t *testing.T) {
 	}
 }
 
-func TestAdapterTryStealOnlyQQGroupStickers(t *testing.T) {
-	tests := []struct {
-		name      string
-		event     Event
-		wantCalls int
-	}{
-		{
-			name: "aiocqhttp group sticker",
-			event: Event{
-				Platform:    astrBotQQPlatform,
-				MessageType: "group",
-				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
-			},
-			wantCalls: 1,
-		},
-		{
-			name: "aiocqhttp private sticker",
-			event: Event{
-				Platform:    astrBotQQPlatform,
-				MessageType: "private",
-				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
-			},
-		},
-		{
-			name: "non aiocqhttp group sticker",
-			event: Event{
-				Platform:    "telegram",
-				MessageType: "group",
-				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.gif", SubType: 1}},
-			},
-		},
-		{
-			name: "aiocqhttp group regular image",
-			event: Event{
-				Platform:    astrBotQQPlatform,
-				MessageType: "group",
-				Attachments: []core.Attachment{{Type: core.AttachmentTypeImage, URL: "https://example.com/image.png"}},
-			},
-		},
+func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
 	}
+	stealer := sticker.NewStealer(store, nil)
+	adapter := NewAdapter(nil)
+	adapter.stealer = stealer
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stealer := &recordingStickerStealer{}
-			adapter := NewAdapter(nil)
-			adapter.stealer = stealer
-
-			adapter.trySteal(tt.event)
-
-			if len(stealer.urls) != tt.wantCalls {
-				t.Fatalf("TrySteal calls = %d, want %d", len(stealer.urls), tt.wantCalls)
-			}
-		})
-	}
-}
-
-func TestStickerURLsForEventOnlyTrustsQQStickerAttachments(t *testing.T) {
-	qqEvent := Event{
+	currentImage := []byte{0x89, 'P', 'N', 'G', 1}
+	quotedImage := []byte("GIF89a quoted")
+	event := Event{
+		MessageID:   "msg_current",
+		SessionID:   "aiocqhttp:private:123",
 		Platform:    astrBotQQPlatform,
 		MessageType: "private",
 		Attachments: []core.Attachment{
-			{Type: core.AttachmentTypeImage, URL: "https://example.com/sticker.png", SubType: 1},
-			{Type: core.AttachmentTypeImage, URL: "https://example.com/regular.png"},
+			{Type: core.AttachmentTypeImage, Content: currentImage, SubType: 1},
+			{Type: core.AttachmentTypeImage, Content: quotedImage, SubType: 1, MessageID: "msg_quoted"},
+			{Type: core.AttachmentTypeImage, Content: []byte("regular")},
 		},
 	}
-	urls := stickerURLsForEvent(qqEvent)
-	if len(urls) != 1 || urls[0] != "https://example.com/sticker.png" {
-		t.Fatalf("QQ sticker URLs = %v", urls)
-	}
+	adapter.observeStickers(event)
 
-	qqEvent.Platform = "telegram"
-	if urls := stickerURLsForEvent(qqEvent); len(urls) != 0 {
-		t.Fatalf("non-QQ sticker URLs = %v, want none", urls)
+	result, messageID, err := stealer.StealObserved(context.Background(), event.SessionID, "msg_quoted", 0)
+	if err != nil {
+		t.Fatalf("steal quoted sticker: %v", err)
+	}
+	if messageID != "msg_quoted" || result.ID != sticker.HashBytes(quotedImage) {
+		t.Fatalf("quoted result = %+v message=%q", result, messageID)
+	}
+	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0); !errors.Is(err, sticker.ErrStickerNotInScope) {
+		t.Fatalf("cross-session error = %v, want ErrStickerNotInScope", err)
 	}
 }
 

@@ -34,13 +34,22 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 				userTexts = append(userTexts, text)
 			}
 		} else if seg.Type == "image" {
-			url, ok := seg.Data["url"].(string)
-			if !ok || strings.TrimSpace(url) == "" {
-				logs.Warn(logs.WEBSOCKET, fmt.Sprintf("图片消息缺少 url 字段: %+v", seg.Data))
+			if b64, ok := seg.Data["base64"].(string); ok && strings.TrimSpace(b64) != "" {
+				imageBase64List = append(imageBase64List, strings.TrimSpace(b64))
 				continue
 			}
-			// convert img to base64
-			if b64, err := downloadAndToBase64(url); err == nil {
+			source, _ := seg.Data["url"].(string)
+			if strings.TrimSpace(source) == "" {
+				if file, ok := seg.Data["file"].(string); ok &&
+					(strings.HasPrefix(file, "base64://") || strings.HasPrefix(file, "data:")) {
+					source = file
+				}
+			}
+			if strings.TrimSpace(source) == "" {
+				logs.Warn(logs.WEBSOCKET, fmt.Sprintf("图片消息缺少可读取的数据: %+v", seg.Data))
+				continue
+			}
+			if b64, err := imageSourceToBase64(source); err == nil {
 				imageBase64List = append(imageBase64List, b64)
 			} else {
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("下载图片失败: %v", err))
@@ -72,8 +81,31 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 }
 
 func downloadAndToBase64(url string) (string, error) {
+	return imageSourceToBase64(url)
+}
+
+func imageSourceToBase64(source string) (string, error) {
+	if strings.HasPrefix(source, "base64://") {
+		encoded := strings.TrimPrefix(source, "base64://")
+		if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
+			return "", err
+		}
+		return encoded, nil
+	}
+	if strings.HasPrefix(source, "data:") {
+		comma := strings.IndexByte(source, ',')
+		if comma < 0 || !strings.Contains(strings.ToLower(source[:comma]), ";base64") {
+			return "", fmt.Errorf("图片 data URI 不是 Base64")
+		}
+		encoded := source[comma+1:]
+		if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
+			return "", err
+		}
+		return encoded, nil
+	}
+
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Get(url)
+	resp, err := httpClient.Get(source)
 	if err != nil {
 		return "", err
 	}

@@ -26,6 +26,31 @@ class FakeImage:
         self.source = source
 
 
+class InboundImage:
+    def __init__(self, data: bytes, sub_type: int = 1) -> None:
+        self.data_bytes = data
+        self.subType = sub_type
+
+    async def convert_to_base64(self) -> str:
+        return base64.b64encode(self.data_bytes).decode("ascii")
+
+
+class Reply:
+    def __init__(self, message_id: str, chain: list[object]) -> None:
+        self.id = message_id
+        self.chain = chain
+
+
+class MessageObject:
+    def __init__(self, message: list[object]) -> None:
+        self.message = message
+
+
+class InboundEvent:
+    def __init__(self, message: list[object]) -> None:
+        self.message_obj = MessageObject(message)
+
+
 class FakeHTTPResponse:
     def __init__(self, data: bytes, status: int = 200) -> None:
         self.data = data
@@ -107,6 +132,25 @@ def load_plugin_module():
 
 
 class MessageComponentTests(unittest.TestCase):
+
+    def test_current_and_quoted_images_are_forwarded_as_base64(self) -> None:
+        current_data = b"current-sticker"
+        quoted_data = b"quoted-sticker"
+        event = InboundEvent([
+            InboundImage(current_data),
+            Reply("msg_quoted", [InboundImage(quoted_data)]),
+        ])
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current"))
+
+            self.assertEqual(len(attachments), 2)
+            self.assertEqual(attachments[0]["message_id"], "msg_current")
+            self.assertEqual(attachments[1]["message_id"], "msg_quoted")
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), current_data)
+            self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
+            self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
+
     def test_mention_user_and_plain_build_ordered_chain(self) -> None:
         action = {
             "messages": [

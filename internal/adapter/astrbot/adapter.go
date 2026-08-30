@@ -20,16 +20,12 @@ import (
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
 	engine  *llm.Engine
-	stealer stickerStealer
+	stealer *sticker.Stealer
 	mu      sync.RWMutex
 	conns   map[*wsConn]struct{}
 }
 
 const astrBotQQPlatform = "aiocqhttp"
-
-type stickerStealer interface {
-	TrySteal(imageURL string)
-}
 
 // NewAdapter 创建一个新的 AstrBot 适配器实例。
 func NewAdapter(engine *llm.Engine) *Adapter {
@@ -43,30 +39,38 @@ func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
 }
 
-func (a *Adapter) trySteal(event Event) {
-	if a.stealer == nil || event.MessageType != "group" || event.Platform != astrBotQQPlatform {
+func (a *Adapter) observeStickers(event Event) {
+	if a.stealer == nil || event.Platform != astrBotQQPlatform ||
+		(event.MessageType != "group" && event.MessageType != "private") {
 		return
 	}
-	for _, stickerURL := range stickerURLsFromAttachments(event.Attachments) {
-		a.stealer.TrySteal(stickerURL)
-	}
-}
-
-func stickerURLsForEvent(event Event) []string {
-	if event.Platform != astrBotQQPlatform {
-		return nil
-	}
-	return stickerURLsFromAttachments(event.Attachments)
-}
-
-func stickerURLsFromAttachments(attachments []core.Attachment) []string {
-	var urls []string
-	for _, att := range attachments {
-		if att.Type == core.AttachmentTypeImage && att.SubType == 1 && att.URL != "" {
-			urls = append(urls, att.URL)
+	indexes := make(map[string]int)
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || att.SubType != 1 ||
+			(len(att.Content) == 0 && att.URL == "") {
+			continue
 		}
+		messageID := att.MessageID
+		if messageID == "" {
+			messageID = event.MessageID
+		}
+		index := indexes[messageID]
+		indexes[messageID]++
+		data := append([]byte(nil), att.Content...)
+		source := att.URL
+		a.stealer.Observe(
+			sessionKey(event),
+			messageID,
+			index,
+			func(ctx context.Context) ([]byte, error) {
+				if len(data) > 0 {
+					return append([]byte(nil), data...), nil
+				}
+				return sticker.LoadImageSource(ctx, source)
+			},
+			event.MessageType == "group" && messageID == event.MessageID,
+		)
 	}
-	return urls
 }
 
 // ID 返回平台唯一标识 "astrbot"
@@ -212,7 +216,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			a.trySteal(event)
+			a.observeStickers(event)
 
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
