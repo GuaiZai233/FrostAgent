@@ -102,6 +102,27 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
 
+    def test_mention_user_action_returns_one_chain_result(self) -> None:
+        action = {
+            "messages": [
+                {"type": "mention_user", "mention_user_id": "2763665407"},
+                {"type": "plain", "text": " 收到啦"},
+            ]
+        }
+
+        class FakeEvent:
+            @staticmethod
+            def chain_result(parts):
+                return parts
+
+        with load_plugin_module() as module:
+            results = module.action_to_astrbot_result(FakeEvent(), action)
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual([type(part) for part in results[0]], [FakeAt, FakePlain])
+            self.assertEqual(results[0][0].qq, "2763665407")
+            self.assertEqual(results[0][1].text, " 收到啦")
+
 
 if __name__ == "__main__":
     unittest.main()
