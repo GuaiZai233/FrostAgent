@@ -146,7 +146,6 @@ export function mountStickersPage(container: HTMLElement): () => void {
         background-color: var(--destructive);
         border-color: var(--destructive);
         color: var(--destructive-foreground);
-        cursor: pointer;
       }
       .sticker-card-body {
         padding: 0.5rem;
@@ -266,7 +265,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
           ? `<span class="badge badge-success text-[10px] px-1 py-0">已摘要</span>`
           : `<span class="badge badge-warning text-[10px] px-1 py-0">未摘要</span>`;
         const inappropriateBadge = s.suspectedInappropriate
-          ? `<button type="button" class="badge badge-destructive sticker-flag-badge text-[10px] px-1 py-0" data-action="clear-inappropriate-flag" data-id="${escapeHtml(s.id)}" title="移除疑似不合适标记">疑似不合适</button>`
+          ? `<span class="badge badge-destructive sticker-flag-badge text-[10px] px-1 py-0">疑似不合适</span>`
           : '';
 
         const keywordsHtml = (s.keywords || [])
@@ -338,34 +337,6 @@ export function mountStickersPage(container: HTMLElement): () => void {
         void loadStickers();
       },
     });
-
-    grid
-      .querySelectorAll<HTMLButtonElement>('[data-action="clear-inappropriate-flag"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const id = btn.dataset.id;
-          if (!id) return;
-          const confirmed = await confirmDialog({
-            title: '移除疑似不合适标记',
-            message: '移除后，这个表情包会恢复为可检索和可发送状态。确定继续吗？',
-            confirmLabel: '移除标记',
-          });
-          if (!confirmed) return;
-
-          try {
-            const res = await api.clearStickerInappropriateFlag(id);
-            if (res.success) {
-              toast.success('已移除疑似不合适标记');
-              void loadStickers();
-            } else {
-              toast.error('移除标记失败: ' + res.error);
-            }
-          } catch (err) {
-            toast.error('移除标记失败: ' + (err instanceof Error ? err.message : String(err)));
-          }
-        });
-      });
 
     // Edit button events
     grid.querySelectorAll<HTMLButtonElement>('[data-action="edit-sticker"]').forEach((btn) => {
@@ -449,16 +420,41 @@ export function mountStickersPage(container: HTMLElement): () => void {
         </div>
       `,
       footerHtml: `
+        ${
+          s.suspectedInappropriate
+            ? '<button class="btn btn-destructive btn-sm" style="margin-right: auto;" id="edit-sticker-clear-flag">移除不合适标记</button>'
+            : ''
+        }
         <button class="btn btn-outline btn-sm" id="edit-sticker-cancel">取消</button>
         <button class="btn btn-primary btn-sm" id="edit-sticker-save">保存</button>
       `,
       onMount: (dialogEl, close) => {
         const cancelBtn = dialogEl.querySelector('#edit-sticker-cancel')!;
         const saveBtn = dialogEl.querySelector<HTMLButtonElement>('#edit-sticker-save')!;
+        const clearFlagBtn = dialogEl.querySelector<HTMLButtonElement>(
+          '#edit-sticker-clear-flag',
+        );
         const descInput = dialogEl.querySelector<HTMLTextAreaElement>('#edit-sticker-desc')!;
         const keywordsInput = dialogEl.querySelector<HTMLInputElement>('#edit-sticker-keywords')!;
 
         cancelBtn.addEventListener('click', () => close());
+        clearFlagBtn?.addEventListener('click', async () => {
+          try {
+            clearFlagBtn.disabled = true;
+            const res = await api.clearStickerInappropriateFlag(s.id);
+            if (res.success) {
+              toast.success('已移除疑似不合适标记');
+              close();
+              void loadStickers();
+            } else {
+              toast.error('移除标记失败: ' + res.error);
+            }
+          } catch (err) {
+            toast.error('移除标记失败: ' + (err instanceof Error ? err.message : String(err)));
+          } finally {
+            clearFlagBtn.disabled = false;
+          }
+        });
         saveBtn.addEventListener('click', async () => {
           const description = descInput.value.trim();
           const keywords = keywordsInput.value
