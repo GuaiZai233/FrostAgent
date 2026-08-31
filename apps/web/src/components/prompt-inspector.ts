@@ -36,6 +36,13 @@ export interface StructuredGroupMessage {
   time: string;
 }
 
+export interface PromptImage {
+  mimeType: string;
+  size: number;
+  hash?: string;
+  url: string;
+}
+
 export interface ParsedPrompt {
   model?: string;
   systemPrompt?: string;
@@ -47,6 +54,7 @@ export interface ParsedPrompt {
   systemContext?: string;
   replyContext?: string;
   deliveryContext?: string;
+  images: PromptImage[];
   raw: string;
   hasGroupMessages: boolean;
 }
@@ -245,6 +253,7 @@ export function buildInspectorDataFromSessionContext(context: {
     runningSummary: context.runningSummary,
     recentMessages,
     summaryGroups,
+    images: [],
     hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.parsedMessages?.length ?? 0) > 0),
     responseContext: `当前会话: ${context.sessionId}\n平台: ${context.platform || 'unknown'}`,
   };
@@ -259,6 +268,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
     raw,
     recentMessages: [],
     summaryGroups: [],
+    images: [],
     hasGroupMessages: false,
   };
 
@@ -289,10 +299,18 @@ export function parsePrompt(raw: string): ParsedPrompt {
           if (typeof m.content === 'string') {
             contentStr = m.content;
           } else if (Array.isArray(m.content)) {
-            contentStr = m.content
-              .map((c: { text?: string }) => c.text || '')
+            const contentParts = m.content as Array<{
+              text?: string;
+              image_url?: { url?: string };
+            }>;
+            contentStr = contentParts
+              .map((c) => c.text || '')
               .filter(Boolean)
               .join('\n');
+            for (const part of contentParts) {
+              const image = parsePromptImage(part.image_url?.url);
+              if (image) result.images.push(image);
+            }
           }
 
           if (role === 'system') {
@@ -532,6 +550,24 @@ export function renderPromptInspector(
             <div class="card p-3 text-xs leading-relaxed select-text bg-muted/40 text-foreground whitespace-pre-wrap">${escapeHtml(
               parsed.userMessage,
             )}</div>
+          </div>
+        `
+            : ''
+        }
+
+        <!-- Images attached to the LLM request -->
+        ${
+          parsed.images.length > 0
+            ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">
+                <span class="text-primary flex items-center">${icon('eye', 'w-3.5 h-3.5')}</span>
+                <span>请求图片</span>
+              </div>
+              <span class="text-xs text-muted">${parsed.images.length} 张 · 点击图片查看原图</span>
+            </div>
+            ${renderPromptImages(parsed.images)}
           </div>
         `
             : ''
@@ -814,6 +850,69 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
       <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${escapeHtml(msg.content)}</div>
     </div>
   `;
+}
+
+const loggedImagePlaceholder = /^\[image omitted: type=([^,\]]+), size=(\d+) bytes, sha256=([a-f0-9]{64})\]$/;
+const inlineImageDataURL = /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/;
+
+function parsePromptImage(value: string | undefined): PromptImage | undefined {
+  if (!value) return undefined;
+
+  const placeholder = value.match(loggedImagePlaceholder);
+  if (placeholder) {
+    const hash = placeholder[3];
+    return {
+      mimeType: placeholder[1],
+      size: Number(placeholder[2]),
+      hash,
+      url: `/api/log-images/${hash}`,
+    };
+  }
+
+  const inlineImage = value.match(inlineImageDataURL);
+  if (!inlineImage) return undefined;
+
+  const encoded = inlineImage[2];
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  return {
+    mimeType: inlineImage[1],
+    size: Math.max(0, Math.floor((encoded.length * 3) / 4) - padding),
+    url: value,
+  };
+}
+
+function renderPromptImages(images: PromptImage[]): string {
+  return `
+    <div class="prompt-image-list">
+      ${images
+        .map(
+          (image, index) => `
+        <figure class="prompt-image-row">
+          <a class="prompt-image-preview" href="${escapeHtml(image.url)}" target="_blank" rel="noopener noreferrer">
+            <img src="${escapeHtml(image.url)}" alt="请求图片 ${index + 1}" loading="lazy" decoding="async" />
+          </a>
+          <figcaption class="prompt-image-meta">
+            <span class="font-medium text-foreground">图片 ${index + 1}</span>
+            <span>${escapeHtml(image.mimeType)}</span>
+            <span>${formatImageSize(image.size)}</span>
+            ${
+              image.hash
+                ? `<code title="sha256:${escapeHtml(image.hash)}">sha256:${escapeHtml(image.hash.slice(0, 12))}…</code>`
+                : ''
+            }
+          </figcaption>
+        </figure>
+      `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+function formatImageSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /**
