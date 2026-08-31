@@ -228,6 +228,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			if event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
+			}
 
 			var routeSnapshot *modelrouter.Snapshot
 			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&

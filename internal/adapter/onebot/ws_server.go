@@ -35,6 +35,8 @@ var upgrader = websocket.Upgrader{
 
 var allowedOrigins []string
 
+const maxTrustedMessageSessions = 4096
+
 func init() {
 	env := os.Getenv("WS_ALLOWED_ORIGINS")
 	if env != "" {
@@ -75,23 +77,27 @@ func checkWebSocketOrigin(r *http.Request) bool {
 
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
-	conn               *websocket.Conn
-	stealer            *sticker.Stealer
-	writeMu            sync.Mutex
-	messageMu          sync.Mutex
-	pendingMessage     map[string]chan oneBotAPIResponse
-	nextMessageEcho    uint64
-	groupMu            sync.Mutex
-	groupCache         map[int64]cachedGroupInfo
-	pendingGroupByEcho map[string]pendingGroupInfo
-	pendingGroupByID   map[int64]string
-	nextGroupEcho      uint64
+	conn                *websocket.Conn
+	stealer             *sticker.Stealer
+	writeMu             sync.Mutex
+	messageMu           sync.Mutex
+	pendingMessage      map[string]chan oneBotAPIResponse
+	nextMessageEcho     uint64
+	messageSessionMu    sync.Mutex
+	messageSessions     map[int64]string
+	messageSessionOrder []int64
+	groupMu             sync.Mutex
+	groupCache          map[int64]cachedGroupInfo
+	pendingGroupByEcho  map[string]pendingGroupInfo
+	pendingGroupByID    map[int64]string
+	nextGroupEcho       uint64
 }
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
 	return &wsConnection{
 		conn:               conn,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
+		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
 		pendingGroupByEcho: make(map[string]pendingGroupInfo),
 		pendingGroupByID:   make(map[int64]string),
@@ -397,6 +403,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				return fmt.Errorf("%s", reason)
 			}
+			conn.rememberActionMessageSession(ackResp, historyKey(event))
 			return nil
 		}
 
@@ -522,6 +529,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout())
 	if err == nil {
+		conn.rememberActionMessageSession(ackResp, historyKey(event))
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 		if session != nil {
 			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -24,9 +25,10 @@ func TestLoadObservedStickerPrefersResolvedReplySegments(t *testing.T) {
 	imageBytes := []byte("GIF89a quoted sticker")
 
 	conn := &wsConnection{}
-	event := model.OneBotEvent{MessageID: 100}
+	event := model.OneBotEvent{MessageType: "private", UserID: 10001, MessageID: 100}
 	reply := resolvedReplyContext{
 		MessageID: "42",
+		SessionID: "private:10001",
 		Segments: []content.MessageSegment{{
 			Type: "image",
 			Data: map[string]interface{}{
@@ -42,6 +44,110 @@ func TestLoadObservedStickerPrefersResolvedReplySegments(t *testing.T) {
 	}
 	if string(data) != string(imageBytes) {
 		t.Fatalf("loaded bytes = %q, want %q", data, imageBytes)
+	}
+}
+
+func TestPrivateCrossSessionGetMsgIsNotObserved(t *testing.T) {
+	const (
+		currentPeerID int64 = 10001
+		otherPeerID   int64 = 10002
+		botID         int64 = 20001
+	)
+	imageBytes := []byte("GIF89a cross session")
+	responseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      otherPeerID,
+		"message": []map[string]any{{
+			"type": "image",
+			"data": map[string]any{
+				"sub_type": 1,
+				"base64":   base64.StdEncoding.EncodeToString(imageBytes),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal get_msg data: %v", err)
+	}
+
+	stealer := sticker.NewStealer(nil, nil)
+	conn := newWSConnection(nil)
+	conn.stealer = stealer
+	conn.rememberMessageSession(42, "private:10001")
+	event := model.OneBotEvent{
+		SelfID:      botID,
+		MessageType: "private",
+		UserID:      currentPeerID,
+	}
+	reply := conn.resolveReplyResponse(event, 42, oneBotAPIResponse{
+		Status:  "ok",
+		RetCode: 0,
+		Data:    responseData,
+	})
+	if reply.MessageID != "" || len(reply.Segments) != 0 {
+		t.Fatalf("cross-session get_msg became trusted reply context: %+v", reply)
+	}
+	conn.observeResolvedReply(event, reply)
+
+	_, _, err = stealer.StealObserved(
+		context.Background(),
+		"private:10001",
+		"42",
+		0,
+		func(context.Context, string, int) ([]byte, error) { return imageBytes, nil },
+	)
+	if !errors.Is(err, sticker.ErrStickerNotInScope) {
+		t.Fatalf("cross-session sticker error = %v, want ErrStickerNotInScope", err)
+	}
+}
+
+func TestPrivateBotAuthoredGetMsgRequiresTrustedSession(t *testing.T) {
+	const (
+		peerID int64 = 10001
+		botID  int64 = 20001
+	)
+	responseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      botID,
+		"message": []map[string]any{{
+			"type": "text",
+			"data": map[string]any{"text": "bot reply"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal get_msg data: %v", err)
+	}
+	response := oneBotAPIResponse{Status: "ok", RetCode: 0, Data: responseData}
+	event := model.OneBotEvent{SelfID: botID, MessageType: "private", UserID: peerID}
+	conn := newWSConnection(nil)
+
+	if reply := conn.resolveReplyResponse(event, 42, response); reply.MessageID != "" {
+		t.Fatalf("unmapped bot-authored message became trusted: %+v", reply)
+	}
+	targetResponseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      botID,
+		"target_id":    peerID,
+		"message": []map[string]any{{
+			"type": "text",
+			"data": map[string]any{"text": "bot reply"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal target-aware get_msg data: %v", err)
+	}
+	if reply := conn.resolveReplyResponse(event, 42, oneBotAPIResponse{Status: "ok", Data: targetResponseData}); reply.MessageID != "42" {
+		t.Fatalf("target-aware bot-authored message was rejected: %+v", reply)
+	}
+	ackData, err := json.Marshal(map[string]any{"message_id": "42"})
+	if err != nil {
+		t.Fatalf("marshal send ACK data: %v", err)
+	}
+	conn.rememberActionMessageSession(oneBotAPIResponse{Data: ackData}, "private:10001")
+	if reply := conn.resolveReplyResponse(event, 42, response); reply.MessageID != "42" || reply.SessionID != "private:10001" {
+		t.Fatalf("trusted bot-authored message was rejected: %+v", reply)
 	}
 }
 
@@ -227,7 +333,7 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 		"data": map[string]interface{}{
 			"message_id":   42,
 			"message_type": "private",
-			"user_id":      112233,
+			"user_id":      event.UserID,
 			"message": []map[string]interface{}{{
 				"type": "image",
 				"data": map[string]interface{}{"base64": base64.StdEncoding.EncodeToString(imageBytes)},
