@@ -39,6 +39,12 @@ func TestSendStickerTool(t *testing.T) {
 	hashC := sticker.HashBytes(dataC)
 	_ = store.Add(hashC, hashC+".jpg", dataC)
 
+	// 4. Add sticker D (ready but marked as suspected inappropriate)
+	dataD := []byte("fake_image_inappropriate")
+	hashD := sticker.HashBytes(dataD)
+	_ = store.Add(hashD, hashD+".jpg", dataD)
+	_ = store.UpdateSummary(hashD, "只匹配这个词条", []string{"唯一敏感词条"}, true)
+
 	tool := SendStickerTool(store)
 
 	// Test case: empty query error
@@ -89,6 +95,15 @@ func TestSendStickerTool(t *testing.T) {
 	}
 	if !strings.Contains(out, "no matching sticker found") {
 		t.Errorf("unsummarized sticker was matched unexpectedly: %s", out)
+	}
+
+	// A uniquely matching suspected-inappropriate sticker must look absent.
+	out, err = tool.Execute(`{"query": "唯一敏感词条"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "no matching sticker found") {
+		t.Errorf("suspected-inappropriate sticker was matched unexpectedly: %s", out)
 	}
 }
 

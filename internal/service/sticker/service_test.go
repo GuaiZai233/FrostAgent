@@ -221,3 +221,36 @@ func TestUploadStickerReportsDuplicateWeightPersistenceFailure(t *testing.T) {
 		t.Fatalf("failed duplicate upload persisted weight: entry=%+v found=%v", reloadedEntry, ok)
 	}
 }
+
+func TestClearStickerInappropriateFlag(t *testing.T) {
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("flagged sticker")
+	id := sticker.HashBytes(data)
+	if err := store.Add(id, id+".jpg", data); err != nil {
+		t.Fatalf("add sticker: %v", err)
+	}
+	if err := store.UpdateSummary(id, "疑似不合适", []string{"敏感"}, true); err != nil {
+		t.Fatalf("mark sticker: %v", err)
+	}
+
+	svc := New(store, nil)
+	listed, err := svc.ListStickers(context.Background(), connect.NewRequest(&v1.ListStickersRequest{}))
+	if err != nil {
+		t.Fatalf("list stickers: %v", err)
+	}
+	if got := listed.Msg.GetStickers()[0]; !got.GetSuspectedInappropriate() || got.GetWeight() != 0 {
+		t.Fatalf("listed sticker = %+v, want flagged with zero weight", got)
+	}
+
+	resp, err := svc.ClearStickerInappropriateFlag(context.Background(), connect.NewRequest(&v1.ClearStickerInappropriateFlagRequest{Id: id}))
+	if err != nil || !resp.Msg.GetSuccess() {
+		t.Fatalf("clear flag: response=%v err=%v", resp, err)
+	}
+	entry, _ := store.Get(id)
+	if entry.SuspectedInappropriate || entry.Weight != 1 {
+		t.Fatalf("cleared entry = %+v, want unflagged and weight 1", entry)
+	}
+}

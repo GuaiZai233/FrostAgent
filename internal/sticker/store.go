@@ -46,6 +46,9 @@ func (s *Store) load() error {
 	s.ordered = make([]string, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
+		if e.SuspectedInappropriate {
+			e.Weight = 0
+		}
 		s.index[e.ID] = e
 		s.ordered = append(s.ordered, e.ID)
 	}
@@ -137,6 +140,9 @@ func (s *Store) IncrementWeight(id string) error {
 	}
 	nextIndex := cloneIndex(s.index)
 	e := nextIndex[id]
+	if e.SuspectedInappropriate {
+		return nil
+	}
 	e.Weight++
 	e.UpdatedAt = time.Now().Unix()
 	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
@@ -215,6 +221,55 @@ func (s *Store) Update(id string, description string, keywords []string) error {
 	e.Description = description
 	e.Keywords = append([]string(nil), keywords...)
 	e.Status = StatusReady
+	e.UpdatedAt = time.Now().Unix()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
+}
+
+func (s *Store) UpdateSummary(id string, description string, keywords []string, suspectedInappropriate bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.index[id]
+	if !ok {
+		return fmt.Errorf("sticker %s not found", id)
+	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
+	e.Description = description
+	e.Keywords = append([]string(nil), keywords...)
+	e.Status = StatusReady
+	e.SuspectedInappropriate = suspectedInappropriate
+	if suspectedInappropriate {
+		e.Weight = 0
+	} else if e.Weight < 1 {
+		e.Weight = 1
+	}
+	e.UpdatedAt = time.Now().Unix()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
+}
+
+func (s *Store) ClearSuspectedInappropriate(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.index[id]
+	if !ok {
+		return fmt.Errorf("sticker %s not found", id)
+	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
+	e.SuspectedInappropriate = false
+	if e.Weight < 1 {
+		e.Weight = 1
+	}
 	e.UpdatedAt = time.Now().Unix()
 	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
 		return err

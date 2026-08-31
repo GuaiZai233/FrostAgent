@@ -215,3 +215,39 @@ func TestStoreDeleteReportsFileRemovalFailureAndRestoresIndex(t *testing.T) {
 		t.Fatal("Delete did not restore the persisted index after file removal failed")
 	}
 }
+
+func TestStoreSuspectedInappropriateWeightAndClear(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("GIF89a inappropriate sticker")
+	id := HashBytes(data)
+	if err := store.Add(id, id+".gif", data); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := store.UpdateSummary(id, "疑似不合适", []string{"敏感"}, true); err != nil {
+		t.Fatalf("mark suspected inappropriate: %v", err)
+	}
+	if err := store.IncrementWeight(id); err != nil {
+		t.Fatalf("increment flagged sticker: %v", err)
+	}
+
+	entry, _ := store.Get(id)
+	if !entry.SuspectedInappropriate || entry.Weight != 0 {
+		t.Fatalf("flagged entry = %+v, want suspected and weight 0", entry)
+	}
+	if err := store.ClearSuspectedInappropriate(id); err != nil {
+		t.Fatalf("clear flag: %v", err)
+	}
+
+	reloaded, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	entry, _ = reloaded.Get(id)
+	if entry.SuspectedInappropriate || entry.Weight != 1 {
+		t.Fatalf("cleared entry = %+v, want unflagged and weight 1", entry)
+	}
+}

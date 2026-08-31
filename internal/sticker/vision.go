@@ -12,14 +12,14 @@ type LLMVisionCaller struct {
 	ModelName string
 }
 
-func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []string, error) {
+func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []string, bool, error) {
 	if v.Provider == nil {
-		return "", nil, fmt.Errorf("vision provider not configured")
+		return "", nil, false, fmt.Errorf("vision provider not configured")
 	}
 
 	model := v.ModelName
 	if model == "" {
-		return "", nil, fmt.Errorf("vision model not configured")
+		return "", nil, false, fmt.Errorf("vision model not configured")
 	}
 
 	contentParts := []map[string]any{
@@ -32,8 +32,9 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 		{
 			"type": "text",
 			"text": `请分析这张表情包/贴纸图片，返回严格的JSON格式：
-{"description":"一句话描述图片内容和表达的情绪","keywords":["关键词1","关键词2","关键词3"]}
-关键词应为中文情绪/语境词，如：开心、生气、无语、尴尬、嘲讽、惊讶、期待、可爱等。返回3-6个关键词。只返回JSON，不要其他文字。`,
+{"description":"一句话描述图片内容和表达的情绪","keywords":["关键词1","关键词2","关键词3"],"suspected_inappropriate":false}
+关键词应为中文情绪/语境词，如：开心、生气、无语、尴尬、嘲讽、惊讶、期待、可爱等。返回3-6个关键词。
+如果图片疑似包含R-18或露骨色情、政治敏感内容、极端血腥暴力、仇恨歧视或其他明显不适合Bot主动发送的内容，将suspected_inappropriate设为true；否则设为false。疑似时也要正常返回描述和关键词。只返回JSON，不要其他文字。`,
 		},
 	}
 
@@ -49,19 +50,19 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 
 	resp, err := v.Provider.Chat(ctx, req)
 	if err != nil {
-		return "", nil, fmt.Errorf("vision call: %w", err)
+		return "", nil, false, fmt.Errorf("vision call: %w", err)
 	}
 
 	var raw string
 	if str, ok := resp.Message.Content.(string); ok {
 		raw = str
 	} else {
-		return "", nil, fmt.Errorf("unexpected response type")
+		return "", nil, false, fmt.Errorf("unexpected response type")
 	}
 
-	desc, keywords := ParseVisionResult(raw)
+	desc, keywords, suspectedInappropriate := ParseVisionResult(raw)
 	if desc == "" {
-		return "", nil, fmt.Errorf("empty description from vision model")
+		return "", nil, false, fmt.Errorf("empty description from vision model")
 	}
-	return desc, keywords, nil
+	return desc, keywords, suspectedInappropriate, nil
 }

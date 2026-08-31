@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/sticker.proto.
  */
 export const file_frostagent_v1_sticker: GenFile = /*@__PURE__*/
-  fileDesc("Chtmcm9zdGFnZW50L3YxL3N0aWNrZXIucHJvdG8SDWZyb3N0YWdlbnQudjEimwEKC1N0aWNrZXJJdGVtEgoKAmlkGAEgASgJEhEKCWZpbGVfbmFtZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghrZXl3b3JkcxgEIAMoCRIOCgZ3ZWlnaHQYBSABKAUSDgoGc3RhdHVzGAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAMSEgoKdXBkYXRlZF9hdBgIIAEoAyJrChNMaXN0U3RpY2tlcnNSZXF1ZXN0Ei0KCnBhZ2luYXRpb24YASABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24SFQoNc3RhdHVzX2ZpbHRlchgCIAEoCRIOCgZzZWFyY2gYAyABKAkicgoUTGlzdFN0aWNrZXJzUmVzcG9uc2USLAoIc3RpY2tlcnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlN0aWNrZXJJdGVtEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCRITCgt0b3RhbF9jb3VudBgDIAEoBSIiChREZWxldGVTdGlja2VyUmVxdWVzdBIKCgJpZBgBIAEoCSI3ChVEZWxldGVTdGlja2VyUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJRChxVcGRhdGVTdGlja2VyS2V5d29yZHNSZXF1ZXN0EgoKAmlkGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhAKCGtleXdvcmRzGAMgAygJIj8KHVVwZGF0ZVN0aWNrZXJLZXl3b3Jkc1Jlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiPgoUVXBsb2FkU3RpY2tlclJlcXVlc3QSFAoMZmlsZV9jb250ZW50GAEgASgMEhAKCGZpbGVuYW1lGAIgASgJImQKFVVwbG9hZFN0aWNrZXJSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEisKB3N0aWNrZXIYAyABKAsyGi5mcm9zdGFnZW50LnYxLlN0aWNrZXJJdGVtIh0KG1JldHJ5QWxsVW5zdW1tYXJpemVkUmVxdWVzdCI2ChxSZXRyeUFsbFVuc3VtbWFyaXplZFJlc3BvbnNlEhYKDmVucXVldWVkX2NvdW50GAEgASgFIhgKFkdldFN0aWNrZXJTdGF0c1JlcXVlc3QiTQoXR2V0U3RpY2tlclN0YXRzUmVzcG9uc2USDQoFdG90YWwYASABKAUSDQoFcmVhZHkYAiABKAUSFAoMdW5zdW1tYXJpemVkGAMgASgFIiQKFkdldFN0aWNrZXJJbWFnZVJlcXVlc3QSCgoCaWQYASABKAkiQAoXR2V0U3RpY2tlckltYWdlUmVzcG9uc2USDwoHY29udGVudBgBIAEoDBIUCgxjb250ZW50X3R5cGUYAiABKAkyygUKDlN0aWNrZXJTZXJ2aWNlElcKDExpc3RTdGlja2VycxIiLmZyb3N0YWdlbnQudjEuTGlzdFN0aWNrZXJzUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuTGlzdFN0aWNrZXJzUmVzcG9uc2USWgoNRGVsZXRlU3RpY2tlchIjLmZyb3N0YWdlbnQudjEuRGVsZXRlU3RpY2tlclJlcXVlc3QaJC5mcm9zdGFnZW50LnYxLkRlbGV0ZVN0aWNrZXJSZXNwb25zZRJyChVVcGRhdGVTdGlja2VyS2V5d29yZHMSKy5mcm9zdGFnZW50LnYxLlVwZGF0ZVN0aWNrZXJLZXl3b3Jkc1JlcXVlc3QaLC5mcm9zdGFnZW50LnYxLlVwZGF0ZVN0aWNrZXJLZXl3b3Jkc1Jlc3BvbnNlEloKDVVwbG9hZFN0aWNrZXISIy5mcm9zdGFnZW50LnYxLlVwbG9hZFN0aWNrZXJSZXF1ZXN0GiQuZnJvc3RhZ2VudC52MS5VcGxvYWRTdGlja2VyUmVzcG9uc2USbwoUUmV0cnlBbGxVbnN1bW1hcml6ZWQSKi5mcm9zdGFnZW50LnYxLlJldHJ5QWxsVW5zdW1tYXJpemVkUmVxdWVzdBorLmZyb3N0YWdlbnQudjEuUmV0cnlBbGxVbnN1bW1hcml6ZWRSZXNwb25zZRJgCg9HZXRTdGlja2VyU3RhdHMSJS5mcm9zdGFnZW50LnYxLkdldFN0aWNrZXJTdGF0c1JlcXVlc3QaJi5mcm9zdGFnZW50LnYxLkdldFN0aWNrZXJTdGF0c1Jlc3BvbnNlEmAKD0dldFN0aWNrZXJJbWFnZRIlLmZyb3N0YWdlbnQudjEuR2V0U3RpY2tlckltYWdlUmVxdWVzdBomLmZyb3N0YWdlbnQudjEuR2V0U3RpY2tlckltYWdlUmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
+  fileDesc("Chtmcm9zdGFnZW50L3YxL3N0aWNrZXIucHJvdG8SDWZyb3N0YWdlbnQudjEivAEKC1N0aWNrZXJJdGVtEgoKAmlkGAEgASgJEhEKCWZpbGVfbmFtZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghrZXl3b3JkcxgEIAMoCRIOCgZ3ZWlnaHQYBSABKAUSDgoGc3RhdHVzGAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAMSEgoKdXBkYXRlZF9hdBgIIAEoAxIfChdzdXNwZWN0ZWRfaW5hcHByb3ByaWF0ZRgJIAEoCCJrChNMaXN0U3RpY2tlcnNSZXF1ZXN0Ei0KCnBhZ2luYXRpb24YASABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24SFQoNc3RhdHVzX2ZpbHRlchgCIAEoCRIOCgZzZWFyY2gYAyABKAkicgoUTGlzdFN0aWNrZXJzUmVzcG9uc2USLAoIc3RpY2tlcnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlN0aWNrZXJJdGVtEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCRITCgt0b3RhbF9jb3VudBgDIAEoBSIiChREZWxldGVTdGlja2VyUmVxdWVzdBIKCgJpZBgBIAEoCSI3ChVEZWxldGVTdGlja2VyUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJRChxVcGRhdGVTdGlja2VyS2V5d29yZHNSZXF1ZXN0EgoKAmlkGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhAKCGtleXdvcmRzGAMgAygJIj8KHVVwZGF0ZVN0aWNrZXJLZXl3b3Jkc1Jlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiMgokQ2xlYXJTdGlja2VySW5hcHByb3ByaWF0ZUZsYWdSZXF1ZXN0EgoKAmlkGAEgASgJIkcKJUNsZWFyU3RpY2tlckluYXBwcm9wcmlhdGVGbGFnUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSI+ChRVcGxvYWRTdGlja2VyUmVxdWVzdBIUCgxmaWxlX2NvbnRlbnQYASABKAwSEAoIZmlsZW5hbWUYAiABKAkiZAoVVXBsb2FkU3RpY2tlclJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkSKwoHc3RpY2tlchgDIAEoCzIaLmZyb3N0YWdlbnQudjEuU3RpY2tlckl0ZW0iHQobUmV0cnlBbGxVbnN1bW1hcml6ZWRSZXF1ZXN0IjYKHFJldHJ5QWxsVW5zdW1tYXJpemVkUmVzcG9uc2USFgoOZW5xdWV1ZWRfY291bnQYASABKAUiGAoWR2V0U3RpY2tlclN0YXRzUmVxdWVzdCJNChdHZXRTdGlja2VyU3RhdHNSZXNwb25zZRINCgV0b3RhbBgBIAEoBRINCgVyZWFkeRgCIAEoBRIUCgx1bnN1bW1hcml6ZWQYAyABKAUiJAoWR2V0U3RpY2tlckltYWdlUmVxdWVzdBIKCgJpZBgBIAEoCSJAChdHZXRTdGlja2VySW1hZ2VSZXNwb25zZRIPCgdjb250ZW50GAEgASgMEhQKDGNvbnRlbnRfdHlwZRgCIAEoCTLXBgoOU3RpY2tlclNlcnZpY2USVwoMTGlzdFN0aWNrZXJzEiIuZnJvc3RhZ2VudC52MS5MaXN0U3RpY2tlcnNSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5MaXN0U3RpY2tlcnNSZXNwb25zZRJaCg1EZWxldGVTdGlja2VyEiMuZnJvc3RhZ2VudC52MS5EZWxldGVTdGlja2VyUmVxdWVzdBokLmZyb3N0YWdlbnQudjEuRGVsZXRlU3RpY2tlclJlc3BvbnNlEnIKFVVwZGF0ZVN0aWNrZXJLZXl3b3JkcxIrLmZyb3N0YWdlbnQudjEuVXBkYXRlU3RpY2tlcktleXdvcmRzUmVxdWVzdBosLmZyb3N0YWdlbnQudjEuVXBkYXRlU3RpY2tlcktleXdvcmRzUmVzcG9uc2USigEKHUNsZWFyU3RpY2tlckluYXBwcm9wcmlhdGVGbGFnEjMuZnJvc3RhZ2VudC52MS5DbGVhclN0aWNrZXJJbmFwcHJvcHJpYXRlRmxhZ1JlcXVlc3QaNC5mcm9zdGFnZW50LnYxLkNsZWFyU3RpY2tlckluYXBwcm9wcmlhdGVGbGFnUmVzcG9uc2USWgoNVXBsb2FkU3RpY2tlchIjLmZyb3N0YWdlbnQudjEuVXBsb2FkU3RpY2tlclJlcXVlc3QaJC5mcm9zdGFnZW50LnYxLlVwbG9hZFN0aWNrZXJSZXNwb25zZRJvChRSZXRyeUFsbFVuc3VtbWFyaXplZBIqLmZyb3N0YWdlbnQudjEuUmV0cnlBbGxVbnN1bW1hcml6ZWRSZXF1ZXN0GisuZnJvc3RhZ2VudC52MS5SZXRyeUFsbFVuc3VtbWFyaXplZFJlc3BvbnNlEmAKD0dldFN0aWNrZXJTdGF0cxIlLmZyb3N0YWdlbnQudjEuR2V0U3RpY2tlclN0YXRzUmVxdWVzdBomLmZyb3N0YWdlbnQudjEuR2V0U3RpY2tlclN0YXRzUmVzcG9uc2USYAoPR2V0U3RpY2tlckltYWdlEiUuZnJvc3RhZ2VudC52MS5HZXRTdGlja2VySW1hZ2VSZXF1ZXN0GiYuZnJvc3RhZ2VudC52MS5HZXRTdGlja2VySW1hZ2VSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.StickerItem
@@ -57,6 +57,11 @@ export type StickerItem = Message<"frostagent.v1.StickerItem"> & {
    * @generated from field: int64 updated_at = 8;
    */
   updatedAt: bigint;
+
+  /**
+   * @generated from field: bool suspected_inappropriate = 9;
+   */
+  suspectedInappropriate: boolean;
 };
 
 /**
@@ -209,6 +214,45 @@ export const UpdateStickerKeywordsResponseSchema: GenMessage<UpdateStickerKeywor
   messageDesc(file_frostagent_v1_sticker, 6);
 
 /**
+ * @generated from message frostagent.v1.ClearStickerInappropriateFlagRequest
+ */
+export type ClearStickerInappropriateFlagRequest = Message<"frostagent.v1.ClearStickerInappropriateFlagRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ClearStickerInappropriateFlagRequest.
+ * Use `create(ClearStickerInappropriateFlagRequestSchema)` to create a new message.
+ */
+export const ClearStickerInappropriateFlagRequestSchema: GenMessage<ClearStickerInappropriateFlagRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_sticker, 7);
+
+/**
+ * @generated from message frostagent.v1.ClearStickerInappropriateFlagResponse
+ */
+export type ClearStickerInappropriateFlagResponse = Message<"frostagent.v1.ClearStickerInappropriateFlagResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ClearStickerInappropriateFlagResponse.
+ * Use `create(ClearStickerInappropriateFlagResponseSchema)` to create a new message.
+ */
+export const ClearStickerInappropriateFlagResponseSchema: GenMessage<ClearStickerInappropriateFlagResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_sticker, 8);
+
+/**
  * @generated from message frostagent.v1.UploadStickerRequest
  */
 export type UploadStickerRequest = Message<"frostagent.v1.UploadStickerRequest"> & {
@@ -228,7 +272,7 @@ export type UploadStickerRequest = Message<"frostagent.v1.UploadStickerRequest">
  * Use `create(UploadStickerRequestSchema)` to create a new message.
  */
 export const UploadStickerRequestSchema: GenMessage<UploadStickerRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 7);
+  messageDesc(file_frostagent_v1_sticker, 9);
 
 /**
  * @generated from message frostagent.v1.UploadStickerResponse
@@ -255,7 +299,7 @@ export type UploadStickerResponse = Message<"frostagent.v1.UploadStickerResponse
  * Use `create(UploadStickerResponseSchema)` to create a new message.
  */
 export const UploadStickerResponseSchema: GenMessage<UploadStickerResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 8);
+  messageDesc(file_frostagent_v1_sticker, 10);
 
 /**
  * @generated from message frostagent.v1.RetryAllUnsummarizedRequest
@@ -268,7 +312,7 @@ export type RetryAllUnsummarizedRequest = Message<"frostagent.v1.RetryAllUnsumma
  * Use `create(RetryAllUnsummarizedRequestSchema)` to create a new message.
  */
 export const RetryAllUnsummarizedRequestSchema: GenMessage<RetryAllUnsummarizedRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 9);
+  messageDesc(file_frostagent_v1_sticker, 11);
 
 /**
  * @generated from message frostagent.v1.RetryAllUnsummarizedResponse
@@ -285,7 +329,7 @@ export type RetryAllUnsummarizedResponse = Message<"frostagent.v1.RetryAllUnsumm
  * Use `create(RetryAllUnsummarizedResponseSchema)` to create a new message.
  */
 export const RetryAllUnsummarizedResponseSchema: GenMessage<RetryAllUnsummarizedResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 10);
+  messageDesc(file_frostagent_v1_sticker, 12);
 
 /**
  * @generated from message frostagent.v1.GetStickerStatsRequest
@@ -298,7 +342,7 @@ export type GetStickerStatsRequest = Message<"frostagent.v1.GetStickerStatsReque
  * Use `create(GetStickerStatsRequestSchema)` to create a new message.
  */
 export const GetStickerStatsRequestSchema: GenMessage<GetStickerStatsRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 11);
+  messageDesc(file_frostagent_v1_sticker, 13);
 
 /**
  * @generated from message frostagent.v1.GetStickerStatsResponse
@@ -325,7 +369,7 @@ export type GetStickerStatsResponse = Message<"frostagent.v1.GetStickerStatsResp
  * Use `create(GetStickerStatsResponseSchema)` to create a new message.
  */
 export const GetStickerStatsResponseSchema: GenMessage<GetStickerStatsResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 12);
+  messageDesc(file_frostagent_v1_sticker, 14);
 
 /**
  * @generated from message frostagent.v1.GetStickerImageRequest
@@ -342,7 +386,7 @@ export type GetStickerImageRequest = Message<"frostagent.v1.GetStickerImageReque
  * Use `create(GetStickerImageRequestSchema)` to create a new message.
  */
 export const GetStickerImageRequestSchema: GenMessage<GetStickerImageRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 13);
+  messageDesc(file_frostagent_v1_sticker, 15);
 
 /**
  * @generated from message frostagent.v1.GetStickerImageResponse
@@ -364,7 +408,7 @@ export type GetStickerImageResponse = Message<"frostagent.v1.GetStickerImageResp
  * Use `create(GetStickerImageResponseSchema)` to create a new message.
  */
 export const GetStickerImageResponseSchema: GenMessage<GetStickerImageResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_sticker, 14);
+  messageDesc(file_frostagent_v1_sticker, 16);
 
 /**
  * @generated from service frostagent.v1.StickerService
@@ -393,6 +437,14 @@ export const StickerService: GenService<{
     methodKind: "unary";
     input: typeof UpdateStickerKeywordsRequestSchema;
     output: typeof UpdateStickerKeywordsResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.StickerService.ClearStickerInappropriateFlag
+   */
+  clearStickerInappropriateFlag: {
+    methodKind: "unary";
+    input: typeof ClearStickerInappropriateFlagRequestSchema;
+    output: typeof ClearStickerInappropriateFlagResponseSchema;
   },
   /**
    * @generated from rpc frostagent.v1.StickerService.UploadSticker

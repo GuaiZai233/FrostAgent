@@ -11,7 +11,7 @@ import (
 )
 
 type VisionCaller interface {
-	Describe(imageBase64, mimeType string) (description string, keywords []string, err error)
+	Describe(imageBase64, mimeType string) (description string, keywords []string, suspectedInappropriate bool, err error)
 }
 
 type Summarizer struct {
@@ -95,13 +95,13 @@ func (s *Summarizer) process(id string) {
 	mime := guessMimeType(entry.FileName)
 	b64 := base64.StdEncoding.EncodeToString(data)
 
-	desc, keywords, err := s.vision.Describe(b64, mime)
+	desc, keywords, suspectedInappropriate, err := s.vision.Describe(b64, mime)
 	if err != nil {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: vision call failed for %s: %v", id[:12], err))
 		return
 	}
 
-	if err := s.store.Update(id, desc, keywords); err != nil {
+	if err := s.store.UpdateSummary(id, desc, keywords, suspectedInappropriate); err != nil {
 		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: update %s: %v", id[:12], err))
 	} else {
 		logs.Info(logs.SYSTEM, fmt.Sprintf("sticker summarizer: %s => %q %v", id[:12], desc, keywords))
@@ -124,11 +124,12 @@ func guessMimeType(fileName string) string {
 
 // VisionResult is the structured output from the vision model.
 type VisionResult struct {
-	Description string   `json:"description"`
-	Keywords    []string `json:"keywords"`
+	Description            string   `json:"description"`
+	Keywords               []string `json:"keywords"`
+	SuspectedInappropriate bool     `json:"suspected_inappropriate"`
 }
 
-func ParseVisionResult(raw string) (string, []string) {
+func ParseVisionResult(raw string) (string, []string, bool) {
 	raw = strings.TrimSpace(raw)
 
 	start := strings.Index(raw, "{")
@@ -139,7 +140,7 @@ func ParseVisionResult(raw string) (string, []string) {
 
 	var result VisionResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return raw, nil
+		return raw, nil, false
 	}
-	return result.Description, result.Keywords
+	return result.Description, result.Keywords, result.SuspectedInappropriate
 }

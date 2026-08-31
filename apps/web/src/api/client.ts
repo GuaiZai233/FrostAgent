@@ -39,6 +39,7 @@ import {
   type ListStickersResponse,
   type DeleteStickerResponse,
   type UpdateStickerKeywordsResponse,
+  type ClearStickerInappropriateFlagResponse,
   type UploadStickerResponse,
   type RetryAllUnsummarizedResponse,
   type GetStickerStatsResponse,
@@ -320,6 +321,10 @@ export const api = {
     keywords: string[],
   ): Promise<UpdateStickerKeywordsResponse> {
     return stickerClient.updateStickerKeywords({ id, description, keywords });
+  },
+
+  clearStickerInappropriateFlag(id: string): Promise<ClearStickerInappropriateFlagResponse> {
+    return stickerClient.clearStickerInappropriateFlag({ id });
   },
 
   uploadSticker(fileContent: Uint8Array, filename: string): Promise<UploadStickerResponse> {

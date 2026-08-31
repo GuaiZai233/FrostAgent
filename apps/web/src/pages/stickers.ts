@@ -132,10 +132,18 @@ export function mountStickersPage(container: HTMLElement): () => void {
         max-height: 100%;
         object-fit: contain;
       }
-      .sticker-status-badge {
+      .sticker-status-badges {
         position: absolute;
         top: 0.25rem;
         right: 0.25rem;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0.2rem;
+        max-width: calc(100% - 0.5rem);
+      }
+      .sticker-flag-badge {
+        cursor: pointer;
       }
       .sticker-card-body {
         padding: 0.5rem;
@@ -254,6 +262,9 @@ export function mountStickersPage(container: HTMLElement): () => void {
         const statusBadge = isReady
           ? `<span class="badge badge-success text-[10px] px-1 py-0">已摘要</span>`
           : `<span class="badge badge-warning text-[10px] px-1 py-0">未摘要</span>`;
+        const inappropriateBadge = s.suspectedInappropriate
+          ? `<button type="button" class="badge badge-destructive sticker-flag-badge text-[10px] px-1 py-0" data-action="clear-inappropriate-flag" data-id="${escapeHtml(s.id)}" title="移除疑似不合适标记">疑似不合适</button>`
+          : '';
 
         const keywordsHtml = (s.keywords || [])
           .slice(0, 4)
@@ -276,7 +287,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
                 alt="${escapeHtml(s.description || '表情包')}"
                 loading="lazy"
               />
-              <div class="sticker-status-badge">${statusBadge}</div>
+              <div class="sticker-status-badges">${inappropriateBadge}${statusBadge}</div>
             </div>
             <div class="sticker-card-body">
               <div class="sticker-desc" title="${escapeHtml(s.description || '')}">
@@ -324,6 +335,34 @@ export function mountStickersPage(container: HTMLElement): () => void {
         void loadStickers();
       },
     });
+
+    grid
+      .querySelectorAll<HTMLButtonElement>('[data-action="clear-inappropriate-flag"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.id;
+          if (!id) return;
+          const confirmed = await confirmDialog({
+            title: '移除疑似不合适标记',
+            message: '移除后，这个表情包会恢复为可检索和可发送状态。确定继续吗？',
+            confirmLabel: '移除标记',
+          });
+          if (!confirmed) return;
+
+          try {
+            const res = await api.clearStickerInappropriateFlag(id);
+            if (res.success) {
+              toast.success('已移除疑似不合适标记');
+              void loadStickers();
+            } else {
+              toast.error('移除标记失败: ' + res.error);
+            }
+          } catch (err) {
+            toast.error('移除标记失败: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        });
+      });
 
     // Edit button events
     grid.querySelectorAll<HTMLButtonElement>('[data-action="edit-sticker"]').forEach((btn) => {

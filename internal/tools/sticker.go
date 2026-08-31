@@ -44,7 +44,7 @@ func SendStickerTool(store *sticker.Store) Tool {
 			var candidates []stickerCandidate
 
 			for _, e := range entries {
-				if e.Status != sticker.StatusReady {
+				if e.Status != sticker.StatusReady || e.SuspectedInappropriate || e.Weight <= 0 {
 					continue
 				}
 				matched := false

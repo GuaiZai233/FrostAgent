@@ -8,25 +8,27 @@ import (
 )
 
 type mockVisionCaller struct {
-	desc     string
-	keywords []string
-	err      error
-	called   int
+	desc                   string
+	keywords               []string
+	suspectedInappropriate bool
+	err                    error
+	called                 int
 }
 
-func (m *mockVisionCaller) Describe(imageBase64, mimeType string) (string, []string, error) {
+func (m *mockVisionCaller) Describe(imageBase64, mimeType string) (string, []string, bool, error) {
 	m.called++
 	if m.err != nil {
-		return "", nil, m.err
+		return "", nil, false, m.err
 	}
-	return m.desc, m.keywords, nil
+	return m.desc, m.keywords, m.suspectedInappropriate, nil
 }
 
 func TestParseVisionResult(t *testing.T) {
 	tests := []struct {
-		input        string
-		wantDesc     string
-		wantKeywords []string
+		input                      string
+		wantDesc                   string
+		wantKeywords               []string
+		wantSuspectedInappropriate bool
 	}{
 		{
 			input:        `{"description": "一只猫猫在挥手", "keywords": ["开心", "打招呼", "猫猫"]}`,
@@ -39,21 +41,58 @@ func TestParseVisionResult(t *testing.T) {
 			wantKeywords: []string{"委屈", "难过"},
 		},
 		{
-			input:        `这里是分析结果：{"description": "测试", "keywords": ["测试词"]} 谢谢`,
-			wantDesc:     "测试",
-			wantKeywords: []string{"测试词"},
+			input:                      `这里是分析结果：{"description": "测试", "keywords": ["测试词"], "suspected_inappropriate": true} 谢谢`,
+			wantDesc:                   "测试",
+			wantKeywords:               []string{"测试词"},
+			wantSuspectedInappropriate: true,
 		},
 	}
 
 	for _, tt := range tests {
-		desc, kws := ParseVisionResult(tt.input)
+		desc, kws, suspectedInappropriate := ParseVisionResult(tt.input)
 		if desc != tt.wantDesc {
 			t.Errorf("ParseVisionResult(%q) desc = %q, want %q", tt.input, desc, tt.wantDesc)
 		}
 		if len(kws) != len(tt.wantKeywords) {
 			t.Errorf("ParseVisionResult(%q) kws length = %d, want %d", tt.input, len(kws), len(tt.wantKeywords))
 		}
+		if suspectedInappropriate != tt.wantSuspectedInappropriate {
+			t.Errorf("ParseVisionResult(%q) suspected_inappropriate = %v, want %v", tt.input, suspectedInappropriate, tt.wantSuspectedInappropriate)
+		}
 	}
+}
+
+func TestSummarizerMarksSuspectedInappropriateStickerUnused(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	mockVision := &mockVisionCaller{
+		desc:                   "疑似不适合主动发送的图片",
+		keywords:               []string{"敏感"},
+		suspectedInappropriate: true,
+	}
+	summarizer := NewSummarizer(store, mockVision)
+	defer summarizer.Stop()
+
+	data := []byte("fake_inappropriate_image")
+	id := HashBytes(data)
+	if err := store.Add(id, id+".png", data); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	summarizer.Enqueue(id)
+
+	for i := 0; i < 50; i++ {
+		time.Sleep(20 * time.Millisecond)
+		entry, ok := store.Get(id)
+		if ok && entry.Status == StatusReady {
+			if !entry.SuspectedInappropriate || entry.Weight != 0 {
+				t.Fatalf("flagged entry = %+v, want suspected and weight 0", entry)
+			}
+			return
+		}
+	}
+	t.Fatal("summarizer did not process sticker in time")
 }
 
 func TestSummarizer_ProcessAndRetry(t *testing.T) {

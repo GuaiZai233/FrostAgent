@@ -127,6 +127,19 @@ func (s *Service) UpdateStickerKeywords(
 	return connect.NewResponse(&v1.UpdateStickerKeywordsResponse{Success: true}), nil
 }
 
+func (s *Service) ClearStickerInappropriateFlag(
+	_ context.Context,
+	req *connect.Request[v1.ClearStickerInappropriateFlagRequest],
+) (*connect.Response[v1.ClearStickerInappropriateFlagResponse], error) {
+	if err := s.store.ClearSuspectedInappropriate(req.Msg.GetId()); err != nil {
+		return connect.NewResponse(&v1.ClearStickerInappropriateFlagResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+	return connect.NewResponse(&v1.ClearStickerInappropriateFlagResponse{Success: true}), nil
+}
+
 func (s *Service) UploadSticker(
 	_ context.Context,
 	req *connect.Request[v1.UploadStickerRequest],
@@ -270,13 +283,14 @@ func (s *Service) ImageHandler() http.HandlerFunc {
 
 func entryToProto(e sticker.Entry) *v1.StickerItem {
 	return &v1.StickerItem{
-		Id:          e.ID,
-		FileName:    e.FileName,
-		Description: e.Description,
-		Keywords:    e.Keywords,
-		Weight:      int32(e.Weight),
-		Status:      string(e.Status),
-		CreatedAt:   e.CreatedAt,
-		UpdatedAt:   e.UpdatedAt,
+		Id:                     e.ID,
+		FileName:               e.FileName,
+		Description:            e.Description,
+		Keywords:               e.Keywords,
+		Weight:                 int32(e.Weight),
+		Status:                 string(e.Status),
+		SuspectedInappropriate: e.SuspectedInappropriate,
+		CreatedAt:              e.CreatedAt,
+		UpdatedAt:              e.UpdatedAt,
 	}
 }
