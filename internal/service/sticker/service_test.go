@@ -222,7 +222,7 @@ func TestUploadStickerReportsDuplicateWeightPersistenceFailure(t *testing.T) {
 	}
 }
 
-func TestClearStickerInappropriateFlag(t *testing.T) {
+func TestStickerInappropriateFlag(t *testing.T) {
 	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
 	if err != nil {
 		t.Fatalf("create store: %v", err)
@@ -232,11 +232,15 @@ func TestClearStickerInappropriateFlag(t *testing.T) {
 	if err := store.Add(id, id+".jpg", data); err != nil {
 		t.Fatalf("add sticker: %v", err)
 	}
-	if err := store.UpdateSummary(id, "疑似不合适", []string{"敏感"}, true); err != nil {
-		t.Fatalf("mark sticker: %v", err)
+	if err := store.Update(id, "人工标记测试", []string{"测试"}); err != nil {
+		t.Fatalf("update sticker: %v", err)
 	}
 
 	svc := New(store, nil)
+	marked, err := svc.MarkStickerInappropriateFlag(context.Background(), connect.NewRequest(&v1.MarkStickerInappropriateFlagRequest{Id: id}))
+	if err != nil || !marked.Msg.GetSuccess() {
+		t.Fatalf("mark flag: response=%v err=%v", marked, err)
+	}
 	listed, err := svc.ListStickers(context.Background(), connect.NewRequest(&v1.ListStickersRequest{}))
 	if err != nil {
 		t.Fatalf("list stickers: %v", err)

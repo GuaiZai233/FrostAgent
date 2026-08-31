@@ -256,6 +256,26 @@ func (s *Store) UpdateSummary(id string, description string, keywords []string, 
 	return nil
 }
 
+func (s *Store) MarkSuspectedInappropriate(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.index[id]
+	if !ok {
+		return fmt.Errorf("sticker %s not found", id)
+	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
+	e.SuspectedInappropriate = true
+	e.Weight = 0
+	e.UpdatedAt = time.Now().Unix()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
+}
+
 func (s *Store) ClearSuspectedInappropriate(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

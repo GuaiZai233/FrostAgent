@@ -422,8 +422,8 @@ export function mountStickersPage(container: HTMLElement): () => void {
       footerHtml: `
         ${
           s.suspectedInappropriate
-            ? '<button class="btn btn-destructive btn-sm" style="margin-right: auto;" id="edit-sticker-clear-flag">移除不合适标记</button>'
-            : ''
+            ? '<button class="btn btn-destructive btn-sm" style="margin-right: auto;" id="edit-sticker-toggle-flag">移除不合适标记</button>'
+            : '<button class="btn btn-primary btn-sm" style="margin-right: auto;" id="edit-sticker-toggle-flag">添加不合适标记</button>'
         }
         <button class="btn btn-outline btn-sm" id="edit-sticker-cancel">取消</button>
         <button class="btn btn-primary btn-sm" id="edit-sticker-save">保存</button>
@@ -431,28 +431,36 @@ export function mountStickersPage(container: HTMLElement): () => void {
       onMount: (dialogEl, close) => {
         const cancelBtn = dialogEl.querySelector('#edit-sticker-cancel')!;
         const saveBtn = dialogEl.querySelector<HTMLButtonElement>('#edit-sticker-save')!;
-        const clearFlagBtn = dialogEl.querySelector<HTMLButtonElement>(
-          '#edit-sticker-clear-flag',
+        const toggleFlagBtn = dialogEl.querySelector<HTMLButtonElement>(
+          '#edit-sticker-toggle-flag',
         );
         const descInput = dialogEl.querySelector<HTMLTextAreaElement>('#edit-sticker-desc')!;
         const keywordsInput = dialogEl.querySelector<HTMLInputElement>('#edit-sticker-keywords')!;
 
         cancelBtn.addEventListener('click', () => close());
-        clearFlagBtn?.addEventListener('click', async () => {
+        toggleFlagBtn?.addEventListener('click', async () => {
           try {
-            clearFlagBtn.disabled = true;
-            const res = await api.clearStickerInappropriateFlag(s.id);
+            toggleFlagBtn.disabled = true;
+            const res = s.suspectedInappropriate
+              ? await api.clearStickerInappropriateFlag(s.id)
+              : await api.markStickerInappropriateFlag(s.id);
             if (res.success) {
-              toast.success('已移除疑似不合适标记');
+              toast.success(
+                s.suspectedInappropriate ? '已移除疑似不合适标记' : '已添加疑似不合适标记',
+              );
               close();
               void loadStickers();
             } else {
-              toast.error('移除标记失败: ' + res.error);
+              toast.error(`${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${res.error}`);
             }
           } catch (err) {
-            toast.error('移除标记失败: ' + (err instanceof Error ? err.message : String(err)));
+            toast.error(
+              `${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
           } finally {
-            clearFlagBtn.disabled = false;
+            toggleFlagBtn.disabled = false;
           }
         });
         saveBtn.addEventListener('click', async () => {

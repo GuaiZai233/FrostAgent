@@ -39,6 +39,7 @@ import {
   type ListStickersResponse,
   type DeleteStickerResponse,
   type UpdateStickerKeywordsResponse,
+  type MarkStickerInappropriateFlagResponse,
   type ClearStickerInappropriateFlagResponse,
   type UploadStickerResponse,
   type RetryAllUnsummarizedResponse,
@@ -321,6 +322,10 @@ export const api = {
     keywords: string[],
   ): Promise<UpdateStickerKeywordsResponse> {
     return stickerClient.updateStickerKeywords({ id, description, keywords });
+  },
+
+  markStickerInappropriateFlag(id: string): Promise<MarkStickerInappropriateFlagResponse> {
+    return stickerClient.markStickerInappropriateFlag({ id });
   },
 
   clearStickerInappropriateFlag(id: string): Promise<ClearStickerInappropriateFlagResponse> {

@@ -227,7 +227,10 @@ func TestStoreSuspectedInappropriateWeightAndClear(t *testing.T) {
 	if err := store.Add(id, id+".gif", data); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
-	if err := store.UpdateSummary(id, "疑似不合适", []string{"敏感"}, true); err != nil {
+	if err := store.Update(id, "人工标记测试", []string{"测试"}); err != nil {
+		t.Fatalf("update sticker: %v", err)
+	}
+	if err := store.MarkSuspectedInappropriate(id); err != nil {
 		t.Fatalf("mark suspected inappropriate: %v", err)
 	}
 	if err := store.IncrementWeight(id); err != nil {

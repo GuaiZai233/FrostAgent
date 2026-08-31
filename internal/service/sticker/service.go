@@ -127,6 +127,19 @@ func (s *Service) UpdateStickerKeywords(
 	return connect.NewResponse(&v1.UpdateStickerKeywordsResponse{Success: true}), nil
 }
 
+func (s *Service) MarkStickerInappropriateFlag(
+	_ context.Context,
+	req *connect.Request[v1.MarkStickerInappropriateFlagRequest],
+) (*connect.Response[v1.MarkStickerInappropriateFlagResponse], error) {
+	if err := s.store.MarkSuspectedInappropriate(req.Msg.GetId()); err != nil {
+		return connect.NewResponse(&v1.MarkStickerInappropriateFlagResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+	return connect.NewResponse(&v1.MarkStickerInappropriateFlagResponse{Success: true}), nil
+}
+
 func (s *Service) ClearStickerInappropriateFlag(
 	_ context.Context,
 	req *connect.Request[v1.ClearStickerInappropriateFlagRequest],

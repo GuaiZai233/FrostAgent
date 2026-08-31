@@ -8,6 +8,7 @@ service StickerService {
   rpc ListStickers(ListStickersRequest) returns (ListStickersResponse);
   rpc DeleteSticker(DeleteStickerRequest) returns (DeleteStickerResponse);
   rpc UpdateStickerKeywords(UpdateStickerKeywordsRequest) returns (UpdateStickerKeywordsResponse);
+  rpc MarkStickerInappropriateFlag(MarkStickerInappropriateFlagRequest) returns (MarkStickerInappropriateFlagResponse);
   rpc ClearStickerInappropriateFlag(ClearStickerInappropriateFlagRequest) returns (ClearStickerInappropriateFlagResponse);
   rpc UploadSticker(UploadStickerRequest) returns (UploadStickerResponse);
   rpc RetryAllUnsummarized(RetryAllUnsummarizedRequest) returns (RetryAllUnsummarizedResponse);
@@ -55,6 +56,15 @@ message UpdateStickerKeywordsRequest {
 }
 
 message UpdateStickerKeywordsResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message MarkStickerInappropriateFlagRequest {
+  string id = 1;
+}
+
+message MarkStickerInappropriateFlagResponse {
   bool success = 1;
   string error = 2;
 }
