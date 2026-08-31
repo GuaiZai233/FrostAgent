@@ -142,7 +142,12 @@ func (s *Service) UploadSticker(
 
 	hash := sticker.HashBytes(data)
 	if s.store.Exists(hash) {
-		_ = s.store.IncrementWeight(hash)
+		if err := s.store.IncrementWeight(hash); err != nil {
+			return connect.NewResponse(&v1.UploadStickerResponse{
+				Success: false,
+				Error:   fmt.Sprintf("increment sticker weight: %v", err),
+			}), nil
+		}
 		entry, _ := s.store.Get(hash)
 		return connect.NewResponse(&v1.UploadStickerResponse{
 			Success: true,

@@ -52,10 +52,10 @@ func (s *Store) load() error {
 	return nil
 }
 
-func (s *Store) save() error {
-	entries := make([]Entry, 0, len(s.ordered))
-	for _, id := range s.ordered {
-		if e, ok := s.index[id]; ok {
+func (s *Store) saveSnapshot(index map[string]*Entry, ordered []string) error {
+	entries := make([]Entry, 0, len(ordered))
+	for _, id := range ordered {
+		if e, ok := index[id]; ok {
 			entries = append(entries, *e)
 		}
 	}
@@ -75,6 +75,16 @@ func (s *Store) save() error {
 		os.Remove(tmp)
 	}
 	return nil
+}
+
+func cloneIndex(index map[string]*Entry) map[string]*Entry {
+	cloned := make(map[string]*Entry, len(index))
+	for id, entry := range index {
+		copyEntry := *entry
+		copyEntry.Keywords = append([]string(nil), entry.Keywords...)
+		cloned[id] = &copyEntry
+	}
+	return cloned
 }
 
 func HashBytes(data []byte) string {
@@ -103,22 +113,37 @@ func (s *Store) Add(id, fileName string, fileData []byte) error {
 	}
 
 	e := newEntry(id, fileName)
-	s.index[id] = &e
-	s.ordered = append(s.ordered, id)
-	return s.save()
+	nextIndex := cloneIndex(s.index)
+	nextIndex[id] = &e
+	nextOrdered := append(append([]string(nil), s.ordered...), id)
+	if err := s.saveSnapshot(nextIndex, nextOrdered); err != nil {
+		if removeErr := os.Remove(filePath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("persist index: %v; remove uncommitted file: %w", err, removeErr)
+		}
+		return err
+	}
+	s.index = nextIndex
+	s.ordered = nextOrdered
+	return nil
 }
 
 func (s *Store) IncrementWeight(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e, ok := s.index[id]
+	_, ok := s.index[id]
 	if !ok {
 		return fmt.Errorf("sticker %s not found", id)
 	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
 	e.Weight++
 	e.UpdatedAt = time.Now().Unix()
-	return s.save()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
 }
 
 func (s *Store) Get(id string) (Entry, bool) {
@@ -152,45 +177,69 @@ func (s *Store) Delete(id string) error {
 		return fmt.Errorf("sticker %s not found", id)
 	}
 
-	filePath := filepath.Join(s.dir, e.FileName)
-	os.Remove(filePath)
-
-	delete(s.index, id)
-	for i, oid := range s.ordered {
-		if oid == id {
-			s.ordered = append(s.ordered[:i], s.ordered[i+1:]...)
-			break
+	nextIndex := cloneIndex(s.index)
+	delete(nextIndex, id)
+	nextOrdered := make([]string, 0, len(s.ordered)-1)
+	for _, oid := range s.ordered {
+		if oid != id {
+			nextOrdered = append(nextOrdered, oid)
 		}
 	}
-	return s.save()
+	if err := s.saveSnapshot(nextIndex, nextOrdered); err != nil {
+		return err
+	}
+
+	filePath := filepath.Join(s.dir, e.FileName)
+	if err := os.Remove(filePath); err != nil {
+		if rollbackErr := s.saveSnapshot(s.index, s.ordered); rollbackErr != nil {
+			return fmt.Errorf("remove file: %v; rollback index: %w", err, rollbackErr)
+		}
+		return fmt.Errorf("remove file: %w", err)
+	}
+
+	s.index = nextIndex
+	s.ordered = nextOrdered
+	return nil
 }
 
 func (s *Store) Update(id string, description string, keywords []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e, ok := s.index[id]
+	_, ok := s.index[id]
 	if !ok {
 		return fmt.Errorf("sticker %s not found", id)
 	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
 	e.Description = description
-	e.Keywords = keywords
+	e.Keywords = append([]string(nil), keywords...)
 	e.Status = StatusReady
 	e.UpdatedAt = time.Now().Unix()
-	return s.save()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
 }
 
 func (s *Store) SetStatus(id string, status Status) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e, ok := s.index[id]
+	_, ok := s.index[id]
 	if !ok {
 		return fmt.Errorf("sticker %s not found", id)
 	}
+	nextIndex := cloneIndex(s.index)
+	e := nextIndex[id]
 	e.Status = status
 	e.UpdatedAt = time.Now().Unix()
-	return s.save()
+	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
+		return err
+	}
+	s.index = nextIndex
+	return nil
 }
 
 func (s *Store) Stats() Stats {

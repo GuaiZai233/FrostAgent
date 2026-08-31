@@ -3,7 +3,9 @@ package stickersvc
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -171,5 +173,51 @@ func TestStickerService_Pagination(t *testing.T) {
 	}
 	if resp3.Msg.GetNextPageToken() != "" {
 		t.Errorf("expected empty next_page_token on last page, got %q", resp3.Msg.GetNextPageToken())
+	}
+}
+
+func TestUploadStickerReportsDuplicateWeightPersistenceFailure(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := sticker.NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	svc := New(store, nil)
+	request := connect.NewRequest(&v1.UploadStickerRequest{
+		FileContent: []byte("duplicate upload"),
+		Filename:    "duplicate.jpg",
+	})
+	first, err := svc.UploadSticker(context.Background(), request)
+	if err != nil || !first.Msg.GetSuccess() {
+		t.Fatalf("seed upload: response=%v err=%v", first, err)
+	}
+	id := first.Msg.GetSticker().GetId()
+	blocker := filepath.Join(storeDir, "index.json.tmp")
+	if err := os.Mkdir(blocker, 0755); err != nil {
+		t.Fatalf("block index save: %v", err)
+	}
+
+	second, err := svc.UploadSticker(context.Background(), request)
+	if err != nil {
+		t.Fatalf("duplicate upload RPC error: %v", err)
+	}
+	if second.Msg.GetSuccess() || !strings.Contains(second.Msg.GetError(), "increment sticker weight") {
+		t.Fatalf("duplicate upload response = %+v, want persistence failure", second.Msg)
+	}
+	entry, ok := store.Get(id)
+	if !ok || entry.Weight != 1 {
+		t.Fatalf("failed duplicate upload changed weight: entry=%+v found=%v", entry, ok)
+	}
+
+	if err := os.Remove(blocker); err != nil {
+		t.Fatalf("unblock index save: %v", err)
+	}
+	reloaded, err := sticker.NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	reloadedEntry, ok := reloaded.Get(id)
+	if !ok || reloadedEntry.Weight != 1 {
+		t.Fatalf("failed duplicate upload persisted weight: entry=%+v found=%v", reloadedEntry, ok)
 	}
 }

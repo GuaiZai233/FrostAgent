@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -240,6 +241,32 @@ func TestStealer_ExplicitStealIsDeterministicAndDeduplicates(t *testing.T) {
 	entry, ok := store.Get(wantID)
 	if !ok || entry.Weight != 2 {
 		t.Fatalf("stored entry = %+v, found=%v; want weight 2", entry, ok)
+	}
+}
+
+func TestStealerPersistenceFailureIsNotReportedAsDuplicate(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("GIF89a persistence failure")
+	id := HashBytes(data)
+	unblock := blockIndexSave(t, store)
+	defer unblock()
+
+	result, err := NewStealer(store, nil).Steal(context.Background(), data)
+	if err == nil || !strings.Contains(err.Error(), "add sticker") {
+		t.Fatalf("Steal error = %v, want Add persistence failure", err)
+	}
+	if result.Duplicate {
+		t.Fatal("persistence failure was reported as a duplicate")
+	}
+	if store.Exists(id) {
+		t.Fatal("persistence failure left a duplicate-looking entry in memory")
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, id+".gif")); !os.IsNotExist(err) {
+		t.Fatalf("persistence failure left an image file behind: %v", err)
 	}
 }
 

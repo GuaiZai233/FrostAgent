@@ -1,9 +1,25 @@
 package sticker
 
 import (
+	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
+
+func blockIndexSave(t *testing.T, store *Store) func() {
+	t.Helper()
+	blocker := store.indexPath() + ".tmp"
+	if err := os.Mkdir(blocker, 0755); err != nil {
+		t.Fatalf("block index save: %v", err)
+	}
+	return func() {
+		if err := os.Remove(blocker); err != nil {
+			t.Fatalf("unblock index save: %v", err)
+		}
+	}
+}
 
 func TestStore_CRUDAndPersistence(t *testing.T) {
 	tempDir := t.TempDir()
@@ -86,5 +102,116 @@ func TestStore_CRUDAndPersistence(t *testing.T) {
 	}
 	if reloaded.Exists(hash) {
 		t.Error("expected sticker to be deleted")
+	}
+}
+
+func TestStoreAddPersistenceFailureDoesNotCommitMemory(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("GIF89a failed add")
+	id := HashBytes(data)
+	fileName := id + ".gif"
+	unblock := blockIndexSave(t, store)
+
+	if err := store.Add(id, fileName, data); err == nil {
+		t.Fatal("expected Add persistence failure")
+	}
+	if store.Exists(id) {
+		t.Fatal("failed Add committed the entry in memory")
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, fileName)); !os.IsNotExist(err) {
+		t.Fatalf("uncommitted image file still exists: %v", err)
+	}
+
+	unblock()
+	reloaded, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	if reloaded.Exists(id) {
+		t.Fatal("failed Add was persisted to disk")
+	}
+}
+
+func TestStoreMutationPersistenceFailuresDoNotCommitMemory(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("GIF89a existing sticker")
+	id := HashBytes(data)
+	fileName := id + ".gif"
+	if err := store.Add(id, fileName, data); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	want, _ := store.Get(id)
+	unblock := blockIndexSave(t, store)
+
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "IncrementWeight", run: func() error { return store.IncrementWeight(id) }},
+		{name: "Update", run: func() error { return store.Update(id, "changed", []string{"changed"}) }},
+		{name: "SetStatus", run: func() error { return store.SetStatus(id, StatusReady) }},
+		{name: "Delete", run: func() error { return store.Delete(id) }},
+	}
+	for _, operation := range operations {
+		if err := operation.run(); err == nil {
+			t.Errorf("%s succeeded while persistence was blocked", operation.name)
+		}
+		got, ok := store.Get(id)
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s changed in-memory entry: got %+v, found=%v; want %+v", operation.name, got, ok, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, fileName)); err != nil {
+		t.Fatalf("failed Delete removed image file: %v", err)
+	}
+
+	unblock()
+	reloaded, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	got, ok := reloaded.Get(id)
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted entry changed after failed mutations: got %+v, found=%v; want %+v", got, ok, want)
+	}
+}
+
+func TestStoreDeleteReportsFileRemovalFailureAndRestoresIndex(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "stickers")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	data := []byte("GIF89a missing file")
+	id := HashBytes(data)
+	fileName := id + ".gif"
+	if err := store.Add(id, fileName, data); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := os.Remove(filepath.Join(storeDir, fileName)); err != nil {
+		t.Fatalf("remove image before Delete: %v", err)
+	}
+
+	err = store.Delete(id)
+	if err == nil || !strings.Contains(err.Error(), "remove file") {
+		t.Fatalf("Delete error = %v, want file removal error", err)
+	}
+	if !store.Exists(id) {
+		t.Fatal("Delete committed memory after file removal failed")
+	}
+	reloaded, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	if !reloaded.Exists(id) {
+		t.Fatal("Delete did not restore the persisted index after file removal failed")
 	}
 }
