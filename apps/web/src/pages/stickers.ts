@@ -143,6 +143,9 @@ export function mountStickersPage(container: HTMLElement): () => void {
         max-width: calc(100% - 0.5rem);
       }
       .sticker-flag-badge {
+        background-color: var(--destructive);
+        border-color: var(--destructive);
+        color: var(--destructive-foreground);
         cursor: pointer;
       }
       .sticker-card-body {
