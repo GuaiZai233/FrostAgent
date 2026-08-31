@@ -47,18 +47,7 @@ func SubAgentTool(provider core.LLMProvider) Tool {
 					route.Platform = runContext.RouteScope.Platform
 					route.GroupID = runContext.RouteScope.GroupID
 				}
-				result, err := subagent.CallCoder(ctx, provider, route, params.Content)
-				if err != nil {
-					return "", err
-				}
-
-				wrapped, err := json.Marshal(map[string]string{
-					"subagent_result": result,
-				})
-				if err != nil {
-					return "", fmt.Errorf("子Agent结果包装失败: %w", err)
-				}
-				return string(wrapped), nil
+				return subagent.CallCoder(ctx, provider, route, params.Content)
 			}
 			return "", nil
 		},
