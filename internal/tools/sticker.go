@@ -63,7 +63,7 @@ func SendStickerTool(store *sticker.Store) Tool {
 			}
 
 			if len(candidates) == 0 {
-				return `{"error":"no matching sticker found"}`, nil
+				return `{"error":"查无此词条"}`, nil
 			}
 
 			selected := weightedRandomSticker(candidates)

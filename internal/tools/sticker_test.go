@@ -58,7 +58,7 @@ func TestSendStickerTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "no matching sticker found") {
+	if !strings.Contains(out, "查无此词条") {
 		t.Errorf("expected no match, got: %s", out)
 	}
 
@@ -93,7 +93,7 @@ func TestSendStickerTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "no matching sticker found") {
+	if !strings.Contains(out, "查无此词条") {
 		t.Errorf("unsummarized sticker was matched unexpectedly: %s", out)
 	}
 
@@ -102,7 +102,7 @@ func TestSendStickerTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "no matching sticker found") {
+	if !strings.Contains(out, "查无此词条") {
 		t.Errorf("suspected-inappropriate sticker was matched unexpectedly: %s", out)
 	}
 }
