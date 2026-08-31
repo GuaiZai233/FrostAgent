@@ -56,21 +56,47 @@ func (a *Adapter) observeStickers(event Event) {
 		}
 		index := indexes[messageID]
 		indexes[messageID]++
-		data := append([]byte(nil), att.Content...)
-		source := att.URL
+		autoCollect := event.MessageType == "group" && messageID == event.MessageID
+		var loader sticker.ImageLoader
+		if autoCollect {
+			attachment := att
+			loader = func(ctx context.Context) ([]byte, error) {
+				return loadStickerAttachment(ctx, attachment)
+			}
+		}
 		a.stealer.Observe(
 			sessionKey(event),
 			messageID,
 			index,
-			func(ctx context.Context) ([]byte, error) {
-				if len(data) > 0 {
-					return append([]byte(nil), data...), nil
-				}
-				return sticker.LoadImageSource(ctx, source)
-			},
-			event.MessageType == "group" && messageID == event.MessageID,
+			loader,
+			autoCollect,
 		)
 	}
+}
+
+func loadObservedStickerFromEvent(ctx context.Context, event Event, messageID string, stickerIndex int) ([]byte, error) {
+	matchedIndex := 0
+	for _, att := range event.Attachments {
+		attachmentMessageID := att.MessageID
+		if attachmentMessageID == "" {
+			attachmentMessageID = event.MessageID
+		}
+		if attachmentMessageID != messageID || att.Type != core.AttachmentTypeImage || att.SubType != 1 {
+			continue
+		}
+		if matchedIndex == stickerIndex {
+			return loadStickerAttachment(ctx, att)
+		}
+		matchedIndex++
+	}
+	return nil, fmt.Errorf("sticker index %d is unavailable for message %s", stickerIndex, messageID)
+}
+
+func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, error) {
+	if len(att.Content) > 0 {
+		return append([]byte(nil), att.Content...), nil
+	}
+	return sticker.LoadImageSource(ctx, att.URL)
 }
 
 // ID 返回平台唯一标识 "astrbot"

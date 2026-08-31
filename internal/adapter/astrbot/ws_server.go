@@ -626,11 +626,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:     sessionKey(event),
-			Owner:         owner,
-			OwnerType:     ownerType,
-			ActorUserID:   event.UserID,
-			SendHook:      sendHook,
+			SessionID:   sessionKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: event.UserID,
+			SendHook:    sendHook,
+			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
+				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
+			},
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,

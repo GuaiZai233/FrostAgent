@@ -65,6 +65,7 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 				runContext.SessionID,
 				strings.TrimSpace(payload.MessageID),
 				payload.StickerIndex,
+				runContext.LoadObservedSticker,
 			)
 			if err != nil {
 				if errors.Is(err, sticker.ErrStickerNotInScope) {

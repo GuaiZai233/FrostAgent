@@ -56,15 +56,18 @@ func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
 		},
 	}
 	adapter.observeStickers(event)
+	loader := func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
+		return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
+	}
 
-	result, messageID, err := stealer.StealObserved(context.Background(), event.SessionID, "msg_quoted", 0)
+	result, messageID, err := stealer.StealObserved(context.Background(), event.SessionID, "msg_quoted", 0, loader)
 	if err != nil {
 		t.Fatalf("steal quoted sticker: %v", err)
 	}
 	if messageID != "msg_quoted" || result.ID != sticker.HashBytes(quotedImage) {
 		t.Fatalf("quoted result = %+v message=%q", result, messageID)
 	}
-	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0); !errors.Is(err, sticker.ErrStickerNotInScope) {
+	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0, loader); !errors.Is(err, sticker.ErrStickerNotInScope) {
 		t.Fatalf("cross-session error = %v, want ErrStickerNotInScope", err)
 	}
 }

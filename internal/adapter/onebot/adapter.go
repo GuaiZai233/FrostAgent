@@ -275,14 +275,18 @@ func observeStickerSources(
 	autoCollect bool,
 ) {
 	for index, source := range sources {
-		source := source
+		var loader sticker.ImageLoader
+		if autoCollect {
+			source := source
+			loader = func(ctx context.Context) ([]byte, error) {
+				return sticker.LoadImageSource(ctx, source)
+			}
+		}
 		stealer.Observe(
 			sessionID,
 			messageID,
 			index,
-			func(ctx context.Context) ([]byte, error) {
-				return sticker.LoadImageSource(ctx, source)
-			},
+			loader,
 			autoCollect,
 		)
 	}

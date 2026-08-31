@@ -3,14 +3,100 @@ package sticker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestStealerObserveProbabilityMissSkipsLoader(t *testing.T) {
+	stealer := NewStealer(nil, nil)
+	stealer.random = func() float64 { return 1 }
+	var loads atomic.Int32
+
+	stealer.Observe("group:test", "message:1", 0, func(context.Context) ([]byte, error) {
+		loads.Add(1)
+		return []byte("GIF89a"), nil
+	}, true)
+
+	if got := loads.Load(); got != 0 {
+		t.Fatalf("loader calls = %d, want 0 when probability gate misses", got)
+	}
+}
+
+func TestStealerObserveFullSemaphoreSkipsLoader(t *testing.T) {
+	stealer := NewStealer(nil, nil)
+	stealer.random = func() float64 { return 0 }
+	for i := 0; i < cap(stealer.sem); i++ {
+		stealer.sem <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(stealer.sem); i++ {
+			<-stealer.sem
+		}
+	}()
+
+	var loads atomic.Int32
+	stealer.Observe("group:test", "message:1", 0, func(context.Context) ([]byte, error) {
+		loads.Add(1)
+		return []byte("GIF89a"), nil
+	}, true)
+
+	if got := loads.Load(); got != 0 {
+		t.Fatalf("loader calls = %d, want 0 when semaphore is full", got)
+	}
+}
+
+func TestStealerObserveBurstCreatesOnlyAdmittedLoaders(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	stealer := NewStealer(store, nil)
+	stealer.random = func() float64 { return 0 }
+	started := make(chan struct{}, maxConcurrent+1)
+	release := make(chan struct{})
+	loader := func(context.Context) ([]byte, error) {
+		started <- struct{}{}
+		<-release
+		return []byte("GIF89a burst"), nil
+	}
+
+	for i := 0; i < 1000; i++ {
+		stealer.Observe("group:test", fmt.Sprintf("message:%d", i), 0, loader, true)
+	}
+	for i := 0; i < maxConcurrent; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("admitted loader %d did not start", i)
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("burst created a loader waiting behind the semaphore")
+	default:
+	}
+
+	close(release)
+	for i := 0; i < cap(stealer.sem); i++ {
+		stealer.sem <- struct{}{}
+	}
+	for i := 0; i < cap(stealer.sem); i++ {
+		<-stealer.sem
+	}
+	stealer.observedMu.Lock()
+	observedCount := len(stealer.observed)
+	stealer.observedMu.Unlock()
+	if observedCount != maxObservedStickers {
+		t.Fatalf("observed metadata count = %d, want cap %d", observedCount, maxObservedStickers)
+	}
+}
 
 func TestStealer_GuessExtension(t *testing.T) {
 	tests := []struct {

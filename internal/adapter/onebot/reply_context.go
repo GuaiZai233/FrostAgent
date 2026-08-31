@@ -1,8 +1,11 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/sticker"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -102,10 +105,10 @@ func (c *wsConnection) registerActionRequest(actionName, existingEcho string) (s
 }
 
 type resolvedReplyContext struct {
-	Prompt         string
-	MentionsBot    bool
-	MessageID      string
-	StickerSources []string
+	Prompt      string
+	MentionsBot bool
+	MessageID   string
+	Segments    []content.MessageSegment
 }
 
 type oneBotMessageData struct {
@@ -127,7 +130,13 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	if !ok || c == nil {
 		return resolvedReplyContext{}
 	}
+	return c.lookupMessageContext(context.Background(), event, messageID)
+}
 
+func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.OneBotEvent, messageID int64) resolvedReplyContext {
+	if c == nil {
+		return resolvedReplyContext{}
+	}
 	echo, responseChannel := c.registerMessageRequest(messageID)
 	action, err := json.Marshal(model.OneBotAction{
 		Action: "get_msg",
@@ -153,6 +162,10 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	case <-timer.C:
 		c.clearMessageRequest(echo, responseChannel)
 		logReplyLookupFailure(messageID, "查询超时")
+		return resolvedReplyContext{}
+	case <-ctx.Done():
+		c.clearMessageRequest(echo, responseChannel)
+		logReplyLookupFailure(messageID, fmt.Sprintf("查询取消: %v", ctx.Err()))
 		return resolvedReplyContext{}
 	}
 }
@@ -241,10 +254,10 @@ func resolveReplyResponse(event model.OneBotEvent, messageID int64, response one
 	}
 
 	return resolvedReplyContext{
-		Prompt:         string(prompt),
-		MentionsBot:    rawMessageMentionsBot(data.Message, configuredBotNames()),
-		MessageID:      strconv.FormatInt(messageID, 10),
-		StickerSources: stickerSourcesFromSegments(segments),
+		Prompt:      string(prompt),
+		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames()),
+		MessageID:   strconv.FormatInt(messageID, 10),
+		Segments:    segments,
 	}
 }
 
@@ -263,16 +276,72 @@ func replyMessageMatchesEvent(event model.OneBotEvent, data oneBotMessageData) b
 }
 
 func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resolvedReplyContext) {
-	if c == nil || c.stealer == nil || reply.MessageID == "" || len(reply.StickerSources) == 0 {
+	if c == nil || c.stealer == nil || reply.MessageID == "" {
 		return
 	}
 	observeStickerSources(
 		c.stealer,
 		historyKey(event),
 		reply.MessageID,
-		reply.StickerSources,
+		stickerSourcesFromSegments(reply.Segments),
 		false,
 	)
+}
+
+func (c *wsConnection) loadObservedSticker(
+	ctx context.Context,
+	event model.OneBotEvent,
+	reply resolvedReplyContext,
+	currentSegments []content.MessageSegment,
+	messageID string,
+	stickerIndex int,
+) ([]byte, error) {
+	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
+	if messageID == currentMessageID {
+		return stickerDataFromSegments(ctx, currentSegments, stickerIndex)
+	}
+	if messageID == reply.MessageID && len(reply.Segments) > 0 {
+		return stickerDataFromSegments(ctx, reply.Segments, stickerIndex)
+	}
+
+	numericID, ok := numericMessageID(messageID)
+	if !ok {
+		return nil, fmt.Errorf("OneBot message_id %q is not numeric", messageID)
+	}
+	resolved := c.lookupMessageContext(ctx, event, numericID)
+	if len(resolved.Segments) == 0 {
+		return nil, fmt.Errorf("OneBot get_msg returned no usable message segments for %s", messageID)
+	}
+	return stickerDataFromSegments(ctx, resolved.Segments, stickerIndex)
+}
+
+func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegment, stickerIndex int) ([]byte, error) {
+	sources := stickerSourcesFromSegments(segments)
+	if stickerIndex < 0 || stickerIndex >= len(sources) {
+		return nil, fmt.Errorf("sticker index %d is unavailable", stickerIndex)
+	}
+	return sticker.LoadImageSource(ctx, sources[stickerIndex])
+}
+
+func (r *resolvedReplyContext) addImageDescription(description string) {
+	description = strings.TrimSpace(description)
+	if r == nil || r.Prompt == "" || description == "" {
+		return
+	}
+
+	var context map[string]interface{}
+	if err := json.Unmarshal([]byte(r.Prompt), &context); err != nil {
+		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("解析引用上下文失败: %v", err))
+		return
+	}
+	context["image_description"] = description
+
+	prompt, err := json.Marshal(context)
+	if err != nil {
+		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用图片描述失败: %v", err))
+		return
+	}
+	r.Prompt = string(prompt)
 }
 
 func replyMessageID(event model.OneBotEvent) (int64, bool) {

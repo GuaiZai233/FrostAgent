@@ -48,13 +48,16 @@ func TestStealStickerToolCollectsSelectedHistoricalStickerBytes(t *testing.T) {
 		"group:7788",
 		"msg_older",
 		0,
-		func(context.Context) ([]byte, error) { return append([]byte(nil), imageBytes...), nil },
+		nil,
 		false,
 	)
 	tool := StealStickerTool(stealer)
 	ctx := llm.WithRunContext(context.Background(), llm.RunContext{
 		ActorUserID: "123456",
 		SessionID:   "group:7788",
+		LoadObservedSticker: func(context.Context, string, int) ([]byte, error) {
+			return append([]byte(nil), imageBytes...), nil
+		},
 	})
 
 	output, err := tool.ExecuteContext(ctx, `{"message_id":"msg_older"}`)

@@ -14,7 +14,6 @@ const (
 	stealProbability         = 0.25
 	maxConcurrent            = 3
 	maxObservedStickers      = 256
-	maxObservedStickerBytes  = 128 << 20
 	observedStickerRetention = 24 * time.Hour
 )
 
@@ -37,16 +36,13 @@ type observedSticker struct {
 	messageID  string
 	index      int
 	observedAt time.Time
-	ready      chan struct{}
-	data       []byte
-	err        error
 }
 
 type Stealer struct {
 	store      *Store
 	summarizer *Summarizer
 	sem        chan struct{}
-	loadSem    chan struct{}
+	random     func() float64
 
 	observedMu sync.Mutex
 	observed   []*observedSticker
@@ -57,13 +53,13 @@ func NewStealer(store *Store, summarizer *Summarizer) *Stealer {
 		store:      store,
 		summarizer: summarizer,
 		sem:        make(chan struct{}, maxConcurrent),
-		loadSem:    make(chan struct{}, maxConcurrent),
+		random:     rand.Float64,
 	}
 }
 
-// Observe registers one sticker from a trusted platform event. Loading occurs
-// asynchronously, while a tool call targeting the same message waits for the
-// pending bytes instead of being restricted to the triggering message.
+// Observe registers lightweight metadata for one sticker from a trusted
+// platform event. Automatic collection is admitted before any goroutine or
+// image load is started; explicit collection resolves bytes on demand later.
 func (s *Stealer) Observe(
 	sessionID string,
 	messageID string,
@@ -71,113 +67,87 @@ func (s *Stealer) Observe(
 	loader ImageLoader,
 	autoCollect bool,
 ) {
-	if s == nil || sessionID == "" || messageID == "" || index < 0 || loader == nil {
+	if s == nil || sessionID == "" || messageID == "" || index < 0 || (autoCollect && loader == nil) {
 		return
 	}
 
 	now := time.Now()
 	s.observedMu.Lock()
 	s.pruneObservedLocked(now)
-	for i, existing := range s.observed {
+	for _, existing := range s.observed {
 		if existing.sessionID == sessionID && existing.messageID == messageID && existing.index == index {
-			select {
-			case <-existing.ready:
-				if existing.err != nil {
-					s.observed = append(s.observed[:i], s.observed[i+1:]...)
-					break
-				}
-				s.observedMu.Unlock()
-				return
-			default:
-				s.observedMu.Unlock()
-				return
-			}
-			break
+			s.observedMu.Unlock()
+			return
 		}
 	}
-	entry := &observedSticker{
+	s.observed = append(s.observed, &observedSticker{
 		sessionID:  sessionID,
 		messageID:  messageID,
 		index:      index,
 		observedAt: now,
-		ready:      make(chan struct{}),
-	}
-	s.observed = append(s.observed, entry)
+	})
 	s.pruneObservedLocked(now)
 	s.observedMu.Unlock()
 
-	go s.loadObserved(entry, loader, autoCollect)
-}
-
-func (s *Stealer) loadObserved(entry *observedSticker, loader ImageLoader, autoCollect bool) {
-	s.loadSem <- struct{}{}
-	data, err := loader(context.Background())
-	<-s.loadSem
-	if err == nil {
-		err = validateImageData(data)
-	}
-
-	s.observedMu.Lock()
-	if err == nil {
-		entry.data = append([]byte(nil), data...)
-	} else {
-		entry.err = err
-	}
-	close(entry.ready)
-	s.pruneObservedLocked(time.Now())
-	s.observedMu.Unlock()
-
-	if err != nil {
-		logs.Warn(logs.SYSTEM, fmt.Sprintf(
-			"sticker: failed to cache session=%s message=%s index=%d: %v",
-			entry.sessionID,
-			entry.messageID,
-			entry.index,
-			err,
-		))
+	if !autoCollect || s.random() > stealProbability {
 		return
 	}
-	if autoCollect {
-		s.TrySteal(data)
+	select {
+	case s.sem <- struct{}{}:
+	default:
+		return
 	}
+
+	go func() {
+		defer func() { <-s.sem }()
+		data, err := loader(context.Background())
+		if err == nil {
+			_, err = s.collect(context.Background(), data)
+		}
+		if err != nil {
+			logs.Error(logs.SYSTEM, fmt.Sprintf(
+				"sticker: automatic steal failed for session=%s message=%s index=%d: %v",
+				sessionID,
+				messageID,
+				index,
+				err,
+			))
+		}
+	}()
 }
 
 // StealObserved collects a trusted sticker previously observed in the same
-// session. When messageID is empty, the latest sticker-bearing message is used.
+// session. Bytes are resolved on demand by the current platform adapter only
+// after the message and index pass the session-scope check.
 func (s *Stealer) StealObserved(
 	ctx context.Context,
 	sessionID string,
 	messageID string,
 	stickerIndex int,
+	loader func(context.Context, string, int) ([]byte, error),
 ) (StealResult, string, error) {
 	if s == nil || sessionID == "" || stickerIndex < 0 {
 		return StealResult{}, "", ErrStickerNotInScope
 	}
 
-	entry, resolvedMessageID := s.findObserved(sessionID, messageID, stickerIndex)
-	if entry == nil {
+	found, resolvedMessageID := s.findObserved(sessionID, messageID, stickerIndex)
+	if !found {
 		return StealResult{}, resolvedMessageID, ErrStickerNotInScope
 	}
-
-	select {
-	case <-entry.ready:
-	case <-ctx.Done():
-		return StealResult{}, resolvedMessageID, ctx.Err()
+	if loader == nil {
+		return StealResult{}, resolvedMessageID, errors.New("sticker loader is unavailable")
 	}
 
-	s.observedMu.Lock()
-	data := append([]byte(nil), entry.data...)
-	loadErr := entry.err
-	s.observedMu.Unlock()
-	if loadErr != nil {
-		return StealResult{}, resolvedMessageID, fmt.Errorf("load observed sticker: %w", loadErr)
+	data, err := loader(ctx, resolvedMessageID, stickerIndex)
+	if err != nil {
+		return StealResult{}, resolvedMessageID, fmt.Errorf("load observed sticker: %w", err)
 	}
 
 	result, err := s.Steal(ctx, data)
 	return result, resolvedMessageID, err
 }
 
-func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (*observedSticker, string) {
+func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (bool, string) {
 	s.observedMu.Lock()
 	defer s.observedMu.Unlock()
 	s.pruneObservedLocked(time.Now())
@@ -194,33 +164,30 @@ func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (*
 	for i := len(s.observed) - 1; i >= 0; i-- {
 		entry := s.observed[i]
 		if entry.sessionID == sessionID && entry.messageID == resolvedMessageID && entry.index == stickerIndex {
-			return entry, resolvedMessageID
+			return true, resolvedMessageID
 		}
 	}
-	return nil, resolvedMessageID
+	return false, resolvedMessageID
 }
 
 func (s *Stealer) pruneObservedLocked(now time.Time) {
 	cutoff := now.Add(-observedStickerRetention)
 	kept := s.observed[:0]
-	totalBytes := 0
 	for _, entry := range s.observed {
 		if entry.observedAt.Before(cutoff) {
 			continue
 		}
 		kept = append(kept, entry)
-		totalBytes += len(entry.data)
 	}
 	s.observed = kept
-	for len(s.observed) > maxObservedStickers || totalBytes > maxObservedStickerBytes {
-		totalBytes -= len(s.observed[0].data)
+	for len(s.observed) > maxObservedStickers {
 		s.observed = s.observed[1:]
 	}
 }
 
 // TrySteal applies the normal probability gate to already-loaded image bytes.
 func (s *Stealer) TrySteal(data []byte) {
-	if rand.Float64() > stealProbability {
+	if s.random() > stealProbability {
 		return
 	}
 	select {

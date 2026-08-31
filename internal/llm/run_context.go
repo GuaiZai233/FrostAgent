@@ -22,14 +22,15 @@ type BillingRunState struct {
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
-	SessionID     string
-	Owner         string
-	OwnerType     memory.OwnerType
-	ActorUserID   string // Trusted sender ID supplied by the platform adapter.
-	SendHook      func(toolResultJSON string) error
-	Billing       *BillingRunState
-	RouteScope    modelrouter.Scope
-	RouteSnapshot *modelrouter.Snapshot
+	SessionID           string
+	Owner               string
+	OwnerType           memory.OwnerType
+	ActorUserID         string // Trusted sender ID supplied by the platform adapter.
+	SendHook            func(toolResultJSON string) error
+	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
+	Billing             *BillingRunState
+	RouteScope          modelrouter.Scope
+	RouteSnapshot       *modelrouter.Snapshot
 }
 
 type runContextKey struct{}
