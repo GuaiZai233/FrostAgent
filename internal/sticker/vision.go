@@ -34,7 +34,7 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 			"text": `请分析这张表情包/贴纸图片，返回严格的JSON格式：
 {"description":"一句话描述图片内容和表达的情绪","keywords":["关键词1","关键词2","关键词3"],"suspected_inappropriate":false}
 关键词应为中文情绪/语境词，如：开心、生气、无语、尴尬、嘲讽、惊讶、期待、可爱等。返回3-6个关键词。
-如果图片疑似包含R-18或露骨色情、政治敏感内容、极端血腥暴力、仇恨歧视或其他明显不适合Bot主动发送的内容，将suspected_inappropriate设为true；否则设为false。疑似时也要正常返回描述和关键词。只返回JSON，不要其他文字。`,
+如果图片疑似包含R-18或软色情（涩涩、敏感部位、性暗示等）、政治敏感内容、极端血腥暴力、仇恨歧视或其他明显不适合Bot主动发送的内容，将suspected_inappropriate设为true；否则设为false。疑似时也要正常返回描述和关键词。只返回JSON，不要其他文字。`,
 		},
 	}
 
