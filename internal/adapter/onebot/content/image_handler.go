@@ -10,11 +10,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const marketFaceURLPrefix = "https://gxh.vip.qq.com/club/item/parcel/item/"
+
+var (
+	trustedQQImageURL = regexp.MustCompile(`^https://(?:gchat\.qpic\.cn|c2cpicdw\.qpic\.cn|p\.qpic\.cn|multimedia\.nt\.qq\.com\.cn|gxh\.vip\.qq\.com)(?:[/?#]|$)`)
+	imageHTTPClient   = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !trustedQQImageURL.MatchString(req.URL.String()) {
+				return fmt.Errorf("图片重定向目标不是允许的 QQ 媒体地址")
+			}
+			return nil
+		},
+	}
+)
 
 func IsContainImage(segments []MessageSegment) bool {
 	for _, seg := range segments {
@@ -173,8 +187,10 @@ func imageSourceToBase64(source string) (string, error) {
 		return encoded, nil
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Get(source)
+	if !trustedQQImageURL.MatchString(source) {
+		return "", fmt.Errorf("图片来源不是允许的 QQ 媒体地址")
+	}
+	resp, err := imageHTTPClient.Get(source)
 	if err != nil {
 		return "", err
 	}

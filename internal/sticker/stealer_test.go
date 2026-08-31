@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +13,26 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func useStickerHTTPResponse(t *testing.T, status int, data []byte) {
+	t.Helper()
+	saved := httpClient.Transport
+	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Request:    req,
+		}, nil
+	})
+	t.Cleanup(func() { httpClient.Transport = saved })
+}
 
 func TestStealerObserveProbabilityMissSkipsLoader(t *testing.T) {
 	stealer := NewStealer(nil, nil)
@@ -153,12 +173,7 @@ func TestStealer_ConcurrencyLimiting(t *testing.T) {
 
 func TestStealer_DownloadAndDeduplication(t *testing.T) {
 	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(imageBytes)
-	}))
-	defer server.Close()
+	useStickerHTTPResponse(t, http.StatusOK, imageBytes)
 
 	tempDir := t.TempDir()
 	store, err := NewStore(filepath.Join(tempDir, "stickers"))
@@ -171,7 +186,7 @@ func TestStealer_DownloadAndDeduplication(t *testing.T) {
 	hash := HashBytes(imageBytes)
 
 	// Force steal once without probability check by adding to store or direct execution
-	data, err := downloadImage(server.URL + "/test.png")
+	data, err := downloadImage("https://gchat.qpic.cn/test.png")
 	if err != nil {
 		t.Fatalf("downloadImage failed: %v", err)
 	}
@@ -259,13 +274,9 @@ func TestStealer_ConcurrentTheft(t *testing.T) {
 
 func TestDownloadImage_RejectsOversized(t *testing.T) {
 	oversized := bytes.Repeat([]byte{0xFF}, maxImageSize+1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(oversized)
-	}))
-	defer server.Close()
+	useStickerHTTPResponse(t, http.StatusOK, oversized)
 
-	_, err := downloadImage(server.URL + "/big.jpg")
+	_, err := downloadImage("https://gchat.qpic.cn/big.jpg")
 	if err == nil {
 		t.Fatal("expected error for oversized image, got nil")
 	}
@@ -276,13 +287,9 @@ func TestDownloadImage_RejectsOversized(t *testing.T) {
 
 func TestDownloadImage_AcceptsExactLimit(t *testing.T) {
 	exact := bytes.Repeat([]byte{0xFF}, maxImageSize)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(exact)
-	}))
-	defer server.Close()
+	useStickerHTTPResponse(t, http.StatusOK, exact)
 
-	data, err := downloadImage(server.URL + "/exact.jpg")
+	data, err := downloadImage("https://gchat.qpic.cn/exact.jpg")
 	if err != nil {
 		t.Fatalf("expected success for exact-limit image, got: %v", err)
 	}
@@ -292,18 +299,25 @@ func TestDownloadImage_AcceptsExactLimit(t *testing.T) {
 }
 
 func TestDownloadImage_Timeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5 * time.Second)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
 	saved := httpClient.Timeout
 	httpClient.Timeout = 100 * time.Millisecond
 	defer func() { httpClient.Timeout = saved }()
+	savedTransport := httpClient.Transport
+	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+	defer func() { httpClient.Transport = savedTransport }()
 
-	_, err := downloadImage(server.URL + "/slow.jpg")
+	_, err := downloadImage("https://gchat.qpic.cn/slow.jpg")
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+func TestDownloadImage_RejectsUntrustedURL(t *testing.T) {
+	_, err := downloadImage("http://127.0.0.1/private.jpg")
+	if err == nil || !strings.Contains(err.Error(), "allowed QQ media URL") {
+		t.Fatalf("downloadImage error = %v, want untrusted URL rejection", err)
 	}
 }

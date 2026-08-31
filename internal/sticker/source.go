@@ -7,13 +7,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const maxImageSize = 10 << 20 // 10 MiB
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var (
+	trustedQQImageURL = regexp.MustCompile(`^https://(?:gchat\.qpic\.cn|c2cpicdw\.qpic\.cn|p\.qpic\.cn|multimedia\.nt\.qq\.com\.cn|gxh\.vip\.qq\.com)(?:[/?#]|$)`)
+	httpClient        = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !trustedQQImageURL.MatchString(req.URL.String()) {
+				return errors.New("image redirect target is not an allowed QQ media URL")
+			}
+			return nil
+		},
+	}
+)
 
 // LoadImageSource normalizes a trusted platform image source into bytes at the
 // adapter boundary. Downstream sticker selection and storage use bytes only.
@@ -53,6 +65,9 @@ func downloadImage(url string) ([]byte, error) {
 }
 
 func downloadImageContext(ctx context.Context, url string) ([]byte, error) {
+	if !trustedQQImageURL.MatchString(url) {
+		return nil, errors.New("image source is not an allowed QQ media URL")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

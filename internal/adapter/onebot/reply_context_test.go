@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,10 +22,6 @@ import (
 
 func TestLoadObservedStickerPrefersResolvedReplySegments(t *testing.T) {
 	imageBytes := []byte("GIF89a quoted sticker")
-	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(imageBytes)
-	}))
-	defer imageServer.Close()
 
 	conn := &wsConnection{}
 	event := model.OneBotEvent{MessageID: 100}
@@ -34,7 +31,7 @@ func TestLoadObservedStickerPrefersResolvedReplySegments(t *testing.T) {
 			Type: "image",
 			Data: map[string]interface{}{
 				"sub_type": 1,
-				"url":      imageServer.URL + "/quoted.gif",
+				"base64":   base64.StdEncoding.EncodeToString(imageBytes),
 			},
 		}},
 	}
@@ -52,10 +49,6 @@ func TestWSExplicitHistoricalStickerUsesGetMsg(t *testing.T) {
 	const actorID int64 = 10001
 	t.Setenv("ADMIN_QQ_IDS", strconv.FormatInt(actorID, 10))
 	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x03}
-	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(imageBytes)
-	}))
-	defer imageServer.Close()
 
 	provider := &mockLLMProvider{responses: []*core.ChatResponse{
 		{
@@ -138,7 +131,7 @@ func TestWSExplicitHistoricalStickerUsesGetMsg(t *testing.T) {
 				"type": "image",
 				"data": map[string]interface{}{
 					"sub_type": 1,
-					"url":      imageServer.URL + "/history.png",
+					"base64":   base64.StdEncoding.EncodeToString(imageBytes),
 				},
 			}},
 		},
@@ -174,11 +167,7 @@ func TestWSExplicitHistoricalStickerUsesGetMsg(t *testing.T) {
 }
 
 func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
-	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte{0xff, 0xd8, 0xff, 0xd9})
-	}))
-	defer imageServer.Close()
+	imageBytes := []byte{0xff, 0xd8, 0xff, 0xd9}
 
 	visionProvider := &mockLLMProvider{responses: []*core.ChatResponse{{
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "被引用图片是一只小狐狸"},
@@ -241,7 +230,7 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 			"user_id":      112233,
 			"message": []map[string]interface{}{{
 				"type": "image",
-				"data": map[string]interface{}{"url": imageServer.URL + "/quoted.jpg"},
+				"data": map[string]interface{}{"base64": base64.StdEncoding.EncodeToString(imageBytes)},
 			}},
 		},
 	}
