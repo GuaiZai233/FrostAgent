@@ -17,7 +17,7 @@ type stickerCandidate struct {
 func SendStickerTool(store *sticker.Store) Tool {
 	return Tool{
 		name:        "send_sticker",
-		description: "Search and send a sticker/meme image from the collected sticker library. Searches by emotion/context keywords (e.g. 开心, 生气, 无语, 嘲讽). Returns the selected sticker as an image message. Use this when you want to react with a sticker that matches the conversation mood. 你被鼓励在文本对话结束后使用此工具发送一个贴纸表情包，以增强对话的情感表达。",
+		description: "Search and send a sticker/meme image from the collected sticker library. Searches by emotion/context keywords (e.g. 开心, 生气, 无语, 嘲讽). Returns the selected sticker as an image message. Use this when you want to react with a sticker that matches the conversation mood. 你被鼓励在合适的日常对话中使用贴纸增强情感表达。需要同时发送文本和表情包时，必须在同一批工具调用中先调用 send_message 发送 plain，再调用 send_sticker；工具调用顺序即发送顺序，禁止先调用 send_sticker。若无需文本，可以单独调用 send_sticker。成功发送后不要在最终回复中重复已经发送的文本。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

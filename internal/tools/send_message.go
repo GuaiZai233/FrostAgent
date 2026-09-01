@@ -28,7 +28,7 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. After successful delivery, do not repeat the message in the final response. Return ordinary text-only replies directly without this tool.",
+		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool. Exception: when a sticker should follow the text in the same turn, call send_message first with a plain component, then call send_sticker in the same tool-call batch. Tool-call order is delivery order. After successful delivery, do not repeat the message in the final response.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
