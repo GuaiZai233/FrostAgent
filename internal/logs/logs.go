@@ -3,6 +3,7 @@ package logs
 import (
 	"container/ring"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -111,6 +112,24 @@ func Info(category Category, content string, traceID ...string) {
 		tid = traceID[0]
 	}
 	log(INFO, category, content, tid, "INTERNAL")
+}
+
+// InfoWithInlineImages writes an informational log while retaining its images
+// separately. The stored and copied content contains only compact placeholders.
+func InfoWithInlineImages(category Category, content string, images []InlineImage, traceID ...string) {
+	tid := ""
+	if len(traceID) > 0 {
+		tid = traceID[0]
+	}
+	retainedImages, placeholders := prepareInlineImages(images)
+	if len(placeholders) > 0 {
+		content = strings.TrimRight(content, " \t\r\n")
+		if content != "" {
+			content += "\n"
+		}
+		content += strings.Join(placeholders, "\n")
+	}
+	logWithImages(INFO, category, content, tid, "INTERNAL", retainedImages)
 }
 
 func Warn(category Category, content string, traceID ...string) {

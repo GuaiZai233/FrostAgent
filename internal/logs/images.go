@@ -21,6 +21,13 @@ type retainedImage struct {
 	data        []byte
 }
 
+// InlineImage is image data that should be retained for the lifetime of a log
+// entry and exposed through the log image handler.
+type InlineImage struct {
+	ContentType string
+	Data        []byte
+}
+
 type cachedImage struct {
 	contentType string
 	data        []byte
@@ -28,6 +35,39 @@ type cachedImage struct {
 }
 
 var imageCache = make(map[string]*cachedImage)
+
+func prepareInlineImages(images []InlineImage) ([]retainedImage, []string) {
+	retainedImages := make([]retainedImage, 0, len(images))
+	placeholders := make([]string, 0, len(images))
+	for _, image := range images {
+		if len(image.Data) == 0 {
+			continue
+		}
+
+		contentType := strings.ToLower(strings.TrimSpace(strings.SplitN(image.ContentType, ";", 2)[0]))
+		if !strings.HasPrefix(contentType, "image/") {
+			contentType = strings.ToLower(strings.TrimSpace(strings.SplitN(http.DetectContentType(image.Data), ";", 2)[0]))
+		}
+		if !strings.HasPrefix(contentType, "image/") {
+			continue
+		}
+
+		data := append([]byte(nil), image.Data...)
+		hash := fmt.Sprintf("%x", sha256.Sum256(data))
+		retainedImages = append(retainedImages, retainedImage{
+			hash:        hash,
+			contentType: contentType,
+			data:        data,
+		})
+		placeholders = append(placeholders, fmt.Sprintf(
+			"[image omitted: type=%s, size=%d bytes, sha256=%s]",
+			contentType,
+			len(data),
+			hash,
+		))
+	}
+	return retainedImages, placeholders
+}
 
 func redactInlineImages(content string) (string, []retainedImage) {
 	retainedImages := make([]retainedImage, 0)

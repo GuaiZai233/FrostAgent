@@ -853,7 +853,33 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
 }
 
 const loggedImagePlaceholder = /^\[image omitted: type=([^,\]]+), size=(\d+) bytes, sha256=([a-f0-9]{64})\]$/;
+const loggedImagePlaceholderInText =
+  /\[image omitted: type=([^,\]]+), size=(\d+) bytes, sha256=([a-f0-9]{64})\]/g;
 const inlineImageDataURL = /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/;
+
+export function renderLoggedImagesInText(value: string): string {
+  let rendered = '';
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  loggedImagePlaceholderInText.lastIndex = 0;
+
+  while ((match = loggedImagePlaceholderInText.exec(value)) !== null) {
+    rendered += escapeHtml(value.slice(cursor, match.index));
+    const hash = match[3];
+    rendered += renderPromptImages([
+      {
+        mimeType: match[1],
+        size: Number(match[2]),
+        hash,
+        url: `/api/log-images/${hash}`,
+      },
+    ]);
+    cursor = match.index + match[0].length;
+  }
+
+  rendered += escapeHtml(value.slice(cursor));
+  return rendered;
+}
 
 function parsePromptImage(value: string | undefined): PromptImage | undefined {
   if (!value) return undefined;
