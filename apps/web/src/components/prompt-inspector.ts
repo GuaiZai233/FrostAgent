@@ -912,18 +912,17 @@ function renderPromptImages(images: PromptImage[]): string {
     <div class="prompt-image-list">
       ${images
         .map(
-          (image, index) => `
+          (image) => `
         <figure class="prompt-image-row">
           <a class="prompt-image-preview" href="${escapeHtml(image.url)}" target="_blank" rel="noopener noreferrer">
-            <img src="${escapeHtml(image.url)}" alt="请求图片 ${index + 1}" loading="lazy" decoding="async" />
+            <img src="${escapeHtml(image.url)}" alt="请求图片" loading="lazy" decoding="async" />
           </a>
           <figcaption class="prompt-image-meta">
-            <span class="font-medium text-foreground">图片 ${index + 1}</span>
             <span>${escapeHtml(image.mimeType)}</span>
             <span>${formatImageSize(image.size)}</span>
             ${
               image.hash
-                ? `<code title="sha256:${escapeHtml(image.hash)}">sha256:${escapeHtml(image.hash.slice(0, 12))}…</code>`
+                ? `<code>sha256:${escapeHtml(image.hash)}</code>`
                 : ''
             }
           </figcaption>

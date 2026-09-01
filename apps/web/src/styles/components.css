@@ -760,9 +760,9 @@ dialog.dialog-modal::backdrop {
 }
 
 .prompt-image-meta code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-all;
 }
 
 @media (max-width: 640px) {
