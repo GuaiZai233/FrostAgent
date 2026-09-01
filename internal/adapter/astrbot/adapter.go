@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,10 +19,13 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
-	engine *llm.Engine
-	mu     sync.RWMutex
-	conns  map[*wsConn]struct{}
+	engine  *llm.Engine
+	stealer *sticker.Stealer
+	mu      sync.RWMutex
+	conns   map[*wsConn]struct{}
 }
+
+const astrBotQQPlatform = "aiocqhttp"
 
 // NewAdapter 创建一个新的 AstrBot 适配器实例。
 func NewAdapter(engine *llm.Engine) *Adapter {
@@ -29,6 +33,70 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 		engine: engine,
 		conns:  make(map[*wsConn]struct{}),
 	}
+}
+
+func (a *Adapter) SetStealer(s *sticker.Stealer) {
+	a.stealer = s
+}
+
+func (a *Adapter) observeStickers(event Event) {
+	if a.stealer == nil || event.Platform != astrBotQQPlatform ||
+		(event.MessageType != "group" && event.MessageType != "private") {
+		return
+	}
+	indexes := make(map[string]int)
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || att.SubType != 1 ||
+			(len(att.Content) == 0 && att.URL == "") {
+			continue
+		}
+		messageID := att.MessageID
+		if messageID == "" {
+			messageID = event.MessageID
+		}
+		index := indexes[messageID]
+		indexes[messageID]++
+		autoCollect := event.MessageType == "group" && messageID == event.MessageID
+		var loader sticker.ImageLoader
+		if autoCollect {
+			attachment := att
+			loader = func(ctx context.Context) ([]byte, error) {
+				return loadStickerAttachment(ctx, attachment)
+			}
+		}
+		a.stealer.Observe(
+			sessionKey(event),
+			messageID,
+			index,
+			loader,
+			autoCollect,
+		)
+	}
+}
+
+func loadObservedStickerFromEvent(ctx context.Context, event Event, messageID string, stickerIndex int) ([]byte, error) {
+	matchedIndex := 0
+	for _, att := range event.Attachments {
+		attachmentMessageID := att.MessageID
+		if attachmentMessageID == "" {
+			attachmentMessageID = event.MessageID
+		}
+		if attachmentMessageID != messageID || att.Type != core.AttachmentTypeImage || att.SubType != 1 {
+			continue
+		}
+		if matchedIndex == stickerIndex {
+			return loadStickerAttachment(ctx, att)
+		}
+		matchedIndex++
+	}
+	return nil, fmt.Errorf("sticker index %d is unavailable for message %s", stickerIndex, messageID)
+}
+
+func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, error) {
+	if len(att.Content) > 0 {
+		return append([]byte(nil), att.Content...), nil
+	}
+	return sticker.LoadImageSource(ctx, att.URL)
 }
 
 // ID 返回平台唯一标识 "astrbot"
@@ -173,6 +241,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MessageType == "group" {
 				captureGroupCompactMessage(event, a.engine)
 			}
+
+			a.observeStickers(event)
 
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&

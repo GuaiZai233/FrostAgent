@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -33,6 +34,8 @@ var upgrader = websocket.Upgrader{
 }
 
 var allowedOrigins []string
+
+const maxTrustedMessageSessions = 4096
 
 func init() {
 	env := os.Getenv("WS_ALLOWED_ORIGINS")
@@ -74,22 +77,27 @@ func checkWebSocketOrigin(r *http.Request) bool {
 
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
-	conn               *websocket.Conn
-	writeMu            sync.Mutex
-	messageMu          sync.Mutex
-	pendingMessage     map[string]chan oneBotAPIResponse
-	nextMessageEcho    uint64
-	groupMu            sync.Mutex
-	groupCache         map[int64]cachedGroupInfo
-	pendingGroupByEcho map[string]pendingGroupInfo
-	pendingGroupByID   map[int64]string
-	nextGroupEcho      uint64
+	conn                *websocket.Conn
+	stealer             *sticker.Stealer
+	writeMu             sync.Mutex
+	messageMu           sync.Mutex
+	pendingMessage      map[string]chan oneBotAPIResponse
+	nextMessageEcho     uint64
+	messageSessionMu    sync.Mutex
+	messageSessions     map[int64]string
+	messageSessionOrder []int64
+	groupMu             sync.Mutex
+	groupCache          map[int64]cachedGroupInfo
+	pendingGroupByEcho  map[string]pendingGroupInfo
+	pendingGroupByID    map[int64]string
+	nextGroupEcho       uint64
 }
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
 	return &wsConnection{
 		conn:               conn,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
+		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
 		pendingGroupByEcho: make(map[string]pendingGroupInfo),
 		pendingGroupByID:   make(map[int64]string),
@@ -149,6 +157,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		}
 		wakeSignals := DetectGroupWakeSignals(event)
 		replyContext := conn.lookupReplyContext(event)
+		conn.observeResolvedReply(event, replyContext)
 		if !wakeSignals.Any() && !replyContext.MentionsBot {
 			return
 		}
@@ -166,6 +175,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			),
 		)
 		replyContext := conn.lookupReplyContext(event)
+		conn.observeResolvedReply(event, replyContext)
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
 		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
 	}
@@ -360,7 +370,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				logs.Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
-			oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+			oneBotSegments, err := tools.BuildOneBotMessage(toolOutput.Messages)
+			if err != nil {
+				return fmt.Errorf("组装 OneBot 消息失败: %w", err)
+			}
 			if len(oneBotSegments) == 0 {
 				return fmt.Errorf("消息内容为空")
 			}
@@ -390,14 +403,19 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				return fmt.Errorf("%s", reason)
 			}
+			conn.rememberActionMessageSession(ackResp, historyKey(event))
 			return nil
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:     historyKey(event),
-			Owner:         owner,
-			OwnerType:     ownerType,
-			SendHook:      sendHook,
+			SessionID:   historyKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: strconv.FormatInt(event.UserID, 10),
+			SendHook:    sendHook,
+			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
+				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
+			},
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
@@ -444,7 +462,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		logs.Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-		oneBotSegments := tools.BuildOneBotMessage(toolOutput.Messages)
+		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
+		if buildErr != nil {
+			logs.Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error())
+			return
+		}
 		if len(oneBotSegments) > 0 {
 			if receiptText != "" {
 				oneBotSegments = append(oneBotSegments, tools.OneBotSegment{
@@ -506,6 +529,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout())
 	if err == nil {
+		conn.rememberActionMessageSession(ackResp, historyKey(event))
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 		if session != nil {
 			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})

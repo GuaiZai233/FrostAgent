@@ -125,3 +125,34 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 - **单二进制静态嵌入与开发体验**：
   - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
   - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。
+
+### 表情包摘取与检索系统 (Sticker Stealing & Retrieval System)
+
+为了让智能体兼具趣味性与原生聊天软件拟人化表达，FrostAgent 实现了表情包自主抓取、多模态视觉摘要与基于情绪语境的智能检索系统：
+
+- **概率抓取与非阻塞并发门禁 (Probabilistic Stealing & Non-blocking Concurrency Gating)**：
+  - 仅对 QQ 平台（OneBot 与 AstrBot `platform == "aiocqhttp"` 适配器中带有 `sub_type == 1` 贴纸标识）的群聊图片进行 25% 概率随机抓取，私聊与其他平台图片自动忽略；
+  - 采用容量为 3 的信号量 Channel（`make(chan struct{}, 3)`）实现非阻塞截断机制。当群聊遭遇表情包刷屏时，超出并发上限的请求立即静默丢弃（Zero-Wait Dropping），杜绝多协程下载耗尽服务器带宽与计算资源；
+  - 下载 HTTP 客户端强制 30 秒超时，超过 10 MiB 的图片直接拒绝（非静默截断），持久化写入失败时错误向上传播。
+- **存储去重与权重回归机制 (Deduplication & Weight Regression)**：
+  - 本地持久化保存于 `data/sticker/<hash>.<ext>`，全局元数据原子维护于 `data/sticker/index.json` 中；
+  - 采用 SHA-256 图像哈希去重。若抓取到已存在的表情包，系统自动将其命中权重（`weight`）累加 1，群内热度越高的表情包权重值越高。
+- **串行多模态视觉摘要管道 (Serialized Multimodal Vision Pipeline)**：
+  - 异步单 Worker FIFO 队列解耦消息链路，避免并发调用多模态模型导致上游 API 速率（RPM/TPM）超限；
+  - 调用模型路由器（`ModelRouter`）配置的视觉多模态模型（`VISUAL_MODEL_NAME`），提取表情包视觉描述并提炼情绪语境关键词（如 `["开心", "生气", "无语", "真的假的"]`）；
+  - 视觉模型调用强制 60 秒上下文超时，防止请求无限挂起；
+  - 当视觉模型不可用或网络异常时，标记状态为 `unsummarized`（未摘要）并隔离保护，绝不向大模型工具输出未摘要表情包；多模态服务恢复后支持批量一键重试并更新状态为 `ready`。
+- **工具检索与轮盘赌加权随机选择 (`send_sticker` Tool & Weighted Roulette Selection)**：
+  - 注册 `send_sticker` 工具供大模型在合适语境下调用；
+  - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
+  - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
+  - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；
+  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
+  - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
+- **Web 控制台表情包管理 (Web Dashboard Management)**：
+  - Web 控制台在「Prompt 检查」下方提供「表情包摘取」独立管理页面（`/#stickers`）；
+  - 提供表情包总数、就绪数、未摘要数与累计抓取总权重等统计卡片；
+  - 支持按情绪关键词/描述实时模糊过滤与状态快速筛选；
+  - 支持本地表情包手动上传入库、表情包关键词与描述在线编辑、单张删除以及一键重试所有未摘要表情包；
+  - 提供 ConnectRPC `StickerService` 契约及 `/api/sticker/{id}/image` 原生 HTTP 缩略图流式直链服务；
+  - `ListStickers` 接口支持基于 `page_token` 的偏移量分页，保证超出首页的数据可通过翻页访问。

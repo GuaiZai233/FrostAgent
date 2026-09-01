@@ -31,6 +31,7 @@ import {
   Filter,
   Flame,
   Globe,
+  Image,
   Info,
   LayoutDashboard,
   LayoutGrid,
@@ -157,6 +158,8 @@ const iconMap: Record<string, IconNode> = {
   lock: Lock,
   globe: Globe,
   public: Globe,
+  image: Image,
+  sticker: Image,
   tag: Tag,
 
   // Chevrons & Arrows

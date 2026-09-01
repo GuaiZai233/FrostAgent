@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import sys
 import types
@@ -31,6 +32,11 @@ class _Star:
         pass
 
 
+class _MessageChain:
+    def __init__(self, chain: list[object]):
+        self.chain = chain
+
+
 def _register(*_args: object, **_kwargs: object):
     return lambda cls: cls
 
@@ -41,6 +47,7 @@ event_module = types.ModuleType("astrbot.api.event")
 star_module = types.ModuleType("astrbot.api.star")
 api_module.logger = _Logger()
 event_module.AstrMessageEvent = object
+event_module.MessageChain = _MessageChain
 event_module.filter = _Filter()
 star_module.Context = object
 star_module.Star = _Star
@@ -67,6 +74,9 @@ class At:
 class Image:
     def __init__(self, url: str):
         self.url = url
+
+    async def convert_to_base64(self) -> str:
+        return base64.b64encode(self.url.encode("utf-8")).decode("ascii")
 
 
 class FakeEvent:
@@ -144,7 +154,8 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
     ) -> list[dict[str, Any]]:
         adapter = object.__new__(FrostAgentAdapter)
         adapter.settings = SimpleNamespace(
-            forward_all_group_messages=forward_all_group_messages
+            forward_all_group_messages=forward_all_group_messages,
+            http_base_url="http://127.0.0.1:8080",
         )
         adapter.client = FakeClient()
 
@@ -180,7 +191,10 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_reply_disables_astrbot_default_llm(self):
         adapter = object.__new__(FrostAgentAdapter)
-        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=True,
+            http_base_url="http://127.0.0.1:8080",
+        )
         adapter.client = FakeClient([{"action": "reply", "content": "FrostAgent 回复"}])
         event = FakeEvent(image_url="https://example.com/image.png")
 
@@ -190,6 +204,32 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(results, [{"content": "FrostAgent 回复"}])
         self.assertTrue(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [True])
+
+    async def test_multiple_responses_disable_default_llm_once(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=True,
+            http_base_url="http://127.0.0.1:8080",
+        )
+        adapter.client = FakeClient([
+            {
+                "action": "send_message",
+                "content": "工具消息",
+                "is_intermediate": True,
+            },
+            {"action": "reply", "content": "最终回复"},
+        ])
+        event = FakeEvent(content="测试")
+
+        results = [
+            result async for result in adapter.forward_to_frostagent(event)
+        ]
+
+        self.assertEqual(results, [
+            {"content": "工具消息"},
+            {"content": "最终回复"},
+        ])
         self.assertEqual(event.should_call_llm_calls, [True])
 
     async def test_noop_keeps_event_propagation_unchanged(self):

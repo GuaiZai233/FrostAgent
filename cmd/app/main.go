@@ -17,6 +17,8 @@ import (
 	memsvc "FrostAgent/internal/service/memory"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
+	stickersvc "FrostAgent/internal/service/sticker"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"fmt"
 	"net/http"
@@ -36,6 +38,11 @@ var GlobalEngine *llm.Engine
 
 // 全局 memory store
 var globalStore *memory.Store
+
+// Sticker subsystem
+var globalStickerStore *sticker.Store
+var globalStickerStealer *sticker.Stealer
+var globalStickerSummarizer *sticker.Summarizer
 
 const version = "0.1.0"
 
@@ -68,6 +75,10 @@ func dialoguePath() string {
 		return p
 	}
 	return "eval/dialogue/dialogue.yml"
+}
+
+func stickerDir() string {
+	return filepath.Join(filepath.Dir(brainPath()), "sticker")
 }
 
 // ensureDataDir ensures the data directory exists for brain.json.
@@ -199,6 +210,26 @@ func init() {
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
 
+	// Initialize sticker subsystem
+	stickerVision := &sticker.LLMVisionCaller{
+		Provider:  visionProvider,
+		ModelName: "model-router-vision",
+	}
+	var err2 error
+	globalStickerStore, err2 = sticker.NewStore(stickerDir())
+	if err2 != nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker store init failed: %v", err2))
+	} else {
+		globalStickerSummarizer = sticker.NewSummarizer(globalStickerStore, stickerVision)
+		globalStickerStealer = sticker.NewStealer(globalStickerStore, globalStickerSummarizer)
+		stickerTool := tools.SendStickerTool(globalStickerStore)
+		registry[stickerTool.Name()] = stickerTool
+		stealStickerTool := tools.StealStickerTool(globalStickerStealer)
+		registry[stealStickerTool.Name()] = stealStickerTool
+		logs.Info(logs.SYSTEM, "✓ 表情包摘取子系统已初始化")
+		globalStickerSummarizer.EnqueueUnsummarized()
+	}
+
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
 		executorMap[name] = tool
@@ -291,6 +322,13 @@ func main() {
 	)
 	mux.Handle(dialogueServicePath, dialogueHandler)
 
+	if globalStickerStore != nil {
+		stickerSvc := stickersvc.New(globalStickerStore, globalStickerSummarizer)
+		stickerPath, stickerHandler := pbconnect.NewStickerServiceHandler(stickerSvc)
+		mux.Handle(stickerPath, stickerHandler)
+		mux.HandleFunc("/api/sticker/", stickerSvc.ImageHandler())
+	}
+
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())
 
@@ -321,6 +359,9 @@ func main() {
 			onebotPath = "/ws/frostagent"
 		}
 		onebotAdapter := onebot.NewAdapter(GlobalEngine)
+		if globalStickerStealer != nil {
+			onebotAdapter.SetStealer(globalStickerStealer)
+		}
 		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
 			GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
 		}
@@ -335,6 +376,9 @@ func main() {
 			astrbotPath = "/ws/astrbot"
 		}
 		astrbotAdapter := astrbot.NewAdapter(GlobalEngine)
+		if globalStickerStealer != nil {
+			astrbotAdapter.SetStealer(globalStickerStealer)
+		}
 		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
 			GlobalEngine.Dispatcher.RegisterAdapter(astrbotAdapter)
 		}

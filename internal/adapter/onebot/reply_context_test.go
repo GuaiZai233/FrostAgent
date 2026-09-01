@@ -1,11 +1,19 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/sticker"
+	"FrostAgent/internal/tools"
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,12 +21,259 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestLoadObservedStickerPrefersResolvedReplySegments(t *testing.T) {
+	imageBytes := []byte("GIF89a quoted sticker")
+
+	conn := &wsConnection{}
+	event := model.OneBotEvent{MessageType: "private", UserID: 10001, MessageID: 100}
+	reply := resolvedReplyContext{
+		MessageID: "42",
+		SessionID: "private:10001",
+		Segments: []content.MessageSegment{{
+			Type: "image",
+			Data: map[string]interface{}{
+				"sub_type": 1,
+				"base64":   base64.StdEncoding.EncodeToString(imageBytes),
+			},
+		}},
+	}
+
+	data, err := conn.loadObservedSticker(context.Background(), event, reply, nil, "42", 0)
+	if err != nil {
+		t.Fatalf("load resolved reply sticker: %v", err)
+	}
+	if string(data) != string(imageBytes) {
+		t.Fatalf("loaded bytes = %q, want %q", data, imageBytes)
+	}
+}
+
+func TestPrivateCrossSessionGetMsgIsNotObserved(t *testing.T) {
+	const (
+		currentPeerID int64 = 10001
+		otherPeerID   int64 = 10002
+		botID         int64 = 20001
+	)
+	imageBytes := []byte("GIF89a cross session")
+	responseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      otherPeerID,
+		"message": []map[string]any{{
+			"type": "image",
+			"data": map[string]any{
+				"sub_type": 1,
+				"base64":   base64.StdEncoding.EncodeToString(imageBytes),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal get_msg data: %v", err)
+	}
+
+	stealer := sticker.NewStealer(nil, nil)
+	conn := newWSConnection(nil)
+	conn.stealer = stealer
+	conn.rememberMessageSession(42, "private:10001")
+	event := model.OneBotEvent{
+		SelfID:      botID,
+		MessageType: "private",
+		UserID:      currentPeerID,
+	}
+	reply := conn.resolveReplyResponse(event, 42, oneBotAPIResponse{
+		Status:  "ok",
+		RetCode: 0,
+		Data:    responseData,
+	})
+	if reply.MessageID != "" || len(reply.Segments) != 0 {
+		t.Fatalf("cross-session get_msg became trusted reply context: %+v", reply)
+	}
+	conn.observeResolvedReply(event, reply)
+
+	_, _, err = stealer.StealObserved(
+		context.Background(),
+		"private:10001",
+		"42",
+		0,
+		func(context.Context, string, int) ([]byte, error) { return imageBytes, nil },
+	)
+	if !errors.Is(err, sticker.ErrStickerNotInScope) {
+		t.Fatalf("cross-session sticker error = %v, want ErrStickerNotInScope", err)
+	}
+}
+
+func TestPrivateBotAuthoredGetMsgRequiresTrustedSession(t *testing.T) {
+	const (
+		peerID int64 = 10001
+		botID  int64 = 20001
+	)
+	responseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      botID,
+		"message": []map[string]any{{
+			"type": "text",
+			"data": map[string]any{"text": "bot reply"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal get_msg data: %v", err)
+	}
+	response := oneBotAPIResponse{Status: "ok", RetCode: 0, Data: responseData}
+	event := model.OneBotEvent{SelfID: botID, MessageType: "private", UserID: peerID}
+	conn := newWSConnection(nil)
+
+	if reply := conn.resolveReplyResponse(event, 42, response); reply.MessageID != "" {
+		t.Fatalf("unmapped bot-authored message became trusted: %+v", reply)
+	}
+	targetResponseData, err := json.Marshal(map[string]any{
+		"message_id":   42,
+		"message_type": "private",
+		"user_id":      botID,
+		"target_id":    peerID,
+		"message": []map[string]any{{
+			"type": "text",
+			"data": map[string]any{"text": "bot reply"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal target-aware get_msg data: %v", err)
+	}
+	if reply := conn.resolveReplyResponse(event, 42, oneBotAPIResponse{Status: "ok", Data: targetResponseData}); reply.MessageID != "42" {
+		t.Fatalf("target-aware bot-authored message was rejected: %+v", reply)
+	}
+	ackData, err := json.Marshal(map[string]any{"message_id": "42"})
+	if err != nil {
+		t.Fatalf("marshal send ACK data: %v", err)
+	}
+	conn.rememberActionMessageSession(oneBotAPIResponse{Data: ackData}, "private:10001")
+	if reply := conn.resolveReplyResponse(event, 42, response); reply.MessageID != "42" || reply.SessionID != "private:10001" {
+		t.Fatalf("trusted bot-authored message was rejected: %+v", reply)
+	}
+}
+
+func TestWSExplicitHistoricalStickerUsesGetMsg(t *testing.T) {
+	const actorID int64 = 10001
+	t.Setenv("ADMIN_QQ_IDS", strconv.FormatInt(actorID, 10))
+	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x03}
+
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{
+		{
+			Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{
+					ID:   "call-steal-history",
+					Type: "function",
+					Function: core.ToolCallFunction{
+						Name:      "steal_sticker",
+						Arguments: `{"message_id":"42","sticker_index":0}`,
+					},
+				}},
+			},
+		},
+		{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "已收藏"}},
+	}}
+	engine := newTestEngine(provider)
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	stealer := sticker.NewStealer(store, nil)
+	stealer.Observe("private:10001", "42", 0, nil, false)
+	engine.ToolRegistry["steal_sticker"] = tools.StealStickerTool(stealer)
+
+	mux := http.NewServeMux()
+	adapter := NewAdapter(engine)
+	adapter.SetStealer(stealer)
+	mux.HandleFunc("/ws/frostagent", adapter.Handler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/frostagent"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("connect test websocket: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	event := model.OneBotEvent{
+		SelfID:      20001,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      actorID,
+		MessageID:   100,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"偷历史表情"}}]`),
+	}
+	eventBytes, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("send event: %v", err)
+	}
+
+	_, lookupBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read get_msg request: %v", err)
+	}
+	var lookupAction model.OneBotAction
+	if err := json.Unmarshal(lookupBytes, &lookupAction); err != nil {
+		t.Fatalf("parse get_msg request: %v", err)
+	}
+	if lookupAction.Action != "get_msg" {
+		t.Fatalf("first action = %q, want get_msg", lookupAction.Action)
+	}
+
+	lookupResponse, err := json.Marshal(map[string]interface{}{
+		"status":  "ok",
+		"retcode": 0,
+		"echo":    lookupAction.Echo,
+		"data": map[string]interface{}{
+			"message_id":   42,
+			"message_type": "private",
+			"user_id":      actorID,
+			"message": []map[string]interface{}{{
+				"type": "image",
+				"data": map[string]interface{}{
+					"sub_type": 1,
+					"base64":   base64.StdEncoding.EncodeToString(imageBytes),
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal get_msg response: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, lookupResponse); err != nil {
+		t.Fatalf("send get_msg response: %v", err)
+	}
+
+	_, replyBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read final reply: %v", err)
+	}
+	var replyAction model.OneBotAction
+	if err := json.Unmarshal(replyBytes, &replyAction); err != nil {
+		t.Fatalf("parse final reply: %v", err)
+	}
+	if replyAction.Action != "send_private_msg" {
+		t.Fatalf("final action = %q, want send_private_msg", replyAction.Action)
+	}
+	wantID := sticker.HashBytes(imageBytes)
+	if !store.Exists(wantID) {
+		t.Fatalf("historical sticker %s was not collected", wantID)
+	}
+	ack, _ := json.Marshal(map[string]interface{}{
+		"status": "ok", "retcode": 0, "echo": replyAction.Echo,
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatalf("send final ack: %v", err)
+	}
+}
+
 func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
-	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte{0xff, 0xd8, 0xff, 0xd9})
-	}))
-	defer imageServer.Close()
+	imageBytes := []byte{0xff, 0xd8, 0xff, 0xd9}
 
 	visionProvider := &mockLLMProvider{responses: []*core.ChatResponse{{
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "被引用图片是一只小狐狸"},
@@ -78,10 +333,10 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 		"data": map[string]interface{}{
 			"message_id":   42,
 			"message_type": "private",
-			"user_id":      112233,
+			"user_id":      event.UserID,
 			"message": []map[string]interface{}{{
 				"type": "image",
-				"data": map[string]interface{}{"url": imageServer.URL + "/quoted.jpg"},
+				"data": map[string]interface{}{"base64": base64.StdEncoding.EncodeToString(imageBytes)},
 			}},
 		},
 	}

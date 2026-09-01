@@ -3,7 +3,10 @@ package astrbot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/sticker"
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -27,6 +30,45 @@ func TestAdapterSendNoConns(t *testing.T) {
 	err := adapter.Send(context.Background(), msg)
 	if err == nil {
 		t.Fatalf("expected error when sending with no active connections, got nil")
+	}
+}
+
+func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	stealer := sticker.NewStealer(store, nil)
+	adapter := NewAdapter(nil)
+	adapter.stealer = stealer
+
+	currentImage := []byte{0x89, 'P', 'N', 'G', 1}
+	quotedImage := []byte("GIF89a quoted")
+	event := Event{
+		MessageID:   "msg_current",
+		SessionID:   "aiocqhttp:private:123",
+		Platform:    astrBotQQPlatform,
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: currentImage, SubType: 1},
+			{Type: core.AttachmentTypeImage, Content: quotedImage, SubType: 1, MessageID: "msg_quoted"},
+			{Type: core.AttachmentTypeImage, Content: []byte("regular")},
+		},
+	}
+	adapter.observeStickers(event)
+	loader := func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
+		return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
+	}
+
+	result, messageID, err := stealer.StealObserved(context.Background(), event.SessionID, "msg_quoted", 0, loader)
+	if err != nil {
+		t.Fatalf("steal quoted sticker: %v", err)
+	}
+	if messageID != "msg_quoted" || result.ID != sticker.HashBytes(quotedImage) {
+		t.Fatalf("quoted result = %+v message=%q", result, messageID)
+	}
+	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0, loader); !errors.Is(err, sticker.ErrStickerNotInScope) {
+		t.Fatalf("cross-session error = %v, want ErrStickerNotInScope", err)
 	}
 }
 

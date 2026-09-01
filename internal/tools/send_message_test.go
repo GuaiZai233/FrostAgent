@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -69,8 +72,73 @@ func TestSendMsgToolExecuteRejectsInvalidPayload(t *testing.T) {
 }
 
 func TestBuildOneBotMessageSupportsFile(t *testing.T) {
-	segments := BuildOneBotMessage([]Msg{{Type: "file", URL: "https://example.com/a.zip"}})
+	segments, err := BuildOneBotMessage([]Msg{{Type: "file", URL: "https://example.com/a.zip"}})
+	if err != nil {
+		t.Fatalf("BuildOneBotMessage returned error: %v", err)
+	}
 	if len(segments) != 1 || segments[0].Type != "file" || segments[0].Data["file"] == "" {
 		t.Fatalf("unexpected segments: %+v", segments)
+	}
+}
+
+func TestBuildOneBotMessageEncodesStickerPathAsBase64(t *testing.T) {
+	content := []byte("sticker image")
+	path := filepath.Join(t.TempDir(), "sticker.png")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write sticker fixture: %v", err)
+	}
+
+	segments, err := BuildOneBotMessage([]Msg{{
+		Type:      "image",
+		Path:      path,
+		URL:       "/api/sticker/example/image",
+		IsSticker: true,
+	}})
+	if err != nil {
+		t.Fatalf("BuildOneBotMessage returned error: %v", err)
+	}
+	if len(segments) != 1 {
+		t.Fatalf("unexpected segments: %+v", segments)
+	}
+	wantFile := "base64://" + base64.StdEncoding.EncodeToString(content)
+	if got := segments[0].Data["file"]; got != wantFile {
+		t.Fatalf("sticker file = %q, want %q", got, wantFile)
+	}
+	if got := segments[0].Data["sub_type"]; got != 1 {
+		t.Fatalf("sticker sub_type = %v, want 1", got)
+	}
+	if got := segments[0].Data["subType"]; got != 1 {
+		t.Fatalf("sticker subType = %v, want 1", got)
+	}
+}
+
+func TestBuildOneBotMessageReturnsStickerReadError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.png")
+	segments, err := BuildOneBotMessage([]Msg{{Type: "image", Path: path, IsSticker: true}})
+	if err == nil {
+		t.Fatalf("BuildOneBotMessage returned no error for missing sticker: %+v", segments)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("BuildOneBotMessage returned partial segments: %+v", segments)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("error %q does not identify missing sticker path %q", err, path)
+	}
+}
+
+func TestBuildOneBotMessageKeepsRegularImagePath(t *testing.T) {
+	path := filepath.Join("data", "images", "regular.png")
+	segments, err := BuildOneBotMessage([]Msg{{Type: "image", Path: path}})
+	if err != nil {
+		t.Fatalf("BuildOneBotMessage returned error: %v", err)
+	}
+	if len(segments) != 1 || segments[0].Data["file"] != "file://"+path {
+		t.Fatalf("unexpected segments: %+v", segments)
+	}
+	if _, ok := segments[0].Data["sub_type"]; ok {
+		t.Fatalf("regular image unexpectedly has sticker subtype: %+v", segments[0])
+	}
+	if _, ok := segments[0].Data["subType"]; ok {
+		t.Fatalf("regular image unexpectedly has LLBot sticker subtype: %+v", segments[0])
 	}
 }

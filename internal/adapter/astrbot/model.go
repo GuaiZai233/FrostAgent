@@ -34,6 +34,7 @@ type ActionMessage struct {
 	MessageID     string `json:"message_id,omitempty"`
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
+	IsSticker     bool   `json:"is_sticker,omitempty"`
 }
 
 // Action 表示 FrostAgent 发送给 AstrBot 插件的出站动作。

@@ -4,6 +4,8 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/sticker"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -105,6 +107,8 @@ func (c *wsConnection) registerActionRequest(actionName, existingEcho string) (s
 type resolvedReplyContext struct {
 	Prompt      string
 	MentionsBot bool
+	MessageID   string
+	SessionID   string
 	Segments    []content.MessageSegment
 }
 
@@ -115,6 +119,8 @@ type oneBotMessageData struct {
 	RealID      int64               `json:"real_id"`
 	GroupID     int64               `json:"group_id"`
 	UserID      int64               `json:"user_id"`
+	TargetID    any                 `json:"target_id"`
+	PeerID      any                 `json:"peer_id"`
 	Sender      *model.OneBotSender `json:"sender"`
 	Message     json.RawMessage     `json:"message"`
 }
@@ -127,7 +133,13 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	if !ok || c == nil {
 		return resolvedReplyContext{}
 	}
+	return c.lookupMessageContext(context.Background(), event, messageID)
+}
 
+func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.OneBotEvent, messageID int64) resolvedReplyContext {
+	if c == nil {
+		return resolvedReplyContext{}
+	}
 	echo, responseChannel := c.registerMessageRequest(messageID)
 	action, err := json.Marshal(model.OneBotAction{
 		Action: "get_msg",
@@ -149,10 +161,14 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	defer timer.Stop()
 	select {
 	case response := <-responseChannel:
-		return resolveReplyResponse(messageID, response)
+		return c.resolveReplyResponse(event, messageID, response)
 	case <-timer.C:
 		c.clearMessageRequest(echo, responseChannel)
 		logReplyLookupFailure(messageID, "查询超时")
+		return resolvedReplyContext{}
+	case <-ctx.Done():
+		c.clearMessageRequest(echo, responseChannel)
+		logReplyLookupFailure(messageID, fmt.Sprintf("查询取消: %v", ctx.Err()))
 		return resolvedReplyContext{}
 	}
 }
@@ -192,7 +208,7 @@ func (c *wsConnection) deliverMessageResponse(echo string, response oneBotAPIRes
 	return true
 }
 
-func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedReplyContext {
+func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID int64, response oneBotAPIResponse) resolvedReplyContext {
 	if response.RetCode != 0 || (response.Status != "" && response.Status != "ok") {
 		detail := strings.TrimSpace(response.Wording)
 		if detail == "" {
@@ -209,6 +225,10 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 	}
 	if data.MessageID != 0 && data.MessageID != messageID {
 		logReplyLookupFailure(messageID, fmt.Sprintf("响应消息 ID 不匹配: %d", data.MessageID))
+		return resolvedReplyContext{}
+	}
+	if !c.replyMessageMatchesEvent(event, messageID, data) {
+		logReplyLookupFailure(messageID, "引用消息不属于当前会话")
 		return resolvedReplyContext{}
 	}
 
@@ -239,8 +259,156 @@ func resolveReplyResponse(messageID int64, response oneBotAPIResponse) resolvedR
 	return resolvedReplyContext{
 		Prompt:      string(prompt),
 		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames()),
+		MessageID:   strconv.FormatInt(messageID, 10),
+		SessionID:   historyKey(event),
 		Segments:    segments,
 	}
+}
+
+func (c *wsConnection) replyMessageMatchesEvent(event model.OneBotEvent, messageID int64, data oneBotMessageData) bool {
+	switch event.MessageType {
+	case "group":
+		if data.MessageType != "" && data.MessageType != "group" {
+			return false
+		}
+		return data.GroupID == 0 || data.GroupID == event.GroupID
+	case "private":
+		if data.MessageType != "" && data.MessageType != "private" {
+			return false
+		}
+		if peerID, ok := privateMessagePeer(event.SelfID, data); ok {
+			return peerID == event.UserID
+		}
+		return c.messageSessionMatches(messageID, historyKey(event))
+	default:
+		return false
+	}
+}
+
+func privateMessagePeer(selfID int64, data oneBotMessageData) (int64, bool) {
+	if data.PeerID != nil {
+		peerID, ok := numericMessageID(data.PeerID)
+		if !ok || peerID == 0 {
+			return 0, true
+		}
+		return peerID, true
+	}
+
+	senderID := data.UserID
+	if senderID == 0 && data.Sender != nil {
+		senderID = data.Sender.UserID
+	}
+	if data.TargetID != nil {
+		targetID, ok := numericMessageID(data.TargetID)
+		if !ok || targetID == 0 {
+			return 0, true
+		}
+		switch {
+		case senderID == selfID:
+			return targetID, true
+		case targetID == selfID && senderID != 0:
+			return senderID, true
+		case targetID == senderID && senderID != selfID:
+			return senderID, true
+		default:
+			return 0, true
+		}
+	}
+	if senderID != 0 && senderID != selfID {
+		return senderID, true
+	}
+	return 0, false
+}
+
+func (c *wsConnection) rememberMessageSession(messageID int64, sessionID string) {
+	if c == nil || messageID == 0 || sessionID == "" {
+		return
+	}
+	c.messageSessionMu.Lock()
+	defer c.messageSessionMu.Unlock()
+	if c.messageSessions == nil {
+		c.messageSessions = make(map[int64]string)
+	}
+	if existing, ok := c.messageSessions[messageID]; ok {
+		if existing != sessionID {
+			c.messageSessions[messageID] = ""
+		}
+		return
+	}
+	c.messageSessions[messageID] = sessionID
+	c.messageSessionOrder = append(c.messageSessionOrder, messageID)
+	for len(c.messageSessionOrder) > maxTrustedMessageSessions {
+		oldest := c.messageSessionOrder[0]
+		c.messageSessionOrder = c.messageSessionOrder[1:]
+		delete(c.messageSessions, oldest)
+	}
+}
+
+func (c *wsConnection) messageSessionMatches(messageID int64, sessionID string) bool {
+	if c == nil || messageID == 0 || sessionID == "" {
+		return false
+	}
+	c.messageSessionMu.Lock()
+	defer c.messageSessionMu.Unlock()
+	return c.messageSessions[messageID] == sessionID
+}
+
+func (c *wsConnection) rememberActionMessageSession(response oneBotAPIResponse, sessionID string) {
+	var data map[string]any
+	if c == nil || json.Unmarshal(response.Data, &data) != nil {
+		return
+	}
+	if messageID, ok := numericMessageID(data["message_id"]); ok {
+		c.rememberMessageSession(messageID, sessionID)
+	}
+}
+
+func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resolvedReplyContext) {
+	if c == nil || c.stealer == nil || reply.MessageID == "" || reply.SessionID != historyKey(event) {
+		return
+	}
+	observeStickerSources(
+		c.stealer,
+		historyKey(event),
+		reply.MessageID,
+		stickerSourcesFromSegments(reply.Segments),
+		false,
+	)
+}
+
+func (c *wsConnection) loadObservedSticker(
+	ctx context.Context,
+	event model.OneBotEvent,
+	reply resolvedReplyContext,
+	currentSegments []content.MessageSegment,
+	messageID string,
+	stickerIndex int,
+) ([]byte, error) {
+	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
+	if messageID == currentMessageID {
+		return stickerDataFromSegments(ctx, currentSegments, stickerIndex)
+	}
+	if messageID == reply.MessageID && reply.SessionID == historyKey(event) && len(reply.Segments) > 0 {
+		return stickerDataFromSegments(ctx, reply.Segments, stickerIndex)
+	}
+
+	numericID, ok := numericMessageID(messageID)
+	if !ok {
+		return nil, fmt.Errorf("OneBot message_id %q is not numeric", messageID)
+	}
+	resolved := c.lookupMessageContext(ctx, event, numericID)
+	if len(resolved.Segments) == 0 {
+		return nil, fmt.Errorf("OneBot get_msg returned no usable message segments for %s", messageID)
+	}
+	return stickerDataFromSegments(ctx, resolved.Segments, stickerIndex)
+}
+
+func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegment, stickerIndex int) ([]byte, error) {
+	sources := stickerSourcesFromSegments(segments)
+	if stickerIndex < 0 || stickerIndex >= len(sources) {
+		return nil, fmt.Errorf("sticker index %d is unavailable", stickerIndex)
+	}
+	return sticker.LoadImageSource(ctx, sources[stickerIndex])
 }
 
 func (r *resolvedReplyContext) addImageDescription(description string) {

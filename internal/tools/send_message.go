@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -14,6 +16,7 @@ type Msg struct {
 	MessageID     string `json:"message_id,omitempty"`
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
+	IsSticker     bool   `json:"is_sticker,omitempty"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
@@ -25,7 +28,7 @@ type OneBotSegment struct {
 func SendMsgTool() Tool {
 	return Tool{
 		name:        "send_message",
-		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. After successful delivery, do not repeat the message in the final response. Return ordinary text-only replies directly without this tool.",
+		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool. Exception: when a sticker should follow the text in the same turn, call send_message first with a plain component, then call send_sticker in the same tool-call batch. Tool-call order is delivery order. After successful delivery, do not repeat the message in the final response.",
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
@@ -119,7 +122,7 @@ func SendMsgTool() Tool {
 	}
 }
 
-func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
+func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 	var oneBotChain []OneBotSegment
 
 	for _, Msg := range toolMessages {
@@ -144,19 +147,40 @@ func BuildOneBotMessage(toolMessages []Msg) []OneBotSegment {
 			})
 
 		case "image", "record", "video", "file":
-			// 确定文件来源：URL 优先，如果有本地路径则拼接 file:// 前缀
-			fileData := Msg.URL
-			if Msg.Path != "" {
-				fileData = fmt.Sprintf("file://%s", Msg.Path)
+			fileData, err := buildOneBotMediaFile(Msg)
+			if err != nil {
+				return nil, err
 			}
 
-			// OneBot 协议中图片、语音、视频的 type 名称与工具定义的正好一致
+			segData := map[string]interface{}{"file": fileData}
+			if Msg.Type == "image" && Msg.IsSticker {
+				segData["sub_type"] = 1
+				segData["subType"] = 1
+			}
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: Msg.Type,
-				Data: map[string]interface{}{"file": fileData},
+				Data: segData,
 			})
 		}
 	}
 
-	return oneBotChain
+	return oneBotChain, nil
+}
+
+func buildOneBotMediaFile(msg Msg) (string, error) {
+	if msg.Type == "image" && msg.IsSticker && msg.Path != "" {
+		content, err := os.ReadFile(msg.Path)
+		if err != nil {
+			return "", fmt.Errorf("读取贴纸文件 %q 失败: %w", msg.Path, err)
+		}
+		if len(content) == 0 {
+			return "", fmt.Errorf("贴纸文件 %q 为空", msg.Path)
+		}
+		return "base64://" + base64.StdEncoding.EncodeToString(content), nil
+	}
+
+	if msg.Path != "" {
+		return fmt.Sprintf("file://%s", msg.Path), nil
+	}
+	return msg.URL, nil
 }

@@ -31,11 +31,13 @@ const (
 
 // Attachment 消息附件（内容/URL/MIME）
 type Attachment struct {
-	Type     AttachmentType `json:"type"`
-	Content  []byte         `json:"content,omitempty"`
-	MimeType string         `json:"mime_type,omitempty"`
-	URL      string         `json:"url,omitempty"`
-	Name     string         `json:"name,omitempty"`
+	Type      AttachmentType `json:"type"`
+	SubType   int            `json:"sub_type,omitempty"`
+	MessageID string         `json:"message_id,omitempty"`
+	Content   []byte         `json:"content,omitempty"`
+	MimeType  string         `json:"mime_type,omitempty"`
+	URL       string         `json:"url,omitempty"`
+	Name      string         `json:"name,omitempty"`
 }
 
 // IncomingMessage 平台上游入站消息（含会话、用户、平台、附件等元数据）。

@@ -1,11 +1,13 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -21,9 +23,10 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
-	engine *llm.Engine
-	mu     sync.RWMutex
-	conns  map[*wsConnection]struct{}
+	engine  *llm.Engine
+	stealer *sticker.Stealer
+	mu      sync.RWMutex
+	conns   map[*wsConnection]struct{}
 }
 
 // NewAdapter 创建一个新的 OneBot 适配器实例。
@@ -32,6 +35,25 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 		engine: engine,
 		conns:  make(map[*wsConnection]struct{}),
 	}
+}
+
+func (a *Adapter) SetStealer(s *sticker.Stealer) {
+	a.stealer = s
+}
+
+func (a *Adapter) observeStickers(event model.OneBotEvent) {
+	if a.stealer == nil || event.PostType != "message" ||
+		(event.MessageType != "group" && event.MessageType != "private") {
+		return
+	}
+	messageID := strconv.FormatInt(int64(event.MessageID), 10)
+	observeStickerSources(
+		a.stealer,
+		historyKey(event),
+		messageID,
+		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		event.MessageType == "group",
+	)
 }
 
 // ID 返回平台唯一标识 "onebot"
@@ -177,6 +199,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			return
 		}
 		wsConn := newWSConnection(conn)
+		wsConn.stealer = a.stealer
 		a.registerConn(wsConn)
 		defer func() {
 			a.unregisterConn(wsConn)
@@ -205,6 +228,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			if event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
+			}
 
 			var routeSnapshot *modelrouter.Snapshot
 			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
@@ -218,6 +245,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.PostType == "message" && event.MessageType == "group" {
 				captureGroupCompactMessage(event, a.engine)
 			}
+
+			a.observeStickers(event)
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -225,5 +254,59 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			go processEvent(wsConn, event, a.engine, turn, routeSnapshot)
 		}
+	}
+}
+
+func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
+	var sources []string
+	for _, seg := range segments {
+		if seg.Type != "mface" &&
+			(seg.Type != "image" || (!isStickerSubType(seg.Data["sub_type"]) && !content.IsMarketFaceSegment(seg))) {
+			continue
+		}
+		if source := content.SegmentImageSource(seg); source != "" {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+func observeStickerSources(
+	stealer *sticker.Stealer,
+	sessionID string,
+	messageID string,
+	sources []string,
+	autoCollect bool,
+) {
+	for index, source := range sources {
+		var loader sticker.ImageLoader
+		if autoCollect {
+			source := source
+			loader = func(ctx context.Context) ([]byte, error) {
+				return sticker.LoadImageSource(ctx, source)
+			}
+		}
+		stealer.Observe(
+			sessionID,
+			messageID,
+			index,
+			loader,
+			autoCollect,
+		)
+	}
+}
+
+func isStickerSubType(value any) bool {
+	switch stickerType := value.(type) {
+	case int:
+		return stickerType == 1
+	case float64:
+		return stickerType == 1
+	case string:
+		return stickerType == "1"
+	case json.Number:
+		return stickerType.String() == "1"
+	default:
+		return false
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,12 +453,14 @@ func TestGroupCompactor_PendingPersistenceRetryAndRecovery(t *testing.T) {
 		t.Fatalf("timed out waiting for retry recovery")
 	}
 
-	// 等待 worker 更新完 pending 状态
-	time.Sleep(20 * time.Millisecond)
-
-	// 验证：重试已成功落盘，dirty 状态清除
-	if compactor.HasPendingPersistence("test_group_persist_fail_1") {
-		t.Fatalf("expected HasPendingPersistence to be false after recovery")
+	// SaveHook 在真实磁盘写入之前执行；等待 worker 完成 Upsert 并清除 pending，
+	// 避免用固定 sleep 猜测 CI 文件系统的写入耗时。
+	deadline := time.Now().Add(2 * time.Second)
+	for compactor.HasPendingPersistence("test_group_persist_fail_1") {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected HasPendingPersistence to be false after recovery")
+		}
+		runtime.Gosched()
 	}
 
 	// 重新从磁盘载入 Store 验证持久化真实落盘

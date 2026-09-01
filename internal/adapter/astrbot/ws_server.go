@@ -10,6 +10,7 @@ import (
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/tools"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,7 +135,7 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	if engine == nil || event.GroupID == "" {
 		return
 	}
-	visibleText := strings.TrimSpace(event.Content)
+	visibleText := astrBotVisibleText(event)
 	if visibleText == "" {
 		return
 	}
@@ -162,6 +163,24 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 		owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
 		engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
 	}
+}
+
+func astrBotVisibleText(event Event) string {
+	parts := make([]string, 0, 3)
+	if text := strings.TrimSpace(event.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, att := range event.Attachments {
+		if att.Type == core.AttachmentTypeImage && (att.MessageID == "" || att.MessageID == event.MessageID) {
+			parts = append(parts, "[图片]")
+		}
+	}
+	if event.Metadata != nil {
+		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
+			parts = append(parts, fmt.Sprintf("[回复:%s]", strings.TrimSpace(replyMessageID)))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 func formatGroupSpeakerMessage(event Event, text string) string {
@@ -367,15 +386,21 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if engine != nil && engine.ModelRouter != nil {
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
-	userText := event.Content
+	userText := astrBotVisibleText(event)
 
 	// 处理图片等多模态内容描述
 	var imageSegments []content.MessageSegment
 	for _, att := range event.Attachments {
-		if att.Type == core.AttachmentTypeImage && att.URL != "" {
+		if att.Type == core.AttachmentTypeImage && (len(att.Content) > 0 || att.URL != "") {
+			data := make(map[string]any)
+			if len(att.Content) > 0 {
+				data["base64"] = base64.StdEncoding.EncodeToString(att.Content)
+			} else {
+				data["url"] = att.URL
+			}
 			imageSegments = append(imageSegments, content.MessageSegment{
 				Type: "image",
-				Data: map[string]any{"url": att.URL},
+				Data: data,
 			})
 		}
 	}
@@ -448,9 +473,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	contextData := map[string]any{
+		"message_id":  event.MessageID,
 		"sender_id":   event.UserID,
 		"sender_name": senderDisplayName(event),
 		"platform":    platform,
+	}
+	if event.Metadata != nil {
+		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
+			contextData["reply_message_id"] = strings.TrimSpace(replyMessageID)
+		}
 	}
 	if event.MessageType == "group" {
 		contextData["group_id"] = event.GroupID
@@ -530,14 +561,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			var plainTexts []string
 			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
-				actionMessages = append(actionMessages, ActionMessage{
-					Type:          m.Type,
-					Text:          m.Text,
-					MentionUserID: m.MentionUserID,
-					MessageID:     m.MessageID,
-					Path:          m.Path,
-					URL:           m.URL,
-				})
+				actionMessages = append(actionMessages, actionMessageFromToolMessage(m))
 				switch m.Type {
 				case "plain":
 					plainTexts = append(plainTexts, m.Text)
@@ -546,10 +570,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					if url == "" {
 						url = m.Path
 					}
-					attachments = append(attachments, core.Attachment{
+					att := core.Attachment{
 						Type: core.AttachmentTypeImage,
 						URL:  url,
-					})
+					}
+					if m.IsSticker {
+						att.SubType = 1
+					}
+					attachments = append(attachments, att)
 				case "record":
 					url := m.URL
 					if url == "" {
@@ -598,10 +626,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:     sessionKey(event),
-			Owner:         owner,
-			OwnerType:     ownerType,
-			SendHook:      sendHook,
+			SessionID:   sessionKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: event.UserID,
+			SendHook:    sendHook,
+			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
+				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
+			},
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
@@ -695,6 +727,24 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if event.MessageType == "group" {
 		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
+	}
+}
+
+func actionMessageFromToolMessage(m tools.Msg) ActionMessage {
+	path := m.Path
+	if m.IsSticker {
+		// Sticker files belong to FrostAgent's private storage. AstrBot receives
+		// the HTTP endpoint instead and resolves it into OneBot-compatible data.
+		path = ""
+	}
+	return ActionMessage{
+		Type:          m.Type,
+		Text:          m.Text,
+		MentionUserID: m.MentionUserID,
+		MessageID:     m.MessageID,
+		Path:          path,
+		URL:           m.URL,
+		IsSticker:     m.IsSticker,
 	}
 }
 
