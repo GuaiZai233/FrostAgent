@@ -60,9 +60,9 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 		return "", nil, false, fmt.Errorf("unexpected response type")
 	}
 
-	desc, keywords, suspectedInappropriate := ParseVisionResult(raw)
-	if desc == "" {
-		return "", nil, false, fmt.Errorf("empty description from vision model")
+	desc, keywords, suspectedInappropriate, err := ParseVisionResult(raw)
+	if err != nil {
+		return "", nil, false, err
 	}
 	return desc, keywords, suspectedInappropriate, nil
 }

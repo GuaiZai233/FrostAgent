@@ -227,19 +227,19 @@ func TestStoreSuspectedInappropriateWeightAndClear(t *testing.T) {
 	if err := store.Add(id, id+".gif", data); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
-	if err := store.Update(id, "人工标记测试", []string{"测试"}); err != nil {
-		t.Fatalf("update sticker: %v", err)
-	}
 	if err := store.MarkSuspectedInappropriate(id); err != nil {
 		t.Fatalf("mark suspected inappropriate: %v", err)
+	}
+	if err := store.UpdateSummary(id, "视觉模型判断安全", []string{"测试"}, false); err != nil {
+		t.Fatalf("update summary: %v", err)
 	}
 	if err := store.IncrementWeight(id); err != nil {
 		t.Fatalf("increment flagged sticker: %v", err)
 	}
 
 	entry, _ := store.Get(id)
-	if !entry.SuspectedInappropriate || entry.Weight != 0 {
-		t.Fatalf("flagged entry = %+v, want suspected and weight 0", entry)
+	if !entry.SuspectedInappropriate || !entry.ManualBlocked || entry.Weight != 0 {
+		t.Fatalf("summarized entry = %+v, want sticky manual quarantine and weight 0", entry)
 	}
 	if err := store.ClearSuspectedInappropriate(id); err != nil {
 		t.Fatalf("clear flag: %v", err)
@@ -250,7 +250,7 @@ func TestStoreSuspectedInappropriateWeightAndClear(t *testing.T) {
 		t.Fatalf("reload store: %v", err)
 	}
 	entry, _ = reloaded.Get(id)
-	if entry.SuspectedInappropriate || entry.Weight != 1 {
+	if entry.SuspectedInappropriate || entry.ModelSuspected || entry.ManualBlocked || entry.Weight != 1 {
 		t.Fatalf("cleared entry = %+v, want unflagged and weight 1", entry)
 	}
 }

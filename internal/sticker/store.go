@@ -46,13 +46,25 @@ func (s *Store) load() error {
 	s.ordered = make([]string, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
-		if e.SuspectedInappropriate {
-			e.Weight = 0
+		if e.SuspectedInappropriate && !e.ModelSuspected && !e.ManualBlocked {
+			// Existing indexes cannot distinguish model and manual flags. Preserve
+			// them as sticky manual quarantine rather than risking an automatic clear.
+			e.ManualBlocked = true
 		}
+		refreshInappropriateState(e)
 		s.index[e.ID] = e
 		s.ordered = append(s.ordered, e.ID)
 	}
 	return nil
+}
+
+func refreshInappropriateState(e *Entry) {
+	e.SuspectedInappropriate = e.ModelSuspected || e.ManualBlocked
+	if e.SuspectedInappropriate {
+		e.Weight = 0
+	} else if e.Weight < 1 {
+		e.Weight = 1
+	}
 }
 
 func (s *Store) saveSnapshot(index map[string]*Entry, ordered []string) error {
@@ -242,12 +254,8 @@ func (s *Store) UpdateSummary(id string, description string, keywords []string, 
 	e.Description = description
 	e.Keywords = append([]string(nil), keywords...)
 	e.Status = StatusReady
-	e.SuspectedInappropriate = suspectedInappropriate
-	if suspectedInappropriate {
-		e.Weight = 0
-	} else if e.Weight < 1 {
-		e.Weight = 1
-	}
+	e.ModelSuspected = suspectedInappropriate
+	refreshInappropriateState(e)
 	e.UpdatedAt = time.Now().Unix()
 	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
 		return err
@@ -266,8 +274,8 @@ func (s *Store) MarkSuspectedInappropriate(id string) error {
 	}
 	nextIndex := cloneIndex(s.index)
 	e := nextIndex[id]
-	e.SuspectedInappropriate = true
-	e.Weight = 0
+	e.ManualBlocked = true
+	refreshInappropriateState(e)
 	e.UpdatedAt = time.Now().Unix()
 	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
 		return err
@@ -286,10 +294,9 @@ func (s *Store) ClearSuspectedInappropriate(id string) error {
 	}
 	nextIndex := cloneIndex(s.index)
 	e := nextIndex[id]
-	e.SuspectedInappropriate = false
-	if e.Weight < 1 {
-		e.Weight = 1
-	}
+	e.ModelSuspected = false
+	e.ManualBlocked = false
+	refreshInappropriateState(e)
 	e.UpdatedAt = time.Now().Unix()
 	if err := s.saveSnapshot(nextIndex, s.ordered); err != nil {
 		return err

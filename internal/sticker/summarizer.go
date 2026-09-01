@@ -126,10 +126,10 @@ func guessMimeType(fileName string) string {
 type VisionResult struct {
 	Description            string   `json:"description"`
 	Keywords               []string `json:"keywords"`
-	SuspectedInappropriate bool     `json:"suspected_inappropriate"`
+	SuspectedInappropriate *bool    `json:"suspected_inappropriate"`
 }
 
-func ParseVisionResult(raw string) (string, []string, bool) {
+func ParseVisionResult(raw string) (string, []string, bool, error) {
 	raw = strings.TrimSpace(raw)
 
 	start := strings.Index(raw, "{")
@@ -140,7 +140,14 @@ func ParseVisionResult(raw string) (string, []string, bool) {
 
 	var result VisionResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return raw, nil, false
+		return "", nil, false, fmt.Errorf("parse vision result: %w", err)
 	}
-	return result.Description, result.Keywords, result.SuspectedInappropriate
+	if result.SuspectedInappropriate == nil {
+		return "", nil, false, fmt.Errorf("parse vision result: missing suspected_inappropriate")
+	}
+	result.Description = strings.TrimSpace(result.Description)
+	if result.Description == "" {
+		return "", nil, false, fmt.Errorf("parse vision result: empty description")
+	}
+	return result.Description, result.Keywords, *result.SuspectedInappropriate, nil
 }

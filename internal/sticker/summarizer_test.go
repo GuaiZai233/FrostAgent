@@ -29,14 +29,15 @@ func TestParseVisionResult(t *testing.T) {
 		wantDesc                   string
 		wantKeywords               []string
 		wantSuspectedInappropriate bool
+		wantErr                    bool
 	}{
 		{
-			input:        `{"description": "一只猫猫在挥手", "keywords": ["开心", "打招呼", "猫猫"]}`,
+			input:        `{"description": "一只猫猫在挥手", "keywords": ["开心", "打招呼", "猫猫"], "suspected_inappropriate": false}`,
 			wantDesc:     "一只猫猫在挥手",
 			wantKeywords: []string{"开心", "打招呼", "猫猫"},
 		},
 		{
-			input:        "```json\n{\"description\": \"委屈巴巴的表情\", \"keywords\": [\"委屈\", \"难过\"]}\n```",
+			input:        "```json\n{\"description\": \"委屈巴巴的表情\", \"keywords\": [\"委屈\", \"难过\"], \"suspected_inappropriate\": false}\n```",
 			wantDesc:     "委屈巴巴的表情",
 			wantKeywords: []string{"委屈", "难过"},
 		},
@@ -46,10 +47,24 @@ func TestParseVisionResult(t *testing.T) {
 			wantKeywords:               []string{"测试词"},
 			wantSuspectedInappropriate: true,
 		},
+		{
+			input:   `{"description":"缺少安全字段","keywords":["测试"]}`,
+			wantErr: true,
+		},
+		{
+			input:   `不是JSON`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
-		desc, kws, suspectedInappropriate := ParseVisionResult(tt.input)
+		desc, kws, suspectedInappropriate, err := ParseVisionResult(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseVisionResult(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+		}
+		if tt.wantErr {
+			continue
+		}
 		if desc != tt.wantDesc {
 			t.Errorf("ParseVisionResult(%q) desc = %q, want %q", tt.input, desc, tt.wantDesc)
 		}

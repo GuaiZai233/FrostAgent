@@ -17,6 +17,8 @@ type Entry struct {
 	Weight                 int      `json:"weight"`
 	Status                 Status   `json:"status"`
 	SuspectedInappropriate bool     `json:"suspected_inappropriate,omitempty"`
+	ModelSuspected         bool     `json:"model_suspected,omitempty"`
+	ManualBlocked          bool     `json:"manual_blocked,omitempty"`
 	CreatedAt              int64    `json:"created_at"`
 	UpdatedAt              int64    `json:"updated_at"`
 }
