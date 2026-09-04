@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FrostAgent 控制台</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <script>
+      (function () {
+        try {
+          var scale = localStorage.getItem('user-ui-scale') || '1.1';
+          document.documentElement.style.zoom = scale;
+          document.documentElement.style.setProperty('--ui-scale', scale);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

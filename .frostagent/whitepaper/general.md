@@ -119,9 +119,10 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 前端基于 `@connectrpc/connect-web` 与 `@frostagent/proto`，实现端到端的 Protobuf 类型安全与请求/响应全量校验；
   - 支持 ConnectRPC Server-Streaming 实时日志长连接订阅与动态取消；
   - 敏感配置自动脱敏与按需显隐。
-- **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
+- **现代化设计令牌、主题与视觉缩放系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
-  - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化。
+  - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
+  - 默认采用 110% 界面缩放比例，结合 CSS `zoom` 与预加载防闪烁脚本优化桌面视距与字号阅读体验，并支持在外观设置中自由调整（100%、105%、110%、115%、120%）与即时持久化。
 - **单二进制静态嵌入与开发体验**：
   - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
   - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。

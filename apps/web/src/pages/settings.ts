@@ -39,7 +39,7 @@ export function mountSettingsPage(container: HTMLElement): () => void {
             </div>
             <div style="min-width: 0;">
               <h2 class="text-sm font-semibold text-foreground">网页端外观设置</h2>
-              <p class="text-xs text-muted mt-0.5">切换浅色、深色主题模式或跟随系统首选项</p>
+              <p class="text-xs text-muted mt-0.5">切换浅色与深色主题模式，调整界面整体缩放比例</p>
             </div>
           </div>
           <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">
