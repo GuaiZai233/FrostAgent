@@ -3,6 +3,7 @@ package logs
 import (
 	"container/ring"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +33,7 @@ type LogEntry struct {
 	Category  Category  `json:"category"`
 	Level     Level     `json:"level"`
 	Content   string    `json:"content"`
+	imageRefs []string
 }
 
 // subscriber receives broadcasted log entries.
@@ -57,15 +59,24 @@ func Init(s int) {
 
 	size = s
 	buffer = ring.New(size)
+	imageCache = make(map[string]*cachedImage)
 	nextEntryID = 0
 }
 
 func log(level Level, category Category, content string, traceID string, direction string) {
+	logWithImages(level, category, content, traceID, direction, nil)
+}
+
+func logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage) {
 	mu.Lock()
 
 	if buffer == nil {
 		mu.Unlock()
 		return
+	}
+
+	if previous, ok := buffer.Value.(LogEntry); ok {
+		releaseImagesLocked(previous.imageRefs)
 	}
 
 	nextEntryID++
@@ -78,6 +89,7 @@ func log(level Level, category Category, content string, traceID string, directi
 		Level:     level,
 		Content:   content,
 	}
+	entry.imageRefs = retainImagesLocked(retainedImages)
 
 	buffer.Value = entry
 	buffer = buffer.Next()
@@ -100,6 +112,24 @@ func Info(category Category, content string, traceID ...string) {
 		tid = traceID[0]
 	}
 	log(INFO, category, content, tid, "INTERNAL")
+}
+
+// InfoWithInlineImages writes an informational log while retaining its images
+// separately. The stored and copied content contains only compact placeholders.
+func InfoWithInlineImages(category Category, content string, images []InlineImage, traceID ...string) {
+	tid := ""
+	if len(traceID) > 0 {
+		tid = traceID[0]
+	}
+	retainedImages, placeholders := prepareInlineImages(images)
+	if len(placeholders) > 0 {
+		content = strings.TrimRight(content, " \t\r\n")
+		if content != "" {
+			content += "\n"
+		}
+		content += strings.Join(placeholders, "\n")
+	}
+	logWithImages(INFO, category, content, tid, "INTERNAL", retainedImages)
 }
 
 func Warn(category Category, content string, traceID ...string) {
@@ -131,7 +161,8 @@ func LLMRequest(content string, traceID ...string) {
 	if len(traceID) > 0 {
 		tid = traceID[0]
 	}
-	log(INFO, LLM_REQUEST, content, tid, "OUTBOUND")
+	redacted, retainedImages := redactInlineImages(content)
+	logWithImages(INFO, LLM_REQUEST, redacted, tid, "OUTBOUND", retainedImages)
 }
 
 func LLMResponse(content string, traceID ...string) {
@@ -173,6 +204,7 @@ func Clear() {
 	mu.Lock()
 	defer mu.Unlock()
 	buffer = ring.New(size)
+	imageCache = make(map[string]*cachedImage)
 }
 
 // Subscribe returns a channel that receives new log entries matching the filter.

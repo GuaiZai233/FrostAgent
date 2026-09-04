@@ -311,6 +311,7 @@ func main() {
 
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New())
 	mux.Handle(logsPath, logsHandler)
+	mux.HandleFunc(logs.LogImagePathPrefix, logs.ImageHandler)
 
 	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
 		memsvc.New(globalStore, GlobalEngine.MemoryReflections),

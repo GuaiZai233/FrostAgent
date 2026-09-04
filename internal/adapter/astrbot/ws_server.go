@@ -183,6 +183,33 @@ func astrBotVisibleText(event Event) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
+func astrBotLogText(event Event) (string, []logs.InlineImage) {
+	parts := make([]string, 0, 3)
+	if text := strings.TrimSpace(event.Content); text != "" {
+		parts = append(parts, text)
+	}
+	images := make([]logs.InlineImage, 0, len(event.Attachments))
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
+			continue
+		}
+		if len(att.Content) > 0 {
+			images = append(images, logs.InlineImage{
+				ContentType: att.MimeType,
+				Data:        att.Content,
+			})
+		} else {
+			parts = append(parts, "[图片]")
+		}
+	}
+	if event.Metadata != nil {
+		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
+			parts = append(parts, fmt.Sprintf("[回复:%s]", strings.TrimSpace(replyMessageID)))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, " ")), images
+}
+
 func formatGroupSpeakerMessage(event Event, text string) string {
 	return fmt.Sprintf("[user] %s (%s): %s", senderDisplayName(event), event.UserID, strings.TrimSpace(text))
 }
@@ -355,7 +382,8 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		return
 	}
 
-	logs.Info(
+	logText, logImages := astrBotLogText(event)
+	logs.InfoWithInlineImages(
 		logs.WEBSOCKET,
 		fmt.Sprintf(
 			"AstrBot 收到 [%s] %s 消息 (ID:%s User:%s/%s Group:%s): %s",
@@ -365,8 +393,9 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 			event.UserID,
 			senderDisplayName(event),
 			event.GroupID,
-			event.Content,
+			logText,
 		),
+		logImages,
 	)
 
 	replyWithSnapshot(event, engine, conn, routeSnapshot)

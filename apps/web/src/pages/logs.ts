@@ -14,7 +14,7 @@ import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 import { renderPagination, attachPaginationEvents } from '../components/pagination';
-import { openPromptInspectorDialog } from '../components/prompt-inspector';
+import { openPromptInspectorDialog, renderLoggedImagesInText } from '../components/prompt-inspector';
 
 export function mountLogsPage(container: HTMLElement): () => void {
   let isUnmounted = false;
@@ -372,7 +372,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}`,
       maxWidth: '38rem',
       bodyHtml: `
-        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${escapeHtml(entry.summary || '无摘要内容')}</div>
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${renderLoggedImagesInText(entry.summary || '无摘要内容')}</div>
       `,
       footerHtml: `
         ${
