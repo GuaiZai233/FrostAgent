@@ -23,11 +23,12 @@ type envEntry struct {
 var knownEnvVars = map[string]envEntry{
 	"LISTEN_ADDR":                 {"HTTP 监听地址", false, true},
 	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true},
+	"HTTP_ALLOWED_ORIGINS":        {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true},
+	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true},
 	"SYSTEM_PROMPT":               {"系统提示词", false, false},
 	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true},
 	"MAX_CONTEXT_MESSAGES":        {"最多保留的消息数", false, false},
 	"MAX_CONTEXT_CHARS":           {"近似字符上限", false, false},
-	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true},
 	"ENABLE_AT_IN_GROUP_MSG":      {"是否开启群聊回复前艾特", false, false},
 	"GROUP_REPLY_ON_MENTION":      {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false},
 	"BOT_NAME":                    {"机器人主名称，用于群聊文本唤醒", false, false},
@@ -43,6 +44,16 @@ var knownEnvVars = map[string]envEntry{
 	"ONEBOT_WS_PATH":              {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true},
 	"ENABLE_ASTRBOT_ADAPTER":      {"是否启用 AstrBot WebSocket 适配器", false, true},
 	"ASTRBOT_WS_PATH":             {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true},
+	"BILLING_ENABLED":             {"是否启用 Alcyone 计费", false, true},
+	"ALCYONE_BASE_URL":            {"Alcyone 计费服务地址", false, true},
+	"ALCYONE_SERVICE_TOKEN":       {"Alcyone 计费服务通信 Token", true, true},
+	"ALCYONE_TIMEOUT":             {"计费请求超时时间", false, true},
+	"BILLING_MAX_OUTPUT_TOKENS":   {"计费预扣款最大预留输出 Token", false, true},
+	"BILLING_SAFETY_MULTIPLIER":   {"计费预扣款输入 Token 安全倍率", false, true},
+	"MEMORY_REFLECTION_TIMEOUT":   {"记忆反思独立超时时间", false, true},
+	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true},
+	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true},
+	"CODER_API_KEY":               {"Coder API 密钥", true, true},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.
@@ -80,13 +91,20 @@ func (s *Service) UpdateEnvVar(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateEnvVarRequest],
 ) (*connect.Response[v1.UpdateEnvVarResponse], error) {
-	key := req.Msg.GetKey()
+	key := strings.TrimSpace(req.Msg.GetKey())
 	value := req.Msg.GetValue()
 
 	if key == "" {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{
 			Success: false,
 			Error:   "key is required",
+		}), nil
+	}
+
+	if _, ok := knownEnvVars[key]; !ok {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
 	}
 
@@ -108,11 +126,18 @@ func (s *Service) DeleteEnvVar(
 	ctx context.Context,
 	req *connect.Request[v1.DeleteEnvVarRequest],
 ) (*connect.Response[v1.DeleteEnvVarResponse], error) {
-	key := req.Msg.GetKey()
+	key := strings.TrimSpace(req.Msg.GetKey())
 	if key == "" {
 		return connect.NewResponse(&v1.DeleteEnvVarResponse{
 			Success: false,
 			Error:   "key is required",
+		}), nil
+	}
+
+	if _, ok := knownEnvVars[key]; !ok {
+		return connect.NewResponse(&v1.DeleteEnvVarResponse{
+			Success: false,
+			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
 	}
 
@@ -151,7 +176,7 @@ func (s *Service) UpdateRawEnvFile(
 	content := req.Msg.GetContent()
 
 	tmpPath := s.envPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
 			Error:   fmt.Sprintf("write temp file: %v", err),
@@ -236,7 +261,7 @@ func readEnvLines(path string) ([]string, error) {
 func writeEnvAtomic(path string, lines []string) error {
 	tmpPath := path + ".tmp"
 
-	f, err := os.Create(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
@@ -264,5 +289,5 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	return os.WriteFile(dst, data, 0600)
 }

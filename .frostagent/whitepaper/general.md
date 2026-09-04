@@ -126,6 +126,29 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
   - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。
 
+### 管理面与网络信任边界 (Management API & Network Trust Boundary)
+
+为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
+
+- **本地回环默认绑定 (Localhost Default Binding)**：
+  - HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`；
+  - WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - 杜绝默认监听 `0.0.0.0` 或通配端口导致的未授权公网暴露。
+- **严格同源与 CORS 边界控制 (Strict Same-Origin & CORS Protection)**：
+  - 管理接口通过 `corsMiddleware` 统一拦截跨域请求；
+  - 默认仅放行与请求 Host 严格匹配的同源来源（Scheme 与 Host 强校验），拦截来自外部域名的跨域请求并返回 `403 Forbidden`；
+  - 如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
+- **单管理员信任模型与配置透明性 (Single-Administrator Trust Model)**：
+  - FrostAgent 明确将 Dashboard 定义为受认证保护的、单管理员、自托管控制台；
+  - 在已授权的控制台会话中，管理员享有实例的完全配置控制权。设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性。
+- **环境变量白名单约束 (Settings API Allowlist)**：
+  - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入，杜绝远程环境注入风险。
+- **原子落盘与安全文件权限 (Atomic Write & Secure File Permissions)**：
+  - 环境变量与配置落盘通过创建 `.tmp` 临时文件后原子重命名（Atomic Rename）完成，避免并发写入损坏；
+  - 临时文件及目标配置文件在落盘时统一强制使用 `0600`（所有者独占读写）权限，防止同主机其他非特权进程窥探敏感凭证。
+- **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
+  - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
+
 ### 表情包摘取与检索系统 (Sticker Stealing & Retrieval System)
 
 为了让智能体兼具趣味性与原生聊天软件拟人化表达，FrostAgent 实现了表情包自主抓取、多模态视觉摘要与基于情绪语境的智能检索系统：
