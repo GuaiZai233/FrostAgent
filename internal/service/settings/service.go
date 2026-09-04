@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect"
 
@@ -58,7 +60,8 @@ var knownEnvVars = map[string]envEntry{
 
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
-	envPath string // path to .env file
+	envPath string
+	mu      sync.Mutex
 }
 
 // New creates a new SettingsService.
@@ -66,7 +69,15 @@ func New(envPath string) *Service {
 	if envPath == "" {
 		envPath = ".env"
 	}
-	return &Service{envPath: envPath}
+	s := &Service{envPath: envPath}
+	s.hardenPermissions()
+	return s
+}
+
+func (s *Service) hardenPermissions() {
+	if fi, err := os.Stat(s.envPath); err == nil && !fi.IsDir() {
+		_ = os.Chmod(s.envPath, 0600)
+	}
 }
 
 // ListEnvVars returns all known env vars with their current values.
@@ -108,6 +119,9 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if err := s.atomicWriteEnv(key, value); err != nil {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{
 			Success: false,
@@ -141,6 +155,9 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if err := s.removeKeyFromEnv(key); err != nil {
 		return connect.NewResponse(&v1.DeleteEnvVarResponse{
 			Success: false,
@@ -158,6 +175,9 @@ func (s *Service) GetRawEnvFile(
 	ctx context.Context,
 	req *connect.Request[v1.GetRawEnvFileRequest],
 ) (*connect.Response[v1.GetRawEnvFileResponse], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	data, err := os.ReadFile(s.envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -175,11 +195,34 @@ func (s *Service) UpdateRawEnvFile(
 ) (*connect.Response[v1.UpdateRawEnvFileResponse], error) {
 	content := req.Msg.GetContent()
 
-	tmpPath := s.envPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := filepath.Dir(s.envPath)
+	tmpFile, err := os.CreateTemp(dir, ".env.tmp.*")
+	if err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("create temp file: %v", err),
+		}), nil
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	_ = tmpFile.Chmod(0600)
+	if _, err := tmpFile.Write([]byte(content)); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
 			Error:   fmt.Sprintf("write temp file: %v", err),
+		}), nil
+	}
+	if err := tmpFile.Close(); err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("close temp file: %v", err),
 		}), nil
 	}
 
@@ -191,8 +234,8 @@ func (s *Service) UpdateRawEnvFile(
 				Error:   fmt.Sprintf("rename .env: %v", err),
 			}), nil
 		}
-		os.Remove(tmpPath)
 	}
+	_ = os.Chmod(s.envPath, 0600)
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
 }
@@ -257,19 +300,27 @@ func readEnvLines(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
-// writeEnvAtomic writes lines to a temp file then renames.
+// writeEnvAtomic writes lines to a unique temp file then renames.
 func writeEnvAtomic(path string, lines []string) error {
-	tmpPath := path + ".tmp"
-
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".env.tmp.*")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	_ = tmpFile.Chmod(0600)
 
 	for _, line := range lines {
-		fmt.Fprintln(f, line)
+		if _, err := fmt.Fprintln(tmpFile, line); err != nil {
+			return fmt.Errorf("write temp: %w", err)
+		}
 	}
-	if err := f.Close(); err != nil {
+	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
 	}
 
@@ -278,8 +329,8 @@ func writeEnvAtomic(path string, lines []string) error {
 		if err := copyFile(tmpPath, path); err != nil {
 			return fmt.Errorf("rename .env: %w", err)
 		}
-		os.Remove(tmpPath)
 	}
+	_ = os.Chmod(path, 0600)
 	return nil
 }
 
@@ -289,5 +340,8 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0600)
+	if err := os.WriteFile(dst, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(dst, 0600)
 }

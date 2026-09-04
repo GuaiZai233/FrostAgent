@@ -128,24 +128,26 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 
 ### 管理面与网络信任边界 (Management API & Network Trust Boundary)
 
-为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
+为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
   - HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`；
   - WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
   - 杜绝默认监听 `0.0.0.0` 或通配端口导致的未授权公网暴露。
-- **严格同源与 CORS 边界控制 (Strict Same-Origin & CORS Protection)**：
-  - 管理接口通过 `corsMiddleware` 统一拦截跨域请求；
-  - 默认仅放行与请求 Host 严格匹配的同源来源（Scheme 与 Host 强校验），拦截来自外部域名的跨域请求并返回 `403 Forbidden`；
-  - 如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
-- **单管理员信任模型与配置透明性 (Single-Administrator Trust Model)**：
-  - FrostAgent 明确将 Dashboard 定义为受认证保护的、单管理员、自托管控制台；
-  - 在已授权的控制台会话中，管理员享有实例的完全配置控制权。设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性。
+- **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
+  - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
+  - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；
+  - **Origin 校验**：同源自动放行规则严格限制在本地回环 Host 上，杜绝攻击者利用解析至 127.0.0.1 的恶意域名伪造同源；如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
+- **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
+  - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
+  - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
+  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
 - **环境变量白名单约束 (Settings API Allowlist)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入，杜绝远程环境注入风险。
-- **原子落盘与安全文件权限 (Atomic Write & Secure File Permissions)**：
-  - 环境变量与配置落盘通过创建 `.tmp` 临时文件后原子重命名（Atomic Rename）完成，避免并发写入损坏；
-  - 临时文件及目标配置文件在落盘时统一强制使用 `0600`（所有者独占读写）权限，防止同主机其他非特权进程窥探敏感凭证。
+- **并发互斥与安全原子落盘 (Concurrency Safety & Secure Atomic Writes)**：
+  - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免并发 read-modify-write 导致数据丢失或状态冲突；
+  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），避免多协程竞争同一临时路径；
+  - 服务初始化（`New`）时自动将已有 `.env` 文件权限收紧至 `0600`，所有写入临时文件与目标文件在保存后均显式强制 `0600`（所有者独占读写）权限，防止同主机其他非特权用户窥探敏感配置。
 - **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
   - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
 

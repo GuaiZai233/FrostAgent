@@ -1,17 +1,25 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 )
 
-// corsMiddleware allows same-origin browser access and explicit exact origins.
-// It prevents unauthorized cross-origin requests from external malicious websites.
+// corsMiddleware enforces strict origin and host boundaries.
+// It protects against DNS rebinding and malicious cross-origin requests.
 func corsMiddleware(next http.Handler) http.Handler {
-	allowedOrigins := configuredHTTPOrigins()
+	allowedOrigins, allowedHosts := configuredHTTPOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Validate Host header to protect against DNS rebinding
+		if !isHostAllowed(r.Host, allowedHosts) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
+			return
+		}
+
+		// 2. Validate Origin header if present
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
 			if !httpOriginAllowed(origin, r, allowedOrigins) {
@@ -34,14 +42,41 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func configuredHTTPOrigins() map[string]struct{} {
-	result := make(map[string]struct{})
+func configuredHTTPOrigins() (map[string]struct{}, map[string]struct{}) {
+	origins := make(map[string]struct{})
+	hosts := make(map[string]struct{})
 	for _, value := range strings.Split(os.Getenv("HTTP_ALLOWED_ORIGINS"), ",") {
-		if origin := strings.TrimSpace(value); origin != "" {
-			result[origin] = struct{}{}
+		origin := strings.TrimSpace(value)
+		if origin == "" {
+			continue
+		}
+		origins[origin] = struct{}{}
+		if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
+			hosts[parsed.Host] = struct{}{}
 		}
 	}
-	return result
+	return origins, hosts
+}
+
+func isLoopbackHost(rawHost string) bool {
+	host := rawHost
+	if h, _, err := net.SplitHostPort(rawHost); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isHostAllowed(host string, allowedHosts map[string]struct{}) bool {
+	if isLoopbackHost(host) {
+		return true
+	}
+	_, ok := allowedHosts[host]
+	return ok
 }
 
 func httpOriginAllowed(origin string, request *http.Request, allowed map[string]struct{}) bool {
@@ -49,13 +84,21 @@ func httpOriginAllowed(origin string, request *http.Request, allowed map[string]
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return false
 	}
+
+	// Explicitly configured origins always allowed
+	if _, ok := allowed[origin]; ok {
+		return true
+	}
+
+	// Same-origin is only trusted automatically if the host is a local loopback.
+	// This prevents DNS rebinding (e.g. attacker.example resolving to 127.0.0.1 where Origin == Host).
+	if !isLoopbackHost(request.Host) {
+		return false
+	}
+
 	requestScheme := "http"
 	if request.TLS != nil || strings.EqualFold(request.Header.Get("X-Forwarded-Proto"), "https") {
 		requestScheme = "https"
 	}
-	if strings.EqualFold(parsed.Scheme, requestScheme) && strings.EqualFold(parsed.Host, request.Host) {
-		return true
-	}
-	_, ok := allowed[origin]
-	return ok
+	return strings.EqualFold(parsed.Scheme, requestScheme) && strings.EqualFold(parsed.Host, request.Host)
 }

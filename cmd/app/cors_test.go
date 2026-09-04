@@ -51,6 +51,7 @@ func TestCORSMiddlewareAllowsMatchingSameOriginScheme(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:8080")
+	request.Host = "127.0.0.1:8080"
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {
@@ -58,11 +59,64 @@ func TestCORSMiddlewareAllowsMatchingSameOriginScheme(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/", nil)
+	request.Host = "127.0.0.1:8080"
 	request.Header.Set("Origin", "https://127.0.0.1:8080")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected cross-scheme origin to be rejected, got %d", recorder.Code)
+	}
+}
+
+func TestCORSMiddlewareRejectsDNSRebinding(t *testing.T) {
+	// Attacker binds attacker.example to 127.0.0.1.
+	// Request sent with Origin == Host == "attacker.example:8080".
+	t.Setenv("HTTP_ALLOWED_ORIGINS", "")
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api", nil)
+	request.Host = "attacker.example:8080"
+	request.Header.Set("Origin", "http://attacker.example:8080")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected DNS rebinding request (Origin == Host == attacker.example) to be rejected with 403, got %d", recorder.Code)
+	}
+}
+
+func TestCORSMiddlewareRejectsUnallowedHostWithoutOrigin(t *testing.T) {
+	t.Setenv("HTTP_ALLOWED_ORIGINS", "")
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/", nil)
+	request.Host = "evil.example.com:8080"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected unallowed host to be rejected with 403, got %d", recorder.Code)
+	}
+}
+
+func TestCORSMiddlewareAllowsExplicitRemoteHostAndOrigin(t *testing.T) {
+	t.Setenv("HTTP_ALLOWED_ORIGINS", "https://admin.example.com")
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "https://admin.example.com/api", nil)
+	request.Host = "admin.example.com"
+	request.Header.Set("Origin", "https://admin.example.com")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("expected explicit remote host and origin to pass, got %d", recorder.Code)
 	}
 }
 
