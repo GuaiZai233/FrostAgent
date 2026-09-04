@@ -1,4 +1,5 @@
 import { themeManager, ThemeMode } from '../theme';
+import { scaleManager, scaleOptions } from '../scale';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
@@ -27,6 +28,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
 
   function render() {
     const currentMode = themeManager.getMode();
+    const currentScale = scaleManager.getScale();
 
     container.innerHTML = `
       <div class="page-container fade-in">
@@ -74,6 +76,41 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
               .join('')}
           </div>
         </section>
+
+        <section class="card p-4 flex flex-col gap-4" style="max-width: 42rem;">
+          <div>
+            <h2 class="text-sm font-semibold text-foreground">界面缩放</h2>
+            <p class="text-xs text-muted mt-0.5">调整控制台整体显示比例（包括字体、间距与组件），默认预设为 110%</p>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            ${scaleOptions
+              .map((opt) => {
+                const isActive = currentScale === opt.value;
+                return `
+                <button
+                  class="card p-3 text-left cursor-pointer hover-bg transition-all flex flex-col gap-1.5 relative ${
+                    isActive ? 'border-primary ring-1 ring-primary' : ''
+                  }"
+                  data-scale="${opt.value}"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold ${isActive ? 'text-primary' : 'text-foreground'}">${opt.label}</span>
+                    ${
+                      isActive
+                        ? `<span class="badge badge-primary text-[10px] px-1 py-0">当前</span>`
+                        : opt.isDefault
+                        ? `<span class="badge badge-outline text-[10px] px-1 py-0">默认</span>`
+                        : ''
+                    }
+                  </div>
+                  <p class="text-[11px] text-muted mt-0.5 leading-snug">${escapeHtml(opt.desc)}</p>
+                </button>
+              `;
+              })
+              .join('')}
+          </div>
+        </section>
       </div>
     `;
 
@@ -83,6 +120,18 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
         if (mode) {
           themeManager.setMode(mode);
           toast.success(`已切换为${mode === 'system' ? '跟随系统' : mode === 'light' ? '亮色' : '暗色'}模式`);
+          render();
+        }
+      });
+    });
+
+    container.querySelectorAll<HTMLButtonElement>('button[data-scale]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const scale = btn.dataset.scale;
+        if (scale) {
+          scaleManager.setScale(scale);
+          const matched = scaleManager.options.find((o) => o.value === scale);
+          toast.success(`界面缩放已设置为 ${matched?.label || scale}`);
           render();
         }
       });
