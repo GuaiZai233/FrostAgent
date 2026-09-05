@@ -46,3 +46,47 @@ jobs:
 
       - name: Run checks
         run: make ci
+
+  windows-smoke:
+    name: Windows Smoke
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: 'go.sum'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web frontend
+        run: pnpm --filter @frostagent/web run build
+
+      - name: Install proto tools
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@latest
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
+
+      - name: Generate Go proto
+        run: buf generate --template buf.gen.yaml
+
+      - name: Build cmd/app
+        run: go build ./cmd/app
+
+      - name: Run tests
+        run: go test ./...

@@ -303,8 +303,13 @@ func main() {
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(GlobalEngine, version))
 	mux.Handle(botPath, botHandler)
 
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.New(".env"))
-	mux.Handle(settingsPath, settingsHandler)
+	settingsSvc, err := settings.New(".env")
+	if err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 无法将 .env 权限收紧至 0600，拒绝注册设置管理服务: %v", err))
+	} else {
+		settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsSvc)
+		mux.Handle(settingsPath, settingsHandler)
+	}
 
 	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(GlobalEngine.ModelRouter))
 	mux.Handle(routerPath, routerHandler)
@@ -333,25 +338,26 @@ func main() {
 	// 前端 SPA（兜底，放在最后）
 	mux.Handle("/", frontend.Handler())
 
-	// CORS 中间件
-	handler := corsMiddleware(mux)
-
 	// HTTP 服务 (ConnectRPC + 前端)
 	listenAddr := os.Getenv("LISTEN_ADDR")
 	if listenAddr == "" {
-		listenAddr = ":8080"
+		listenAddr = "127.0.0.1:8080"
 	}
+
+	handler := corsMiddleware(mux)
 
 	go func() {
 		logs.Info(logs.SYSTEM, "🚀 FrostAgent 智能体服务已启动")
-		logs.Info(logs.SYSTEM, fmt.Sprintf("📍 管理面板: http://localhost%s", listenAddr))
-		logs.Info(logs.SYSTEM, fmt.Sprintf("📡 ConnectRPC: http://localhost%s/frostagent.v1.BotStatusService/GetOverview", listenAddr))
+		logs.Info(logs.SYSTEM, fmt.Sprintf("📍 管理面板: http://%s", listenAddr))
+		logs.Info(logs.SYSTEM, fmt.Sprintf("📡 ConnectRPC: http://%s/frostagent.v1.BotStatusService/GetOverview", listenAddr))
 
 		if err := http.ListenAndServe(listenAddr, handler); err != nil {
 			logs.Error(logs.SYSTEM, fmt.Sprintf("HTTP 服务启动失败: %v", err))
 			os.Exit(1)
 		}
 	}()
+
+	wsMux := http.NewServeMux()
 
 	// OneBot WebSocket 服务
 	if os.Getenv("ENABLE_ONEBOT_ADAPTER") != "false" {
@@ -366,7 +372,7 @@ func main() {
 		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
 			GlobalEngine.Dispatcher.RegisterAdapter(onebotAdapter)
 		}
-		http.HandleFunc(onebotPath, onebotAdapter.Handler())
+		wsMux.Handle(onebotPath, onebotAdapter.Handler())
 		logs.Info(logs.WEBSOCKET, fmt.Sprintf("✓ OneBot WebSocket 适配器已挂载: %s", onebotPath))
 	}
 
@@ -383,35 +389,18 @@ func main() {
 		if GlobalEngine != nil && GlobalEngine.Dispatcher != nil {
 			GlobalEngine.Dispatcher.RegisterAdapter(astrbotAdapter)
 		}
-		http.HandleFunc(astrbotPath, astrbotAdapter.Handler())
+		wsMux.Handle(astrbotPath, astrbotAdapter.Handler())
 		logs.Info(logs.WEBSOCKET, fmt.Sprintf("✓ AstrBot WebSocket 适配器已挂载: %s", astrbotPath))
 	}
 
 	wsAddr := os.Getenv("WS_LISTEN_ADDR")
 	if wsAddr == "" {
-		wsAddr = "0.0.0.0:1234"
+		wsAddr = "127.0.0.1:1234"
 	}
 
 	logs.Info(logs.WEBSOCKET, fmt.Sprintf("FrostAgent WebSocket 服务已启动，监听 %s", wsAddr))
-	if err := http.ListenAndServe(wsAddr, nil); err != nil {
+	if err := http.ListenAndServe(wsAddr, wsMux); err != nil {
 		logs.Error(logs.WEBSOCKET, fmt.Sprintf("WS 服务启动失败: %v", err))
 		os.Exit(1)
 	}
-}
-
-// corsMiddleware 作为标准 http.Handler 包装器
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
