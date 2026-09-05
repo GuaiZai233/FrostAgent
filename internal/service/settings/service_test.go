@@ -839,3 +839,288 @@ func TestSettingsUpdateEnvVarNullByteRejection(t *testing.T) {
 		t.Fatalf("expected formatEnvEntry to fail for value containing NUL byte")
 	}
 }
+
+func TestSettingsQuotedMultilineWithDoubleBackslashBeforeQuote(t *testing.T) {
+	// Pinned godotenv v1.5.1 semantics test:
+	// A quoted multiline value contains an internal quote preceded by two backslashes.
+	// In godotenv v1.5.1, `prevChar := src[i-1]; prevChar == '\\'` treats any quote
+	// with a preceding backslash as escaped, without checking backslash count parity.
+	// Therefore, the statement does NOT terminate at the internal quote; the closing quote
+	// is on the subsequent line.
+	initialRaw := `SYSTEM_PROMPT="line 1 with \\"
+line 2 of prompt"
+BOT_NAME=GoodBot
+`
+	// Verify godotenv v1.5.1 parses the initial file as expected
+	parsedInitial, err := godotenv.Unmarshal(initialRaw)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed on initial raw:\n%s\nerr: %v", initialRaw, err)
+	}
+	expectedInitialPrompt := "line 1 with \\\"\nline 2 of prompt"
+	if parsedInitial["SYSTEM_PROMPT"] != expectedInitialPrompt {
+		t.Fatalf("expected initial parsed SYSTEM_PROMPT %q, got %q", expectedInitialPrompt, parsedInitial["SYSTEM_PROMPT"])
+	}
+	if parsedInitial["BOT_NAME"] != "GoodBot" {
+		t.Fatalf("expected initial parsed BOT_NAME %q, got %q", "GoodBot", parsedInitial["BOT_NAME"])
+	}
+
+	// 1. Update SYSTEM_PROMPT:
+	// The entire multiline statement must be replaced without leaving orphan continuation lines.
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to write initial .env: %v", err)
+	}
+	svc := mustNew(t, envPath)
+
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SYSTEM_PROMPT",
+		Value: "single line new prompt",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed to read .env: %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "line 2 of prompt") {
+		t.Fatalf("orphan continuation line left in .env:\n%s", text)
+	}
+	parsedAfterPromptUpdate, err := godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after prompt update:\n%s\nerr: %v", text, err)
+	}
+	if parsedAfterPromptUpdate["SYSTEM_PROMPT"] != "single line new prompt" {
+		t.Errorf("parsed SYSTEM_PROMPT = %q, want %q", parsedAfterPromptUpdate["SYSTEM_PROMPT"], "single line new prompt")
+	}
+	if parsedAfterPromptUpdate["BOT_NAME"] != "GoodBot" {
+		t.Errorf("parsed BOT_NAME = %q, want %q", parsedAfterPromptUpdate["BOT_NAME"], "GoodBot")
+	}
+
+	// 2. Reset and update BOT_NAME:
+	// SYSTEM_PROMPT multiline with \\" must be preserved intact and uncorrupted.
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to reset .env: %v", err)
+	}
+	svc2 := mustNew(t, envPath)
+
+	resp, err = svc2.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "BOT_NAME",
+		Value: "UpdatedBot",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed to read .env: %v", err)
+	}
+	text = string(content)
+	parsedAfterBotUpdate, err := godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after bot update:\n%s\nerr: %v", text, err)
+	}
+	if parsedAfterBotUpdate["SYSTEM_PROMPT"] != expectedInitialPrompt {
+		t.Errorf("parsed SYSTEM_PROMPT = %q, want %q", parsedAfterBotUpdate["SYSTEM_PROMPT"], expectedInitialPrompt)
+	}
+	if parsedAfterBotUpdate["BOT_NAME"] != "UpdatedBot" {
+		t.Errorf("parsed BOT_NAME = %q, want %q", parsedAfterBotUpdate["BOT_NAME"], "UpdatedBot")
+	}
+
+	// 3. Reset and delete SYSTEM_PROMPT:
+	// Must completely remove the multiline statement and leave BOT_NAME intact.
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to reset .env: %v", err)
+	}
+	svc3 := mustNew(t, envPath)
+
+	delResp, err := svc3.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
+		Key: "SYSTEM_PROMPT",
+	}))
+	if err != nil {
+		t.Fatalf("DeleteEnvVar error: %v", err)
+	}
+	if !delResp.Msg.GetSuccess() {
+		t.Fatalf("DeleteEnvVar failed: %s", delResp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed to read .env: %v", err)
+	}
+	text = string(content)
+	if strings.Contains(text, "SYSTEM_PROMPT") || strings.Contains(text, "line 2 of prompt") {
+		t.Fatalf("SYSTEM_PROMPT or orphan continuation line still present:\n%s", text)
+	}
+	parsedAfterDelete, err := godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after delete:\n%s\nerr: %v", text, err)
+	}
+	if _, ok := parsedAfterDelete["SYSTEM_PROMPT"]; ok {
+		t.Fatalf("SYSTEM_PROMPT still parsed after delete")
+	}
+	if parsedAfterDelete["BOT_NAME"] != "GoodBot" {
+		t.Errorf("parsed BOT_NAME = %q, want %q", parsedAfterDelete["BOT_NAME"], "GoodBot")
+	}
+}
+
+func TestSettingsMultipleStatementsOnSameLine(t *testing.T) {
+	// Raw .env containing multiple variable statements on the same physical line:
+	// e.g. KEY1="quoted" KEY2=value
+	initialRaw := `SYSTEM_PROMPT="hello" BOT_NAME=InlineBot
+`
+	// Verify godotenv v1.5.1 parses both variables from the same physical line
+	parsedInitial, err := godotenv.Unmarshal(initialRaw)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed on initial raw:\n%s\nerr: %v", initialRaw, err)
+	}
+	if parsedInitial["SYSTEM_PROMPT"] != "hello" || parsedInitial["BOT_NAME"] != "InlineBot" {
+		t.Fatalf("unexpected godotenv parse of same-line statements: %v", parsedInitial)
+	}
+
+	// 1. Update SYSTEM_PROMPT:
+	// Must update SYSTEM_PROMPT while BOT_NAME is NOT lost!
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to write initial .env: %v", err)
+	}
+	svc := mustNew(t, envPath)
+
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SYSTEM_PROMPT",
+		Value: "new hello",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text := string(content)
+	parsed, err := godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed on updated .env:\n%s\nerr: %v", text, err)
+	}
+	if parsed["SYSTEM_PROMPT"] != "new hello" {
+		t.Errorf("parsed SYSTEM_PROMPT = %q, want %q", parsed["SYSTEM_PROMPT"], "new hello")
+	}
+	if parsed["BOT_NAME"] != "InlineBot" {
+		t.Errorf("parsed BOT_NAME was lost or corrupted! Got %q, want %q (content:\n%s)", parsed["BOT_NAME"], "InlineBot", text)
+	}
+
+	// 2. Delete SYSTEM_PROMPT:
+	// Must delete SYSTEM_PROMPT while BOT_NAME is NOT lost!
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to reset .env: %v", err)
+	}
+	svc2 := mustNew(t, envPath)
+
+	delResp, err := svc2.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
+		Key: "SYSTEM_PROMPT",
+	}))
+	if err != nil {
+		t.Fatalf("DeleteEnvVar error: %v", err)
+	}
+	if !delResp.Msg.GetSuccess() {
+		t.Fatalf("DeleteEnvVar failed: %s", delResp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after delete:\n%s\nerr: %v", text, err)
+	}
+	if _, ok := parsed["SYSTEM_PROMPT"]; ok {
+		t.Errorf("SYSTEM_PROMPT still present after delete (content:\n%s)", text)
+	}
+	if parsed["BOT_NAME"] != "InlineBot" {
+		t.Errorf("parsed BOT_NAME was lost when deleting sibling statement on same line! Got %q, want %q (content:\n%s)", parsed["BOT_NAME"], "InlineBot", text)
+	}
+
+	// 3. Update BOT_NAME:
+	// Must update BOT_NAME while SYSTEM_PROMPT is NOT lost!
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to reset .env: %v", err)
+	}
+	svc3 := mustNew(t, envPath)
+
+	resp, err = svc3.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "BOT_NAME",
+		Value: "NewBot",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after bot update:\n%s\nerr: %v", text, err)
+	}
+	if parsed["SYSTEM_PROMPT"] != "hello" {
+		t.Errorf("SYSTEM_PROMPT was lost or corrupted! Got %q, want %q (content:\n%s)", parsed["SYSTEM_PROMPT"], "hello", text)
+	}
+	if parsed["BOT_NAME"] != "NewBot" {
+		t.Errorf("BOT_NAME = %q, want %q", parsed["BOT_NAME"], "NewBot")
+	}
+
+	// 4. Delete BOT_NAME:
+	// Must delete BOT_NAME while SYSTEM_PROMPT is NOT lost!
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to reset .env: %v", err)
+	}
+	svc4 := mustNew(t, envPath)
+
+	delResp, err = svc4.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
+		Key: "BOT_NAME",
+	}))
+	if err != nil {
+		t.Fatalf("DeleteEnvVar error: %v", err)
+	}
+	if !delResp.Msg.GetSuccess() {
+		t.Fatalf("DeleteEnvVar failed: %s", delResp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed after bot delete:\n%s\nerr: %v", text, err)
+	}
+	if parsed["SYSTEM_PROMPT"] != "hello" {
+		t.Errorf("SYSTEM_PROMPT was lost when deleting sibling statement on same line! Got %q, want %q (content:\n%s)", parsed["SYSTEM_PROMPT"], "hello", text)
+	}
+	if _, ok := parsed["BOT_NAME"]; ok {
+		t.Errorf("BOT_NAME still present after delete (content:\n%s)", text)
+	}
+}

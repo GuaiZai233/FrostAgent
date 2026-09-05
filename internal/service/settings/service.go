@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"unicode"
 
 	"connectrpc.com/connect"
 	"github.com/joho/godotenv"
@@ -329,115 +330,195 @@ type envStatement struct {
 	key   string
 }
 
-// parseEnvStatements parses raw .env content into statements, handling comments, blank lines,
-// 'export KEY=value', 'KEY: value', and quoted multiline values.
+// parseKeyAndSep parses a key name and locates the separator (= or :) at the start of s.
+// It mirrors godotenv v1.5.1 locateKeyName semantics, supporting optional 'export' prefix
+// and variable characters [A-Za-z0-9_.].
+func parseKeyAndSep(s string) (key string, sepOffset int, ok bool) {
+	trimmed := s
+	prefixLen := 0
+	if strings.HasPrefix(trimmed, "export") && len(trimmed) > 6 && (trimmed[6] == ' ' || trimmed[6] == '\t') {
+		afterExport := strings.TrimLeft(trimmed[6:], " \t")
+		prefixLen = len(s) - len(afterExport)
+		trimmed = afterExport
+	}
+
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if c == ' ' || c == '\t' || c == '\r' {
+			continue
+		}
+		if c == '=' || c == ':' {
+			rawKey := strings.TrimSpace(trimmed[:i])
+			if rawKey == "" {
+				return "", -1, false
+			}
+			return rawKey, prefixLen + i, true
+		}
+		if c == '_' || c == '.' || unicode.IsLetter(rune(c)) || unicode.IsNumber(rune(c)) {
+			continue
+		}
+		return "", -1, false
+	}
+	return "", -1, false
+}
+
+// parseEnvStatements parses raw .env content into statements, strictly mirroring
+// godotenv v1.5.1 statement boundary and quote terminator semantics.
 func parseEnvStatements(content string) []envStatement {
 	var stmts []envStatement
 	idx := 0
 	n := len(content)
 
 	for idx < n {
-		start := idx
-
-		lineEnd := strings.IndexByte(content[idx:], '\n')
-		var nextIdx int
-		var firstLine string
-		if lineEnd == -1 {
-			firstLine = content[idx:]
-			nextIdx = n
-		} else {
-			nextIdx = idx + lineEnd + 1
-			firstLine = content[idx:nextIdx]
+		// Locate statement begin, skipping whitespace
+		pos := idx
+		for pos < n && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\r' || content[pos] == '\n') {
+			pos++
 		}
 
-		trimmed := strings.TrimLeft(firstLine, " \t")
-		if trimmed == "" || trimmed == "\n" || trimmed == "\r\n" || strings.HasPrefix(trimmed, "#") {
+		if pos >= n {
+			// Trailing whitespace to EOF
 			stmts = append(stmts, envStatement{
-				raw:   content[start:nextIdx],
+				raw:   content[idx:n],
 				isKey: false,
 			})
-			idx = nextIdx
-			continue
+			break
 		}
 
-		lineText := trimmed
-		if strings.HasPrefix(lineText, "export ") || strings.HasPrefix(lineText, "export\t") {
-			lineText = strings.TrimLeft(lineText[6:], " \t")
-		}
-
-		sepIdx := -1
-		eqIdx := strings.IndexByte(lineText, '=')
-		colonIdx := strings.IndexByte(lineText, ':')
-		if eqIdx != -1 && colonIdx != -1 {
-			sepIdx = min(eqIdx, colonIdx)
-		} else if eqIdx != -1 {
-			sepIdx = eqIdx
-		} else {
-			sepIdx = colonIdx
-		}
-
-		if sepIdx == -1 {
-			stmts = append(stmts, envStatement{
-				raw:   content[start:nextIdx],
-				isKey: false,
-			})
-			idx = nextIdx
-			continue
-		}
-
-		keyName := strings.TrimSpace(lineText[:sepIdx])
-		if keyName == "" {
-			stmts = append(stmts, envStatement{
-				raw:   content[start:nextIdx],
-				isKey: false,
-			})
-			idx = nextIdx
-			continue
-		}
-
-		sepChar := lineText[sepIdx]
-		firstLineSepPos := strings.IndexByte(firstLine, sepChar)
-		valPart := firstLine[firstLineSepPos+1:]
-		trimmedValPart := strings.TrimLeft(valPart, " \t")
-		valOffset := firstLineSepPos + 1 + (len(valPart) - len(trimmedValPart))
-		valAbsStart := start + valOffset
-
-		if valAbsStart < nextIdx && (content[valAbsStart] == '"' || content[valAbsStart] == '\'') {
-			quote := content[valAbsStart]
-			pos := valAbsStart + 1
-			closingQuotePos := -1
-			for pos < n {
-				if content[pos] == quote {
-					bsCount := 0
-					for k := pos - 1; k >= valAbsStart && content[k] == '\\'; k-- {
-						bsCount++
-					}
-					if bsCount%2 == 0 {
-						closingQuotePos = pos
-						break
-					}
-				}
-				pos++
-			}
-
-			if closingQuotePos != -1 {
-				afterQuoteNewline := strings.IndexByte(content[closingQuotePos:], '\n')
-				if afterQuoteNewline == -1 {
-					nextIdx = n
-				} else {
-					nextIdx = closingQuotePos + afterQuoteNewline + 1
-				}
+		// Comment line starting with #
+		if content[pos] == '#' {
+			lineEnd := strings.IndexByte(content[pos:], '\n')
+			var commentEnd int
+			if lineEnd == -1 {
+				commentEnd = n
 			} else {
-				nextIdx = n
+				commentEnd = pos + lineEnd + 1
 			}
+			stmts = append(stmts, envStatement{
+				raw:   content[idx:commentEnd],
+				isKey: false,
+			})
+			idx = commentEnd
+			continue
 		}
 
-		stmts = append(stmts, envStatement{
-			raw:   content[start:nextIdx],
-			isKey: true,
-			key:   keyName,
-		})
-		idx = nextIdx
+		// Try to parse a key-value assignment starting at pos
+		key, sepOffset, ok := parseKeyAndSep(content[pos:])
+		if !ok {
+			// Not a valid key statement; consume up to next newline as non-key
+			lineEnd := strings.IndexByte(content[pos:], '\n')
+			var nextIdx int
+			if lineEnd == -1 {
+				nextIdx = n
+			} else {
+				nextIdx = pos + lineEnd + 1
+			}
+			stmts = append(stmts, envStatement{
+				raw:   content[idx:nextIdx],
+				isKey: false,
+			})
+			idx = nextIdx
+			continue
+		}
+
+		// Preserve any trivia/whitespace between idx and pos
+		if pos > idx {
+			stmts = append(stmts, envStatement{
+				raw:   content[idx:pos],
+				isKey: false,
+			})
+			idx = pos
+		}
+
+		// Statement starts at idx (which now equals pos)
+		sepAbsPos := pos + sepOffset
+		valOffset := sepAbsPos + 1
+		for valOffset < n && (content[valOffset] == ' ' || content[valOffset] == '\t') {
+			valOffset++
+		}
+
+		if valOffset >= n {
+			// Empty value at EOF
+			stmts = append(stmts, envStatement{
+				raw:   content[idx:n],
+				isKey: true,
+				key:   key,
+			})
+			idx = n
+			break
+		}
+
+		quote := content[valOffset]
+		if quote == '"' || quote == '\'' {
+			// Quoted value. Pinned to godotenv v1.5.1 semantics:
+			// godotenv checks `prevChar := src[i-1]; prevChar == '\\'` without backslash parity.
+			closingQuotePos := -1
+			for p := valOffset + 1; p < n; p++ {
+				if content[p] == quote {
+					if content[p-1] == '\\' {
+						continue
+					}
+					closingQuotePos = p
+					break
+				}
+			}
+
+			var valEnd int
+			if closingQuotePos != -1 {
+				valEnd = closingQuotePos + 1
+			} else {
+				valEnd = n
+			}
+
+			// Check what follows the closing quote on the same line.
+			// godotenv.extractVarValue returns src[i+1:] immediately to main loop.
+			// If non-comment characters follow on the same line, multiple statements exist.
+			lineEnd := strings.IndexByte(content[valEnd:], '\n')
+			var restOfLine string
+			var restEnd int
+			if lineEnd == -1 {
+				restOfLine = content[valEnd:]
+				restEnd = n
+			} else {
+				restOfLine = content[valEnd : valEnd+lineEnd+1]
+				restEnd = valEnd + lineEnd + 1
+			}
+
+			trimmedRest := strings.TrimLeft(restOfLine, " \t\r\n")
+			if trimmedRest == "" || strings.HasPrefix(trimmedRest, "#") {
+				// Sole statement on this line; include remainder of line
+				stmts = append(stmts, envStatement{
+					raw:   content[idx:restEnd],
+					isKey: true,
+					key:   key,
+				})
+				idx = restEnd
+			} else {
+				// Multiple statements on the same line (e.g. KEY1="val" KEY2=val)
+				stmts = append(stmts, envStatement{
+					raw:   content[idx:valEnd],
+					isKey: true,
+					key:   key,
+				})
+				idx = valEnd
+			}
+		} else {
+			// Unquoted value: godotenv reads until newline/EOF
+			lineEnd := strings.IndexByte(content[valOffset:], '\n')
+			var stmtEnd int
+			if lineEnd == -1 {
+				stmtEnd = n
+			} else {
+				stmtEnd = valOffset + lineEnd + 1
+			}
+
+			stmts = append(stmts, envStatement{
+				raw:   content[idx:stmtEnd],
+				isKey: true,
+				key:   key,
+			})
+			idx = stmtEnd
+		}
 	}
 
 	return stmts
@@ -445,6 +526,8 @@ func parseEnvStatements(content string) []envStatement {
 
 // mutateEnvStatements updates the first occurrence of key with formatted and eliminates
 // any duplicate occurrences of the same key. If key was not present, it is appended.
+// The updated entry always terminates with a newline to prevent swallowing any sibling
+// inline statements that may have followed it on the same line.
 func mutateEnvStatements(stmts []envStatement, key, formatted string) []envStatement {
 	found := false
 	var result []envStatement
@@ -484,17 +567,18 @@ func removeKeyFromStatements(stmts []envStatement, key string) []envStatement {
 	return result
 }
 
-// renderEnvStatements renders statements into bytes, ensuring each intermediate statement
-// ends with a newline so consecutive statements do not collide.
+// renderEnvStatements renders statements into bytes, preserving exact original bytes
+// and guaranteeing trailing newline termination when modified.
 func renderEnvStatements(stmts []envStatement) []byte {
 	var b strings.Builder
-	for i, s := range stmts {
+	for _, s := range stmts {
 		b.WriteString(s.raw)
-		if i < len(stmts)-1 && !strings.HasSuffix(s.raw, "\n") {
-			b.WriteByte('\n')
-		}
 	}
-	return []byte(b.String())
+	res := b.String()
+	if len(res) > 0 && !strings.HasSuffix(res, "\n") {
+		res += "\n"
+	}
+	return []byte(res)
 }
 
 // atomicWriteEnv updates or appends a key=value line in the .env file atomically
