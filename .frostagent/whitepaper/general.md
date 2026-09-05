@@ -139,24 +139,29 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；
   - **Origin 校验**：同源自动放行规则严格限制在本地回环 Host 上，杜绝攻击者利用解析至 127.0.0.1 的恶意域名伪造同源；如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
 - **平台基线与操作系统支持边界 (Platform Security Baseline & OS Boundary)**：
-  - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；
-  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义。
+  - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
+  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
   - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
   - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
-- **环境变量白名单、Dotenv 序列化往返保证与防换行注入 (Settings API Allowlist, Safe Dotenv Serialization & Newline Defense)**：
+- **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
+  - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：
+    - 废弃物理逐行扫描，引入语句级语法解析器（`parseEnvStatements`），以 AST 级边界追踪识别单行/跨行语句；
+    - **跨行带引号值边界识别**：通过反斜杠奇偶性与引号闭合扫描，将跨多物理行的多行声明完整识别为单条语句，在此类文件中修改或追加配置时，绝不产生孤儿延续行或破坏后续变量定义；
+    - **重复键消除与规范化**：当原始 `.env` 存在重复定义键时，更新操作规范化首个匹配语句为 `key=value` 格式，并自动剔除所有后续同名重复声明；删除操作彻底移除全部同名声明；
+    - **变体语法识别与注释保真**：原生识别 `export KEY=value` 与冒号分隔符 `KEY: value` 等常见变体语法；未修改的配置项、单行注释（`#`）与空行在变异后无损保真保留；
   - **多模式安全序列化与 godotenv v1.5.1 往返保真**：针对 `godotenv v1.5.1` 解析器的特定行为（如双引号终止符不判断奇偶反斜杠导致尾部反斜杠闭合失效、转义双引号修剪丢失等），采用自适应多模式序列化策略：
     - 普通单行安全值（无换行、无 `$` 变量展开标记、无首尾空格、不以引号开头、无行内注释）采用直接不加引号的格式落盘（`key=value`），原生保真保留 Windows 路径、末尾反斜杠及内部引号；
     - 以引号开头的安全值自适应采用单引号格式（`key='value'`）；
     - 包含空值、前后空白、`$` 变量、换行等多行配置项（如 `SYSTEM_PROMPT`）采用安全转义的双引号格式（`"...\n..."`）；
   - **写入前 Round-Trip 强校验与 Fail-Closed**：在实际落盘前，序列化器即时调用 `godotenv.Unmarshal` 对格式化后的条目进行解析回测，严格验证 `parse(format(value)) == value` 且无键分裂或多余键注入；对于解析器本身无法无歧义表示的非法输入，显式拒绝写入并返回错误，彻底杜绝配置损坏或服务重启后无法解析的风险；
-  - **防换行注入双层防御**：单行环境变量在 API 层面严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项经转义双引号后在 `.env` 中落盘为单行记录，杜绝利用换行注入非受信环境变量。
+  - **防换行注入与 NUL 字节防护**：单行环境变量在 API 层面严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项经转义双引号后在 `.env` 中落盘为单行记录，杜绝利用换行注入非受信环境变量；同时对包含空字节（`\x00`）的输入进行前置防御与显式拒绝，并完整捕获与向上传播 `os.Setenv` / `os.Unsetenv` 错误，避免因操作系统底层调用限制（`syscall.EINVAL`）导致内存与磁盘状态不一致。
 - **并发互斥与安全原子落盘 (Concurrency Safety & Secure Atomic Writes)**：
   - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免高并发交错写入或结构化与 Raw 编辑交织导致配置覆盖或数据竞争；
-  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），避免多协程写入碰撞；
-  - **权限收紧 Fail-Closed 机制**：服务初始化（`New`）时主动将已有 `.env` 文件权限收紧至 `0600`，若收紧失败则向上返回错误并拒绝挂载设置服务，防止静默运行于不安全权限下；写入临时文件与目标落盘后均显式强制 `0600` 校验，绝不静默吞咽任何文件权限设置错误。
+  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），并在写入与提交前预先赋予 `0600` 权限，避免多协程写入碰撞且消除落盘后再次 `os.Chmod` 的潜在脆弱状态；
+  - **权限收紧 Fail-Closed 机制**：服务初始化（`New`）时主动将已有 `.env` 文件权限收紧至 `0600`，若收紧失败则向上返回错误并拒绝挂载设置服务，防止静默运行于不安全权限下。
 - **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
   - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
 

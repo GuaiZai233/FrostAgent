@@ -1,11 +1,11 @@
 package settings
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -133,6 +133,13 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
+	if strings.ContainsRune(value, 0) {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   "value contains null byte (NUL) which cannot be represented in environment",
+		}), nil
+	}
+
 	if !entry.AllowMultiline && strings.ContainsAny(value, "\r\n") {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{
 			Success: false,
@@ -151,7 +158,12 @@ func (s *Service) UpdateEnvVar(
 	}
 
 	// Immediately set in-process so it takes effect for the current run.
-	os.Setenv(key, value)
+	if err := os.Setenv(key, value); err != nil {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   fmt.Sprintf("set in-process environment variable %q: %v", key, err),
+		}), nil
+	}
 
 	return connect.NewResponse(&v1.UpdateEnvVarResponse{Success: true}), nil
 }
@@ -186,7 +198,12 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 
-	os.Unsetenv(key)
+	if err := os.Unsetenv(key); err != nil {
+		return connect.NewResponse(&v1.DeleteEnvVarResponse{
+			Success: false,
+			Error:   fmt.Sprintf("unset in-process environment variable %q: %v", key, err),
+		}), nil
+	}
 
 	return connect.NewResponse(&v1.DeleteEnvVarResponse{Success: true}), nil
 }
@@ -219,52 +236,10 @@ func (s *Service) UpdateRawEnvFile(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir := filepath.Dir(s.envPath)
-	tmpFile, err := os.CreateTemp(dir, ".env.tmp.*")
-	if err != nil {
+	if err := writeEnvAtomic(s.envPath, []byte(content)); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
-			Error:   fmt.Sprintf("create temp file: %v", err),
-		}), nil
-	}
-	tmpPath := tmpFile.Name()
-	defer func() {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-	}()
-
-	if err := tmpFile.Chmod(0600); err != nil {
-		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-			Success: false,
-			Error:   fmt.Sprintf("chmod temp file 0600: %v", err),
-		}), nil
-	}
-	if _, err := tmpFile.Write([]byte(content)); err != nil {
-		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-			Success: false,
-			Error:   fmt.Sprintf("write temp file: %v", err),
-		}), nil
-	}
-	if err := tmpFile.Close(); err != nil {
-		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-			Success: false,
-			Error:   fmt.Sprintf("close temp file: %v", err),
-		}), nil
-	}
-
-	if err := os.Rename(tmpPath, s.envPath); err != nil {
-		// Fallback: cross-device rename, copy instead
-		if err := copyFile(tmpPath, s.envPath); err != nil {
-			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-				Success: false,
-				Error:   fmt.Sprintf("rename .env: %v", err),
-			}), nil
-		}
-	}
-	if err := os.Chmod(s.envPath, 0600); err != nil {
-		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-			Success: false,
-			Error:   fmt.Sprintf("chmod .env 0600: %v", err),
+			Error:   err.Error(),
 		}), nil
 	}
 
@@ -289,6 +264,10 @@ func (s *Service) UpdateRawEnvFile(
 // Before returning, godotenv.Unmarshal is executed on the formatted line. If the value cannot
 // be safely parsed back to its exact original form, an error is returned to prevent persisting corrupt values.
 func formatEnvEntry(key, value string) (string, error) {
+	if strings.ContainsRune(value, 0) {
+		return "", fmt.Errorf("value contains null byte (NUL) which cannot be represented in environment")
+	}
+
 	hasLeadingOrTrailingSpace := strings.HasPrefix(value, " ") || strings.HasPrefix(value, "\t") ||
 		strings.HasSuffix(value, " ") || strings.HasSuffix(value, "\t")
 	hasNewline := strings.ContainsAny(value, "\r\n")
@@ -343,9 +322,185 @@ func formatEnvEntry(key, value string) (string, error) {
 	return formatted, nil
 }
 
-// atomicWriteEnv updates or appends a key=value line in the .env file atomically.
+// envStatement represents a single statement in a .env file.
+type envStatement struct {
+	raw   string
+	isKey bool
+	key   string
+}
+
+// parseEnvStatements parses raw .env content into statements, handling comments, blank lines,
+// 'export KEY=value', 'KEY: value', and quoted multiline values.
+func parseEnvStatements(content string) []envStatement {
+	var stmts []envStatement
+	idx := 0
+	n := len(content)
+
+	for idx < n {
+		start := idx
+
+		lineEnd := strings.IndexByte(content[idx:], '\n')
+		var nextIdx int
+		var firstLine string
+		if lineEnd == -1 {
+			firstLine = content[idx:]
+			nextIdx = n
+		} else {
+			nextIdx = idx + lineEnd + 1
+			firstLine = content[idx:nextIdx]
+		}
+
+		trimmed := strings.TrimLeft(firstLine, " \t")
+		if trimmed == "" || trimmed == "\n" || trimmed == "\r\n" || strings.HasPrefix(trimmed, "#") {
+			stmts = append(stmts, envStatement{
+				raw:   content[start:nextIdx],
+				isKey: false,
+			})
+			idx = nextIdx
+			continue
+		}
+
+		lineText := trimmed
+		if strings.HasPrefix(lineText, "export ") || strings.HasPrefix(lineText, "export\t") {
+			lineText = strings.TrimLeft(lineText[6:], " \t")
+		}
+
+		sepIdx := -1
+		eqIdx := strings.IndexByte(lineText, '=')
+		colonIdx := strings.IndexByte(lineText, ':')
+		if eqIdx != -1 && colonIdx != -1 {
+			sepIdx = min(eqIdx, colonIdx)
+		} else if eqIdx != -1 {
+			sepIdx = eqIdx
+		} else {
+			sepIdx = colonIdx
+		}
+
+		if sepIdx == -1 {
+			stmts = append(stmts, envStatement{
+				raw:   content[start:nextIdx],
+				isKey: false,
+			})
+			idx = nextIdx
+			continue
+		}
+
+		keyName := strings.TrimSpace(lineText[:sepIdx])
+		if keyName == "" {
+			stmts = append(stmts, envStatement{
+				raw:   content[start:nextIdx],
+				isKey: false,
+			})
+			idx = nextIdx
+			continue
+		}
+
+		sepChar := lineText[sepIdx]
+		firstLineSepPos := strings.IndexByte(firstLine, sepChar)
+		valPart := firstLine[firstLineSepPos+1:]
+		trimmedValPart := strings.TrimLeft(valPart, " \t")
+		valOffset := firstLineSepPos + 1 + (len(valPart) - len(trimmedValPart))
+		valAbsStart := start + valOffset
+
+		if valAbsStart < nextIdx && (content[valAbsStart] == '"' || content[valAbsStart] == '\'') {
+			quote := content[valAbsStart]
+			pos := valAbsStart + 1
+			closingQuotePos := -1
+			for pos < n {
+				if content[pos] == quote {
+					bsCount := 0
+					for k := pos - 1; k >= valAbsStart && content[k] == '\\'; k-- {
+						bsCount++
+					}
+					if bsCount%2 == 0 {
+						closingQuotePos = pos
+						break
+					}
+				}
+				pos++
+			}
+
+			if closingQuotePos != -1 {
+				afterQuoteNewline := strings.IndexByte(content[closingQuotePos:], '\n')
+				if afterQuoteNewline == -1 {
+					nextIdx = n
+				} else {
+					nextIdx = closingQuotePos + afterQuoteNewline + 1
+				}
+			} else {
+				nextIdx = n
+			}
+		}
+
+		stmts = append(stmts, envStatement{
+			raw:   content[start:nextIdx],
+			isKey: true,
+			key:   keyName,
+		})
+		idx = nextIdx
+	}
+
+	return stmts
+}
+
+// mutateEnvStatements updates the first occurrence of key with formatted and eliminates
+// any duplicate occurrences of the same key. If key was not present, it is appended.
+func mutateEnvStatements(stmts []envStatement, key, formatted string) []envStatement {
+	found := false
+	var result []envStatement
+	for _, stmt := range stmts {
+		if stmt.isKey && stmt.key == key {
+			if !found {
+				result = append(result, envStatement{
+					raw:   formatted + "\n",
+					isKey: true,
+					key:   key,
+				})
+				found = true
+			}
+			continue
+		}
+		result = append(result, stmt)
+	}
+	if !found {
+		result = append(result, envStatement{
+			raw:   formatted + "\n",
+			isKey: true,
+			key:   key,
+		})
+	}
+	return result
+}
+
+// removeKeyFromStatements removes all occurrences of key from stmts.
+func removeKeyFromStatements(stmts []envStatement, key string) []envStatement {
+	var result []envStatement
+	for _, stmt := range stmts {
+		if stmt.isKey && stmt.key == key {
+			continue
+		}
+		result = append(result, stmt)
+	}
+	return result
+}
+
+// renderEnvStatements renders statements into bytes, ensuring each intermediate statement
+// ends with a newline so consecutive statements do not collide.
+func renderEnvStatements(stmts []envStatement) []byte {
+	var b strings.Builder
+	for i, s := range stmts {
+		b.WriteString(s.raw)
+		if i < len(stmts)-1 && !strings.HasSuffix(s.raw, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return []byte(b.String())
+}
+
+// atomicWriteEnv updates or appends a key=value line in the .env file atomically
+// using statement-aware dotenv semantics.
 func (s *Service) atomicWriteEnv(key, value string) error {
-	lines, err := readEnvLines(s.envPath)
+	content, err := os.ReadFile(s.envPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read .env: %w", err)
 	}
@@ -354,25 +509,16 @@ func (s *Service) atomicWriteEnv(key, value string) error {
 	if err != nil {
 		return err
 	}
-	found := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+"=") || trimmed == key {
-			lines[i] = formatted
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines, formatted)
-	}
 
-	return writeEnvAtomic(s.envPath, lines)
+	stmts := parseEnvStatements(string(content))
+	stmts = mutateEnvStatements(stmts, key, formatted)
+
+	return writeEnvAtomic(s.envPath, renderEnvStatements(stmts))
 }
 
-// removeKeyFromEnv removes a key from the .env file atomically.
+// removeKeyFromEnv removes all occurrences of a key from the .env file atomically.
 func (s *Service) removeKeyFromEnv(key string) error {
-	lines, err := readEnvLines(s.envPath)
+	content, err := os.ReadFile(s.envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -380,40 +526,36 @@ func (s *Service) removeKeyFromEnv(key string) error {
 		return fmt.Errorf("read .env: %w", err)
 	}
 
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+"=") || trimmed == key {
-			continue
+	stmts := parseEnvStatements(string(content))
+	stmts = removeKeyFromStatements(stmts, key)
+
+	return writeEnvAtomic(s.envPath, renderEnvStatements(stmts))
+}
+
+// commitEnvFile atomically renames tmpPath to targetPath.
+// On POSIX systems, rename failure is treated as fatal to preserve atomic guarantees and
+// avoid truncating the destination. On Windows development environments, best-effort
+// copy is used if rename fails due to platform-specific file locking.
+func commitEnvFile(tmpPath, targetPath string) error {
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		if runtime.GOOS == "windows" {
+			if copyErr := copyFile(tmpPath, targetPath); copyErr != nil {
+				return fmt.Errorf("rename .env: %w (windows fallback copy failed: %v)", err, copyErr)
+			}
+			return nil
 		}
-		filtered = append(filtered, line)
+		return fmt.Errorf("atomic rename .env: %w", err)
 	}
-
-	return writeEnvAtomic(s.envPath, filtered)
+	return nil
 }
 
-// readEnvLines reads all lines from a file.
-func readEnvLines(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	return lines, scanner.Err()
-}
-
-// writeEnvAtomic writes lines to a unique temp file then renames.
-func writeEnvAtomic(path string, lines []string) error {
+// writeEnvAtomic writes data to a unique temp file in the same directory,
+// enforces 0600 on the temp file prior to commit, and commits via atomic rename.
+func writeEnvAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmpFile, err := os.CreateTemp(dir, ".env.tmp.*")
 	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	defer func() {
@@ -421,39 +563,27 @@ func writeEnvAtomic(path string, lines []string) error {
 		_ = os.Remove(tmpPath)
 	}()
 
+	// Enforce 0600 on the temp file before writing and committing
 	if err := tmpFile.Chmod(0600); err != nil {
 		return fmt.Errorf("chmod temp file 0600: %w", err)
 	}
 
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(tmpFile, line); err != nil {
-			return fmt.Errorf("write temp: %w", err)
-		}
-	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
+	if _, err := tmpFile.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		// Cross-device fallback
-		if err := copyFile(tmpPath, path); err != nil {
-			return fmt.Errorf("rename .env: %w", err)
-		}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
 	}
-	if err := os.Chmod(path, 0600); err != nil {
-		return fmt.Errorf("chmod .env 0600: %w", err)
-	}
-	return nil
+
+	return commitEnvFile(tmpPath, path)
 }
 
-// copyFile copies a file from src to dst.
+// copyFile copies a file from src to dst. Used only as a fallback on Windows development environments.
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dst, data, 0600); err != nil {
-		return err
-	}
-	return os.Chmod(dst, 0600)
+	return os.WriteFile(dst, data, 0600)
 }

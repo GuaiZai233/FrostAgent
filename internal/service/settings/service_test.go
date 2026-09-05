@@ -631,3 +631,211 @@ func TestSettingsHardenPermissionsFailure(t *testing.T) {
 		t.Fatalf("expected error mentioning directory, got: %v", err)
 	}
 }
+
+func TestSettingsStructuredMutationOnRawDotenv(t *testing.T) {
+	// Raw .env containing:
+	// - Comments and blank lines
+	// - 'export KEY=value' syntax
+	// - 'KEY: value' colon separator syntax
+	// - Quoted multiline values with internal comments
+	// - Duplicate keys (BOT_NAME defined twice)
+	initialRaw := `# Header comment
+export BOT_NAME=FirstBotName
+LISTEN_ADDR: 127.0.0.1:8080
+
+# Prompt block with multiline quotes
+SYSTEM_PROMPT="line 1 of prompt
+line 2 of prompt
+line 3 with # inline comment"
+BOT_NAME=DuplicateOldBotName
+
+# Trailing footer comment
+`
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	if err := os.WriteFile(envPath, []byte(initialRaw), 0600); err != nil {
+		t.Fatalf("failed to write initial .env: %v", err)
+	}
+
+	svc := mustNew(t, envPath)
+
+	// 1. Update BOT_NAME:
+	// - First occurrence (export BOT_NAME=FirstBotName) must be replaced with canonical BOT_NAME=NewBot
+	// - Duplicate occurrence (BOT_NAME=DuplicateOldBotName) must be eliminated
+	// - Comments, blank lines, LISTEN_ADDR, and multiline SYSTEM_PROMPT must be preserved intact
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "BOT_NAME",
+		Value: "NewBot",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text := string(content)
+
+	// Verify comments and non-target statements preserved
+	if !strings.Contains(text, "# Header comment") {
+		t.Errorf("expected # Header comment preserved in .env:\n%s", text)
+	}
+	if !strings.Contains(text, "# Trailing footer comment") {
+		t.Errorf("expected # Trailing footer comment preserved in .env:\n%s", text)
+	}
+	if !strings.Contains(text, "LISTEN_ADDR: 127.0.0.1:8080") {
+		t.Errorf("expected LISTEN_ADDR: 127.0.0.1:8080 preserved in .env:\n%s", text)
+	}
+	// Verify duplicate was removed and not duplicated
+	if strings.Count(text, "BOT_NAME") != 1 {
+		t.Errorf("expected exactly 1 BOT_NAME statement, found %d in:\n%s", strings.Count(text, "BOT_NAME"), text)
+	}
+	if strings.Contains(text, "DuplicateOldBotName") {
+		t.Errorf("expected duplicate old bot name removed from .env:\n%s", text)
+	}
+
+	// Verify godotenv parse matches expectation
+	parsed, err := godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed on modified .env:\n%s\nerr: %v", text, err)
+	}
+	if parsed["BOT_NAME"] != "NewBot" {
+		t.Errorf("parsed BOT_NAME = %q, want %q", parsed["BOT_NAME"], "NewBot")
+	}
+	expectedPrompt := "line 1 of prompt\nline 2 of prompt\nline 3 with # inline comment"
+	if parsed["SYSTEM_PROMPT"] != expectedPrompt {
+		t.Errorf("parsed SYSTEM_PROMPT = %q, want %q", parsed["SYSTEM_PROMPT"], expectedPrompt)
+	}
+
+	// 2. Update SYSTEM_PROMPT:
+	// - Entire multiline statement should be replaced cleanly
+	// - No leftover orphan lines ("line 2...", "line 3...")
+	resp, err = svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SYSTEM_PROMPT",
+		Value: "single line prompt",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	if strings.Contains(text, "line 2 of prompt") || strings.Contains(text, "line 3 with") {
+		t.Fatalf("orphan continuation lines from multiline statement were left behind in .env:\n%s", text)
+	}
+
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed: %v\ncontent:\n%s", err, text)
+	}
+	if parsed["SYSTEM_PROMPT"] != "single line prompt" {
+		t.Errorf("parsed SYSTEM_PROMPT = %q, want %q", parsed["SYSTEM_PROMPT"], "single line prompt")
+	}
+
+	// 3. Update colon-separated LISTEN_ADDR:
+	// - LISTEN_ADDR: 127.0.0.1:8080 should be recognized and replaced
+	resp, err = svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "LISTEN_ADDR",
+		Value: "127.0.0.1:9090",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("UpdateEnvVar failed: %s", resp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	if strings.Contains(text, "127.0.0.1:8080") {
+		t.Fatalf("old colon-separated LISTEN_ADDR value was not replaced in .env:\n%s", text)
+	}
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed: %v\ncontent:\n%s", err, text)
+	}
+	if parsed["LISTEN_ADDR"] != "127.0.0.1:9090" {
+		t.Errorf("parsed LISTEN_ADDR = %q, want %q", parsed["LISTEN_ADDR"], "127.0.0.1:9090")
+	}
+
+	// 4. Delete BOT_NAME:
+	// - Statement should be removed cleanly
+	delResp, err := svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
+		Key: "BOT_NAME",
+	}))
+	if err != nil {
+		t.Fatalf("DeleteEnvVar error: %v", err)
+	}
+	if !delResp.Msg.GetSuccess() {
+		t.Fatalf("DeleteEnvVar failed: %s", delResp.Msg.GetError())
+	}
+
+	content, err = os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	text = string(content)
+	if strings.Contains(text, "BOT_NAME") {
+		t.Fatalf("BOT_NAME still exists in .env after DeleteEnvVar:\n%s", text)
+	}
+	parsed, err = godotenv.Unmarshal(text)
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed: %v\ncontent:\n%s", err, text)
+	}
+	if _, ok := parsed["BOT_NAME"]; ok {
+		t.Fatalf("BOT_NAME still parsed after DeleteEnvVar")
+	}
+}
+
+func TestSettingsUpdateEnvVarNullByteRejection(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	initialContent := "BOT_NAME=GoodBot\n"
+	if err := os.WriteFile(envPath, []byte(initialContent), 0600); err != nil {
+		t.Fatalf("failed to write initial .env: %v", err)
+	}
+
+	svc := mustNew(t, envPath)
+
+	// Attempt to set a value containing a NUL byte (\x00)
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "BOT_NAME",
+		Value: "bad\x00value",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if resp.Msg.GetSuccess() {
+		t.Fatalf("expected UpdateEnvVar with NUL byte to be rejected")
+	}
+	if !strings.Contains(resp.Msg.GetError(), "null byte (NUL)") {
+		t.Fatalf("expected error message to mention null byte, got: %s", resp.Msg.GetError())
+	}
+
+	// Verify .env file on disk was NOT modified
+	diskContent, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed to read .env: %v", err)
+	}
+	if string(diskContent) != initialContent {
+		t.Fatalf("expected .env content unchanged, got:\n%s", string(diskContent))
+	}
+
+	// Verify formatEnvEntry itself rejects NUL bytes
+	if _, err := formatEnvEntry("BOT_NAME", "null\x00byte"); err == nil {
+		t.Fatalf("expected formatEnvEntry to fail for value containing NUL byte")
+	}
+}
