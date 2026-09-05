@@ -11,15 +11,25 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/joho/godotenv"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
+
+func mustNew(t *testing.T, envPath string) *Service {
+	t.Helper()
+	svc, err := New(envPath)
+	if err != nil {
+		t.Fatalf("New(%q) failed: %v", envPath, err)
+	}
+	return svc
+}
 
 func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 	t.Setenv("UPSTREAM_API_KEY", "sk-secret-key-123456789")
 	t.Setenv("BOT_NAME", "FrostFox")
 
-	svc := New(".env.nonexistent")
+	svc := mustNew(t, ".env.nonexistent")
 	resp, err := svc.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
 	if err != nil {
 		t.Fatalf("ListEnvVars failed: %v", err)
@@ -52,7 +62,7 @@ func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 func TestSettingsUpdateEnvVarAllowlist(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")
-	svc := New(envPath)
+	svc := mustNew(t, envPath)
 
 	// 1. Updating an allowed key should succeed
 	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
@@ -103,7 +113,7 @@ func TestSettingsDeleteEnvVar(t *testing.T) {
 	os.WriteFile(envPath, []byte("BOT_NAME=DeleteMe\n"), 0600)
 	os.Setenv("BOT_NAME", "DeleteMe")
 
-	svc := New(envPath)
+	svc := mustNew(t, envPath)
 
 	// 1. Deleting non-allowlisted key should fail
 	resp, err := svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
@@ -134,7 +144,7 @@ func TestSettingsDeleteEnvVar(t *testing.T) {
 func TestSettingsRawEnvFileReadWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")
-	svc := New(envPath)
+	svc := mustNew(t, envPath)
 
 	content := "BOT_NAME=RawBot\nLISTEN_ADDR=127.0.0.1:8080\n"
 	updateResp, err := svc.UpdateRawEnvFile(context.Background(), connect.NewRequest(&v1.UpdateRawEnvFileRequest{
@@ -175,7 +185,7 @@ func TestSettingsTightensExisting0644File(t *testing.T) {
 	}
 
 	// Service init should tighten permissions
-	svc := New(envPath)
+	svc := mustNew(t, envPath)
 
 	if runtime.GOOS != "windows" {
 		fi, err := os.Stat(envPath)
@@ -210,7 +220,7 @@ func TestSettingsTightensExisting0644File(t *testing.T) {
 func TestSettingsConcurrentUpdates(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")
-	svc := New(envPath)
+	svc := mustNew(t, envPath)
 
 	keys := []string{
 		"BOT_NAME",
@@ -223,7 +233,7 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(keys)*10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		for _, key := range keys {
 			wg.Add(1)
 			go func(k string, round int) {
@@ -262,5 +272,173 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 		if !strings.Contains(text, key+"=") {
 			t.Fatalf("expected final env file to contain key %q, file content:\n%s", key, text)
 		}
+	}
+}
+
+func TestSettingsUpdateEnvVarNewlineInjectionRejection(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	svc := mustNew(t, envPath)
+
+	// 1. Single-line variable (BOT_NAME) must reject values with newlines
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "BOT_NAME",
+		Value: "ok\nUNREGISTERED_KEY=pwned",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if resp.Msg.GetSuccess() {
+		t.Fatalf("expected BOT_NAME update with newline to be rejected")
+	}
+	if !strings.Contains(resp.Msg.GetError(), "does not allow multiline values") {
+		t.Fatalf("unexpected error message: %s", resp.Msg.GetError())
+	}
+
+	// 2. Multiline variable (SYSTEM_PROMPT) accepts multiline text,
+	// but escapes newlines into a single line in .env, preventing key injection
+	multilinePrompt := "Line 1: Hello\nLine 2: UNREGISTERED_KEY=pwned\nLine 3: Goodbye"
+	resp, err = svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SYSTEM_PROMPT",
+		Value: multilinePrompt,
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if !resp.Msg.GetSuccess() {
+		t.Fatalf("expected SYSTEM_PROMPT multiline update to succeed, got error: %s", resp.Msg.GetError())
+	}
+
+	// 3. Verify in-process env is the exact multiline value
+	if os.Getenv("SYSTEM_PROMPT") != multilinePrompt {
+		t.Fatalf("expected os.Getenv(SYSTEM_PROMPT) to be %q, got %q", multilinePrompt, os.Getenv("SYSTEM_PROMPT"))
+	}
+
+	// 4. Verify with godotenv parser that NO extra keys were injected
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env failed: %v", err)
+	}
+	parsed, err := godotenv.Unmarshal(string(content))
+	if err != nil {
+		t.Fatalf("godotenv.Unmarshal failed on generated file: %v\ncontent:\n%s", err, string(content))
+	}
+
+	if val, ok := parsed["SYSTEM_PROMPT"]; !ok || val != multilinePrompt {
+		t.Fatalf("expected parsed SYSTEM_PROMPT to be %q, got %q", multilinePrompt, val)
+	}
+
+	if _, injected := parsed["UNREGISTERED_KEY"]; injected {
+		t.Fatalf("FATAL: UNREGISTERED_KEY was injected as an independent key into .env! Content:\n%s", string(content))
+	}
+	if _, injected := parsed["Line 2"]; injected {
+		t.Fatalf("FATAL: 'Line 2' was parsed as an independent key! Content:\n%s", string(content))
+	}
+}
+
+func TestSettingsConcurrentInterleavedUpdates(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	svc := mustNew(t, envPath)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 50)
+
+	// Interleave structured UpdateEnvVar and raw UpdateRawEnvFile
+	for i := range 15 {
+		// Goroutine 1: structured update on BOT_NAME
+		wg.Add(1)
+		go func(round int) {
+			defer wg.Done()
+			val := fmt.Sprintf("InterleavedBot_%d", round)
+			resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+				Key:   "BOT_NAME",
+				Value: val,
+			}))
+			if err != nil {
+				errCh <- fmt.Errorf("UpdateEnvVar BOT_NAME error: %w", err)
+				return
+			}
+			if !resp.Msg.GetSuccess() {
+				errCh <- fmt.Errorf("UpdateEnvVar BOT_NAME failed: %s", resp.Msg.GetError())
+				return
+			}
+		}(i)
+
+		// Goroutine 2: structured update on SYSTEM_PROMPT
+		wg.Add(1)
+		go func(round int) {
+			defer wg.Done()
+			val := fmt.Sprintf("Prompt line 1\nPrompt line 2: %d", round)
+			resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+				Key:   "SYSTEM_PROMPT",
+				Value: val,
+			}))
+			if err != nil {
+				errCh <- fmt.Errorf("UpdateEnvVar SYSTEM_PROMPT error: %w", err)
+				return
+			}
+			if !resp.Msg.GetSuccess() {
+				errCh <- fmt.Errorf("UpdateEnvVar SYSTEM_PROMPT failed: %s", resp.Msg.GetError())
+				return
+			}
+		}(i)
+
+		// Goroutine 3: raw file update
+		wg.Add(1)
+		go func(round int) {
+			defer wg.Done()
+			rawContent := fmt.Sprintf("BOT_NAME=RawBot_%d\nLISTEN_ADDR=127.0.0.1:8080\n", round)
+			resp, err := svc.UpdateRawEnvFile(context.Background(), connect.NewRequest(&v1.UpdateRawEnvFileRequest{
+				Content: rawContent,
+			}))
+			if err != nil {
+				errCh <- fmt.Errorf("UpdateRawEnvFile error: %w", err)
+				return
+			}
+			if !resp.Msg.GetSuccess() {
+				errCh <- fmt.Errorf("UpdateRawEnvFile failed: %s", resp.Msg.GetError())
+				return
+			}
+		}(i)
+
+		// Goroutine 4: raw file read
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.GetRawEnvFile(context.Background(), connect.NewRequest(&v1.GetRawEnvFileRequest{}))
+			if err != nil {
+				errCh <- fmt.Errorf("GetRawEnvFile error: %w", err)
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	// Verify file is readable and valid dotenv
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed to read final .env file: %v", err)
+	}
+	if _, err := godotenv.Unmarshal(string(content)); err != nil {
+		t.Fatalf("final .env file is corrupted: %v\ncontent:\n%s", err, string(content))
+	}
+}
+
+func TestSettingsHardenPermissionsFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Directory path instead of file path: os.Stat is Dir, should fail hardenPermissions
+	_, err := New(tmpDir)
+	if err == nil {
+		t.Fatalf("expected New() on a directory path to fail, got nil error")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("expected error mentioning directory, got: %v", err)
 	}
 }

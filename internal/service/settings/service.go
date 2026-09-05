@@ -19,43 +19,44 @@ type envEntry struct {
 	Description     string
 	IsSecret        bool
 	RequiresRestart bool
+	AllowMultiline  bool
 }
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
-	"LISTEN_ADDR":                 {"HTTP 监听地址", false, true},
-	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true},
-	"HTTP_ALLOWED_ORIGINS":        {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true},
-	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true},
-	"SYSTEM_PROMPT":               {"系统提示词", false, false},
-	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true},
-	"MAX_CONTEXT_MESSAGES":        {"最多保留的消息数", false, false},
-	"MAX_CONTEXT_CHARS":           {"近似字符上限", false, false},
-	"ENABLE_AT_IN_GROUP_MSG":      {"是否开启群聊回复前艾特", false, false},
-	"GROUP_REPLY_ON_MENTION":      {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false},
-	"BOT_NAME":                    {"机器人主名称，用于群聊文本唤醒", false, false},
-	"BOT_ALIASES":                 {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false},
-	"ADMIN_QQ_IDS":                {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false},
-	"ENABLE_REPLY_IN_GROUP_MSG":   {"群聊回复时是否引用原消息", false, false},
-	"GROUP_COMPACT_BUFFER_SIZE":   {"群聊 running compact 每批原消息数量", false, true},
-	"GROUP_COMPACT_MIN_INTERVAL":  {"同群 running compact 最小触发间隔（如 30s）", false, true},
-	"GROUP_RAW_CONTEXT_MAX_CHARS": {"群聊未压缩原消息临时上下文的最大字符数（默认 12000）", false, false},
-	"MEMORY_EXTRACT_BATCH_MIN":    {"自动记忆提取的最小累计轮数", false, false},
-	"MEMORY_EXTRACT_BATCH_MAX":    {"自动记忆提取的最大累计轮数", false, false},
-	"ENABLE_ONEBOT_ADAPTER":       {"是否启用 OneBot WebSocket 适配器", false, true},
-	"ONEBOT_WS_PATH":              {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true},
-	"ENABLE_ASTRBOT_ADAPTER":      {"是否启用 AstrBot WebSocket 适配器", false, true},
-	"ASTRBOT_WS_PATH":             {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true},
-	"BILLING_ENABLED":             {"是否启用 Alcyone 计费", false, true},
-	"ALCYONE_BASE_URL":            {"Alcyone 计费服务地址", false, true},
-	"ALCYONE_SERVICE_TOKEN":       {"Alcyone 计费服务通信 Token", true, true},
-	"ALCYONE_TIMEOUT":             {"计费请求超时时间", false, true},
-	"BILLING_MAX_OUTPUT_TOKENS":   {"计费预扣款最大预留输出 Token", false, true},
-	"BILLING_SAFETY_MULTIPLIER":   {"计费预扣款输入 Token 安全倍率", false, true},
-	"MEMORY_REFLECTION_TIMEOUT":   {"记忆反思独立超时时间", false, true},
-	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true},
-	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true},
-	"CODER_API_KEY":               {"Coder API 密钥", true, true},
+	"LISTEN_ADDR":                 {"HTTP 监听地址", false, true, false},
+	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true, false},
+	"HTTP_ALLOWED_ORIGINS":        {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true, false},
+	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true, false},
+	"SYSTEM_PROMPT":               {"系统提示词", false, false, true},
+	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true, false},
+	"MAX_CONTEXT_MESSAGES":        {"最多保留的消息数", false, false, false},
+	"MAX_CONTEXT_CHARS":           {"近似字符上限", false, false, false},
+	"ENABLE_AT_IN_GROUP_MSG":      {"是否开启群聊回复前艾特", false, false, false},
+	"GROUP_REPLY_ON_MENTION":      {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false, false},
+	"BOT_NAME":                    {"机器人主名称，用于群聊文本唤醒", false, false, false},
+	"BOT_ALIASES":                 {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
+	"ADMIN_QQ_IDS":                {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
+	"ENABLE_REPLY_IN_GROUP_MSG":   {"群聊回复时是否引用原消息", false, false, false},
+	"GROUP_COMPACT_BUFFER_SIZE":   {"群聊 running compact 每批原消息数量", false, true, false},
+	"GROUP_COMPACT_MIN_INTERVAL":  {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
+	"GROUP_RAW_CONTEXT_MAX_CHARS": {"群聊未压缩原消息临时上下文的最大字符数（默认 12000）", false, false, false},
+	"MEMORY_EXTRACT_BATCH_MIN":    {"自动记忆提取的最小累计轮数", false, false, false},
+	"MEMORY_EXTRACT_BATCH_MAX":    {"自动记忆提取的最大累计轮数", false, false, false},
+	"ENABLE_ONEBOT_ADAPTER":       {"是否启用 OneBot WebSocket 适配器", false, true, false},
+	"ONEBOT_WS_PATH":              {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true, false},
+	"ENABLE_ASTRBOT_ADAPTER":      {"是否启用 AstrBot WebSocket 适配器", false, true, false},
+	"ASTRBOT_WS_PATH":             {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true, false},
+	"BILLING_ENABLED":             {"是否启用 Alcyone 计费", false, true, false},
+	"ALCYONE_BASE_URL":            {"Alcyone 计费服务地址", false, true, false},
+	"ALCYONE_SERVICE_TOKEN":       {"Alcyone 计费服务通信 Token", true, true, false},
+	"ALCYONE_TIMEOUT":             {"计费请求超时时间", false, true, false},
+	"BILLING_MAX_OUTPUT_TOKENS":   {"计费预扣款最大预留输出 Token", false, true, false},
+	"BILLING_SAFETY_MULTIPLIER":   {"计费预扣款输入 Token 安全倍率", false, true, false},
+	"MEMORY_REFLECTION_TIMEOUT":   {"记忆反思独立超时时间", false, true, false},
+	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true, false},
+	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true, false},
+	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.
@@ -64,20 +65,31 @@ type Service struct {
 	mu      sync.Mutex
 }
 
-// New creates a new SettingsService.
-func New(envPath string) *Service {
+// New creates a new SettingsService and tightens permissions on existing .env.
+// If tightening permissions on an existing file fails, New returns an error (fail-closed).
+func New(envPath string) (*Service, error) {
 	if envPath == "" {
 		envPath = ".env"
 	}
 	s := &Service{envPath: envPath}
-	s.hardenPermissions()
-	return s
+	if err := s.hardenPermissions(); err != nil {
+		return nil, fmt.Errorf("harden .env permissions: %w", err)
+	}
+	return s, nil
 }
 
-func (s *Service) hardenPermissions() {
-	if fi, err := os.Stat(s.envPath); err == nil && !fi.IsDir() {
-		_ = os.Chmod(s.envPath, 0600)
+func (s *Service) hardenPermissions() error {
+	fi, err := os.Stat(s.envPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
+	if fi.IsDir() {
+		return fmt.Errorf("%s is a directory, not a regular file", s.envPath)
+	}
+	return os.Chmod(s.envPath, 0600)
 }
 
 // ListEnvVars returns all known env vars with their current values.
@@ -112,10 +124,18 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
-	if _, ok := knownEnvVars[key]; !ok {
+	entry, ok := knownEnvVars[key]
+	if !ok {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{
 			Success: false,
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
+		}), nil
+	}
+
+	if !entry.AllowMultiline && strings.ContainsAny(value, "\r\n") {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   fmt.Sprintf("key %q does not allow multiline values or newlines", key),
 		}), nil
 	}
 
@@ -212,7 +232,12 @@ func (s *Service) UpdateRawEnvFile(
 		_ = os.Remove(tmpPath)
 	}()
 
-	_ = tmpFile.Chmod(0600)
+	if err := tmpFile.Chmod(0600); err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("chmod temp file 0600: %v", err),
+		}), nil
+	}
 	if _, err := tmpFile.Write([]byte(content)); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
@@ -235,9 +260,51 @@ func (s *Service) UpdateRawEnvFile(
 			}), nil
 		}
 	}
-	_ = os.Chmod(s.envPath, 0600)
+	if err := os.Chmod(s.envPath, 0600); err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("chmod .env 0600: %v", err),
+		}), nil
+	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
+}
+
+// formatEnvEntry formats key=value for .env with secure dotenv-compatible escaping.
+// Any value containing newlines, carriage returns, quotes, backslashes, leading/trailing spaces,
+// or special characters is safely double-quoted and backslash-escaped (\n, \r, \", \\) so it
+// never injects extra lines or keys into the .env file.
+func formatEnvEntry(key, value string) string {
+	needsQuotes := strings.ContainsAny(value, "\n\r\"\\ \t#$!`") || strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ")
+	if !needsQuotes && value != "" {
+		return key + "=" + value
+	}
+
+	var b strings.Builder
+	b.WriteString(key)
+	b.WriteString(`="`)
+	for _, r := range value {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '"':
+			b.WriteString(`\"`)
+		case '$':
+			b.WriteString(`\$`)
+		case '`':
+			b.WriteString("\\`")
+		case '!':
+			b.WriteString(`\!`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // atomicWriteEnv updates or appends a key=value line in the .env file atomically.
@@ -247,16 +314,18 @@ func (s *Service) atomicWriteEnv(key, value string) error {
 		return fmt.Errorf("read .env: %w", err)
 	}
 
+	formatted := formatEnvEntry(key, value)
 	found := false
 	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), key+"=") {
-			lines[i] = key + "=" + value
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+"=") || trimmed == key {
+			lines[i] = formatted
 			found = true
 			break
 		}
 	}
 	if !found {
-		lines = append(lines, key+"="+value)
+		lines = append(lines, formatted)
 	}
 
 	return writeEnvAtomic(s.envPath, lines)
@@ -313,7 +382,9 @@ func writeEnvAtomic(path string, lines []string) error {
 		_ = os.Remove(tmpPath)
 	}()
 
-	_ = tmpFile.Chmod(0600)
+	if err := tmpFile.Chmod(0600); err != nil {
+		return fmt.Errorf("chmod temp file 0600: %w", err)
+	}
 
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(tmpFile, line); err != nil {
@@ -330,7 +401,9 @@ func writeEnvAtomic(path string, lines []string) error {
 			return fmt.Errorf("rename .env: %w", err)
 		}
 	}
-	_ = os.Chmod(path, 0600)
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("chmod .env 0600: %w", err)
+	}
 	return nil
 }
 

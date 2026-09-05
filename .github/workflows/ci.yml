@@ -46,3 +46,23 @@ jobs:
 
       - name: Run checks
         run: make ci
+
+  windows-smoke:
+    name: Windows Smoke
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: 'go.sum'
+
+      - name: Build cmd/app
+        run: go build ./cmd/app
+
+      - name: Run tests
+        run: go test ./...

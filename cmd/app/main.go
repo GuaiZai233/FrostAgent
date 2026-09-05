@@ -303,8 +303,13 @@ func main() {
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(GlobalEngine, version))
 	mux.Handle(botPath, botHandler)
 
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.New(".env"))
-	mux.Handle(settingsPath, settingsHandler)
+	settingsSvc, err := settings.New(".env")
+	if err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 无法将 .env 权限收紧至 0600，拒绝注册设置管理服务: %v", err))
+	} else {
+		settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsSvc)
+		mux.Handle(settingsPath, settingsHandler)
+	}
 
 	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(GlobalEngine.ModelRouter))
 	mux.Handle(routerPath, routerHandler)

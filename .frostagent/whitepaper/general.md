@@ -138,16 +138,20 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；
   - **Origin 校验**：同源自动放行规则严格限制在本地回环 Host 上，杜绝攻击者利用解析至 127.0.0.1 的恶意域名伪造同源；如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
+- **平台基线与操作系统支持边界 (Platform Security Baseline & OS Boundary)**：
+  - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；
+  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
   - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
   - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
-- **环境变量白名单约束 (Settings API Allowlist)**：
-  - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入，杜绝远程环境注入风险。
+- **环境变量白名单与防换行注入 (Settings API Allowlist & Newline Injection Defense)**：
+  - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
+  - **防换行注入双层防御**：单行环境变量严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项（如 `SYSTEM_PROMPT`）在落盘时通过 dotenv 标准安全转义，将换行字符转义并以双引号包裹（`"...\n..."`），确保每一项在 `.env` 中落盘为单行安全记录，彻底杜绝恶意构造换行注入额外环境变量的攻击可能。
 - **并发互斥与安全原子落盘 (Concurrency Safety & Secure Atomic Writes)**：
-  - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免并发 read-modify-write 导致数据丢失或状态冲突；
-  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），避免多协程竞争同一临时路径；
-  - 服务初始化（`New`）时自动将已有 `.env` 文件权限收紧至 `0600`，所有写入临时文件与目标文件在保存后均显式强制 `0600`（所有者独占读写）权限，防止同主机其他非特权用户窥探敏感配置。
+  - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免高并发交错写入或结构化与 Raw 编辑交织导致配置覆盖或数据竞争；
+  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），避免多协程写入碰撞；
+  - **权限收紧 Fail-Closed 机制**：服务初始化（`New`）时主动将已有 `.env` 文件权限收紧至 `0600`，若收紧失败则向上返回错误并拒绝挂载设置服务，防止静默运行于不安全权限下；写入临时文件与目标落盘后均显式强制 `0600` 校验，绝不静默吞咽任何文件权限设置错误。
 - **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
   - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
 
