@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	"github.com/joho/godotenv"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
@@ -270,41 +271,76 @@ func (s *Service) UpdateRawEnvFile(
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
 }
 
-// formatEnvEntry formats key=value for .env with secure dotenv-compatible escaping.
-// Any value containing newlines, carriage returns, quotes, backslashes, leading/trailing spaces,
-// or special characters is safely double-quoted and backslash-escaped (\n, \r, \", \\) so it
-// never injects extra lines or keys into the .env file.
-func formatEnvEntry(key, value string) string {
-	needsQuotes := strings.ContainsAny(value, "\n\r\"\\ \t#$!`") || strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ")
-	if !needsQuotes && value != "" {
-		return key + "=" + value
+// formatEnvEntry formats key=value for .env with secure dotenv-compatible serialization
+// guaranteed to round-trip correctly with godotenv v1.5.1.
+//
+// godotenv v1.5.1 has known parser quirks:
+// 1. In double quotes, closing quote checks `src[i-1] == '\\'` without backslash parity,
+//    causing any value ending in backslash (e.g. C:\temp\) to fail with "unterminated quoted value".
+// 2. Trailing quote trimming in double quotes strips escaped quotes (\").
+//
+// To guarantee round-trip fidelity:
+// - Simple values (no newlines, no $, no leading/trailing space, no leading quote, no inline comments)
+//   are formatted unquoted (key=value), which natively preserves backslashes and quotes without escaping pitfalls.
+// - Values starting with a quote (without single quotes or newlines, not ending in \) are single-quoted (key='value').
+// - Values requiring quotes (empty string, leading/trailing space, $, newlines) are double-quoted with
+//   proper escape sequences (\, \n, \r, \", \$).
+//
+// Before returning, godotenv.Unmarshal is executed on the formatted line. If the value cannot
+// be safely parsed back to its exact original form, an error is returned to prevent persisting corrupt values.
+func formatEnvEntry(key, value string) (string, error) {
+	hasLeadingOrTrailingSpace := strings.HasPrefix(value, " ") || strings.HasPrefix(value, "\t") ||
+		strings.HasSuffix(value, " ") || strings.HasSuffix(value, "\t")
+	hasNewline := strings.ContainsAny(value, "\r\n")
+	hasDollar := strings.ContainsRune(value, '$')
+	startsQuote := strings.HasPrefix(value, "\"") || strings.HasPrefix(value, "'")
+	hasInlineComment := strings.Contains(value, " #") || strings.Contains(value, "\t#")
+
+	canBeUnquoted := value != "" && !hasNewline && !hasLeadingOrTrailingSpace && !hasDollar && !startsQuote && !hasInlineComment
+	canBeSingleQuoted := value != "" && !hasNewline && !strings.ContainsRune(value, '\'') && !strings.HasSuffix(value, "\\")
+
+	var formatted string
+	if canBeUnquoted {
+		formatted = key + "=" + value
+	} else if canBeSingleQuoted && startsQuote {
+		formatted = key + "='" + value + "'"
+	} else {
+		var b strings.Builder
+		b.WriteString(key)
+		b.WriteString(`="`)
+		for _, r := range value {
+			switch r {
+			case '\\':
+				b.WriteString(`\\`)
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '"':
+				b.WriteString(`\"`)
+			case '$':
+				b.WriteString(`\$`)
+			default:
+				b.WriteRune(r)
+			}
+		}
+		b.WriteByte('"')
+		formatted = b.String()
 	}
 
-	var b strings.Builder
-	b.WriteString(key)
-	b.WriteString(`="`)
-	for _, r := range value {
-		switch r {
-		case '\\':
-			b.WriteString(`\\`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\r':
-			b.WriteString(`\r`)
-		case '"':
-			b.WriteString(`\"`)
-		case '$':
-			b.WriteString(`\$`)
-		case '`':
-			b.WriteString("\\`")
-		case '!':
-			b.WriteString(`\!`)
-		default:
-			b.WriteRune(r)
-		}
+	// Pre-write verification against godotenv parser
+	parsed, err := godotenv.Unmarshal(formatted)
+	if err != nil {
+		return "", fmt.Errorf("value cannot be safely represented in .env: %w", err)
 	}
-	b.WriteByte('"')
-	return b.String()
+	if parsedVal, ok := parsed[key]; !ok || parsedVal != value {
+		return "", fmt.Errorf("value cannot be safely round-tripped in .env (got %q, want %q)", parsed[key], value)
+	}
+	if len(parsed) != 1 {
+		return "", fmt.Errorf("value causes unexpected additional keys in .env: %v", parsed)
+	}
+
+	return formatted, nil
 }
 
 // atomicWriteEnv updates or appends a key=value line in the .env file atomically.
@@ -314,7 +350,10 @@ func (s *Service) atomicWriteEnv(key, value string) error {
 		return fmt.Errorf("read .env: %w", err)
 	}
 
-	formatted := formatEnvEntry(key, value)
+	formatted, err := formatEnvEntry(key, value)
+	if err != nil {
+		return err
+	}
 	found := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)

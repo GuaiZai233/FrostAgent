@@ -431,6 +431,195 @@ func TestSettingsConcurrentInterleavedUpdates(t *testing.T) {
 	}
 }
 
+func TestSettingsDotenvRoundTripMatrix(t *testing.T) {
+	// Round-trip test matrix covering:
+	// - Trailing backslashes
+	// - Backslash + quotes
+	// - Ordinary Windows paths
+	// - Dollar signs ($) and variable expansions
+	// - Backticks (`)
+	// - Exclamation marks (!)
+	// - Empty values
+	// - Leading/trailing and internal whitespace padding
+	// - Multiline strings
+	// - Quotes and JSON-like structures
+	validMatrix := []struct {
+		name  string
+		value string
+	}{
+		// Trailing backslashes
+		{"trailing backslash - windows dir", `C:\temp\`},
+		{"trailing backslash - single slash", `\`},
+		{"trailing backslash - word slash", `foo\`},
+		{"trailing backslash - space dir", `C:\Program Files\App\`},
+
+		// Backslash + quote
+		{"backslash quote - word middle", `foo\"bar`},
+		{"backslash quote - single escaped quote", `\"`},
+		{"backslash quote - double escaped quote", `\"\"`},
+		{"backslash quote - word suffix", `foo\"`},
+		{"backslash quote - word prefix", `\"bar`},
+
+		// Ordinary Windows paths
+		{"windows path - program files", `C:\Program Files\App`},
+		{"windows path - file with extension", `C:\Users\foo\bar.txt`},
+		{"windows path - drive D yml", `D:\test\app\config.yml`},
+
+		// Dollar signs ($)
+		{"dollar - single", `$`},
+		{"dollar - double", `$$`},
+		{"dollar - path variable", `$PATH`},
+		{"dollar - embedded in name", `user$name`},
+		{"dollar - braced variable", `${VAR}`},
+		{"dollar - escaped dollar", `\$`},
+		{"dollar - escaped dollar with word", `\$PATH`},
+
+		// Backticks (`)
+		{"backtick - enclosed word", "`hello`"},
+		{"backtick - single", "`"},
+		{"backtick - multiple words", "`foo` `bar`"},
+
+		// Exclamation marks (!)
+		{"exclamation - suffix", `hello!`},
+		{"exclamation - prefix number", `!123`},
+		{"exclamation - wrapped word", `!foo!bar!`},
+
+		// Empty value
+		{"empty value", ""},
+
+		// Whitespace padding
+		{"whitespace - leading spaces", `  hello`},
+		{"whitespace - trailing spaces", `hello  `},
+		{"whitespace - both sides", `  hello  `},
+		{"whitespace - single space", ` `},
+		{"whitespace - tab", "\t"},
+		{"whitespace - padded phrase", `  foo bar  `},
+
+		// Multiline strings
+		{"multiline - standard lf", "line1\nline2"},
+		{"multiline - crlf", "line1\r\nline2"},
+		{"multiline - single lf", "\n"},
+		{"multiline - single crlf", "\r\n"},
+		{"multiline - three lines", "a\nb\nc"},
+		{"multiline - trailing lf", "line1\nline2\n"},
+
+		// Quotes & structures
+		{"quotes - double quoted word", `"quoted"`},
+		{"quotes - single quoted word", `'single-quoted'`},
+		{"structure - json map", `{"key": "value"}`},
+		{"complex - quote and dollar", `hello "world" $FOO`},
+	}
+
+	for _, tc := range validMatrix {
+		t.Run(tc.name, func(t *testing.T) {
+			formatted, err := formatEnvEntry("TEST_KEY", tc.value)
+			if err != nil {
+				t.Fatalf("formatEnvEntry failed for %q: %v", tc.value, err)
+			}
+
+			parsed, err := godotenv.Unmarshal(formatted)
+			if err != nil {
+				t.Fatalf("godotenv.Unmarshal failed on %q (formatted: %s): %v", tc.value, formatted, err)
+			}
+
+			if got, ok := parsed["TEST_KEY"]; !ok || got != tc.value {
+				t.Fatalf("round-trip mismatch for %q: got %q (formatted: %s)", tc.value, got, formatted)
+			}
+
+			if len(parsed) != 1 {
+				t.Fatalf("unexpected keys parsed from formatted line %q: %v", formatted, parsed)
+			}
+		})
+	}
+
+	// Unrepresentable values that godotenv v1.5.1 cannot safely parse back
+	// must be explicitly rejected before write.
+	unrepresentableMatrix := []struct {
+		name  string
+		value string
+	}{
+		{"multiline with trailing backslash", "line1\nline2\\"},
+		{"dollar with trailing backslash", "$PATH\\"},
+	}
+
+	for _, tc := range unrepresentableMatrix {
+		t.Run("reject: "+tc.name, func(t *testing.T) {
+			formatted, err := formatEnvEntry("TEST_KEY", tc.value)
+			if err == nil {
+				t.Fatalf("expected formatEnvEntry to fail for unrepresentable value %q, got: %s", tc.value, formatted)
+			}
+		})
+	}
+}
+
+func TestSettingsUpdateEnvVarEndToEndMatrix(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	svc := mustNew(t, envPath)
+
+	testCases := []struct {
+		key   string
+		value string
+	}{
+		{"BOT_NAME", `C:\Program Files\App\`},
+		{"BOT_NAME", `foo\"bar`},
+		{"BOT_NAME", `$PATH`},
+		{"BOT_NAME", "`hello`"},
+		{"BOT_NAME", `hello!`},
+		{"BOT_NAME", `  padded bot  `},
+		{"SYSTEM_PROMPT", "line1\nline2\nline3"},
+		{"SYSTEM_PROMPT", `hello "world" $PROMPT`},
+	}
+
+	for _, tc := range testCases {
+		resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+			Key:   tc.key,
+			Value: tc.value,
+		}))
+		if err != nil {
+			t.Fatalf("UpdateEnvVar RPC failed for key %s: %v", tc.key, err)
+		}
+		if !resp.Msg.GetSuccess() {
+			t.Fatalf("UpdateEnvVar failed for key %s with value %q: %s", tc.key, tc.value, resp.Msg.GetError())
+		}
+
+		// 1. In-process env is immediately updated
+		if got := os.Getenv(tc.key); got != tc.value {
+			t.Fatalf("os.Getenv(%q) = %q, want %q", tc.key, got, tc.value)
+		}
+
+		// 2. .env file on disk parses with godotenv to the exact value
+		content, err := os.ReadFile(envPath)
+		if err != nil {
+			t.Fatalf("failed to read .env: %v", err)
+		}
+		parsed, err := godotenv.Unmarshal(string(content))
+		if err != nil {
+			t.Fatalf("godotenv.Unmarshal failed on disk .env content:\n%s\nerr: %v", string(content), err)
+		}
+		if got, ok := parsed[tc.key]; !ok || got != tc.value {
+			t.Fatalf("parsed[%q] = %q, want %q (file content: %s)", tc.key, got, tc.value, string(content))
+		}
+	}
+
+	// 3. Unrepresentable value via UpdateEnvVar is rejected and does not corrupt .env
+	badValue := "prompt line 1\nprompt line 2\\"
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SYSTEM_PROMPT",
+		Value: badValue,
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar RPC failed: %v", err)
+	}
+	if resp.Msg.GetSuccess() {
+		t.Fatalf("expected UpdateEnvVar to fail for unrepresentable value %q", badValue)
+	}
+	if !strings.Contains(resp.Msg.GetError(), "cannot be safely represented") &&
+		!strings.Contains(resp.Msg.GetError(), "cannot be safely round-tripped") {
+		t.Fatalf("unexpected error message: %s", resp.Msg.GetError())
+	}
+}
+
 func TestSettingsHardenPermissionsFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Directory path instead of file path: os.Stat is Dir, should fail hardenPermissions

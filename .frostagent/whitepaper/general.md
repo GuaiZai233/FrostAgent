@@ -145,9 +145,14 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
   - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
-- **环境变量白名单与防换行注入 (Settings API Allowlist & Newline Injection Defense)**：
+- **环境变量白名单、Dotenv 序列化往返保证与防换行注入 (Settings API Allowlist, Safe Dotenv Serialization & Newline Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
-  - **防换行注入双层防御**：单行环境变量严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项（如 `SYSTEM_PROMPT`）在落盘时通过 dotenv 标准安全转义，将换行字符转义并以双引号包裹（`"...\n..."`），确保每一项在 `.env` 中落盘为单行安全记录，彻底杜绝恶意构造换行注入额外环境变量的攻击可能。
+  - **多模式安全序列化与 godotenv v1.5.1 往返保真**：针对 `godotenv v1.5.1` 解析器的特定行为（如双引号终止符不判断奇偶反斜杠导致尾部反斜杠闭合失效、转义双引号修剪丢失等），采用自适应多模式序列化策略：
+    - 普通单行安全值（无换行、无 `$` 变量展开标记、无首尾空格、不以引号开头、无行内注释）采用直接不加引号的格式落盘（`key=value`），原生保真保留 Windows 路径、末尾反斜杠及内部引号；
+    - 以引号开头的安全值自适应采用单引号格式（`key='value'`）；
+    - 包含空值、前后空白、`$` 变量、换行等多行配置项（如 `SYSTEM_PROMPT`）采用安全转义的双引号格式（`"...\n..."`）；
+  - **写入前 Round-Trip 强校验与 Fail-Closed**：在实际落盘前，序列化器即时调用 `godotenv.Unmarshal` 对格式化后的条目进行解析回测，严格验证 `parse(format(value)) == value` 且无键分裂或多余键注入；对于解析器本身无法无歧义表示的非法输入，显式拒绝写入并返回错误，彻底杜绝配置损坏或服务重启后无法解析的风险；
+  - **防换行注入双层防御**：单行环境变量在 API 层面严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项经转义双引号后在 `.env` 中落盘为单行记录，杜绝利用换行注入非受信环境变量。
 - **并发互斥与安全原子落盘 (Concurrency Safety & Secure Atomic Writes)**：
   - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免高并发交错写入或结构化与 Raw 编辑交织导致配置覆盖或数据竞争；
   - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），避免多协程写入碰撞；
