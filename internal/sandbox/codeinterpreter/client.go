@@ -20,7 +20,10 @@ import (
 )
 
 const (
-	maxResponseBodyBytes = 10 << 20 // 10 MiB limit on gateway responses
+	// maxResponseBodyBytes bounds gateway response bodies. Sized to 16 MiB to safely
+	// accommodate up to 1 MiB per stream (Worker limit) under worst-case JSON control
+	// character escaping (e.g. control char expansion => ~12 MiB total).
+	maxResponseBodyBytes = 16 << 20 // 16 MiB
 	maxErrorBodyBytes    = 4096     // 4 KiB limit on error bodies
 	httpTimeoutEnvelope  = 10 * time.Second
 )
@@ -163,7 +166,8 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 
 	// 204 No Content -> success
 	// 404 Not Found -> already released/not found, idempotent success
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+	// HTTP 200 is intentionally rejected to prevent masking endpoint misconfigurations.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 
@@ -172,9 +176,9 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 }
 
 type gatewayExecRequest struct {
-	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
-	Timeout int    `json:"timeout"`
+	Command string  `json:"command"`
+	Cwd     string  `json:"cwd"`
+	Timeout float64 `json:"timeout"`
 }
 
 type gatewayExecResponse struct {
@@ -211,15 +215,15 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	q.Set("user_uuid", userUUID)
 	execURL.RawQuery = q.Encode()
 
-	timeoutSeconds := int(req.Timeout.Round(time.Second).Seconds())
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 1
+	timeoutSec := req.Timeout.Seconds()
+	if timeoutSec <= 0 {
+		timeoutSec = 1.0
 	}
 
 	payload := gatewayExecRequest{
 		Command: req.Command,
 		Cwd:     req.Cwd,
-		Timeout: timeoutSeconds,
+		Timeout: timeoutSec,
 	}
 
 	bodyBytes, err := json.Marshal(payload)
@@ -276,6 +280,25 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	var gatewayResp gatewayExecResponse
 	if err := json.NewDecoder(limitedReader).Decode(&gatewayResp); err != nil {
 		return sandbox.ExecResult{}, fmt.Errorf("failed to decode sandbox gateway response: %w", err)
+	}
+
+	// Validate execution-state invariants according to adapter contract:
+	// 1. Completed: exit_code != nil && timed_out == false
+	// 2. Timed out: exit_code == nil && timed_out == true
+	// Reject impossible or incomplete combinations as gateway protocol failures.
+	if gatewayResp.TimedOut {
+		if gatewayResp.ExitCode != nil {
+			return sandbox.ExecResult{}, fmt.Errorf(
+				"malformed gateway response: timed_out is true but exit_code is non-nil (%d)",
+				*gatewayResp.ExitCode,
+			)
+		}
+	} else {
+		if gatewayResp.ExitCode == nil {
+			return sandbox.ExecResult{}, errors.New(
+				"malformed gateway response: exit_code is null but timed_out is false",
+			)
+		}
 	}
 
 	execDuration := time.Since(startTime)

@@ -21,7 +21,7 @@ func TestRealGatewayIntegration(t *testing.T) {
 
 	baseURL := os.Getenv("REAL_SANDBOX_BASE_URL")
 	if baseURL == "" {
-		baseURL = "http://127.0.0.1:13874"
+		baseURL = "http://127.0.0.1:3874"
 	}
 
 	cfg := sandbox.Config{

@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DefaultBaseURL          = "http://127.0.0.1:13874"
+	DefaultBaseURL          = "http://127.0.0.1:3874"
 	DefaultSessionNamespace = "frostagent"
 	DefaultExecutionTimeout = 30 * time.Second
 	MaxExecutionTimeout     = 120 * time.Second

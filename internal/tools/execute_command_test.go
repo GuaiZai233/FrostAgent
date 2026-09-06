@@ -334,6 +334,78 @@ func TestExecuteCommandTool_LargeOutputTruncationAndJSONSafety(t *testing.T) {
 	}
 }
 
+func TestExecuteCommandTool_EscapeHeavyOutputTruncationAndJSONSafety(t *testing.T) {
+	// Regression test for Finding 3: escape-heavy output (control bytes \x00, \x1f, quotes, backslashes, <, >, &)
+	// which expand up to 6x during json.Marshal.
+	// Output must strictly stay below MaxToolOutputBytes (64 KiB) and remain 100% valid JSON.
+	headStdout := "ESCAPE_HEAD_<>&_\"\\"
+	tailStdout := "_ESCAPE_TAIL_<>&"
+	escapeStdout := headStdout + strings.Repeat("\x00\"\\<>&", 20*1024) + tailStdout
+
+	headStderr := "STDERR_HEAD_\x01\x1f"
+	tailStderr := "_STDERR_TAIL_ERROR"
+	escapeStderr := headStderr + strings.Repeat("\x01\x1f\"\\", 25*1024) + tailStderr
+	zero := 0
+
+	fake := &fakeSandboxBackend{
+		execFunc: func(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{
+				Stdout:          escapeStdout,
+				Stderr:          escapeStderr,
+				ExitCode:        &zero,
+				StdoutTruncated: false,
+				StderrTruncated: false,
+				Duration:        120 * time.Millisecond,
+			}, nil
+		},
+	}
+
+	tool := tools.ExecuteCommandTool(fake)
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "sess-escape"})
+	resStr, err := tool.ExecuteContext(ctx, `{"command": "echo escape_heavy"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Result MUST be strictly below FrostAgent's MaxToolOutputBytes (64 KiB = 65536)
+	if len(resStr) >= llm.MaxToolOutputBytes {
+		t.Fatalf("escape-heavy tool result size (%d bytes) exceeded MaxToolOutputBytes (%d)", len(resStr), llm.MaxToolOutputBytes)
+	}
+
+	// Result MUST be valid JSON
+	var parsed tools.CommandToolOutput
+	if err := json.Unmarshal([]byte(resStr), &parsed); err != nil {
+		t.Fatalf("failed to parse escape-heavy output JSON: %v\nResult: %s", err, resStr)
+	}
+
+	if !parsed.FrostAgentStdoutTruncated {
+		t.Errorf("expected FrostAgentStdoutTruncated to be true for escape-heavy stdout")
+	}
+	if !parsed.FrostAgentStderrTruncated {
+		t.Errorf("expected FrostAgentStderrTruncated to be true for escape-heavy stderr")
+	}
+
+	if !strings.HasPrefix(parsed.Stdout, headStdout) {
+		t.Errorf("stdout head was lost: %s", parsed.Stdout[:50])
+	}
+	if !strings.HasSuffix(parsed.Stdout, tailStdout) {
+		t.Errorf("stdout tail was lost: %s", parsed.Stdout[len(parsed.Stdout)-50:])
+	}
+	if !strings.Contains(parsed.Stdout, "...[FrostAgent output truncated]...") {
+		t.Errorf("stdout missing truncation marker")
+	}
+
+	if !strings.HasPrefix(parsed.Stderr, headStderr) {
+		t.Errorf("stderr head was lost")
+	}
+	if !strings.HasSuffix(parsed.Stderr, tailStderr) {
+		t.Errorf("stderr tail was lost")
+	}
+	if !strings.Contains(parsed.Stderr, "...[FrostAgent output truncated]...") {
+		t.Errorf("stderr missing truncation marker")
+	}
+}
+
 func TestExecuteCommandTool_ConcurrentSessionIsolation(t *testing.T) {
 	// 16. Concurrent session A/B do not mix SessionID
 	fake := &fakeSandboxBackend{}

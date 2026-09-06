@@ -1,4 +1,4 @@
-package tools
+﻿package tools
 
 import (
 	"context"
@@ -14,13 +14,14 @@ import (
 )
 
 const (
-	// executeCommandMaxStreamBytes is the maximum byte size allocated to stdout
-	// or stderr before FrostAgent performs two-sided head/tail truncation.
-	// 24 KiB each ensures stdout + stderr + JSON metadata strictly stays under
-	// agent.go's MaxToolOutputBytes (64 KiB), preventing generic truncation from
-	// corrupting structured JSON.
-	executeCommandMaxStreamBytes = 24 * 1024
-	truncationMarker             = "\n...[FrostAgent output truncated]...\n"
+	// executeCommandMaxStreamEncodedBytes is the maximum JSON-encoded byte size
+	// allocated to stdout or stderr after JSON escaping. 24 KiB each ensures
+	// encoded stdout (<=24 KiB) + encoded stderr (<=24 KiB) + metadata strictly
+	// stays under agent.go's MaxToolOutputBytes (64 KiB), preventing generic
+	// truncation from corrupting structured JSON even under worst-case control
+	// character expansion (e.g. \x00 -> ) or HTML escaping (<, >, &).
+	executeCommandMaxStreamEncodedBytes = 24 * 1024
+	truncationMarker                    = "\n...[FrostAgent output truncated]...\n"
 )
 
 // CommandToolOutput is the structured JSON returned to the LLM.
@@ -81,13 +82,13 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 				return "", fmt.Errorf("参数解析失败: %w", err)
 			}
 
-			command := strings.TrimSpace(params.Command)
-			if command == "" {
+			if strings.TrimSpace(params.Command) == "" {
 				return "", errors.New("command 参数不能为空")
 			}
+			command := params.Command
 
-			cwd := strings.TrimSpace(params.Cwd)
-			if cwd == "" {
+			cwd := params.Cwd
+			if strings.TrimSpace(cwd) == "" {
 				cwd = "/sandbox"
 			}
 
@@ -117,8 +118,8 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 				return "", fmt.Errorf("sandbox 执行失败: %w", err)
 			}
 
-			stdout, stdoutTrunc := boundStream(result.Stdout, executeCommandMaxStreamBytes)
-			stderr, stderrTrunc := boundStream(result.Stderr, executeCommandMaxStreamBytes)
+			stdout, stdoutTrunc := boundStream(result.Stdout, executeCommandMaxStreamEncodedBytes)
+			stderr, stderrTrunc := boundStream(result.Stderr, executeCommandMaxStreamEncodedBytes)
 
 			toolOutput := CommandToolOutput{
 				Stdout:                    stdout,
@@ -142,35 +143,86 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 	}
 }
 
-// boundStream ensures stream output does not exceed maxBytes. If truncation is
-// needed, it keeps both head and tail sections separated by a marker to retain
-// critical compiler/runtime error diagnostics at the tail.
-func boundStream(content string, maxBytes int) (string, bool) {
-	if len(content) <= maxBytes {
+// boundStream ensures stream output, when JSON-encoded, does not exceed
+// maxEncodedBytes. If truncation is needed, it keeps both head and tail sections
+// separated by a marker to retain critical compiler/runtime error diagnostics
+// at the tail, while guaranteeing that the marshaled JSON will never exceed
+// the budget regardless of escape expansion (e.g. control chars or HTML escaping).
+func boundStream(content string, maxEncodedBytes int) (string, bool) {
+	if jsonEncodedContentLen(content) <= maxEncodedBytes {
 		return content, false
 	}
 
-	markerLen := len(truncationMarker)
-	budget := maxBytes - markerLen
+	markerLen := jsonEncodedContentLen(truncationMarker)
+	budget := maxEncodedBytes - markerLen
 	if budget <= 0 {
 		return truncationMarker, true
 	}
 
-	half := budget / 2
-
-	// Head section: cut up to half, ensuring valid UTF-8 rune boundary.
-	headCut := half
-	for headCut > 0 && !utf8.RuneStart(content[headCut]) {
-		headCut--
-	}
-	head := content[:headCut]
-
-	// Tail section: take last half, ensuring valid UTF-8 rune boundary.
-	tailStart := len(content) - half
-	for tailStart < len(content) && !utf8.RuneStart(content[tailStart]) {
-		tailStart++
-	}
-	tail := content[tailStart:]
+	halfBudget := budget / 2
+	head := findPrefixUnderBudget(content, halfBudget)
+	tail := findSuffixUnderBudget(content, halfBudget)
 
 	return head + truncationMarker + tail, true
+}
+
+func jsonEncodedContentLen(s string) int {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return len(s) * 6
+	}
+	if len(b) >= 2 {
+		return len(b) - 2
+	}
+	return len(b)
+}
+
+func findPrefixUnderBudget(content string, maxEncodedBudget int) string {
+	if maxEncodedBudget <= 0 {
+		return ""
+	}
+	low := 0
+	high := len(content)
+	bestCut := 0
+
+	for low <= high {
+		mid := (low + high) / 2
+		cut := mid
+		for cut > 0 && !utf8.RuneStart(content[cut]) {
+			cut--
+		}
+		prefix := content[:cut]
+		if jsonEncodedContentLen(prefix) <= maxEncodedBudget {
+			bestCut = cut
+			low = mid + 1
+		} else {
+			high = cut - 1
+		}
+	}
+	return content[:bestCut]
+}
+
+func findSuffixUnderBudget(content string, maxEncodedBudget int) string {
+	if maxEncodedBudget <= 0 {
+		return ""
+	}
+	low := 0
+	high := len(content)
+	bestStart := len(content)
+
+	for low <= high {
+		mid := (low + high) / 2
+		start := mid
+		for start < len(content) && !utf8.RuneStart(content[start]) {
+			start++
+		}
+		suffix := content[start:]
+		if jsonEncodedContentLen(suffix) <= maxEncodedBudget {
+			bestStart = start
+			high = mid - 1
+		} else {
+			low = start + 1
+		}
+	}
+	return content[bestStart:]
 }

@@ -25,7 +25,7 @@ func TestConfig_Validation(t *testing.T) {
 			name: "enabled sandbox with valid config",
 			cfg: sandbox.Config{
 				Enabled:          true,
-				BaseURL:          "http://127.0.0.1:13874",
+				BaseURL:          "http://127.0.0.1:3874",
 				AuthToken:        "secret-token",
 				SessionNamespace: "frostagent",
 			},
@@ -45,7 +45,7 @@ func TestConfig_Validation(t *testing.T) {
 			name: "enabled with invalid base url scheme",
 			cfg: sandbox.Config{
 				Enabled:          true,
-				BaseURL:          "ftp://127.0.0.1:13874",
+				BaseURL:          "ftp://127.0.0.1:3874",
 				AuthToken:        "secret-token",
 				SessionNamespace: "frostagent",
 			},
@@ -55,7 +55,7 @@ func TestConfig_Validation(t *testing.T) {
 			name: "enabled with empty auth token",
 			cfg: sandbox.Config{
 				Enabled:          true,
-				BaseURL:          "http://127.0.0.1:13874",
+				BaseURL:          "http://127.0.0.1:3874",
 				AuthToken:        "",
 				SessionNamespace: "frostagent",
 			},
@@ -65,7 +65,7 @@ func TestConfig_Validation(t *testing.T) {
 			name: "enabled with empty namespace",
 			cfg: sandbox.Config{
 				Enabled:          true,
-				BaseURL:          "http://127.0.0.1:13874",
+				BaseURL:          "http://127.0.0.1:3874",
 				AuthToken:        "secret-token",
 				SessionNamespace: "",
 			},

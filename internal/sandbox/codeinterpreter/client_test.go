@@ -315,12 +315,12 @@ func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 	t.Run("oversized response body is bounded", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			// Send an infinite or huge stream that exceeds 10MB
+			// Send an infinite or huge stream that exceeds 16MB
 			w.Header().Set("Content-Type", "application/json")
 			// Create a string prefix that opens json
 			_, _ = w.Write([]byte(`{"stdout":"`))
 			chunk := strings.Repeat("A", 1024*1024)
-			for i := 0; i < 15; i++ {
+			for i := 0; i < 20; i++ {
 				_, _ = w.Write([]byte(chunk))
 			}
 			_, _ = w.Write([]byte(`","stderr":"","exit_code":0}`))
@@ -466,4 +466,190 @@ func TestRelease(t *testing.T) {
 			t.Fatalf("expected error on 500 release")
 		}
 	})
+
+	t.Run("200 OK is rejected to prevent masking misconfigurations", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "tok",
+			SessionNamespace: "ns",
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		err := client.Release(context.Background(), "session-200")
+		if err == nil {
+			t.Fatalf("expected error on 200 release, got nil")
+		}
+	})
+}
+
+func TestExec_SemanticExecutionStateInvariants(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		expectError bool
+		checkResult func(t *testing.T, res sandbox.ExecResult)
+	}{
+		{
+			name:        "empty JSON object missing exit_code and timed_out false",
+			body:        `{}`,
+			expectError: true,
+		},
+		{
+			name:        "exit_code null and timed_out false",
+			body:        `{"stdout":"","stderr":"","exit_code":null,"timed_out":false}`,
+			expectError: true,
+		},
+		{
+			name:        "exit_code non-nil and timed_out true",
+			body:        `{"stdout":"","stderr":"","exit_code":0,"timed_out":true}`,
+			expectError: true,
+		},
+		{
+			name:        "valid completed command",
+			body:        `{"stdout":"hello","stderr":"","exit_code":0,"timed_out":false,"duration_ms":42}`,
+			expectError: false,
+			checkResult: func(t *testing.T, res sandbox.ExecResult) {
+				if res.TimedOut {
+					t.Errorf("expected timed_out false")
+				}
+				if res.ExitCode == nil || *res.ExitCode != 0 {
+					t.Errorf("expected exit_code 0, got %v", res.ExitCode)
+				}
+				if res.Stdout != "hello" {
+					t.Errorf("expected stdout 'hello', got %q", res.Stdout)
+				}
+			},
+		},
+		{
+			name:        "valid timed out command",
+			body:        `{"stdout":"partial","stderr":"","exit_code":null,"timed_out":true,"duration_ms":1000}`,
+			expectError: false,
+			checkResult: func(t *testing.T, res sandbox.ExecResult) {
+				if !res.TimedOut {
+					t.Errorf("expected timed_out true")
+				}
+				if res.ExitCode != nil {
+					t.Errorf("expected exit_code nil, got %v", res.ExitCode)
+				}
+				if res.Stdout != "partial" {
+					t.Errorf("expected stdout 'partial', got %q", res.Stdout)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			client := codeinterpreter.New(sandbox.Config{
+				BaseURL:          server.URL,
+				AuthToken:        "tok",
+				SessionNamespace: "ns",
+			}, codeinterpreter.WithHTTPClient(server.Client()))
+
+			res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+				SessionID: "sess1",
+				Command:   "ls",
+				Timeout:   5 * time.Second,
+			})
+			if tc.expectError {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if tc.checkResult != nil {
+					tc.checkResult(t, res)
+				}
+			}
+		})
+	}
+}
+
+func TestExec_FloatTimeoutSemantics(t *testing.T) {
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		capturedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"stdout":"done","stderr":"","exit_code":0,"timed_out":false}`))
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess1",
+		Command:   "sleep 5.5",
+		Timeout:   5500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("exec failed: %v", err)
+	}
+
+	var parsed struct {
+		Timeout float64 `json:"timeout"`
+	}
+	if err := json.Unmarshal(capturedBody, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal request body: %v", err)
+	}
+	if parsed.Timeout != 5.5 {
+		t.Fatalf("expected timeout 5.5, got %v", parsed.Timeout)
+	}
+}
+
+func TestExec_EscapeHeavyNearLimitResponse(t *testing.T) {
+	// Worker limit is 1 MiB per stream. Under worst-case control character escaping
+	// ( = 6 bytes in JSON), 1 MiB expands to ~6 MiB JSON per stream.
+	// Two streams (stdout + stderr) expand to ~12 MiB total JSON.
+	// We verify that the 16 MiB client limit allows this response to decode cleanly.
+	rawEscapeStream := strings.Repeat("\\u0000", 1024*1024)
+	payload := `{"stdout":"` + rawEscapeStream + `","stderr":"` + rawEscapeStream + `","exit_code":0,"timed_out":false}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess1",
+		Command:   "cat binary_control_chars",
+		Timeout:   10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("expected 12 MiB escape-heavy response to decode successfully, got error: %v", err)
+	}
+	if res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Fatalf("expected exit_code 0, got %v", res.ExitCode)
+	}
+	if len(res.Stdout) != 1024*1024 {
+		t.Fatalf("expected stdout length 1048576, got %d", len(res.Stdout))
+	}
 }
