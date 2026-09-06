@@ -1,4 +1,5 @@
-import { api } from '../api/client';
+import { instanceState } from '../instance-state';
+import { createInstanceAPI } from '../api/client';
 import { LogEntry, LogLevel } from '@frostagent/proto';
 import {
   escapeHtml,
@@ -17,6 +18,7 @@ import { renderPagination, attachPaginationEvents } from '../components/paginati
 import { openPromptInspectorDialog, renderLoggedImagesInText } from '../components/prompt-inspector';
 
 export function mountLogsPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let streaming = false;
@@ -48,6 +50,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
         </div>
       </header>
 
+      <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" id="logs-general" ${instanceState.showGeneral ? "checked" : ""}>显示后端总日志(General)</label>
       <!-- Filter Card -->
       <section class="card p-3.5">
         <div class="flex items-end gap-3 flex-wrap">
@@ -140,6 +143,10 @@ export function mountLogsPage(container: HTMLElement): () => void {
     </div>
   `;
 
+  container.querySelector<HTMLInputElement>("#logs-general")!.onchange = event => {
+ instanceState.showGeneral = (event.target as HTMLInputElement).checked;
+ stopStream(); tokenStack.reset(); streamEntries=[]; selectedEntry=null;void loadLogs();
+ };
   // Elements
   const refreshBtn = container.querySelector<HTMLButtonElement>('#logs-refresh-btn')!;
   const clearBtn = container.querySelector<HTMLButtonElement>('#logs-clear-btn')!;
@@ -228,7 +235,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
             </td>
             <td class="text-xs font-medium text-foreground">
               <div class="flex items-center gap-1.5">
-                <span>${escapeHtml(entry.source || '-')}</span>
+                <span>${escapeHtml(entry.instanceId ? "Instance: "+entry.instanceName : "General")} · ${escapeHtml(entry.source || '-')}</span>
                 ${
                   hasPrompt
                     ? `<span class="text-info" title="包含 LLM Prompt">${icon('sparkles', 'w-3 h-3')}</span>`
@@ -429,6 +436,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       for await (const entry of api.streamLogs(minLevel, sourceFilter, streamAbortController.signal)) {
         if (isUnmounted) break;
         streamEntries.unshift(entry);
+ streamEntries.sort((a,b)=>b.timestamp.localeCompare(a.timestamp)||b.id.localeCompare(a.id));
         if (streamEntries.length > 200) streamEntries.pop();
         renderStreamEntries();
       }

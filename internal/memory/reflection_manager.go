@@ -2,7 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/logs"
-	"context"
+	"FrostAgent/internal/runtimescope"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,6 +21,7 @@ type ReflectionStatus struct {
 // ReflectionManager starts reflection in the background and prevents
 // overlapping reflection jobs.
 type ReflectionManager struct {
+	*runtimescope.Scope
 	reflector *Reflector
 	mu        sync.RWMutex
 	status    ReflectionStatus
@@ -52,7 +53,12 @@ func (m *ReflectionManager) Start(owner string) (ReflectionStatus, bool, error) 
 	status := m.status
 	m.mu.Unlock()
 
-	go m.run(owner)
+	if !m.Go(func() { m.run(owner) }) {
+		m.mu.Lock()
+		m.status.Running = false
+		m.mu.Unlock()
+		return status, false, fmt.Errorf("实例未启用")
+	}
 	return status, true, nil
 }
 
@@ -67,7 +73,7 @@ func (m *ReflectionManager) Status() ReflectionStatus {
 }
 
 func (m *ReflectionManager) run(owner string) {
-	ctx := context.Background()
+	ctx := m.Context()
 	var err error
 	if owner == "" {
 		err = m.reflector.Reflect(ctx)
@@ -86,8 +92,8 @@ func (m *ReflectionManager) run(owner string) {
 	m.mu.Unlock()
 
 	if err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("后台记忆反思失败: %v", err))
+		m.Log().Error(logs.SYSTEM, fmt.Sprintf("后台记忆反思失败: %v", err))
 		return
 	}
-	logs.Info(logs.SYSTEM, "后台记忆反思任务已完成")
+	m.Log().Info(logs.SYSTEM, "后台记忆反思任务已完成")
 }

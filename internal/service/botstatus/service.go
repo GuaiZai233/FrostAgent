@@ -38,6 +38,9 @@ func (s *Service) GetOverview(
 	}
 
 	status := v1.BotStatus_BOT_STATUS_RUNNING
+	if s.engine.Scope != nil && s.engine.Context().Err() != nil {
+		status = v1.BotStatus_BOT_STATUS_STOPPED
+	}
 	if s.engine.SessionManager == nil {
 		status = v1.BotStatus_BOT_STATUS_INITIALIZING
 	}
@@ -152,7 +155,7 @@ func (s *Service) GetSessions(
 	if s.engine.GroupSummaryStore != nil {
 		records, err := s.engine.GroupSummaryStore.List()
 		if err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
+			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
 				if existing, ok := viewsByID[record.SessionID]; ok {
@@ -363,7 +366,7 @@ func (s *Service) DeleteGroupSummary(
 			Error: err.Error(),
 		}), nil
 	}
-	logs.Info(logs.SYSTEM, "群聊总结已删除 ("+sessionID+")")
+	s.engine.Log().Info(logs.SYSTEM, "群聊总结已删除 ("+sessionID+")")
 	return connect.NewResponse(&v1.DeleteGroupSummaryResponse{Success: true}), nil
 }
 

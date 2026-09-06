@@ -3,6 +3,7 @@ package memory
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,7 @@ func CurrentTimeLabel(t time.Time) string {
 // Reflector analyzes memories per owner and rebuilds the replaceable topic
 // catalog. It never injects a full summary into the conversation.
 type Reflector struct {
+	*runtimescope.Scope
 	store    *Store
 	catalog  *CatalogStore
 	provider core.LLMProvider
@@ -180,7 +182,7 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 
 	startedAt := time.Now()
 	promptBytes := len([]byte(prompt))
-	logs.Info(
+	r.Log().Info(
 		logs.SYSTEM,
 		fmt.Sprintf(
 			"开始记忆反思请求：owner=%s，记忆=%d 条，prompt=%d bytes，timeout=%s",
@@ -209,7 +211,7 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 			err,
 		)
 	}
-	logs.Info(
+	r.Log().Info(
 		logs.SYSTEM,
 		fmt.Sprintf(
 			"记忆反思响应完成：owner=%s，耗时=%s",
@@ -274,7 +276,7 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 		requestedOutdated,
 	)
 	if rejectedMerges > 0 {
-		logs.Warn(
+		r.Log().Warn(
 			logs.SYSTEM,
 			fmt.Sprintf("反思忽略了 %d 组不安全的记忆合并候选", rejectedMerges),
 		)
@@ -310,7 +312,7 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 		}
 	}
 
-	logs.Info(
+	r.Log().Info(
 		logs.SYSTEM,
 		fmt.Sprintf(
 			"反思完成：owner=%s，处理 %d 条记忆，合并 %d 组（归档 %d 条来源），删除 %d 条过时记忆，生成 %d 个主题",

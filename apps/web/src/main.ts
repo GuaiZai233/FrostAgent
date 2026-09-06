@@ -1,3 +1,5 @@
+import { instanceState } from './instance-state';
+import { openInstanceManagement } from './components/instances';
 import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
@@ -54,7 +56,10 @@ function buildNavigationLinks(isMobile = false): string {
     .join('');
 }
 
-function getThemeIconAndLabel(mode: ThemeMode): { iconName: string; label: string } {
+function getThemeIconAndLabel(mode: ThemeMode): {
+  iconName: string;
+  label: string;
+} {
   switch (mode) {
     case 'light':
       return { iconName: 'sun', label: '浅色模式' };
@@ -76,7 +81,7 @@ function initAppShell(): void {
   appEl.innerHTML = `
     <div class="app-layout">
       <!-- Desktop Sidebar -->
-      <aside class="sidebar">
+      <aside class="desktop-sidebar">
         <div class="sidebar-header">
           <div class="brand">
             <div class="brand-icon">
@@ -94,6 +99,7 @@ function initAppShell(): void {
         </nav>
 
         <div class="sidebar-footer">
+ <button class="theme-toggle-btn instance-manager-btn">实例管理<span class="instance-selected-label text-xs text-muted">未选择</span></button>
           <button class="theme-toggle-btn" id="theme-toggle-desktop" title="切换主题">
             <span class="flex items-center gap-2">
               <span id="theme-icon-desktop" class="inline-flex">${icon(themeInfo.iconName)}</span>
@@ -141,7 +147,7 @@ function initAppShell(): void {
         </div>
         <nav class="sidebar-nav p-3" aria-label="移动端导航">
           ${buildNavigationLinks(true)}
-        </nav>
+        </nav><div class="sidebar-footer"><button class="theme-toggle-btn instance-manager-btn">实例管理<span class="instance-selected-label text-xs text-muted">未选择</span></button></div>
       </aside>
 
       <!-- Main Content Container -->
@@ -196,8 +202,12 @@ function initAppShell(): void {
     else themeManager.setMode('light');
   };
 
-  document.getElementById('theme-toggle-desktop')?.addEventListener('click', handleQuickThemeToggle);
-  document.getElementById('theme-toggle-mobile')?.addEventListener('click', handleQuickThemeToggle);
+  document
+    .getElementById('theme-toggle-desktop')
+    ?.addEventListener('click', handleQuickThemeToggle);
+  document
+    .getElementById('theme-toggle-mobile')
+    ?.addEventListener('click', handleQuickThemeToggle);
 
   themeManager.onChange((mode) => {
     updateThemeUI(mode);
@@ -221,6 +231,22 @@ function initAppShell(): void {
     });
   });
 
+  document.querySelectorAll('.instance-manager-btn').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      closeDrawer();
+      void openInstanceManagement();
+    }),
+  );
+  window.addEventListener('instance-selected', () => {
+    document
+      .querySelectorAll('.instance-selected-label')
+      .forEach(
+        (label) =>
+          (label.textContent = instanceState.selected?.name || '未选择'),
+      );
+    router.refresh();
+  });
+
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
   router.register('/sessions', '会话管理', mountSessionsPage);
@@ -230,9 +256,52 @@ function initAppShell(): void {
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
-  router.register('/settings/backend', 'Bot 服务端设置', mountBackendSettingsPage);
-  router.register('/settings/frontend', '网页端外观设置', mountFrontendSettingsPage);
+  router.register(
+    '/settings/backend',
+    'Bot 服务端设置',
+    mountBackendSettingsPage,
+  );
+  router.register(
+    '/settings/frontend',
+    '网页端外观设置',
+    mountFrontendSettingsPage,
+  );
   router.register('/model-router', '模型路由器', mountModelRouterPage);
+
+  const register = router.register.bind(router);
+  const guardedPaths = [
+    '/overview',
+    '/sessions',
+    '/memory',
+    '/dialogue',
+    '/prompt',
+    '/stickers',
+    '/settings/backend',
+    '/model-router',
+  ];
+  const mounts = [
+    mountOverviewPage,
+    mountSessionsPage,
+    mountMemoryPage,
+    mountDialoguePage,
+    mountPromptPage,
+    mountStickersPage,
+    mountBackendSettingsPage,
+    mountModelRouterPage,
+  ];
+  guardedPaths.forEach((path, index) =>
+    register(
+      path,
+      navItems.find((n) => n.path === path)?.label || '设置',
+      (container) => {
+        if (instanceState.selected) return mounts[index](container);
+        container.innerHTML = `<div class="page-container"><article class="card p-6"><h1 class="page-title">请选择实例</h1><p class="page-description">FrostAgent Control Plane 正在运行。创建或选择实例后，即可管理它的配置与数据。</p><button class="btn btn-primary mt-4" id="empty-manage">实例管理</button></article></div>`;
+        container
+          .querySelector('#empty-manage')!
+          .addEventListener('click', () => void openInstanceManagement());
+      },
+    ),
+  );
 
   // Initialize Router
   if (pageContainer) {

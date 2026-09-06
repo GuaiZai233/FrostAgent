@@ -1,4 +1,4 @@
-import { api } from '../api/client';
+import { createInstanceAPI } from '../api/client';
 import { MemoryEntry, GetMemoryStatsResponse } from '@frostagent/proto';
 import { escapeHtml, formatCount, formatDateTime, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -8,6 +8,7 @@ import { confirmDialog } from '../components/confirm';
 import { renderPagination, attachPaginationEvents } from '../components/pagination';
 
 export function mountMemoryPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let reflecting = false;
@@ -749,6 +750,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
     const reader = new FileReader();
     reader.onload = async () => {
+ if(isUnmounted)return;
       try {
         const res = await api.importMemories(reader.result as string, false);
         if (res.error) {

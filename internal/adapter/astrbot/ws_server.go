@@ -8,6 +8,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
@@ -69,6 +70,7 @@ func checkWebSocketOrigin(r *http.Request) bool {
 }
 
 type wsConn struct {
+	*runtimescope.Scope
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 }
@@ -96,8 +98,6 @@ func (c *wsConn) WriteJSON(v any) error {
 }
 
 func (c *wsConn) Close() error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	if c.conn == nil {
 		return nil
 	}
@@ -246,7 +246,7 @@ func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine
 		return
 	}
 
-	botName := os.Getenv("BOT_NAME")
+	botName := engine.Getenv("BOT_NAME")
 	if botName == "" {
 		botName = "霜降"
 	}
@@ -278,11 +278,11 @@ func composeReplyWithReceipt(replyText, receiptText string) string {
 	return replyText + "\n\n" + receiptText
 }
 
-func isBotNameMentioned(text string) bool {
+func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	if text == "" {
 		return false
 	}
-	names := configuredBotNames()
+	names := configuredBotNames(scopes...)
 	for _, name := range names {
 		if strings.Contains(text, name) {
 			return true
@@ -291,12 +291,13 @@ func isBotNameMentioned(text string) bool {
 	return false
 }
 
-func configuredBotNames() []string {
-	name, nameSet := os.LookupEnv("BOT_NAME")
+func configuredBotNames(scopes ...*runtimescope.Scope) []string {
+	scope := runtimescope.First(scopes)
+	name, nameSet := scope.LookupEnv("BOT_NAME")
 	if !nameSet {
 		name = "霜降狐"
 	}
-	aliases, aliasesSet := os.LookupEnv("BOT_ALIASES")
+	aliases, aliasesSet := scope.LookupEnv("BOT_ALIASES")
 	if !aliasesSet {
 		aliases = "霜降,FrostAgent"
 	}
@@ -318,21 +319,22 @@ func configuredBotNames() []string {
 	return result
 }
 
-func shouldReply(event Event) bool {
+func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+	scope := runtimescope.First(scopes)
 	if event.MessageType == "private" {
 		return true
 	}
 	if event.MessageType == "group" {
-		if os.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		if scope.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 			return false
 		}
 		if event.IsWake || event.IsAt {
 			return true
 		}
-		if isBotNameMentioned(event.Content) {
+		if isBotNameMentioned(event.Content, scope) {
 			return true
 		}
-		return slices.ContainsFunc(event.Messages, isBotNameMentioned)
+		return slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) })
 	}
 	return true
 }
@@ -362,8 +364,8 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		platform = "astrbot"
 	}
 
-	if !shouldReply(event) {
-		logs.Debug(
+	if !shouldReply(event, engine.Scope) {
+		engine.Log().Debug(
 			logs.WEBSOCKET,
 			fmt.Sprintf(
 				"AstrBot 忽略未唤醒群聊消息 (ID:%s Group:%s User:%s): %s",
@@ -383,7 +385,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 	}
 
 	logText, logImages := astrBotLogText(event)
-	logs.InfoWithInlineImages(
+	engine.Log().InfoWithInlineImages(
 		logs.WEBSOCKET,
 		fmt.Sprintf(
 			"AstrBot 收到 [%s] %s 消息 (ID:%s User:%s/%s Group:%s): %s",
@@ -411,7 +413,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
 	routeScope := astrBotRouteScope(event)
-	routeCtx := context.Background()
+	routeCtx := runtimescope.WithContext(engine.Context(), engine.Scope)
 	if engine != nil && engine.ModelRouter != nil {
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
@@ -448,21 +450,21 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				platform = "astrbot"
 			}
 			if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-				bCtx, bCancel := context.WithTimeout(context.Background(), engine.BillingConfig.Timeout)
+				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 				bal, err := engine.BillingClient.Balance(bCtx, platform, event.UserID)
 				bCancel()
 				if err != nil {
 					if errors.Is(err, billing.ErrInsufficientFunds) {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
 						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
 						return
 					}
-					logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
 					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
 					return
 				}
 				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
 					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
 					return
 				}
@@ -583,7 +585,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Messages []tools.Msg `json:"messages"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
+				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
 			actionMessages := make([]ActionMessage, 0, len(toolOutput.Messages))
@@ -642,7 +644,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
 			}
 			if err := conn.WriteJSON(action); err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
+				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
 				return err
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
@@ -686,7 +688,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 		if runResult.Silent {
 			engine.TrimSession(session)
-			logs.Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", sessionKey(event)))
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", sessionKey(event)))
 			return
 		}
 
@@ -732,7 +734,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	engine.TrimSession(session)
 
 	if runResult.MemoryWritten {
-		logs.Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+		engine.Log().Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
 		pendingUserText := userText
 		if event.MessageType == "group" {
@@ -828,7 +830,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
 	}
 	if err := conn.WriteJSON(action); err != nil {
-		logs.Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
+		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
 		return err
 	}
 	return nil

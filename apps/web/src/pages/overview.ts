@@ -1,9 +1,13 @@
-import { api } from '../api/client';
+import { instanceState, instanceRequest } from '../instance-state';
+import { openQuickConfig } from '../components/instances';
+import { toast } from '../components/toast';
+import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let timerId: number | null = null;
   let isUnmounted = false;
 
@@ -29,7 +33,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     }
 
     try {
-      const data = await api.getOverview();
+      const [data] = await Promise.all([api.getOverview(),instanceState.refresh()]);
+ const instance = instanceState.selected;
       if (isUnmounted) return;
 
       loadingEl.style.display = 'none';
@@ -45,7 +50,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           ? 'badge-destructive'
           : 'badge-outline';
 
-      const botName = data.botName || 'FrostAgent';
+      const botName = instance?.name || data.botName || 'FrostAgent';
       const version = data.version || '-';
 
       const toolsHtml =
@@ -78,6 +83,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               你好👋！我是 ${escapeHtml(botName)}
             </h1>
             <div class="flex flex-wrap gap-1.5 items-center">
+ <button class="btn btn-outline btn-sm" id="quick-config">快速配置</button>
               <span class="badge ${statusBadgeClass}">
                 ${icon('activity', 'w-3 h-3')}
                 ${escapeHtml(formatStatus(data.status))}
@@ -93,10 +99,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             </div>
           </div>
           <p class="page-description">智能体核心服务运行状态与已挂载工具能力</p>
+ <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(window.location.origin.replace(/^http/, "ws"))}/instances/${instance?.id}/ws/onebot<br>AstrBot: ${escapeHtml(window.location.origin.replace(/^http/, "ws"))}/instances/${instance?.id}/ws/astrbot</p>
         </header>
 
         <!-- KPI Summary Cards -->
-        <section class="grid grid-cols-1 sm:grid-cols-3 gap-3.5" aria-label="Bot statistics">
+        <section class="grid grid-cols-1 instance-kpis gap-3.5" aria-label="Bot statistics">
           <article class="card p-3.5 flex items-center gap-3.5">
             <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary flex-shrink-0">
               ${icon('message_square', 'w-4 h-4')}
@@ -128,7 +135,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               </p>
             </div>
           </article>
-        </section>
+<article class="card p-3.5 flex flex-col gap-2"><p class="text-xs text-muted font-medium">是否启用</p><label class="instance-toggle"><input type="checkbox" role="switch" aria-label="是否启用" id="instance-enabled" ${instance?.enabled ? "checked" : ""}><span></span></label></article>
+ </section>
+ ${instance?.error ? `<p class="text-sm text-destructive">${escapeHtml(instance.error)}</p>` : ""}
+ ${instance?.restart_required ? `<p class="text-sm text-warning">需要重启实例后生效</p>` : ""}
 
         <!-- Tools Capability Section -->
         <section class="flex flex-col gap-3">
@@ -143,6 +153,12 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           </div>
         </section>
       `;
+ contentEl.querySelector("#quick-config")!.addEventListener("click",()=>void openQuickConfig());
+ contentEl.querySelector<HTMLInputElement>("#instance-enabled")!.onchange = async (event) => {
+ const enabled=(event.target as HTMLInputElement).checked;
+ try {if(instance)await instanceRequest("/"+instance.id+"/enable",{enabled});}catch(err){toast.error(String(err));}
+ if(!isUnmounted)void loadData();
+ };
     } catch (err) {
       if (isUnmounted) return;
       loadingEl.style.display = 'none';

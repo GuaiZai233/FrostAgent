@@ -4,11 +4,11 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,8 +21,9 @@ const (
 	defaultActionACKTimeout = 10 * time.Second
 )
 
-func actionACKTimeout() time.Duration {
-	if s := strings.TrimSpace(os.Getenv("ONEBOT_ACTION_TIMEOUT")); s != "" {
+func actionACKTimeout(scopes ...*runtimescope.Scope) time.Duration {
+	scope := runtimescope.First(scopes)
+	if s := strings.TrimSpace(scope.Getenv("ONEBOT_ACTION_TIMEOUT")); s != "" {
 		if d, err := time.ParseDuration(s); err == nil && d > 0 {
 			return d
 		}
@@ -68,6 +69,9 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 	defer timer.Stop()
 
 	select {
+	case <-c.Context().Done():
+		c.clearMessageRequest(echo, responseChannel)
+		return oneBotAPIResponse{}, c.Context().Err()
 	case response := <-responseChannel:
 		if response.RetCode != 0 || response.Status != "ok" {
 			detail := strings.TrimSpace(response.Wording)
@@ -133,7 +137,7 @@ func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReply
 	if !ok || c == nil {
 		return resolvedReplyContext{}
 	}
-	return c.lookupMessageContext(context.Background(), event, messageID)
+	return c.lookupMessageContext(c.Context(), event, messageID)
 }
 
 func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.OneBotEvent, messageID int64) resolvedReplyContext {
@@ -148,12 +152,12 @@ func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.One
 	})
 	if err != nil {
 		c.clearMessageRequest(echo, responseChannel)
-		logReplyLookupFailure(messageID, fmt.Sprintf("构造查询失败: %v", err))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("构造查询失败: %v", err))
 		return resolvedReplyContext{}
 	}
 	if err := c.WriteMessage(websocket.TextMessage, action); err != nil {
 		c.clearMessageRequest(echo, responseChannel)
-		logReplyLookupFailure(messageID, fmt.Sprintf("发送查询失败: %v", err))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("发送查询失败: %v", err))
 		return resolvedReplyContext{}
 	}
 
@@ -164,11 +168,11 @@ func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.One
 		return c.resolveReplyResponse(event, messageID, response)
 	case <-timer.C:
 		c.clearMessageRequest(echo, responseChannel)
-		logReplyLookupFailure(messageID, "查询超时")
+		c.logReplyLookupFailure(messageID, "查询超时")
 		return resolvedReplyContext{}
 	case <-ctx.Done():
 		c.clearMessageRequest(echo, responseChannel)
-		logReplyLookupFailure(messageID, fmt.Sprintf("查询取消: %v", ctx.Err()))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("查询取消: %v", ctx.Err()))
 		return resolvedReplyContext{}
 	}
 }
@@ -214,26 +218,26 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		if detail == "" {
 			detail = strings.TrimSpace(response.Message)
 		}
-		logReplyLookupFailure(messageID, fmt.Sprintf("retcode=%d %s", response.RetCode, detail))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("retcode=%d %s", response.RetCode, detail))
 		return resolvedReplyContext{}
 	}
 
 	var data oneBotMessageData
 	if err := json.Unmarshal(response.Data, &data); err != nil {
-		logReplyLookupFailure(messageID, fmt.Sprintf("解析响应失败: %v", err))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("解析响应失败: %v", err))
 		return resolvedReplyContext{}
 	}
 	if data.MessageID != 0 && data.MessageID != messageID {
-		logReplyLookupFailure(messageID, fmt.Sprintf("响应消息 ID 不匹配: %d", data.MessageID))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("响应消息 ID 不匹配: %d", data.MessageID))
 		return resolvedReplyContext{}
 	}
 	if !c.replyMessageMatchesEvent(event, messageID, data) {
-		logReplyLookupFailure(messageID, "引用消息不属于当前会话")
+		c.logReplyLookupFailure(messageID, "引用消息不属于当前会话")
 		return resolvedReplyContext{}
 	}
 
 	segments := ParseMessageSegments(data.Message)
-	visibleText := extractUserText(segments, data.Message)
+	visibleText := extractUserText(segments, data.Message, c.Scope)
 	context := map[string]interface{}{
 		"message_id": messageID,
 		"message":    visibleText,
@@ -252,13 +256,13 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 	}
 	prompt, err := json.Marshal(context)
 	if err != nil {
-		logReplyLookupFailure(messageID, fmt.Sprintf("构造引用上下文失败: %v", err))
+		c.logReplyLookupFailure(messageID, fmt.Sprintf("构造引用上下文失败: %v", err))
 		return resolvedReplyContext{}
 	}
 
 	return resolvedReplyContext{
 		Prompt:      string(prompt),
-		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames()),
+		MentionsBot: rawMessageMentionsBot(data.Message, configuredBotNames(c.Scope)),
 		MessageID:   strconv.FormatInt(messageID, 10),
 		SessionID:   historyKey(event),
 		Segments:    segments,
@@ -411,7 +415,8 @@ func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegm
 	return sticker.LoadImageSource(ctx, sources[stickerIndex])
 }
 
-func (r *resolvedReplyContext) addImageDescription(description string) {
+func (r *resolvedReplyContext) addImageDescription(description string, scopes ...*runtimescope.Scope) {
+	scope := runtimescope.First(scopes)
 	description = strings.TrimSpace(description)
 	if r == nil || r.Prompt == "" || description == "" {
 		return
@@ -419,14 +424,14 @@ func (r *resolvedReplyContext) addImageDescription(description string) {
 
 	var context map[string]interface{}
 	if err := json.Unmarshal([]byte(r.Prompt), &context); err != nil {
-		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("解析引用上下文失败: %v", err))
+		scope.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("解析引用上下文失败: %v", err))
 		return
 	}
 	context["image_description"] = description
 
 	prompt, err := json.Marshal(context)
 	if err != nil {
-		logs.Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用图片描述失败: %v", err))
+		scope.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用图片描述失败: %v", err))
 		return
 	}
 	r.Prompt = string(prompt)
@@ -466,8 +471,8 @@ func numericMessageID(value interface{}) (int64, bool) {
 	}
 }
 
-func logReplyLookupFailure(messageID int64, detail string) {
+func (c *wsConnection) logReplyLookupFailure(messageID int64, detail string) {
 	// Keep failures non-fatal: the current message can still wake the bot via
 	// an explicit at/name signal even when historical content is unavailable.
-	logs.Warn(logs.WEBSOCKET, fmt.Sprintf("引用消息查询失败 message=%d: %s", messageID, detail))
+	c.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("引用消息查询失败 message=%d: %s", messageID, detail))
 }

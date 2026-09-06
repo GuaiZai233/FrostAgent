@@ -8,7 +8,7 @@
 }
 
 /* Desktop Sidebar */
-.sidebar {
+.desktop-sidebar {
   width: 16rem;
   background-color: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
@@ -17,7 +17,7 @@
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: calc(100dvh / var(--ui-scale, 1));
   z-index: 40;
   transition: transform 0.2s ease-in-out;
 }
@@ -94,7 +94,9 @@
   color: var(--sidebar-foreground);
   font-size: 0.875rem;
   font-weight: 500;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
   text-decoration: none;
   user-select: none;
 }
@@ -258,7 +260,11 @@
 }
 
 @media (max-width: 768px) {
-  .sidebar {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .desktop-sidebar {
     display: none;
   }
 

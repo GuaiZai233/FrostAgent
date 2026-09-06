@@ -21,6 +21,7 @@ type secretMutation struct {
 // SecretBackend owns API key material. Configuration and its DTOs only retain
 // the source, reference and configured status.
 type SecretBackend struct {
+	getenv     func(string) string
 	mu         sync.RWMutex
 	manualPath string
 	manual     map[string]string
@@ -97,7 +98,11 @@ func (b *SecretBackend) Resolve(endpoint Endpoint) (string, error) {
 		b.mu.RUnlock()
 		return apiKey, nil
 	case APIKeyStorageEnv:
-		apiKey := strings.TrimSpace(os.Getenv(ref))
+		getenv := b.getenv
+		if getenv == nil {
+			getenv = os.Getenv
+		}
+		apiKey := strings.TrimSpace(getenv(ref))
 		if apiKey == "" {
 			return "", fmt.Errorf("环境变量 %s 为空", ref)
 		}

@@ -32,19 +32,21 @@ const (
 )
 
 // LoadConfigFromEnv reads billing settings from environment variables.
-func LoadConfigFromEnv() Config {
-	enabledStr := strings.ToLower(strings.TrimSpace(os.Getenv("BILLING_ENABLED")))
+func LoadConfigFromEnv() Config { return LoadConfig(os.Getenv) }
+
+func LoadConfig(getenv func(string) string) Config {
+	enabledStr := strings.ToLower(strings.TrimSpace(getenv("BILLING_ENABLED")))
 	enabled := enabledStr == "true" || enabledStr == "1" || enabledStr == "yes" || enabledStr == "on"
 
-	baseURL := strings.TrimSpace(os.Getenv("ALCYONE_BASE_URL"))
+	baseURL := strings.TrimSpace(getenv("ALCYONE_BASE_URL"))
 	if baseURL == "" && enabled {
 		baseURL = DefaultAlcyoneBaseURL
 	}
 
-	serviceToken := strings.TrimSpace(os.Getenv("ALCYONE_SERVICE_TOKEN"))
+	serviceToken := strings.TrimSpace(getenv("ALCYONE_SERVICE_TOKEN"))
 
 	timeout := DefaultAlcyoneTimeout
-	if timeoutStr := strings.TrimSpace(os.Getenv("ALCYONE_TIMEOUT")); timeoutStr != "" {
+	if timeoutStr := strings.TrimSpace(getenv("ALCYONE_TIMEOUT")); timeoutStr != "" {
 		if d, err := time.ParseDuration(timeoutStr); err == nil && d > 0 {
 			timeout = d
 		}
@@ -55,28 +57,28 @@ func LoadConfigFromEnv() Config {
 	modelName := DefaultModelName
 
 	maxOutputTokens := DefaultMaxOutputTokens
-	if maxOutputStr := strings.TrimSpace(os.Getenv("BILLING_MAX_OUTPUT_TOKENS")); maxOutputStr != "" {
+	if maxOutputStr := strings.TrimSpace(getenv("BILLING_MAX_OUTPUT_TOKENS")); maxOutputStr != "" {
 		if val, err := strconv.Atoi(maxOutputStr); err == nil && val > 0 {
 			maxOutputTokens = val
 		}
 	}
 
 	safetyMultiplier := DefaultSafetyMultiplier
-	if safetyStr := strings.TrimSpace(os.Getenv("BILLING_SAFETY_MULTIPLIER")); safetyStr != "" {
+	if safetyStr := strings.TrimSpace(getenv("BILLING_SAFETY_MULTIPLIER")); safetyStr != "" {
 		if val, err := strconv.ParseFloat(safetyStr, 64); err == nil && val > 0 {
 			safetyMultiplier = val
 		}
 	}
 
 	var customPromptPrice *int64
-	if pStr := strings.TrimSpace(os.Getenv("BILLING_PROMPT_PRICE_PER_MILLION")); pStr != "" {
+	if pStr := strings.TrimSpace(getenv("BILLING_PROMPT_PRICE_PER_MILLION")); pStr != "" {
 		if val, err := strconv.ParseInt(pStr, 10, 64); err == nil && val >= 0 {
 			customPromptPrice = &val
 		}
 	}
 
 	var customCompletionPrice *int64
-	if cStr := strings.TrimSpace(os.Getenv("BILLING_COMPLETION_PRICE_PER_MILLION")); cStr != "" {
+	if cStr := strings.TrimSpace(getenv("BILLING_COMPLETION_PRICE_PER_MILLION")); cStr != "" {
 		if val, err := strconv.ParseInt(cStr, 10, 64); err == nil && val >= 0 {
 			customCompletionPrice = &val
 		}

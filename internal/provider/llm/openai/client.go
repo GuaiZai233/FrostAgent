@@ -53,6 +53,7 @@ type chatResponse struct {
 
 // Client implements the core.LLMProvider interface for OpenAI-compatible APIs.
 type Client struct {
+	Logger     *logs.Store
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
@@ -148,7 +149,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	logs.LLMRequest(string(jsonData))
+	c.log().LLMRequest(string(jsonData))
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
 	if err != nil {
@@ -172,7 +173,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		logs.Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
+		c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
 		return nil, &HTTPError{Status: resp.Status, Body: string(body)}
 	}
 
@@ -180,7 +181,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	logs.LLMResponse(string(respBody))
+	c.log().LLMResponse(string(respBody))
 
 	var openAIResp chatResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
@@ -205,7 +206,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			if tool.Name != staySilentFallbackToolName {
 				continue
 			}
-			logs.Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
+			c.log().Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
 			return &core.ChatResponse{
 				Message: core.ChatMessage{
 					Role: core.RoleAssistant,
@@ -244,4 +245,11 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		Message: coreMsg,
 		Usage:   usage,
 	}, nil
+}
+
+func (c *Client) log() *logs.Store {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return logs.General
 }

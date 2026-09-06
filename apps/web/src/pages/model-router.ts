@@ -13,7 +13,7 @@ import {
   type ModelRouterConfiguration,
   type ModelTarget,
 } from '@frostagent/proto';
-import { api } from '../api/client';
+import { createInstanceAPI } from '../api/client';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -99,6 +99,7 @@ function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
 }
 
 export function mountModelRouterPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let unmounted = false;
   let loading = true;
   let busy = false;

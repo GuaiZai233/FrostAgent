@@ -14,11 +14,15 @@ import (
 )
 
 // Service implements frostagent.v1.LogServiceHandler.
-type Service struct{}
+type Service struct{ store *logspkg.Store }
 
 // New creates a new LogService.
-func New() *Service {
-	return &Service{}
+func New(stores ...*logspkg.Store) *Service {
+	store := logspkg.General
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	return &Service{store: store}
 }
 
 // ListLogs returns paginated log entries with optional filtering.
@@ -26,7 +30,13 @@ func (s *Service) ListLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ListLogsRequest],
 ) (*connect.Response[v1.ListLogsResponse], error) {
-	entries := logspkg.Snapshot()
+	entries := s.store.Snapshot()
+	if s.store == logspkg.General && req.Header().Get("X-FrostAgent-General") == "false" {
+		entries = nil
+	}
+	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
+		entries = append(entries, logspkg.General.Snapshot()...)
+	}
 
 	// Filter
 	minLevel := req.Msg.GetMinLevel()
@@ -59,6 +69,9 @@ func (s *Service) ListLogs(
 	}
 
 	total := len(filtered)
+	if offset < 0 {
+		offset = 0
+	}
 	if offset >= total {
 		return connect.NewResponse(&v1.ListLogsResponse{
 			Pagination: &v1.Pagination{PageSize: int32(pageSize), Total: int32(total)},
@@ -96,19 +109,40 @@ func (s *Service) StreamLogs(
 ) error {
 	minLevel := req.Msg.GetMinLevel()
 	sourceFilter := req.Msg.GetSourceFilter()
+	if s.store == logspkg.General && req.Header().Get("X-FrostAgent-General") == "false" {
+		<-ctx.Done()
+		return nil
+	}
 
-	subID, ch := logspkg.Subscribe(func(e logspkg.LogEntry) bool {
+	subID, ch := s.store.Subscribe(func(e logspkg.LogEntry) bool {
 		return matchesFilter(e, minLevel, sourceFilter)
 	})
-	defer logspkg.Unsubscribe(subID)
+	defer s.store.Unsubscribe(subID)
 
+	var general <-chan logspkg.LogEntry
+	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
+		id, c := logspkg.General.Subscribe(func(e logspkg.LogEntry) bool { return matchesFilter(e, minLevel, sourceFilter) })
+		general = c
+		defer logspkg.General.Unsubscribe(id)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case entry, ok := <-ch:
+		case entry, ok := <-general:
 			if !ok {
 				return nil
+			}
+			if err := stream.Send(convertEntry(entry)); err != nil {
+				return err
+			}
+		case entry, ok := <-ch:
+			if !ok {
+				if general == nil {
+					return nil
+				}
+				ch = nil
+				continue
 			}
 			if err := stream.Send(convertEntry(entry)); err != nil {
 				return err
@@ -122,7 +156,12 @@ func (s *Service) ClearLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ClearLogsRequest],
 ) (*connect.Response[v1.ClearLogsResponse], error) {
-	logspkg.Clear()
+	if s.store != logspkg.General || req.Header().Get("X-FrostAgent-General") != "false" {
+		s.store.Clear()
+	}
+	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
+		logspkg.General.Clear()
+	}
 	return connect.NewResponse(&v1.ClearLogsResponse{Success: true}), nil
 }
 
@@ -131,12 +170,14 @@ func (s *Service) ClearLogs(
 // convertEntry maps internal LogEntry → proto LogEntry.
 func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 	entry := &v1.LogEntry{
-		Id:        strconv.FormatUint(e.ID, 10),
-		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
-		Level:     toProtoLevel(e.Level),
-		Source:    string(e.Category),
-		Summary:   e.Content,
-		HasDetail: strings.TrimSpace(e.Content) != "",
+		Id:           e.InstanceID + ":" + strconv.FormatUint(e.ID, 10),
+		InstanceId:   e.InstanceID,
+		InstanceName: e.InstanceName,
+		Timestamp:    e.Timestamp.Format(time.RFC3339Nano),
+		Level:        toProtoLevel(e.Level),
+		Source:       string(e.Category),
+		Summary:      e.Content,
+		HasDetail:    strings.TrimSpace(e.Content) != "",
 	}
 	switch e.Category {
 	case logspkg.LLM_REQUEST:

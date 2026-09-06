@@ -1,0 +1,175 @@
+package instanceconfig
+
+import (
+	"fmt"
+	"github.com/joho/godotenv"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sync"
+)
+
+// GlobalKeys are owned by the control plane, including the temporary shared persona.
+var GlobalKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "WS_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true, "SYSTEM_PROMPT": true}
+var RestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE_ASTRBOT_ADAPTER": true, "MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
+var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
+
+type Store struct {
+	mu      sync.RWMutex
+	path    string
+	values  map[string]string
+	global  bool
+	raw     string
+	loadErr error
+}
+
+func Open(path string, global bool) (*Store, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		raw = nil
+		err = nil
+	}
+	s := &Store{path: path, global: global, raw: string(raw), values: map[string]string{}, loadErr: err}
+	if err != nil {
+		return s, err
+	}
+	values, err := godotenv.Unmarshal(string(raw))
+	if err != nil {
+		s.loadErr = err
+		return s, err
+	}
+	for k := range values {
+		if !allowed(k, global) {
+			delete(values, k)
+		}
+	}
+	s.values = values
+	return s, nil
+}
+func (s *Store) Error() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
+
+func allowed(k string, global bool) bool {
+	if !keyPattern.MatchString(k) {
+		return false
+	}
+	if global {
+		return GlobalKeys[k]
+	}
+	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH" && k != "ASTRBOT_WS_PATH"
+}
+func (s *Store) Get(k string) string { s.mu.RLock(); defer s.mu.RUnlock(); return s.values[k] }
+func (s *Store) Snapshot() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v := map[string]string{}
+	for k, x := range s.values {
+		v[k] = x
+	}
+	return v
+}
+func (s *Store) Raw() (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.raw, nil
+}
+func (s *Store) Update(k, v string, remove bool) error {
+	if !allowed(k, s.global) {
+		return fmt.Errorf("字段 %s 不属于此配置", k)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return fmt.Errorf("配置文件不可解析，请通过原始 .env 编辑修复: %w", s.loadErr)
+	}
+	next := map[string]string{}
+	for k, x := range s.values {
+		next[k] = x
+	}
+	if remove {
+		delete(next, k)
+	} else {
+		next[k] = v
+	}
+	return s.writeLocked(next)
+}
+func (s *Store) Replace(raw string) error {
+	next, err := godotenv.Unmarshal(raw)
+	if err != nil {
+		return err
+	}
+	for k := range next {
+		if !allowed(k, s.global) {
+			return fmt.Errorf("字段 %s 不属于此配置", k)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
+		return err
+	}
+	s.values = next
+	s.raw = raw
+	s.loadErr = nil
+	return nil
+}
+func (s *Store) writeLocked(next map[string]string) error {
+	raw, err := godotenv.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if err = WriteAtomic(s.path, []byte(raw+"\n"), 0600); err != nil {
+		return err
+	}
+	s.values = next
+	s.raw = raw + "\n"
+	return nil
+}
+func WriteAtomic(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = f.Chmod(mode); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+const Template = `# Instance settings. Restart-required fields take effect after disabling/enabling.
+UPSTREAM_API_KEY=
+BOT_NAME=霜降狐
+BOT_ALIASES=霜降,FrostAgent
+ADMIN_QQ_IDS=
+MAX_CONTEXT_MESSAGES=20
+MAX_CONTEXT_CHARS=24000
+MEMORY_REFLECTION_TIMEOUT=10m
+ENABLE_AT_IN_GROUP_MSG=true
+GROUP_REPLY_ON_MENTION=true
+ENABLE_REPLY_IN_GROUP_MSG=false
+GROUP_COMPACT_BUFFER_SIZE=20
+GROUP_COMPACT_MIN_INTERVAL=30s
+GROUP_RAW_CONTEXT_MAX_CHARS=12000
+MEMORY_EXTRACT_BATCH_MIN=3
+MEMORY_EXTRACT_BATCH_MAX=5
+ENABLE_ONEBOT_ADAPTER=true
+ENABLE_ASTRBOT_ADAPTER=true
+BILLING_ENABLED=false
+BILLING_MAX_OUTPUT_TOKENS=2048
+BILLING_SAFETY_MULTIPLIER=1.2
+`

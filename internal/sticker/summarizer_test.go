@@ -3,11 +3,13 @@ package sticker
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
 type mockVisionCaller struct {
+	mu                     sync.Mutex
 	desc                   string
 	keywords               []string
 	suspectedInappropriate bool
@@ -16,6 +18,8 @@ type mockVisionCaller struct {
 }
 
 func (m *mockVisionCaller) Describe(imageBase64, mimeType string) (string, []string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.called++
 	if m.err != nil {
 		return "", nil, false, m.err
@@ -153,7 +157,9 @@ func TestSummarizer_ProcessAndRetry(t *testing.T) {
 	}
 
 	// 3. Test retry unsummarized when vision fails
+	mockVision.mu.Lock()
 	mockVision.err = errors.New("network error")
+	mockVision.mu.Unlock()
 	data2 := []byte("fake_image_cat")
 	hash2 := HashBytes(data2)
 	_ = store.Add(hash2, hash2+".png", data2)
@@ -167,9 +173,11 @@ func TestSummarizer_ProcessAndRetry(t *testing.T) {
 	}
 
 	// 4. Recover vision and retry all unsummarized
+	mockVision.mu.Lock()
 	mockVision.err = nil
 	mockVision.desc = "一只好奇的猫咪"
 	mockVision.keywords = []string{"好奇", "猫咪"}
+	mockVision.mu.Unlock()
 
 	enqueued := summarizer.EnqueueUnsummarized()
 	if enqueued != 1 {

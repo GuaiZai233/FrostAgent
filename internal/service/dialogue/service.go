@@ -205,3 +205,11 @@ func copyFile(src, dst string) error {
 	}
 	return os.WriteFile(dst, data, 0644)
 }
+
+// Prompt provides the shared persona snapshot under the same lock as file edits.
+func (s *Service) Prompt() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, _ := llm.LoadDialoguePrompt(s.filePath)
+	return p
+}

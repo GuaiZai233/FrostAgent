@@ -1,4 +1,4 @@
-import { api } from '../api/client';
+import { createInstanceAPI } from '../api/client';
 import { SessionInfo } from '@frostagent/proto';
 import { escapeHtml, formatDateTime, formatPlatform, isGroupSession } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -41,6 +41,7 @@ const SAMPLE_GROUP_PROMPT = `{
 }`;
 
 export function mountPromptPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let sessionsLoading = false;
   let sessions: SessionInfo[] = [];

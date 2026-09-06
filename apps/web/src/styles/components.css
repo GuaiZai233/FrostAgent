@@ -966,3 +966,18 @@ dialog.dialog-modal::backdrop {
   }
 }
 
+/* Instance management uses the same control-plane shell on desktop and mobile. */
+.instance-item { display:grid; grid-template-columns:1fr auto auto; align-items:start; position:relative; }
+.instance-select { justify-content:flex-start; min-height:3rem; height:auto; }
+.instance-dot { width:.6rem; height:.6rem; border-radius:50%; display:inline-block; flex-shrink:0; }
+.instance-dot.on { background:#22c55e; }
+.instance-dot.off { background:#ef4444; }
+.instance-toggle { position:relative; width:2.75rem; height:1.5rem; display:inline-flex; }
+.instance-toggle input { position:absolute; opacity:0; width:100%; height:100%; cursor:pointer; z-index:1; }
+.instance-toggle span { width:100%; border-radius:2rem; background:var(--muted-foreground,#777); transition:background .15s; }
+.instance-toggle span::after {content:''; position:absolute; left:.2rem; top:.2rem; width:1.1rem; height:1.1rem; border-radius:50%; background:white; transition:transform .15s;}
+.instance-toggle input:checked + span {background:#22c55e;}
+.instance-toggle input:checked + span::after {transform:translateX(1.25rem);}
+.instance-toggle input:focus-visible + span {outline:2px solid var(--primary); outline-offset:3px;}
+@media (min-width:640px) { .instance-kpis {grid-template-columns:repeat(4,minmax(0,1fr));} }
+

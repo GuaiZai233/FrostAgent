@@ -3,8 +3,8 @@ package onebot
 import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
 	"encoding/json"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -30,10 +30,10 @@ func (s GroupWakeSignals) Any() bool {
 // DetectGroupWakeSignals evaluates the OneBot at segment and configured
 // literal names once so routing and response-context generation use the same
 // decision.
-func DetectGroupWakeSignals(event model.OneBotEvent) GroupWakeSignals {
+func DetectGroupWakeSignals(event model.OneBotEvent, scopes ...*runtimescope.Scope) GroupWakeSignals {
 	return GroupWakeSignals{
 		AtBot: IsMentionedBot(event),
-		Alias: IsBotNameMentioned(event),
+		Alias: IsBotNameMentioned(event, scopes...),
 	}
 }
 
@@ -83,12 +83,12 @@ func IsMentionedBot(event model.OneBotEvent) bool {
 // IsBotNameMentioned checks text segments only. Configuration values are
 // treated as literal strings rather than regular expressions, so aliases such
 // as ".*" cannot accidentally wake the bot for every group message.
-func IsBotNameMentioned(event model.OneBotEvent) bool {
+func IsBotNameMentioned(event model.OneBotEvent, scopes ...*runtimescope.Scope) bool {
 	if event.MessageType != "group" {
 		return false
 	}
 
-	names := configuredBotNames()
+	names := configuredBotNames(scopes...)
 	if len(names) == 0 {
 		return false
 	}
@@ -118,12 +118,13 @@ func rawMessageMentionsBot(raw json.RawMessage, names []string) bool {
 	return false
 }
 
-func configuredBotNames() []string {
-	name, nameSet := os.LookupEnv("BOT_NAME")
+func configuredBotNames(scopes ...*runtimescope.Scope) []string {
+	scope := runtimescope.First(scopes)
+	name, nameSet := scope.LookupEnv("BOT_NAME")
 	if !nameSet {
 		name = defaultBotName
 	}
-	aliases, aliasesSet := os.LookupEnv("BOT_ALIASES")
+	aliases, aliasesSet := scope.LookupEnv("BOT_ALIASES")
 	if !aliasesSet {
 		aliases = defaultBotAliases
 	}

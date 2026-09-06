@@ -28,6 +28,8 @@ class Router {
     window.location.hash = path.startsWith('/') ? `#${path}` : `#/${path}`;
   }
 
+  refresh(): void { this.handleHashChange(); }
+
   getCurrentPath(): string {
     return this.currentPath;
   }
@@ -71,7 +73,9 @@ class Router {
 
     // Clear and mount
     this.container.innerHTML = '';
-    const cleanup = route.mount(this.container);
+    const page = document.createElement('div');
+    this.container.appendChild(page);
+    const cleanup = route.mount(page);
     if (typeof cleanup === 'function') {
       this.currentCleanup = cleanup;
     }

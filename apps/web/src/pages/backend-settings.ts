@@ -1,4 +1,6 @@
-import { api } from '../api/client';
+const globalKeys = new Set(['LISTEN_ADDR','WS_LISTEN_ADDR','WS_ALLOWED_ORIGINS','ALCYONE_BASE_URL','ALCYONE_SERVICE_TOKEN','ALCYONE_TIMEOUT','SYSTEM_PROMPT']);
+const restartKeys = new Set(['ENABLE_ONEBOT_ADAPTER','ENABLE_ASTRBOT_ADAPTER','MEMORY_REFLECTION_TIMEOUT','GROUP_COMPACT_BUFFER_SIZE','GROUP_COMPACT_MAX_BUFFER_SIZE','GROUP_COMPACT_MIN_INTERVAL','BILLING_ENABLED','BILLING_MAX_OUTPUT_TOKENS','BILLING_SAFETY_MULTIPLIER','BILLING_PROMPT_PRICE_PER_MILLION','BILLING_COMPLETION_PRICE_PER_MILLION']);
+import { createInstanceAPI } from '../api/client';
 import { EnvVar } from '@frostagent/proto';
 import { escapeHtml, maskSecret } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -7,6 +9,7 @@ import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 
 export function mountBackendSettingsPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let saving = false;
@@ -30,7 +33,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">Bot 服务端设置</h1>
-            <p class="page-description">修改服务端运行环境变量与群聊响应策略</p>
+            <p class="page-description">当前实例的配置独立保存。标记为全局共享的字段影响所有实例；需要重启的字段请手动停用后启用。</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -121,7 +124,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       <div id="tab-raw-content" class="flex flex-col gap-3" style="display: none;">
         <article class="card p-4 flex flex-col gap-3.5">
           <div class="flex items-center justify-between">
-            <label class="form-label" for="raw-env-textarea">.env 原始文件编辑</label>
+            <label class="form-label" for="raw-env-textarea">实例 .env 原始文件编辑（不含全局字段）</label>
             <button class="btn btn-primary btn-sm" id="save-raw-env-btn">
               ${icon('save', 'w-3.5 h-3.5')}
               <span>保存 .env 文件</span>
@@ -222,7 +225,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           return `
             <tr class="bg-muted">
               <td>
-                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>
+                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>${globalKeys.has(item.key) ? `<small class="badge badge-outline">全局共享</small>` : restartKeys.has(item.key) ? `<small class="badge badge-outline">需要重启实例后生效</small>` : ""}
               </td>
               <td>
                 <div class="flex items-center gap-2">
@@ -260,7 +263,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             <td>
               <div class="flex items-center gap-1.5">
                 ${isSecret ? `<span class="text-muted flex items-center" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>
+                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>${globalKeys.has(item.key) ? `<small class="badge badge-outline">全局共享</small>` : restartKeys.has(item.key) ? `<small class="badge badge-outline">需要重启实例后生效</small>` : ""}
               </div>
             </td>
             <td>

@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+ "paths": { "@frostagent/proto": ["../../libs/frostagent-proto/src/index.ts"] },
     "target": "ES2022",
     "useDefineForClassFields": true,
     "module": "ESNext",

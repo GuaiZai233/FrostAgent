@@ -561,11 +561,11 @@ func TestGroupCompactor_NewerPersistenceOverridesPendingRetryTimer(t *testing.T)
 }
 
 func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
-	var receivedPrompt string
+	promptReady := make(chan string, 1)
 	mockLLM := &mockCompactorLLM{
 		customReply: func(req core.ChatRequest) (string, error) {
 			if len(req.Messages) > 0 {
-				receivedPrompt = req.Messages[0].Content.(string)
+				promptReady <- req.Messages[0].Content.(string)
 			}
 			return "群聊确认周末聚餐在川菜馆，霜降推荐了招牌毛血旺并被大家采纳。", nil
 		},
@@ -585,8 +585,16 @@ func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
 	s.AppendGroupCompactMessage("[user] 李四 (10002): 赞成蜀香园！那就定周六晚上！", 50)
 
 	compactor.Trigger(s, "test_group_dialogue_flow")
-
-	time.Sleep(30 * time.Millisecond)
+	var receivedPrompt string
+	select {
+	case receivedPrompt = <-promptReady:
+	case <-time.After(time.Second):
+		t.Fatal("prompt not received")
+	}
+	deadline := time.Now().Add(time.Second)
+	for s.GroupRunningSummary() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 
 	if mockLLM.CallCount() != 1 {
 		t.Fatalf("expected 1 LLM call, got %d", mockLLM.CallCount())

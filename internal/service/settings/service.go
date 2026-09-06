@@ -1,15 +1,11 @@
 package settings
 
 import (
-	"bufio"
+	v1 "FrostAgent/gen/proto/frostagent/v1"
+	"FrostAgent/internal/instanceconfig"
+	"connectrpc.com/connect"
 	"context"
 	"fmt"
-	"os"
-	"strings"
-
-	"connectrpc.com/connect"
-
-	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
 
 // envEntry defines metadata for a known environment variable.
@@ -45,224 +41,64 @@ var knownEnvVars = map[string]envEntry{
 	"ASTRBOT_WS_PATH":             {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true},
 }
 
-// Service implements frostagent.v1.SettingsServiceHandler.
-type Service struct {
-	envPath string // path to .env file
-}
+type Service struct{ config, global *instanceconfig.Store }
 
-// New creates a new SettingsService.
-func New(envPath string) *Service {
-	if envPath == "" {
-		envPath = ".env"
+func New(path string) *Service                      { c, _ := instanceconfig.Open(path, false); return NewScoped(c, nil) }
+func NewScoped(c, g *instanceconfig.Store) *Service { return &Service{c, g} }
+func (s *Service) store(k string) *instanceconfig.Store {
+	if instanceconfig.GlobalKeys[k] && s.global != nil {
+		return s.global
 	}
-	return &Service{envPath: envPath}
+	return s.config
 }
-
-// ListEnvVars returns all known env vars with their current values.
-func (s *Service) ListEnvVars(
-	ctx context.Context,
-	req *connect.Request[v1.ListEnvVarsRequest],
-) (*connect.Response[v1.ListEnvVarsResponse], error) {
-	var vars []*v1.EnvVar
-	for key, meta := range knownEnvVars {
-		val := os.Getenv(key)
-		vars = append(vars, &v1.EnvVar{
-			Key:      key,
-			Value:    val,
-			IsSecret: meta.IsSecret,
-		})
+func (s *Service) ListEnvVars(ctx context.Context, req *connect.Request[v1.ListEnvVarsRequest]) (*connect.Response[v1.ListEnvVarsResponse], error) {
+	values := s.config.Snapshot()
+	for k := range knownEnvVars {
+		if !instanceconfig.GlobalKeys[k] && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH" && k != "ASTRBOT_WS_PATH" {
+			if _, ok := values[k]; !ok {
+				values[k] = ""
+			}
+		}
+	}
+	if s.global != nil {
+		for k := range instanceconfig.GlobalKeys {
+			values[k] = s.global.Get(k)
+		}
+	}
+	vars := []*v1.EnvVar{}
+	for k, v := range values {
+		vars = append(vars, &v1.EnvVar{Key: k, Value: v, IsSecret: knownEnvVars[k].IsSecret})
 	}
 	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars}), nil
 }
-
-// UpdateEnvVar updates a single env var in the .env file.
-func (s *Service) UpdateEnvVar(
-	ctx context.Context,
-	req *connect.Request[v1.UpdateEnvVarRequest],
-) (*connect.Response[v1.UpdateEnvVarResponse], error) {
-	key := req.Msg.GetKey()
-	value := req.Msg.GetValue()
-
-	if key == "" {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   "key is required",
-		}), nil
-	}
-
-	if err := s.atomicWriteEnv(key, value); err != nil {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   err.Error(),
-		}), nil
-	}
-
-	// Immediately set in-process so it takes effect for the current run.
-	os.Setenv(key, value)
-
-	return connect.NewResponse(&v1.UpdateEnvVarResponse{Success: true}), nil
-}
-
-// DeleteEnvVar removes a key from the .env file.
-func (s *Service) DeleteEnvVar(
-	ctx context.Context,
-	req *connect.Request[v1.DeleteEnvVarRequest],
-) (*connect.Response[v1.DeleteEnvVarResponse], error) {
-	key := req.Msg.GetKey()
-	if key == "" {
-		return connect.NewResponse(&v1.DeleteEnvVarResponse{
-			Success: false,
-			Error:   "key is required",
-		}), nil
-	}
-
-	if err := s.removeKeyFromEnv(key); err != nil {
-		return connect.NewResponse(&v1.DeleteEnvVarResponse{
-			Success: false,
-			Error:   err.Error(),
-		}), nil
-	}
-
-	os.Unsetenv(key)
-
-	return connect.NewResponse(&v1.DeleteEnvVarResponse{Success: true}), nil
-}
-
-// GetRawEnvFile returns the raw content of the .env file.
-func (s *Service) GetRawEnvFile(
-	ctx context.Context,
-	req *connect.Request[v1.GetRawEnvFileRequest],
-) (*connect.Response[v1.GetRawEnvFileResponse], error) {
-	data, err := os.ReadFile(s.envPath)
+func (s *Service) UpdateEnvVar(ctx context.Context, req *connect.Request[v1.UpdateEnvVarRequest]) (*connect.Response[v1.UpdateEnvVarResponse], error) {
+	err := s.store(req.Msg.Key).Update(req.Msg.Key, req.Msg.Value, false)
+	res := &v1.UpdateEnvVarResponse{Success: err == nil}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return connect.NewResponse(&v1.GetRawEnvFileResponse{Content: ""}), nil
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read .env: %w", err))
+		res.Error = err.Error()
 	}
-	return connect.NewResponse(&v1.GetRawEnvFileResponse{Content: string(data)}), nil
+	return connect.NewResponse(res), nil
 }
-
-// UpdateRawEnvFile overwrites the .env file with the given content.
-func (s *Service) UpdateRawEnvFile(
-	ctx context.Context,
-	req *connect.Request[v1.UpdateRawEnvFileRequest],
-) (*connect.Response[v1.UpdateRawEnvFileResponse], error) {
-	content := req.Msg.GetContent()
-
-	tmpPath := s.envPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-			Success: false,
-			Error:   fmt.Sprintf("write temp file: %v", err),
-		}), nil
-	}
-
-	if err := os.Rename(tmpPath, s.envPath); err != nil {
-		// Fallback: cross-device rename, copy instead
-		if err := copyFile(tmpPath, s.envPath); err != nil {
-			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
-				Success: false,
-				Error:   fmt.Sprintf("rename .env: %v", err),
-			}), nil
-		}
-		os.Remove(tmpPath)
-	}
-
-	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
-}
-
-// atomicWriteEnv updates or appends a key=value line in the .env file atomically.
-func (s *Service) atomicWriteEnv(key, value string) error {
-	lines, err := readEnvLines(s.envPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read .env: %w", err)
-	}
-
-	found := false
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), key+"=") {
-			lines[i] = key + "=" + value
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines, key+"="+value)
-	}
-
-	return writeEnvAtomic(s.envPath, lines)
-}
-
-// removeKeyFromEnv removes a key from the .env file atomically.
-func (s *Service) removeKeyFromEnv(key string) error {
-	lines, err := readEnvLines(s.envPath)
+func (s *Service) DeleteEnvVar(ctx context.Context, req *connect.Request[v1.DeleteEnvVarRequest]) (*connect.Response[v1.DeleteEnvVarResponse], error) {
+	err := s.store(req.Msg.Key).Update(req.Msg.Key, "", true)
+	res := &v1.DeleteEnvVarResponse{Success: err == nil}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read .env: %w", err)
+		res.Error = err.Error()
 	}
-
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+"=") || trimmed == key {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-
-	return writeEnvAtomic(s.envPath, filtered)
+	return connect.NewResponse(res), nil
 }
-
-// readEnvLines reads all lines from a file.
-func readEnvLines(path string) ([]string, error) {
-	f, err := os.Open(path)
+func (s *Service) GetRawEnvFile(ctx context.Context, req *connect.Request[v1.GetRawEnvFileRequest]) (*connect.Response[v1.GetRawEnvFileResponse], error) {
+	raw, err := s.config.Raw()
 	if err != nil {
-		return nil, err
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read env: %w", err))
 	}
-	defer f.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	return lines, scanner.Err()
+	return connect.NewResponse(&v1.GetRawEnvFileResponse{Content: raw}), nil
 }
-
-// writeEnvAtomic writes lines to a temp file then renames.
-func writeEnvAtomic(path string, lines []string) error {
-	tmpPath := path + ".tmp"
-
-	f, err := os.Create(tmpPath)
+func (s *Service) UpdateRawEnvFile(ctx context.Context, req *connect.Request[v1.UpdateRawEnvFileRequest]) (*connect.Response[v1.UpdateRawEnvFileResponse], error) {
+	err := s.config.Replace(req.Msg.Content)
+	res := &v1.UpdateRawEnvFileResponse{Success: err == nil}
 	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
+		res.Error = err.Error()
 	}
-
-	for _, line := range lines {
-		fmt.Fprintln(f, line)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		// Cross-device fallback
-		if err := copyFile(tmpPath, path); err != nil {
-			return fmt.Errorf("rename .env: %w", err)
-		}
-		os.Remove(tmpPath)
-	}
-	return nil
-}
-
-// copyFile copies a file from src to dst.
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0644)
+	return connect.NewResponse(res), nil
 }

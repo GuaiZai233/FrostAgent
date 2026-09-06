@@ -1,4 +1,4 @@
-import { api } from '../api/client';
+import { createInstanceAPI } from '../api/client';
 import { SessionInfo } from '@frostagent/proto';
 import {
   escapeHtml,
@@ -15,6 +15,7 @@ import { confirmDialog } from '../components/confirm';
 import { toast } from '../components/toast';
 
 export function mountSessionsPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let sessions: SessionInfo[] = [];

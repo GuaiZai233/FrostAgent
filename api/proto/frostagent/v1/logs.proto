@@ -20,6 +20,8 @@ enum LogLevel {
 }
 
 message LogEntry {
+  string instance_id = 20;
+  string instance_name = 21;
   string id = 1;
   string timestamp = 2;
   LogLevel level = 3;

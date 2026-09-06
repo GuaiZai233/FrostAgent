@@ -94,7 +94,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					return "未找到相关记忆", nil
 				}
 				if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
 				}
 				now := time.Now()
 				for i := range filtered {

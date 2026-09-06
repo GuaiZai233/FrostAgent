@@ -13,6 +13,8 @@ export default defineConfig({
   server: {
     port: 4200,
     proxy: {
+ '/instances/': { target:'http://127.0.0.1:8080', changeOrigin:true },
+ '/api/': { target:'http://127.0.0.1:8080', changeOrigin:true },
       '/frostagent.v1.': {
         target: 'http://127.0.0.1:8080',
         changeOrigin: true,

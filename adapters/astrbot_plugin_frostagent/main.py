@@ -99,6 +99,10 @@ MARKET_FACE_URL_PREFIX = "https://gxh.vip.qq.com/club/item/parcel/item/"
 MARKET_FACE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{2,128}")
 
 
+def is_sticker_endpoint_path(path: str) -> bool:
+    return bool(re.fullmatch(r"(?:/instances/[a-f0-9]{8})?/api/sticker/[^/]+/image", path))
+
+
 def sticker_download_url(source: str, http_base_url: str) -> str:
     base = urlparse(http_base_url)
     if base.scheme not in ("http", "https") or not base.netloc:
@@ -110,14 +114,14 @@ def sticker_download_url(source: str, http_base_url: str) -> str:
             raise StickerFetchError("sticker source must use HTTP(S) or base64")
         absolute_url = source
     else:
-        if not source.startswith(STICKER_IMAGE_PATH_PREFIX):
+        if not is_sticker_endpoint_path(source):
             raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
         absolute_url = urljoin(http_base_url.rstrip("/") + "/", source)
 
     target = urlparse(absolute_url)
     if (target.scheme, target.netloc) != (base.scheme, base.netloc):
         raise StickerFetchError("sticker source origin does not match FrostAgent http_base_url")
-    if not target.path.startswith(STICKER_IMAGE_PATH_PREFIX):
+    if not is_sticker_endpoint_path(target.path):
         raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
     return absolute_url
 

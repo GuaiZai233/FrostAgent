@@ -47,7 +47,9 @@ export function formatDateTime(value: string | undefined | null): string {
 
 export function formatStatus(status: BotStatus): string {
   switch (status) {
-    case BotStatus.RUNNING:
+    case BotStatus.STOPPED:
+ return "已停用";
+ case BotStatus.RUNNING:
       return '运行中';
     case BotStatus.INITIALIZING:
       return '初始化中';
@@ -223,7 +225,7 @@ export function formatConsoleLog(entry: LogEntry): string {
   const sourceStr = entry.source || 'SYSTEM';
   const contentStr = entry.summary || entry.responseBody || entry.requestBody || '';
 
-  return `[${timeStr}][${levelStr}][${sourceStr}] ${contentStr}`;
+  return `[${timeStr}](${entry.instanceId ? "Instance: "+entry.instanceName : "General"})[${levelStr}][${sourceStr}] ${contentStr}`;
 }
 
 

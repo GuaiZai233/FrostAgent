@@ -171,6 +171,7 @@ func EstimateReservationAmount(
 	tools []core.Tool,
 	maxOutputTokens int,
 	safetyMultiplier float64,
+	prices ...ModelPrice,
 ) (int64, error) {
 	promptTokens, err := EstimateMessagesTokens(msgs, tools)
 	if err != nil {
@@ -185,10 +186,13 @@ func EstimateReservationAmount(
 	}
 
 	adjustedPrompt := int(math.Ceil(float64(promptTokens) * safetyMultiplier))
-	amountMinor := CalculateCost(model, adjustedPrompt, maxOutputTokens)
+	price, _ := GetPrice(model)
+	if len(prices) > 0 {
+		price = prices[0]
+	}
+	amountMinor := CalculateMinorUnits(adjustedPrompt, maxOutputTokens, price)
 
 	// Ensure at least 1 minor unit if pricing is non-zero
-	price, _ := GetPrice(model)
 	if amountMinor == 0 && (price.PromptPricePerMillion > 0 || price.CompletionPricePerMillion > 0) && utf8.RuneCountInString(model) > 0 {
 		amountMinor = 1
 	}

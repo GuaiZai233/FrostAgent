@@ -7,11 +7,11 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +65,8 @@ type AgentRunResult struct {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
+	*runtimescope.Scope
+	SharedDialogue         func() string
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
 	Provider               core.LLMProvider // LLM 供应商接口
@@ -98,12 +100,12 @@ type Engine struct {
 
 // Run 执行智能体的主循环（单次无状态调用）
 func (e *Engine) Run(prompt string) string {
-	systemPrompt := os.Getenv("SYSTEM_PROMPT")
-	if e.DialoguePrompt != "" {
+	systemPrompt := e.Getenv("SYSTEM_PROMPT")
+	if e.PersonaDialogue() != "" {
 		if systemPrompt != "" {
-			systemPrompt += "\n\n" + e.DialoguePrompt
+			systemPrompt += "\n\n" + e.PersonaDialogue()
 		} else {
-			systemPrompt = e.DialoguePrompt
+			systemPrompt = e.PersonaDialogue()
 		}
 	}
 	messages := []ChatMessage{
@@ -118,12 +120,12 @@ func (e *Engine) Run(prompt string) string {
 func (e *Engine) RunMessages(messages []ChatMessage) string {
 	// 如果消息数组中没有 system 提示词，添加一个
 	if len(messages) == 0 || messages[0].Role != "system" {
-		systemPrompt := os.Getenv("SYSTEM_PROMPT")
-		if e.DialoguePrompt != "" {
+		systemPrompt := e.Getenv("SYSTEM_PROMPT")
+		if e.PersonaDialogue() != "" {
 			if systemPrompt != "" {
-				systemPrompt += "\n\n" + e.DialoguePrompt
+				systemPrompt += "\n\n" + e.PersonaDialogue()
 			} else {
-				systemPrompt = e.DialoguePrompt
+				systemPrompt = e.PersonaDialogue()
 			}
 		}
 		messages = append([]ChatMessage{
@@ -134,7 +136,7 @@ func (e *Engine) RunMessages(messages []ChatMessage) string {
 }
 
 func (e *Engine) newRoutingContext() context.Context {
-	ctx := context.Background()
+	ctx := runtimescope.WithContext(e.Context(), e.Scope)
 	if e.ModelRouter == nil {
 		return ctx
 	}
@@ -169,7 +171,7 @@ func (e *Engine) RunMessagesWithContext(
 			GroupID:  runContext.RouteScope.GroupID,
 		})
 	}
-	ctx := context.Background()
+	ctx := e.Context()
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
 			runContext.RouteSnapshot = e.ModelRouter.Snapshot()
@@ -179,18 +181,18 @@ func (e *Engine) RunMessagesWithContext(
 	ctx = withRunContext(ctx, runContext)
 
 	if len(messages) == 0 || messages[0].Role != "system" {
-		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		systemPrompt := e.Getenv("SYSTEM_PROMPT")
 		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
 		systemPrompt = "当前系统时间：" + memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
 
-		if e.DialoguePrompt != "" {
-			systemPrompt += "\n\n" + e.DialoguePrompt
+		if e.PersonaDialogue() != "" {
+			systemPrompt += "\n\n" + e.PersonaDialogue()
 		}
 
 		if owner != "" && e.MemoryCatalog != nil {
 			catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
 			if err != nil {
-				logs.Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
+				e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
 			} else if catalogContext != "" {
 				systemPrompt += "\n\n" + catalogContext
 			}
@@ -199,7 +201,7 @@ func (e *Engine) RunMessagesWithContext(
 		// 召回 → 网关过滤 → 注入
 		if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 			lastUserMsg := extractLastUserMessage(messages)
-			raw, err := e.MemoryReader.Recall(context.Background(), lastUserMsg)
+			raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
 			if err == nil {
 				filtered := e.MemoryGateway.Filter(raw, owner)
 				filtered = e.MemoryReader.Limit(filtered)
@@ -207,7 +209,7 @@ func (e *Engine) RunMessagesWithContext(
 					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
 					if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
 					}
 				}
 			}
@@ -256,14 +258,14 @@ func (e *Engine) EnqueueExtractionTurn(
 	if e == nil || e.MemoryWriter == nil || session == nil || len(items) == 0 {
 		return
 	}
-	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3)
-	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5)
+	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3, e.Scope)
+	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5, e.Scope)
 	maxTurns = max(maxTurns, minTurns)
 	batch, ready := session.EnqueuePendingTurn(items, minTurns, maxTurns)
 	if !ready {
 		return
 	}
-	go e.extractPendingBatch(batch)
+	e.Go(func() { e.extractPendingBatch(batch) })
 }
 
 func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
@@ -295,13 +297,14 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 	for _, key := range order {
 		group := groups[key]
 		if err := e.MemoryWriter.ExtractByOwnerWithRoute(group.owner, group.ownerType, group.route, group.messages); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
+			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
 		}
 	}
 }
 
-func positiveIntEnv(name string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(name))
+func positiveIntEnv(name string, fallback int, scopes ...*runtimescope.Scope) int {
+	scope := runtimescope.First(scopes)
+	raw := strings.TrimSpace(scope.Getenv(name))
 	if raw == "" {
 		return fallback
 	}
@@ -392,14 +395,14 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 
 	// if new session, add system prompt
 	if len(messages) == 0 {
-		systemPrompt := os.Getenv("SYSTEM_PROMPT")
+		systemPrompt := e.Getenv("SYSTEM_PROMPT")
 		messages = append(messages, ChatMessage{Role: "system", Content: systemPrompt})
 	}
 
 	// add user input
 	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
 
-	result := e.runLoop(context.Background(), messages)
+	result := e.runLoop(e.Context(), messages)
 
 	// 修改后的 messages 写回
 	session.History = e.trimMessagesForSession(messages)
@@ -447,8 +450,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
+		if err := ctx.Err(); err != nil {
+			return AgentRunResult{Silent: true, Error: err}
+		}
 		e.TotalMessagesProcessed.Add(1)
-		logs.Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
+		e.Log().Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
 
 		coreMsgs := convertToCoreMessages(messages)
 
@@ -458,7 +464,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			contextTokens = billing.EstimateTokens(coreMsgs)
 		}
 		if contextTokens > MaxContextTokens {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens))
+			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens))
 			return AgentRunResult{
 				Content:       "FrostAgent错误：对话上下文过长，超出模型处理上限。",
 				MemoryWritten: memoryWritten,
@@ -475,9 +481,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				modelTools,
 				e.BillingConfig.MaxOutputTokens,
 				e.BillingConfig.SafetyMultiplier,
+				e.BillingConfig.Price(modelName),
 			)
 			if err != nil {
-				logs.Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed, iter %d): %v", i+1, err))
+				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
 					Content:       billing.FormatBillingUnavailableMessage(),
 					MemoryWritten: memoryWritten,
@@ -514,15 +521,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				IdempotencyKey: idempotencyKey,
 			}
 
-			bCtx, bCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+			bCtx, bCancel := context.WithTimeout(e.Context(), e.BillingConfig.Timeout)
 			res, err := e.BillingClient.ReserveLLM(bCtx, reserveReq)
 			bCancel()
 
 			if err != nil {
 				if errors.Is(err, billing.ErrInsufficientFunds) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, i+1))
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, i+1))
 					var balMinor int64 = 0
-					if cCtx, cCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout); cCancel != nil {
+					if cCtx, cCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout); cCancel != nil {
 						if bRes, bErr := e.BillingClient.Balance(cCtx, runCtx.Billing.Platform, runCtx.Billing.ExternalID); bErr == nil && bRes != nil {
 							balMinor = bRes.BalanceMinor
 						}
@@ -542,7 +549,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						Error:         billing.ErrInsufficientFunds,
 					}
 				}
-				logs.Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %v", i+1, err))
+				e.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
 					Content:       billing.FormatBillingUnavailableMessage(),
 					MemoryWritten: memoryWritten,
@@ -552,7 +559,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 
 			if res.Decision == billing.DecisionInsufficient {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足 (%d minor)，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, res.BalanceMinor, i+1))
+				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%s] 雪花余额不足 (%d minor)，停止思考循环 (iter %d)", runCtx.Billing.ExternalID, res.BalanceMinor, i+1))
 				var replyMsg string
 				if i == 0 {
 					replyMsg = billing.FormatInsufficientFundsMessage(res.BalanceMinor)
@@ -590,11 +597,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {
-			logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
+			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			if billingActive && reservationID != "" {
-				rCtx, rCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+				rCtx, rCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
 				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
-					logs.Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败 (iter %d): %v", i+1, relErr))
+					e.Log().Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败 (iter %d): %v", i+1, relErr))
 				}
 				rCancel()
 			}
@@ -639,18 +646,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				promptTok = resp.Usage.PromptTokens
 				compTok = resp.Usage.CompletionTokens
 			}
-			price, _ := billing.GetPrice(modelName)
+			price := e.BillingConfig.Price(modelName)
 			actualMinor := billing.CalculateMinorUnits(promptTok, compTok, price)
 
-			cCtx, cCancel := context.WithTimeout(context.Background(), e.BillingConfig.Timeout)
+			cCtx, cCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
 			commitRes, commitErr := e.BillingClient.CommitLLM(cCtx, reservationID, actualMinor)
 			cCancel()
 
 			if commitErr != nil {
-				logs.Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
+				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
 				// 如果是 Tool Call 且 commit 失败，禁止执行工具以防止免费副作用
 				if len(responseMsg.ToolCalls) > 0 {
-					logs.Warn(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行")
+					e.Log().Warn(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行")
 					return AgentRunResult{
 						Content:       "FrostAgent错误：计费结算失败，已终止后续工具执行。",
 						MemoryWritten: memoryWritten,
@@ -672,14 +679,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
 			if isStandaloneAssistantSilentMarker(contentStr) {
-				logs.Warn(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理")
+				e.Log().Warn(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理")
 				return AgentRunResult{
 					MemoryWritten: memoryWritten,
 					Silent:        true,
 					Usage:         totalUsage,
 				}
 			}
-			logs.Info(logs.SYSTEM, "【智能体给出最终答案】")
+			e.Log().Info(logs.SYSTEM, "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
@@ -688,7 +695,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		if conflict := staySilentConflict(responseMsg.ToolCalls); conflict != "" {
-			logs.Warn(logs.TOOL, conflict)
+			e.Log().Warn(logs.TOOL, conflict)
 			for _, tc := range responseMsg.ToolCalls {
 				messages = append(messages, ChatMessage{
 					Role:       "tool",
@@ -700,7 +707,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			logs.Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
+			e.Log().Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
 
 			var toolResult string
 			toolSucceeded := false
@@ -719,7 +726,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolSucceeded = true
 					toolResult = res
 					if tc.Function.Name == StaySilentToolName {
-						logs.Info(logs.SYSTEM, "【智能体选择保持沉默】")
+						e.Log().Info(logs.SYSTEM, "【智能体选择保持沉默】")
 						return AgentRunResult{
 							MemoryWritten: memoryWritten,
 							Silent:        true,
@@ -736,7 +743,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			// 单条工具结果过大保护
 			if len(toolResult) > MaxToolOutputBytes {
-				logs.Warn(logs.TOOL, fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes))
+				e.Log().Warn(logs.TOOL, fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes))
 				cut := MaxToolOutputBytes
 				for cut > 0 && !utf8.RuneStart(toolResult[cut]) {
 					cut--
@@ -744,7 +751,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
+			e.Log().Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
 				if err := runContext.SendHook(toolResult); err != nil {
@@ -816,8 +823,9 @@ func isMemoryWriteAction(toolCall ToolCall, result string) bool {
 
 // effectiveMaxHistory 返回当前生效的历史消息上限：
 // 优先读 MAX_CONTEXT_MESSAGES env（运行期修改即时生效），否则回退到 fallback。
-func effectiveMaxHistory(fallback int) int {
-	if v := os.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
+func effectiveMaxHistory(fallback int, scopes ...*runtimescope.Scope) int {
+	scope := runtimescope.First(scopes)
+	if v := scope.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
 			return n
 		}
@@ -831,12 +839,12 @@ func (e *Engine) TrimSession(session *SessionContext) {
 	if session == nil {
 		return
 	}
-	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory))
+	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope))
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
 func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
-	maxHistory := effectiveMaxHistory(e.SessionManager.MaxHistory)
+	maxHistory := effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope)
 	if len(messages) <= maxHistory+1 {
 		return messages
 	}
@@ -894,7 +902,10 @@ func (e *Engine) GroupRawLimit() int {
 // GroupRawMaxChars dynamically returns the total character budget for uncompacted
 // group messages from the current runtime environment.
 func (e *Engine) GroupRawMaxChars() int {
-	cfg := LoadGroupRawContextConfigFromEnv()
+	if e == nil {
+		return LoadGroupRawContextConfigFromEnv().MaxChars
+	}
+	cfg := LoadGroupRawContextConfigFromEnv(e.Scope)
 	return cfg.MaxChars
 }
 
@@ -923,4 +934,11 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 		res[i] = coreMsg
 	}
 	return res
+}
+
+func (e *Engine) PersonaDialogue() string {
+	if e.SharedDialogue != nil {
+		return e.SharedDialogue()
+	}
+	return e.DialoguePrompt
 }

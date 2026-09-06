@@ -2,12 +2,12 @@ package tools
 
 import (
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"unicode"
 )
@@ -41,7 +41,7 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 				return "", fmt.Errorf("sticker stealer is unavailable")
 			}
 			runContext, ok := llm.RunContextFromContext(ctx)
-			if !ok || !isConfiguredQQAdmin(runContext.ActorUserID) {
+			if !ok || !isConfiguredQQAdmin(runContext.ActorUserID, stealer.Scope) {
 				return "", fmt.Errorf("steal_sticker 仅允许 ADMIN_QQ_IDS 中配置的管理员使用")
 			}
 
@@ -105,12 +105,13 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 	}
 }
 
-func isConfiguredQQAdmin(userID string) bool {
+func isConfiguredQQAdmin(userID string, scopes ...*runtimescope.Scope) bool {
+	scope := runtimescope.First(scopes)
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return false
 	}
-	for _, configuredID := range strings.FieldsFunc(os.Getenv(adminQQIDsEnv), func(r rune) bool {
+	for _, configuredID := range strings.FieldsFunc(scope.Getenv(adminQQIDsEnv), func(r rune) bool {
 		return r == ',' || r == ';' || unicode.IsSpace(r)
 	}) {
 		if configuredID == userID {
