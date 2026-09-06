@@ -230,6 +230,13 @@ func (m *Manager) RemoveServer(id string) error {
 		return fmt.Errorf("server %q not found", id)
 	}
 	delete(m.servers, id)
+	// Clean up stable tool name mappings associated with this server
+	for exposed, target := range m.exposedToTarget {
+		if target.ServerID == id {
+			delete(m.exposedToTarget, exposed)
+			delete(m.targetToExposed, target)
+		}
+	}
 	m.mu.Unlock()
 
 	_ = srv.Stop()
@@ -284,15 +291,40 @@ func (m *Manager) CallTool(ctx context.Context, serverID, remoteName string, arg
 	return srv.CallTool(ctx, remoteName, args)
 }
 
+// updateToolMappingsLocked ensures bidirectional mappings between exposed sanitized names
+// and internal (serverID, remoteName) targets are stably registered for all catalog items across all servers.
+func (m *Manager) updateToolMappingsLocked() {
+	if m.exposedToTarget == nil {
+		m.exposedToTarget = make(map[string]ToolTarget)
+	}
+	if m.targetToExposed == nil {
+		m.targetToExposed = make(map[ToolTarget]string)
+	}
+
+	for _, srv := range m.servers {
+		serverID := srv.ID()
+		for _, item := range srv.Catalog().List() {
+			target := ToolTarget{ServerID: serverID, RemoteName: item.RemoteName}
+			if _, exists := m.targetToExposed[target]; !exists {
+				fullName := SanitizeExposedToolName(serverID, item.RemoteName)
+				if _, isBuiltin := m.builtinNames[fullName]; isBuiltin {
+					continue
+				}
+				m.exposedToTarget[fullName] = target
+				m.targetToExposed[target] = fullName
+			}
+		}
+	}
+}
+
 // EffectiveTools computes the current list of tools that are eligible to be passed to LLM.
 // EffectiveTool = server.enabled && server.status == connected && tool.enabled && tool.exists
 func (m *Manager) EffectiveTools() []core.Tool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Clear old name mappings
-	m.exposedToTarget = make(map[string]ToolTarget)
-	m.targetToExposed = make(map[ToolTarget]string)
+	// Update mappings across all registered servers' catalogs without wiping previously learned identities.
+	m.updateToolMappingsLocked()
 
 	var result []core.Tool
 	for _, srv := range m.servers {
@@ -301,15 +333,16 @@ func (m *Manager) EffectiveTools() []core.Tool {
 		}
 		serverID := srv.ID()
 		for _, item := range srv.Catalog().EffectiveItems() {
-			fullName := SanitizeExposedToolName(serverID, item.RemoteName)
-			// Guard against overwriting builtins
-			if _, isBuiltin := m.builtinNames[fullName]; isBuiltin {
-				continue
-			}
-
 			target := ToolTarget{ServerID: serverID, RemoteName: item.RemoteName}
-			m.exposedToTarget[fullName] = target
-			m.targetToExposed[target] = fullName
+			fullName, ok := m.targetToExposed[target]
+			if !ok {
+				fullName = SanitizeExposedToolName(serverID, item.RemoteName)
+				if _, isBuiltin := m.builtinNames[fullName]; isBuiltin {
+					continue
+				}
+				m.exposedToTarget[fullName] = target
+				m.targetToExposed[target] = fullName
+			}
 
 			result = append(result, core.Tool{
 				Name:        fullName,
@@ -330,18 +363,22 @@ func (m *Manager) AllAdapters() map[string]*ToolAdapter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.updateToolMappingsLocked()
+
 	adapters := make(map[string]*ToolAdapter)
 	for _, srv := range m.servers {
 		serverID := srv.ID()
 		for _, item := range srv.Catalog().List() {
-			fullName := SanitizeExposedToolName(serverID, item.RemoteName)
-			if _, isBuiltin := m.builtinNames[fullName]; isBuiltin {
-				continue
-			}
-
 			target := ToolTarget{ServerID: serverID, RemoteName: item.RemoteName}
-			m.exposedToTarget[fullName] = target
-			m.targetToExposed[target] = fullName
+			fullName, ok := m.targetToExposed[target]
+			if !ok {
+				fullName = SanitizeExposedToolName(serverID, item.RemoteName)
+				if _, isBuiltin := m.builtinNames[fullName]; isBuiltin {
+					continue
+				}
+				m.exposedToTarget[fullName] = target
+				m.targetToExposed[target] = fullName
+			}
 
 			adapters[fullName] = NewToolAdapterWithFullName(serverID, item.RemoteName, fullName, item.Description, item.Parameters, m)
 		}

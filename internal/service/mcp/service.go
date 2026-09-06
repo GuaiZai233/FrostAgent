@@ -21,7 +21,7 @@ import (
 const MaskedSecret = "******"
 
 var sensitiveKeyWords = []string{
-	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "PRIVATE",
+	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "PRIVATE", "COOKIE",
 }
 
 func isSensitiveKey(key string) bool {
@@ -86,7 +86,7 @@ func isLoopbackAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
-func checkControlPlaneAuth(peerAddr string, authHeader string, isStdioMutation bool) error {
+func checkControlPlaneAuth(peerAddr string, authHeader string) error {
 	token := strings.TrimSpace(os.Getenv("MCP_CONTROL_TOKEN"))
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
@@ -100,15 +100,13 @@ func checkControlPlaneAuth(peerAddr string, authHeader string, isStdioMutation b
 		return nil
 	}
 
-	// When no explicit auth token is configured, enforce loopback boundary for stdio command execution
-	// to prevent unauthenticated remote clients from achieving RCE.
-	if isStdioMutation {
-		if os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
-			return nil
-		}
-		if !isLoopbackAddr(peerAddr) {
-			return connect.NewError(connect.CodePermissionDenied, errors.New("managing stdio MCP servers is restricted to localhost or requires MCP_CONTROL_TOKEN authorization"))
-		}
+	// When no explicit auth token is configured, enforce loopback boundary for control plane
+	// access to prevent unauthenticated remote clients from tampering with MCP configuration.
+	if os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
+		return nil
+	}
+	if !isLoopbackAddr(peerAddr) {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("MCP control plane access is restricted to localhost or requires MCP_CONTROL_TOKEN authorization"))
 	}
 	return nil
 }
@@ -128,6 +126,10 @@ func (s *Service) ListMCPServers(
 	ctx context.Context,
 	req *connect.Request[v1.ListMCPServersRequest],
 ) (*connect.Response[v1.ListMCPServersResponse], error) {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.ListMCPServersResponse{Servers: []*v1.MCPServerInfo{}}), nil
 	}
@@ -145,6 +147,10 @@ func (s *Service) GetMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.GetMCPServerRequest],
 ) (*connect.Response[v1.GetMCPServerResponse], error) {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("mcp manager not initialized"))
 	}
@@ -163,16 +169,15 @@ func (s *Service) AddMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.AddMCPServerRequest],
 ) (*connect.Response[v1.AddMCPServerResponse], error) {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.AddMCPServerResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	isStdio := req.Msg.TransportType == string(mcp.TransportStdio)
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), isStdio); err != nil {
-		return nil, err
 	}
 
 	cfg := mcp.ServerConfig{
@@ -212,8 +217,7 @@ func (s *Service) UpdateMCPServer(
 		}), nil
 	}
 
-	isStdio := req.Msg.TransportType == string(mcp.TransportStdio)
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), isStdio); err != nil {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
 		return nil, err
 	}
 
@@ -277,7 +281,7 @@ func (s *Service) DeleteMCPServer(
 		}), nil
 	}
 
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
 		return nil, err
 	}
 
@@ -302,7 +306,7 @@ func (s *Service) ToggleMCPServer(
 		}), nil
 	}
 
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
 		return nil, err
 	}
 
@@ -327,7 +331,7 @@ func (s *Service) ToggleMCPTool(
 		}), nil
 	}
 
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
 		return nil, err
 	}
 
@@ -352,7 +356,7 @@ func (s *Service) SyncMCPServer(
 		}), nil
 	}
 
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
 		return nil, err
 	}
 

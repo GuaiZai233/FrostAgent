@@ -499,6 +499,28 @@ func TestSanitizeExposedToolNameAndBidirectionalMapping(t *testing.T) {
 	if err != nil || out != "special result" {
 		t.Fatalf("execute failed: err=%v, out=%s", err, out)
 	}
+
+	// 6. Disable the tool: EffectiveTools must omit it, but LookupAdapter must still resolve and return graceful disabled notice!
+	err = mgr.SetToolEnabled("special-server", "tool:special", false)
+	if err != nil {
+		t.Fatalf("SetToolEnabled failed: %v", err)
+	}
+	toolsAfterDisable := mgr.EffectiveTools()
+	if len(toolsAfterDisable) != 0 {
+		t.Fatalf("expected 0 effective tools after disabling, got %d", len(toolsAfterDisable))
+	}
+
+	adapterAfterDisable, ok := mgr.LookupAdapter(exposedName)
+	if !ok {
+		t.Fatalf("expected LookupAdapter to resolve disabled tool by its stable exposed name: %s", exposedName)
+	}
+	outDisabled, err := adapterAfterDisable.ExecuteContext(ctx, "{}")
+	if err != nil {
+		t.Fatalf("unexpected execution error for disabled tool: %v", err)
+	}
+	if !strings.Contains(outDisabled, "currently disabled") {
+		t.Fatalf("expected graceful disabled message for sanitized tool, got: %q", outDisabled)
+	}
 }
 
 func TestServerRuntimeGenerationTokenPreventsResurrection(t *testing.T) {
@@ -542,6 +564,22 @@ func TestServerRuntimeGenerationTokenPreventsResurrection(t *testing.T) {
 	}
 }
 
+type testClosableTransport struct {
+	officialmcp.Transport
+	onConnect func(officialmcp.Connection)
+}
+
+func (t *testClosableTransport) Connect(ctx context.Context) (officialmcp.Connection, error) {
+	conn, err := t.Transport.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if t.onConnect != nil {
+		t.onConnect(conn)
+	}
+	return conn, nil
+}
+
 func TestProcessTerminationWatcher(t *testing.T) {
 	server := officialmcp.NewServer(&officialmcp.Implementation{Name: "crash-server", Version: "1.0"}, nil)
 	server.AddTool(&officialmcp.Tool{
@@ -554,15 +592,19 @@ func TestProcessTerminationWatcher(t *testing.T) {
 		}, nil
 	})
 
-	var serverSession *officialmcp.ServerSession
+	var activeConn officialmcp.Connection
 	factory := func(cfg TransportConfig) (officialmcp.Transport, error) {
 		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
-		var err error
-		serverSession, err = server.Connect(context.Background(), serverTransport, nil)
+		_, err := server.Connect(context.Background(), serverTransport, nil)
 		if err != nil {
 			return nil, err
 		}
-		return clientTransport, nil
+		return &testClosableTransport{
+			Transport: clientTransport,
+			onConnect: func(c officialmcp.Connection) {
+				activeConn = c
+			},
+		}, nil
 	}
 
 	mgr := NewManagerWithFactory(nil, nil, factory)
@@ -586,9 +628,9 @@ func TestProcessTerminationWatcher(t *testing.T) {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
 
-	// Simulate unexpected termination of the server process by closing serverSession
-	if serverSession != nil {
-		_ = serverSession.Close()
+	// Simulate unexpected termination of the server process by abruptly closing connection
+	if activeConn != nil {
+		_ = activeConn.Close()
 	}
 
 	// Wait for background termination watcher goroutine to detect exit
@@ -660,5 +702,200 @@ func TestConcurrentCatalogSyncAndPolicyUpdate(t *testing.T) {
 	items := srv.Catalog().List()
 	if len(items) != 3 {
 		t.Fatalf("expected 3 tools in catalog, got %d", len(items))
+	}
+}
+
+func TestTransportHTTPConfiguration(t *testing.T) {
+	// SSE transport
+	sseTransport, err := CreateTransport(TransportConfig{
+		Type:    TransportSSE,
+		URL:     "http://localhost:8080/sse",
+		Headers: map[string]string{"Authorization": "Bearer token123"},
+	})
+	if err != nil {
+		t.Fatalf("failed to create SSE transport: %v", err)
+	}
+	sseClientTransport, ok := sseTransport.(*officialmcp.SSEClientTransport)
+	if !ok {
+		t.Fatalf("expected SSEClientTransport, got %T", sseTransport)
+	}
+	if sseClientTransport.HTTPClient.Timeout != 0 {
+		t.Fatalf("expected Timeout 0 for streaming SSE, got %v", sseClientTransport.HTTPClient.Timeout)
+	}
+
+	// Streamable HTTP transport
+	streamTransport, err := CreateTransport(TransportConfig{
+		Type: TransportStreamableHTTP,
+		URL:  "http://localhost:8080/stream",
+	})
+	if err != nil {
+		t.Fatalf("failed to create StreamableHTTP transport: %v", err)
+	}
+	streamClientTransport, ok := streamTransport.(*officialmcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("expected StreamableClientTransport, got %T", streamTransport)
+	}
+	if streamClientTransport.HTTPClient.Timeout != 0 {
+		t.Fatalf("expected Timeout 0 for StreamableHTTP, got %v", streamClientTransport.HTTPClient.Timeout)
+	}
+}
+
+func TestServerRuntimeLifecycleDecoupledFromStartupContext(t *testing.T) {
+	tools := map[string]func(args string) (string, error){
+		"ping": func(args string) (string, error) { return "pong", nil },
+	}
+	factory := createTestServerFactory("decoupled-server", tools)
+	srv := NewServerRuntimeWithFactory(ServerConfig{
+		ID:      "decoupled",
+		Name:    "Decoupled Server",
+		Enabled: true,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "decoupled",
+		},
+	}, factory)
+
+	// Call Start with a short-lived context that gets cancelled immediately after Start returns
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	if err := srv.Start(startCtx); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	cancelStart() // Cancel caller's context
+
+	// Server must still be connected because session lifecycle is decoupled!
+	if srv.Status() != StatusConnected {
+		t.Fatalf("server disconnected when startup ctx was cancelled, status=%s", srv.Status())
+	}
+
+	// Tools must still be callable
+	res, err := srv.CallTool(context.Background(), "ping", "{}")
+	if err != nil || res != "pong" {
+		t.Fatalf("tool call failed after startup ctx cancellation: res=%q, err=%v", res, err)
+	}
+
+	_ = srv.Stop()
+}
+
+func TestServerRuntimeSetEnabledIdempotency(t *testing.T) {
+	connectCount := 0
+	factory := func(cfg TransportConfig) (officialmcp.Transport, error) {
+		connectCount++
+		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+		server := officialmcp.NewServer(&officialmcp.Implementation{Name: "idem", Version: "1.0"}, nil)
+		server.AddTool(&officialmcp.Tool{
+			Name:        "t",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+			return &officialmcp.CallToolResult{
+				Content: []officialmcp.Content{&officialmcp.TextContent{Text: "ok"}},
+			}, nil
+		})
+		_, _ = server.Connect(context.Background(), serverTransport, nil)
+		return clientTransport, nil
+	}
+
+	srv := NewServerRuntimeWithFactory(ServerConfig{
+		ID:      "idem",
+		Name:    "Idem Server",
+		Enabled: true,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "idem",
+		},
+	}, factory)
+
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	if connectCount != 1 {
+		t.Fatalf("expected 1 connect, got %d", connectCount)
+	}
+
+	// Call SetEnabled(true) repeatedly on connected server -> must be a no-op!
+	if err := srv.SetEnabled(true); err != nil {
+		t.Fatalf("SetEnabled(true) failed: %v", err)
+	}
+	if err := srv.SetEnabled(true); err != nil {
+		t.Fatalf("SetEnabled(true) failed: %v", err)
+	}
+	if connectCount != 1 {
+		t.Fatalf("expected connectCount to remain 1 after redundant SetEnabled(true), got %d", connectCount)
+	}
+
+	// Calling Stop then SetEnabled(false) -> must be a no-op!
+	_ = srv.Stop()
+	if err := srv.SetEnabled(false); err != nil {
+		t.Fatalf("SetEnabled(false) failed: %v", err)
+	}
+	if srv.Status() != StatusStopped {
+		t.Fatalf("expected StatusStopped, got %s", srv.Status())
+	}
+}
+
+func TestServerRuntimeToolListChangedNotification(t *testing.T) {
+	server := officialmcp.NewServer(&officialmcp.Implementation{Name: "dyn", Version: "1.0"}, &officialmcp.ServerOptions{
+		Capabilities: &officialmcp.ServerCapabilities{
+			Tools: &officialmcp.ToolCapabilities{ListChanged: true},
+		},
+	})
+	server.AddTool(&officialmcp.Tool{
+		Name:        "tool_v1",
+		Description: "Version 1",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+		return &officialmcp.CallToolResult{Content: []officialmcp.Content{&officialmcp.TextContent{Text: "v1"}}}, nil
+	})
+
+	factory := func(cfg TransportConfig) (officialmcp.Transport, error) {
+		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+		_, err := server.Connect(context.Background(), serverTransport, nil)
+		if err != nil {
+			return nil, err
+		}
+		return clientTransport, nil
+	}
+
+	srv := NewServerRuntimeWithFactory(ServerConfig{
+		ID:      "dyn",
+		Name:    "Dynamic Server",
+		Enabled: true,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "dyn",
+		},
+	}, factory)
+
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	defer srv.Stop()
+
+	if len(srv.Catalog().List()) != 1 {
+		t.Fatalf("expected 1 tool initially, got %d", len(srv.Catalog().List()))
+	}
+
+	// Now dynamically add tool_v2 to server. Since ListChanged is true, server automatically broadcasts notification
+	server.AddTool(&officialmcp.Tool{
+		Name:        "tool_v2",
+		Description: "Version 2",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+		return &officialmcp.CallToolResult{Content: []officialmcp.Content{&officialmcp.TextContent{Text: "v2"}}}, nil
+	})
+
+	// Client's ToolListChangedHandler should automatically trigger SyncCatalog
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(srv.Catalog().List()) == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(srv.Catalog().List()) != 2 {
+		t.Fatalf("expected 2 tools after dynamic list_changed notification, got %d", len(srv.Catalog().List()))
+	}
+	if _, ok := srv.Catalog().Get("tool_v2"); !ok {
+		t.Fatalf("expected tool_v2 in catalog after sync")
 	}
 }

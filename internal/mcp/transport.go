@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,6 +27,35 @@ func (h *HeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		reqCopy.Header.Set(k, v)
 	}
 	return base.RoundTrip(reqCopy)
+}
+
+// newTransportHTTPClient constructs an HTTP client suitable for long-lived streaming connections (SSE and Streamable HTTP).
+// It sets Timeout to 0 to avoid killing hanging GET streams, while configuring granular dial, TLS, and header timeouts.
+func newTransportHTTPClient(headers map[string]string) *http.Client {
+	baseTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	var rt http.RoundTripper = baseTransport
+	if len(headers) > 0 {
+		rt = &HeaderTransport{
+			Base:    baseTransport,
+			Headers: headers,
+		}
+	}
+
+	return &http.Client{
+		Transport: rt,
+		Timeout:   0, // Unbounded stream reading
+	}
 }
 
 // CreateTransport builds an official MCP Transport based on TransportConfig.
@@ -55,36 +85,18 @@ func CreateTransport(cfg TransportConfig) (officialmcp.Transport, error) {
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("url cannot be empty for streamable_http transport")
 		}
-		httpClient := &http.Client{
-			Timeout: 60 * time.Second,
-		}
-		if len(cfg.Headers) > 0 {
-			httpClient.Transport = &HeaderTransport{
-				Base:    http.DefaultTransport,
-				Headers: cfg.Headers,
-			}
-		}
 		return &officialmcp.StreamableClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: httpClient,
+			HTTPClient: newTransportHTTPClient(cfg.Headers),
 		}, nil
 
 	case TransportSSE:
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("url cannot be empty for sse transport")
 		}
-		httpClient := &http.Client{
-			Timeout: 60 * time.Second,
-		}
-		if len(cfg.Headers) > 0 {
-			httpClient.Transport = &HeaderTransport{
-				Base:    http.DefaultTransport,
-				Headers: cfg.Headers,
-			}
-		}
 		return &officialmcp.SSEClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: httpClient,
+			HTTPClient: newTransportHTTPClient(cfg.Headers),
 		}, nil
 
 	default:

@@ -194,28 +194,22 @@ func TestMCPServiceRPCs(t *testing.T) {
 }
 
 func TestControlPlaneSecurityBoundary(t *testing.T) {
-	// 1. When no token is set: stdio mutation should only be allowed on loopback
+	// 1. When no token is set: control plane access is restricted to loopback
 	os.Unsetenv("MCP_CONTROL_TOKEN")
 	os.Unsetenv("ADMIN_TOKEN")
 	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
 
-	// Remote address -> permission denied for stdio
-	err := checkControlPlaneAuth("192.168.1.100:45678", "", true)
+	// Remote address -> permission denied
+	err := checkControlPlaneAuth("192.168.1.100:45678", "")
 	if err == nil {
-		t.Fatalf("expected permission denied for remote stdio mutation")
+		t.Fatalf("expected permission denied for remote control plane access without token")
 	}
 	connectErr, ok := err.(*connect.Error)
 	if !ok || connectErr.Code() != connect.CodePermissionDenied {
 		t.Fatalf("expected CodePermissionDenied, got %v", err)
 	}
 
-	// Remote address -> allowed for non-stdio (e.g. sse or streamable_http)
-	err = checkControlPlaneAuth("192.168.1.100:45678", "", false)
-	if err != nil {
-		t.Fatalf("expected non-stdio mutation to be allowed without auth: %v", err)
-	}
-
-	// Loopback addresses -> allowed for stdio
+	// Loopback addresses -> allowed
 	loopbackAddrs := []string{
 		"127.0.0.1:12345",
 		"[::1]:12345",
@@ -223,14 +217,14 @@ func TestControlPlaneSecurityBoundary(t *testing.T) {
 		"",
 	}
 	for _, addr := range loopbackAddrs {
-		if err := checkControlPlaneAuth(addr, "", true); err != nil {
+		if err := checkControlPlaneAuth(addr, ""); err != nil {
 			t.Fatalf("expected loopback addr %q to be allowed, got: %v", addr, err)
 		}
 	}
 
-	// With ALLOW_REMOTE_MCP_MANAGEMENT=true -> remote allowed for stdio
+	// With ALLOW_REMOTE_MCP_MANAGEMENT=true -> remote allowed
 	os.Setenv("ALLOW_REMOTE_MCP_MANAGEMENT", "true")
-	if err := checkControlPlaneAuth("192.168.1.100:45678", "", true); err != nil {
+	if err := checkControlPlaneAuth("192.168.1.100:45678", ""); err != nil {
 		t.Fatalf("expected allowed with ALLOW_REMOTE_MCP_MANAGEMENT=true, got: %v", err)
 	}
 	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
@@ -240,15 +234,15 @@ func TestControlPlaneSecurityBoundary(t *testing.T) {
 	defer os.Unsetenv("MCP_CONTROL_TOKEN")
 
 	// Missing or invalid token -> unauthenticated
-	if err := checkControlPlaneAuth("127.0.0.1", "", true); err == nil {
+	if err := checkControlPlaneAuth("127.0.0.1", ""); err == nil {
 		t.Fatalf("expected unauthenticated when token is set but header is missing")
 	}
-	if err := checkControlPlaneAuth("127.0.0.1", "Bearer wrong", true); err == nil {
+	if err := checkControlPlaneAuth("127.0.0.1", "Bearer wrong"); err == nil {
 		t.Fatalf("expected unauthenticated with wrong token")
 	}
 
 	// Valid token -> allowed
-	if err := checkControlPlaneAuth("192.168.1.100:45678", "Bearer super-secret-token", true); err != nil {
+	if err := checkControlPlaneAuth("192.168.1.100:45678", "Bearer super-secret-token"); err != nil {
 		t.Fatalf("expected allowed with valid bearer token, got: %v", err)
 	}
 
@@ -285,6 +279,33 @@ func TestControlPlaneSecurityBoundary(t *testing.T) {
 	}
 	if !res.Msg.Success {
 		t.Fatalf("expected success with valid token: %s", res.Msg.Error)
+	}
+
+	// ListMCPServers also protected by token
+	listReq := connect.NewRequest(&v1.ListMCPServersRequest{})
+	_, err = svc.ListMCPServers(ctx, listReq)
+	if err == nil {
+		t.Fatalf("expected unauthenticated for ListMCPServers without token")
+	}
+	listReq.Header().Set("Authorization", "Bearer super-secret-token")
+	listRes, err := svc.ListMCPServers(ctx, listReq)
+	if err != nil || len(listRes.Msg.Servers) != 1 {
+		t.Fatalf("expected ListMCPServers to succeed with token, err=%v", err)
+	}
+
+	// 3. Verify COOKIE masking in headers and env
+	cookieEnv := maskEnv(map[string]string{
+		"SESSION_COOKIE": "session=xyz123",
+		"NORMAL_KEY":     "plain",
+	})
+	if cookieEnv["SESSION_COOKIE"] != MaskedSecret {
+		t.Fatalf("expected SESSION_COOKIE to be masked, got %q", cookieEnv["SESSION_COOKIE"])
+	}
+	cookieHeaders := maskHeaders(map[string]string{
+		"Cookie": "uid=123",
+	})
+	if cookieHeaders["Cookie"] != MaskedSecret {
+		t.Fatalf("expected Cookie header to be masked, got %q", cookieHeaders["Cookie"])
 	}
 }
 

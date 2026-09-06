@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -118,7 +119,8 @@ func (s *ServerRuntime) IsToolEnabled(remoteName string) bool {
 }
 
 // Start connects to the MCP server, initializes protocol, and syncs the tool catalog.
-// Uses generation tokens and cancellable context to prevent Start/Stop race conditions.
+// Uses generation tokens and a decoupled lifecycle context to ensure long-lived streaming connections
+// (such as SSE) survive short-lived startup/RPC request contexts, while guarding the initial handshake with ctx.
 func (s *ServerRuntime) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.cfg.Enabled {
@@ -130,16 +132,28 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	gen := s.generation
 	s.status = StatusStarting
 	s.lastError = ""
+
+	// Explicitly close any superseded session to prevent leaked background goroutines or processes
+	if s.session != nil {
+		oldSession := s.session
+		s.session = nil
+		s.client = nil
+		go func(sess *officialmcp.ClientSession) { _ = sess.Close() }(oldSession)
+	}
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
-	startCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
+
+	// Decouple the long-lived session lifecycle from caller's short-lived RPC/startup context
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	s.cancel = cancelLifecycle
 	transportCfg := s.cfg.Transport
 	s.mu.Unlock()
 
 	transport, err := s.createTransport(transportCfg)
 	if err != nil {
+		cancelLifecycle()
 		s.mu.Lock()
 		if s.generation == gen {
 			s.status = StatusFailed
@@ -152,23 +166,56 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	client := officialmcp.NewClient(&officialmcp.Implementation{
 		Name:    "FrostAgent",
 		Version: "0.1.0",
-	}, nil)
+	}, &officialmcp.ClientOptions{
+		ToolListChangedHandler: func(changedCtx context.Context, req *officialmcp.ToolListChangedRequest) {
+			go func() {
+				syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = s.SyncCatalog(syncCtx)
+			}()
+		},
+	})
 
-	session, err := client.Connect(startCtx, transport, nil)
-	if err != nil {
+	type connResult struct {
+		session *officialmcp.ClientSession
+		err     error
+	}
+	connCh := make(chan connResult, 1)
+	go func() {
+		sess, err := client.Connect(lifecycleCtx, transport, nil)
+		connCh <- connResult{session: sess, err: err}
+	}()
+
+	var session *officialmcp.ClientSession
+	select {
+	case <-ctx.Done():
+		cancelLifecycle()
 		s.mu.Lock()
 		if s.generation == gen {
 			s.status = StatusFailed
-			s.lastError = fmt.Sprintf("mcp connect failed: %v", err)
+			s.lastError = fmt.Sprintf("mcp connect timed out: %v", ctx.Err())
 		}
 		s.mu.Unlock()
-		return fmt.Errorf("mcp connect failed: %w", err)
+		return fmt.Errorf("mcp connect timed out: %w", ctx.Err())
+	case res := <-connCh:
+		if res.err != nil {
+			cancelLifecycle()
+			s.mu.Lock()
+			if s.generation == gen {
+				s.status = StatusFailed
+				s.lastError = fmt.Sprintf("mcp connect failed: %v", res.err)
+			}
+			s.mu.Unlock()
+			return fmt.Errorf("mcp connect failed: %w", res.err)
+		}
+		session = res.session
 	}
 
-	// Initial catalog sync
-	toolsRes, err := session.ListTools(startCtx, nil)
+	// Initial catalog sync (guarded by caller's ctx)
+	toolsRes, err := session.ListTools(ctx, nil)
 	if err != nil {
 		_ = session.Close()
+		cancelLifecycle()
 		s.mu.Lock()
 		if s.generation == gen {
 			s.status = StatusFailed
@@ -183,6 +230,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	if s.generation != gen || !s.cfg.Enabled {
 		s.mu.Unlock()
 		_ = session.Close()
+		cancelLifecycle()
 		return errors.New("server start was aborted or superseded")
 	}
 
@@ -274,6 +322,16 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 
 func (s *ServerRuntime) SetEnabled(enabled bool) error {
 	s.mu.Lock()
+	if s.cfg.Enabled == enabled {
+		if !enabled && s.status == StatusStopped {
+			s.mu.Unlock()
+			return nil
+		}
+		if enabled && (s.status == StatusStarting || s.status == StatusConnected) {
+			s.mu.Unlock()
+			return nil
+		}
+	}
 	s.cfg.Enabled = enabled
 	s.mu.Unlock()
 
