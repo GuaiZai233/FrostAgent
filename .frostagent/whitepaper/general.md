@@ -119,12 +119,52 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 前端基于 `@connectrpc/connect-web` 与 `@frostagent/proto`，实现端到端的 Protobuf 类型安全与请求/响应全量校验；
   - 支持 ConnectRPC Server-Streaming 实时日志长连接订阅与动态取消；
   - 敏感配置自动脱敏与按需显隐。
-- **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
+- **现代化设计令牌、主题与视觉缩放系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
-  - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化。
+  - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
+  - 默认采用 110% 界面缩放比例，结合 CSS `zoom` 与预加载防闪烁脚本优化桌面视距与字号阅读体验，并支持在外观设置中自由调整（100%、105%、110%、115%、120%）与即时持久化。
 - **单二进制静态嵌入与开发体验**：
   - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
   - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。
+
+### 管理面与网络信任边界 (Management API & Network Trust Boundary)
+
+为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
+
+- **本地回环默认绑定 (Localhost Default Binding)**：
+  - HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`；
+  - WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - 杜绝默认监听 `0.0.0.0` 或通配端口导致的未授权公网暴露。
+- **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
+  - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
+  - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；
+  - **Origin 校验**：同源自动放行规则严格限制在本地回环 Host 上，杜绝攻击者利用解析至 127.0.0.1 的恶意域名伪造同源；如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
+- **平台基线与操作系统支持边界 (Platform Security Baseline & OS Boundary)**：
+  - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
+  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
+- **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
+  - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
+  - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
+  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
+- **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
+  - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
+  - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：
+    - 废弃物理逐行扫描，引入严格镜像 `godotenv v1.5.1` 解析语义的语句级解析器（`parseEnvStatements`）；
+    - **语句边界与终止符精准对齐**：完全对齐 `godotenv v1.5.1` 上游解析器的真实行为，遇到前驱字符为反斜杠 `\` 的引号作为转义引号跳过，完整识别跨物理行的单/双引号多行值声明；同时支持闭合引号后即刻将剩余字节交回主循环的同物理行多声明（如 `KEY1="val" KEY2=val`），在修改或删除目标配置时精确定位并单独处理，绝不产生孤儿延续行或误删/遗漏同物理行后续变量定义；
+    - **重复键消除与规范化**：当原始 `.env` 存在重复定义键时，更新操作规范化首个匹配语句为 `key=value` 格式，并自动剔除所有后续同名重复声明；删除操作彻底移除全部同名声明；
+    - **变体语法识别与注释保真**：原生识别 `export KEY=value` 与冒号分隔符 `KEY: value` 等常见变体语法；未修改的配置项、单行注释（`#`）与空行在变异后无损保真保留；
+  - **多模式安全序列化与 godotenv v1.5.1 往返保真**：针对 `godotenv v1.5.1` 解析器的特定行为（如双引号终止符不判断奇偶反斜杠导致尾部反斜杠闭合失效、转义双引号修剪丢失等），采用自适应多模式序列化策略：
+    - 普通单行安全值（无换行、无 `$` 变量展开标记、无首尾空格、不以引号开头、无行内注释）采用直接不加引号的格式落盘（`key=value`），原生保真保留 Windows 路径、末尾反斜杠及内部引号；
+    - 以引号开头的安全值自适应采用单引号格式（`key='value'`）；
+    - 包含空值、前后空白、`$` 变量、换行等多行配置项（如 `SYSTEM_PROMPT`）采用安全转义的双引号格式（`"...\n..."`）；
+  - **写入前 Round-Trip 强校验与 Fail-Closed**：在实际落盘前，序列化器即时调用 `godotenv.Unmarshal` 对格式化后的条目进行解析回测，严格验证 `parse(format(value)) == value` 且无键分裂或多余键注入；对于解析器本身无法无歧义表示的非法输入，显式拒绝写入并返回错误，彻底杜绝配置损坏或服务重启后无法解析的风险；
+  - **防换行注入与 NUL 字节防护**：单行环境变量在 API 层面严格禁止包含 `\r` 或 `\n` 字符；允许多行的配置项经转义双引号后在 `.env` 中落盘为单行记录，杜绝利用换行注入非受信环境变量；同时对包含空字节（`\x00`）的输入进行前置防御与显式拒绝，并完整捕获与向上传播 `os.Setenv` / `os.Unsetenv` 错误，避免因操作系统底层调用限制（`syscall.EINVAL`）导致内存与磁盘状态不一致。
+- **并发互斥与安全原子落盘 (Concurrency Safety & Secure Atomic Writes)**：
+  - `SettingsService` 内部维护互斥锁（`sync.Mutex`），全生命周期保护 `UpdateEnvVar`、`DeleteEnvVar`、`GetRawEnvFile` 与 `UpdateRawEnvFile`，避免高并发交错写入或结构化与 Raw 编辑交织导致配置覆盖或数据竞争；
+  - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），并在写入与提交前预先赋予 `0600` 权限，避免多协程写入碰撞且消除落盘后再次 `os.Chmod` 的潜在脆弱状态；
+  - **权限收紧 Fail-Closed 机制**：服务初始化（`New`）时主动将已有 `.env` 文件权限收紧至 `0600`，若收紧失败则向上返回错误并拒绝挂载设置服务，防止静默运行于不安全权限下。
+- **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
+  - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
 
 ### 表情包摘取与检索系统 (Sticker Stealing & Retrieval System)
 
@@ -181,7 +221,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
   - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
 - **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：
-  - **浏览器跨源防护与 Origin 校验 (CSRF / Origin Bypass Defense)**：针对恶意网页利用浏览器向 `localhost` 发起请求时 TCP 对端同样为本地回环（`127.0.0.1`）的安全隐患，控制平面在 HTTP CORS 中间件与 ConnectRPC 服务层实施双重 Origin 校验。非受信外部源（如 `https://evil.example`）即便通过回环地址发起请求，也将被直接拦截并返回 `403 Forbidden` / `CodePermissionDenied`，彻底阻断网页跨站导致本地 stdio 命令执行（RCE）的风险。受信来源仅包括本地回环源（`localhost`, `127.0.0.1`, `[::1]`）、与服务端 `Host`/`X-Forwarded-Host` 一致的同源请求，以及通过 `MCP_ALLOWED_ORIGINS` 显式声明的白名单；
+  - **统一网关跨源防护与 DNS 重绑定防御 (CORS, CSRF & DNS Rebinding Defense)**：针对恶意网页利用浏览器向 `localhost` 发起跨域请求或利用 DNS 重绑定（攻击者域名解析至 `127.0.0.1`，制造 `Origin == Host == attacker.example`）绕过回环认证的安全隐患，系统在 HTTP 全局入口层（`corsMiddleware`）实施严格的 Host 与 Origin 校验。网关强制验证请求 Host 头仅限本地回环（`localhost`, `127.0.0.1`, `[::1]`）或显式配置的 `HTTP_ALLOWED_ORIGINS`，且同源自动信任仅在请求 Host 本身为回环地址时成立。非受信跨源请求直接由网关层拒绝并返回 `403 Forbidden`，从传输层杜绝网页端逃逸执行本地 stdio 进程（RCE）的风险；MCP 服务层则专注管控本地回环与远程 Bearer Token 鉴权边界；
   - **网络边界认证与本地控制台防锁死机制 (Local Same-Origin vs. Remote Bearer Token)**：远程访问（非回环 IP）强制要求配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并在请求中提供合法 Bearer 认证；本地同源访问（本地回环 + 受信同源）默认放行以保证内置控制台开箱即用（支持配置 `MCP_ENFORCE_LOCAL_TOKEN=true` 开启本地严格鉴权）。同时前端 ConnectRPC 客户端内置 `authInterceptor` 拦截器，支持在 Web 端外观设置中配置与持久化访问 Token，确保远程部署和受保护环境下控制台顺畅交互；
   - **敏感凭据全面脱敏防护**：在环境变量及请求头中，对包含 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `COOKIE` 以及 `Authorization` 的敏感信息在读取接口（`ListMCPServers`, `GetMCPServer`）中统一脱敏展示为 `"******"`；
   - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏；

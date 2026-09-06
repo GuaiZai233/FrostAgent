@@ -2,6 +2,10 @@
   box-sizing: border-box;
 }
 
+html {
+  zoom: var(--ui-scale, 1.1);
+}
+
 html, body {
   min-height: 100vh;
   background-color: var(--background);

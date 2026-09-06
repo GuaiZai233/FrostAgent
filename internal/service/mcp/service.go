@@ -8,7 +8,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -70,60 +69,6 @@ func maskHeaders(headers map[string]string) map[string]string {
 	return masked
 }
 
-// IsTrustedOrigin reports whether an incoming HTTP Origin header is trusted for
-// MCP control plane access. It permits:
-//  1. Empty Origin (non-browser requests such as curl, CLI, or backend services).
-//  2. Local loopback origins (http(s)://localhost[:port], 127.0.0.1[:port], [::1][:port]).
-//  3. Same-origin requests where Origin matches the server's Host / X-Forwarded-Host.
-//  4. Explicitly allowlisted origins in the MCP_ALLOWED_ORIGINS environment variable.
-//
-// Any untrusted external origin (e.g. https://evil.example) returns false to eliminate
-// browser-based cross-origin request / CSRF execution of stdio commands (RCE).
-func IsTrustedOrigin(origin string, host string) bool {
-	origin = strings.TrimSpace(origin)
-	if origin == "" {
-		return true
-	}
-
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return false
-	}
-
-	// Check loopback hostname
-	if isLoopbackHost(u.Hostname()) {
-		return true
-	}
-
-	// Check server Host / X-Forwarded-Host match
-	if host != "" {
-		host = strings.TrimSpace(host)
-		if strings.EqualFold(u.Host, host) {
-			return true
-		}
-		hostHostname, hostPort, err := net.SplitHostPort(host)
-		if err != nil {
-			hostHostname = host
-			hostPort = ""
-		}
-		if strings.EqualFold(u.Hostname(), hostHostname) && u.Port() == hostPort {
-			return true
-		}
-	}
-
-	// Check explicit allowlist via environment variable
-	if allowed := os.Getenv("MCP_ALLOWED_ORIGINS"); allowed != "" {
-		for item := range strings.SplitSeq(allowed, ",") {
-			item = strings.TrimSpace(item)
-			if item != "" && (strings.EqualFold(origin, item) || strings.EqualFold(u.Host, item)) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
@@ -146,29 +91,15 @@ func isLoopbackAddr(addr string) bool {
 	return isLoopbackHost(host)
 }
 
-// CheckControlPlaneAuth validates incoming request origin, peer address, and token
-// authorization.
+// CheckControlPlaneAuth validates incoming request peer address and token authorization
+// for the MCP control plane. Host, Origin, and DNS rebinding protections are enforced
+// at the HTTP gateway layer via corsMiddleware in cmd/app/cors.go.
 func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
-	var authHeader, originHeader, hostHeader string
+	var authHeader string
 	if header != nil {
 		authHeader = strings.TrimSpace(header.Get("Authorization"))
-		originHeader = strings.TrimSpace(header.Get("Origin"))
-		hostHeader = strings.TrimSpace(header.Get("Host"))
-		if hostHeader == "" {
-			hostHeader = strings.TrimSpace(header.Get("X-Forwarded-Host"))
-		}
 	}
 
-	// 1. Origin verification: untrusted cross-origin requests are rejected unconditionally,
-	// protecting against browser CSRF / origin bypass (e.g. evil web page -> localhost -> stdio RCE).
-	if originHeader != "" && !IsTrustedOrigin(originHeader, hostHeader) {
-		return connect.NewError(
-			connect.CodePermissionDenied,
-			fmt.Errorf("untrusted cross-origin request from %q is forbidden on MCP control plane", originHeader),
-		)
-	}
-
-	// 2. Token & Peer address boundary:
 	token := strings.TrimSpace(os.Getenv("MCP_CONTROL_TOKEN"))
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
