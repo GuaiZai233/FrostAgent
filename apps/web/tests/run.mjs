@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 const require = createRequire(import.meta.url);

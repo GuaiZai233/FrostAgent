@@ -504,3 +504,28 @@ func TestWindowsCredentialCloneAndCleanupWithoutRuntime(t *testing.T) {
 		t.Fatal("cloned credential leaked", err)
 	}
 }
+
+func TestLifecycleRejectsNonCanonicalIdentifiers(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "safe")
+	for _, id := range []string{"../" + info.ID, info.ID + "/../../outside", info.ID + "G", info.ID + "\x00"} {
+		if !errors.Is(m.Rename(id, "bad"), os.ErrNotExist) {
+			t.Fatal("invalid rename ID accepted")
+		}
+		if !errors.Is(m.Enable(id, true), os.ErrNotExist) {
+			t.Fatal("invalid enable ID accepted")
+		}
+		if !errors.Is(m.Delete(id, true), os.ErrNotExist) {
+			t.Fatal("invalid delete ID accepted")
+		}
+		if !errors.Is(m.Copy(info.ID, id), os.ErrNotExist) {
+			t.Fatal("invalid copy source accepted")
+		}
+		if !errors.Is(m.Copy(id, info.ID), os.ErrNotExist) {
+			t.Fatal("invalid copy target accepted")
+		}
+	}
+	if _, err := os.Stat(m.dir(info.ID)); err != nil {
+		t.Fatal("valid instance affected", err)
+	}
+}

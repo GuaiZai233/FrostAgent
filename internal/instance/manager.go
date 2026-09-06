@@ -43,6 +43,7 @@ type registry struct {
 	Instances  []Info `json:"instances"`
 }
 type managed struct {
+	id      string // Immutable canonical ID from the registry, never a request path.
 	op      sync.RWMutex
 	mu      sync.RWMutex
 	runtime *Runtime
@@ -142,7 +143,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		if pathError == nil {
 			c, configError = instanceconfig.Open(filepath.Join(m.dir(info.ID), ".env"), false)
 		}
-		i := &managed{config: c, logger: logs.New(info.ID, info.Name, 5000)}
+		i := &managed{id: info.ID, config: c, logger: logs.New(info.ID, info.Name, 5000)}
 		m.instances[info.ID] = i
 		if pathError != nil {
 			m.registry.Instances[index].Enabled = false
@@ -174,6 +175,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
 func (m *Manager) build(id string, i *managed, enabled bool) (*Runtime, error) {
+	id = i.id
 	if err := safeTree(m.dir(id)); err != nil {
 		return nil, err
 	}
@@ -239,6 +241,9 @@ func (m *Manager) List() ([]Info, int) {
 	return append([]Info{}, m.registry.Instances...), m.registry.NextNumber
 }
 func (m *Manager) lookup(id string) (*managed, error) {
+	if !idPattern.MatchString(id) {
+		return nil, fs.ErrNotExist
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	i := m.instances[id]
@@ -310,7 +315,7 @@ func (m *Manager) Create(name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	i := &managed{config: c, logger: logs.New(id, name, 5000)}
+	i := &managed{id: id, config: c, logger: logs.New(id, name, 5000)}
 	r, err := m.build(id, i, false)
 	if err != nil {
 		return Info{}, err
@@ -337,6 +342,7 @@ func (m *Manager) Rename(id, name string) error {
 	if err != nil {
 		return err
 	}
+	id = i.id
 	if !i.op.TryLock() {
 		return ErrBusy
 	}
@@ -388,6 +394,7 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err != nil {
 		return err
 	}
+	id = i.id
 	if !i.op.TryLock() {
 		return ErrBusy
 	}
@@ -454,6 +461,7 @@ func (m *Manager) Delete(id string, all bool) error {
 	if err != nil {
 		return err
 	}
+	id = i.id
 	if !i.op.TryLock() {
 		return ErrBusy
 	}
@@ -615,6 +623,7 @@ func (m *Manager) Copy(target, source string) error {
 	if err != nil {
 		return err
 	}
+	target, source = dst.id, src.id
 	if !dst.op.TryLock() {
 		return ErrBusy
 	}
@@ -724,6 +733,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	id = i.id
 	path := "/" + parts[1]
 	ws := strings.HasPrefix(path, "/ws/")
 	stream := strings.HasSuffix(path, "/StreamLogs")
