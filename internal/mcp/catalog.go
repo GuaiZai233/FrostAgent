@@ -1,18 +1,18 @@
 package mcp
 
 import (
-	"encoding/json"
 	"sort"
 	"sync"
 	"time"
+
+	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type CatalogItem struct {
-	RemoteName  string          `json:"remote_name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Parameters  map[string]any  `json:"parameters"`
-	Enabled     bool            `json:"enabled"`
+	RemoteName  string         `json:"remote_name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+	Enabled     bool           `json:"enabled"`
 }
 
 type ToolCatalog struct {
@@ -29,12 +29,15 @@ func NewToolCatalog() *ToolCatalog {
 
 // UpdateRemote updates the remote catalog from tools/list and applies local policies.
 // Default policy is enabled=true if not explicitly configured.
-func (c *ToolCatalog) UpdateRemote(tools []MCPToolDefinition, policies map[string]ToolPolicy) {
+func (c *ToolCatalog) UpdateRemote(tools []*officialmcp.Tool, policies map[string]ToolPolicy) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	newItems := make(map[string]CatalogItem, len(tools))
 	for _, t := range tools {
+		if t == nil {
+			continue
+		}
 		enabled := true
 		if p, ok := policies[t.Name]; ok {
 			enabled = p.Enabled
@@ -45,7 +48,6 @@ func (c *ToolCatalog) UpdateRemote(tools []MCPToolDefinition, policies map[strin
 		newItems[t.Name] = CatalogItem{
 			RemoteName:  t.Name,
 			Description: t.Description,
-			InputSchema: t.InputSchema,
 			Parameters:  params,
 			Enabled:     enabled,
 		}

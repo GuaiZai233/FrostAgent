@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"maps"
 	"sync"
-	"time"
+
+	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type ServerStatus string
@@ -21,22 +22,26 @@ const (
 
 // ServerRuntime represents a running instance of an MCP server connection.
 type ServerRuntime struct {
-	mu        sync.RWMutex
-	cfg       ServerConfig
-	status    ServerStatus
-	lastError string
-	client    *Client
-	catalog   *ToolCatalog
+	mu         sync.RWMutex
+	cfg        ServerConfig
+	status     ServerStatus
+	lastError  string
+	generation uint64
+	cancel     context.CancelFunc
 
-	// Transport constructor hook (allows injecting mock transport for tests)
-	transportFactory func(cfg TransportConfig) (Transport, error)
+	client  *officialmcp.Client
+	session *officialmcp.ClientSession
+	catalog *ToolCatalog
+
+	// Transport constructor hook (allows injecting mock/in-memory transport for tests)
+	transportFactory func(cfg TransportConfig) (officialmcp.Transport, error)
 }
 
 func NewServerRuntime(cfg ServerConfig) *ServerRuntime {
 	return NewServerRuntimeWithFactory(cfg, nil)
 }
 
-func NewServerRuntimeWithFactory(cfg ServerConfig, factory func(cfg TransportConfig) (Transport, error)) *ServerRuntime {
+func NewServerRuntimeWithFactory(cfg ServerConfig, factory func(cfg TransportConfig) (officialmcp.Transport, error)) *ServerRuntime {
 	if cfg.Tools == nil {
 		cfg.Tools = make(map[string]ToolPolicy)
 	}
@@ -64,8 +69,10 @@ func (s *ServerRuntime) Config() ServerConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	copied := s.cfg
-	copied.Tools = make(map[string]ToolPolicy, len(s.cfg.Tools))
-	maps.Copy(copied.Tools, s.cfg.Tools)
+	copied.Tools = maps.Clone(s.cfg.Tools)
+	if copied.Tools == nil {
+		copied.Tools = make(map[string]ToolPolicy)
+	}
 	return copied
 }
 
@@ -90,7 +97,7 @@ func (s *ServerRuntime) IsEnabled() bool {
 func (s *ServerRuntime) IsAvailable() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg.Enabled && s.status == StatusConnected && s.client != nil
+	return s.cfg.Enabled && s.status == StatusConnected && s.session != nil
 }
 
 func (s *ServerRuntime) Catalog() *ToolCatalog {
@@ -111,6 +118,7 @@ func (s *ServerRuntime) IsToolEnabled(remoteName string) bool {
 }
 
 // Start connects to the MCP server, initializes protocol, and syncs the tool catalog.
+// Uses generation tokens and cancellable context to prevent Start/Stop race conditions.
 func (s *ServerRuntime) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.cfg.Enabled {
@@ -118,88 +126,141 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.generation++
+	gen := s.generation
 	s.status = StatusStarting
 	s.lastError = ""
+	if s.cancel != nil {
+		s.cancel()
+	}
+	startCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	transportCfg := s.cfg.Transport
 	s.mu.Unlock()
 
-	transport, err := s.createTransport(s.cfg.Transport)
+	transport, err := s.createTransport(transportCfg)
 	if err != nil {
 		s.mu.Lock()
-		s.status = StatusFailed
-		s.lastError = err.Error()
+		if s.generation == gen {
+			s.status = StatusFailed
+			s.lastError = err.Error()
+		}
 		s.mu.Unlock()
 		return fmt.Errorf("transport creation failed: %w", err)
 	}
 
-	client := NewClient(transport)
-
-	// Initialize handshake with timeout
-	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	_, err = client.Initialize(initCtx, ClientInfo{
+	client := officialmcp.NewClient(&officialmcp.Implementation{
 		Name:    "FrostAgent",
 		Version: "0.1.0",
-	})
+	}, nil)
+
+	session, err := client.Connect(startCtx, transport, nil)
 	if err != nil {
-		_ = client.Close()
 		s.mu.Lock()
-		s.status = StatusFailed
-		s.lastError = fmt.Sprintf("handshake failed: %v", err)
+		if s.generation == gen {
+			s.status = StatusFailed
+			s.lastError = fmt.Sprintf("mcp connect failed: %v", err)
+		}
 		s.mu.Unlock()
-		return fmt.Errorf("mcp handshake failed: %w", err)
+		return fmt.Errorf("mcp connect failed: %w", err)
 	}
 
-	// Sync tool catalog
-	listCtx, listCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer listCancel()
-
-	tools, err := client.ListTools(listCtx)
+	// Initial catalog sync
+	toolsRes, err := session.ListTools(startCtx, nil)
 	if err != nil {
-		_ = client.Close()
+		_ = session.Close()
 		s.mu.Lock()
-		s.status = StatusFailed
-		s.lastError = fmt.Sprintf("tools/list failed: %v", err)
+		if s.generation == gen {
+			s.status = StatusFailed
+			s.lastError = fmt.Sprintf("tools/list failed: %v", err)
+		}
 		s.mu.Unlock()
 		return fmt.Errorf("tools/list failed: %w", err)
 	}
 
 	s.mu.Lock()
+	// Re-check generation and enabled flag; abort if Stop() occurred in the meantime
+	if s.generation != gen || !s.cfg.Enabled {
+		s.mu.Unlock()
+		_ = session.Close()
+		return errors.New("server start was aborted or superseded")
+	}
+
 	s.client = client
+	s.session = session
 	s.status = StatusConnected
 	s.lastError = ""
-	policies := s.cfg.Tools
+	policies := maps.Clone(s.cfg.Tools)
 	s.mu.Unlock()
 
-	s.catalog.UpdateRemote(tools, policies)
+	s.catalog.UpdateRemote(toolsRes.Tools, policies)
+
+	// Launch background watcher to detect server process termination or connection drop
+	go func(g uint64, sess *officialmcp.ClientSession) {
+		waitErr := sess.Wait()
+		s.handleTermination(g, sess, waitErr)
+	}(gen, session)
+
 	return nil
+}
+
+func (s *ServerRuntime) handleTermination(gen uint64, sess *officialmcp.ClientSession, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.generation == gen && s.session == sess {
+		s.status = StatusFailed
+		if err != nil && !errors.Is(err, context.Canceled) {
+			s.lastError = fmt.Sprintf("server process or connection terminated: %v", err)
+		} else {
+			s.lastError = "server connection closed unexpectedly"
+		}
+		s.session = nil
+	}
 }
 
 func (s *ServerRuntime) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.generation++
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	s.status = StatusStopped
-	if s.client != nil {
-		err := s.client.Close()
-		s.client = nil
-		return err
+	session := s.session
+	s.session = nil
+	s.client = nil
+	s.mu.Unlock()
+
+	if session != nil {
+		return session.Close()
 	}
 	return nil
 }
 
+func (s *ServerRuntime) Restart(ctx context.Context) error {
+	_ = s.Stop()
+	return s.Start(ctx)
+}
+
 func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 	s.mu.RLock()
-	client := s.client
-	policies := s.cfg.Tools
+	status := s.status
+	session := s.session
 	enabled := s.cfg.Enabled
+	policies := maps.Clone(s.cfg.Tools)
 	s.mu.RUnlock()
 
-	if !enabled || client == nil {
-		return errors.New("cannot sync catalog: server is not connected")
+	if !enabled {
+		return errors.New("cannot sync catalog: server is disabled")
 	}
 
-	tools, err := client.ListTools(ctx)
+	// If server failed or disconnected, trigger true reconnect/restart
+	if status != StatusConnected || session == nil {
+		return s.Restart(ctx)
+	}
+
+	toolsRes, err := session.ListTools(ctx, nil)
 	if err != nil {
 		s.mu.Lock()
 		s.lastError = fmt.Sprintf("sync catalog failed: %v", err)
@@ -207,7 +268,7 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 		return err
 	}
 
-	s.catalog.UpdateRemote(tools, policies)
+	s.catalog.UpdateRemote(toolsRes.Tools, policies)
 	return nil
 }
 
@@ -238,7 +299,7 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	enabled := s.cfg.Enabled
 	serverID := s.cfg.ID
 	status := s.status
-	client := s.client
+	session := s.session
 	s.mu.RUnlock()
 
 	// Double-check 1: server enabled
@@ -246,7 +307,7 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 		return fmt.Sprintf("Tool %q is currently disabled because MCP server %q has been disabled.", remoteName, serverID), nil
 	}
 
-	// Double-check 2: tool enabled
+	// Double-check 2: tool enabled in catalog
 	item, exists := s.catalog.Get(remoteName)
 	if !exists {
 		return fmt.Sprintf("Tool %q was not found on MCP server %q.", remoteName, serverID), nil
@@ -256,7 +317,7 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	}
 
 	// Double-check 3: server available
-	if status != StatusConnected || client == nil {
+	if status != StatusConnected || session == nil {
 		return fmt.Sprintf("Tool %q is temporarily unavailable because MCP server %q is not connected.", remoteName, serverID), nil
 	}
 
@@ -271,7 +332,12 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 		argMap = map[string]any{}
 	}
 
-	result, err := client.CallTool(ctx, remoteName, argMap)
+	callParams := &officialmcp.CallToolParams{
+		Name:      remoteName,
+		Arguments: argMap,
+	}
+
+	result, err := session.CallTool(ctx, callParams)
 	if err != nil {
 		return fmt.Sprintf("Tool %q execution error on server %q: %v", remoteName, serverID, err), nil
 	}
@@ -279,23 +345,9 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	return FormatToolResult(result), nil
 }
 
-func (s *ServerRuntime) createTransport(cfg TransportConfig) (Transport, error) {
+func (s *ServerRuntime) createTransport(cfg TransportConfig) (officialmcp.Transport, error) {
 	if s.transportFactory != nil {
 		return s.transportFactory(cfg)
 	}
-
-	switch cfg.Type {
-	case TransportStdio:
-		if cfg.Command == "" {
-			return nil, errors.New("stdio command cannot be empty")
-		}
-		return NewStdioTransport(cfg.Command, cfg.Args, cfg.Env, cfg.WorkingDir)
-	case TransportStreamableHTTP:
-		if cfg.URL == "" {
-			return nil, errors.New("streamable_http URL cannot be empty")
-		}
-		return NewStreamableHTTPTransport(cfg.URL, cfg.Headers)
-	default:
-		return nil, fmt.Errorf("unsupported transport type: %s", cfg.Type)
-	}
+	return CreateTransport(cfg)
 }

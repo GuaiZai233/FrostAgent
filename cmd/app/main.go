@@ -309,16 +309,18 @@ func init() {
 	}
 	mcpStore := mcp.NewConfigStore(mcpPath())
 	mcpManager := mcp.NewManager(mcpStore, builtinNames)
+	if err := mcpManager.Load(); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("加载 MCP 配置失败: %v", err))
+	} else {
+		logs.Info(logs.SYSTEM, "✓ MCP 配置文件加载完成")
+	}
 	GlobalEngine.MCPManager = mcpManager
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		if err := mcpManager.LoadAndStart(ctx); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("加载并启动 MCP 服务失败: %v", err))
-		} else {
-			logs.Info(logs.SYSTEM, "✓ MCP 子系统已初始化")
-		}
+		mcpManager.StartAll(ctx)
+		logs.Info(logs.SYSTEM, "✓ MCP 外部工具连接已就绪")
 	}()
 }
 

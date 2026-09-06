@@ -166,22 +166,36 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **普通工具语义对齐**：对于大模型及智能体循环（Agent Loop），MCP 工具在调用流程、参数组织与执行协议上与系统内置工具（`memory`, `send_msg`, `send_sticker` 等）完全等价，统一归入 `core.ChatRequest.Tools` 并在执行时由 `ToolExecutor` 统一调度；
   - **编译期静态适配器与运行期动态发现**：系统通过编译期静态编写的通用工具适配器（`ToolAdapter`），结合运行期动态拉取的工具目录（`ToolCatalog`），兼具 Go 语言的静态类型安全与 MCP 外部服务的热插拔灵活性；
   - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/mcp_servers.json`），不设全局主开关，避免多实例部署时的系统级配置耦合。
-- **协议握手与双传输模式 (Protocol & Dual Transport Implementations)**：
-  - 全面支持 MCP 协议规范（规范版本 `2024-11-05`，基于 JSON-RPC 2.0 消息交互）；
-  - **Stdio 子进程传输 (`StdioTransport`)**：支持本地命令行子进程模式，通过管道重定向标准输入输出（stdin/stdout），采用非阻塞异步后台读取行缓冲与通道解耦调度，通过唯一的 JSON-RPC 请求 ID 实现高并发异步响应分发；支持自定义可执行命令、参数列表、工作目录以及环境变量；
-  - **Streamable HTTP 传输 (`StreamableHTTPTransport`)**：支持远程 HTTP / SSE 模式，通过 HTTP POST 提交 JSON-RPC 请求并解析返回，支持自定义请求标头（如 Bearer Token 认证鉴权）；
-  - **生命周期握手流程**：启动时依次执行 `initialize` 请求（协商协议版本与能力集） -> 发送 `notifications/initialized` 通知 -> 调用 `tools/list` 进行分页工具能力检索。
-- **崩溃安全与原子持久化 (Crash-Safe Atomic Persistence)**：
+- **官方 SDK 与多传输协议支持 (Official Go SDK & Multi-Transport Implementations)**：
+  - 全面基于官方 Go SDK（`github.com/modelcontextprotocol/go-sdk/mcp`）构建，废弃私有 JSON-RPC 解析；
+  - **Stdio 子进程传输 (`officialmcp.CommandTransport`)**：支持本地命令行子进程模式，托管 stdin/stdout 标准流管道交互与 SIGTERM 优雅退出；支持自定义可执行命令、参数列表、工作目录以及环境变量；
+  - **Streamable HTTP 传输 (`officialmcp.StreamableClientTransport`)**：全面支持 2025-03-26 MCP 传输协议标准规范；
+  - **SSE 传输 (`officialmcp.SSEClientTransport`)**：支持 2024-11-05 标准服务器推送流，并通过自定义 `HeaderTransport` 装饰器实现请求头（如认证 Token）注入；
+  - **生命周期协商与能力同步**：启动时由官方 SDK 完成 `initialize` 握手与 `notifications/initialized`，随后自动拉取 `tools/list` 建立动态工具目录。
+- **两阶段启动加载 (Two-Phase Boot Loading)**：
+  - 系统启动时先通过 `mcpManager.Load()` 同步将持久化配置载入内存，保证 HTTP/ConnectRPC 端口监听就绪时配置已就绪，消除早期管理 API 请求的启动竞态；
+  - 在独立的后台协程中调用 `mcpManager.StartAll(ctx)` 并发连接各个已启用的外部 MCP 服务器，避免外部网络握手或慢子进程阻塞主引擎就绪。
+- **平台专属原生崩溃安全持久化 (Platform-Native Crash-Safe Atomic Persistence)**：
   - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/mcp_servers.json`；
-  - 采用写临时文件（`.tmp`） -> 刷新/同步落盘（`Flush/Sync`） -> 原创原子重命名（`os.Rename`）三步流程，在断电、宕机或进程异常终止时有效防止数据损坏与截断。
+  - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
+  - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
+- **控制平面安全门禁与敏感凭据脱敏 (Control Plane Auth & Secret Masking)**：
+  - **防范未鉴权命令执行 (RCE Guard)**：由于 Stdio 模式允许执行任意系统命令，控制平面严格实施网络隔离。默认情况下，Stdio 服务器的新增与变更仅允许来自本地回环地址（`127.0.0.1`, `::1`, `localhost`）；如需远程管理，必须配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并携带合法 Bearer 认证令牌，或显式声明 `ALLOW_REMOTE_MCP_MANAGEMENT=true`；
+  - **敏感凭据脱敏防护**：在环境变量及请求头中，对包含 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `AUTH`, `CREDENTIAL`, `PRIVATE` 以及 `Authorization` 的敏感信息在读取接口（`ListMCPServers`, `GetMCPServer`）中统一脱敏展示为 `"******"`；
+  - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏。
+- **代数令牌与生命周期竞态消除 (Generation Tokens & Race Elimination)**：
+  - **启动/关闭代数令牌 (`generation uint64`)**：为每次服务器启动分配单调递增的代数令牌，启动前强制取消前序上下文，连接建立后校验代数。当用户在慢连接建立过程中点击停止或删除时，迟到的连接会因代数不匹配被直接丢弃并关闭，杜绝已停止进程“僵尸复活”；
+  - **并发安全策略隔离**：在更新工具策略或重新同步目录时，使用 `maps.Clone(s.cfg.Tools)` 隔离读写副本，配合互斥锁彻底消除了目录同步协程与控制台开关并发时的 Go map 数据竞态。
+- **进程退出监控与动态下线 (Process Termination Watcher & Dynamic Removal)**：
+  - 每个连接会话在后台协程中主动监听 `session.Wait()`，一旦外部子进程异常崩溃或断开，立即将服务器运行时标记为 `StatusFailed` 并捕获退出错误信息，自动从后续轮次的 `EffectiveTools()` 中摘除全部失效工具，杜绝向大模型暴露死工具。
+- **大模型工具命名规范化与双向安全映射 (LLM Tool Name Sanitization & Bidirectional Mapping)**：
+  - **统一字符集约束**：严格遵守所有主流 LLM 提供商对函数名称的字符集与长度约束（`^[a-zA-Z0-9_]{1,64}$`）；
+  - **自动清洗、截断与 SHA-256 防碰撞**：对超出 64 字符或包含非法字符（如 `:`, `-`, `/`, `@`）的工具名自动执行合法化清洗，并在截断时附加 8 字符 SHA-256 唯一哈希后缀（`mcp__<srv>__<tool>_<hash>`），彻底规避名称冲突；
+  - **双向映射引擎**：`mcp.Manager` 内置 `exposedToTarget` 与 `targetToExposed` 双向快速索引，实现从模型暴露名称到底层服务器 ID 与真实远程工具名的高效 O(1) 路由。
 - **两级粒度控制与轮次动态快照 (Two-Level Toggles & Dynamic Snapshotting)**：
   - **服务器级开关 (`enabled`)**：控制单个 MCP 外部服务的启停。停用时自动断开连接并安全清理回收子进程资源；
   - **工具级开关 (`enabled`)**：细粒度控制单个工具的可用性，用户的开关决策保存在持久化策略中，不随重新拉取目录而丢失；
   - **轮次动态刷新 (`EffectiveTools`)**：Agent Loop（`runLoopWithResult`）在每次向大模型发送对话前（包括多轮推理的后续轮次），原子重新计算当前可用且已启用的工具快照。管理员在控制台动态开关工具或服务后无需重启，下一轮推理即可无缝生效。
-- **命名空间隔离与内置工具保护 (Namespacing & Builtin Collision Protection)**：
-  - **命名空间规范**：所有 MCP 外部工具暴露给大模型时统一加上前缀 `mcp__<server_id>__<tool_name>`，服务器 ID 强制校验不得包含 `__`，严格杜绝外部工具与内置工具或其他服务器工具重名；
-  - **系统内置工具保护**：启动时注入内置保留工具名集合（`builtinNames`），严格防止外部服务尝试注册或覆盖关键系统工具；
-  - **参数规范转换 (`NormalizeSchema`)**：自动对 MCP `inputSchema` 进行清理、类型缺省补全与标准化，转化为严格兼容 OpenAI Function Calling 的参数规范。
 - **执行阶段双重校验与优雅降级 (Execution Double-Check & Semantic Degradation)**：
   - **执行即时校验**：不仅在发送大模型前过滤无效工具，在模型发起 `tools/call` 执行阶段，适配器与运行时再次执行三重校验（服务器启用状态、工具启用状态、连接活跃状态）；
   - **语义化错误反馈**：若在模型思考与执行的微小窗口期内服务器断开或被手动停用，系统向大模型返回明确的人类可读解释（如 `mcp server is disabled` 或 `tool is currently disabled`），大模型获知原因后可平滑降级（如向用户说明原因或改用其他策略），绝不崩溃或中断 Agent 循环。
@@ -193,5 +207,5 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 卡片式服务器管理列表：展示连接状态标签（已连接、启动中、异常、已停止）、运行命令/URL、最后错误排查横幅；
   - 支持服务器一键启用/停用、重新连接/同步目录、配置修改与删除（含二次确认）；
   - 工具目录面板：支持单个工具独立开关、完整命名空间名称复制、以及 OpenAI 兼容参数 JSON Schema 检查器；
-  - 新增/编辑服务器对话框：支持 Stdio 与 HTTP 双模式表单配置（命令行、参数、工作目录、环境变量、URL、请求头）；
+  - 新增/编辑服务器对话框：支持 Stdio、Streamable HTTP 与 SSE 三种传输模式表单配置（命令行、参数、工作目录、环境变量、URL、请求头）；
   - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。

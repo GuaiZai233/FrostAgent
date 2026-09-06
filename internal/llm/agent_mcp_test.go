@@ -4,44 +4,45 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/mcp"
 	"context"
-	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
+
+	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type mockMCPTestingTransport struct {
-	mu           sync.Mutex
-	roundTripFn  func(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error)
-	notifyFn     func(ctx context.Context, notif *mcp.JSONRPCNotification) error
-	closeFn      func() error
-}
-
-func (m *mockMCPTestingTransport) RoundTrip(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error) {
-	m.mu.Lock()
-	fn := m.roundTripFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
+func createTestMCPFactory(name string, tools map[string]func(args string) (string, error)) func(mcp.TransportConfig) (officialmcp.Transport, error) {
+	server := officialmcp.NewServer(&officialmcp.Implementation{Name: name, Version: "1.0"}, nil)
+	for toolName, fn := range tools {
+		tName := toolName
+		tFn := fn
+		server.AddTool(&officialmcp.Tool{
+			Name:        tName,
+			Description: "Fetch " + tName,
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+			args := string(req.Params.Arguments)
+			out, err := tFn(args)
+			if err != nil {
+				return &officialmcp.CallToolResult{
+					Content: []officialmcp.Content{&officialmcp.TextContent{Text: err.Error()}},
+					IsError: true,
+				}, nil
+			}
+			return &officialmcp.CallToolResult{
+				Content: []officialmcp.Content{&officialmcp.TextContent{Text: out}},
+			}, nil
+		})
 	}
-	return nil, fmt.Errorf("not implemented")
-}
 
-func (m *mockMCPTestingTransport) Notify(ctx context.Context, notif *mcp.JSONRPCNotification) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.notifyFn != nil {
-		return m.notifyFn(ctx, notif)
+	return func(cfg mcp.TransportConfig) (officialmcp.Transport, error) {
+		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+		_, err := server.Connect(context.Background(), serverTransport, nil)
+		if err != nil {
+			return nil, err
+		}
+		return clientTransport, nil
 	}
-	return nil
-}
-
-func (m *mockMCPTestingTransport) Close() error {
-	if m.closeFn != nil {
-		return m.closeFn()
-	}
-	return nil
 }
 
 type scriptedLLMProvider struct {
@@ -72,42 +73,14 @@ func (s *scriptedLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*
 }
 
 func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
-	mockTransport := &mockMCPTestingTransport{
-		roundTripFn: func(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error) {
-			switch req.Method {
-			case "initialize":
-				res, _ := json.Marshal(mcp.InitializeResult{
-					ProtocolVersion: mcp.ProtocolVersion,
-					ServerInfo:      mcp.ServerInfo{Name: "mock-gh", Version: "1.0"},
-				})
-				return &mcp.JSONRPCResponse{ID: req.ID, Result: res}, nil
-			case "tools/list":
-				res, _ := json.Marshal(mcp.ToolListResult{
-					Tools: []mcp.MCPToolDefinition{
-						{
-							Name:        "get_issue",
-							Description: "Fetch issue info",
-							InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`),
-						},
-					},
-				})
-				return &mcp.JSONRPCResponse{ID: req.ID, Result: res}, nil
-			case "tools/call":
-				res, _ := json.Marshal(mcp.ToolCallResult{
-					Content: []mcp.ContentBlock{
-						{Type: "text", Text: "issue #123 is open"},
-					},
-				})
-				return &mcp.JSONRPCResponse{ID: req.ID, Result: res}, nil
-			default:
-				return nil, fmt.Errorf("unexpected method: %s", req.Method)
-			}
+	tools := map[string]func(args string) (string, error){
+		"get_issue": func(args string) (string, error) {
+			return "issue #123 is open", nil
 		},
 	}
+	factory := createTestMCPFactory("mock-gh", tools)
 
-	mgr := mcp.NewManagerWithFactory(nil, []string{"memory", "send_message"}, func(cfg mcp.TransportConfig) (mcp.Transport, error) {
-		return mockTransport, nil
-	})
+	mgr := mcp.NewManagerWithFactory(nil, []string{"memory", "send_message"}, factory)
 
 	ctx := context.Background()
 	err := mgr.AddServer(ctx, mcp.ServerConfig{
@@ -115,7 +88,8 @@ func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
 		Name:    "GitHub",
 		Enabled: true,
 		Transport: mcp.TransportConfig{
-			Type: mcp.TransportStdio,
+			Type:    mcp.TransportStdio,
+			Command: "github-server",
 		},
 	})
 	if err != nil {
@@ -182,35 +156,14 @@ func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
 }
 
 func TestAgentLoopMCPIntegration_ServerHotDisableAndDoubleCheck(t *testing.T) {
-	mockTransport := &mockMCPTestingTransport{
-		roundTripFn: func(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error) {
-			switch req.Method {
-			case "initialize":
-				res, _ := json.Marshal(mcp.InitializeResult{
-					ProtocolVersion: mcp.ProtocolVersion,
-					ServerInfo:      mcp.ServerInfo{Name: "mock-gh", Version: "1.0"},
-				})
-				return &mcp.JSONRPCResponse{ID: req.ID, Result: res}, nil
-			case "tools/list":
-				res, _ := json.Marshal(mcp.ToolListResult{
-					Tools: []mcp.MCPToolDefinition{
-						{
-							Name:        "get_issue",
-							Description: "Fetch issue info",
-							InputSchema: json.RawMessage(`{}`),
-						},
-					},
-				})
-				return &mcp.JSONRPCResponse{ID: req.ID, Result: res}, nil
-			default:
-				return nil, fmt.Errorf("unexpected method: %s", req.Method)
-			}
+	tools := map[string]func(args string) (string, error){
+		"get_issue": func(args string) (string, error) {
+			return "issue #123 is open", nil
 		},
 	}
+	factory := createTestMCPFactory("mock-gh", tools)
 
-	mgr := mcp.NewManagerWithFactory(nil, []string{"memory"}, func(cfg mcp.TransportConfig) (mcp.Transport, error) {
-		return mockTransport, nil
-	})
+	mgr := mcp.NewManagerWithFactory(nil, []string{"memory"}, factory)
 
 	ctx := context.Background()
 	err := mgr.AddServer(ctx, mcp.ServerConfig{
@@ -218,7 +171,8 @@ func TestAgentLoopMCPIntegration_ServerHotDisableAndDoubleCheck(t *testing.T) {
 		Name:    "GitHub",
 		Enabled: true,
 		Transport: mcp.TransportConfig{
-			Type: mcp.TransportStdio,
+			Type:    mcp.TransportStdio,
+			Command: "github-server",
 		},
 	})
 	if err != nil {

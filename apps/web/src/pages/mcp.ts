@@ -585,7 +585,10 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
   function openServerFormDialog(existing?: MCPServerInfo): void {
     const isEdit = Boolean(existing);
-    const transportType = existing?.transportType || 'stdio';
+    let transportType = existing?.transportType || 'stdio';
+    if (transportType === 'http') {
+      transportType = 'streamable_http';
+    }
 
     // Format env map into KEY=VALUE lines
     const envLines = existing?.env
@@ -648,14 +651,18 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
           <div>
             <label class="font-semibold text-foreground mb-1 block">通信方式 (Transport) *</label>
-            <div class="flex items-center gap-4 mt-1">
+            <div class="flex items-center gap-4 mt-1 flex-wrap">
               <label class="flex items-center gap-1.5 cursor-pointer">
                 <input type="radio" name="form-transport" value="stdio" ${transportType === 'stdio' ? 'checked' : ''} />
-                <span>Stdio (本地子进程 stdin/stdout)</span>
+                <span>Stdio (本地子进程)</span>
               </label>
               <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="form-transport" value="http" ${transportType === 'http' ? 'checked' : ''} />
-                <span>HTTP (远程 SSE / Streamable HTTP)</span>
+                <input type="radio" name="form-transport" value="streamable_http" ${transportType === 'streamable_http' ? 'checked' : ''} />
+                <span>Streamable HTTP (2025-03 规范)</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="form-transport" value="sse" ${transportType === 'sse' ? 'checked' : ''} />
+                <span>SSE (2024-11 规范)</span>
               </label>
             </div>
           </div>
@@ -704,7 +711,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
           </div>
 
           <!-- HTTP Fields -->
-          <div id="http-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${transportType === 'http' ? '' : 'hidden'}">
+          <div id="http-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${transportType !== 'stdio' ? '' : 'hidden'}">
             <div>
               <label class="font-semibold text-foreground mb-1 block">服务器 URL *</label>
               <input
@@ -804,6 +811,10 @@ export function mountMCPPage(container: HTMLElement): () => void {
             url = (dialogEl.querySelector('#form-url') as HTMLInputElement).value.trim();
             if (!url) {
               toast.error('请输入服务器 URL');
+              return;
+            }
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+              toast.error('服务器 URL 必须以 http:// 或 https:// 开头');
               return;
             }
             const headersRaw = (dialogEl.querySelector('#form-headers') as HTMLTextAreaElement).value.trim();

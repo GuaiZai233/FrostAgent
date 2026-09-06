@@ -13,6 +13,7 @@ type TransportType string
 const (
 	TransportStdio          TransportType = "stdio"
 	TransportStreamableHTTP TransportType = "streamable_http"
+	TransportSSE            TransportType = "sse"
 )
 
 type TransportConfig struct {
@@ -118,15 +119,10 @@ func (s *ConfigStore) Save(cfg *Config) error {
 		return fmt.Errorf("failed to close temp config file: %w", err)
 	}
 
-	// Atomic replace (on Windows, os.Rename over existing file might fail without prior remove in some versions,
-	// but standard Go handles or we can retry/replace safely)
-	if err := os.Rename(tmpName, s.path); err != nil {
-		// Fallback for Windows if destination exists
-		_ = os.Remove(s.path)
-		if err2 := os.Rename(tmpName, s.path); err2 != nil {
-			_ = os.Remove(tmpName)
-			return fmt.Errorf("failed to replace config file: %w", err2)
-		}
+	// Crash-safe atomic replace
+	if err := atomicReplaceFile(tmpName, s.path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("failed to atomically replace config file: %w", err)
 	}
 	return nil
 }

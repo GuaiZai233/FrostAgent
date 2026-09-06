@@ -2,7 +2,7 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,36 +11,32 @@ import (
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	mcpcore "FrostAgent/internal/mcp"
+	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type mockServiceTransport struct{}
-
-func (m *mockServiceTransport) RoundTrip(ctx context.Context, req *mcpcore.JSONRPCRequest) (*mcpcore.JSONRPCResponse, error) {
-	switch req.Method {
-	case "initialize":
-		res, _ := json.Marshal(mcpcore.InitializeResult{
-			ProtocolVersion: mcpcore.ProtocolVersion,
-			ServerInfo:      mcpcore.ServerInfo{Name: "svc-mock", Version: "1.0"},
+func createTestServerFactory(name string, toolNames []string) func(mcpcore.TransportConfig) (officialmcp.Transport, error) {
+	server := officialmcp.NewServer(&officialmcp.Implementation{Name: name, Version: "1.0"}, nil)
+	for _, toolName := range toolNames {
+		tName := toolName
+		server.AddTool(&officialmcp.Tool{
+			Name:        tName,
+			Description: "Echo " + tName,
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+			return &officialmcp.CallToolResult{
+				Content: []officialmcp.Content{&officialmcp.TextContent{Text: "echoed"}},
+			}, nil
 		})
-		return &mcpcore.JSONRPCResponse{ID: req.ID, Result: res}, nil
-	case "tools/list":
-		res, _ := json.Marshal(mcpcore.ToolListResult{
-			Tools: []mcpcore.MCPToolDefinition{
-				{Name: "echo", Description: "Echo text", InputSchema: json.RawMessage(`{}`)},
-			},
-		})
-		return &mcpcore.JSONRPCResponse{ID: req.ID, Result: res}, nil
-	default:
-		return &mcpcore.JSONRPCResponse{ID: req.ID}, nil
 	}
-}
 
-func (m *mockServiceTransport) Notify(ctx context.Context, notif *mcpcore.JSONRPCNotification) error {
-	return nil
-}
-
-func (m *mockServiceTransport) Close() error {
-	return nil
+	return func(cfg mcpcore.TransportConfig) (officialmcp.Transport, error) {
+		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+		_, err := server.Connect(context.Background(), serverTransport, nil)
+		if err != nil {
+			return nil, err
+		}
+		return clientTransport, nil
+	}
 }
 
 func TestMCPServiceRPCs(t *testing.T) {
@@ -51,14 +47,13 @@ func TestMCPServiceRPCs(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	store := mcpcore.NewConfigStore(filepath.Join(tmpDir, "mcp.json"))
-	mgr := mcpcore.NewManagerWithFactory(store, []string{"memory"}, func(cfg mcpcore.TransportConfig) (mcpcore.Transport, error) {
-		return &mockServiceTransport{}, nil
-	})
+	factory := createTestServerFactory("test_server", []string{"echo"})
+	mgr := mcpcore.NewManagerWithFactory(store, []string{"memory"}, factory)
 
 	svc := New(mgr)
 	ctx := context.Background()
 
-	// 1. AddMCPServer
+	// 1. AddMCPServer with sensitive env & header
 	addResp, err := svc.AddMCPServer(ctx, connect.NewRequest(&v1.AddMCPServerRequest{
 		Id:            "test_server",
 		Name:          "Test Server",
@@ -66,6 +61,14 @@ func TestMCPServiceRPCs(t *testing.T) {
 		TransportType: "stdio",
 		Command:       "echo",
 		Args:          []string{"hello"},
+		Env: map[string]string{
+			"API_KEY":      "super_secret_key_123",
+			"REGULAR_CONF": "normal_value",
+		},
+		Headers: map[string]string{
+			"Authorization": "Bearer confidential_token",
+			"X-Custom":      "regular_header",
+		},
 	}))
 	if err != nil {
 		t.Fatalf("AddMCPServer failed: %v", err)
@@ -74,7 +77,7 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("AddMCPServer returned success=false: %s", addResp.Msg.Error)
 	}
 
-	// 2. ListMCPServers
+	// 2. ListMCPServers (verify secret masking)
 	listResp, err := svc.ListMCPServers(ctx, connect.NewRequest(&v1.ListMCPServersRequest{}))
 	if err != nil {
 		t.Fatalf("ListMCPServers failed: %v", err)
@@ -89,6 +92,18 @@ func TestMCPServiceRPCs(t *testing.T) {
 	if len(s0.Tools) != 1 || s0.Tools[0].Name != "echo" {
 		t.Fatalf("expected tool echo, got %+v", s0.Tools)
 	}
+	if s0.Env["API_KEY"] != MaskedSecret {
+		t.Fatalf("expected API_KEY to be masked as %q, got %q", MaskedSecret, s0.Env["API_KEY"])
+	}
+	if s0.Env["REGULAR_CONF"] != "normal_value" {
+		t.Fatalf("expected REGULAR_CONF to be preserved, got %q", s0.Env["REGULAR_CONF"])
+	}
+	if s0.Headers["Authorization"] != MaskedSecret {
+		t.Fatalf("expected Authorization header to be masked, got %q", s0.Headers["Authorization"])
+	}
+	if s0.Headers["X-Custom"] != "regular_header" {
+		t.Fatalf("expected X-Custom header to be preserved, got %q", s0.Headers["X-Custom"])
+	}
 
 	// 3. GetMCPServer
 	getResp, err := svc.GetMCPServer(ctx, connect.NewRequest(&v1.GetMCPServerRequest{Id: "test_server"}))
@@ -98,8 +113,45 @@ func TestMCPServiceRPCs(t *testing.T) {
 	if getResp.Msg.Server.Id != "test_server" {
 		t.Fatalf("unexpected get server id: %s", getResp.Msg.Server.Id)
 	}
+	if getResp.Msg.Server.Env["API_KEY"] != MaskedSecret {
+		t.Fatalf("expected masked secret in GetMCPServer")
+	}
 
-	// 4. ToggleMCPTool
+	// 4. UpdateMCPServer with placeholder "******" -> should restore original secrets!
+	updateResp, err := svc.UpdateMCPServer(ctx, connect.NewRequest(&v1.UpdateMCPServerRequest{
+		Id:            "test_server",
+		Name:          "Test Server Updated",
+		Enabled:       true,
+		TransportType: "stdio",
+		Command:       "echo",
+		Args:          []string{"hello"},
+		Env: map[string]string{
+			"API_KEY":      MaskedSecret, // Masked placeholder sent by frontend
+			"REGULAR_CONF": "updated_value",
+		},
+		Headers: map[string]string{
+			"Authorization": MaskedSecret,
+			"X-Custom":      "updated_header",
+		},
+	}))
+	if err != nil || !updateResp.Msg.Success {
+		t.Fatalf("UpdateMCPServer failed: %v, err=%s", err, updateResp.Msg.Error)
+	}
+
+	// Verify the underlying config retained the secret
+	srvRuntime, ok := mgr.GetServer("test_server")
+	if !ok {
+		t.Fatalf("failed to get server runtime")
+	}
+	cfg := srvRuntime.Config()
+	if cfg.Transport.Env["API_KEY"] != "super_secret_key_123" {
+		t.Fatalf("expected restored API_KEY secret, got %q", cfg.Transport.Env["API_KEY"])
+	}
+	if cfg.Transport.Headers["Authorization"] != "Bearer confidential_token" {
+		t.Fatalf("expected restored Authorization header, got %q", cfg.Transport.Headers["Authorization"])
+	}
+
+	// 5. ToggleMCPTool
 	toggleToolResp, err := svc.ToggleMCPTool(ctx, connect.NewRequest(&v1.ToggleMCPToolRequest{
 		ServerId: "test_server",
 		ToolName: "echo",
@@ -115,7 +167,7 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("expected tool to be disabled")
 	}
 
-	// 5. ToggleMCPServer
+	// 6. ToggleMCPServer
 	toggleSrvResp, err := svc.ToggleMCPServer(ctx, connect.NewRequest(&v1.ToggleMCPServerRequest{
 		Id:      "test_server",
 		Enabled: false,
@@ -129,7 +181,7 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("expected server to be disabled")
 	}
 
-	// 6. DeleteMCPServer
+	// 7. DeleteMCPServer
 	delResp, err := svc.DeleteMCPServer(ctx, connect.NewRequest(&v1.DeleteMCPServerRequest{Id: "test_server"}))
 	if err != nil || !delResp.Msg.Success {
 		t.Fatalf("DeleteMCPServer failed: %v", err)
@@ -140,3 +192,101 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("expected 0 servers after delete, got %d", len(listResp2.Msg.Servers))
 	}
 }
+
+func TestControlPlaneSecurityBoundary(t *testing.T) {
+	// 1. When no token is set: stdio mutation should only be allowed on loopback
+	os.Unsetenv("MCP_CONTROL_TOKEN")
+	os.Unsetenv("ADMIN_TOKEN")
+	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
+
+	// Remote address -> permission denied for stdio
+	err := checkControlPlaneAuth("192.168.1.100:45678", "", true)
+	if err == nil {
+		t.Fatalf("expected permission denied for remote stdio mutation")
+	}
+	connectErr, ok := err.(*connect.Error)
+	if !ok || connectErr.Code() != connect.CodePermissionDenied {
+		t.Fatalf("expected CodePermissionDenied, got %v", err)
+	}
+
+	// Remote address -> allowed for non-stdio (e.g. sse or streamable_http)
+	err = checkControlPlaneAuth("192.168.1.100:45678", "", false)
+	if err != nil {
+		t.Fatalf("expected non-stdio mutation to be allowed without auth: %v", err)
+	}
+
+	// Loopback addresses -> allowed for stdio
+	loopbackAddrs := []string{
+		"127.0.0.1:12345",
+		"[::1]:12345",
+		"localhost:8080",
+		"",
+	}
+	for _, addr := range loopbackAddrs {
+		if err := checkControlPlaneAuth(addr, "", true); err != nil {
+			t.Fatalf("expected loopback addr %q to be allowed, got: %v", addr, err)
+		}
+	}
+
+	// With ALLOW_REMOTE_MCP_MANAGEMENT=true -> remote allowed for stdio
+	os.Setenv("ALLOW_REMOTE_MCP_MANAGEMENT", "true")
+	if err := checkControlPlaneAuth("192.168.1.100:45678", "", true); err != nil {
+		t.Fatalf("expected allowed with ALLOW_REMOTE_MCP_MANAGEMENT=true, got: %v", err)
+	}
+	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
+
+	// 2. When MCP_CONTROL_TOKEN is set
+	os.Setenv("MCP_CONTROL_TOKEN", "super-secret-token")
+	defer os.Unsetenv("MCP_CONTROL_TOKEN")
+
+	// Missing or invalid token -> unauthenticated
+	if err := checkControlPlaneAuth("127.0.0.1", "", true); err == nil {
+		t.Fatalf("expected unauthenticated when token is set but header is missing")
+	}
+	if err := checkControlPlaneAuth("127.0.0.1", "Bearer wrong", true); err == nil {
+		t.Fatalf("expected unauthenticated with wrong token")
+	}
+
+	// Valid token -> allowed
+	if err := checkControlPlaneAuth("192.168.1.100:45678", "Bearer super-secret-token", true); err != nil {
+		t.Fatalf("expected allowed with valid bearer token, got: %v", err)
+	}
+
+	// End-to-end via service RPC
+	tmpDir, err := os.MkdirTemp("", "mcpsvc_sec_test_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store := mcpcore.NewConfigStore(filepath.Join(tmpDir, "mcp.json"))
+	mgr := mcpcore.NewManager(store, []string{"memory"})
+	svc := New(mgr)
+	ctx := context.Background()
+
+	req := connect.NewRequest(&v1.AddMCPServerRequest{
+		Id:            "remote_exploit",
+		Name:          "Remote Exploit",
+		Enabled:       false,
+		TransportType: "stdio",
+		Command:       "malicious_cmd",
+	})
+	// Without token in header -> CodeUnauthenticated
+	_, err = svc.AddMCPServer(ctx, req)
+	if err == nil {
+		t.Fatalf("expected unauthenticated error from RPC")
+	}
+
+	// With valid Bearer token -> success
+	req.Header().Set("Authorization", "Bearer super-secret-token")
+	res, err := svc.AddMCPServer(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error with valid token: %v", err)
+	}
+	if !res.Msg.Success {
+		t.Fatalf("expected success with valid token: %s", res.Msg.Error)
+	}
+}
+
+// Dummy reference to avoid unused import error
+var _ = http.StatusOK

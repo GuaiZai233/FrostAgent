@@ -3,7 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"net"
+	"os"
+	"strings"
 
 	"connectrpc.com/connect"
 
@@ -11,6 +16,102 @@ import (
 	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"FrostAgent/internal/mcp"
 )
+
+// MaskedSecret is the replacement placeholder returned for sensitive keys.
+const MaskedSecret = "******"
+
+var sensitiveKeyWords = []string{
+	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "PRIVATE",
+}
+
+func isSensitiveKey(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, w := range sensitiveKeyWords {
+		if strings.Contains(upper, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMaskedSecret(val string) bool {
+	return val == MaskedSecret || (strings.Contains(val, "***") && len(val) <= 12)
+}
+
+func maskEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return nil
+	}
+	masked := make(map[string]string, len(env))
+	for k, v := range env {
+		if isSensitiveKey(k) && v != "" {
+			masked[k] = MaskedSecret
+		} else {
+			masked[k] = v
+		}
+	}
+	return masked
+}
+
+func maskHeaders(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	masked := make(map[string]string, len(headers))
+	for k, v := range headers {
+		if (isSensitiveKey(k) || strings.EqualFold(k, "Authorization")) && v != "" {
+			masked[k] = MaskedSecret
+		} else {
+			masked[k] = v
+		}
+	}
+	return masked
+}
+
+func isLoopbackAddr(addr string) bool {
+	if addr == "" {
+		return true // In-process or test invocation
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" || host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+func checkControlPlaneAuth(peerAddr string, authHeader string, isStdioMutation bool) error {
+	token := strings.TrimSpace(os.Getenv("MCP_CONTROL_TOKEN"))
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	}
+
+	if token != "" {
+		expected := "Bearer " + token
+		if authHeader != expected {
+			return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid or missing MCP control plane token"))
+		}
+		return nil
+	}
+
+	// When no explicit auth token is configured, enforce loopback boundary for stdio command execution
+	// to prevent unauthenticated remote clients from achieving RCE.
+	if isStdioMutation {
+		if os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
+			return nil
+		}
+		if !isLoopbackAddr(peerAddr) {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("managing stdio MCP servers is restricted to localhost or requires MCP_CONTROL_TOKEN authorization"))
+		}
+	}
+	return nil
+}
 
 // Service implements frostagent.v1.MCPServiceHandler.
 type Service struct {
@@ -69,6 +170,11 @@ func (s *Service) AddMCPServer(
 		}), nil
 	}
 
+	isStdio := req.Msg.TransportType == string(mcp.TransportStdio)
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), isStdio); err != nil {
+		return nil, err
+	}
+
 	cfg := mcp.ServerConfig{
 		ID:      req.Msg.Id,
 		Name:    req.Msg.Name,
@@ -106,6 +212,14 @@ func (s *Service) UpdateMCPServer(
 		}), nil
 	}
 
+	isStdio := req.Msg.TransportType == string(mcp.TransportStdio)
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), isStdio); err != nil {
+		return nil, err
+	}
+
+	envCopy := maps.Clone(req.Msg.Env)
+	headersCopy := maps.Clone(req.Msg.Headers)
+
 	cfg := mcp.ServerConfig{
 		ID:      req.Msg.Id,
 		Name:    req.Msg.Name,
@@ -114,16 +228,32 @@ func (s *Service) UpdateMCPServer(
 			Type:       mcp.TransportType(req.Msg.TransportType),
 			Command:    req.Msg.Command,
 			Args:       req.Msg.Args,
-			Env:        req.Msg.Env,
+			Env:        envCopy,
 			WorkingDir: req.Msg.WorkingDir,
 			URL:        req.Msg.Url,
-			Headers:    req.Msg.Headers,
+			Headers:    headersCopy,
 		},
 	}
 
-	// Preserve existing tool policies
+	// Preserve existing tool policies and unmasked secrets if incoming fields contain placeholder
 	if existing, ok := s.manager.GetServer(req.Msg.Id); ok {
-		cfg.Tools = existing.Config().Tools
+		oldCfg := existing.Config()
+		cfg.Tools = oldCfg.Tools
+
+		for k, v := range cfg.Transport.Env {
+			if isMaskedSecret(v) {
+				if original, found := oldCfg.Transport.Env[k]; found {
+					cfg.Transport.Env[k] = original
+				}
+			}
+		}
+		for k, v := range cfg.Transport.Headers {
+			if isMaskedSecret(v) {
+				if original, found := oldCfg.Transport.Headers[k]; found {
+					cfg.Transport.Headers[k] = original
+				}
+			}
+		}
 	}
 
 	if err := s.manager.UpdateServer(ctx, cfg); err != nil {
@@ -147,6 +277,10 @@ func (s *Service) DeleteMCPServer(
 		}), nil
 	}
 
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+		return nil, err
+	}
+
 	if err := s.manager.RemoveServer(req.Msg.Id); err != nil {
 		return connect.NewResponse(&v1.DeleteMCPServerResponse{
 			Success: false,
@@ -166,6 +300,10 @@ func (s *Service) ToggleMCPServer(
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
+	}
+
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+		return nil, err
 	}
 
 	if err := s.manager.SetServerEnabled(ctx, req.Msg.Id, req.Msg.Enabled); err != nil {
@@ -189,6 +327,10 @@ func (s *Service) ToggleMCPTool(
 		}), nil
 	}
 
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+		return nil, err
+	}
+
 	if err := s.manager.SetToolEnabled(req.Msg.ServerId, req.Msg.ToolName, req.Msg.Enabled); err != nil {
 		return connect.NewResponse(&v1.ToggleMCPToolResponse{
 			Success: false,
@@ -208,6 +350,10 @@ func (s *Service) SyncMCPServer(
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
+	}
+
+	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization"), false); err != nil {
+		return nil, err
 	}
 
 	if err := s.manager.SyncServer(ctx, req.Msg.Id); err != nil {
@@ -249,10 +395,10 @@ func (s *Service) buildServerInfo(srv *mcp.ServerRuntime) *v1.MCPServerInfo {
 		TransportType:     string(cfg.Transport.Type),
 		Command:           cfg.Transport.Command,
 		Args:              cfg.Transport.Args,
-		Env:               cfg.Transport.Env,
+		Env:               maskEnv(cfg.Transport.Env),
 		WorkingDir:        cfg.Transport.WorkingDir,
 		Url:               cfg.Transport.URL,
-		Headers:           cfg.Transport.Headers,
+		Headers:           maskHeaders(cfg.Transport.Headers),
 		ToolsCount:        int32(len(catItems)),
 		EnabledToolsCount: int32(enabledCount),
 		Tools:             tools,

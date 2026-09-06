@@ -4,28 +4,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// FormatToolResult converts an MCP ToolCallResult into a string result for FrostAgent Agent Loop.
-func FormatToolResult(res *ToolCallResult) string {
+// FormatToolResult converts an MCP CallToolResult into a string result for FrostAgent Agent Loop.
+func FormatToolResult(res *officialmcp.CallToolResult) string {
 	if res == nil {
 		return "Tool executed successfully (no output)."
 	}
 
 	var parts []string
-	for _, block := range res.Content {
-		switch block.Type {
-		case "text":
+	for _, item := range res.Content {
+		switch block := item.(type) {
+		case *officialmcp.TextContent:
 			if block.Text != "" {
 				parts = append(parts, block.Text)
 			}
-		case "image":
-			mime := block.MimeType
+		case *officialmcp.ImageContent:
+			mime := block.MIMEType
 			if mime == "" {
 				mime = "image/unknown"
 			}
 			parts = append(parts, fmt.Sprintf("[image content: %s]", mime))
-		case "resource":
+		case *officialmcp.EmbeddedResource:
 			if block.Resource != nil {
 				data, err := json.Marshal(block.Resource)
 				if err == nil {
@@ -35,13 +37,19 @@ func FormatToolResult(res *ToolCallResult) string {
 			}
 			parts = append(parts, "[resource content]")
 		default:
-			if block.Text != "" {
-				parts = append(parts, block.Text)
-			} else if block.Data != "" {
-				parts = append(parts, fmt.Sprintf("[%s content: %s]", block.Type, block.MimeType))
-			} else {
-				parts = append(parts, fmt.Sprintf("[%s content]", block.Type))
+			if block != nil {
+				data, err := json.Marshal(block)
+				if err == nil {
+					parts = append(parts, string(data))
+				}
 			}
+		}
+	}
+
+	if res.StructuredContent != nil {
+		data, err := json.Marshal(res.StructuredContent)
+		if err == nil {
+			parts = append(parts, string(data))
 		}
 	}
 

@@ -6,19 +6,49 @@ import (
 
 // NormalizeSchema normalizes an MCP inputSchema into an OpenAI-compatible function parameter schema.
 // If input is nil or invalid, it returns a safe default {"type": "object", "properties": {}}.
-func NormalizeSchema(raw json.RawMessage) map[string]any {
+func NormalizeSchema(input any) map[string]any {
 	fallback := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{},
 	}
 
-	if len(raw) == 0 {
+	if input == nil {
 		return fallback
 	}
 
 	var schema map[string]any
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		return fallback
+	switch v := input.(type) {
+	case map[string]any:
+		schema = v
+	case []byte:
+		if len(v) == 0 {
+			return fallback
+		}
+		if err := json.Unmarshal(v, &schema); err != nil {
+			return fallback
+		}
+	case string:
+		if v == "" {
+			return fallback
+		}
+		if err := json.Unmarshal([]byte(v), &schema); err != nil {
+			return fallback
+		}
+	case json.RawMessage:
+		if len(v) == 0 {
+			return fallback
+		}
+		if err := json.Unmarshal(v, &schema); err != nil {
+			return fallback
+		}
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fallback
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return fallback
+		}
 	}
 
 	if schema == nil {
