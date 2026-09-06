@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -68,15 +70,62 @@ func maskHeaders(headers map[string]string) map[string]string {
 	return masked
 }
 
-func isLoopbackAddr(addr string) bool {
-	if addr == "" {
-		return true // In-process or test invocation
+// IsTrustedOrigin reports whether an incoming HTTP Origin header is trusted for
+// MCP control plane access. It permits:
+//  1. Empty Origin (non-browser requests such as curl, CLI, or backend services).
+//  2. Local loopback origins (http(s)://localhost[:port], 127.0.0.1[:port], [::1][:port]).
+//  3. Same-origin requests where Origin matches the server's Host / X-Forwarded-Host.
+//  4. Explicitly allowlisted origins in the MCP_ALLOWED_ORIGINS environment variable.
+//
+// Any untrusted external origin (e.g. https://evil.example) returns false to eliminate
+// browser-based cross-origin request / CSRF execution of stdio commands (RCE).
+func IsTrustedOrigin(origin string, host string) bool {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return true
 	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
+
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
 	}
-	if host == "localhost" || host == "" {
+
+	// Check loopback hostname
+	if isLoopbackHost(u.Hostname()) {
+		return true
+	}
+
+	// Check server Host / X-Forwarded-Host match
+	if host != "" {
+		host = strings.TrimSpace(host)
+		if strings.EqualFold(u.Host, host) {
+			return true
+		}
+		hostHostname, hostPort, err := net.SplitHostPort(host)
+		if err != nil {
+			hostHostname = host
+			hostPort = ""
+		}
+		if strings.EqualFold(u.Hostname(), hostHostname) && u.Port() == hostPort {
+			return true
+		}
+	}
+
+	// Check explicit allowlist via environment variable
+	if allowed := os.Getenv("MCP_ALLOWED_ORIGINS"); allowed != "" {
+		for item := range strings.SplitSeq(allowed, ",") {
+			item = strings.TrimSpace(item)
+			if item != "" && (strings.EqualFold(origin, item) || strings.EqualFold(u.Host, item)) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -86,28 +135,80 @@ func isLoopbackAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
-func checkControlPlaneAuth(peerAddr string, authHeader string) error {
+func isLoopbackAddr(addr string) bool {
+	if addr == "" {
+		return true // In-process or test invocation
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return isLoopbackHost(host)
+}
+
+// CheckControlPlaneAuth validates incoming request origin, peer address, and token
+// authorization.
+func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
+	var authHeader, originHeader, hostHeader string
+	if header != nil {
+		authHeader = strings.TrimSpace(header.Get("Authorization"))
+		originHeader = strings.TrimSpace(header.Get("Origin"))
+		hostHeader = strings.TrimSpace(header.Get("Host"))
+		if hostHeader == "" {
+			hostHeader = strings.TrimSpace(header.Get("X-Forwarded-Host"))
+		}
+	}
+
+	// 1. Origin verification: untrusted cross-origin requests are rejected unconditionally,
+	// protecting against browser CSRF / origin bypass (e.g. evil web page -> localhost -> stdio RCE).
+	if originHeader != "" && !IsTrustedOrigin(originHeader, hostHeader) {
+		return connect.NewError(
+			connect.CodePermissionDenied,
+			fmt.Errorf("untrusted cross-origin request from %q is forbidden on MCP control plane", originHeader),
+		)
+	}
+
+	// 2. Token & Peer address boundary:
 	token := strings.TrimSpace(os.Getenv("MCP_CONTROL_TOKEN"))
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	}
 
-	if token != "" {
-		expected := "Bearer " + token
-		if authHeader != expected {
-			return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid or missing MCP control plane token"))
+	isLoopback := isLoopbackAddr(peerAddr)
+
+	// If client provided an Authorization header:
+	if authHeader != "" {
+		if token != "" {
+			expected := "Bearer " + token
+			if authHeader != expected {
+				return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid MCP control plane token"))
+			}
+			return nil
 		}
-		return nil
+		// No token configured on server, but client sent one:
+		if isLoopback || os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
+			return nil
+		}
+		return connect.NewError(connect.CodePermissionDenied, errors.New("MCP control plane access is restricted to localhost"))
 	}
 
-	// When no explicit auth token is configured, enforce loopback boundary for control plane
-	// access to prevent unauthenticated remote clients from tampering with MCP configuration.
-	if os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
-		return nil
-	}
-	if !isLoopbackAddr(peerAddr) {
+	// Client did NOT provide an Authorization header:
+	// If the request comes from a remote address:
+	if !isLoopback && os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") != "true" {
+		if token != "" {
+			return connect.NewError(connect.CodeUnauthenticated, errors.New("missing MCP control plane token for remote access"))
+		}
 		return connect.NewError(connect.CodePermissionDenied, errors.New("MCP control plane access is restricted to localhost or requires MCP_CONTROL_TOKEN authorization"))
 	}
+
+	// Request is from local loopback (or ALLOW_REMOTE_MCP_MANAGEMENT is true):
+	// Check if local token enforcement is explicitly requested.
+	if token != "" && os.Getenv("MCP_ENFORCE_LOCAL_TOKEN") == "true" {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("missing MCP control plane token"))
+	}
+
+	// Trusted local same-origin / loopback client is permitted by default
+	// without locking out the built-in management console.
 	return nil
 }
 
@@ -126,7 +227,7 @@ func (s *Service) ListMCPServers(
 	ctx context.Context,
 	req *connect.Request[v1.ListMCPServersRequest],
 ) (*connect.Response[v1.ListMCPServersResponse], error) {
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -147,7 +248,7 @@ func (s *Service) GetMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.GetMCPServerRequest],
 ) (*connect.Response[v1.GetMCPServerResponse], error) {
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +270,7 @@ func (s *Service) AddMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.AddMCPServerRequest],
 ) (*connect.Response[v1.AddMCPServerResponse], error) {
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -210,15 +311,15 @@ func (s *Service) UpdateMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateMCPServerRequest],
 ) (*connect.Response[v1.UpdateMCPServerResponse], error) {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.UpdateMCPServerResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
-		return nil, err
 	}
 
 	envCopy := maps.Clone(req.Msg.Env)
@@ -274,15 +375,15 @@ func (s *Service) DeleteMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.DeleteMCPServerRequest],
 ) (*connect.Response[v1.DeleteMCPServerResponse], error) {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.DeleteMCPServerResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
-		return nil, err
 	}
 
 	if err := s.manager.RemoveServer(req.Msg.Id); err != nil {
@@ -299,15 +400,15 @@ func (s *Service) ToggleMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.ToggleMCPServerRequest],
 ) (*connect.Response[v1.ToggleMCPServerResponse], error) {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.ToggleMCPServerResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
-		return nil, err
 	}
 
 	if err := s.manager.SetServerEnabled(ctx, req.Msg.Id, req.Msg.Enabled); err != nil {
@@ -324,15 +425,15 @@ func (s *Service) ToggleMCPTool(
 	ctx context.Context,
 	req *connect.Request[v1.ToggleMCPToolRequest],
 ) (*connect.Response[v1.ToggleMCPToolResponse], error) {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.ToggleMCPToolResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
-		return nil, err
 	}
 
 	if err := s.manager.SetToolEnabled(req.Msg.ServerId, req.Msg.ToolName, req.Msg.Enabled); err != nil {
@@ -349,15 +450,15 @@ func (s *Service) SyncMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.SyncMCPServerRequest],
 ) (*connect.Response[v1.SyncMCPServerResponse], error) {
+	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+		return nil, err
+	}
+
 	if s.manager == nil {
 		return connect.NewResponse(&v1.SyncMCPServerResponse{
 			Success: false,
 			Error:   "mcp manager not initialized",
 		}), nil
-	}
-
-	if err := checkControlPlaneAuth(req.Peer().Addr, req.Header().Get("Authorization")); err != nil {
-		return nil, err
 	}
 
 	if err := s.manager.SyncServer(ctx, req.Msg.Id); err != nil {

@@ -179,6 +179,37 @@ func (c *GroupCompactor) HasPendingPersistence(owner string) bool {
 	return c.pendingPersist[owner] != nil
 }
 
+// IsPersistenceActive reports whether a persist worker is currently running or has pending records for the owner.
+func (c *GroupCompactor) IsPersistenceActive(owner string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.persistActive[owner] || c.pendingPersist[owner] != nil
+}
+
+// DrainPersistence waits for any active persist worker and pending persistence
+// for the given owner to completely finish and close files.
+func (c *GroupCompactor) DrainPersistence(owner string, timeout time.Duration) error {
+	if c == nil {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		c.mu.Lock()
+		active := c.persistActive[owner] || c.pendingPersist[owner] != nil
+		c.mu.Unlock()
+		if !active {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for persistence to drain for %s", owner)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // Trigger starts compaction when a full batch is ready. Failures are logged and
 // never block OneBot event processing.
 func (c *GroupCompactor) Trigger(session *SessionContext, owner string) {

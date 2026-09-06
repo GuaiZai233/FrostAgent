@@ -320,7 +320,7 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 	return nil
 }
 
-func (s *ServerRuntime) SetEnabled(enabled bool) error {
+func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 	s.mu.Lock()
 	if s.cfg.Enabled == enabled {
 		if !enabled && s.status == StatusStopped {
@@ -336,7 +336,15 @@ func (s *ServerRuntime) SetEnabled(enabled bool) error {
 	s.mu.Unlock()
 
 	if enabled {
-		return s.Start(context.Background())
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+		return s.Start(ctx)
 	}
 	return s.Stop()
 }

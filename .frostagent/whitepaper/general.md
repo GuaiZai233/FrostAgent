@@ -180,10 +180,12 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/mcp_servers.json`；
   - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
   - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
-- **控制平面安全门禁与敏感凭据脱敏 (Control Plane Auth & Secret Masking)**：
-  - **全量端点网络隔离与认证校验 (Comprehensive Control Plane Boundary)**：为杜绝未鉴权 RCE、SSRF、配置篡改及凭据侦测，控制平面针对**全部 MCP 管理端点**（包括读取端点 `ListMCPServers` / `GetMCPServer` 以及增删改查、启停开关与同步等变更高危操作）统一实施网络边界鉴权。默认仅允许本地回环地址（`127.0.0.1`, `::1`, `localhost`）；如需远程管理，必须配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并携带合法 Bearer 认证令牌，或显式声明 `ALLOW_REMOTE_MCP_MANAGEMENT=true`；
+- **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：
+  - **浏览器跨源防护与 Origin 校验 (CSRF / Origin Bypass Defense)**：针对恶意网页利用浏览器向 `localhost` 发起请求时 TCP 对端同样为本地回环（`127.0.0.1`）的安全隐患，控制平面在 HTTP CORS 中间件与 ConnectRPC 服务层实施双重 Origin 校验。非受信外部源（如 `https://evil.example`）即便通过回环地址发起请求，也将被直接拦截并返回 `403 Forbidden` / `CodePermissionDenied`，彻底阻断网页跨站导致本地 stdio 命令执行（RCE）的风险。受信来源仅包括本地回环源（`localhost`, `127.0.0.1`, `[::1]`）、与服务端 `Host`/`X-Forwarded-Host` 一致的同源请求，以及通过 `MCP_ALLOWED_ORIGINS` 显式声明的白名单；
+  - **网络边界认证与本地控制台防锁死机制 (Local Same-Origin vs. Remote Bearer Token)**：远程访问（非回环 IP）强制要求配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并在请求中提供合法 Bearer 认证；本地同源访问（本地回环 + 受信同源）默认放行以保证内置控制台开箱即用（支持配置 `MCP_ENFORCE_LOCAL_TOKEN=true` 开启本地严格鉴权）。同时前端 ConnectRPC 客户端内置 `authInterceptor` 拦截器，支持在 Web 端外观设置中配置与持久化访问 Token，确保远程部署和受保护环境下控制台顺畅交互；
   - **敏感凭据全面脱敏防护**：在环境变量及请求头中，对包含 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `COOKIE` 以及 `Authorization` 的敏感信息在读取接口（`ListMCPServers`, `GetMCPServer`）中统一脱敏展示为 `"******"`；
-  - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏。
+  - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏；
+  - **上下文透传与启动错误真实反馈**：`SetServerEnabled` 完整透传 RPC 请求上下文并设置启动超时保护，当外部子进程或网络传输握手失败时，将真实错误向上传播给控制台 RPC 响应，杜绝将启动失败伪报为“成功”的操作误导。
 - **代数令牌、状态幂等与生命周期竞态消除 (Generation Tokens & State Idempotency)**：
   - **启动/关闭代数令牌 (`generation uint64`)**：为每次服务器启动分配单调递增的代数令牌，启动前强制取消前序上下文，连接建立后校验代数。当用户在慢连接建立过程中点击停止或删除时，迟到的连接会因代数不匹配被直接丢弃并关闭，杜绝已停止进程“僵尸复活”；
   - **启停幂等性防护与资源即时回收**：`SetEnabled` 实现严格幂等防护，防止重复启用造成子进程与网络会话多重泄漏；新启动时显式异步关闭前序存活会话；

@@ -432,16 +432,32 @@ func main() {
 	}
 }
 
-// corsMiddleware 作为标准 http.Handler 包装器
+// corsMiddleware 作为标准 http.Handler 包装器，处理 CORS 并对 MCP 控制平面阻断不受信跨源请求
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		// 确保下游 ConnectRPC handler 可以正确读取 Host 请求头
+		if r.Header.Get("Host") == "" && r.Host != "" {
+			r.Header.Set("Host", r.Host)
+		}
+
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if mcpsvc.IsTrustedOrigin(origin, r.Host) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Connect-Protocol-Version")
+				w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+			} else {
+				// 不受信跨站来源直接在 HTTP 入口层拦截 MCP 控制平面操作，防止恶意外网页面发起 CSRF 导致 RCE
+				if strings.HasPrefix(r.URL.Path, "/frostagent.v1.MCPService/") {
+					http.Error(w, "Forbidden cross-origin request on MCP control plane", http.StatusForbidden)
+					return
+				}
+			}
+		}
 
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 

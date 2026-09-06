@@ -92,11 +92,24 @@ export function mountMCPPage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`获取 MCP 服务器列表失败: ${msg}`);
+      const isAuthError =
+        msg.toLowerCase().includes('token') ||
+        msg.toLowerCase().includes('unauthenticated') ||
+        msg.toLowerCase().includes('permission') ||
+        msg.toLowerCase().includes('restricted');
+
       serversContainer.innerHTML = `
         <div class="card p-8 text-center text-muted">
           <p class="text-destructive font-medium mb-2">获取列表失败</p>
           <p class="text-xs text-muted mb-4">${escapeHtml(msg)}</p>
-          <button class="btn btn-outline btn-sm" id="mcp-retry-load">重试</button>
+          <div class="flex items-center justify-center gap-2">
+            <button class="btn btn-outline btn-sm" id="mcp-retry-load">重试</button>
+            ${
+              isAuthError
+                ? `<a href="#/settings/frontend" class="btn btn-primary btn-sm" style="text-decoration: none;">前往设置配置 Token</a>`
+                : ''
+            }
+          </div>
         </div>
       `;
       container.querySelector('#mcp-retry-load')?.addEventListener('click', () => loadServers());

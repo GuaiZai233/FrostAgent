@@ -249,11 +249,15 @@ func (m *Manager) SetServerEnabled(ctx context.Context, id string, enabled bool)
 		return fmt.Errorf("server %q not found", id)
 	}
 
-	if err := srv.SetEnabled(enabled); err != nil && enabled {
-		// Logged or handled, persist state so user intent is retained
+	startErr := srv.SetEnabled(ctx, enabled)
+	if err := m.saveConfig(); err != nil {
+		return err
+	}
+	if startErr != nil {
+		return startErr
 	}
 
-	return m.saveConfig()
+	return nil
 }
 
 func (m *Manager) SetToolEnabled(serverID, remoteName string, enabled bool) error {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -289,7 +290,7 @@ func TestServerRuntimeLifecycleAndDoubleCheck(t *testing.T) {
 	}
 
 	// 4. Disable entire server -> call get_issue -> should return server disabled message
-	_ = srv.SetEnabled(false)
+	_ = srv.SetEnabled(ctx, false)
 	resServerDisabled, err := srv.CallTool(ctx, "get_issue", "{}")
 	if err != nil {
 		t.Fatalf("call tool returned error: %v", err)
@@ -811,11 +812,13 @@ func TestServerRuntimeSetEnabledIdempotency(t *testing.T) {
 		t.Fatalf("expected 1 connect, got %d", connectCount)
 	}
 
+	ctx := context.Background()
+
 	// Call SetEnabled(true) repeatedly on connected server -> must be a no-op!
-	if err := srv.SetEnabled(true); err != nil {
+	if err := srv.SetEnabled(ctx, true); err != nil {
 		t.Fatalf("SetEnabled(true) failed: %v", err)
 	}
-	if err := srv.SetEnabled(true); err != nil {
+	if err := srv.SetEnabled(ctx, true); err != nil {
 		t.Fatalf("SetEnabled(true) failed: %v", err)
 	}
 	if connectCount != 1 {
@@ -824,7 +827,7 @@ func TestServerRuntimeSetEnabledIdempotency(t *testing.T) {
 
 	// Calling Stop then SetEnabled(false) -> must be a no-op!
 	_ = srv.Stop()
-	if err := srv.SetEnabled(false); err != nil {
+	if err := srv.SetEnabled(ctx, false); err != nil {
 		t.Fatalf("SetEnabled(false) failed: %v", err)
 	}
 	if srv.Status() != StatusStopped {
@@ -897,5 +900,62 @@ func TestServerRuntimeToolListChangedNotification(t *testing.T) {
 	}
 	if _, ok := srv.Catalog().Get("tool_v2"); !ok {
 		t.Fatalf("expected tool_v2 in catalog after sync")
+	}
+}
+
+func TestManager_SetServerEnabled_PropagatesStartupErrorAndContext(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mcp_mgr_err_test_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store := NewConfigStore(filepath.Join(tmpDir, "mcp.json"))
+	manager := NewManagerWithFactory(store, []string{"memory"}, func(cfg TransportConfig) (officialmcp.Transport, error) {
+		if cfg.Command == "nonexistent-cmd" {
+			return nil, errors.New("simulated transport connection failure")
+		}
+		return nil, errors.New("unknown server")
+	})
+
+	ctx := context.Background()
+	// Add server initially disabled
+	err = manager.AddServer(ctx, ServerConfig{
+		ID:      "failing_server",
+		Name:    "Failing Server",
+		Enabled: false,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "nonexistent-cmd",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddServer failed: %v", err)
+	}
+
+	// 1. Enabling failing server must propagate the startup error rather than false success!
+	enableErr := manager.SetServerEnabled(ctx, "failing_server", true)
+	if enableErr == nil {
+		t.Fatalf("expected SetServerEnabled to return error, got nil")
+	}
+	if !strings.Contains(enableErr.Error(), "simulated transport connection failure") {
+		t.Fatalf("expected error to contain simulated failure, got: %v", enableErr)
+	}
+
+	// Verify server status reflects failure
+	srv, ok := manager.GetServer("failing_server")
+	if !ok {
+		t.Fatalf("server not found")
+	}
+	if srv.Status() != StatusFailed {
+		t.Fatalf("expected server status to be StatusFailed, got %s", srv.Status())
+	}
+
+	// 2. Test context cancellation
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	cancelErr := manager.SetServerEnabled(canceledCtx, "failing_server", true)
+	if cancelErr == nil {
+		t.Fatalf("expected error on canceled context, got nil")
 	}
 }
