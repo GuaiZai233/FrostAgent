@@ -6,33 +6,51 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
 // GlobalKeys are owned by the control plane, including the temporary shared persona.
-var GlobalKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "WS_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true, "SYSTEM_PROMPT": true}
+var GlobalKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "WS_ALLOWED_ORIGINS": true, "HTTP_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true, "SYSTEM_PROMPT": true}
 var RestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE_ASTRBOT_ADAPTER": true, "MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
 type Store struct {
-	mu      sync.RWMutex
-	path    string
-	values  map[string]string
-	global  bool
-	raw     string
-	loadErr error
+	mu        sync.RWMutex
+	path      string
+	values    map[string]string
+	global    bool
+	raw       string
+	loadErr   error
+	accessErr error
 }
 
 func Open(path string, global bool) (*Store, error) {
+	s := &Store{path: path, global: global, values: map[string]string{}}
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			err = fmt.Errorf("配置路径不是普通文件")
+		} else {
+			err = os.Chmod(path, 0600)
+		}
+	}
+	if err != nil && !os.IsNotExist(err) {
+		s.accessErr = err
+		s.loadErr = err
+		return s, err
+	}
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		raw = nil
 		err = nil
 	}
-	s := &Store{path: path, global: global, raw: string(raw), values: map[string]string{}, loadErr: err}
 	if err != nil {
+		s.accessErr = err
+		s.loadErr = err
 		return s, err
 	}
+	s.raw = string(raw)
 	values, err := godotenv.Unmarshal(string(raw))
 	if err != nil {
 		s.loadErr = err
@@ -46,7 +64,8 @@ func Open(path string, global bool) (*Store, error) {
 	s.values = values
 	return s, nil
 }
-func (s *Store) Error() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
+func (s *Store) AccessError() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.accessErr }
+func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
 
 func allowed(k string, global bool) bool {
 	if !keyPattern.MatchString(k) {
@@ -70,7 +89,7 @@ func (s *Store) Snapshot() map[string]string {
 func (s *Store) Raw() (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.raw, nil
+	return s.raw, s.accessErr
 }
 func (s *Store) Update(k, v string, remove bool) error {
 	if !allowed(k, s.global) {
@@ -81,17 +100,34 @@ func (s *Store) Update(k, v string, remove bool) error {
 	if s.loadErr != nil {
 		return fmt.Errorf("配置文件不可解析，请通过原始 .env 编辑修复: %w", s.loadErr)
 	}
-	next := map[string]string{}
-	for k, x := range s.values {
-		next[k] = x
+	if strings.ContainsRune(v, 0) || (k != "SYSTEM_PROMPT" && strings.ContainsAny(v, "\r\n")) {
+		return fmt.Errorf("字段 %s 不允许 NUL 或换行", k)
 	}
-	if remove {
-		delete(next, k)
-	} else {
-		next[k] = v
+	raw, err := MutateEnv(s.raw, k, v, remove)
+	if err != nil {
+		return err
 	}
-	return s.writeLocked(next)
+	next, err := godotenv.Unmarshal(raw)
+	if err != nil {
+		return err
+	}
+	value, exists := next[k]
+	if (remove && exists) || (!remove && (!exists || value != v)) {
+		return fmt.Errorf("字段 %s 无法安全写入配置", k)
+	}
+	if err = WriteAtomic(s.path, []byte(raw), 0600); err != nil {
+		return err
+	}
+	for key := range next {
+		if !allowed(key, s.global) {
+			delete(next, key)
+		}
+	}
+	s.values = next
+	s.raw = raw
+	return nil
 }
+
 func (s *Store) Replace(raw string) error {
 	next, err := godotenv.Unmarshal(raw)
 	if err != nil {
@@ -104,24 +140,15 @@ func (s *Store) Replace(raw string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.accessErr != nil {
+		return s.accessErr
+	}
 	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
 		return err
 	}
 	s.values = next
 	s.raw = raw
 	s.loadErr = nil
-	return nil
-}
-func (s *Store) writeLocked(next map[string]string) error {
-	raw, err := godotenv.Marshal(next)
-	if err != nil {
-		return err
-	}
-	if err = WriteAtomic(s.path, []byte(raw+"\n"), 0600); err != nil {
-		return err
-	}
-	s.values = next
-	s.raw = raw + "\n"
 	return nil
 }
 func WriteAtomic(path string, data []byte, mode os.FileMode) error {

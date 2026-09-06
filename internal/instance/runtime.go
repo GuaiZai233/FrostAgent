@@ -42,6 +42,9 @@ type Runtime struct {
 }
 
 func buildRuntime(dir, prefix string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
+	if config.AccessError() != nil {
+		return nil, config.AccessError()
+	}
 	if enabled && config.Error() != nil {
 		return nil, config.Error()
 	}

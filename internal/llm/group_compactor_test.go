@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 	"errors"
@@ -574,6 +575,8 @@ func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
 	tmpDir := t.TempDir()
 	store, _ := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 3, 10*time.Millisecond)
+	compactor.Scope = runtimescope.New(nil, nil, nil)
+	t.Cleanup(func() { compactor.Cancel(); compactor.StopTimers(); compactor.Wait() })
 
 	s := &SessionContext{
 		ConversationID: "test_group_dialogue_flow",

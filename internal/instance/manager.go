@@ -137,7 +137,11 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			}
 		}
 		pathError := safeTree(m.dir(info.ID))
-		c, configError := instanceconfig.Open(filepath.Join(m.dir(info.ID), ".env"), false)
+		var c *instanceconfig.Store
+		var configError error
+		if pathError == nil {
+			c, configError = instanceconfig.Open(filepath.Join(m.dir(info.ID), ".env"), false)
+		}
 		i := &managed{config: c, logger: logs.New(info.ID, info.Name, 5000)}
 		m.instances[info.ID] = i
 		if pathError != nil {
@@ -170,6 +174,16 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
 func (m *Manager) build(id string, i *managed, enabled bool) (*Runtime, error) {
+	if err := safeTree(m.dir(id)); err != nil {
+		return nil, err
+	}
+	if i.config == nil {
+		c, err := instanceconfig.Open(filepath.Join(m.dir(id), ".env"), false)
+		if err != nil {
+			return nil, err
+		}
+		i.config = c
+	}
 	r, err := buildRuntime(m.dir(id), "/instances/"+id, i.config, m.global, i.logger, m.shared, m.billing, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }

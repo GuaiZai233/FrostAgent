@@ -60,3 +60,34 @@ func TestConcurrentUpdatesAreAtomic(t *testing.T) {
 		t.Fatal("lost updates")
 	}
 }
+
+func TestAppendToRawEnvWithoutFinalNewline(t *testing.T) {
+	for _, raw := range []string{"BOT_NAME=old", "BOT_NAME=\"old\"", "# keep-comment"} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".env")
+			c, err := Open(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = c.Replace(raw); err != nil {
+				t.Fatal(err)
+			}
+			if err = c.Update("ADMIN_QQ_IDS", "synthetic", false); err != nil {
+				t.Fatal(err)
+			}
+			if c.Get("ADMIN_QQ_IDS") != "synthetic" {
+				t.Fatal("appended field missing")
+			}
+			if raw != "# keep-comment" && c.Get("BOT_NAME") != "old" {
+				t.Fatal("sibling field changed")
+			}
+			reloaded, err := Open(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.Get("ADMIN_QQ_IDS") != "synthetic" || reloaded.Get("BOT_NAME") != c.Get("BOT_NAME") {
+				t.Fatal("persisted values differ")
+			}
+		})
+	}
+}

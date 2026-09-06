@@ -34,15 +34,15 @@ func run() error {
 	mux.Handle("/", frontend.Handler())
 	listen := global.Get("LISTEN_ADDR")
 	if listen == "" {
-		listen = ":8080"
+		listen = "127.0.0.1:8080"
 	}
 	wsListen := global.Get("WS_LISTEN_ADDR")
 	if wsListen == "" {
-		wsListen = "0.0.0.0:1234"
+		wsListen = "127.0.0.1:1234"
 	}
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(manager))
-	servers := []*http.Server{{Addr: listen, Handler: corsMiddleware(mux), ReadHeaderTimeout: 10 * time.Second}}
+	servers := []*http.Server{{Addr: listen, Handler: corsMiddleware(mux, global.Get), ReadHeaderTimeout: 10 * time.Second}}
 	if wsListen != listen {
 		servers = append(servers, &http.Server{Addr: wsListen, Handler: wsMux, ReadHeaderTimeout: 10 * time.Second})
 	}
@@ -84,21 +84,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// corsMiddleware 作为标准 http.Handler 包装器
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
