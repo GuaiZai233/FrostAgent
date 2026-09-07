@@ -432,7 +432,7 @@ func TestRelease(t *testing.T) {
 	t.Run("404 Not Found is idempotent success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte("session not found"))
+			_, _ = w.Write([]byte(`{"detail":"No active session found for user"}`))
 		}))
 		defer server.Close()
 
@@ -445,6 +445,25 @@ func TestRelease(t *testing.T) {
 		err := client.Release(context.Background(), "session-gone")
 		if err != nil {
 			t.Fatalf("expected nil error for idempotent 404, got %v", err)
+		}
+	})
+
+	t.Run("404 Not Found with generic route error returns backend error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("404 page not found"))
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "tok",
+			SessionNamespace: "ns",
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		err := client.Release(context.Background(), "session-gone")
+		if err == nil {
+			t.Fatalf("expected error for generic 404 route error, got nil")
 		}
 	})
 

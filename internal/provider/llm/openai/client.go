@@ -3,6 +3,8 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -148,7 +150,12 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	logs.LLMRequest(string(jsonData))
+	logSafeReq := redactChatRequestForLogging(openAIReq)
+	if logSafeData, err := json.Marshal(logSafeReq); err == nil {
+		logs.LLMRequest(string(logSafeData))
+	} else {
+		logs.LLMRequest("[failed to marshal log-safe request]")
+	}
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
 	if err != nil {
@@ -180,11 +187,18 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	logs.LLMResponse(string(respBody))
 
 	var openAIResp chatResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
+		logs.LLMResponse(fmt.Sprintf("[malformed response body: len=%d]", len(respBody)))
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	logSafeResp := redactChatResponseForLogging(openAIResp)
+	if logSafeBytes, err := json.Marshal(logSafeResp); err == nil {
+		logs.LLMResponse(string(logSafeBytes))
+	} else {
+		logs.LLMResponse("[failed to marshal log-safe response]")
 	}
 
 	if openAIResp.Error != nil {
@@ -244,4 +258,141 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		Message: coreMsg,
 		Usage:   usage,
 	}, nil
+}
+
+// redactExecuteCommandArgs replaces raw shell command strings with metadata
+// (length, sha256 prefix, cwd, timeout) for safe logging.
+func redactExecuteCommandArgs(rawArgs string) string {
+	var p struct {
+		Command string   `json:"command"`
+		Cwd     string   `json:"cwd"`
+		Timeout *float64 `json:"timeout"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &p); err == nil {
+		cmdHash := sha256.Sum256([]byte(p.Command))
+		hashPrefix := hex.EncodeToString(cmdHash[:8])
+		cwd := p.Cwd
+		if cwd == "" {
+			cwd = "/sandbox"
+		}
+		timeoutStr := "default"
+		if p.Timeout != nil {
+			timeoutStr = fmt.Sprintf("%.1fs", *p.Timeout)
+		}
+		p.Command = fmt.Sprintf("[REDACTED command: len=%d, sha256_prefix=%s, cwd=%s, timeout=%s]",
+			len(p.Command), hashPrefix, cwd, timeoutStr)
+		if b, err := json.Marshal(p); err == nil {
+			return string(b)
+		}
+	}
+	return fmt.Sprintf(`{"command":"[REDACTED command: raw_len=%d]"}`, len(rawArgs))
+}
+
+// redactExecuteCommandResult replaces stdout and stderr strings in execute_command
+// tool outputs with length metadata for safe logging.
+func redactExecuteCommandResult(content any) any {
+	str, ok := content.(string)
+	if !ok {
+		return "[REDACTED execute_command output]"
+	}
+
+	var r struct {
+		ExitCode                  *int   `json:"exit_code"`
+		TimedOut                  bool   `json:"timed_out"`
+		Stdout                    string `json:"stdout"`
+		Stderr                    string `json:"stderr"`
+		StdoutTruncated           bool   `json:"stdout_truncated"`
+		StderrTruncated           bool   `json:"stderr_truncated"`
+		FrostAgentStdoutTruncated bool   `json:"frostagent_stdout_truncated,omitempty"`
+		FrostAgentStderrTruncated bool   `json:"frostagent_stderr_truncated,omitempty"`
+		DurationMs                int64  `json:"duration_ms"`
+	}
+	if err := json.Unmarshal([]byte(str), &r); err == nil {
+		r.Stdout = fmt.Sprintf("[REDACTED stdout: len=%d]", len(r.Stdout))
+		r.Stderr = fmt.Sprintf("[REDACTED stderr: len=%d]", len(r.Stderr))
+		if b, err := json.Marshal(r); err == nil {
+			return string(b)
+		}
+	}
+	return fmt.Sprintf("[REDACTED execute_command output: raw_len=%d]", len(str))
+}
+
+// redactChatRequestForLogging returns a deep log-safe copy of chatRequest where
+// execute_command invocations and results have their command strings and stdout/stderr redacted.
+func redactChatRequestForLogging(req chatRequest) chatRequest {
+	execToolCallIDs := make(map[string]bool)
+	for _, msg := range req.Messages {
+		for _, tc := range msg.ToolCalls {
+			if tc.Function.Name == "execute_command" {
+				if tc.ID != "" {
+					execToolCallIDs[tc.ID] = true
+				}
+			}
+		}
+	}
+
+	redacted := req
+	redacted.Messages = make([]chatMessage, len(req.Messages))
+	for i, msg := range req.Messages {
+		msgCopy := msg
+		if len(msg.ToolCalls) > 0 {
+			msgCopy.ToolCalls = make([]toolCall, len(msg.ToolCalls))
+			for j, tc := range msg.ToolCalls {
+				tcCopy := tc
+				if tc.Function.Name == "execute_command" {
+					tcCopy.Function.Arguments = redactExecuteCommandArgs(tc.Function.Arguments)
+				}
+				msgCopy.ToolCalls[j] = tcCopy
+			}
+		}
+
+		if msg.Role == "tool" {
+			isExec := execToolCallIDs[msg.ToolCallID]
+			if !isExec {
+				if s, ok := msg.Content.(string); ok {
+					var probe struct {
+						Stdout   *string `json:"stdout"`
+						Stderr   *string `json:"stderr"`
+						ExitCode *int    `json:"exit_code"`
+					}
+					if err := json.Unmarshal([]byte(s), &probe); err == nil {
+						if probe.Stdout != nil || probe.Stderr != nil || probe.ExitCode != nil {
+							isExec = true
+						}
+					}
+				}
+			}
+			if isExec {
+				msgCopy.Content = redactExecuteCommandResult(msg.Content)
+			}
+		}
+		redacted.Messages[i] = msgCopy
+	}
+	return redacted
+}
+
+// redactChatResponseForLogging returns a log-safe copy of chatResponse where
+// execute_command tool call arguments are redacted.
+func redactChatResponseForLogging(resp chatResponse) chatResponse {
+	redacted := resp
+	if len(resp.Choices) > 0 {
+		redacted.Choices = make([]struct {
+			Message chatMessage `json:"message"`
+		}, len(resp.Choices))
+		for i, ch := range resp.Choices {
+			chCopy := ch
+			if len(ch.Message.ToolCalls) > 0 {
+				chCopy.Message.ToolCalls = make([]toolCall, len(ch.Message.ToolCalls))
+				for j, tc := range ch.Message.ToolCalls {
+					tcCopy := tc
+					if tc.Function.Name == "execute_command" {
+						tcCopy.Function.Arguments = redactExecuteCommandArgs(tc.Function.Arguments)
+					}
+					chCopy.Message.ToolCalls[j] = tcCopy
+				}
+			}
+			redacted.Choices[i] = chCopy
+		}
+	}
+	return redacted
 }

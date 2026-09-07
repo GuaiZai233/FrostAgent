@@ -165,13 +165,21 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	defer resp.Body.Close()
 
 	// 204 No Content -> success
-	// 404 Not Found -> already released/not found, idempotent success
-	// HTTP 200 is intentionally rejected to prevent masking endpoint misconfigurations.
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+	// 404 Not Found specifically for "no active session" -> idempotent success
+	// Generic 404s (e.g. wrong base URL or reverse proxy 404) and HTTP 200 are rejected.
+	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
 
 	errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+	if resp.StatusCode == http.StatusNotFound {
+		lowerErr := strings.ToLower(errBody)
+		if strings.Contains(lowerErr, "no active session") || strings.Contains(lowerErr, "session not found") {
+			return nil
+		}
+		return fmt.Errorf("sandbox gateway release returned unexpected 404 (endpoint or route not found): %s", sanitizeError(errBody, c.authToken))
+	}
+
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
 }
 
