@@ -13,9 +13,21 @@ import (
 )
 
 // GlobalKeys are owned by the control plane, including the temporary shared persona.
-var GlobalKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "WS_ALLOWED_ORIGINS": true, "HTTP_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true, "SYSTEM_PROMPT": true}
+var GlobalKeys = map[string]bool{
+	"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true,
+	"WS_ALLOWED_ORIGINS": true, "HTTP_ALLOWED_ORIGINS": true,
+	"ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true,
+	"SANDBOX_ENABLED": true, "SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
+	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
+	"SYSTEM_PROMPT": true,
+}
 var InstanceRestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE_ASTRBOT_ADAPTER": true, "MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
-var ControlPlaneRestartKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true}
+var ControlPlaneRestartKeys = map[string]bool{
+	"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true,
+	"ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true,
+	"SANDBOX_ENABLED": true, "SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
+	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
+}
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
 type Store struct {

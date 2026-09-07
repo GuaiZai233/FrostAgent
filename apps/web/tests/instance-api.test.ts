@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { createInstanceAPI } from '../src/api/client';
+import { api, createInstanceAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
@@ -81,6 +81,19 @@ assert.equal(
   new URL(calls[3]).pathname,
   '/instances/b1c2d3e4/frostagent.v1.LogService/ListLogs',
   'instance logs bypassed their instance route',
+);
+await api.listMCPServers();
+assert.equal(
+  new URL(calls[4]).pathname,
+  '/frostagent.v1.MCPService/ListMCPServers',
+  'Control Plane MCP requests were routed through the selected instance',
+);
+instanceState.select(null);
+await api.listMCPServers();
+assert.equal(
+  new URL(calls[5]).pathname,
+  '/frostagent.v1.MCPService/ListMCPServers',
+  'Control Plane MCP requests required a selected instance',
 );
 
 const requestGeneration = new RequestGeneration();

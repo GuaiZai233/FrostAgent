@@ -2,6 +2,7 @@ package instance
 
 import (
 	"FrostAgent/internal/instanceconfig"
+	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
 	"context"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -168,6 +170,128 @@ func create(t *testing.T, m *Manager, name string) Info {
 	}
 	return i
 }
+
+func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.T) {
+	var mu sync.Mutex
+	var userUUIDs []string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Auth-Token") != "synthetic-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+		case "/api/v1/shell/exec":
+			mu.Lock()
+			userUUIDs = append(userUUIDs, r.URL.Query().Get("user_uuid"))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"stdout":"ok","stderr":"","exit_code":0,"timed_out":false,"duration_ms":1}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	dir := t.TempDir()
+	globalPath := filepath.Join(dir, ".env")
+	raw := strings.Join([]string{
+		"SANDBOX_ENABLED=true",
+		"SANDBOX_BASE_URL=" + gateway.URL,
+		"SANDBOX_AUTH_TOKEN=synthetic-token",
+		"SANDBOX_SESSION_NAMESPACE=frostagent-test",
+		"",
+	}, "\n")
+	if err := os.WriteFile(globalPath, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	global, err := instanceconfig.Open(globalPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(filepath.Join(dir, "data"), global, filepath.Join(dir, "dialogue.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+
+	a := create(t, m, "sandbox-a")
+	b := create(t, m, "sandbox-b")
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "shared-session"})
+	for _, id := range []string{a.ID, b.ID, a.ID} {
+		tool, ok := m.instances[id].runtime.Engine.ToolRegistry["execute_command"]
+		if !ok {
+			t.Fatalf("instance %s does not expose execute_command", id)
+		}
+		executor, ok := tool.(interface {
+			ExecuteContext(context.Context, string) (string, error)
+		})
+		if !ok {
+			t.Fatalf("instance %s execute_command is not context-aware", id)
+		}
+		if _, err := executor.ExecuteContext(ctx, `{"command":"printf ok"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	got := append([]string(nil), userUUIDs...)
+	mu.Unlock()
+	if len(got) != 3 || got[0] == "" || got[0] == got[1] || got[0] != got[2] {
+		t.Fatalf("sandbox UUID isolation/stability failed: %v", got)
+	}
+
+	disabled := testManager(t)
+	disabledInfo := create(t, disabled, "sandbox-disabled")
+	if _, ok := disabled.instances[disabledInfo.ID].runtime.Engine.ToolRegistry["execute_command"]; ok {
+		t.Fatal("execute_command exposed while SANDBOX_ENABLED is false")
+	}
+}
+
+func TestMCPControlPlaneDoesNotDependOnAnInstanceRuntime(t *testing.T) {
+	m := testManager(t)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/frostagent.v1.MCPService/ListMCPServers",
+		strings.NewReader("{}"),
+	)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("root MCP request with zero instances returned %d: %s", w.Code, w.Body.String())
+	}
+
+	info := create(t, m, "mcp-shared")
+	runtime := m.instances[info.ID].runtime
+	if runtime == nil || runtime.Engine.MCPManager != m.mcp {
+		t.Fatal("instance runtime does not use the Control Plane MCP manager")
+	}
+}
+
+func TestMCPControlPlaneAuthUsesStartupSnapshot(t *testing.T) {
+	m := testManager(t)
+	if err := m.global.Update("MCP_CONTROL_TOKEN", "synthetic-control-token", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.global.Update("MCP_ENFORCE_LOCAL_TOKEN", "true", false); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/frostagent.v1.MCPService/ListMCPServers",
+		strings.NewReader("{}"),
+	)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("MCP auth changed before Control Plane restart: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func rpc(t *testing.T, m *Manager, id, method, body string, includeGeneral bool) *httptest.ResponseRecorder {
 	t.Helper()
 	prefix := ""

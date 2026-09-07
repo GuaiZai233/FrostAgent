@@ -5,10 +5,13 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,6 +99,9 @@ type Engine struct {
 
 	// DialoguePrompt carries formatted few-shot persona examples (optional)
 	DialoguePrompt string
+
+	// MCP Manager (optional, nil = MCP disabled)
+	MCPManager *mcp.Manager
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -422,7 +428,6 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) AgentRunResult {
 	memoryWritten := false
 	var totalUsage core.Usage
-	modelTools := e.ModelTools()
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
 	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
@@ -456,6 +461,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
+
+		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
+		modelTools := e.EffectiveTools()
 
 		coreMsgs := convertToCoreMessages(messages)
 
@@ -709,13 +717,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			toolCallLog := fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments)
+			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
 			var toolResult string
 			toolSucceeded := false
-			// 从 map 中找到工具执行
-			if tool, exists := e.ToolRegistry[tc.Function.Name]; exists {
+			// 从 map 或 MCP Manager 中找到工具执行
+			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
 				var res string
 				var err error
 				if contextualTool, ok := tool.(contextualToolExecutor); ok {
@@ -755,7 +763,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			e.Log().InfoWithConsoleSummary(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult), "【工具执行结果】...")
+			toolResultLog := formatToolResultLog(tc.Function.Name, toolResult)
+			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
 				if err := runContext.SendHook(toolResult); err != nil {
@@ -868,23 +877,48 @@ func (e *Engine) trimMessagesForSession(messages []ChatMessage) []ChatMessage {
 	return trimmed
 }
 
-// ModelTools returns the registered tools as []core.Tool sorted by name.
-func (e *Engine) ModelTools() []core.Tool {
-	if e == nil || len(e.ToolRegistry) == 0 {
+func (e *Engine) findToolExecutor(name string) (ToolExecutor, bool) {
+	if e == nil {
+		return nil, false
+	}
+	if tool, exists := e.ToolRegistry[name]; exists {
+		return tool, true
+	}
+	if e.MCPManager != nil {
+		if adapter, ok := e.MCPManager.LookupAdapter(name); ok {
+			return adapter, true
+		}
+	}
+	return nil, false
+}
+
+// EffectiveTools returns the current effective tool definitions (builtins + enabled MCP tools).
+func (e *Engine) EffectiveTools() []core.Tool {
+	if e == nil {
 		return nil
 	}
 	var modelTools []core.Tool
-	for _, t := range e.ToolRegistry {
-		modelTools = append(modelTools, core.Tool{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Parameters(),
-		})
+	if len(e.ToolRegistry) > 0 {
+		for _, t := range e.ToolRegistry {
+			modelTools = append(modelTools, core.Tool{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Parameters:  t.Parameters(),
+			})
+		}
+	}
+	if e.MCPManager != nil {
+		modelTools = append(modelTools, e.MCPManager.EffectiveTools()...)
 	}
 	sort.SliceStable(modelTools, func(i, j int) bool {
 		return modelTools[i].Name < modelTools[j].Name
 	})
 	return modelTools
+}
+
+// ModelTools returns the current effective tools sorted by name.
+func (e *Engine) ModelTools() []core.Tool {
+	return e.EffectiveTools()
 }
 
 // ConvertToCoreMessages converts internal ChatMessage to core.ChatMessage
@@ -945,4 +979,60 @@ func (e *Engine) PersonaDialogue() string {
 		return e.SharedDialogue()
 	}
 	return e.DialoguePrompt
+}
+
+func formatToolCallLog(name string, args string) string {
+	if name == "execute_command" {
+		var p struct {
+			Command string   `json:"command"`
+			Cwd     string   `json:"cwd"`
+			Timeout *float64 `json:"timeout"`
+		}
+		if err := json.Unmarshal([]byte(args), &p); err == nil {
+			cmdHash := sha256.Sum256([]byte(p.Command))
+			hashPrefix := hex.EncodeToString(cmdHash[:8])
+			cwd := p.Cwd
+			if cwd == "" {
+				cwd = "/sandbox"
+			}
+			timeoutStr := "default"
+			if p.Timeout != nil {
+				timeoutStr = fmt.Sprintf("%.1fs", *p.Timeout)
+			}
+			return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: len=%d, sha256_prefix=%s, cwd=%s, timeout=%s]",
+				len(p.Command), hashPrefix, cwd, timeoutStr)
+		}
+		return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: raw_len=%d]", len(args))
+	}
+	return fmt.Sprintf("【智能体调用工具】%s，参数: %s", name, args)
+}
+
+func formatToolResultLog(name string, result string) string {
+	if name == "execute_command" {
+		var r struct {
+			ExitCode                  *int   `json:"exit_code"`
+			TimedOut                  bool   `json:"timed_out"`
+			Stdout                    string `json:"stdout"`
+			Stderr                    string `json:"stderr"`
+			StdoutTruncated           bool   `json:"stdout_truncated"`
+			StderrTruncated           bool   `json:"stderr_truncated"`
+			FrostAgentStdoutTruncated bool   `json:"frostagent_stdout_truncated"`
+			FrostAgentStderrTruncated bool   `json:"frostagent_stderr_truncated"`
+			DurationMs                int64  `json:"duration_ms"`
+		}
+		if err := json.Unmarshal([]byte(result), &r); err == nil {
+			exitCodeStr := "null"
+			if r.ExitCode != nil {
+				exitCodeStr = strconv.Itoa(*r.ExitCode)
+			}
+			return fmt.Sprintf(
+				"【工具执行结果】execute_command: [REDACTED output: exit_code=%s, timed_out=%t, stdout_len=%d, stderr_len=%d, duration_ms=%d, stdout_truncated=%t, stderr_truncated=%t]",
+				exitCodeStr, r.TimedOut, len(r.Stdout), len(r.Stderr), r.DurationMs,
+				r.StdoutTruncated || r.FrostAgentStdoutTruncated,
+				r.StderrTruncated || r.FrostAgentStderrTruncated,
+			)
+		}
+		return fmt.Sprintf("【工具执行结果】execute_command: [REDACTED output: raw_len=%d]", len(result))
+	}
+	return fmt.Sprintf("【工具执行结果】%s", result)
 }

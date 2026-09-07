@@ -9,9 +9,12 @@ import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sandbox"
+	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
@@ -41,7 +44,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, sandboxCfg *sandbox.Config, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -147,6 +150,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
+	if sandboxCfg != nil {
+		commandTool := tools.ExecuteCommandTool(codeinterpreter.New(*sandboxCfg, codeinterpreter.WithLogger(logger)))
+		registry[commandTool.Name()] = commandTool
+	}
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,
@@ -190,6 +197,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		Dispatcher:     dispatcher,
 		StartedAt:      time.Now(),
 		Version:        version,
+		MCPManager:     mcpManager,
 		// Billing components
 		BillingClient: billingClient,
 		BillingConfig: billingCfg,

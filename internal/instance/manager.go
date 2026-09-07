@@ -5,9 +5,13 @@ import (
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sandbox"
+	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
+	mcpsvc "FrostAgent/internal/service/mcp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -62,6 +66,8 @@ type Manager struct {
 	instances      map[string]*managed
 	shared         *dialogue.Service
 	billing        *billing.Client
+	mcp            *mcp.Manager
+	sandbox        *sandbox.Config
 	endpointMu     sync.Mutex
 	endpointOwners map[string]string
 	general        http.Handler
@@ -161,6 +167,41 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			m.endpointOwners[e.ID] = owner
 		}
 	}
+	sandboxCfg := sandbox.LoadConfig(global.Get)
+	if sandboxCfg.Enabled {
+		if err := sandboxCfg.Validate(); err != nil {
+			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效，已禁用隔离命令执行能力: %v", err))
+		} else {
+			m.sandbox = &sandboxCfg
+			backend := codeinterpreter.New(sandboxCfg)
+			healthCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			healthErr := backend.Health(healthCtx)
+			cancel()
+			if healthErr != nil {
+				logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱运行时暂时不可达 (%v)；execute_command 将 fail-closed，恢复后自动生效", healthErr))
+			} else {
+				logs.General.Info(logs.SYSTEM, fmt.Sprintf("沙箱执行运行时已就绪: %s", sandboxCfg.BaseURL))
+			}
+		}
+	}
+	m.mcp = mcp.NewManager(
+		mcp.NewConfigStore(filepath.Join(abs, "mcp_servers.json")),
+		[]string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command"},
+	)
+	if err := m.mcp.Load(); err != nil {
+		logs.General.Warn(logs.SYSTEM, fmt.Sprintf("加载 MCP 配置失败: %v", err))
+	} else {
+		logs.General.Info(logs.SYSTEM, "MCP 配置文件加载完成")
+	}
+	mcpEnvironment := map[string]string{
+		"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
+		"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
+		"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
+		"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
+	}
+	mcpGetenv := func(key string) string { return mcpEnvironment[key] }
+	mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.NewScoped(m.mcp, mcpGetenv))
+	mux.Handle(mcpPath, mcpHandler)
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
 		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
@@ -191,6 +232,14 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			}
 		}
 	}
+	go func() {
+		ctx, cancel := context.WithTimeout(m.shutdown, 60*time.Second)
+		defer cancel()
+		m.mcp.StartAll(ctx)
+		if m.shutdown.Err() == nil {
+			logs.General.Info(logs.SYSTEM, "MCP 外部工具连接已就绪")
+		}
+	}()
 	return m, nil
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
@@ -208,11 +257,19 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 	if openErr != nil && c.AccessError() != nil {
 		return nil, c, openErr
 	}
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, enabled)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, m.mcp, m.instanceSandboxConfig(id), enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
 	return r, c, errors.Join(openErr, err)
+}
+func (m *Manager) instanceSandboxConfig(id string) *sandbox.Config {
+	if m.sandbox == nil {
+		return nil
+	}
+	cfg := *m.sandbox
+	cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + id
+	return &cfg
 }
 func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoint) error {
 	if err := modelrouter.PersistentRefs(endpoints); err != nil {
@@ -886,6 +943,9 @@ func (m *Manager) Close() {
 			}
 			i.mu.Unlock()
 			i.op.Unlock()
+		}
+		if m.mcp != nil {
+			_ = m.mcp.Close()
 		}
 	})
 }

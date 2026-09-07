@@ -6,6 +6,14 @@ const globalKeys = new Set([
   'ALCYONE_BASE_URL',
   'ALCYONE_SERVICE_TOKEN',
   'ALCYONE_TIMEOUT',
+  'SANDBOX_ENABLED',
+  'SANDBOX_BASE_URL',
+  'SANDBOX_AUTH_TOKEN',
+  'SANDBOX_SESSION_NAMESPACE',
+  'MCP_CONTROL_TOKEN',
+  'ADMIN_TOKEN',
+  'ALLOW_REMOTE_MCP_MANAGEMENT',
+  'MCP_ENFORCE_LOCAL_TOKEN',
   'SYSTEM_PROMPT',
 ]);
 const instanceRestartKeys = new Set([
@@ -28,6 +36,14 @@ const controlPlaneRestartKeys = new Set([
   'ALCYONE_BASE_URL',
   'ALCYONE_SERVICE_TOKEN',
   'ALCYONE_TIMEOUT',
+  'SANDBOX_ENABLED',
+  'SANDBOX_BASE_URL',
+  'SANDBOX_AUTH_TOKEN',
+  'SANDBOX_SESSION_NAMESPACE',
+  'MCP_CONTROL_TOKEN',
+  'ADMIN_TOKEN',
+  'ALLOW_REMOTE_MCP_MANAGEMENT',
+  'MCP_ENFORCE_LOCAL_TOKEN',
 ]);
 import { createInstanceAPI } from '../api/client';
 import { EnvVar } from '@frostagent/proto';

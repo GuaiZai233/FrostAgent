@@ -3,7 +3,7 @@
 }
 
 html {
-  zoom: var(--ui-scale, 1.1);
+  zoom: 1.1;
 }
 
 html, body {

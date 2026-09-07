@@ -1,8 +1,8 @@
 import { themeManager, ThemeMode } from '../theme';
-import { scaleManager, scaleOptions } from '../scale';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
+import { getControlToken, setControlToken } from '../api/client';
 
 export function mountFrontendSettingsPage(container: HTMLElement): () => void {
   const themeOptions: { mode: ThemeMode; icon: string; title: string; desc: string }[] = [
@@ -28,7 +28,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
 
   function render() {
     const currentMode = themeManager.getMode();
-    const currentScale = scaleManager.getScale();
+    const currentToken = getControlToken();
 
     container.innerHTML = `
       <div class="page-container fade-in">
@@ -37,8 +37,8 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
             ${icon('arrow_left', 'w-4 h-4')}
           </a>
           <div>
-            <h1 class="page-title">网页端外观设置</h1>
-            <p class="page-description">自定义 FrostAgent 管理界面的主题模式与视觉风格</p>
+            <h1 class="page-title">网页端设置</h1>
+            <p class="page-description">自定义 FrostAgent 网页端视觉风格与服务端访问凭据</p>
           </div>
         </header>
 
@@ -77,38 +77,34 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
           </div>
         </section>
 
-        <section class="card p-4 flex flex-col gap-4" style="max-width: 42rem;">
+        <section class="card p-4 flex flex-col gap-4 mt-1" style="max-width: 42rem;">
           <div>
-            <h2 class="text-sm font-semibold text-foreground">界面缩放</h2>
-            <p class="text-xs text-muted mt-0.5">调整控制台整体显示比例（包括字体、间距与组件），默认预设为 110%</p>
+            <h2 class="text-sm font-semibold text-foreground">API / 控制平面访问凭据</h2>
+            <p class="text-xs text-muted mt-0.5">当服务端启用了 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN，或通过非本地网络远程访问时，网页端将自动在请求头中携带此 Bearer Token 进行身份认证。</p>
           </div>
 
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            ${scaleOptions
-              .map((opt) => {
-                const isActive = currentScale === opt.value;
-                return `
-                <button
-                  class="card p-3 text-left cursor-pointer hover-bg transition-all flex flex-col gap-1.5 relative ${
-                    isActive ? 'border-primary ring-1 ring-primary' : ''
-                  }"
-                  data-scale="${opt.value}"
-                >
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-bold ${isActive ? 'text-primary' : 'text-foreground'}">${opt.label}</span>
-                    ${
-                      isActive
-                        ? `<span class="badge badge-primary text-[10px] px-1 py-0">当前</span>`
-                        : opt.isDefault
-                        ? `<span class="badge badge-outline text-[10px] px-1 py-0">默认</span>`
-                        : ''
-                    }
-                  </div>
-                  <p class="text-[11px] text-muted mt-0.5 leading-snug">${escapeHtml(opt.desc)}</p>
-                </button>
-              `;
-              })
-              .join('')}
+          <div class="flex flex-col gap-2.5">
+            <div class="flex items-center gap-2">
+              <input
+                id="control-token-input"
+                type="password"
+                class="input text-xs flex-1"
+                placeholder="输入 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN (留空清除)"
+                value="${escapeHtml(currentToken)}"
+              />
+              <button id="toggle-token-visibility" class="btn btn-secondary btn-sm" type="button" title="切换可见性">
+                ${icon('eye', 'w-3.5 h-3.5')}
+              </button>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-xs text-muted">
+                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token (本地同源访问将使用默认安全边界)'}
+              </span>
+              <div class="flex gap-2">
+                ${currentToken ? `<button id="clear-token-btn" class="btn btn-ghost btn-sm text-destructive text-xs">清除</button>` : ''}
+                <button id="save-token-btn" class="btn btn-primary btn-sm text-xs">保存凭据</button>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -125,16 +121,29 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
       });
     });
 
-    container.querySelectorAll<HTMLButtonElement>('button[data-scale]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const scale = btn.dataset.scale;
-        if (scale) {
-          scaleManager.setScale(scale);
-          const matched = scaleManager.options.find((o) => o.value === scale);
-          toast.success(`界面缩放已设置为 ${matched?.label || scale}`);
-          render();
-        }
-      });
+    const tokenInput = container.querySelector<HTMLInputElement>('#control-token-input');
+    const toggleBtn = container.querySelector<HTMLButtonElement>('#toggle-token-visibility');
+    const saveBtn = container.querySelector<HTMLButtonElement>('#save-token-btn');
+    const clearBtn = container.querySelector<HTMLButtonElement>('#clear-token-btn');
+
+    toggleBtn?.addEventListener('click', () => {
+      if (tokenInput) {
+        tokenInput.type = tokenInput.type === 'password' ? 'text' : 'password';
+      }
+    });
+
+    saveBtn?.addEventListener('click', () => {
+      if (tokenInput) {
+        setControlToken(tokenInput.value);
+        toast.success('访问凭据已保存');
+        render();
+      }
+    });
+
+    clearBtn?.addEventListener('click', () => {
+      setControlToken('');
+      toast.success('访问凭据已清除');
+      render();
     });
   }
 

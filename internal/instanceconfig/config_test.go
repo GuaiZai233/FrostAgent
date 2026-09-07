@@ -99,7 +99,12 @@ func TestApplyScopeMetadataIsDisjoint(t *testing.T) {
 			t.Fatalf("instance restart key %s has conflicting scope", key)
 		}
 	}
-	for _, key := range []string{"LISTEN_ADDR", "WS_LISTEN_ADDR", "HTTP_ALLOWED_ORIGINS", "ALCYONE_BASE_URL", "ALCYONE_SERVICE_TOKEN", "ALCYONE_TIMEOUT"} {
+	for _, key := range []string{
+		"LISTEN_ADDR", "WS_LISTEN_ADDR", "HTTP_ALLOWED_ORIGINS",
+		"ALCYONE_BASE_URL", "ALCYONE_SERVICE_TOKEN", "ALCYONE_TIMEOUT",
+		"SANDBOX_ENABLED", "SANDBOX_BASE_URL", "SANDBOX_AUTH_TOKEN", "SANDBOX_SESSION_NAMESPACE",
+		"MCP_CONTROL_TOKEN", "ADMIN_TOKEN", "ALLOW_REMOTE_MCP_MANAGEMENT", "MCP_ENFORCE_LOCAL_TOKEN",
+	} {
 		if !GlobalKeys[key] || !ControlPlaneRestartKeys[key] {
 			t.Fatalf("%s must require a Control Plane restart", key)
 		}

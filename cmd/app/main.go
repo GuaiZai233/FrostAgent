@@ -30,6 +30,7 @@ func run() error {
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)
 	mux.Handle("/frostagent.v1.LogService/", manager)
+	mux.Handle("/frostagent.v1.MCPService/", manager)
 	mux.Handle("/api/log-images/", manager)
 	mux.Handle("/", frontend.Handler())
 	listen := global.Get("LISTEN_ADDR")
@@ -79,6 +80,7 @@ func instanceWebSocketHandler(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -124,10 +124,13 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`，并由 Control Plane 下发本次启动实际采用的 `WS_LISTEN_ADDR` 来生成实例专属适配器地址；设置页修改后的待重启值不会提前污染概览。AstrBot 插件要求显式配置该地址，不再回退到无实例路径。
-- **现代化设计令牌、主题与视觉缩放系统 (shadcn/ui 风格)**：
+  - MCP 配置与连接管理器属于 Control Plane，持久化在 `data/mcp_servers.json`，根级 `MCPService` 在零实例或实例停用时仍可访问；所有实例运行时共享该动态工具目录，但实例停止不会关闭 Control Plane 的 MCP 连接。
+  - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
+  - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
+- **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
-  - 默认采用 110% 界面缩放比例，结合 CSS `zoom` 与预加载防闪烁脚本优化桌面视距与字号阅读体验，并支持在外观设置中自由调整（100%、105%、110%、115%、120%）与即时持久化。
+  - 界面全局采用 110% 基础缩放比例（CSS `zoom: 1.1`），优化桌面视距与字号阅读体验。
 - **单二进制静态嵌入与开发体验**：
   - Vite 构建产物直接输出至 `internal/frontend/dist`，由 Go 1.16+ `embed.FS` 单二进制内嵌打包分发；
   - 秒级极速热重载开发服务器与轻量 Makefile 自动化集成。
@@ -201,3 +204,102 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 支持本地表情包手动上传入库、表情包关键词与描述在线编辑、单张删除以及一键重试所有未摘要表情包；
   - 提供 ConnectRPC `StickerService` 契约及 `/api/sticker/{id}/image` 原生 HTTP 缩略图流式直链服务；
   - `ListStickers` 接口支持基于 `page_token` 的偏移量分页，保证超出首页的数据可通过翻页访问。
+
+### 模型上下文协议外部工具系统 (MCP Host Subsystem)
+
+为了支持智能体动态接入更广泛的外部生态能力（如代码执行、文件系统操作、外部知识库、第三方 API 集成等），FrostAgent 实现了标准模型上下文协议（Model Context Protocol, MCP）的主机端（Host / Client）子系统：
+
+- **定位与系统边界 (Role & Boundary)**：
+  - FrostAgent 严格扮演标准 MCP Host（Client 角色），将外部 MCP Server 视为动态工具提供者（External Tool Provider）；
+  - **普通工具语义对齐**：对于大模型及智能体循环（Agent Loop），MCP 工具在调用流程、参数组织与执行协议上与系统内置工具（`memory`, `send_msg`, `send_sticker` 等）完全等价，统一归入 `core.ChatRequest.Tools` 并在执行时由 `ToolExecutor` 统一调度；
+  - **编译期静态适配器与运行期动态发现**：系统通过编译期静态编写的通用工具适配器（`ToolAdapter`），结合运行期动态拉取的工具目录（`ToolCatalog`），兼具 Go 语言的静态类型安全与 MCP 外部服务的热插拔灵活性；
+  - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/mcp_servers.json`），不设全局主开关，避免多实例部署时的系统级配置耦合。
+- **官方 SDK 与多传输协议支持 (Official Go SDK & Multi-Transport Implementations)**：
+  - 全面基于官方 Go SDK（`github.com/modelcontextprotocol/go-sdk/mcp`）构建，废弃私有 JSON-RPC 解析；
+  - **Stdio 子进程传输 (`officialmcp.CommandTransport`)**：支持本地命令行子进程模式，托管 stdin/stdout 标准流管道交互与 SIGTERM 优雅退出；支持自定义可执行命令、参数列表、工作目录以及环境变量；
+  - **Streamable HTTP 传输 (`officialmcp.StreamableClientTransport`)**：全面支持 2025-03-26 MCP 传输协议标准规范；
+  - **SSE 传输 (`officialmcp.SSEClientTransport`) 与传输层精细化控制**：支持 2024-11-05 标准服务器推送流，并通过自定义 `HeaderTransport` 装饰器实现请求头（如认证 Token）注入。流式 HTTP 客户端显式配置 `Timeout: 0` 保证长挂起流不被底层自动中断，结合精细化底层超时（`DialContext` 15s、`ResponseHeaderTimeout` 30s、`TLSHandshakeTimeout` 15s、`IdleConnTimeout` 90s）确保连接稳健；
+  - **会话生命周期解耦 (`lifecycleCtx`)**：建立会话时将其与短期 RPC 握手上下文完全解耦，仅在显式停止、重启或代数更迭时取消，防止瞬时请求超时意外掐断常驻 SSE 流；
+  - **生命周期协商与能力同步**：启动时由官方 SDK 完成 `initialize` 握手与 `notifications/initialized`，随后自动拉取 `tools/list` 建立动态工具目录；同时注册 `ToolListChangedHandler` 监听外部服务端工具变更通知并自动异步热更新。
+- **两阶段启动加载 (Two-Phase Boot Loading)**：
+  - 系统启动时先通过 `mcpManager.Load()` 同步将持久化配置载入内存，保证 HTTP/ConnectRPC 端口监听就绪时配置已就绪，消除早期管理 API 请求的启动竞态；
+  - 在独立的后台协程中调用 `mcpManager.StartAll(ctx)` 并发连接各个已启用的外部 MCP 服务器，避免外部网络握手或慢子进程阻塞主引擎就绪。
+- **平台专属原生崩溃安全持久化 (Platform-Native Crash-Safe Atomic Persistence)**：
+  - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/mcp_servers.json`；
+  - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
+  - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
+- **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：
+  - **统一网关跨源防护与 DNS 重绑定防御 (CORS, CSRF & DNS Rebinding Defense)**：针对恶意网页利用浏览器向 `localhost` 发起跨域请求或利用 DNS 重绑定（攻击者域名解析至 `127.0.0.1`，制造 `Origin == Host == attacker.example`）绕过回环认证的安全隐患，系统在 HTTP 全局入口层（`corsMiddleware`）实施严格的 Host 与 Origin 校验。网关强制验证请求 Host 头仅限本地回环（`localhost`, `127.0.0.1`, `[::1]`）或显式配置的 `HTTP_ALLOWED_ORIGINS`，且同源自动信任仅在请求 Host 本身为回环地址时成立。非受信跨源请求直接由网关层拒绝并返回 `403 Forbidden`，从传输层杜绝网页端逃逸执行本地 stdio 进程（RCE）的风险；MCP 服务层则专注管控本地回环与远程 Bearer Token 鉴权边界；
+  - **网络边界认证与本地控制台防锁死机制 (Local Same-Origin vs. Remote Bearer Token)**：远程访问（非回环 IP）强制要求配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并在请求中提供合法 Bearer 认证；本地同源访问（本地回环 + 受信同源）默认放行以保证内置控制台开箱即用（支持配置 `MCP_ENFORCE_LOCAL_TOKEN=true` 开启本地严格鉴权）。同时前端 ConnectRPC 客户端内置 `authInterceptor` 拦截器，支持在 Web 端外观设置中配置与持久化访问 Token，确保远程部署和受保护环境下控制台顺畅交互；
+  - **敏感凭据全面脱敏防护**：在环境变量及请求头中，对包含 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `COOKIE` 以及 `Authorization` 的敏感信息在读取接口（`ListMCPServers`, `GetMCPServer`）中统一脱敏展示为 `"******"`；
+  - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏；
+  - **上下文透传与启动错误真实反馈**：`SetServerEnabled` 完整透传 RPC 请求上下文并设置启动超时保护，当外部子进程或网络传输握手失败时，将真实错误向上传播给控制台 RPC 响应，杜绝将启动失败伪报为“成功”的操作误导。
+- **代数令牌、状态幂等与生命周期竞态消除 (Generation Tokens & State Idempotency)**：
+  - **启动/关闭代数令牌 (`generation uint64`)**：为每次服务器启动分配单调递增的代数令牌，启动前强制取消前序上下文，连接建立后校验代数。当用户在慢连接建立过程中点击停止或删除时，迟到的连接会因代数不匹配被直接丢弃并关闭，杜绝已停止进程“僵尸复活”；
+  - **启停幂等性防护与资源即时回收**：`SetEnabled` 实现严格幂等防护，防止重复启用造成子进程与网络会话多重泄漏；新启动时显式异步关闭前序存活会话；
+  - **并发安全策略隔离**：在更新工具策略或重新同步目录时，使用 `maps.Clone(s.cfg.Tools)` 隔离读写副本，配合互斥锁彻底消除了目录同步协程与控制台开关并发时的 Go map 数据竞态。
+- **进程退出监控与动态下线 (Process Termination Watcher & Dynamic Removal)**：
+  - 每个连接会话在后台协程中主动监听 `session.Wait()`，一旦外部子进程异常崩溃或断开，立即将服务器运行时标记为 `StatusFailed` 并捕获退出错误信息，自动从后续轮次的 `EffectiveTools()` 中摘除全部失效工具，杜绝向大模型暴露死工具。
+- **大模型工具命名规范化与双向持久映射 (LLM Tool Name Sanitization & Persistent Mapping)**：
+  - **统一字符集约束**：严格遵守所有主流 LLM 提供商对函数名称的字符集与长度约束（`^[a-zA-Z0-9_]{1,64}$`）；
+  - **自动清洗、截断与 SHA-256 防碰撞**：对超出 64 字符或包含非法字符（如 `:`, `-`, `/`, `@`）的工具名自动执行合法化清洗，并在截断时附加 8 字符 SHA-256 唯一哈希后缀（`mcp__<srv>__<tool>_<hash>`），彻底规避名称冲突；
+  - **全局持久双向映射引擎**：`mcp.Manager` 内置维护全量已知工具的 `exposedToTarget` 与 `targetToExposed` 双向稳定映射。即使工具因开关被临时禁用（不在 `EffectiveTools` 中），其哈希命名反查映射仍稳固存在，并发在途执行请求能够精准反解出目标工具并优雅返回语义化禁用说明，避免路由失效。
+- **两级粒度控制与轮次动态快照 (Two-Level Toggles & Dynamic Snapshotting)**：
+  - **服务器级开关 (`enabled`)**：控制单个 MCP 外部服务的启停。停用时自动断开连接并安全清理回收子进程资源；
+  - **工具级开关 (`enabled`)**：细粒度控制单个工具的可用性，用户的开关决策保存在持久化策略中，不随重新拉取目录而丢失；
+  - **轮次动态刷新 (`EffectiveTools`)**：Agent Loop（`runLoopWithResult`）在每次向大模型发送对话前（包括多轮推理的后续轮次），原子重新计算当前可用且已启用的工具快照。管理员在控制台动态开关工具或服务后无需重启，下一轮推理即可无缝生效。
+- **执行阶段双重校验与优雅降级 (Execution Double-Check & Semantic Degradation)**：
+  - **执行即时校验**：不仅在发送大模型前过滤无效工具，在模型发起 `tools/call` 执行阶段，适配器与运行时再次执行三重校验（服务器启用状态、工具启用状态、连接活跃状态）；
+  - **语义化错误反馈**：若在模型思考与执行的微小窗口期内服务器断开或被手动停用，系统向大模型返回明确的人类可读解释（如 `mcp server is disabled` 或 `tool is currently disabled`），大模型获知原因后可平滑降级（如向用户说明原因或改用其他策略），绝不崩溃或中断 Agent 循环。
+- **安全性防护设计 (Security Boundaries)**：
+  - 明确界定大模型自身的调用权限：大模型仅能调用已暴露的 MCP 业务工具，严禁大模型通过会话直接添加、修改或配置 MCP 服务器，彻底阻断利用 Stdio 子进程命令参数进行任意代码执行（RCE）的安全漏洞。
+- **Web 控制台管理界面 (Web Dashboard Management)**：
+  - Web 控制台在「表情包摘取」下方提供独立的「MCP 服务器」管理页面（`/#mcp`）；
+  - 沉浸式空状态与紧凑型状态统计：0 Server 时呈现轻量引导视图；已配置 Server 时提供一目了然的服务器/工具连接与启用状态概要；
+  - 层次化服务器管理列表：展示连接状态标签（已连接、启动中、异常、已停止）、运行命令/URL、最后错误排查横幅；
+  - 支持服务器一键启用/停用、重新连接/同步目录、配置修改与删除（含二次确认）；
+  - 工具目录面板：支持单个工具独立开关、完整命名空间名称复制、以及 OpenAI 兼容参数 JSON Schema 检查器；
+  - 新增/编辑服务器对话框：支持 Stdio、Streamable HTTP 与 SSE 三种传输模式；
+  - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。以 `DraftServerConfig` 状态为单一事实源（Single Source of Truth），采用状态机词法扫描器（Quote-aware Scanner）在保护 URL 内双斜杠（如 `https://...`）的前提下精准剥除 JSONC 注释与尾随逗号；命令行参数采用原生数组结构（独立 argv 动态输入行），确保含空格、引号与空参数在 Form ↔ `string[]` ↔ JSON 之间 100% 无损可逆，并保证在 JSON 编辑中删减字段时完全重置对应配置为干净初始状态；支持一键识别 Claude Desktop 格式（`mcpServers`）、单服务包裹对象与标准 MCP 配置，提供格式化、一键复制与粘贴校验。
+  - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。
+
+### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)
+
+FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持核心安全不变量（Security Invariant）：**FrostAgent 绝不在宿主机上直接执行任何由大模型生成的任意命令**。
+
+- **分层执行架构 (Tiered Execution Architecture)**：
+  执行链条严格遵循单向隔离调用管道：
+  ```
+  LLM (Agent Loop)
+   ↓
+  execute_command Tool
+   ↓
+  SandboxBackend (中立接口)
+   ↓ HTTP
+  code-interpreter Gateway
+   ↓
+  Worker (Docker / MicroVM)
+   ↓
+  non-root sandbox user
+   ↓
+  bash
+  ```
+- **中立后端与实现隔离 (Neutral SandboxBackend)**：
+  - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
+  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
+  - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
+- **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
+  - 当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，不向大模型注册 `execute_command` 工具；
+  - 当沙箱服务离线、响应超时、认证失败或发生协议异常时，工具执行严格失败中断（Fail-Closed），向模型返回清晰错误提示；
+  - 严禁在沙箱不可用时回退到宿主机的 PowerShell、Bash 或 Cmd 执行。
+- **会话级文件系统隔离与状态持久化 (Session-Scoped Filesystem Persistence)**：
+  - 工具调用依赖请求级上下文（`llm.RunContext.SessionID`），缺失 `SessionID` 时直接拒绝执行；
+  - 通过固定命名空间与 `SANDBOX_SESSION_NAMESPACE` 对 FrostAgent `SessionID` 进行确定性 RFC4122 v5 UUID 映射，作为 Gateway `user_uuid`；
+  - 同一 FrostAgent 会话内的多次命令执行保持文件系统状态（如创建文件、编译中间产物），但每次调用均为干净独立的 Shell 进程；
+  - 不同会话严格对应不同的 Worker/用户隔离空间，互不可见且杜绝跨会话状态穿透；禁止在单次命令调用后自动释放沙箱。
+- **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
+  - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
+  - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **安全边界划分 (Safety Boundary Separation)**：
+  - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
+  - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
