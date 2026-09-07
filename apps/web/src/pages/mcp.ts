@@ -17,7 +17,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">MCP 服务器</h1>
-          <p class="page-description">管理模型上下文协议 (Model Context Protocol) 外部工具提供者与动态工具目录</p>
+          <p class="page-description">连接外部 MCP Server，为 Agent 动态扩展工具能力</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline" id="mcp-refresh-btn" title="刷新服务器列表">
@@ -31,34 +31,241 @@ export function mountMCPPage(container: HTMLElement): () => void {
         </div>
       </header>
 
-      <!-- Stats Cards -->
-      <section class="grid grid-cols-4 gap-3" id="mcp-stats-section">
-        <article class="card p-3 flex flex-col gap-1">
-          <p class="text-xs text-muted font-medium">配置服务器</p>
-          <p class="text-xl font-bold tracking-tight text-foreground" id="stat-mcp-total">-</p>
-        </article>
-        <article class="card p-3 flex flex-col gap-1">
-          <p class="text-xs text-muted font-medium">已连接 / 正常</p>
-          <p class="text-xl font-bold tracking-tight text-foreground" id="stat-mcp-connected">-</p>
-        </article>
-        <article class="card p-3 flex flex-col gap-1">
-          <p class="text-xs text-muted font-medium">发现工具数</p>
-          <p class="text-xl font-bold tracking-tight text-foreground" id="stat-mcp-tools">-</p>
-        </article>
-        <article class="card p-3 flex flex-col gap-1">
-          <p class="text-xs text-muted font-medium">已启用工具</p>
-          <p class="text-xl font-bold tracking-tight text-foreground" id="stat-mcp-enabled-tools">-</p>
-        </article>
-      </section>
+      <!-- Compact Summary Bar (visible only when servers exist) -->
+      <div id="mcp-summary-bar" class="mcp-summary-bar" style="display: none;"></div>
 
-      <!-- Server List -->
-      <div id="mcp-servers-container" class="flex flex-col gap-4">
+      <!-- Server List or Clean Empty State -->
+      <div id="mcp-servers-container" class="flex flex-col gap-3">
         <div class="card p-8 text-center text-muted">
           <span class="spinner"></span>
           <span class="ml-2">正在获取 MCP 服务器配置...</span>
         </div>
       </div>
     </div>
+
+    <style>
+      .mcp-summary-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 0.8125rem;
+        color: var(--muted-foreground);
+        padding: 0.125rem 0.25rem;
+        flex-wrap: wrap;
+      }
+      .mcp-summary-divider {
+        color: var(--border);
+        user-select: none;
+      }
+      .mcp-status-dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+      }
+      .mcp-status-dot.connected {
+        background-color: var(--success);
+        box-shadow: 0 0 0 2px var(--success-bg);
+      }
+      .mcp-status-dot.starting {
+        background-color: var(--warning);
+        box-shadow: 0 0 0 2px var(--warning-bg);
+      }
+      .mcp-status-dot.failed {
+        background-color: var(--destructive);
+        box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+      }
+      .mcp-status-dot.stopped {
+        background-color: var(--muted-foreground);
+        opacity: 0.5;
+      }
+
+      /* Empty State - Centered & Immune to Flex Stretching */
+      .mcp-empty-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background-color: var(--card);
+      }
+      .mcp-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 3.5rem 1.5rem;
+      }
+      .mcp-empty-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 3.25rem;
+        height: 3.25rem;
+        border-radius: var(--radius-full);
+        background-color: var(--secondary);
+        color: var(--muted-foreground);
+        margin-bottom: 1rem;
+        flex-shrink: 0;
+      }
+      .mcp-empty-icon svg {
+        width: 1.75rem;
+        height: 1.75rem;
+      }
+      .mcp-empty-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--foreground);
+        margin-bottom: 0.375rem;
+      }
+      .mcp-empty-desc {
+        font-size: 0.8125rem;
+        color: var(--muted-foreground);
+        margin-bottom: 1.25rem;
+        max-width: 24rem;
+        line-height: 1.5;
+      }
+      #mcp-empty-add-btn {
+        display: inline-flex;
+        width: auto;
+      }
+
+      /* Server Card Styles */
+      .mcp-server-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background-color: var(--card);
+        overflow: hidden;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .mcp-server-card:hover {
+        border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+      }
+      .mcp-card-body {
+        padding: 1.125rem 1.25rem 0.875rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+      }
+      .mcp-card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      .mcp-server-title-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 0;
+      }
+      .mcp-server-name {
+        font-size: 1.0625rem;
+        font-weight: 600;
+        color: var(--foreground);
+        line-height: 1.3;
+      }
+      .mcp-server-subtitle {
+        font-size: 0.75rem;
+        font-family: var(--font-mono);
+        color: var(--muted-foreground);
+        word-break: break-all;
+      }
+      .mcp-card-status-switch {
+        display: flex;
+        align-items: center;
+        gap: 0.875rem;
+        flex-shrink: 0;
+      }
+      .mcp-card-tools-summary {
+        font-size: 0.8125rem;
+        color: var(--muted-foreground);
+        font-weight: 500;
+        margin-top: 0.625rem;
+        margin-bottom: 0.75rem;
+      }
+      .mcp-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding-top: 0.625rem;
+        border-top: 1px solid var(--border);
+      }
+      .mcp-error-banner {
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.75rem;
+        border-radius: var(--radius-sm);
+        background-color: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.2);
+        color: var(--destructive);
+        font-size: 0.75rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+      }
+      .mcp-tools-drawer {
+        border-top: 1px solid var(--border);
+        background-color: var(--secondary);
+        padding: 0.75rem 1.25rem 1rem 1.25rem;
+      }
+      .mcp-tools-empty {
+        font-size: 0.75rem;
+        color: var(--muted-foreground);
+        text-align: center;
+        padding: 1.5rem 1rem;
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-sm);
+        background-color: var(--card);
+      }
+
+      /* Master Switch Toggle */
+      .mcp-switch {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        width: 2.25rem;
+        height: 1.25rem;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .mcp-switch-input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+        position: absolute;
+      }
+      .mcp-switch-slider {
+        position: absolute;
+        inset: 0;
+        background-color: var(--secondary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-full);
+        transition: all 0.2s ease;
+      }
+      .mcp-switch-slider::before {
+        position: absolute;
+        content: "";
+        height: 0.875rem;
+        width: 0.875rem;
+        left: 0.125rem;
+        top: 0.125rem;
+        background-color: var(--muted-foreground);
+        border-radius: 50%;
+        transition: all 0.2s ease;
+      }
+      .mcp-switch-input:checked + .mcp-switch-slider {
+        background-color: var(--primary);
+        border-color: var(--primary);
+      }
+      .mcp-switch-input:checked + .mcp-switch-slider::before {
+        transform: translateX(1rem);
+        background-color: var(--primary-foreground);
+      }
+      .mcp-switch-input:disabled + .mcp-switch-slider {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    </style>
   `;
 
   const serversContainer = container.querySelector('#mcp-servers-container') as HTMLElement;
@@ -79,14 +286,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       servers = resp.servers || [];
 
-      // Default expand all servers on first load if not set
-      if (expandedServers.size === 0) {
-        for (const s of servers) {
-          expandedServers.add(s.id);
-        }
-      }
-
-      updateStats();
+      updateSummary();
       renderServerList();
     } catch (err: unknown) {
       if (isUnmounted) return;
@@ -97,6 +297,9 @@ export function mountMCPPage(container: HTMLElement): () => void {
         msg.toLowerCase().includes('unauthenticated') ||
         msg.toLowerCase().includes('permission') ||
         msg.toLowerCase().includes('restricted');
+
+      const summaryBar = container.querySelector('#mcp-summary-bar') as HTMLElement | null;
+      if (summaryBar) summaryBar.style.display = 'none';
 
       serversContainer.innerHTML = `
         <div class="card p-8 text-center text-muted">
@@ -119,13 +322,16 @@ export function mountMCPPage(container: HTMLElement): () => void {
     }
   }
 
-  function updateStats(): void {
-    const totalEl = container.querySelector('#stat-mcp-total');
-    const connEl = container.querySelector('#stat-mcp-connected');
-    const toolsEl = container.querySelector('#stat-mcp-tools');
-    const enabledToolsEl = container.querySelector('#stat-mcp-enabled-tools');
+  function updateSummary(): void {
+    const summaryBar = container.querySelector('#mcp-summary-bar') as HTMLElement | null;
+    if (!summaryBar) return;
 
-    const total = servers.length;
+    if (servers.length === 0) {
+      summaryBar.style.display = 'none';
+      return;
+    }
+
+    summaryBar.style.display = 'flex';
     let connected = 0;
     let totalTools = 0;
     let enabledTools = 0;
@@ -136,41 +342,47 @@ export function mountMCPPage(container: HTMLElement): () => void {
       enabledTools += s.enabledToolsCount;
     }
 
-    if (totalEl) totalEl.textContent = String(total);
-    if (connEl) connEl.textContent = String(connected);
-    if (toolsEl) toolsEl.textContent = String(totalTools);
-    if (enabledToolsEl) enabledToolsEl.textContent = String(enabledTools);
+    summaryBar.innerHTML = `
+      <span class="inline-flex items-center gap-1.5 text-foreground font-medium">
+        <span class="mcp-status-dot ${connected > 0 ? 'connected' : 'stopped'}"></span>
+        <span><strong>${connected}</strong> / ${servers.length} 已连接</span>
+      </span>
+      <span class="mcp-summary-divider">·</span>
+      <span><strong class="text-foreground">${totalTools}</strong> 个工具</span>
+      <span class="mcp-summary-divider">·</span>
+      <span><strong class="text-foreground">${enabledTools}</strong> 已启用</span>
+    `;
   }
 
-  function getStatusBadge(status: string): { label: string; className: string } {
+  function getStatusInfo(status: string): { label: string; dotClass: string } {
     switch (status) {
       case 'connected':
-        return { label: '已连接', className: 'badge-success' };
+        return { label: '已连接', dotClass: 'connected' };
       case 'starting':
-        return { label: '启动中', className: 'badge-warning' };
+        return { label: '启动中', dotClass: 'starting' };
       case 'failed':
-        return { label: '异常', className: 'badge-destructive' };
+        return { label: '异常', dotClass: 'failed' };
       case 'stopped':
       default:
-        return { label: '已停止', className: 'badge-outline' };
+        return { label: '已停止', dotClass: 'stopped' };
     }
   }
 
   function renderServerList(): void {
     if (servers.length === 0) {
       serversContainer.innerHTML = `
-        <div class="card p-12 text-center text-muted">
-          <div class="inline-flex p-3 rounded-full bg-secondary mb-3 text-muted-foreground">
-            ${icon('server', 'size-8')}
+        <div class="card mcp-empty-card">
+          <div class="mcp-empty-state">
+            <div class="mcp-empty-icon">
+              ${icon('server')}
+            </div>
+            <h3 class="mcp-empty-title">还没有 MCP 服务器</h3>
+            <p class="mcp-empty-desc">添加一个 MCP Server，让 FrostAgent 使用外部工具</p>
+            <button class="btn btn-primary btn-sm" id="mcp-empty-add-btn">
+              ${icon('plus')}
+              <span>添加 MCP 服务器</span>
+            </button>
           </div>
-          <h3 class="text-base font-semibold text-foreground mb-1">尚未配置任何 MCP 服务器</h3>
-          <p class="text-xs text-muted max-w-md mx-auto mb-4">
-            MCP (Model Context Protocol) 允许智能体动态接入外部工具（如文件操作、API调用、代码分析等）。
-          </p>
-          <button class="btn btn-primary btn-sm" id="mcp-empty-add-btn">
-            ${icon('plus')}
-            <span>添加第一个 MCP 服务器</span>
-          </button>
         </div>
       `;
       container.querySelector('#mcp-empty-add-btn')?.addEventListener('click', () => openServerFormDialog());
@@ -180,115 +392,119 @@ export function mountMCPPage(container: HTMLElement): () => void {
     serversContainer.innerHTML = servers
       .map((srv) => {
         const isExpanded = expandedServers.has(srv.id);
-        const statusBadge = getStatusBadge(srv.status);
+        const statusInfo = getStatusInfo(srv.status);
         const isStdio = srv.transportType === 'stdio';
+        const subtitle = isStdio
+          ? `stdio · ${escapeHtml(srv.command)} ${escapeHtml((srv.args || []).join(' '))}`.trim()
+          : `${escapeHtml(srv.transportType)} · ${escapeHtml(srv.url)}`;
 
         return `
-          <div class="card overflow-hidden" data-server-id="${escapeHtml(srv.id)}">
-            <!-- Server Card Header -->
-            <div class="p-4 flex items-center justify-between gap-3 flex-wrap border-b border-border bg-card">
-              <div class="flex items-center gap-3">
-                <button
-                  class="btn btn-ghost btn-icon-sm"
-                  data-action="toggle-expand"
-                  data-id="${escapeHtml(srv.id)}"
-                  title="${isExpanded ? '收起工具列表' : '展开工具列表'}"
-                >
-                  ${icon(isExpanded ? 'chevron_up' : 'chevron_down', 'size-4')}
-                </button>
-                <div>
+          <div class="card mcp-server-card" data-server-id="${escapeHtml(srv.id)}">
+            <div class="mcp-card-body">
+              <!-- Server Card Header -->
+              <div class="mcp-card-header">
+                <div class="mcp-server-title-group">
                   <div class="flex items-center gap-2">
-                    <h3 class="text-base font-bold text-foreground">${escapeHtml(srv.name)}</h3>
-                    <span class="badge font-mono text-xs">${escapeHtml(srv.id)}</span>
-                    <span class="badge ${statusBadge.className}">${statusBadge.label}</span>
-                    <span class="badge badge-outline text-xs">${escapeHtml(srv.transportType)}</span>
+                    <h3 class="mcp-server-name">${escapeHtml(srv.name)}</h3>
+                    <span class="badge font-mono text-[11px] text-muted-foreground">${escapeHtml(srv.id)}</span>
                   </div>
-                  <div class="text-xs text-muted font-mono mt-1">
-                    ${
-                      isStdio
-                        ? `命令: ${escapeHtml(srv.command)} ${escapeHtml((srv.args || []).join(' '))}`
-                        : `URL: ${escapeHtml(srv.url)}`
-                    }
+                  <div class="mcp-server-subtitle">
+                    ${subtitle}
                   </div>
+                </div>
+
+                <!-- Status & Master Switch -->
+                <div class="mcp-card-status-switch">
+                  <span class="inline-flex items-center gap-1.5 text-xs font-medium">
+                    <span class="mcp-status-dot ${statusInfo.dotClass}"></span>
+                    <span class="text-foreground">${statusInfo.label}</span>
+                  </span>
+                  <label class="mcp-switch" title="${srv.enabled ? '已启用 (点击停用)' : '已停用 (点击启用)'}">
+                    <input
+                      type="checkbox"
+                      class="mcp-switch-input"
+                      data-action="toggle-server"
+                      data-id="${escapeHtml(srv.id)}"
+                      ${srv.enabled ? 'checked' : ''}
+                    />
+                    <span class="mcp-switch-slider"></span>
+                  </label>
                 </div>
               </div>
 
-              <!-- Top Actions -->
-              <div class="flex items-center gap-2">
+              <!-- Tools Count Summary -->
+              <div class="mcp-card-tools-summary">
+                ${srv.toolsCount} tools · ${srv.enabledToolsCount} enabled
+              </div>
+
+              <!-- Error Banner (if any) -->
+              ${
+                srv.lastError
+                  ? `
+                  <div class="mcp-error-banner">
+                    <span class="inline-flex mt-0.5">${icon('circle_alert', 'size-3.5')}</span>
+                    <div>
+                      <strong>连接异常:</strong> ${escapeHtml(srv.lastError)}
+                    </div>
+                  </div>
+                `
+                  : ''
+              }
+
+              <!-- Card Action Footer -->
+              <div class="mcp-card-footer">
                 <button
-                  class="btn btn-sm ${srv.enabled ? 'btn-secondary' : 'btn-outline'}"
-                  data-action="toggle-server"
+                  class="btn btn-ghost btn-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  data-action="toggle-expand"
                   data-id="${escapeHtml(srv.id)}"
-                  data-enabled="${srv.enabled ? 'true' : 'false'}"
-                  title="${srv.enabled ? '停用此服务器' : '启用此服务器'}"
                 >
-                  ${icon(srv.enabled ? 'eye_off' : 'eye', 'size-3.5')}
-                  <span>${srv.enabled ? '已启用' : '已停用'}</span>
+                  <span>${isExpanded ? '收起工具' : '工具列表'}</span>
+                  ${icon(isExpanded ? 'chevron_up' : 'chevron_down', 'size-3.5')}
                 </button>
 
-                <button
-                  class="btn btn-outline btn-sm"
-                  data-action="sync-server"
-                  data-id="${escapeHtml(srv.id)}"
-                  title="重新握手并刷新工具目录"
-                >
-                  ${icon('refresh', 'size-3.5')}
-                  <span>重新连接</span>
-                </button>
+                <div class="flex items-center gap-1.5">
+                  <button
+                    class="btn btn-outline btn-sm"
+                    data-action="sync-server"
+                    data-id="${escapeHtml(srv.id)}"
+                    title="重新握手并刷新工具目录"
+                  >
+                    ${icon('refresh', 'size-3')}
+                    <span>重新连接</span>
+                  </button>
 
-                <button
-                  class="btn btn-outline btn-sm"
-                  data-action="edit-server"
-                  data-id="${escapeHtml(srv.id)}"
-                  title="编辑服务器配置"
-                >
-                  ${icon('edit', 'size-3.5')}
-                  <span>配置</span>
-                </button>
+                  <button
+                    class="btn btn-outline btn-sm"
+                    data-action="edit-server"
+                    data-id="${escapeHtml(srv.id)}"
+                    title="编辑服务器配置"
+                  >
+                    ${icon('edit', 'size-3')}
+                    <span>配置</span>
+                  </button>
 
-                <button
-                  class="btn btn-ghost btn-icon-sm text-destructive"
-                  data-action="delete-server"
-                  data-id="${escapeHtml(srv.id)}"
-                  data-name="${escapeHtml(srv.name)}"
-                  title="删除此服务器"
-                >
-                  ${icon('trash', 'size-4')}
-                </button>
+                  <button
+                    class="btn btn-ghost btn-icon-sm text-destructive"
+                    data-action="delete-server"
+                    data-id="${escapeHtml(srv.id)}"
+                    data-name="${escapeHtml(srv.name)}"
+                    title="删除此服务器"
+                  >
+                    ${icon('trash', 'size-3.5')}
+                  </button>
+                </div>
               </div>
             </div>
 
-            <!-- Error Banner (if any) -->
-            ${
-              srv.lastError
-                ? `
-                <div class="p-3 bg-destructive/10 border-b border-destructive/20 text-xs text-destructive flex items-start gap-2">
-                  <span class="inline-flex mt-0.5">${icon('circle_alert', 'size-4')}</span>
-                  <div>
-                    <strong>连接异常:</strong> ${escapeHtml(srv.lastError)}
-                  </div>
-                </div>
-              `
-                : ''
-            }
-
-            <!-- Server Tools Body -->
+            <!-- Expandable Tools Drawer -->
             ${
               isExpanded
                 ? `
-                <div class="p-4 bg-muted/20">
-                  <div class="flex items-center justify-between gap-2 mb-3">
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs font-semibold text-foreground">提供工具</span>
-                      <span class="badge badge-outline text-xs">${srv.tools.length} 个工具 (${srv.enabledToolsCount} 启用)</span>
-                    </div>
-                    <span class="text-xs text-muted">工具名称格式: <code>mcp__&lt;server_id&gt;__&lt;tool_name&gt;</code></span>
-                  </div>
-
+                <div class="mcp-tools-drawer">
                   ${
                     srv.tools.length === 0
                       ? `
-                      <div class="text-xs text-muted text-center py-6 border border-dashed border-border rounded-md bg-card">
+                      <div class="mcp-tools-empty">
                         ${
                           srv.status === 'connected'
                             ? '该服务器未声明任何工具。'
@@ -306,7 +522,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                               <th style="width: 5rem;">状态</th>
                               <th style="width: 14rem;">工具名称</th>
                               <th>描述</th>
-                              <th style="width: 10rem; text-align: right;">操作</th>
+                              <th style="width: 8.5rem; text-align: right;">操作</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -322,7 +538,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                                     data-tool-name="${escapeHtml(tool.name)}"
                                     data-enabled="${tool.enabled ? 'true' : 'false'}"
                                     title="${tool.enabled ? '停用此工具' : '启用此工具'}"
-                                    style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;"
+                                    style="height: 1.625rem; padding: 0 0.5rem; font-size: 0.75rem;"
                                   >
                                     ${tool.enabled ? '已启用' : '已停用'}
                                   </button>
@@ -354,10 +570,10 @@ export function mountMCPPage(container: HTMLElement): () => void {
                                     data-server-id="${escapeHtml(srv.id)}"
                                     data-tool-name="${escapeHtml(tool.name)}"
                                     title="查看参数规范 (JSON Schema)"
-                                    style="height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem;"
+                                    style="height: 1.625rem; padding: 0 0.5rem; font-size: 0.75rem;"
                                   >
                                     ${icon('file_code', 'size-3')}
-                                    <span>参数 Schema</span>
+                                    <span>Schema</span>
                                   </button>
                                 </td>
                               </tr>
@@ -382,7 +598,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
   }
 
   function attachServerEvents(): void {
-    // Toggle expand
+    // Toggle expand drawer
     serversContainer.querySelectorAll('[data-action="toggle-expand"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -397,33 +613,35 @@ export function mountMCPPage(container: HTMLElement): () => void {
       });
     });
 
-    // Toggle server enabled
-    serversContainer.querySelectorAll('[data-action="toggle-server"]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        const target = e.currentTarget as HTMLElement;
+    // Toggle master server switch
+    serversContainer.querySelectorAll('input[data-action="toggle-server"]').forEach((inputEl) => {
+      inputEl.addEventListener('change', async (e) => {
+        const target = e.currentTarget as HTMLInputElement;
         const id = target.dataset.id;
-        const currentlyEnabled = target.dataset.enabled === 'true';
+        const targetEnabled = target.checked;
         if (!id) return;
 
-        target.setAttribute('disabled', 'true');
+        target.disabled = true;
         try {
-          const resp = await api.toggleMCPServer(id, !currentlyEnabled);
+          const resp = await api.toggleMCPServer(id, targetEnabled);
           if (!resp.success) {
             toast.error(`切换服务器状态失败: ${resp.error}`);
+            target.checked = !targetEnabled;
             return;
           }
-          toast.success(`MCP 服务器 "${id}" 已${!currentlyEnabled ? '启用' : '停用'}`);
+          toast.success(`MCP 服务器 "${id}" 已${targetEnabled ? '启用' : '停用'}`);
           await loadServers();
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           toast.error(`切换服务器状态失败: ${msg}`);
+          target.checked = !targetEnabled;
         } finally {
-          target.removeAttribute('disabled');
+          target.disabled = false;
         }
       });
     });
 
-    // Sync server
+    // Reconnect / sync server
     serversContainer.querySelectorAll('[data-action="sync-server"]').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -431,7 +649,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
         if (!id) return;
 
         target.setAttribute('disabled', 'true');
-        const originalText = target.innerHTML;
+        const originalHtml = target.innerHTML;
         target.innerHTML = `<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> <span>连接中...</span>`;
 
         try {
@@ -447,12 +665,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
           toast.error(`重新连接失败: ${msg}`);
         } finally {
           target.removeAttribute('disabled');
-          target.innerHTML = originalText;
+          target.innerHTML = originalHtml;
         }
       });
     });
 
-    // Edit server
+    // Edit server config
     serversContainer.querySelectorAll('[data-action="edit-server"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -475,7 +693,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
         const confirmed = await confirmDialog({
           title: '删除 MCP 服务器',
-          message: `确定要删除服务器 "${name || id}" (${id}) 吗？此操作将停止其子进程/连接并移除相关工具。`,
+          message: `确定要删除服务器 "${name || id}" (${id}) 吗？此操作将停止其连接并移除相关工具。`,
           confirmLabel: '删除',
           cancelLabel: '取消',
           destructive: true,
@@ -497,7 +715,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
       });
     });
 
-    // Toggle tool enabled
+    // Toggle individual tool
     serversContainer.querySelectorAll('[data-action="toggle-tool"]').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -535,7 +753,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
       });
     });
 
-    // View schema
+    // View tool schema
     serversContainer.querySelectorAll('[data-action="view-schema"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -603,14 +821,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
       transportType = 'streamable_http';
     }
 
-    // Format env map into KEY=VALUE lines
     const envLines = existing?.env
       ? Object.entries(existing.env)
           .map(([k, v]) => `${k}=${v}`)
           .join('\n')
       : '';
 
-    // Format headers map into Header: value lines
     const headerLines = existing?.headers
       ? Object.entries(existing.headers)
           .map(([k, v]) => `${k}: ${v}`)
@@ -623,7 +839,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
       title: isEdit ? `编辑 MCP 服务器: ${existing?.name}` : '添加 MCP 服务器',
       description: isEdit
         ? '修改传输方式或命令参数（保存后将自动应用并重新连接）'
-        : '配置新的外部 MCP 服务（支持 stdio 进程管道或 streamable-http/SSE）',
+        : '配置外部 MCP Server（支持 stdio 进程管道或 streamable-http/SSE）',
       maxWidth: '36rem',
       bodyHtml: `
         <form id="mcp-server-form" class="flex flex-col gap-4 text-xs">
@@ -805,7 +1021,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
             }
             const argsRaw = (dialogEl.querySelector('#form-args') as HTMLInputElement).value.trim();
             if (argsRaw) {
-              // Parse space-separated args, preserving quotes
               args = argsRaw.split(/\s+/).filter(Boolean);
             }
             workingDir = (dialogEl.querySelector('#form-working-dir') as HTMLInputElement).value.trim();
