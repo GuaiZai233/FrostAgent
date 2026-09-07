@@ -812,6 +812,267 @@ func TestWindowsCredentialCopyTransactionRecovery(t *testing.T) {
 	}
 }
 
+func tombstoneInstanceForTest(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	if err := m.update(id, func(info *Info) {
+		info.Enabled = false
+		info.Deleting = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := m.instances[id]
+	item.mu.Lock()
+	runtime := item.runtime
+	item.runtime = nil
+	item.mu.Unlock()
+	if runtime != nil {
+		runtime.Stop()
+	}
+}
+
+func TestDeletingTombstoneRejectsLifecycleAndCopyOperations(t *testing.T) {
+	t.Run("target", func(t *testing.T) {
+		m := testManager(t)
+		source := create(t, m, "source")
+		target := create(t, m, "target")
+		tombstoneInstanceForTest(t, m, target.ID)
+		if err := os.RemoveAll(m.dir(target.ID)); err != nil {
+			t.Fatal(err)
+		}
+
+		for name, err := range map[string]error{
+			"rename":  m.Rename(target.ID, "revived"),
+			"enable":  m.Enable(target.ID, true),
+			"disable": m.Enable(target.ID, false),
+			"copy":    m.Copy(target.ID, source.ID),
+		} {
+			if !errors.Is(err, ErrDeleting) {
+				t.Fatalf("%s error = %v, want ErrDeleting", name, err)
+			}
+		}
+		if m.instances[target.ID].runtime != nil {
+			t.Fatal("deleting target runtime was recreated")
+		}
+		if _, err := os.Stat(m.dir(target.ID)); !os.IsNotExist(err) {
+			t.Fatalf("deleting target directory was recreated: %v", err)
+		}
+		if err := m.Delete(target.ID, true); err != nil {
+			t.Fatalf("retry delete was rejected: %v", err)
+		}
+	})
+
+	t.Run("source", func(t *testing.T) {
+		m := testManager(t)
+		source := create(t, m, "source")
+		target := create(t, m, "target")
+		before, err := m.instances[target.ID].config.Raw()
+		if err != nil {
+			t.Fatal(err)
+		}
+		tombstoneInstanceForTest(t, m, source.ID)
+		if err = os.RemoveAll(m.dir(source.ID)); err != nil {
+			t.Fatal(err)
+		}
+
+		if err = m.Copy(target.ID, source.ID); !errors.Is(err, ErrDeleting) {
+			t.Fatalf("copy source error = %v, want ErrDeleting", err)
+		}
+		if m.instances[source.ID].runtime != nil {
+			t.Fatal("deleting source runtime was recreated")
+		}
+		after, err := m.instances[target.ID].config.Raw()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatal("target settings changed after rejecting deleting source")
+		}
+		if _, err = os.Stat(m.dir(source.ID)); !os.IsNotExist(err) {
+			t.Fatalf("deleting source directory was recreated: %v", err)
+		}
+	})
+}
+
+func TestControlPlaneLogsRemainAvailableForDeletingInstance(t *testing.T) {
+	logs.General.Clear()
+	t.Cleanup(logs.General.Clear)
+	m := testManager(t)
+	info := create(t, m, "deleting")
+	tombstoneInstanceForTest(t, m, info.ID)
+	logs.General.Info(logs.HTTP, "delete-failure-diagnostic")
+
+	w := rpc(t, m, "", "LogService/ListLogs", "{}", true)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "delete-failure-diagnostic") {
+		t.Fatalf("root Control Plane logs unavailable: code=%d body=%s", w.Code, w.Body.String())
+	}
+	w = rpc(t, m, "", "LogService/ClearLogs", "{}", true)
+	if w.Code != http.StatusOK || len(logs.General.Snapshot()) != 0 {
+		t.Fatalf("root Control Plane clear unavailable: code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestCloseEndsControlPlaneAndInstanceLogStreams(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "streaming")
+	_, generalStream := logs.General.Subscribe(nil)
+	_, instanceStream := m.instances[info.ID].logger.Subscribe(nil)
+	handlerEntered := make(chan struct{})
+	handlerDone := make(chan struct{})
+	m.general = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(handlerEntered)
+		<-r.Context().Done()
+		close(handlerDone)
+	})
+	requestDone := make(chan struct{})
+	go func() {
+		m.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/frostagent.v1.LogService/StreamLogs", strings.NewReader("{}")))
+		close(requestDone)
+	}()
+	select {
+	case <-handlerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Control Plane stream handler did not start")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		m.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("manager close did not complete promptly")
+	}
+	for name, completed := range map[string]<-chan struct{}{
+		"Control Plane handler": handlerDone,
+		"Control Plane request": requestDone,
+	} {
+		select {
+		case <-completed:
+		case <-time.After(time.Second):
+			t.Fatalf("%s was not cancelled", name)
+		}
+	}
+	for name, stream := range map[string]<-chan logs.LogEntry{
+		"Control Plane": generalStream,
+		"instance":      instanceStream,
+	} {
+		select {
+		case _, ok := <-stream:
+			if ok {
+				t.Fatalf("%s log stream remained open", name)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s log stream was not ended", name)
+		}
+	}
+}
+
+type gatedRequestBody struct {
+	reader  *strings.Reader
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedRequestBody(content string) *gatedRequestBody {
+	return &gatedRequestBody{
+		reader:  strings.NewReader(content),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (b *gatedRequestBody) Read(p []byte) (int, error) {
+	select {
+	case <-b.entered:
+	default:
+		close(b.entered)
+	}
+	<-b.release
+	return b.reader.Read(p)
+}
+
+func (*gatedRequestBody) Close() error { return nil }
+
+func TestCloseRejectsLifecycleRequestsStillReadingBodies(t *testing.T) {
+	t.Run("enable", func(t *testing.T) {
+		m := testManager(t)
+		info := create(t, m, "stays-stopped")
+		originalRuntime := m.instances[info.ID].runtime
+		body := newGatedRequestBody(`{"enabled":true}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+info.ID+"/enable", nil)
+		req.Body = body
+		req.ContentLength = int64(body.reader.Len())
+		response := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			response <- w
+		}()
+		select {
+		case <-body.entered:
+		case <-time.After(time.Second):
+			t.Fatal("enable request did not begin reading its body")
+		}
+		m.Close()
+		close(body.release)
+		select {
+		case w := <-response:
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("enable after close status = %d, body=%s", w.Code, w.Body.String())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("enable request did not finish after body release")
+		}
+		managed := m.instances[info.ID]
+		if managed.runtime != originalRuntime || managed.runtime.Scope.Context().Err() == nil {
+			t.Fatal("in-flight enable revived an instance after close")
+		}
+		items, _ := m.List()
+		if len(items) != 1 || items[0].Enabled {
+			t.Fatalf("instance enabled after close: %+v", items)
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		m := testManager(t)
+		body := newGatedRequestBody(`{"name":"late-instance"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/instances", nil)
+		req.Body = body
+		req.ContentLength = int64(body.reader.Len())
+		response := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			response <- w
+		}()
+		select {
+		case <-body.entered:
+		case <-time.After(time.Second):
+			t.Fatal("create request did not begin reading its body")
+		}
+		m.Close()
+		close(body.release)
+		select {
+		case w := <-response:
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("create after close status = %d, body=%s", w.Code, w.Body.String())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("create request did not finish after body release")
+		}
+		items, _ := m.List()
+		if len(items) != 0 {
+			t.Fatalf("instance created after close: %+v", items)
+		}
+		paths, err := filepath.Glob(filepath.Join(m.root, "instance_*"))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("instance directory created after close: paths=%v err=%v", paths, err)
+		}
+	})
+}
+
 func TestLifecycleRejectsNonCanonicalIdentifiers(t *testing.T) {
 	m := testManager(t)
 	info := create(t, m, "safe")

@@ -8,6 +8,7 @@ import (
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -25,6 +26,8 @@ import (
 )
 
 var ErrBusy = errors.New("实例正忙")
+var ErrDeleting = errors.New("实例正在删除，请重试删除操作")
+var ErrClosing = errors.New("Control Plane 正在关闭")
 var idPattern = regexp.MustCompile("^[a-f0-9]{8}$")
 
 type Info struct {
@@ -61,6 +64,9 @@ type Manager struct {
 	endpointMu     sync.Mutex
 	endpointOwners map[string]string
 	general        http.Handler
+	shutdown       context.Context
+	shutdownCancel context.CancelFunc
+	closeOnce      sync.Once
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
@@ -71,7 +77,8 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if err = os.MkdirAll(abs, 0700); err != nil {
 		return nil, err
 	}
-	m := &Manager{root: abs, global: global, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shared: dialogue.New(dialoguePath, nil)}
+	shutdown, shutdownCancel := context.WithCancel(context.Background())
+	m := &Manager{root: abs, global: global, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shared: dialogue.New(dialoguePath, nil), shutdown: shutdown, shutdownCancel: shutdownCancel}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
 		if err = json.Unmarshal(data, &m.registry); err != nil {
@@ -291,6 +298,18 @@ func (m *Manager) update(id string, fn func(*Info)) error {
 	}
 	return fs.ErrNotExist
 }
+func (m *Manager) rejectDeleting(ids ...string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, id := range ids {
+		for _, info := range m.registry.Instances {
+			if info.ID == id && info.Deleting {
+				return ErrDeleting
+			}
+		}
+	}
+	return nil
+}
 func validateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 32 {
@@ -301,6 +320,9 @@ func validateName(name string) (string, error) {
 func (m *Manager) Create(name string) (result Info, resultErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.shutdown.Err() != nil {
+		return Info{}, ErrClosing
+	}
 	if strings.TrimSpace(name) == "" {
 		name = fmt.Sprintf("实例%d", m.registry.NextNumber)
 	}
@@ -385,6 +407,12 @@ func (m *Manager) Rename(id, name string) error {
 		return ErrBusy
 	}
 	defer i.op.Unlock()
+	if m.shutdown.Err() != nil {
+		return ErrClosing
+	}
+	if err = m.rejectDeleting(id); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, v := range m.registry.Instances {
@@ -440,6 +468,12 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if _, err = m.lookup(id); err != nil {
 		return err
 	}
+	if m.shutdown.Err() != nil {
+		return ErrClosing
+	}
+	if err = m.rejectDeleting(id); err != nil {
+		return err
+	}
 	_, transactionErr := os.Stat(transactionPath(m.dir(id)))
 	hadTransaction := transactionErr == nil
 	if transactionErr != nil && !os.IsNotExist(transactionErr) {
@@ -452,9 +486,6 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	list, _ := m.List()
 	for _, info := range list {
 		if info.ID == id {
-			if info.Deleting {
-				return fmt.Errorf("实例正在删除，请重试删除操作")
-			}
 			if !hadTransaction && info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
 				return nil
 			}
@@ -528,6 +559,9 @@ func (m *Manager) Delete(id string, all bool) error {
 	defer i.op.Unlock()
 	if _, err = m.lookup(id); err != nil {
 		return err
+	}
+	if m.shutdown.Err() != nil {
+		return ErrClosing
 	}
 	if err = m.recoverCopyTransaction(id); err != nil {
 		return err
@@ -665,6 +699,12 @@ func (m *Manager) Copy(target, source string) error {
 		return err
 	}
 	if _, err = m.lookup(source); err != nil {
+		return err
+	}
+	if m.shutdown.Err() != nil {
+		return ErrClosing
+	}
+	if err = m.rejectDeleting(target, source); err != nil {
 		return err
 	}
 	if err = m.recoverCopyTransaction(target); err != nil {
@@ -823,23 +863,39 @@ func (m *Manager) Copy(target, source string) error {
 	return nil
 }
 func (m *Manager) Close() {
-	m.mu.RLock()
-	items := []*managed{}
-	for _, i := range m.instances {
-		items = append(items, i)
-	}
-	m.mu.RUnlock()
-	for _, i := range items {
-		i.op.Lock()
-		i.mu.Lock()
-		if i.runtime != nil {
-			i.runtime.Stop()
+	m.closeOnce.Do(func() {
+		m.shutdownCancel()
+		logs.General.EndStreams()
+		m.mu.RLock()
+		items := []*managed{}
+		for _, i := range m.instances {
+			items = append(items, i)
 		}
-		i.mu.Unlock()
-		i.op.Unlock()
-	}
+		m.mu.RUnlock()
+		for _, i := range items {
+			i.logger.EndStreams()
+			i.op.Lock()
+			i.mu.Lock()
+			if i.runtime != nil {
+				i.runtime.Stop()
+			}
+			i.mu.Unlock()
+			i.op.Unlock()
+		}
+	})
 }
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	stopCancel := context.AfterFunc(m.shutdown, cancel)
+	defer func() {
+		stopCancel()
+		cancel()
+	}()
+	r = r.Clone(ctx)
 	if strings.HasPrefix(r.URL.Path, "/api/instances") {
 		m.api(w, r)
 		return
@@ -890,6 +946,10 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if m.shutdown.Err() != nil {
+			writeError(w, ErrClosing)
+			return
+		}
 	}
 	i.mu.RLock()
 	rt := i.runtime
@@ -932,6 +992,9 @@ func writeError(w http.ResponseWriter, err error) {
 	code := 400
 	if errors.Is(err, ErrBusy) {
 		code = 409
+	}
+	if errors.Is(err, ErrClosing) {
+		code = http.StatusServiceUnavailable
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		code = 404

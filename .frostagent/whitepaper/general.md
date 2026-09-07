@@ -119,6 +119,9 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 前端基于 `@connectrpc/connect-web` 与 `@frostagent/proto`，实现端到端的 Protobuf 类型安全与请求/响应全量校验；
   - 支持 ConnectRPC Server-Streaming 实时日志长连接订阅与动态取消；
   - 敏感配置自动脱敏与按需显隐。
+- **Control Plane 与实例生命周期隔离**：
+  - General 日志通过根级 `LogService` 访问，不依赖当前选中实例的 Runtime、启用状态或操作锁；关闭 Control Plane 时会主动终止 General 与所有实例日志流，并拒绝已排队但尚未取得操作锁的生命周期写入；
+  - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
 - **现代化设计令牌、主题与视觉缩放系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；

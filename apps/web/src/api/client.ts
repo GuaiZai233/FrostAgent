@@ -63,8 +63,14 @@ export function createInstanceAPI() {
       const url = new URL(original.url);
       selectionSignal.throwIfAborted();
       const id = instanceID;
-      if (id) url.pathname = `/instances/${id}${url.pathname}`;
-      else if (!url.pathname.includes('LogService'))
+      const isLogService = url.pathname.startsWith(
+        '/frostagent.v1.LogService/',
+      );
+      const isControlPlaneLog =
+        isLogService && instanceState.logSource === 'control-plane';
+      if (id && !isControlPlaneLog)
+        url.pathname = `/instances/${id}${url.pathname}`;
+      else if (!id && !isLogService)
         throw new Error('请先选择实例');
       const signal = AbortSignal.any([original.signal, selectionSignal]);
       const headers = new Headers(original.headers);

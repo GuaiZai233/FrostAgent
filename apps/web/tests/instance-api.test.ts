@@ -48,6 +48,24 @@ assert.equal(logSources[0], 'instance');
 instanceState.logSource = 'control-plane';
 await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(logSources[1], 'control-plane');
+assert.equal(
+  new URL(calls[1]).pathname,
+  '/frostagent.v1.LogService/ListLogs',
+  'Control Plane logs were routed through the selected instance',
+);
+await createInstanceAPI().clearLogs();
+assert.equal(
+  new URL(calls[2]).pathname,
+  '/frostagent.v1.LogService/ClearLogs',
+  'Control Plane log mutations were routed through the selected instance',
+);
+instanceState.logSource = 'instance';
+await createInstanceAPI().listLogs(10, '', 0, '');
+assert.equal(
+  new URL(calls[3]).pathname,
+  '/instances/b1c2d3e4/frostagent.v1.LogService/ListLogs',
+  'instance logs bypassed their instance route',
+);
 
 const requestGeneration = new RequestGeneration();
 let visibleLogSource = '';
