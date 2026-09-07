@@ -14,6 +14,7 @@ import (
 // Manager manages all MCP server runtimes and tool catalogs for an instance.
 type Manager struct {
 	mu           sync.RWMutex
+	persistMu    sync.Mutex
 	servers      map[string]*ServerRuntime
 	store        *ConfigStore
 	builtinNames map[string]struct{}
@@ -450,6 +451,13 @@ func (m *Manager) saveConfig() error {
 	if m.store == nil {
 		return nil
 	}
+
+	// Serialize snapshot creation together with the durable write. ConfigStore already
+	// serializes file replacement, but without this Manager-level boundary an older
+	// snapshot can be written after a newer mutation and resurrect deleted config.
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+
 	m.mu.RLock()
 	cfg := Config{
 		Servers: make([]ServerConfig, 0, len(m.servers)),
