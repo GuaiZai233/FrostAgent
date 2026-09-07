@@ -6,3 +6,4 @@ export * from './generated/frostagent/v1/memory_pb';
 export * from './generated/frostagent/v1/model_router_pb';
 export * from './generated/frostagent/v1/settings_pb';
 export * from './generated/frostagent/v1/sticker_pb';
+export * from './generated/frostagent/v1/mcp_pb';

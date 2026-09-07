@@ -14,6 +14,7 @@ import { mountMemoryPage } from './pages/memory';
 import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
+import { mountMCPPage } from './pages/mcp';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountBackendSettingsPage } from './pages/backend-settings';
@@ -31,6 +32,7 @@ const navItems = [
   { path: '/dialogue', label: '人设对话', iconName: 'chat' },
   { path: '/prompt', label: 'Prompt 检查', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
+  { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
   { path: '/settings', label: '系统设置', iconName: 'settings' },
 ];
@@ -226,6 +228,7 @@ function initAppShell(): void {
   router.register('/dialogue', '人设对话', mountDialoguePage);
   router.register('/prompt', 'Prompt 检查', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
+  router.register('/mcp', 'MCP服务器', mountMCPPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
   router.register('/settings/backend', 'Bot 服务端设置', mountBackendSettingsPage);

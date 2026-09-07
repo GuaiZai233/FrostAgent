@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package frostagent.v1;
+
+service MCPService {
+  rpc ListMCPServers(ListMCPServersRequest) returns (ListMCPServersResponse);
+  rpc GetMCPServer(GetMCPServerRequest) returns (GetMCPServerResponse);
+  rpc AddMCPServer(AddMCPServerRequest) returns (AddMCPServerResponse);
+  rpc UpdateMCPServer(UpdateMCPServerRequest) returns (UpdateMCPServerResponse);
+  rpc DeleteMCPServer(DeleteMCPServerRequest) returns (DeleteMCPServerResponse);
+  rpc ToggleMCPServer(ToggleMCPServerRequest) returns (ToggleMCPServerResponse);
+  rpc ToggleMCPTool(ToggleMCPToolRequest) returns (ToggleMCPToolResponse);
+  rpc SyncMCPServer(SyncMCPServerRequest) returns (SyncMCPServerResponse);
+}
+
+message MCPToolInfo {
+  string name = 1;
+  string full_name = 2;
+  string description = 3;
+  bool enabled = 4;
+  string parameters_json = 5;
+}
+
+message MCPServerInfo {
+  string id = 1;
+  string name = 2;
+  bool enabled = 3;
+  string status = 4;
+  string last_error = 5;
+  string transport_type = 6;
+  string command = 7;
+  repeated string args = 8;
+  map<string, string> env = 9;
+  string working_dir = 10;
+  string url = 11;
+  map<string, string> headers = 12;
+  int32 tools_count = 13;
+  int32 enabled_tools_count = 14;
+  repeated MCPToolInfo tools = 15;
+}
+
+message ListMCPServersRequest {}
+
+message ListMCPServersResponse {
+  repeated MCPServerInfo servers = 1;
+}
+
+message GetMCPServerRequest {
+  string id = 1;
+}
+
+message GetMCPServerResponse {
+  MCPServerInfo server = 1;
+}
+
+message AddMCPServerRequest {
+  string id = 1;
+  string name = 2;
+  bool enabled = 3;
+  string transport_type = 4;
+  string command = 5;
+  repeated string args = 6;
+  map<string, string> env = 7;
+  string working_dir = 8;
+  string url = 9;
+  map<string, string> headers = 10;
+}
+
+message AddMCPServerResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateMCPServerRequest {
+  string id = 1;
+  string name = 2;
+  bool enabled = 3;
+  string transport_type = 4;
+  string command = 5;
+  repeated string args = 6;
+  map<string, string> env = 7;
+  string working_dir = 8;
+  string url = 9;
+  map<string, string> headers = 10;
+}
+
+message UpdateMCPServerResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteMCPServerRequest {
+  string id = 1;
+}
+
+message DeleteMCPServerResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ToggleMCPServerRequest {
+  string id = 1;
+  bool enabled = 2;
+}
+
+message ToggleMCPServerResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ToggleMCPToolRequest {
+  string server_id = 1;
+  string tool_name = 2;
+  bool enabled = 3;
+}
+
+message ToggleMCPToolResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message SyncMCPServerRequest {
+  string id = 1;
+}
+
+message SyncMCPServerResponse {
+  bool success = 1;
+  string error = 2;
+}

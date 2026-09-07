@@ -1,5 +1,5 @@
 import { createClient } from '@connectrpc/connect';
-import type { Client } from '@connectrpc/connect';
+import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import {
   BotStatusService,
@@ -10,6 +10,17 @@ import {
   ModelRouterService,
   SettingsService,
   StickerService,
+  MCPService,
+  type MCPServerInfo,
+  type MCPToolInfo,
+  type ListMCPServersResponse,
+  type GetMCPServerResponse,
+  type AddMCPServerResponse,
+  type UpdateMCPServerResponse,
+  type DeleteMCPServerResponse,
+  type ToggleMCPServerResponse,
+  type ToggleMCPToolResponse,
+  type SyncMCPServerResponse,
   type EnvVar,
   type GetOverviewResponse,
   type GetSessionsResponse,
@@ -52,8 +63,42 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
+export type { MCPServerInfo, MCPToolInfo };
+
+const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
+
+export function getControlToken(): string {
+  try {
+    return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setControlToken(token: string): void {
+  try {
+    const trimmed = token.trim();
+    if (trimmed) {
+      localStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage errors ignored
+  }
+}
+
+const authInterceptor: Interceptor = (next) => async (req) => {
+  const token = getControlToken();
+  if (token && !req.header.has('Authorization')) {
+    req.header.set('Authorization', `Bearer ${token}`);
+  }
+  return await next(req);
+};
+
 const transport = createConnectTransport({
   baseUrl: window.location.origin,
+  interceptors: [authInterceptor],
 });
 
 const botClient: Client<typeof BotStatusService> = createClient(
@@ -88,6 +133,11 @@ const dialogueClient: Client<typeof DialogueService> = createClient(
 
 const stickerClient: Client<typeof StickerService> = createClient(
   StickerService,
+  transport,
+);
+
+const mcpClient: Client<typeof MCPService> = createClient(
+  MCPService,
   transport,
 );
 
@@ -342,5 +392,60 @@ export const api = {
 
   getStickerStats(): Promise<GetStickerStatsResponse> {
     return stickerClient.getStickerStats({});
+  },
+
+  // MCP Servers
+  listMCPServers(): Promise<ListMCPServersResponse> {
+    return mcpClient.listMCPServers({});
+  },
+
+  getMCPServer(id: string): Promise<GetMCPServerResponse> {
+    return mcpClient.getMCPServer({ id });
+  },
+
+  addMCPServer(params: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    workingDir?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  }): Promise<AddMCPServerResponse> {
+    return mcpClient.addMCPServer(params);
+  },
+
+  updateMCPServer(params: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    workingDir?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  }): Promise<UpdateMCPServerResponse> {
+    return mcpClient.updateMCPServer(params);
+  },
+
+  deleteMCPServer(id: string): Promise<DeleteMCPServerResponse> {
+    return mcpClient.deleteMCPServer({ id });
+  },
+
+  toggleMCPServer(id: string, enabled: boolean): Promise<ToggleMCPServerResponse> {
+    return mcpClient.toggleMCPServer({ id, enabled });
+  },
+
+  toggleMCPTool(serverId: string, toolName: string, enabled: boolean): Promise<ToggleMCPToolResponse> {
+    return mcpClient.toggleMCPTool({ serverId, toolName, enabled });
+  },
+
+  syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
+    return mcpClient.syncMCPServer({ id });
   },
 };

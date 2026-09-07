@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/sandbox"
@@ -16,6 +17,7 @@ import (
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
+	mcpsvc "FrostAgent/internal/service/mcp"
 	memsvc "FrostAgent/internal/service/memory"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
@@ -82,6 +84,10 @@ func dialoguePath() string {
 
 func stickerDir() string {
 	return filepath.Join(filepath.Dir(brainPath()), "sticker")
+}
+
+func mcpPath() string {
+	return filepath.Join(filepath.Dir(brainPath()), "mcp_servers.json")
 }
 
 // ensureDataDir ensures the data directory exists for brain.json.
@@ -319,6 +325,27 @@ func init() {
 	// Register memory tool (must be after GlobalEngine assignment)
 	memTool := tools.NewMemoryTool(GlobalEngine)
 	GlobalEngine.ToolRegistry[memTool.Name()] = memTool
+
+	// Initialize MCP Manager
+	builtinNames := make([]string, 0, len(GlobalEngine.ToolRegistry))
+	for name := range GlobalEngine.ToolRegistry {
+		builtinNames = append(builtinNames, name)
+	}
+	mcpStore := mcp.NewConfigStore(mcpPath())
+	mcpManager := mcp.NewManager(mcpStore, builtinNames)
+	if err := mcpManager.Load(); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("加载 MCP 配置失败: %v", err))
+	} else {
+		logs.Info(logs.SYSTEM, "✓ MCP 配置文件加载完成")
+	}
+	GlobalEngine.MCPManager = mcpManager
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		mcpManager.StartAll(ctx)
+		logs.Info(logs.SYSTEM, "✓ MCP 外部工具连接已就绪")
+	}()
 }
 
 func main() {
@@ -358,6 +385,11 @@ func main() {
 		stickerPath, stickerHandler := pbconnect.NewStickerServiceHandler(stickerSvc)
 		mux.Handle(stickerPath, stickerHandler)
 		mux.HandleFunc("/api/sticker/", stickerSvc.ImageHandler())
+	}
+
+	if GlobalEngine != nil && GlobalEngine.MCPManager != nil {
+		mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.New(GlobalEngine.MCPManager))
+		mux.Handle(mcpPath, mcpHandler)
 	}
 
 	// 前端 SPA（兜底，放在最后）
@@ -429,3 +461,4 @@ func main() {
 		os.Exit(1)
 	}
 }
+

@@ -3,11 +3,13 @@ package sticker
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
 type mockVisionCaller struct {
+	mu                     sync.Mutex
 	desc                   string
 	keywords               []string
 	suspectedInappropriate bool
@@ -16,11 +18,28 @@ type mockVisionCaller struct {
 }
 
 func (m *mockVisionCaller) Describe(imageBase64, mimeType string) (string, []string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.called++
 	if m.err != nil {
 		return "", nil, false, m.err
 	}
 	return m.desc, m.keywords, m.suspectedInappropriate, nil
+}
+
+func (m *mockVisionCaller) setResponse(desc string, keywords []string, suspectedInappropriate bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.desc = desc
+	m.keywords = keywords
+	m.suspectedInappropriate = suspectedInappropriate
+	m.err = err
+}
+
+func (m *mockVisionCaller) getCalled() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.called
 }
 
 func TestParseVisionResult(t *testing.T) {
@@ -153,13 +172,19 @@ func TestSummarizer_ProcessAndRetry(t *testing.T) {
 	}
 
 	// 3. Test retry unsummarized when vision fails
-	mockVision.err = errors.New("network error")
+	mockVision.setResponse("", nil, false, errors.New("network error"))
 	data2 := []byte("fake_image_cat")
 	hash2 := HashBytes(data2)
 	_ = store.Add(hash2, hash2+".png", data2)
 
+	currentCalls := mockVision.getCalled()
 	summarizer.Enqueue(hash2)
-	time.Sleep(50 * time.Millisecond)
+	for i := 0; i < 50; i++ {
+		if mockVision.getCalled() > currentCalls {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	entry2, _ := store.Get(hash2)
 	if entry2.Status != StatusUnsummarized {
@@ -167,9 +192,7 @@ func TestSummarizer_ProcessAndRetry(t *testing.T) {
 	}
 
 	// 4. Recover vision and retry all unsummarized
-	mockVision.err = nil
-	mockVision.desc = "一只好奇的猫咪"
-	mockVision.keywords = []string{"好奇", "猫咪"}
+	mockVision.setResponse("一只好奇的猫咪", []string{"好奇", "猫咪"}, false, nil)
 
 	enqueued := summarizer.EnqueueUnsummarized()
 	if enqueued != 1 {

@@ -70,7 +70,7 @@ func TestCORSMiddlewareAllowsMatchingSameOriginScheme(t *testing.T) {
 
 func TestCORSMiddlewareRejectsDNSRebinding(t *testing.T) {
 	// Attacker binds attacker.example to 127.0.0.1.
-	// Request sent with Origin == Host == "attacker.example:8080".
+	// Request sent with Origin == Host == "attacker.example:8080" and loopback RemoteAddr.
 	t.Setenv("HTTP_ALLOWED_ORIGINS", "")
 	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -79,11 +79,34 @@ func TestCORSMiddlewareRejectsDNSRebinding(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api", nil)
 	request.Host = "attacker.example:8080"
 	request.Header.Set("Origin", "http://attacker.example:8080")
+	request.RemoteAddr = "127.0.0.1:54321"
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected DNS rebinding request (Origin == Host == attacker.example) to be rejected with 403, got %d", recorder.Code)
+		t.Fatalf("expected DNS rebinding request (Origin == Host == attacker.example, RemoteAddr=127.0.0.1) to be rejected with 403, got %d", recorder.Code)
+	}
+}
+
+func TestCORSMiddlewareRejectsDNSRebindingOnMCPControlPlane(t *testing.T) {
+	// DNS Rebinding attack against MCP Control Plane:
+	// Attacker binds attacker.example to 127.0.0.1.
+	// Browser sends POST to /frostagent.v1.MCPService/AddMCPServer with:
+	// Origin: http://attacker.example:8080, Host: attacker.example:8080, RemoteAddr: 127.0.0.1:12345
+	t.Setenv("HTTP_ALLOWED_ORIGINS", "")
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/frostagent.v1.MCPService/AddMCPServer", nil)
+	request.Host = "attacker.example:8080"
+	request.Header.Set("Origin", "http://attacker.example:8080")
+	request.RemoteAddr = "127.0.0.1:12345"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected DNS rebinding MCP request (Origin=Host=attacker.example, RemoteAddr=127.0.0.1) to be rejected with 403, got %d", recorder.Code)
 	}
 }
 
