@@ -42,6 +42,9 @@ func TestAstrBotGroupReplyHonorsAutoMention(t *testing.T) {
 		t.Fatalf("发送群聊事件失败: %v", err)
 	}
 
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置群聊回复读取超时失败: %v", err)
+	}
 	_, respBytes, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("读取群聊回复失败: %v", err)
@@ -121,6 +124,9 @@ func TestAstrBotGroupSendHookHonorsAutoMention(t *testing.T) {
 		t.Fatalf("发送群聊事件失败: %v", err)
 	}
 
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置 SendHook 回复读取超时失败: %v", err)
+	}
 	_, hookBytes, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("读取 SendHook 回复失败: %v", err)
@@ -140,6 +146,9 @@ func TestAstrBotGroupSendHookHonorsAutoMention(t *testing.T) {
 		t.Fatalf("SendHook 应前置触发用户 mention 并保留原组件顺序，实际=%+v", hookAction.Messages)
 	}
 
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置最终回复读取超时失败: %v", err)
+	}
 	_, finalBytes, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("读取最终回复失败: %v", err)
