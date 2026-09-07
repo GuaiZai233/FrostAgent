@@ -182,18 +182,21 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 	// Persist the configuration before attempting to connect. Connection failure is
 	// runtime state (status=failed/lastError), not a failed configuration create.
 	if err := m.saveConfig(); err != nil {
-		// Persistence failure is a true AddServer failure, so roll back the
-		// in-memory insertion and allow the same server ID to be retried.
+		// Persistence failure is a true AddServer failure. Retire the runtime before
+		// removing ownership so no concurrent start/toggle can leave a detached process.
 		m.mu.Lock()
 		if current, exists := m.servers[id]; exists && current == srv {
+			srv.Retire()
 			delete(m.servers, id)
 		}
 		m.mu.Unlock()
 		return err
 	}
 
+	// Initial connection is runtime work, not part of the create transaction. Start
+	// it in the background so AddMCPServer returns as soon as configuration is durable.
 	if cfg.Enabled {
-		_ = srv.Start(ctx)
+		srv.StartAsync()
 	}
 	return nil
 }
@@ -210,12 +213,11 @@ func (m *Manager) UpdateServer(ctx context.Context, cfg ServerConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("server %q not found", id)
 	}
-	m.mu.Unlock()
 
-	_ = srv.Stop()
-
+	// Revoke ownership before replacement so an older asynchronous Add start can
+	// never resurrect this runtime after it has been superseded.
+	srv.Retire()
 	newSrv := NewServerRuntimeWithFactory(cfg, m.transportFactory)
-	m.mu.Lock()
 	m.servers[id] = newSrv
 	m.mu.Unlock()
 
@@ -237,6 +239,10 @@ func (m *Manager) RemoveServer(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("server %q not found", id)
 	}
+
+	// Retire while Manager still owns the runtime. This makes ownership revocation
+	// atomic with respect to any pending asynchronous Start call.
+	srv.Retire()
 	delete(m.servers, id)
 	// Clean up stable tool name mappings associated with this server
 	for exposed, target := range m.exposedToTarget {
@@ -247,7 +253,6 @@ func (m *Manager) RemoveServer(id string) error {
 	}
 	m.mu.Unlock()
 
-	_ = srv.Stop()
 	return m.saveConfig()
 }
 
