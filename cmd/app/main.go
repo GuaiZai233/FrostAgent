@@ -11,6 +11,8 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sandbox"
+	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
@@ -20,6 +22,7 @@ import (
 	stickersvc "FrostAgent/internal/service/sticker"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -228,6 +231,28 @@ func init() {
 		registry[stealStickerTool.Name()] = stealStickerTool
 		logs.Info(logs.SYSTEM, "✓ 表情包摘取子系统已初始化")
 		globalStickerSummarizer.EnqueueUnsummarized()
+	}
+
+	// Initialize sandbox subsystem (optional, enabled via SANDBOX_ENABLED=true)
+	sandboxCfg := sandbox.LoadConfigFromEnv()
+	if sandboxCfg.Enabled {
+		if err := sandboxCfg.Validate(); err != nil {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效，已禁用隔离命令执行能力: %v", err))
+		} else {
+			sbBackend := codeinterpreter.New(sandboxCfg)
+			// Startup health probe with short timeout; failure emits a warning and fails closed,
+			// allowing execution to automatically work once runtime is available.
+			healthCtx, healthCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := sbBackend.Health(healthCtx); err != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 沙箱运行时暂时不可达 (%v)；execute_command 将 fail-closed，恢复后自动生效", err))
+			} else {
+				logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 沙箱执行运行时已就绪: %s", sandboxCfg.BaseURL))
+			}
+			healthCancel()
+
+			cmdTool := tools.ExecuteCommandTool(sbBackend)
+			registry[cmdTool.Name()] = cmdTool
+		}
 	}
 
 	executorMap := make(map[string]llm.ToolExecutor)

@@ -8,6 +8,8 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -700,7 +702,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			logs.Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
+			logs.Info(logs.TOOL, formatToolCallLog(tc.Function.Name, tc.Function.Arguments))
 
 			var toolResult string
 			toolSucceeded := false
@@ -744,7 +746,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			logs.Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
+			logs.Info(logs.TOOL, formatToolResultLog(tc.Function.Name, toolResult))
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
 				if err := runContext.SendHook(toolResult); err != nil {
@@ -923,4 +925,60 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 		res[i] = coreMsg
 	}
 	return res
+}
+
+func formatToolCallLog(name string, args string) string {
+	if name == "execute_command" {
+		var p struct {
+			Command string   `json:"command"`
+			Cwd     string   `json:"cwd"`
+			Timeout *float64 `json:"timeout"`
+		}
+		if err := json.Unmarshal([]byte(args), &p); err == nil {
+			cmdHash := sha256.Sum256([]byte(p.Command))
+			hashPrefix := hex.EncodeToString(cmdHash[:8])
+			cwd := p.Cwd
+			if cwd == "" {
+				cwd = "/sandbox"
+			}
+			timeoutStr := "default"
+			if p.Timeout != nil {
+				timeoutStr = fmt.Sprintf("%.1fs", *p.Timeout)
+			}
+			return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: len=%d, sha256_prefix=%s, cwd=%s, timeout=%s]",
+				len(p.Command), hashPrefix, cwd, timeoutStr)
+		}
+		return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: raw_len=%d]", len(args))
+	}
+	return fmt.Sprintf("【智能体调用工具】%s，参数: %s", name, args)
+}
+
+func formatToolResultLog(name string, result string) string {
+	if name == "execute_command" {
+		var r struct {
+			ExitCode                  *int   `json:"exit_code"`
+			TimedOut                  bool   `json:"timed_out"`
+			Stdout                    string `json:"stdout"`
+			Stderr                    string `json:"stderr"`
+			StdoutTruncated           bool   `json:"stdout_truncated"`
+			StderrTruncated           bool   `json:"stderr_truncated"`
+			FrostAgentStdoutTruncated bool   `json:"frostagent_stdout_truncated"`
+			FrostAgentStderrTruncated bool   `json:"frostagent_stderr_truncated"`
+			DurationMs                int64  `json:"duration_ms"`
+		}
+		if err := json.Unmarshal([]byte(result), &r); err == nil {
+			exitCodeStr := "null"
+			if r.ExitCode != nil {
+				exitCodeStr = strconv.Itoa(*r.ExitCode)
+			}
+			return fmt.Sprintf(
+				"【工具执行结果】execute_command: [REDACTED output: exit_code=%s, timed_out=%t, stdout_len=%d, stderr_len=%d, duration_ms=%d, stdout_truncated=%t, stderr_truncated=%t]",
+				exitCodeStr, r.TimedOut, len(r.Stdout), len(r.Stderr), r.DurationMs,
+				r.StdoutTruncated || r.FrostAgentStdoutTruncated,
+				r.StderrTruncated || r.FrostAgentStderrTruncated,
+			)
+		}
+		return fmt.Sprintf("【工具执行结果】execute_command: [REDACTED output: raw_len=%d]", len(result))
+	}
+	return fmt.Sprintf("【工具执行结果】%s", result)
 }
