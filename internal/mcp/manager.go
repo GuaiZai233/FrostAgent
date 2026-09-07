@@ -179,15 +179,23 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 	m.servers[id] = srv
 	m.mu.Unlock()
 
-	var startErr error
-	if cfg.Enabled {
-		startErr = srv.Start(ctx)
-	}
-
+	// Persist the configuration before attempting to connect. Connection failure is
+	// runtime state (status=failed/lastError), not a failed configuration create.
 	if err := m.saveConfig(); err != nil {
+		// Persistence failure is a true AddServer failure, so roll back the
+		// in-memory insertion and allow the same server ID to be retried.
+		m.mu.Lock()
+		if current, exists := m.servers[id]; exists && current == srv {
+			delete(m.servers, id)
+		}
+		m.mu.Unlock()
 		return err
 	}
-	return startErr
+
+	if cfg.Enabled {
+		_ = srv.Start(ctx)
+	}
+	return nil
 }
 
 func (m *Manager) UpdateServer(ctx context.Context, cfg ServerConfig) error {
