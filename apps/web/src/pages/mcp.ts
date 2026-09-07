@@ -5,74 +5,17 @@ import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 import { copyToClipboard } from '../utils/clipboard';
-
-// Helper utilities for bi-directional JSON & Form synchronization
-function cleanJSON(raw: string): string {
-  return raw
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/,\s*([}\]])/g, '$1')
-    .trim();
-}
-
-function parseArgsText(text: string): string[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  const matches = trimmed.match(/[^\s"']+|"([^"]*)"|'([^']*)'/g) || [];
-  return matches.map((m) => {
-    if ((m.startsWith('"') && m.endsWith('"')) || (m.startsWith("'") && m.endsWith("'"))) {
-      return m.slice(1, -1);
-    }
-    return m;
-  });
-}
-
-function formatArgsArray(args?: string[]): string {
-  if (!args || args.length === 0) return '';
-  return args
-    .map((a) => (a.includes(' ') ? `"${a}"` : a))
-    .join(' ');
-}
-
-function parseEnvText(text: string): Record<string, string> {
-  const envMap: Record<string, string> = {};
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx > 0) {
-      envMap[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-    }
-  }
-  return envMap;
-}
-
-function formatEnvMap(map?: Record<string, string>): string {
-  if (!map) return '';
-  return Object.entries(map)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('\n');
-}
-
-function parseHeadersText(text: string): Record<string, string> {
-  const headerMap: Record<string, string> = {};
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx > 0) {
-      headerMap[trimmed.slice(0, colonIdx).trim()] = trimmed.slice(colonIdx + 1).trim();
-    }
-  }
-  return headerMap;
-}
-
-function formatHeadersMap(map?: Record<string, string>): string {
-  if (!map) return '';
-  return Object.entries(map)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\n');
-}
+import {
+  type DraftServerConfig,
+  cleanJSON,
+  createDefaultDraft,
+  draftToJSON,
+  parseJSONToDraft,
+  parseEnvText,
+  formatEnvMap,
+  parseHeadersText,
+  formatHeadersMap,
+} from './mcp-config';
 
 export function mountMCPPage(container: HTMLElement): () => void {
   let isUnmounted = false;
@@ -884,31 +827,24 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
   function openServerFormDialog(existing?: MCPServerInfo): void {
     const isEdit = Boolean(existing);
-    let transportType = existing?.transportType || 'stdio';
-    if (transportType === 'http') {
-      transportType = 'streamable_http';
-    }
-
-    const envLines = existing?.env
-      ? Object.entries(existing.env)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('\n')
-      : '';
-
-    const headerLines = existing?.headers
-      ? Object.entries(existing.headers)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join('\n')
-      : '';
-
-    const argsString = (existing?.args || []).join(' ');
+    let currentDraft: DraftServerConfig = createDefaultDraft(
+      isEdit,
+      existing
+        ? {
+            ...existing,
+            transportType: (existing.transportType === 'http'
+              ? 'streamable_http'
+              : existing.transportType) as 'stdio' | 'streamable_http' | 'sse',
+          }
+        : undefined
+    );
 
     openDialog({
       title: isEdit ? `编辑 MCP 服务器: ${existing?.name}` : '添加 MCP 服务器',
       description: isEdit
         ? '修改传输方式或命令参数，支持可视化表单与 JSON 实时双向识别'
         : '配置外部 MCP Server，支持可视化表单与 JSON 实时双向识别',
-      maxWidth: '40rem',
+      maxWidth: '42rem',
       bodyHtml: `
         <div class="flex flex-col gap-3 text-xs">
           <!-- Top Tabs & Bidirectional Sync Indicator -->
@@ -939,7 +875,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   id="form-id"
                   class="input w-full font-mono"
                   placeholder="例如: weather_svc"
-                  value="${escapeHtml(existing?.id || '')}"
+                  value="${escapeHtml(currentDraft.id)}"
                   ${isEdit ? 'readonly disabled style="opacity: 0.7;"' : 'required'}
                 />
                 <span class="text-muted text-xs block mt-0.5">英文字母、数字与下划线，不能含 "__"</span>
@@ -951,7 +887,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   id="form-name"
                   class="input w-full"
                   placeholder="例如: 天气查询服务"
-                  value="${escapeHtml(existing?.name || '')}"
+                  value="${escapeHtml(currentDraft.name)}"
                   required
                 />
               </div>
@@ -961,7 +897,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
               <input
                 type="checkbox"
                 id="form-enabled"
-                ${existing ? (existing.enabled ? 'checked' : '') : 'checked'}
+                ${currentDraft.enabled ? 'checked' : ''}
               />
               <label for="form-enabled" class="font-medium text-foreground cursor-pointer">启用此 MCP 服务器</label>
             </div>
@@ -970,22 +906,22 @@ export function mountMCPPage(container: HTMLElement): () => void {
               <label class="font-semibold text-foreground mb-1 block">通信方式 (Transport) *</label>
               <div class="flex items-center gap-4 mt-1 flex-wrap">
                 <label class="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="form-transport" value="stdio" ${transportType === 'stdio' ? 'checked' : ''} />
+                  <input type="radio" name="form-transport" value="stdio" ${currentDraft.transportType === 'stdio' ? 'checked' : ''} />
                   <span>Stdio (本地子进程)</span>
                 </label>
                 <label class="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="form-transport" value="streamable_http" ${transportType === 'streamable_http' ? 'checked' : ''} />
+                  <input type="radio" name="form-transport" value="streamable_http" ${currentDraft.transportType === 'streamable_http' ? 'checked' : ''} />
                   <span>Streamable HTTP (2025-03 规范)</span>
                 </label>
                 <label class="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="form-transport" value="sse" ${transportType === 'sse' ? 'checked' : ''} />
+                  <input type="radio" name="form-transport" value="sse" ${currentDraft.transportType === 'sse' ? 'checked' : ''} />
                   <span>SSE (2024-11 规范)</span>
                 </label>
               </div>
             </div>
 
             <!-- Stdio Fields -->
-            <div id="stdio-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${transportType === 'stdio' ? '' : 'hidden'}">
+            <div id="stdio-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${currentDraft.transportType === 'stdio' ? '' : 'hidden'}">
               <div>
                 <label class="font-semibold text-foreground mb-1 block">执行命令 (Command) *</label>
                 <input
@@ -993,19 +929,28 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   id="form-command"
                   class="input w-full font-mono"
                   placeholder="例如: npx 或 python 或 /path/to/server"
-                  value="${escapeHtml(existing?.command || '')}"
+                  value="${escapeHtml(currentDraft.command)}"
                 />
               </div>
+
+              <!-- Array-native Args Container -->
               <div>
-                <label class="font-semibold text-foreground mb-1 block">命令行参数 (Args)</label>
-                <input
-                  type="text"
-                  id="form-args"
-                  class="input w-full font-mono"
-                  placeholder="以空格分隔，例如: -y @modelcontextprotocol/server-everything"
-                  value="${escapeHtml(argsString)}"
-                />
+                <div class="flex items-center justify-between mb-1">
+                  <label class="font-semibold text-foreground">命令行参数 (Arguments)</label>
+                  <button
+                    type="button"
+                    class="btn btn-outline btn-xs flex items-center gap-1"
+                    id="mcp-add-arg-btn"
+                    style="height: 1.5rem; padding: 0 0.5rem; font-size: 0.75rem;"
+                  >
+                    ${icon('plus', 'size-3')}
+                    <span>添加参数</span>
+                  </button>
+                </div>
+                <div id="mcp-args-container" class="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1"></div>
+                <span class="text-muted text-[11px] block mt-1">每个输入框独立对应一个 argv 参数（无损支持空格与引号），也可在 JSON 编辑器中直接编辑数组</span>
               </div>
+
               <div>
                 <label class="font-semibold text-foreground mb-1 block">工作目录 (Working Directory, 可选)</label>
                 <input
@@ -1013,7 +958,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   id="form-working-dir"
                   class="input w-full font-mono"
                   placeholder="留空则使用当前工作目录"
-                  value="${escapeHtml(existing?.workingDir || '')}"
+                  value="${escapeHtml(currentDraft.workingDir)}"
                 />
               </div>
               <div>
@@ -1023,12 +968,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   class="textarea w-full font-mono"
                   rows="3"
                   placeholder="API_KEY=your_key&#10;DEBUG=1"
-                >${escapeHtml(envLines)}</textarea>
+                >${escapeHtml(formatEnvMap(currentDraft.env))}</textarea>
               </div>
             </div>
 
             <!-- HTTP Fields -->
-            <div id="http-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${transportType !== 'stdio' ? '' : 'hidden'}">
+            <div id="http-fields" class="flex flex-col gap-3 p-3 rounded-md border border-border bg-muted/10 ${currentDraft.transportType !== 'stdio' ? '' : 'hidden'}">
               <div>
                 <label class="font-semibold text-foreground mb-1 block">服务器 URL *</label>
                 <input
@@ -1036,7 +981,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   id="form-url"
                   class="input w-full font-mono"
                   placeholder="http://localhost:8000/sse"
-                  value="${escapeHtml(existing?.url || '')}"
+                  value="${escapeHtml(currentDraft.url)}"
                 />
               </div>
               <div>
@@ -1046,7 +991,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                   class="textarea w-full font-mono"
                   rows="3"
                   placeholder="Authorization: Bearer token_here"
-                >${escapeHtml(headerLines)}</textarea>
+                >${escapeHtml(formatHeadersMap(currentDraft.headers))}</textarea>
               </div>
             </div>
           </form>
@@ -1104,7 +1049,8 @@ export function mountMCPPage(container: HTMLElement): () => void {
         const formNameInput = dialogEl.querySelector('#form-name') as HTMLInputElement;
         const formEnabledInput = dialogEl.querySelector('#form-enabled') as HTMLInputElement;
         const formCommandInput = dialogEl.querySelector('#form-command') as HTMLInputElement;
-        const formArgsInput = dialogEl.querySelector('#form-args') as HTMLInputElement;
+        const argsContainer = dialogEl.querySelector('#mcp-args-container') as HTMLElement;
+        const addArgBtn = dialogEl.querySelector('#mcp-add-arg-btn') as HTMLButtonElement;
         const formWorkingDirInput = dialogEl.querySelector('#form-working-dir') as HTMLInputElement;
         const formEnvTextarea = dialogEl.querySelector('#form-env') as HTMLTextAreaElement;
         const formUrlInput = dialogEl.querySelector('#form-url') as HTMLInputElement;
@@ -1117,243 +1063,168 @@ export function mountMCPPage(container: HTMLElement): () => void {
         let isSyncing = false;
         let activeTab: 'form' | 'json' = 'form';
 
-        function updateJSONFromForm(): void {
-          const id = formIdInput.value.trim();
-          const name = formNameInput.value.trim();
-          const enabled = formEnabledInput.checked;
-          const transport = (
-            dialogEl.querySelector('input[name="form-transport"]:checked') as HTMLInputElement
-          )?.value || 'stdio';
-
-          const obj: Record<string, unknown> = {};
-          if (id) obj.id = id;
-          if (name) obj.name = name;
-          obj.enabled = enabled;
-          obj.transportType = transport;
-
-          if (transport === 'stdio') {
-            const command = formCommandInput.value.trim();
-            const args = parseArgsText(formArgsInput.value);
-            const workingDir = formWorkingDirInput.value.trim();
-            const env = parseEnvText(formEnvTextarea.value);
-
-            if (command) obj.command = command;
-            if (args.length > 0) obj.args = args;
-            if (workingDir) obj.workingDir = workingDir;
-            if (Object.keys(env).length > 0) obj.env = env;
-          } else {
-            const url = formUrlInput.value.trim();
-            const headers = parseHeadersText(formHeadersTextarea.value);
-
-            if (url) obj.url = url;
-            if (Object.keys(headers).length > 0) obj.headers = headers;
+        function renderArgsList(args: string[]): void {
+          argsContainer.innerHTML = '';
+          if (args.length === 0) {
+            argsContainer.innerHTML = `
+              <div class="text-[11px] text-muted py-1.5 px-1 empty-args-hint">
+                暂无命令行参数（点击上方「+ 添加参数」增加）
+              </div>
+            `;
+            return;
           }
 
-          jsonTextarea.value = JSON.stringify(obj, null, 2);
-          jsonAlert.className = 'hidden';
-          syncStatus.innerHTML = `
-            <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-            <span class="text-success">表单与 JSON 实时双向识别</span>
-          `;
+          args.forEach((arg, idx) => {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-1.5 arg-row';
+            row.dataset.index = String(idx);
+            row.innerHTML = `
+              <span class="text-muted font-mono text-[11px] w-5 text-right select-none">${idx + 1}</span>
+              <input
+                type="text"
+                class="input flex-1 font-mono text-xs arg-input"
+                placeholder="参数值，例如: -y"
+                value="${escapeHtml(arg)}"
+              />
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs text-muted hover:text-destructive remove-arg-btn"
+                title="删除此参数"
+                style="width: 1.5rem; height: 1.5rem; padding: 0;"
+              >
+                ${icon('trash', 'size-3')}
+              </button>
+            `;
+
+            const inputEl = row.querySelector('.arg-input') as HTMLInputElement;
+            inputEl.addEventListener('input', () => {
+              currentDraft.args[idx] = inputEl.value;
+              syncFromForm();
+            });
+
+            const removeBtn = row.querySelector('.remove-arg-btn') as HTMLButtonElement;
+            removeBtn.addEventListener('click', () => {
+              currentDraft.args.splice(idx, 1);
+              renderArgsList(currentDraft.args);
+              syncFromForm();
+            });
+
+            argsContainer.appendChild(row);
+          });
         }
 
-        function populateFormFromParsedObject(parsed: unknown): { success: boolean; error?: string; message?: string } {
-          if (typeof parsed !== 'object' || parsed === null) {
-            return { success: false, error: 'JSON 内容必须是一个对象' };
+        addArgBtn.addEventListener('click', () => {
+          currentDraft.args.push('');
+          renderArgsList(currentDraft.args);
+          const allInputs = argsContainer.querySelectorAll<HTMLInputElement>('.arg-input');
+          const lastInput = allInputs[allInputs.length - 1];
+          lastInput?.focus();
+          syncFromForm();
+        });
+
+        function renderFormFromDraft(): void {
+          if (!isEdit) {
+            formIdInput.value = currentDraft.id;
           }
+          formNameInput.value = currentDraft.name;
+          formEnabledInput.checked = currentDraft.enabled;
 
-          const parsedRecord = parsed as Record<string, unknown>;
-          let target: Record<string, unknown> = parsedRecord;
-          let inferredId = '';
-          let note = '';
-
-          // 1. Check if top-level mcpServers object (Claude Desktop / Cursor config)
-          if (parsedRecord.mcpServers && typeof parsedRecord.mcpServers === 'object') {
-            const serversObj = parsedRecord.mcpServers as Record<string, unknown>;
-            const keys = Object.keys(serversObj);
-            if (keys.length === 0) {
-              return { success: false, error: 'mcpServers 对象为空' };
-            }
-            inferredId = keys[0];
-            const firstServer = serversObj[keys[0]];
-            if (typeof firstServer === 'object' && firstServer !== null) {
-              target = firstServer as Record<string, unknown>;
-            }
-            if (keys.length > 1) {
-              note = `识别到 ${keys.length} 个服务器，已载入首个 "${keys[0]}"`;
-            }
-          } else if (
-            Object.keys(parsedRecord).length === 1 &&
-            typeof Object.values(parsedRecord)[0] === 'object' &&
-            Object.values(parsedRecord)[0] !== null
-          ) {
-            const singleVal = Object.values(parsedRecord)[0] as Record<string, unknown>;
-            if (
-              singleVal.command !== undefined ||
-              singleVal.url !== undefined ||
-              singleVal.transport !== undefined ||
-              singleVal.args !== undefined
-            ) {
-              inferredId = Object.keys(parsedRecord)[0];
-              target = singleVal;
-            }
-          }
-
-          if (typeof target !== 'object' || target === null) {
-            return { success: false, error: '未解析到有效的 MCP 配置对象' };
-          }
-
-          // ID
-          const idVal = target.id || inferredId;
-          if (idVal && !isEdit) {
-            formIdInput.value = String(idVal);
-          }
-
-          // Name
-          const nameVal = target.name || (idVal ? String(idVal) : '');
-          if (nameVal) {
-            formNameInput.value = String(nameVal);
-          }
-
-          // Enabled
-          if (typeof target.enabled === 'boolean') {
-            formEnabledInput.checked = target.enabled;
-          }
-
-          // Transport
-          let transport = 'stdio';
-          const tType = target.transportType || target.transport || target.type;
-          if (typeof tType === 'string') {
-            const lower = tType.toLowerCase();
-            if (lower.includes('sse')) {
-              transport = 'sse';
-            } else if (lower.includes('http')) {
-              transport = 'streamable_http';
-            } else {
-              transport = 'stdio';
-            }
-          } else if (target.url) {
-            transport = String(target.url).toLowerCase().includes('sse') ? 'sse' : 'streamable_http';
-          } else {
-            transport = 'stdio';
-          }
-
-          const radio = dialogEl.querySelector(`input[name="form-transport"][value="${transport}"]`) as HTMLInputElement | null;
+          const radio = dialogEl.querySelector(
+            `input[name="form-transport"][value="${currentDraft.transportType}"]`
+          ) as HTMLInputElement | null;
           if (radio) {
             radio.checked = true;
-            if (transport === 'stdio') {
-              stdioFields.classList.remove('hidden');
-              httpFields.classList.add('hidden');
-            } else {
-              stdioFields.classList.add('hidden');
-              httpFields.classList.remove('hidden');
-            }
           }
 
-          // Command
-          if (target.command !== undefined) {
-            formCommandInput.value = String(target.command || '');
+          if (currentDraft.transportType === 'stdio') {
+            stdioFields.classList.remove('hidden');
+            httpFields.classList.add('hidden');
+          } else {
+            stdioFields.classList.add('hidden');
+            httpFields.classList.remove('hidden');
           }
 
-          // Args
-          if (target.args !== undefined) {
-            if (Array.isArray(target.args)) {
-              formArgsInput.value = formatArgsArray(target.args.map(String));
-            } else {
-              formArgsInput.value = String(target.args || '');
-            }
-          }
-
-          // Working Dir
-          const workingDirVal = target.workingDir ?? target.working_dir ?? target.cwd;
-          if (workingDirVal !== undefined) {
-            formWorkingDirInput.value = String(workingDirVal || '');
-          }
-
-          // Env
-          if (target.env !== undefined) {
-            if (typeof target.env === 'object' && target.env !== null) {
-              formEnvTextarea.value = formatEnvMap(target.env as Record<string, string>);
-            } else {
-              formEnvTextarea.value = String(target.env || '');
-            }
-          }
-
-          // URL
-          if (target.url !== undefined) {
-            formUrlInput.value = String(target.url || '');
-          }
-
-          // Headers
-          if (target.headers !== undefined) {
-            if (typeof target.headers === 'object' && target.headers !== null) {
-              formHeadersTextarea.value = formatHeadersMap(target.headers as Record<string, string>);
-            } else {
-              formHeadersTextarea.value = String(target.headers || '');
-            }
-          }
-
-          return { success: true, message: note || '已识别并同步至表单' };
+          formCommandInput.value = currentDraft.command;
+          renderArgsList(currentDraft.args);
+          formWorkingDirInput.value = currentDraft.workingDir;
+          formEnvTextarea.value = formatEnvMap(currentDraft.env);
+          formUrlInput.value = currentDraft.url;
+          formHeadersTextarea.value = formatHeadersMap(currentDraft.headers);
         }
 
-        function updateFormFromJSON(): boolean {
-          const text = jsonTextarea.value.trim();
-          if (!text) {
-            jsonAlert.className = 'hidden';
-            syncStatus.innerHTML = `
-              <span class="inline-flex text-muted">${icon('info', 'size-3')}</span>
-              <span>等待输入 JSON 配置</span>
-            `;
-            return true;
+        function readFormIntoDraft(): void {
+          if (!isEdit) {
+            currentDraft.id = formIdInput.value.trim();
           }
+          currentDraft.name = formNameInput.value.trim();
+          currentDraft.enabled = formEnabledInput.checked;
 
-          const cleaned = cleanJSON(text);
-          let parsed: unknown;
+          const transportRadio = dialogEl.querySelector(
+            'input[name="form-transport"]:checked'
+          ) as HTMLInputElement | null;
+          currentDraft.transportType = (transportRadio?.value as 'stdio' | 'streamable_http' | 'sse') || 'stdio';
+
+          if (currentDraft.transportType === 'stdio') {
+            currentDraft.command = formCommandInput.value.trim();
+            const argInputs = argsContainer.querySelectorAll<HTMLInputElement>('.arg-input');
+            currentDraft.args = Array.from(argInputs).map((el) => el.value);
+            currentDraft.workingDir = formWorkingDirInput.value.trim();
+            currentDraft.env = parseEnvText(formEnvTextarea.value);
+          } else {
+            currentDraft.url = formUrlInput.value.trim();
+            currentDraft.headers = parseHeadersText(formHeadersTextarea.value);
+          }
+        }
+
+        function syncFromForm(): void {
+          if (isSyncing) return;
+          isSyncing = true;
           try {
-            parsed = JSON.parse(cleaned);
-          } catch (e1) {
-            if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
-              try {
-                parsed = JSON.parse(`{${cleaned}}`);
-              } catch {
-                // Ignore fallback error
-              }
-            }
-            if (!parsed) {
-              const msg = e1 instanceof Error ? e1.message : String(e1);
-              jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
-              jsonAlert.textContent = `JSON 语法错误: ${msg}`;
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
-                <span class="text-destructive">JSON 语法错误</span>
-              `;
-              return false;
-            }
-          }
-
-          const res = populateFormFromParsedObject(parsed);
-          if (res.success) {
+            readFormIntoDraft();
+            jsonTextarea.value = draftToJSON(currentDraft);
             jsonAlert.className = 'hidden';
             syncStatus.innerHTML = `
               <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-              <span class="text-success">${res.message || '已成功识别并同步至表单'}</span>
+              <span class="text-success">表单与 JSON 实时双向识别</span>
             `;
-            return true;
-          } else {
-            jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
-            jsonAlert.textContent = res.error || '未识别到有效的 MCP 配置';
-            syncStatus.innerHTML = `
-              <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
-              <span class="text-destructive">${res.error || '配置无法识别'}</span>
-            `;
-            return false;
+          } finally {
+            isSyncing = false;
           }
         }
 
-        // Initialize JSON from initial form state
+        function syncFromJSON(): boolean {
+          if (isSyncing) return true;
+          isSyncing = true;
+          try {
+            const res = parseJSONToDraft(jsonTextarea.value, currentDraft, isEdit);
+            if (res.success && res.draft) {
+              currentDraft = res.draft;
+              renderFormFromDraft();
+              jsonAlert.className = 'hidden';
+              syncStatus.innerHTML = `
+                <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
+                <span class="text-success">${res.message || '已成功识别并同步至表单'}</span>
+              `;
+              return true;
+            } else {
+              jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
+              jsonAlert.textContent = res.error || '未识别到有效的 MCP 配置';
+              syncStatus.innerHTML = `
+                <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
+                <span class="text-destructive">${res.error || '配置无法识别'}</span>
+              `;
+              return false;
+            }
+          } finally {
+            isSyncing = false;
+          }
+        }
+
+        // Initialize UI from currentDraft
         isSyncing = true;
         try {
-          updateJSONFromForm();
+          renderFormFromDraft();
+          jsonTextarea.value = draftToJSON(currentDraft);
         } finally {
           isSyncing = false;
         }
@@ -1361,7 +1232,8 @@ export function mountMCPPage(container: HTMLElement): () => void {
         // Transport radio change listener
         dialogEl.querySelectorAll('input[name="form-transport"]').forEach((radio) => {
           radio.addEventListener('change', (e) => {
-            const val = (e.target as HTMLInputElement).value;
+            const val = (e.target as HTMLInputElement).value as 'stdio' | 'streamable_http' | 'sse';
+            currentDraft.transportType = val;
             if (val === 'stdio') {
               stdioFields.classList.remove('hidden');
               httpFields.classList.add('hidden');
@@ -1369,56 +1241,28 @@ export function mountMCPPage(container: HTMLElement): () => void {
               stdioFields.classList.add('hidden');
               httpFields.classList.remove('hidden');
             }
-            if (isSyncing) return;
-            isSyncing = true;
-            try {
-              updateJSONFromForm();
-            } finally {
-              isSyncing = false;
-            }
+            syncFromForm();
           });
         });
 
         // Listen for all input/change events on form fields to update JSON
         const formInputs = dialogEl.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-          '#form-id, #form-name, #form-enabled, #form-command, #form-args, #form-working-dir, #form-env, #form-url, #form-headers'
+          '#form-id, #form-name, #form-enabled, #form-command, #form-working-dir, #form-env, #form-url, #form-headers'
         );
         formInputs.forEach((input) => {
-          const handler = () => {
-            if (isSyncing) return;
-            isSyncing = true;
-            try {
-              updateJSONFromForm();
-            } finally {
-              isSyncing = false;
-            }
-          };
-          input.addEventListener('input', handler);
-          input.addEventListener('change', handler);
+          input.addEventListener('input', () => syncFromForm());
+          input.addEventListener('change', () => syncFromForm());
         });
 
         // Listen for input on JSON textarea to update form
         jsonTextarea.addEventListener('input', () => {
-          if (isSyncing) return;
-          isSyncing = true;
-          try {
-            updateFormFromJSON();
-          } finally {
-            isSyncing = false;
-          }
+          syncFromJSON();
         });
 
         // Tab Switching
         formTabBtn.addEventListener('click', () => {
           if (activeTab === 'form') return;
-          if (isSyncing) return;
-          isSyncing = true;
-          let ok = true;
-          try {
-            ok = updateFormFromJSON();
-          } finally {
-            isSyncing = false;
-          }
+          const ok = syncFromJSON();
           if (!ok) {
             toast.error('当前 JSON 存在语法错误，请先修正后再切换到表单视图');
             return;
@@ -1432,13 +1276,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
         jsonTabBtn.addEventListener('click', () => {
           if (activeTab === 'json') return;
-          if (isSyncing) return;
-          isSyncing = true;
-          try {
-            updateJSONFromForm();
-          } finally {
-            isSyncing = false;
-          }
+          syncFromForm();
           activeTab = 'json';
           jsonTabBtn.classList.add('active');
           formTabBtn.classList.remove('active');
@@ -1489,17 +1327,11 @@ export function mountMCPPage(container: HTMLElement): () => void {
               return;
             }
             jsonTextarea.value = text;
-            if (isSyncing) return;
-            isSyncing = true;
-            try {
-              const ok = updateFormFromJSON();
-              if (ok) {
-                toast.success('已粘贴并识别 MCP 配置');
-              } else {
-                toast.error('已粘贴，但未识别到有效的 MCP 配置');
-              }
-            } finally {
-              isSyncing = false;
+            const ok = syncFromJSON();
+            if (ok) {
+              toast.success('已粘贴并识别 MCP 配置');
+            } else {
+              toast.error('已粘贴，但未识别到有效的 MCP 配置');
             }
           } catch {
             toast.error('读取剪贴板失败，请在输入框中直接使用 Ctrl+V 粘贴');
@@ -1507,28 +1339,18 @@ export function mountMCPPage(container: HTMLElement): () => void {
         });
 
         submitBtn.addEventListener('click', async () => {
-          // If currently in JSON tab, make sure form is updated from JSON
+          // If currently in JSON tab, make sure form and currentDraft are updated from JSON
           if (activeTab === 'json') {
-            if (isSyncing) return;
-            isSyncing = true;
-            let ok = true;
-            try {
-              ok = updateFormFromJSON();
-            } finally {
-              isSyncing = false;
-            }
+            const ok = syncFromJSON();
             if (!ok) {
               toast.error('JSON 语法有误，请先修正后再保存');
               return;
             }
+          } else {
+            readFormIntoDraft();
           }
 
-          const id = formIdInput.value.trim();
-          const name = formNameInput.value.trim();
-          const enabled = formEnabledInput.checked;
-          const transport = (
-            dialogEl.querySelector('input[name="form-transport"]:checked') as HTMLInputElement
-          ).value;
+          const { id, name, enabled, transportType: transport, command, args, workingDir, env, url, headers } = currentDraft;
 
           if (!id) {
             toast.error('请输入服务器标识 (ID)');
@@ -1543,34 +1365,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
             return;
           }
 
-          let command = '';
-          let args: string[] = [];
-          let workingDir = '';
-          const envMap: Record<string, string> = {};
-          let url = '';
-          const headerMap: Record<string, string> = {};
-
           if (transport === 'stdio') {
-            command = formCommandInput.value.trim();
             if (!command) {
               toast.error('请输入执行命令');
               return;
             }
-            args = parseArgsText(formArgsInput.value);
-            workingDir = formWorkingDirInput.value.trim();
-            const envRaw = formEnvTextarea.value.trim();
-            if (envRaw) {
-              for (const line of envRaw.split('\n')) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith('#')) continue;
-                const eqIdx = trimmed.indexOf('=');
-                if (eqIdx > 0) {
-                  envMap[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-                }
-              }
-            }
           } else {
-            url = formUrlInput.value.trim();
             if (!url) {
               toast.error('请输入服务器 URL');
               return;
@@ -1578,17 +1378,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
             if (!url.startsWith('http://') && !url.startsWith('https://')) {
               toast.error('服务器 URL 必须以 http:// 或 https:// 开头');
               return;
-            }
-            const headersRaw = formHeadersTextarea.value.trim();
-            if (headersRaw) {
-              for (const line of headersRaw.split('\n')) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith('#')) continue;
-                const colonIdx = trimmed.indexOf(':');
-                if (colonIdx > 0) {
-                  headerMap[trimmed.slice(0, colonIdx).trim()] = trimmed.slice(colonIdx + 1).trim();
-                }
-              }
             }
           }
 
@@ -1602,12 +1391,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
                 name,
                 enabled,
                 transportType: transport,
-                command,
-                args,
-                env: envMap,
-                workingDir,
-                url,
-                headers: headerMap,
+                command: transport === 'stdio' ? command : '',
+                args: transport === 'stdio' ? args : [],
+                env: transport === 'stdio' ? env : {},
+                workingDir: transport === 'stdio' ? workingDir : '',
+                url: transport !== 'stdio' ? url : '',
+                headers: transport !== 'stdio' ? headers : {},
               });
               if (!resp.success) {
                 toast.error(`更新服务器失败: ${resp.error}`);
@@ -1620,12 +1409,12 @@ export function mountMCPPage(container: HTMLElement): () => void {
                 name,
                 enabled,
                 transportType: transport,
-                command,
-                args,
-                env: envMap,
-                workingDir,
-                url,
-                headers: headerMap,
+                command: transport === 'stdio' ? command : '',
+                args: transport === 'stdio' ? args : [],
+                env: transport === 'stdio' ? env : {},
+                workingDir: transport === 'stdio' ? workingDir : '',
+                url: transport !== 'stdio' ? url : '',
+                headers: transport !== 'stdio' ? headers : {},
               });
               if (!resp.success) {
                 toast.error(`添加服务器失败: ${resp.error}`);

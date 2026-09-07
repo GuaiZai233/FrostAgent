@@ -252,5 +252,5 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 支持服务器一键启用/停用、重新连接/同步目录、配置修改与删除（含二次确认）；
   - 工具目录面板：支持单个工具独立开关、完整命名空间名称复制、以及 OpenAI 兼容参数 JSON Schema 检查器；
   - 新增/编辑服务器对话框：支持 Stdio、Streamable HTTP 与 SSE 三种传输模式；
-  - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。支持直接粘贴并识别 Claude Desktop 格式（`mcpServers`）、单服务键包装对象或标准 MCP 配置 JSON，自动推导通信协议类型，自动兼容注释与尾随逗号容错，并在表单输入与 JSON 文本编辑之间做到实时无缝双向互认，提供格式化、一键复制与粘贴校验工具；
+  - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。以 `DraftServerConfig` 状态为单一事实源（Single Source of Truth），采用状态机词法扫描器（Quote-aware Scanner）在保护 URL 内双斜杠（如 `https://...`）的前提下精准剥除 JSONC 注释与尾随逗号；命令行参数采用原生数组结构（独立 argv 动态输入行），确保含空格、引号与空参数在 Form ↔ `string[]` ↔ JSON 之间 100% 无损可逆，并保证在 JSON 编辑中删减字段时完全重置对应配置为干净初始状态；支持一键识别 Claude Desktop 格式（`mcpServers`）、单服务包裹对象与标准 MCP 配置，提供格式化、一键复制与粘贴校验。
   - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。
