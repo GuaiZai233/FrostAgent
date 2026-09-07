@@ -247,5 +247,6 @@ func TestAgentLoopMCPIntegration_ServerHotDisableAndDoubleCheck(t *testing.T) {
 			if tool.Name == "mcp__github__get_issue" {
 				t.Fatalf("disabled mcp tool still present in round 2 tools: %s", tool.Name)
 			}
+		}
 	}
 }
