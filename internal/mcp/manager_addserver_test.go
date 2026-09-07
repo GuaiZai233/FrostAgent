@@ -217,3 +217,172 @@ func TestManagerCloseRetiresRuntime(t *testing.T) {
 		t.Fatal("runtime attempted to create a transport after manager shutdown")
 	}
 }
+
+func TestReservedAsyncStartCannotSupersedeNewerRestart(t *testing.T) {
+	factoryCalls := 0
+	factory := func(cfg TransportConfig) (officialmcp.Transport, error) {
+		factoryCalls++
+		serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+		server := officialmcp.NewServer(&officialmcp.Implementation{Name: "reserved-start", Version: "1.0"}, nil)
+		server.AddTool(&officialmcp.Tool{
+			Name:        "ping",
+			Description: "ping",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+			return &officialmcp.CallToolResult{
+				Content: []officialmcp.Content{&officialmcp.TextContent{Text: "pong"}},
+			}, nil
+		})
+		if _, err := server.Connect(context.Background(), serverTransport, nil); err != nil {
+			return nil, err
+		}
+		return clientTransport, nil
+	}
+
+	srv := NewServerRuntimeWithFactory(ServerConfig{
+		ID:      "reserved",
+		Name:    "Reserved Start",
+		Enabled: true,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "reserved",
+		},
+	}, factory)
+	defer srv.Stop()
+
+	// Simulate StartAsync having synchronously reserved ownership while its queued
+	// goroutine has not yet begun transport work.
+	oldReservation, err := srv.reserveStart()
+	if err != nil || oldReservation == nil {
+		t.Fatalf("reserve old async start: reservation=%v err=%v", oldReservation, err)
+	}
+
+	// A newer explicit restart must supersede that queued reservation.
+	if err := srv.Restart(context.Background()); err != nil {
+		t.Fatalf("newer Restart failed: %v", err)
+	}
+	if srv.Status() != StatusConnected {
+		t.Fatalf("expected newer restart to connect, got %s", srv.Status())
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("expected exactly one transport for newer restart, got %d", factoryCalls)
+	}
+
+	// When the old queued work finally runs, it must exit before creating a
+	// transport or canceling/replacing the newer session.
+	err = srv.runReservedStart(context.Background(), oldReservation)
+	if err == nil || !strings.Contains(err.Error(), "superseded") {
+		t.Fatalf("expected stale reserved start to be rejected, got %v", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("stale reserved start created another transport; calls=%d", factoryCalls)
+	}
+	if srv.Status() != StatusConnected {
+		t.Fatalf("stale reserved start disturbed newer connection, status=%s", srv.Status())
+	}
+}
+
+func TestConcurrentAddRemovePersistsLatestManagerState(t *testing.T) {
+	store := NewConfigStore(filepath.Join(t.TempDir(), "mcp_servers.json"))
+	manager := NewManagerWithFactory(store, nil, nil)
+
+	// Hold the store lock so Add can take a Manager snapshot and then block before
+	// its durable write. This creates the stale-snapshot window deterministically.
+	store.mu.Lock()
+	storeLocked := true
+	defer func() {
+		if storeLocked {
+			store.mu.Unlock()
+		}
+	}()
+
+	addDone := make(chan error, 1)
+	go func() {
+		addDone <- manager.AddServer(context.Background(), ServerConfig{
+			ID:      "racy",
+			Name:    "Racy MCP",
+			Enabled: false,
+			Transport: TransportConfig{
+				Type:    TransportStdio,
+				Command: "racy-mcp",
+			},
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := manager.GetServer("racy"); ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := manager.GetServer("racy"); !ok {
+		t.Fatal("AddServer never inserted the test server")
+	}
+
+	// Wait until Add's saveConfig owns the Manager persistence boundary and is
+	// blocked inside ConfigStore.Save on store.mu.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !manager.persistMu.TryLock() {
+			break
+		}
+		manager.persistMu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if manager.persistMu.TryLock() {
+		manager.persistMu.Unlock()
+		t.Fatal("AddServer never entered the persistence critical section")
+	}
+
+	removeDone := make(chan error, 1)
+	go func() {
+		removeDone <- manager.RemoveServer("racy")
+	}()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := manager.GetServer("racy"); !ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := manager.GetServer("racy"); ok {
+		t.Fatal("RemoveServer did not remove the server from memory")
+	}
+
+	// Let the older Add write finish first. Remove's save is waiting on persistMu;
+	// once it acquires the boundary it must take a fresh snapshot and win last.
+	store.mu.Unlock()
+	storeLocked = false
+
+	select {
+	case err := <-addDone:
+		if err != nil {
+			t.Fatalf("AddServer failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AddServer did not finish after store was released")
+	}
+	select {
+	case err := <-removeDone:
+		if err != nil {
+			t.Fatalf("RemoveServer failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RemoveServer did not finish after Add persistence completed")
+	}
+
+	if _, ok := manager.GetServer("racy"); ok {
+		t.Fatal("server unexpectedly reappeared in Manager memory")
+	}
+	persisted, err := store.Load()
+	if err != nil {
+		t.Fatalf("load final persisted config: %v", err)
+	}
+	for _, cfg := range persisted.Servers {
+		if cfg.ID == "racy" {
+			t.Fatalf("stale Add snapshot resurrected deleted server on disk: %+v", persisted.Servers)
+		}
+	}
+}
