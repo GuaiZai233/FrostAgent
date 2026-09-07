@@ -39,6 +39,13 @@ type ServerRuntime struct {
 	transportFactory func(cfg TransportConfig) (officialmcp.Transport, error)
 }
 
+type startReservation struct {
+	generation      uint64
+	lifecycleCtx    context.Context
+	cancelLifecycle context.CancelFunc
+	transportCfg    TransportConfig
+}
+
 func NewServerRuntime(cfg ServerConfig) *ServerRuntime {
 	return NewServerRuntimeWithFactory(cfg, nil)
 }
@@ -119,24 +126,71 @@ func (s *ServerRuntime) IsToolEnabled(remoteName string) bool {
 	return item.Enabled
 }
 
-// StartAsync schedules startup after configuration persistence without tying the
-// management RPC lifetime to the MCP handshake. It marks the runtime as starting
-// synchronously so a subsequent list refresh does not briefly report it as stopped.
-func (s *ServerRuntime) StartAsync() {
+// reserveStart claims a generation before any asynchronous startup work is queued.
+// Any subsequent Stop/Restart/SetEnabled/Retire advances the generation and makes
+// this reservation stale before it can touch a transport or replace a newer session.
+func (s *ServerRuntime) reserveStart() (*startReservation, error) {
 	s.mu.Lock()
-	if s.retired || !s.cfg.Enabled || s.status == StatusStarting || s.status == StatusConnected {
+	if s.retired {
 		s.mu.Unlock()
-		return
+		return nil, errors.New("server runtime has been retired")
 	}
+	if !s.cfg.Enabled {
+		s.status = StatusStopped
+		s.mu.Unlock()
+		return nil, nil
+	}
+
+	s.generation++
+	gen := s.generation
 	s.status = StatusStarting
 	s.lastError = ""
+
+	oldSession := s.session
+	s.session = nil
+	s.client = nil
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	s.cancel = cancelLifecycle
+	transportCfg := s.cfg.Transport
 	s.mu.Unlock()
 
-	go func() {
+	if oldSession != nil {
+		go func(sess *officialmcp.ClientSession) { _ = sess.Close() }(oldSession)
+	}
+
+	return &startReservation{
+		generation:      gen,
+		lifecycleCtx:    lifecycleCtx,
+		cancelLifecycle: cancelLifecycle,
+		transportCfg:    transportCfg,
+	}, nil
+}
+
+func (s *ServerRuntime) isStartReservationCurrent(gen uint64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.retired && s.cfg.Enabled && s.generation == gen
+}
+
+// StartAsync reserves startup ownership synchronously, then performs the MCP handshake
+// in the background. Reserving before spawning prevents an older queued Add startup
+// from arriving late and superseding a newer explicit Restart.
+func (s *ServerRuntime) StartAsync() {
+	reservation, err := s.reserveStart()
+	if err != nil || reservation == nil {
+		return
+	}
+
+	go func(r *startReservation) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = s.Start(ctx)
-	}()
+		_ = s.runReservedStart(ctx, r)
+	}(reservation)
 }
 
 // Retire permanently revokes this runtime's ownership. A retired runtime can
@@ -167,43 +221,39 @@ func (s *ServerRuntime) Retire() {
 }
 
 // Start connects to the MCP server, initializes protocol, and syncs the tool catalog.
-// Uses generation tokens and a decoupled lifecycle context to ensure long-lived streaming connections
-// (such as SSE) survive short-lived startup/RPC request contexts, while guarding the initial handshake with ctx.
+// Uses generation reservations and a decoupled lifecycle context to ensure long-lived
+// streaming connections survive short-lived startup/RPC request contexts while stale
+// startup attempts cannot supersede newer lifecycle operations.
 func (s *ServerRuntime) Start(ctx context.Context) error {
-	s.mu.Lock()
-	if s.retired {
-		s.mu.Unlock()
-		return errors.New("server runtime has been retired")
+	reservation, err := s.reserveStart()
+	if err != nil {
+		return err
 	}
-	if !s.cfg.Enabled {
-		s.status = StatusStopped
-		s.mu.Unlock()
+	if reservation == nil {
 		return nil
 	}
-	s.generation++
-	gen := s.generation
-	s.status = StatusStarting
-	s.lastError = ""
+	return s.runReservedStart(ctx, reservation)
+}
 
-	// Explicitly close any superseded session to prevent leaked background goroutines or processes
-	if s.session != nil {
-		oldSession := s.session
-		s.session = nil
-		s.client = nil
-		go func(sess *officialmcp.ClientSession) { _ = sess.Close() }(oldSession)
+func (s *ServerRuntime) runReservedStart(ctx context.Context, reservation *startReservation) error {
+	if reservation == nil {
+		return nil
 	}
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	// Decouple the long-lived session lifecycle from caller's short-lived RPC/startup context
-	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
-	s.cancel = cancelLifecycle
-	transportCfg := s.cfg.Transport
-	s.mu.Unlock()
+	gen := reservation.generation
+	cancelLifecycle := reservation.cancelLifecycle
 
-	transport, err := s.createTransport(transportCfg)
+	// A queued asynchronous start may have been superseded before its goroutine ran.
+	// Check before constructing the transport so stale work cannot spawn a stdio process.
+	if !s.isStartReservationCurrent(gen) {
+		cancelLifecycle()
+		return errors.New("server start was aborted or superseded")
+	}
+
+	transport, err := s.createTransport(reservation.transportCfg)
 	if err != nil {
 		cancelLifecycle()
 		s.mu.Lock()
@@ -213,6 +263,13 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 		return fmt.Errorf("transport creation failed: %w", err)
+	}
+
+	// A test/custom transport factory may itself block. Re-check after it returns
+	// and before Connect can start a process or network session.
+	if !s.isStartReservationCurrent(gen) {
+		cancelLifecycle()
+		return errors.New("server start was aborted or superseded")
 	}
 
 	client := officialmcp.NewClient(&officialmcp.Implementation{
@@ -234,7 +291,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	}
 	connCh := make(chan connResult, 1)
 	go func() {
-		sess, err := client.Connect(lifecycleCtx, transport, nil)
+		sess, err := client.Connect(reservation.lifecycleCtx, transport, nil)
 		connCh <- connResult{session: sess, err: err}
 	}()
 
@@ -278,7 +335,8 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	}
 
 	s.mu.Lock()
-	// Re-check generation, ownership, and enabled flag; abort if Stop/Retire occurred in the meantime.
+	// Re-check generation, ownership, and enabled flag; abort if Stop/Retire or
+	// a newer Restart superseded this reserved start in the meantime.
 	if s.generation != gen || s.retired || !s.cfg.Enabled {
 		s.mu.Unlock()
 		_ = session.Close()
@@ -286,14 +344,15 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 		return errors.New("server start was aborted or superseded")
 	}
 
+	policies := maps.Clone(s.cfg.Tools)
+	// Publish the catalog while the generation check is still protected by s.mu,
+	// so a newer Start cannot connect and then be overwritten by stale catalog data.
+	s.catalog.UpdateRemote(toolsRes.Tools, policies)
 	s.client = client
 	s.session = session
 	s.status = StatusConnected
 	s.lastError = ""
-	policies := maps.Clone(s.cfg.Tools)
 	s.mu.Unlock()
-
-	s.catalog.UpdateRemote(toolsRes.Tools, policies)
 
 	// Launch background watcher to detect server process termination or connection drop
 	go func(g uint64, sess *officialmcp.ClientSession) {
