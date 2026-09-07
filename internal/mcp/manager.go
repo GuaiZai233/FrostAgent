@@ -177,6 +177,21 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 	}
 
 	srv := NewServerRuntimeWithFactory(cfg, m.transportFactory)
+
+	// Reserve the initial startup generation before the runtime becomes visible to
+	// other control-plane operations. If persistence blocks and a newer Restart,
+	// Stop/disable, Update, or Remove happens meanwhile, that operation advances the
+	// generation and makes this older Add reservation stale before it can start work.
+	var initialStart *startReservation
+	if cfg.Enabled {
+		var err error
+		initialStart, err = srv.reserveStart()
+		if err != nil {
+			m.mu.Unlock()
+			return err
+		}
+	}
+
 	m.servers[id] = srv
 	m.mu.Unlock()
 
@@ -184,7 +199,8 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 	// runtime state (status=failed/lastError), not a failed configuration create.
 	if err := m.saveConfig(); err != nil {
 		// Persistence failure is a true AddServer failure. Retire the runtime before
-		// removing ownership so no concurrent start/toggle can leave a detached process.
+		// removing ownership so the reserved start is cancelled and no concurrent
+		// lifecycle operation can leave a detached process.
 		m.mu.Lock()
 		if current, exists := m.servers[id]; exists && current == srv {
 			srv.Retire()
@@ -194,10 +210,11 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 		return err
 	}
 
-	// Initial connection is runtime work, not part of the create transaction. Start
-	// it in the background so AddMCPServer returns as soon as configuration is durable.
-	if cfg.Enabled {
-		srv.StartAsync()
+	// Initial connection is runtime work, not part of the create transaction. Execute
+	// only the reservation created before publication; if a newer lifecycle operation
+	// occurred while persistence was in flight, startReservedAsync rejects it as stale.
+	if initialStart != nil {
+		srv.startReservedAsync(initialStart)
 	}
 	return nil
 }
