@@ -3,6 +3,7 @@ package logs
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,12 +31,10 @@ func (s *Service) ListLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ListLogsRequest],
 ) (*connect.Response[v1.ListLogsResponse], error) {
-	entries := s.store.Snapshot()
-	if s.store == logspkg.General && req.Header().Get("X-FrostAgent-General") == "false" {
-		entries = nil
-	}
-	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
-		entries = append(entries, logspkg.General.Snapshot()...)
+	store := s.selectedStore(req.Header())
+	var entries []logspkg.LogEntry
+	if store != nil {
+		entries = store.Snapshot()
 	}
 
 	// Filter
@@ -109,40 +108,24 @@ func (s *Service) StreamLogs(
 ) error {
 	minLevel := req.Msg.GetMinLevel()
 	sourceFilter := req.Msg.GetSourceFilter()
-	if s.store == logspkg.General && req.Header().Get("X-FrostAgent-General") == "false" {
+	store := s.selectedStore(req.Header())
+	if store == nil {
 		<-ctx.Done()
 		return nil
 	}
 
-	subID, ch := s.store.Subscribe(func(e logspkg.LogEntry) bool {
+	subID, ch := store.Subscribe(func(e logspkg.LogEntry) bool {
 		return matchesFilter(e, minLevel, sourceFilter)
 	})
-	defer s.store.Unsubscribe(subID)
+	defer store.Unsubscribe(subID)
 
-	var general <-chan logspkg.LogEntry
-	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
-		id, c := logspkg.General.Subscribe(func(e logspkg.LogEntry) bool { return matchesFilter(e, minLevel, sourceFilter) })
-		general = c
-		defer logspkg.General.Unsubscribe(id)
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case entry, ok := <-general:
-			if !ok {
-				return nil
-			}
-			if err := stream.Send(convertEntry(entry)); err != nil {
-				return err
-			}
 		case entry, ok := <-ch:
 			if !ok {
-				if general == nil {
-					return nil
-				}
-				ch = nil
-				continue
+				return nil
 			}
 			if err := stream.Send(convertEntry(entry)); err != nil {
 				return err
@@ -156,13 +139,24 @@ func (s *Service) ClearLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ClearLogsRequest],
 ) (*connect.Response[v1.ClearLogsResponse], error) {
-	if s.store != logspkg.General || req.Header().Get("X-FrostAgent-General") != "false" {
-		s.store.Clear()
-	}
-	if s.store != logspkg.General && req.Header().Get("X-FrostAgent-General") == "true" {
-		logspkg.General.Clear()
+	if store := s.selectedStore(req.Header()); store != nil {
+		store.Clear()
 	}
 	return connect.NewResponse(&v1.ClearLogsResponse{Success: true}), nil
+}
+
+func (s *Service) selectedStore(header http.Header) *logspkg.Store {
+	source := strings.TrimSpace(header.Get("X-FrostAgent-Log-Source"))
+	if source == "control-plane" || (source == "" && header.Get("X-FrostAgent-General") == "true") {
+		return logspkg.General
+	}
+	if source != "" && source != "instance" {
+		return nil
+	}
+	if s.store == logspkg.General {
+		return nil
+	}
+	return s.store
 }
 
 // ── helpers ──

@@ -68,7 +68,7 @@ export function createInstanceAPI() {
         throw new Error('请先选择实例');
       const signal = AbortSignal.any([original.signal, selectionSignal]);
       const headers = new Headers(original.headers);
-      headers.set('X-FrostAgent-General', String(instanceState.showGeneral));
+      headers.set('X-FrostAgent-Log-Source', instanceState.logSource);
       const body =
         original.method === 'GET' || original.method === 'HEAD'
           ? undefined

@@ -4,11 +4,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 )
 
 type CredentialChange struct{ Target, Value string }
+type CredentialPromotion struct {
+	StagedTarget string `json:"staged_target,omitempty"`
+	Target       string `json:"target"`
+	Delete       bool   `json:"delete,omitempty"`
+}
 
 // PersistentRefs ensures one endpoint can never read or overwrite another endpoint's secret.
 func PersistentRefs(endpoints []Endpoint) error {
@@ -124,6 +130,94 @@ func ApplyCredentials(changes []CredentialChange) (func() error, error) {
 		}
 	}
 	return rollback, nil
+}
+
+// PlanCredentialPromotions describes credential work without exposing secret
+// material. Persist this plan before staging any values so preparation can be
+// rolled back after a crash.
+func PlanCredentialPromotions(prefix string, copied, removed []CredentialChange) []CredentialPromotion {
+	actions := make([]CredentialPromotion, 0, len(copied)+len(removed))
+	seen := make(map[string]bool, len(copied)+len(removed))
+	for index, change := range copied {
+		if seen[change.Target] {
+			continue
+		}
+		seen[change.Target] = true
+		if change.Value == "" {
+			actions = append(actions, CredentialPromotion{Target: change.Target, Delete: true})
+			continue
+		}
+		stageTarget := fmt.Sprintf("%s/%d", prefix, index)
+		actions = append(actions, CredentialPromotion{StagedTarget: stageTarget, Target: change.Target})
+	}
+	for _, change := range removed {
+		if seen[change.Target] {
+			continue
+		}
+		seen[change.Target] = true
+		actions = append(actions, CredentialPromotion{Target: change.Target, Delete: true})
+	}
+	return actions
+}
+
+// StageCredentialPromotions stores copied values under transaction-scoped
+// targets. The persisted plan contains only names, never secret material.
+func StageCredentialPromotions(actions []CredentialPromotion, copied []CredentialChange) error {
+	values := make(map[string]string, len(copied))
+	for _, change := range copied {
+		values[change.Target] = change.Value
+	}
+	staged := make([]CredentialChange, 0, len(copied))
+	for _, action := range actions {
+		if action.StagedTarget != "" {
+			value, ok := values[action.Target]
+			if !ok {
+				return fmt.Errorf("暂存凭据缺少来源: %s", action.Target)
+			}
+			staged = append(staged, CredentialChange{Target: action.StagedTarget, Value: value})
+		}
+	}
+	undo, err := ApplyCredentials(staged)
+	if err != nil {
+		return errors.Join(err, undo())
+	}
+	return nil
+}
+
+// CommitCredentialPromotions idempotently promotes staged values to their
+// canonical endpoint targets, or removes credentials no longer owned by the
+// target configuration.
+func CommitCredentialPromotions(actions []CredentialPromotion) error {
+	for _, action := range actions {
+		if action.Delete {
+			if err := writeWindowsCredential(action.Target, ""); err != nil {
+				return err
+			}
+			continue
+		}
+		value, ok, err := readWindowsCredential(action.StagedTarget)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("暂存凭据不存在: %s", action.StagedTarget)
+		}
+		if err := writeWindowsCredential(action.Target, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CleanupCredentialPromotions removes transaction-scoped credential copies.
+func CleanupCredentialPromotions(actions []CredentialPromotion) error {
+	var errs error
+	for _, action := range actions {
+		if action.StagedTarget != "" {
+			errs = errors.Join(errs, writeWindowsCredential(action.StagedTarget, ""))
+		}
+	}
+	return errs
 }
 
 func CredentialTarget(id string) string { return windowsCredentialTarget(id) }

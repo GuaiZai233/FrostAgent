@@ -268,13 +268,10 @@ func Console(e LogEntry) string {
 	if e.InstanceID != "" {
 		label = "Instance: " + e.InstanceName
 	}
-	body := e.Content
-	if e.Category == WEBSOCKET || e.Category == LLM_REQUEST || e.Category == LLM_RESPONSE {
-		body = strings.Join(strings.Fields(body), " ")
-		r := []rune(body)
-		if len(r) > 200 {
-			body = string(r[:197]) + "..."
-		}
+	body := strings.Join(strings.Fields(e.Content), " ")
+	r := []rune(body)
+	if len(r) > 200 {
+		body = string(r[:197]) + "..."
 	}
 	return fmt.Sprintf("[%s](%s)[%s][%s] %s", e.Timestamp.Format("15:04:05"), label, e.Level, e.Category, body)
 }

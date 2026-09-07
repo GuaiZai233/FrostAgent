@@ -1,18 +1,21 @@
 package instanceconfig
 
 import (
+	"errors"
 	"fmt"
 	"github.com/joho/godotenv"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
 
 // GlobalKeys are owned by the control plane, including the temporary shared persona.
 var GlobalKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "WS_ALLOWED_ORIGINS": true, "HTTP_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true, "SYSTEM_PROMPT": true}
-var RestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE_ASTRBOT_ADAPTER": true, "MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
+var InstanceRestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE_ASTRBOT_ADAPTER": true, "MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
+var ControlPlaneRestartKeys = map[string]bool{"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true, "ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true}
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
 type Store struct {
@@ -177,6 +180,30 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+var syncDirectory = func(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
+}
+
+// WriteAtomicDurable reports whether rename committed the new file before a
+// possible directory-sync error. Callers must not roll back committed state as
+// though the rename never happened.
+func WriteAtomicDurable(path string, data []byte, mode os.FileMode) (committed bool, err error) {
+	if err = WriteAtomic(path, data, mode); err != nil {
+		return false, err
+	}
+	return true, syncDirectory(filepath.Dir(path))
+}
+
+// SyncDirectory makes a newly created child entry durable where supported.
+func SyncDirectory(path string) error { return syncDirectory(path) }
 
 const Template = `# Instance settings. Restart-required fields take effect after disabling/enabling.
 UPSTREAM_API_KEY=

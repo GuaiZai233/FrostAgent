@@ -13,7 +13,9 @@ export function formatCount(value: bigint | number | undefined | null): string {
   return new Intl.NumberFormat('zh-CN').format(value);
 }
 
-export function formatUptime(totalSeconds: bigint | number | undefined | null): string {
+export function formatUptime(
+  totalSeconds: bigint | number | undefined | null,
+): string {
   if (totalSeconds === undefined || totalSeconds === null) return '未知';
   const seconds = Number(totalSeconds);
   const days = Math.floor(seconds / 86400);
@@ -48,8 +50,8 @@ export function formatDateTime(value: string | undefined | null): string {
 export function formatStatus(status: BotStatus): string {
   switch (status) {
     case BotStatus.STOPPED:
- return "已停用";
- case BotStatus.RUNNING:
+      return '已停用';
+    case BotStatus.RUNNING:
       return '运行中';
     case BotStatus.INITIALIZING:
       return '初始化中';
@@ -85,7 +87,11 @@ export function formatPlatform(platform: string | undefined | null): string {
 }
 
 export function isGroupSession(
-  session: { id?: string; sessionId?: string; platform?: string } | string | null | undefined,
+  session:
+    | { id?: string; sessionId?: string; platform?: string }
+    | string
+    | null
+    | undefined,
 ): boolean {
   if (!session) {
     return false;
@@ -102,11 +108,15 @@ export function isGroupSession(
 }
 
 export function formatLogLevel(level: LogLevel): string {
-  return logLevelOptions.find((option) => option.value === level)?.label ?? '未知';
+  return (
+    logLevelOptions.find((option) => option.value === level)?.label ?? '未知'
+  );
 }
 
 export function logLevelTone(level: LogLevel): string {
-  return logLevelOptions.find((option) => option.value === level)?.tone ?? 'neutral';
+  return (
+    logLevelOptions.find((option) => option.value === level)?.tone ?? 'neutral'
+  );
 }
 
 export function logLevelBadgeClass(level: LogLevel): string {
@@ -223,9 +233,8 @@ export function formatConsoleLog(entry: LogEntry): string {
   }
 
   const sourceStr = entry.source || 'SYSTEM';
-  const contentStr = entry.summary || entry.responseBody || entry.requestBody || '';
+  const contentStr =
+    entry.summary || entry.responseBody || entry.requestBody || '';
 
-  return `[${timeStr}](${entry.instanceId ? "Instance: "+entry.instanceName : "General"})[${levelStr}][${sourceStr}] ${contentStr}`;
+  return `[${timeStr}](${entry.instanceId ? 'Instance: ' + entry.instanceName : 'Control Plane'})[${levelStr}][${sourceStr}] ${contentStr}`;
 }
-
-

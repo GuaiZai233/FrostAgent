@@ -91,6 +91,24 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	recoveryErrors := make(map[string]error)
+	for index, info := range m.registry.Instances {
+		if !idPattern.MatchString(info.ID) {
+			return nil, fmt.Errorf("无效的实例 ID")
+		}
+		for j := 0; j < index; j++ {
+			if m.registry.Instances[j].ID == info.ID || strings.EqualFold(m.registry.Instances[j].Name, info.Name) {
+				return nil, fmt.Errorf("重复的实例 ID 或名称")
+			}
+		}
+		if err := safeTree(m.dir(info.ID)); err != nil {
+			recoveryErrors[info.ID] = err
+			continue
+		}
+		if err := m.recoverCopyTransaction(info.ID); err != nil {
+			recoveryErrors[info.ID] = err
+		}
+	}
 	cfg := billing.LoadConfig(global.Get)
 	base := cfg.BaseURL
 	if base == "" {
@@ -109,6 +127,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	}
 	for _, path := range paths {
 		dir := filepath.Dir(path)
+		owner := strings.TrimPrefix(filepath.Base(dir), "instance_")
+		if recoveryErrors[owner] != nil {
+			continue
+		}
 		if err := safeTree(dir); err != nil {
 			continue
 		}
@@ -120,7 +142,6 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		if err = json.Unmarshal(raw, &c); err != nil {
 			continue
 		}
-		owner := strings.TrimPrefix(filepath.Base(dir), "instance_")
 		for _, e := range c.Endpoints {
 			if old, ok := m.endpointOwners[e.ID]; ok && old != owner {
 				return nil, fmt.Errorf("Endpoint ID 冲突: %s", e.ID)
@@ -129,39 +150,26 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		}
 	}
 	for index, info := range m.registry.Instances {
-		if !idPattern.MatchString(info.ID) || m.instances[info.ID] != nil {
-			return nil, fmt.Errorf("无效或重复的实例 ID")
-		}
-		for j := 0; j < index; j++ {
-			if strings.EqualFold(m.registry.Instances[j].Name, info.Name) {
-				return nil, fmt.Errorf("重复的实例名称")
-			}
-		}
-		pathError := safeTree(m.dir(info.ID))
-		var c *instanceconfig.Store
-		var configError error
-		if pathError == nil {
-			c, configError = instanceconfig.Open(filepath.Join(m.dir(info.ID), ".env"), false)
-		}
-		i := &managed{id: info.ID, config: c, logger: logs.New(info.ID, info.Name, 5000)}
+		pathError := recoveryErrors[info.ID]
+		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
 		m.instances[info.ID] = i
 		if pathError != nil {
 			m.registry.Instances[index].Enabled = false
 			m.registry.Instances[index].Error = pathError.Error()
 			continue
 		}
-		if configError != nil {
-			m.registry.Instances[index].Enabled = false
-			m.registry.Instances[index].Error = configError.Error()
-		}
 		if info.Deleting {
 			continue
 		}
-		r, err := m.build(info.ID, i, false)
+		r, c, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
+		i.config = c
 		i.runtime = r
 		if err != nil {
 			m.registry.Instances[index].Enabled = false
 			m.registry.Instances[index].Error = err.Error()
+		} else if c != nil && c.Error() != nil {
+			m.registry.Instances[index].Enabled = false
+			m.registry.Instances[index].Error = c.Error().Error()
 		}
 	}
 	for _, info := range append([]Info{}, m.registry.Instances...) {
@@ -174,23 +182,25 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	return m, nil
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
-func (m *Manager) build(id string, i *managed, enabled bool) (*Runtime, error) {
+func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir string) (*Runtime, *instanceconfig.Store, error) {
 	id = i.id
 	if err := safeTree(m.dir(id)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if i.config == nil {
-		c, err := instanceconfig.Open(filepath.Join(m.dir(id), ".env"), false)
-		if err != nil {
-			return nil, err
+	if configDir != m.dir(id) {
+		if err := safeTree(configDir); err != nil {
+			return nil, nil, err
 		}
-		i.config = c
 	}
-	r, err := buildRuntime(m.dir(id), "/instances/"+id, i.config, m.global, i.logger, m.shared, m.billing, enabled)
+	c, openErr := instanceconfig.Open(filepath.Join(configDir, ".env"), false)
+	if openErr != nil && c.AccessError() != nil {
+		return nil, c, openErr
+	}
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, c, m.global, i.logger, m.shared, m.billing, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
-	return r, err
+	return r, c, errors.Join(openErr, err)
 }
 func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoint) error {
 	if err := modelrouter.PersistentRefs(endpoints); err != nil {
@@ -198,25 +208,12 @@ func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoin
 	}
 	m.endpointMu.Lock()
 	defer m.endpointMu.Unlock()
-	next := map[string]string{}
-	for id, v := range m.endpointOwners {
-		next[id] = v
-	}
-	for _, e := range endpoints {
-		if existing, ok := next[e.ID]; ok {
-			if existing != owner {
-				return fmt.Errorf("Endpoint ID 已被占用: %s", e.ID)
-			}
-		} else {
-			exists, err := modelrouter.CredentialExists(e.ID)
-			if err != nil {
-				return err
-			}
-			if exists {
-				return fmt.Errorf("Endpoint 凭据已存在: %s", e.ID)
-			}
-			next[e.ID] = owner
-		}
+	return m.reserveEndpointsLocked(owner, endpoints)
+}
+func (m *Manager) reserveEndpointsLocked(owner string, endpoints []modelrouter.Endpoint) error {
+	next, err := m.nextEndpointOwnersLocked(owner, endpoints)
+	if err != nil {
+		return err
 	}
 	data, err := json.Marshal(next)
 	if err != nil {
@@ -227,6 +224,32 @@ func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoin
 	}
 	m.endpointOwners = next
 	return nil
+}
+func (m *Manager) nextEndpointOwnersLocked(owner string, endpoints []modelrouter.Endpoint) (map[string]string, error) {
+	if err := modelrouter.PersistentRefs(endpoints); err != nil {
+		return nil, err
+	}
+	next := map[string]string{}
+	for id, v := range m.endpointOwners {
+		next[id] = v
+	}
+	for _, e := range endpoints {
+		if existing, ok := next[e.ID]; ok {
+			if existing != owner {
+				return nil, fmt.Errorf("Endpoint ID 已被占用: %s", e.ID)
+			}
+		} else {
+			exists, err := modelrouter.CredentialExists(e.ID)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return nil, fmt.Errorf("Endpoint 凭据已存在: %s", e.ID)
+			}
+			next[e.ID] = owner
+		}
+	}
+	return next, nil
 }
 func (m *Manager) saveLocked() error {
 	data, err := json.MarshalIndent(m.registry, "", "  ")
@@ -275,7 +298,7 @@ func validateName(name string) (string, error) {
 	}
 	return name, nil
 }
-func (m *Manager) Create(name string) (Info, error) {
+func (m *Manager) Create(name string) (result Info, resultErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if strings.TrimSpace(name) == "" {
@@ -308,18 +331,31 @@ func (m *Manager) Create(name string) (Info, error) {
 	if err = os.Mkdir(m.dir(id), 0700); err != nil {
 		return Info{}, err
 	}
+	committed := false
+	var partialRuntime *Runtime
+	defer func() {
+		if committed {
+			return
+		}
+		if partialRuntime != nil {
+			partialRuntime.Stop()
+		}
+		cleanupErr := safeTree(m.dir(id))
+		if cleanupErr == nil {
+			cleanupErr = os.RemoveAll(m.dir(id))
+		}
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
 	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), ".env"), []byte(instanceconfig.Template), 0600); err != nil {
 		return Info{}, err
 	}
-	c, err := instanceconfig.Open(filepath.Join(m.dir(id), ".env"), false)
+	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	r, c, err := m.buildFresh(id, i, false, m.dir(id))
 	if err != nil {
 		return Info{}, err
 	}
-	i := &managed{id: id, config: c, logger: logs.New(id, name, 5000)}
-	r, err := m.build(id, i, false)
-	if err != nil {
-		return Info{}, err
-	}
+	partialRuntime = r
+	i.config = c
 	i.runtime = r
 	info := Info{ID: id, Name: name, CreatedAt: time.Now().UTC()}
 	m.registry.Instances = append(m.registry.Instances, info)
@@ -330,6 +366,7 @@ func (m *Manager) Create(name string) (Info, error) {
 		return Info{}, err
 	}
 	m.instances[id] = i
+	committed = true
 	logs.General.Info(logs.SYSTEM, "创建实例: "+name)
 	return info, nil
 }
@@ -402,13 +439,22 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if _, err = m.lookup(id); err != nil {
 		return err
 	}
+	_, transactionErr := os.Stat(transactionPath(m.dir(id)))
+	hadTransaction := transactionErr == nil
+	if transactionErr != nil && !os.IsNotExist(transactionErr) {
+		return transactionErr
+	}
+	if err = m.recoverCopyTransaction(id); err != nil {
+		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+		return err
+	}
 	list, _ := m.List()
 	for _, info := range list {
 		if info.ID == id {
 			if info.Deleting {
 				return fmt.Errorf("实例正在删除，请重试删除操作")
 			}
-			if info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
+			if !hadTransaction && info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
 				return nil
 			}
 		}
@@ -416,16 +462,28 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err = m.stop(id, i); err != nil {
 		return err
 	}
-	r, err := m.build(id, i, enabled)
-	if err == nil {
-		i.mu.Lock()
-		i.runtime = r
-		i.mu.Unlock()
-	}
+	r, c, err := m.buildFresh(id, i, enabled, m.dir(id))
 	if err != nil {
+		if r != nil {
+			r.Stop()
+		}
+		// Keep a stopped management runtime over the newly read file when possible,
+		// so a malformed .env can still be repaired without reviving stale values.
+		fallback, fallbackConfig, fallbackErr := m.buildFresh(id, i, false, m.dir(id))
+		i.mu.Lock()
+		i.runtime = fallback
+		i.config = fallbackConfig
+		i.mu.Unlock()
+		if fallbackErr != nil {
+			err = errors.Join(err, fallbackErr)
+		}
 		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
 		return err
 	}
+	i.mu.Lock()
+	i.runtime = r
+	i.config = c
+	i.mu.Unlock()
 	if err = m.update(id, func(info *Info) { info.Enabled = enabled; info.Error = ""; info.RestartRequired = false }); err != nil {
 		r.Stop()
 		return err
@@ -467,6 +525,9 @@ func (m *Manager) Delete(id string, all bool) error {
 	}
 	defer i.op.Unlock()
 	if _, err = m.lookup(id); err != nil {
+		return err
+	}
+	if err = m.recoverCopyTransaction(id); err != nil {
 		return err
 	}
 	if err = m.stop(id, i); err != nil {
@@ -577,40 +638,6 @@ func (m *Manager) Delete(id string, all bool) error {
 	return nil
 }
 
-type fileBackup struct {
-	path   string
-	data   []byte
-	exists bool
-}
-
-func backupFiles(dir string) ([]fileBackup, error) {
-	result := []fileBackup{}
-	for _, name := range []string{".env", "model_router.json", "model_router_secrets.json"} {
-		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		result = append(result, fileBackup{path, data, err == nil})
-	}
-	return result, nil
-}
-func restoreFiles(files []fileBackup) error {
-	var errs error
-	for _, f := range files {
-		var err error
-		if f.exists {
-			err = instanceconfig.WriteAtomic(f.path, f.data, 0600)
-		} else {
-			err = os.Remove(f.path)
-			if os.IsNotExist(err) {
-				err = nil
-			}
-		}
-		errs = errors.Join(errs, err)
-	}
-	return errs
-}
 func (m *Manager) Copy(target, source string) error {
 	if target == source {
 		return fmt.Errorf("不能复用自身")
@@ -638,11 +665,42 @@ func (m *Manager) Copy(target, source string) error {
 	if _, err = m.lookup(source); err != nil {
 		return err
 	}
+	if err = m.recoverCopyTransaction(target); err != nil {
+		return err
+	}
+	if err = m.recoverCopyTransaction(source); err != nil {
+		return err
+	}
 	list, _ := m.List()
+	targetEnabled := false
+	sourceEnabled := false
 	for _, info := range list {
-		if info.ID == target && info.Enabled {
-			return fmt.Errorf("被覆盖的实例必须处于非活跃状态")
+		if info.ID == target {
+			targetEnabled = info.Enabled
 		}
+		if info.ID == source {
+			sourceEnabled = info.Enabled
+		}
+	}
+	if targetEnabled {
+		return fmt.Errorf("被覆盖的实例必须处于非活跃状态")
+	}
+	for id, item := range map[string]*managed{target: dst, source: src} {
+		if item.runtime != nil {
+			continue
+		}
+		enabled := sourceEnabled && id == source
+		r, c, buildErr := m.buildFresh(id, item, enabled, m.dir(id))
+		if buildErr != nil {
+			if r != nil {
+				r.Stop()
+			}
+			return buildErr
+		}
+		item.mu.Lock()
+		item.runtime = r
+		item.config = c
+		item.mu.Unlock()
 	}
 	if dst.runtime == nil || src.runtime == nil {
 		return fmt.Errorf("实例配置不可用")
@@ -654,7 +712,22 @@ func (m *Manager) Copy(target, source string) error {
 	if err != nil {
 		return err
 	}
-	cfg, secrets, newCreds, err := src.runtime.Engine.ModelRouter.CopyPublished(func(e []modelrouter.Endpoint) error { return m.reserveEndpoints(target, e) })
+	m.endpointMu.Lock()
+	endpointLocked := true
+	defer func() {
+		if endpointLocked {
+			m.endpointMu.Unlock()
+		}
+	}()
+	pendingEndpoints := []modelrouter.Endpoint{}
+	cfg, secrets, newCreds, err := src.runtime.Engine.ModelRouter.CopyPublished(func(e []modelrouter.Endpoint) error {
+		next := append(append([]modelrouter.Endpoint{}, pendingEndpoints...), e...)
+		if _, reserveErr := m.nextEndpointOwnersLocked(target, next); reserveErr != nil {
+			return reserveErr
+		}
+		pendingEndpoints = next
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -662,38 +735,89 @@ func (m *Manager) Copy(target, source string) error {
 	if err != nil {
 		return err
 	}
-	backup, err := backupFiles(m.dir(target))
+	transaction, err := newCopyTransaction(target, newCreds, oldCreds)
 	if err != nil {
 		return err
 	}
-	undo, err := modelrouter.ApplyCredentials(append(newCreds, oldCreds...))
-	rollback := func(cause error) error { return errors.Join(cause, undo(), restoreFiles(backup)) }
-	if err != nil {
-		return rollback(err)
+	targetDir := m.dir(target)
+	abort := func(cause error) error {
+		return errors.Join(cause, abortCopyTransaction(targetDir, transaction))
+	}
+	committed, writeErr := writeCopyTransaction(targetDir, transaction)
+	if writeErr != nil {
+		if committed {
+			return errors.Join(writeErr, abortCopyTransaction(targetDir, transaction))
+		}
+		return writeErr
+	}
+	stageDir := filepath.Join(targetDir, transaction.Stage)
+	if err = os.Mkdir(stageDir, 0700); err != nil {
+		return abort(err)
+	}
+	if err = instanceconfig.SyncDirectory(targetDir); err != nil {
+		return abort(err)
 	}
 	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets} {
-		if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(target), name), data, 0600); err != nil {
-			return rollback(err)
+		if _, err = writeCopyFile(filepath.Join(stageDir, name), data, 0600); err != nil {
+			return abort(err)
 		}
 	}
-	c, err := instanceconfig.Open(filepath.Join(m.dir(target), ".env"), false)
-	if err != nil {
-		return rollback(err)
+	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
+		return abort(err)
 	}
-	previousConfig := dst.config
-	dst.config = c
-	r, err := m.build(target, dst, false)
-	if err != nil {
-		dst.config = previousConfig
-		return rollback(err)
+	candidate, _, err := m.buildFresh(target, dst, false, stageDir)
+	if err == nil {
+		err = candidate.Engine.ModelRouter.LoadError()
 	}
-	if err = m.update(target, func(info *Info) { info.Error = ""; info.RestartRequired = false }); err != nil {
-		dst.config = previousConfig
-		return rollback(err)
+	if err != nil {
+		if candidate != nil {
+			candidate.Stop()
+		}
+		return abort(err)
+	}
+	candidate.Stop()
+	transaction.Phase = copyCommitting
+	committed, writeErr = writeCopyTransaction(targetDir, transaction)
+	if writeErr != nil && !committed {
+		return abort(writeErr)
+	}
+	// Once the committing rename is visible, preserve recovery-forward state.
+	// A directory-sync failure keeps the target unavailable until a later retry
+	// durably re-establishes the marker; never expose partially installed files.
+	dst.mu.Lock()
+	previous := dst.runtime
+	dst.runtime = nil
+	dst.config = nil
+	dst.mu.Unlock()
+	if previous != nil {
+		previous.Stop()
+	}
+	if writeErr != nil {
+		updateErr := m.update(target, func(info *Info) { info.Enabled = false; info.Error = writeErr.Error() })
+		return errors.Join(writeErr, updateErr)
+	}
+	if err = m.reserveEndpointsLocked(target, pendingEndpoints); err != nil {
+		updateErr := m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+		return errors.Join(err, updateErr)
+	}
+	m.endpointMu.Unlock()
+	endpointLocked = false
+	if err = m.recoverCopyTransaction(target); err != nil {
+		_ = m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+		return err
+	}
+	r, c, err := m.buildFresh(target, dst, false, targetDir)
+	if err != nil {
+		_ = m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+		return err
 	}
 	dst.mu.Lock()
 	dst.runtime = r
+	dst.config = c
 	dst.mu.Unlock()
+	if err = m.update(target, func(info *Info) { info.Error = ""; info.RestartRequired = false }); err != nil {
+		return err
+	}
 	return nil
 }
 func (m *Manager) Close() {
@@ -788,7 +912,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ws && !stream {
 		after := i.config.Snapshot()
 		pending := false
-		for k := range instanceconfig.RestartKeys {
+		for k := range instanceconfig.InstanceRestartKeys {
 			if before[k] != after[k] {
 				pending = true
 			}

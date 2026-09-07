@@ -8,7 +8,7 @@ export interface InstanceInfo {
 }
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();
-let general = false;
+let logSource: 'instance' | 'control-plane' = 'instance';
 export const instanceState = {
   get selected() {
     return selected;
@@ -16,11 +16,11 @@ export const instanceState = {
   get signal() {
     return controller.signal;
   },
-  get showGeneral() {
-    return general;
+  get logSource() {
+    return logSource;
   },
-  set showGeneral(value: boolean) {
-    general = value;
+  set logSource(value: 'instance' | 'control-plane') {
+    logSource = value;
   },
   select(value: InstanceInfo | null) {
     controller.abort();

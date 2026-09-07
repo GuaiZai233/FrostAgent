@@ -26,8 +26,10 @@ func TestConsoleSummaryDoesNotTruncateStoredLog(t *testing.T) {
 		t.Fatal(console)
 	}
 	e := LogEntry{Timestamp: time.Now(), Category: TOOL, Level: INFO, Content: full}
-	if !strings.HasSuffix(Console(e), full) {
-		t.Fatal("TOOL unexpectedly truncated")
+	toolConsole := Console(e)
+	toolParts := strings.SplitN(toolConsole, "] ", 2)
+	if len(toolParts) != 2 || utf8.RuneCountInString(toolParts[1]) != 200 || !strings.HasSuffix(toolParts[1], "...") || strings.Contains(toolConsole, "\n") {
+		t.Fatal(toolConsole)
 	}
 }
 func TestImageCacheIsPerStore(t *testing.T) {

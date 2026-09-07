@@ -1,6 +1,7 @@
 package instanceconfig
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -89,5 +90,42 @@ func TestAppendToRawEnvWithoutFinalNewline(t *testing.T) {
 				t.Fatal("persisted values differ")
 			}
 		})
+	}
+}
+
+func TestApplyScopeMetadataIsDisjoint(t *testing.T) {
+	for key := range InstanceRestartKeys {
+		if GlobalKeys[key] || ControlPlaneRestartKeys[key] {
+			t.Fatalf("instance restart key %s has conflicting scope", key)
+		}
+	}
+	for _, key := range []string{"LISTEN_ADDR", "WS_LISTEN_ADDR", "HTTP_ALLOWED_ORIGINS", "ALCYONE_BASE_URL", "ALCYONE_SERVICE_TOKEN", "ALCYONE_TIMEOUT"} {
+		if !GlobalKeys[key] || !ControlPlaneRestartKeys[key] {
+			t.Fatalf("%s must require a Control Plane restart", key)
+		}
+	}
+	for _, key := range []string{"SYSTEM_PROMPT", "WS_ALLOWED_ORIGINS"} {
+		if !GlobalKeys[key] || ControlPlaneRestartKeys[key] {
+			t.Fatalf("%s must remain global and hot", key)
+		}
+	}
+}
+
+func TestWriteAtomicDurableReportsPostCommitSyncFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	original := syncDirectory
+	syncDirectory = func(string) error { return errors.New("synthetic directory sync failure") }
+	t.Cleanup(func() { syncDirectory = original })
+
+	committed, err := WriteAtomicDurable(path, []byte("BOT_NAME=committed\n"), 0600)
+	if !committed || err == nil {
+		t.Fatalf("committed=%v err=%v, want committed post-rename error", committed, err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != "BOT_NAME=committed\n" {
+		t.Fatalf("rename did not commit visible data: %q", data)
 	}
 }

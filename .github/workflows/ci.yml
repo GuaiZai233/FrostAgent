@@ -50,6 +50,9 @@ jobs:
       - name: Run checks
         run: make ci
 
+      - name: Run instance lifecycle race regression
+        run: go test -race ./internal/instance/... -timeout 120s
+
   windows-smoke:
     name: Windows Smoke
     runs-on: windows-latest

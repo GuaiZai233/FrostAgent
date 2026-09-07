@@ -1,16 +1,21 @@
 import { strict as assert } from 'node:assert';
 import { createInstanceAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
+import { RequestGeneration } from '../src/utils/request-generation';
 const events = new EventTarget();
 Object.assign(globalThis, {
   window: Object.assign(events, { location: { origin: 'http://localhost' } }),
   document: { querySelectorAll: () => [] },
 });
 const calls: string[] = [];
+const logSources: string[] = [];
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = input instanceof Request ? input.url : String(input);
   init?.signal?.throwIfAborted();
   calls.push(url);
+  logSources.push(
+    new Headers(init?.headers).get('X-FrostAgent-Log-Source') ?? '',
+  );
   return new Response(JSON.stringify({ success: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -39,6 +44,31 @@ await createInstanceAPI().updateEnvVar({
 });
 assert.equal(calls.length, 1);
 assert.ok(calls[0].includes('/instances/b1c2d3e4/'));
+assert.equal(logSources[0], 'instance');
+instanceState.logSource = 'control-plane';
+await createInstanceAPI().listLogs(10, '', 0, '');
+assert.equal(logSources[1], 'control-plane');
+
+const requestGeneration = new RequestGeneration();
+let visibleLogSource = '';
+let releaseOldLogs!: () => void;
+const oldLogs = new Promise<void>((resolve) => {
+  releaseOldLogs = resolve;
+});
+const loadLogSource = async (source: string, response: Promise<void>) => {
+  const generation = requestGeneration.next();
+  await response;
+  if (requestGeneration.isCurrent(generation)) visibleLogSource = source;
+};
+const oldLogRequest = loadLogSource('instance', oldLogs);
+await loadLogSource('control-plane', Promise.resolve());
+releaseOldLogs();
+await oldLogRequest;
+assert.equal(
+  visibleLogSource,
+  'control-plane',
+  'late instance response replaced the selected Control Plane source',
+);
 console.log(
-  'PASS: stale upload/import continuations cannot target a new instance',
+  'PASS: stale instance continuations and log responses are rejected',
 );

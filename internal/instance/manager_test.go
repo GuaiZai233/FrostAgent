@@ -49,7 +49,7 @@ func rpc(t *testing.T, m *Manager, id, method, body string, includeGeneral bool)
 	req := httptest.NewRequest("POST", prefix+"/frostagent.v1."+method, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if includeGeneral {
-		req.Header.Set("X-FrostAgent-General", "true")
+		req.Header.Set("X-FrostAgent-Log-Source", "control-plane")
 	}
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
@@ -257,6 +257,255 @@ func TestLifecycleBusyBackendAndAutostart(t *testing.T) {
 	list, _ = next.List()
 	if !list[0].Enabled {
 		t.Fatal("enabled state not restored")
+	}
+}
+
+func TestInstanceRestartReloadsOnlyItsEnvFromDisk(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "a")
+	b := create(t, m, "b")
+	if err := m.Enable(a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.dir(a.ID), ".env"), []byte("BOT_NAME=disk-a\nENABLE_ONEBOT_ADAPTER=false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(a.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("BOT_NAME"); got != "disk-a" {
+		t.Fatalf("A used stale BOT_NAME %q", got)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("ENABLE_ONEBOT_ADAPTER"); got != "false" {
+		t.Fatalf("A used stale restart setting %q", got)
+	}
+	if got := m.instances[b.ID].runtime.Scope.Getenv("BOT_NAME"); got == "disk-a" {
+		t.Fatal("A's disk reload leaked into B")
+	}
+}
+
+func TestEnableRejectsMalformedFreshEnvWithoutStaleValues(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "malformed")
+	if err := m.instances[info.ID].config.Replace("BOT_NAME=old-value\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.dir(info.ID), ".env"), []byte("BOT_NAME=\"unterminated\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err == nil {
+		t.Fatal("malformed fresh .env was enabled")
+	}
+	items, _ := m.List()
+	if items[0].Enabled || items[0].Error == "" {
+		t.Fatalf("malformed instance state = %+v", items[0])
+	}
+	managed := m.instances[info.ID]
+	if managed.config == nil || managed.config.Error() == nil {
+		t.Fatal("fresh parse error was not retained for repair")
+	}
+	if got := managed.config.Get("BOT_NAME"); got != "" {
+		t.Fatalf("stale BOT_NAME survived malformed reload: %q", got)
+	}
+	if managed.runtime != nil && managed.runtime.Scope.Context().Err() == nil {
+		t.Fatal("malformed instance kept an active runtime")
+	}
+}
+
+func stageTestCopy(t *testing.T, m *Manager, target, source string) copyTransaction {
+	t.Helper()
+	raw, err := m.instances[source].config.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, secrets, copied, err := m.instances[source].runtime.Engine.ModelRouter.CopyPublished(func([]modelrouter.Endpoint) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := m.instances[target].runtime.Engine.ModelRouter.DeleteCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := newCopyTransaction(target, copied, removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := m.dir(target)
+	if _, err = writeCopyTransaction(dir, transaction); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(dir, transaction.Stage)
+	if err = os.Mkdir(stageDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets} {
+		if _, err = writeCopyFile(filepath.Join(stageDir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, copied); err != nil {
+		t.Fatal(err)
+	}
+	return transaction
+}
+
+func TestCopyTransactionRecoveryNeverExposesMixedConfiguration(t *testing.T) {
+	t.Run("preparing rolls back to old configuration", func(t *testing.T) {
+		m := testManager(t)
+		source := create(t, m, "source")
+		target := create(t, m, "target")
+		configureRouter(t, m, source.ID, "http://127.0.0.1:1")
+		if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
+			t.Fatal(err)
+		}
+		transaction := stageTestCopy(t, m, target.ID, source.ID)
+		m.Close()
+		next, err := New(m.root, m.global, m.sharedPathForTest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer next.Close()
+		if got := next.instances[target.ID].config.Get("BOT_NAME"); got != "old-generation" {
+			t.Fatalf("preparing transaction exposed %q", got)
+		}
+		if len(next.instances[target.ID].runtime.Engine.ModelRouter.Active().Endpoints) != 0 {
+			t.Fatal("preparing transaction exposed the new router")
+		}
+		for _, path := range []string{transactionPath(next.dir(target.ID)), filepath.Join(next.dir(target.ID), transaction.Stage)} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("preparing residue remains at %s: %v", path, err)
+			}
+		}
+	})
+
+	t.Run("committing completes the new configuration", func(t *testing.T) {
+		m := testManager(t)
+		source := create(t, m, "source")
+		target := create(t, m, "target")
+		configureRouter(t, m, source.ID, "http://127.0.0.1:1")
+		if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
+			t.Fatal(err)
+		}
+		transaction := stageTestCopy(t, m, target.ID, source.ID)
+		transaction.Phase = copyCommitting
+		if _, err := writeCopyTransaction(m.dir(target.ID), transaction); err != nil {
+			t.Fatal(err)
+		}
+		// Simulate a crash after only the first of three target files was replaced.
+		stagedEnv, err := os.ReadFile(filepath.Join(m.dir(target.ID), transaction.Stage, ".env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(target.ID), ".env"), stagedEnv, 0600); err != nil {
+			t.Fatal(err)
+		}
+		m.Close()
+		next, err := New(m.root, m.global, m.sharedPathForTest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer next.Close()
+		if got := next.instances[target.ID].config.Get("BOT_NAME"); got != "new-generation" {
+			t.Fatalf("committing transaction did not expose the new env: %q", got)
+		}
+		active := next.instances[target.ID].runtime.Engine.ModelRouter.Active()
+		if len(active.Endpoints) != 1 || len(active.Models) != 1 || active.Models[0].EndpointID != active.Endpoints[0].ID {
+			t.Fatal("committing transaction exposed a mixed model configuration")
+		}
+		for _, path := range []string{transactionPath(next.dir(target.ID)), filepath.Join(next.dir(target.ID), transaction.Stage)} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("committing residue remains at %s: %v", path, err)
+			}
+		}
+	})
+}
+
+func TestCopyKeepsRecoveryMaterialAfterCommittedJournalSyncFailure(t *testing.T) {
+	m := testManager(t)
+	source := create(t, m, "source")
+	target := create(t, m, "target")
+	if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	originalWrite := writeCopyFile
+	injected := false
+	writeCopyFile = func(path string, data []byte, mode os.FileMode) (bool, error) {
+		if !injected && filepath.Base(path) == copyTransactionFile && strings.Contains(string(data), `"phase": "committing"`) {
+			if err := instanceconfig.WriteAtomic(path, data, mode); err != nil {
+				return false, err
+			}
+			injected = true
+			return true, errors.New("synthetic directory sync failure")
+		}
+		return originalWrite(path, data, mode)
+	}
+	err := m.Copy(target.ID, source.ID)
+	writeCopyFile = originalWrite
+	if err == nil || !injected {
+		t.Fatalf("copy error=%v injected=%v", err, injected)
+	}
+	transaction, readErr := readCopyTransaction(m.dir(target.ID), target.ID)
+	if readErr != nil || transaction == nil || transaction.Phase != copyCommitting {
+		t.Fatalf("committed recovery journal missing: transaction=%+v err=%v", transaction, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(m.dir(target.ID), transaction.Stage)); statErr != nil {
+		t.Fatalf("copy recovery stage was removed: %v", statErr)
+	}
+	if m.instances[target.ID].runtime != nil {
+		t.Fatal("target runtime exposed files while commit durability was uncertain")
+	}
+	oldEnv, readErr := os.ReadFile(filepath.Join(m.dir(target.ID), ".env"))
+	if readErr != nil || !strings.Contains(string(oldEnv), "BOT_NAME=old-generation") {
+		t.Fatalf("target files changed before durable commit: %q err=%v", oldEnv, readErr)
+	}
+
+	if err = m.Enable(target.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.instances[target.ID].config.Get("BOT_NAME"); got != "new-generation" {
+		t.Fatalf("recovery did not complete new configuration: %q", got)
+	}
+	if _, statErr := os.Stat(transactionPath(m.dir(target.ID))); !os.IsNotExist(statErr) {
+		t.Fatalf("recovered journal remains: %v", statErr)
+	}
+}
+
+func TestCreateFailureRemovesOwnedDirectory(t *testing.T) {
+	m := testManager(t)
+	if err := os.Mkdir(filepath.Join(m.root, "instances.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create("must-fail"); err == nil {
+		t.Fatal("create unexpectedly succeeded")
+	}
+	paths, err := filepath.Glob(filepath.Join(m.root, "instance_*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("failed creation left orphan paths: %v", paths)
 	}
 }
 func (m *Manager) sharedPathForTest() string {
@@ -502,6 +751,64 @@ func TestWindowsCredentialCloneAndCleanupWithoutRuntime(t *testing.T) {
 	exists, err = modelrouter.CredentialExists(cloned.ID)
 	if err != nil || exists {
 		t.Fatal("cloned credential leaked", err)
+	}
+}
+
+func TestWindowsCredentialCopyTransactionRecovery(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows Credential Manager")
+	}
+	m := testManager(t)
+	source := create(t, m, "source")
+	target := create(t, m, "target")
+	router := m.instances[source.ID].runtime.Engine.ModelRouter
+	endpointID := "endpoint_recovery_" + source.ID
+	sourceTarget := modelrouter.CredentialTarget(endpointID)
+	cfg := router.Draft()
+	cfg.Endpoints = []modelrouter.Endpoint{{ID: endpointID, DisplayName: "synthetic", BaseURL: "http://127.0.0.1:1", Enabled: true, APIKeySource: modelrouter.APIKeyStorageWindowsCredentialManager, APIKeyRef: sourceTarget}}
+	if err := router.SaveDraft(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.SetDraftEndpointSecret(endpointID, "synthetic-recovery-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: sourceTarget}}) })
+
+	transaction := stageTestCopy(t, m, target.ID, source.ID)
+	transaction.Phase = copyCommitting
+	if _, err := writeCopyTransaction(m.dir(target.ID), transaction); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(transactionPath(m.dir(target.ID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(manifest), "synthetic-recovery-secret") {
+		t.Fatal("copy transaction manifest persisted credential material")
+	}
+	m.Close()
+	next, err := New(m.root, m.global, m.sharedPathForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	active := next.instances[target.ID].runtime.Engine.ModelRouter.Active()
+	if len(active.Endpoints) != 1 {
+		t.Fatal("recovered endpoint missing")
+	}
+	cloned := active.Endpoints[0]
+	t.Cleanup(func() {
+		_, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: cloned.APIKeyRef}})
+	})
+	exists, err := modelrouter.CredentialExists(cloned.ID)
+	if err != nil || !exists {
+		t.Fatal("recovered credential missing", err)
+	}
+	if _, err := os.Stat(transactionPath(next.dir(target.ID))); !os.IsNotExist(err) {
+		t.Fatal("recovered credential transaction was not cleaned", err)
 	}
 }
 

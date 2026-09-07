@@ -31,7 +31,7 @@ func corsMiddleware(next http.Handler, getters ...func(string) string) http.Hand
 			w.Header().Add("Vary", "Origin")
 		}
 
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Connect-Protocol-Version, X-FrostAgent-General")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Connect-Protocol-Version, X-FrostAgent-Log-Source, X-FrostAgent-General")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

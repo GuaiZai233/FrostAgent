@@ -41,7 +41,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, prefix string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -62,7 +62,7 @@ func buildRuntime(dir, prefix string, config, global *instanceconfig.Store, logg
 			scope.Wait()
 		}
 	}()
-	routerManager := modelrouter.New(filepath.Join(dir, "model_router.json"), scope)
+	routerManager := modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
 	if err := routerManager.LoadError(); err != nil {
 		if enabled {
 			return nil, err
