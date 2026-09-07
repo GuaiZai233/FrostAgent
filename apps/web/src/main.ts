@@ -5,7 +5,6 @@ import './styles/components.css';
 import './styles/layout.css';
 
 import { themeManager, type ThemeMode } from './theme';
-import { scaleManager } from './scale';
 import { router } from './router';
 import { icon } from './components/icons';
 
@@ -21,9 +20,8 @@ import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountModelRouterPage } from './pages/model-router';
 
-// Initialize Theme & UI Scale
+// Initialize Theme
 themeManager.init();
-scaleManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
