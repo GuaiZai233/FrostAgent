@@ -141,6 +141,28 @@ func TestExecuteCommandTool_TimeoutValidation(t *testing.T) {
 	}
 }
 
+func TestExecuteCommandTool_LengthValidation(t *testing.T) {
+	fake := &fakeSandboxBackend{}
+	tool := tools.ExecuteCommandTool(fake)
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "sess-test"})
+
+	// Oversized command > 65536
+	oversizedCmd := strings.Repeat("c", sandbox.MaxCommandLength+1)
+	payload, _ := json.Marshal(map[string]any{"command": oversizedCmd})
+	_, err := tool.ExecuteContext(ctx, string(payload))
+	if err == nil || !strings.Contains(err.Error(), "command 长度超出最大限制") {
+		t.Fatalf("expected error for oversized command, got: %v", err)
+	}
+
+	// Oversized cwd > 1024
+	oversizedCwd := "/" + strings.Repeat("d", sandbox.MaxCwdLength+1)
+	payloadCwd, _ := json.Marshal(map[string]any{"command": "ls", "cwd": oversizedCwd})
+	_, err = tool.ExecuteContext(ctx, string(payloadCwd))
+	if err == nil || !strings.Contains(err.Error(), "cwd 长度超出最大限制") {
+		t.Fatalf("expected error for oversized cwd, got: %v", err)
+	}
+}
+
 func TestExecuteCommandTool_SessionIsolationAndContext(t *testing.T) {
 	fake := &fakeSandboxBackend{}
 	tool := tools.ExecuteCommandTool(fake)

@@ -86,10 +86,16 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 				return "", errors.New("command 参数不能为空")
 			}
 			command := params.Command
+			if utf8.RuneCountInString(command) > sandbox.MaxCommandLength {
+				return "", fmt.Errorf("command 长度超出最大限制 (%d 字符)", sandbox.MaxCommandLength)
+			}
 
 			cwd := params.Cwd
 			if strings.TrimSpace(cwd) == "" {
 				cwd = "/sandbox"
+			}
+			if utf8.RuneCountInString(cwd) > sandbox.MaxCwdLength {
+				return "", fmt.Errorf("cwd 长度超出最大限制 (%d 字符)", sandbox.MaxCwdLength)
 			}
 
 			timeoutSec := 30.0

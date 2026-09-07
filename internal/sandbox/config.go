@@ -14,6 +14,8 @@ const (
 	DefaultSessionNamespace = "frostagent"
 	DefaultExecutionTimeout = 30 * time.Second
 	MaxExecutionTimeout     = 120 * time.Second
+	MaxCommandLength        = 65536 // Maximum command character length matching upstream ShellExecRequest
+	MaxCwdLength            = 1024  // Maximum cwd character length matching upstream ShellExecRequest
 )
 
 // Config defines the configuration for the sandbox subsystem.

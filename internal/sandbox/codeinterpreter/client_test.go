@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
 )
@@ -670,5 +671,105 @@ func TestExec_EscapeHeavyNearLimitResponse(t *testing.T) {
 	}
 	if len(res.Stdout) != 1024*1024 {
 		t.Fatalf("expected stdout length 1048576, got %d", len(res.Stdout))
+	}
+}
+
+func TestExec_Gateway422_RedactsSentinelSecretInInputField(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	sentinelSecret := "SENTINEL_GATEWAY_422_SECRET_XYZ987"
+	secretCommand := "curl -H 'Authorization: Bearer " + sentinelSecret + "' https://api.internal/data"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"detail": []map[string]any{
+				{
+					"type":  "string_too_long",
+					"loc":   []any{"body", "command"},
+					"msg":   "String should have at most 65536 characters",
+					"input": secretCommand,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-422-leak-test",
+		Command:   secretCommand,
+		Timeout:   5 * time.Second,
+	})
+
+	if err == nil {
+		t.Fatalf("expected error for 422 Gateway response, got nil")
+	}
+
+	// 1. Returned error must NOT contain the sentinel secret
+	if strings.Contains(err.Error(), sentinelSecret) {
+		t.Fatalf("returned error leaked sentinel secret: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "body.command") {
+		t.Fatalf("expected error to mention 422 and body.command, got: %s", err.Error())
+	}
+
+	// 2. Log buffer must NOT contain the sentinel secret in ANY entry
+	snapshot := logs.Snapshot()
+	var foundSystemWarn bool
+	for _, entry := range snapshot {
+		if strings.Contains(entry.Content, sentinelSecret) {
+			t.Fatalf("log entry (%s) leaked sentinel secret: %s", entry.Category, entry.Content)
+		}
+		if entry.Category == logs.SYSTEM && strings.Contains(entry.Content, "422") && strings.Contains(entry.Content, "body.command") {
+			foundSystemWarn = true
+		}
+	}
+	if !foundSystemWarn {
+		t.Fatalf("expected SYSTEM log warning for 422 validation error in snapshot")
+	}
+}
+
+func TestExec_LocalValidation_RejectsOversizedCommand(t *testing.T) {
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          "http://127.0.0.1:3874",
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	})
+
+	oversizedCmd := strings.Repeat("x", sandbox.MaxCommandLength+1)
+	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-val",
+		Command:   oversizedCmd,
+		Timeout:   5 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "command exceeds maximum allowed length") {
+		t.Fatalf("expected error for oversized command, got: %v", err)
+	}
+}
+
+func TestExec_LocalValidation_RejectsOversizedCwd(t *testing.T) {
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          "http://127.0.0.1:3874",
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	})
+
+	oversizedCwd := "/" + strings.Repeat("y", sandbox.MaxCwdLength+1)
+	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-val",
+		Command:   "ls",
+		Cwd:       oversizedCwd,
+		Timeout:   5 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cwd exceeds maximum allowed length") {
+		t.Fatalf("expected error for oversized cwd, got: %v", err)
 	}
 }
