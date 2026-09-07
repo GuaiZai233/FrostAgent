@@ -74,22 +74,27 @@ func TestAddServerReturnsBeforeInitialStartupCompletes(t *testing.T) {
 		return nil, errors.New("simulated slow startup")
 	})
 
-	start := time.Now()
-	err := manager.AddServer(context.Background(), ServerConfig{
-		ID:      "slow",
-		Name:    "Slow MCP",
-		Enabled: true,
-		Transport: TransportConfig{
-			Type:    TransportStdio,
-			Command: "slow-mcp",
-		},
-	})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("AddServer failed: %v", err)
-	}
-	if elapsed > 500*time.Millisecond {
-		t.Fatalf("AddServer blocked on runtime startup for %v", elapsed)
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.AddServer(context.Background(), ServerConfig{
+			ID:      "slow",
+			Name:    "Slow MCP",
+			Enabled: true,
+			Transport: TransportConfig{
+				Type:    TransportStdio,
+				Command: "slow-mcp",
+			},
+		})
+	}()
+
+	// AddServer must complete without waiting for the blocked transport factory.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AddServer failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AddServer blocked on initial runtime startup")
 	}
 
 	select {
