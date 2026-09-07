@@ -1420,7 +1420,11 @@ export function mountMCPPage(container: HTMLElement): () => void {
                 toast.error(`添加服务器失败: ${resp.error}`);
                 return;
               }
-              toast.success(`MCP 服务器 "${name}" 已成功添加并启动连接`);
+              if (enabled) {
+                toast.success(`MCP 服务器 "${name}" 配置已添加，正在尝试连接`);
+              } else {
+                toast.success(`MCP 服务器 "${name}" 配置已添加`);
+              }
               expandedServers.add(id);
             }
 
