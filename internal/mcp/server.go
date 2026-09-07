@@ -177,12 +177,16 @@ func (s *ServerRuntime) isStartReservationCurrent(gen uint64) bool {
 	return !s.retired && s.cfg.Enabled && s.generation == gen
 }
 
-// StartAsync reserves startup ownership synchronously, then performs the MCP handshake
-// in the background. Reserving before spawning prevents an older queued Add startup
-// from arriving late and superseding a newer explicit Restart.
-func (s *ServerRuntime) StartAsync() {
-	reservation, err := s.reserveStart()
-	if err != nil || reservation == nil {
+// startReservedAsync executes a previously claimed startup reservation in the
+// background. The synchronous preflight is intentional: if persistence or another
+// caller delayed submission until a newer lifecycle operation already won, no stale
+// goroutine is queued at all. runReservedStart still re-checks generation after spawn.
+func (s *ServerRuntime) startReservedAsync(reservation *startReservation) {
+	if reservation == nil {
+		return
+	}
+	if !s.isStartReservationCurrent(reservation.generation) {
+		reservation.cancelLifecycle()
 		return
 	}
 
@@ -191,6 +195,17 @@ func (s *ServerRuntime) StartAsync() {
 		defer cancel()
 		_ = s.runReservedStart(ctx, r)
 	}(reservation)
+}
+
+// StartAsync reserves startup ownership synchronously, then performs the MCP handshake
+// in the background. Reserving before spawning prevents queued startup work from
+// arriving late and superseding a newer explicit lifecycle operation.
+func (s *ServerRuntime) StartAsync() {
+	reservation, err := s.reserveStart()
+	if err != nil || reservation == nil {
+		return
+	}
+	s.startReservedAsync(reservation)
 }
 
 // Retire permanently revokes this runtime's ownership. A retired runtime can
