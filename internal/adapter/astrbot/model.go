@@ -2,6 +2,9 @@ package astrbot
 
 import (
 	"FrostAgent/internal/core"
+	"encoding/json"
+	"os"
+	"strings"
 )
 
 // Event 表示 AstrBot 插件发送给 FrostAgent 的入站事件。
@@ -51,4 +54,51 @@ type Action struct {
 	Attachments    []core.Attachment `json:"attachments,omitempty"`     // 附件列表 (图片等)
 	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 是否为工具调用产生的中间消息 (sendHook)
 	Echo           string            `json:"echo,omitempty"`            // 回显标识
+}
+
+// MarshalJSON normalizes outbound AstrBot actions at the wire boundary. This keeps
+// ENABLE_AT_IN_GROUP_MSG behavior consistent with the native OneBot adapter without
+// requiring every AstrBot reply path (normal, direct error, SendHook) to remember to
+// inject the same platform-native mention component independently.
+func (a Action) MarshalJSON() ([]byte, error) {
+	type actionAlias Action
+	normalized := a.withConfiguredGroupMention()
+	return json.Marshal(actionAlias(normalized))
+}
+
+func (a Action) withConfiguredGroupMention() Action {
+	if a.Action != "send_message" || a.MessageType != "group" || os.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
+		return a
+	}
+
+	userID := strings.TrimSpace(a.UserID)
+	if userID == "" {
+		return a
+	}
+
+	for _, message := range a.Messages {
+		if message.Type == "mention_user" && strings.TrimSpace(message.MentionUserID) == userID {
+			return a
+		}
+	}
+
+	mention := ActionMessage{Type: "mention_user", MentionUserID: userID}
+	if len(a.Messages) > 0 {
+		messages := make([]ActionMessage, 0, len(a.Messages)+1)
+		messages = append(messages, mention)
+		messages = append(messages, a.Messages...)
+		a.Messages = messages
+		return a
+	}
+
+	// Plain direct replies historically use Content instead of Messages. Promote
+	// them to an ordered message chain so the AstrBot plugin can emit a native At
+	// component while retaining Content as a compatibility fallback for consumers.
+	if strings.TrimSpace(a.Content) != "" {
+		a.Messages = []ActionMessage{
+			mention,
+			{Type: "plain", Text: a.Content},
+		}
+	}
+	return a
 }
