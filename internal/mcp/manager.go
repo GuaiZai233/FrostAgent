@@ -14,6 +14,7 @@ import (
 // Manager manages all MCP server runtimes and tool catalogs for an instance.
 type Manager struct {
 	mu           sync.RWMutex
+	persistMu    sync.Mutex
 	servers      map[string]*ServerRuntime
 	store        *ConfigStore
 	builtinNames map[string]struct{}
@@ -176,18 +177,46 @@ func (m *Manager) AddServer(ctx context.Context, cfg ServerConfig) error {
 	}
 
 	srv := NewServerRuntimeWithFactory(cfg, m.transportFactory)
+
+	// Reserve the initial startup generation before the runtime becomes visible to
+	// other control-plane operations. If persistence blocks and a newer Restart,
+	// Stop/disable, Update, or Remove happens meanwhile, that operation advances the
+	// generation and makes this older Add reservation stale before it can start work.
+	var initialStart *startReservation
+	if cfg.Enabled {
+		var err error
+		initialStart, err = srv.reserveStart()
+		if err != nil {
+			m.mu.Unlock()
+			return err
+		}
+	}
+
 	m.servers[id] = srv
 	m.mu.Unlock()
 
-	var startErr error
-	if cfg.Enabled {
-		startErr = srv.Start(ctx)
-	}
-
+	// Persist the configuration before attempting to connect. Connection failure is
+	// runtime state (status=failed/lastError), not a failed configuration create.
 	if err := m.saveConfig(); err != nil {
+		// Persistence failure is a true AddServer failure. Retire the runtime before
+		// removing ownership so the reserved start is cancelled and no concurrent
+		// lifecycle operation can leave a detached process.
+		m.mu.Lock()
+		if current, exists := m.servers[id]; exists && current == srv {
+			srv.Retire()
+			delete(m.servers, id)
+		}
+		m.mu.Unlock()
 		return err
 	}
-	return startErr
+
+	// Initial connection is runtime work, not part of the create transaction. Execute
+	// only the reservation created before publication; if a newer lifecycle operation
+	// occurred while persistence was in flight, startReservedAsync rejects it as stale.
+	if initialStart != nil {
+		srv.startReservedAsync(initialStart)
+	}
+	return nil
 }
 
 func (m *Manager) UpdateServer(ctx context.Context, cfg ServerConfig) error {
@@ -202,12 +231,11 @@ func (m *Manager) UpdateServer(ctx context.Context, cfg ServerConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("server %q not found", id)
 	}
-	m.mu.Unlock()
 
-	_ = srv.Stop()
-
+	// Revoke ownership before replacement so an older asynchronous Add start can
+	// never resurrect this runtime after it has been superseded.
+	srv.Retire()
 	newSrv := NewServerRuntimeWithFactory(cfg, m.transportFactory)
-	m.mu.Lock()
 	m.servers[id] = newSrv
 	m.mu.Unlock()
 
@@ -229,6 +257,10 @@ func (m *Manager) RemoveServer(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("server %q not found", id)
 	}
+
+	// Retire while Manager still owns the runtime. This makes ownership revocation
+	// atomic with respect to any pending asynchronous Start call.
+	srv.Retire()
 	delete(m.servers, id)
 	// Clean up stable tool name mappings associated with this server
 	for exposed, target := range m.exposedToTarget {
@@ -239,7 +271,6 @@ func (m *Manager) RemoveServer(id string) error {
 	}
 	m.mu.Unlock()
 
-	_ = srv.Stop()
 	return m.saveConfig()
 }
 
@@ -425,8 +456,10 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Closing a Manager permanently revokes ownership of every runtime. Retire,
+	// rather than Stop, so a pending StartAsync goroutine cannot restart after shutdown.
 	for _, srv := range m.servers {
-		_ = srv.Stop()
+		srv.Retire()
 	}
 	return nil
 }
@@ -435,6 +468,13 @@ func (m *Manager) saveConfig() error {
 	if m.store == nil {
 		return nil
 	}
+
+	// Serialize snapshot creation together with the durable write. ConfigStore already
+	// serializes file replacement, but without this Manager-level boundary an older
+	// snapshot can be written after a newer mutation and resurrect deleted config.
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+
 	m.mu.RLock()
 	cfg := Config{
 		Servers: make([]ServerConfig, 0, len(m.servers)),

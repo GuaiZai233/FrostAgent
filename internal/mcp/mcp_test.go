@@ -200,7 +200,7 @@ func TestToolCatalog(t *testing.T) {
 
 	remoteTools := []*officialmcp.Tool{
 		{Name: "get_issue", Description: "Get an issue", InputSchema: map[string]any{}},
-		{Name: "create_issue", Description: "Create an issue", InputSchema: map[string]any{}},
+		{Name: "create_issue", Description: "Create issue", InputSchema: map[string]any{}},
 		{Name: "search_code", Description: "Search code", InputSchema: map[string]any{}},
 	}
 
@@ -353,6 +353,16 @@ func TestManagerMultiServerAndNamespacing(t *testing.T) {
 		t.Fatalf("add gitlab server failed: %v", err)
 	}
 
+	// AddServer now guarantees durable config, not completed startup. Wait until the
+	// test servers are connected before asserting their discovered tool catalogs.
+	for _, id := range []string{"github", "gitlab"} {
+		srv, ok := manager.GetServer(id)
+		if !ok {
+			t.Fatalf("expected server %s to be registered", id)
+		}
+		waitForStatus(t, srv, StatusConnected)
+	}
+
 	// Check Effective Tools namespacing
 	effective := manager.EffectiveTools()
 	if len(effective) != 4 {
@@ -476,6 +486,12 @@ func TestSanitizeExposedToolNameAndBidirectionalMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add server failed: %v", err)
 	}
+
+	srv, ok := mgr.GetServer("special-server")
+	if !ok {
+		t.Fatal("expected special-server to be registered")
+	}
+	waitForStatus(t, srv, StatusConnected)
 
 	tools := mgr.EffectiveTools()
 	if len(tools) != 1 {
@@ -623,6 +639,12 @@ func TestProcessTerminationWatcher(t *testing.T) {
 		t.Fatalf("add server failed: %v", err)
 	}
 
+	srv, ok := mgr.GetServer("crash-srv")
+	if !ok {
+		t.Fatal("expected crash-srv to be registered")
+	}
+	waitForStatus(t, srv, StatusConnected)
+
 	// Effective tools should initially have crash_tool
 	tools := mgr.EffectiveTools()
 	if len(tools) != 1 {
@@ -635,7 +657,6 @@ func TestProcessTerminationWatcher(t *testing.T) {
 	}
 
 	// Wait for background termination watcher goroutine to detect exit
-	srv, _ := mgr.GetServer("crash-srv")
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		if srv.Status() == StatusFailed {

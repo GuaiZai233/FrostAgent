@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -94,6 +95,23 @@ func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("add server failed: %v", err)
+	}
+
+	// AddServer returns once configuration is registered/durable; startup is async.
+	// Wait for the test runtime before asserting that round 1 receives its tools.
+	srv, ok := mgr.GetServer("github")
+	if !ok {
+		t.Fatal("github MCP runtime was not registered")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.Status() == mcp.StatusConnected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if srv.Status() != mcp.StatusConnected {
+		t.Fatalf("github MCP runtime did not connect: status=%s lastError=%q", srv.Status(), srv.LastError())
 	}
 
 	provider := &scriptedLLMProvider{

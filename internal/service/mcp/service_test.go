@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -77,6 +78,23 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("AddMCPServer returned success=false: %s", addResp.Msg.Error)
 	}
 
+	// Add now returns before the MCP handshake completes. Wait for this test server
+	// before asserting the discovered tools returned by ListMCPServers.
+	addedRuntime, ok := mgr.GetServer("test_server")
+	if !ok {
+		t.Fatal("test_server runtime was not registered")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if addedRuntime.Status() == mcpcore.StatusConnected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if addedRuntime.Status() != mcpcore.StatusConnected {
+		t.Fatalf("test_server did not connect: status=%s lastError=%q", addedRuntime.Status(), addedRuntime.LastError())
+	}
+
 	// 2. ListMCPServers (verify secret masking)
 	listResp, err := svc.ListMCPServers(ctx, connect.NewRequest(&v1.ListMCPServersRequest{}))
 	if err != nil {
@@ -102,7 +120,7 @@ func TestMCPServiceRPCs(t *testing.T) {
 		t.Fatalf("expected Authorization header to be masked, got %q", s0.Headers["Authorization"])
 	}
 	if s0.Headers["X-Custom"] != "regular_header" {
-		t.Fatalf("expected X-Custom header to be preserved, got %q", s0.Headers["X-Custom"])
+		t.Fatalf("expected X-Custom to be preserved, got %q", s0.Headers["X-Custom"])
 	}
 
 	// 3. GetMCPServer
