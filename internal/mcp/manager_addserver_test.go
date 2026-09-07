@@ -182,3 +182,38 @@ func TestRemovedRuntimeCannotBeStartedAfterDetach(t *testing.T) {
 		t.Fatal("retired runtime attempted to create a transport after ownership was revoked")
 	}
 }
+
+func TestManagerCloseRetiresRuntime(t *testing.T) {
+	started := false
+	manager := NewManagerWithFactory(nil, nil, func(cfg TransportConfig) (officialmcp.Transport, error) {
+		started = true
+		return nil, errors.New("transport should not be created after manager close")
+	})
+
+	cfg := ServerConfig{
+		ID:      "shutdown",
+		Name:    "Shutdown MCP",
+		Enabled: false,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "shutdown-mcp",
+		},
+	}
+	if err := manager.AddServer(context.Background(), cfg); err != nil {
+		t.Fatalf("AddServer failed: %v", err)
+	}
+	srv, ok := manager.GetServer("shutdown")
+	if !ok {
+		t.Fatal("expected runtime before manager close")
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("Manager.Close failed: %v", err)
+	}
+
+	if err := srv.SetEnabled(context.Background(), true); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("expected closed manager runtime to reject re-enable, got %v", err)
+	}
+	if started {
+		t.Fatal("runtime attempted to create a transport after manager shutdown")
+	}
+}
