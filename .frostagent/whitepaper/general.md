@@ -254,3 +254,45 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 新增/编辑服务器对话框：支持 Stdio、Streamable HTTP 与 SSE 三种传输模式；
   - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。以 `DraftServerConfig` 状态为单一事实源（Single Source of Truth），采用状态机词法扫描器（Quote-aware Scanner）在保护 URL 内双斜杠（如 `https://...`）的前提下精准剥除 JSONC 注释与尾随逗号；命令行参数采用原生数组结构（独立 argv 动态输入行），确保含空格、引号与空参数在 Form ↔ `string[]` ↔ JSON 之间 100% 无损可逆，并保证在 JSON 编辑中删减字段时完全重置对应配置为干净初始状态；支持一键识别 Claude Desktop 格式（`mcpServers`）、单服务包裹对象与标准 MCP 配置，提供格式化、一键复制与粘贴校验。
   - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。
+
+### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)
+
+FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持核心安全不变量（Security Invariant）：**FrostAgent 绝不在宿主机上直接执行任何由大模型生成的任意命令**。
+
+- **分层执行架构 (Tiered Execution Architecture)**：
+  执行链条严格遵循单向隔离调用管道：
+  ```
+  LLM (Agent Loop)
+   ↓
+  execute_command Tool
+   ↓
+  SandboxBackend (中立接口)
+   ↓ HTTP
+  code-interpreter Gateway
+   ↓
+  Worker (Docker / MicroVM)
+   ↓
+  non-root sandbox user
+   ↓
+  bash
+  ```
+- **中立后端与实现隔离 (Neutral SandboxBackend)**：
+  - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
+  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
+  - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
+- **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
+  - 当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，不向大模型注册 `execute_command` 工具；
+  - 当沙箱服务离线、响应超时、认证失败或发生协议异常时，工具执行严格失败中断（Fail-Closed），向模型返回清晰错误提示；
+  - 严禁在沙箱不可用时回退到宿主机的 PowerShell、Bash 或 Cmd 执行。
+- **会话级文件系统隔离与状态持久化 (Session-Scoped Filesystem Persistence)**：
+  - 工具调用依赖请求级上下文（`llm.RunContext.SessionID`），缺失 `SessionID` 时直接拒绝执行；
+  - 通过固定命名空间与 `SANDBOX_SESSION_NAMESPACE` 对 FrostAgent `SessionID` 进行确定性 RFC4122 v5 UUID 映射，作为 Gateway `user_uuid`；
+  - 同一 FrostAgent 会话内的多次命令执行保持文件系统状态（如创建文件、编译中间产物），但每次调用均为干净独立的 Shell 进程；
+  - 不同会话严格对应不同的 Worker/用户隔离空间，互不可见且杜绝跨会话状态穿透；禁止在单次命令调用后自动释放沙箱。
+- **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
+  - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
+  - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **安全边界划分 (Safety Boundary Separation)**：
+  - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
+  - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
+
