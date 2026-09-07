@@ -29,6 +29,7 @@ type ServerRuntime struct {
 	lastError  string
 	generation uint64
 	cancel     context.CancelFunc
+	retired    bool
 
 	client  *officialmcp.Client
 	session *officialmcp.ClientSession
@@ -98,7 +99,7 @@ func (s *ServerRuntime) IsEnabled() bool {
 func (s *ServerRuntime) IsAvailable() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg.Enabled && s.status == StatusConnected && s.session != nil
+	return !s.retired && s.cfg.Enabled && s.status == StatusConnected && s.session != nil
 }
 
 func (s *ServerRuntime) Catalog() *ToolCatalog {
@@ -108,7 +109,7 @@ func (s *ServerRuntime) Catalog() *ToolCatalog {
 func (s *ServerRuntime) IsToolEnabled(remoteName string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.cfg.Enabled {
+	if s.retired || !s.cfg.Enabled {
 		return false
 	}
 	item, ok := s.catalog.Get(remoteName)
@@ -118,11 +119,62 @@ func (s *ServerRuntime) IsToolEnabled(remoteName string) bool {
 	return item.Enabled
 }
 
+// StartAsync schedules startup after configuration persistence without tying the
+// management RPC lifetime to the MCP handshake. It marks the runtime as starting
+// synchronously so a subsequent list refresh does not briefly report it as stopped.
+func (s *ServerRuntime) StartAsync() {
+	s.mu.Lock()
+	if s.retired || !s.cfg.Enabled || s.status == StatusStarting || s.status == StatusConnected {
+		s.mu.Unlock()
+		return
+	}
+	s.status = StatusStarting
+	s.lastError = ""
+	s.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = s.Start(ctx)
+	}()
+}
+
+// Retire permanently revokes this runtime's ownership. A retired runtime can
+// never be started again, which prevents an AddServer startup goroutine from
+// resurrecting a server after RemoveServer/UpdateServer detached it.
+func (s *ServerRuntime) Retire() {
+	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return
+	}
+	s.retired = true
+	s.cfg.Enabled = false
+	s.generation++
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	s.status = StatusStopped
+	session := s.session
+	s.session = nil
+	s.client = nil
+	s.mu.Unlock()
+
+	if session != nil {
+		go func() { _ = session.Close() }()
+	}
+}
+
 // Start connects to the MCP server, initializes protocol, and syncs the tool catalog.
 // Uses generation tokens and a decoupled lifecycle context to ensure long-lived streaming connections
 // (such as SSE) survive short-lived startup/RPC request contexts, while guarding the initial handshake with ctx.
 func (s *ServerRuntime) Start(ctx context.Context) error {
 	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return errors.New("server runtime has been retired")
+	}
 	if !s.cfg.Enabled {
 		s.status = StatusStopped
 		s.mu.Unlock()
@@ -155,7 +207,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	if err != nil {
 		cancelLifecycle()
 		s.mu.Lock()
-		if s.generation == gen {
+		if s.generation == gen && !s.retired {
 			s.status = StatusFailed
 			s.lastError = err.Error()
 		}
@@ -191,7 +243,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	case <-ctx.Done():
 		cancelLifecycle()
 		s.mu.Lock()
-		if s.generation == gen {
+		if s.generation == gen && !s.retired {
 			s.status = StatusFailed
 			s.lastError = fmt.Sprintf("mcp connect timed out: %v", ctx.Err())
 		}
@@ -201,7 +253,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 		if res.err != nil {
 			cancelLifecycle()
 			s.mu.Lock()
-			if s.generation == gen {
+			if s.generation == gen && !s.retired {
 				s.status = StatusFailed
 				s.lastError = fmt.Sprintf("mcp connect failed: %v", res.err)
 			}
@@ -217,7 +269,7 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 		_ = session.Close()
 		cancelLifecycle()
 		s.mu.Lock()
-		if s.generation == gen {
+		if s.generation == gen && !s.retired {
 			s.status = StatusFailed
 			s.lastError = fmt.Sprintf("tools/list failed: %v", err)
 		}
@@ -226,8 +278,8 @@ func (s *ServerRuntime) Start(ctx context.Context) error {
 	}
 
 	s.mu.Lock()
-	// Re-check generation and enabled flag; abort if Stop() occurred in the meantime
-	if s.generation != gen || !s.cfg.Enabled {
+	// Re-check generation, ownership, and enabled flag; abort if Stop/Retire occurred in the meantime.
+	if s.generation != gen || s.retired || !s.cfg.Enabled {
 		s.mu.Unlock()
 		_ = session.Close()
 		cancelLifecycle()
@@ -256,7 +308,7 @@ func (s *ServerRuntime) handleTermination(gen uint64, sess *officialmcp.ClientSe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.generation == gen && s.session == sess {
+	if !s.retired && s.generation == gen && s.session == sess {
 		s.status = StatusFailed
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.lastError = fmt.Sprintf("server process or connection terminated: %v", err)
@@ -296,9 +348,13 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 	status := s.status
 	session := s.session
 	enabled := s.cfg.Enabled
+	retired := s.retired
 	policies := maps.Clone(s.cfg.Tools)
 	s.mu.RUnlock()
 
+	if retired {
+		return errors.New("cannot sync catalog: server runtime has been retired")
+	}
 	if !enabled {
 		return errors.New("cannot sync catalog: server is disabled")
 	}
@@ -322,6 +378,10 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 
 func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return errors.New("server runtime has been retired")
+	}
 	if s.cfg.Enabled == enabled {
 		if !enabled && s.status == StatusStopped {
 			s.mu.Unlock()
@@ -351,6 +411,10 @@ func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 
 func (s *ServerRuntime) SetToolEnabled(remoteName string, enabled bool) {
 	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return
+	}
 	if s.cfg.Tools == nil {
 		s.cfg.Tools = make(map[string]ToolPolicy)
 	}
@@ -366,10 +430,11 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	serverID := s.cfg.ID
 	status := s.status
 	session := s.session
+	retired := s.retired
 	s.mu.RUnlock()
 
-	// Double-check 1: server enabled
-	if !enabled {
+	// Double-check 1: server enabled and still owned.
+	if retired || !enabled {
 		return fmt.Sprintf("Tool %q is currently disabled because MCP server %q has been disabled.", remoteName, serverID), nil
 	}
 
