@@ -438,8 +438,10 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Closing a Manager permanently revokes ownership of every runtime. Retire,
+	// rather than Stop, so a pending StartAsync goroutine cannot restart after shutdown.
 	for _, srv := range m.servers {
-		_ = srv.Stop()
+		srv.Retire()
 	}
 	return nil
 }
