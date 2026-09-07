@@ -367,7 +367,8 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	m.instances[id] = i
 	committed = true
-	logs.General.Info(logs.SYSTEM, "创建实例: "+name)
+	createdLog := "创建实例: " + name
+	logs.General.InfoWithConsoleSummary(logs.SYSTEM, createdLog, createdLog)
 	return info, nil
 }
 func (m *Manager) Rename(id, name string) error {
@@ -488,7 +489,8 @@ func (m *Manager) Enable(id string, enabled bool) error {
 		r.Stop()
 		return err
 	}
-	logs.General.Info(logs.SYSTEM, fmt.Sprintf("实例 %s enabled=%t", id, enabled))
+	lifecycleLog := fmt.Sprintf("实例 %s enabled=%t", id, enabled)
+	logs.General.InfoWithConsoleSummary(logs.SYSTEM, lifecycleLog, lifecycleLog)
 	return nil
 }
 

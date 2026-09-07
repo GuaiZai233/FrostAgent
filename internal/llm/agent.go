@@ -454,7 +454,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			return AgentRunResult{Silent: true, Error: err}
 		}
 		e.TotalMessagesProcessed.Add(1)
-		e.Log().Info(logs.SYSTEM, fmt.Sprintf("【第%d轮思考开始】", i+1))
+		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
+		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
 		coreMsgs := convertToCoreMessages(messages)
 
@@ -464,7 +465,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			contextTokens = billing.EstimateTokens(coreMsgs)
 		}
 		if contextTokens > MaxContextTokens {
-			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens))
+			content := fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens)
+			e.Log().WarnWithConsoleSummary(logs.SYSTEM, content, "上下文长度超出硬上限")
 			return AgentRunResult{
 				Content:       "FrostAgent错误：对话上下文过长，超出模型处理上限。",
 				MemoryWritten: memoryWritten,
@@ -657,7 +659,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
 				// 如果是 Tool Call 且 commit 失败，禁止执行工具以防止免费副作用
 				if len(responseMsg.ToolCalls) > 0 {
-					e.Log().Warn(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行")
+					e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行", "Tool Call 阶段 commit 失败，终止本轮工具执行")
 					return AgentRunResult{
 						Content:       "FrostAgent错误：计费结算失败，已终止后续工具执行。",
 						MemoryWritten: memoryWritten,
@@ -679,14 +681,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
 			if isStandaloneAssistantSilentMarker(contentStr) {
-				e.Log().Warn(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理")
+				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
 				return AgentRunResult{
 					MemoryWritten: memoryWritten,
 					Silent:        true,
 					Usage:         totalUsage,
 				}
 			}
-			e.Log().Info(logs.SYSTEM, "【智能体给出最终答案】")
+			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
@@ -695,7 +697,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		if conflict := staySilentConflict(responseMsg.ToolCalls); conflict != "" {
-			e.Log().Warn(logs.TOOL, conflict)
+			e.Log().WarnWithConsoleSummary(logs.TOOL, conflict, "工具调用冲突")
 			for _, tc := range responseMsg.ToolCalls {
 				messages = append(messages, ChatMessage{
 					Role:       "tool",
@@ -707,7 +709,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			e.Log().Info(logs.TOOL, fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments))
+			toolCallLog := fmt.Sprintf("【智能体调用工具】%s，参数: %s", tc.Function.Name, tc.Function.Arguments)
+			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
 			var toolResult string
 			toolSucceeded := false
@@ -726,7 +729,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolSucceeded = true
 					toolResult = res
 					if tc.Function.Name == StaySilentToolName {
-						e.Log().Info(logs.SYSTEM, "【智能体选择保持沉默】")
+						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
 						return AgentRunResult{
 							MemoryWritten: memoryWritten,
 							Silent:        true,
@@ -743,7 +746,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			// 单条工具结果过大保护
 			if len(toolResult) > MaxToolOutputBytes {
-				e.Log().Warn(logs.TOOL, fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes))
+				largeOutputLog := fmt.Sprintf("工具 [%s] 输出过大 (%d 字节)，已截断至 %d 字节", tc.Function.Name, len(toolResult), MaxToolOutputBytes)
+				e.Log().WarnWithConsoleSummary(logs.TOOL, largeOutputLog, "工具输出过大，已截断")
 				cut := MaxToolOutputBytes
 				for cut > 0 && !utf8.RuneStart(toolResult[cut]) {
 					cut--
@@ -751,7 +755,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			e.Log().Info(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult))
+			e.Log().InfoWithConsoleSummary(logs.TOOL, fmt.Sprintf("【工具执行结果】%s", toolResult), "【工具执行结果】...")
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
 				if err := runContext.SendHook(toolResult); err != nil {

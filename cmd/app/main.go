@@ -50,7 +50,7 @@ func run() error {
 	defer stop()
 	errs := make(chan error, len(servers))
 	for _, server := range servers {
-		go func() { logs.General.Info(logs.HTTP, "listening on "+server.Addr); errs <- server.ListenAndServe() }()
+		go func() { logs.General.Listening(server.Addr); errs <- server.ListenAndServe() }()
 	}
 	select {
 	case <-ctx.Done():

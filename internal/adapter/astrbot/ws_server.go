@@ -734,7 +734,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	engine.TrimSession(session)
 
 	if runResult.MemoryWritten {
-		engine.Log().Info(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
 		pendingUserText := userText
 		if event.MessageType == "group" {

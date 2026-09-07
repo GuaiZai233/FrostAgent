@@ -41,7 +41,7 @@ func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.
 		Route: route,
 	}
 
-	runtimescope.FromContext(ctx).Log().Info(logs.SYSTEM, "即将传递消息给视觉模型")
+	runtimescope.FromContext(ctx).Log().InfoWithConsoleSummary(logs.SYSTEM, "即将传递消息给视觉模型", "即将传递消息给视觉模型")
 
 	// 调用 LLMProvider 接口
 	resp, err := provider.Chat(ctx, chatReq)

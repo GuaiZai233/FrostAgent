@@ -78,10 +78,10 @@ func (s *Store) Init(capacity int) {
 }
 
 func (s *Store) log(level Level, category Category, content string, traceID string, direction string) {
-	s.logWithImages(level, category, content, traceID, direction, nil)
+	s.logWithImages(level, category, content, traceID, direction, nil, "...")
 }
 
-func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage) {
+func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string) {
 	s.mu.Lock()
 
 	if s.buffer == nil {
@@ -106,6 +106,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 		Content:      content,
 	}
 	entry.imageRefs = s.retainImagesLocked(retainedImages)
+	consoleLine := formatConsoleLine(entry.Timestamp, entry.InstanceID, entry.InstanceName, level, category, consoleContent)
 
 	s.buffer.Value = entry
 	s.buffer = s.buffer.Next()
@@ -116,7 +117,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 
 	// 同时输出到控制台，方便调试
 	if level != DEBUG {
-		fmt.Println(Console(entry))
+		fmt.Println(consoleLine)
 	}
 }
 
@@ -126,6 +127,16 @@ func (s *Store) Info(category Category, content string, traceID ...string) {
 		tid = traceID[0]
 	}
 	s.log(INFO, category, content, tid, "INTERNAL")
+}
+
+// InfoWithConsoleSummary exposes only an explicitly reviewed, bounded and
+// non-sensitive summary on stdout while retaining the complete log content.
+func (s *Store) InfoWithConsoleSummary(category Category, content, consoleSummary string, traceID ...string) {
+	tid := ""
+	if len(traceID) > 0 {
+		tid = traceID[0]
+	}
+	s.logWithImages(INFO, category, content, tid, "INTERNAL", nil, consoleSummary)
 }
 
 // InfoWithInlineImages writes an informational log while retaining its images
@@ -143,7 +154,14 @@ func (s *Store) InfoWithInlineImages(category Category, content string, images [
 		}
 		content += strings.Join(placeholders, "\n")
 	}
-	s.logWithImages(INFO, category, content, tid, "INTERNAL", retainedImages)
+	s.logWithImages(INFO, category, content, tid, "INTERNAL", retainedImages, "...")
+}
+
+// Listening records the complete Control Plane event while exposing only the
+// explicitly safe listener address on the process console.
+func (s *Store) Listening(address string) {
+	content := "listening on " + address
+	s.logWithImages(INFO, HTTP, content, "", "INTERNAL", nil, content)
 }
 
 func (s *Store) Warn(category Category, content string, traceID ...string) {
@@ -152,6 +170,16 @@ func (s *Store) Warn(category Category, content string, traceID ...string) {
 		tid = traceID[0]
 	}
 	s.log(WARN, category, content, tid, "INTERNAL")
+}
+
+// WarnWithConsoleSummary is the warning counterpart of
+// InfoWithConsoleSummary.
+func (s *Store) WarnWithConsoleSummary(category Category, content, consoleSummary string, traceID ...string) {
+	tid := ""
+	if len(traceID) > 0 {
+		tid = traceID[0]
+	}
+	s.logWithImages(WARN, category, content, tid, "INTERNAL", nil, consoleSummary)
 }
 
 func (s *Store) Error(category Category, content string, traceID ...string) {
@@ -176,7 +204,7 @@ func (s *Store) LLMRequest(content string, traceID ...string) {
 		tid = traceID[0]
 	}
 	redacted, retainedImages := redactInlineImages(content)
-	s.logWithImages(INFO, LLM_REQUEST, redacted, tid, "OUTBOUND", retainedImages)
+	s.logWithImages(INFO, LLM_REQUEST, redacted, tid, "OUTBOUND", retainedImages, "...")
 }
 
 func (s *Store) LLMResponse(content string, traceID ...string) {
@@ -264,16 +292,20 @@ func (s *Store) broadcast(entry LogEntry) {
 }
 
 func Console(e LogEntry) string {
+	return formatConsoleLine(e.Timestamp, e.InstanceID, e.InstanceName, e.Level, e.Category, "...")
+}
+
+func formatConsoleLine(timestamp time.Time, instanceID, instanceName string, level Level, category Category, body string) string {
 	label := "General"
-	if e.InstanceID != "" {
-		label = "Instance: " + e.InstanceName
+	if instanceID != "" {
+		label = "Instance: " + instanceName
 	}
-	body := strings.Join(strings.Fields(e.Content), " ")
+	body = strings.Join(strings.Fields(body), " ")
 	r := []rune(body)
 	if len(r) > 200 {
 		body = string(r[:197]) + "..."
 	}
-	return fmt.Sprintf("[%s](%s)[%s][%s] %s", e.Timestamp.Format("15:04:05"), label, e.Level, e.Category, body)
+	return fmt.Sprintf("[%s](%s)[%s][%s] %s", timestamp.Format("15:04:05"), label, level, category, body)
 }
 func Init(size int)                           { General.Init(size) }
 func Info(c Category, v string, t ...string)  { General.Info(c, v, t...) }

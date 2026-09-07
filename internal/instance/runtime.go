@@ -128,9 +128,11 @@ func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.
 		"model-router-reflection",
 		memoryConfig,
 	)
-	scope.Log().Info(
+	reflectionSummary := fmt.Sprintf("✓ 记忆反思独立超时: %s", memoryConfig.ReflectTimeout)
+	scope.Log().InfoWithConsoleSummary(
 		logs.SYSTEM,
-		fmt.Sprintf("✓ 记忆反思独立超时: %s", memoryConfig.ReflectTimeout),
+		reflectionSummary,
+		reflectionSummary,
 	)
 	reflector.Scope = scope
 	reflections := memory.NewReflectionManager(reflector)
@@ -163,7 +165,7 @@ func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.
 		registry[stickerTool.Name()] = stickerTool
 		stealStickerTool := tools.StealStickerTool(stealer)
 		registry[stealStickerTool.Name()] = stealStickerTool
-		scope.Log().Info(logs.SYSTEM, "✓ 表情包摘取子系统已初始化")
+		scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 表情包摘取子系统已初始化", "✓ 表情包摘取子系统已初始化")
 		if enabled {
 			summarizer.EnqueueUnsummarized()
 		}
@@ -202,16 +204,14 @@ func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.
 		// Persona dialogue prompt
 		SharedDialogue: shared.Prompt,
 	}
-	scope.Log().Info(
-		logs.SYSTEM,
-		fmt.Sprintf(
-			"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
-			groupCompactBufferSize,
-			groupCompactMinInterval,
-		),
+	compactSummary := fmt.Sprintf(
+		"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
+		groupCompactBufferSize,
+		groupCompactMinInterval,
 	)
+	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, compactSummary, compactSummary)
 
-	scope.Log().Info(logs.SYSTEM, "✓ 智能体引擎初始化完成")
+	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool

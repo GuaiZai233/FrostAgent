@@ -569,7 +569,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		if engine != nil && session != nil {
 			if runResult.MemoryWritten {
-				engine.Log().Info(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 			} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
 				pendingUserText := userText
 				if event.MessageType == "group" {

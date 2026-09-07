@@ -95,5 +95,5 @@ func (m *ReflectionManager) run(owner string) {
 		m.Log().Error(logs.SYSTEM, fmt.Sprintf("后台记忆反思失败: %v", err))
 		return
 	}
-	m.Log().Info(logs.SYSTEM, "后台记忆反思任务已完成")
+	m.Log().InfoWithConsoleSummary(logs.SYSTEM, "后台记忆反思任务已完成", "后台记忆反思任务已完成")
 }
