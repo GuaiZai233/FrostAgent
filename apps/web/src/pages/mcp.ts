@@ -828,7 +828,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
   function openServerFormDialog(existing?: MCPServerInfo): void {
     const isEdit = Boolean(existing);
     let currentDraft: DraftServerConfig = createDefaultDraft(
-      isEdit,
       existing
         ? {
             ...existing,

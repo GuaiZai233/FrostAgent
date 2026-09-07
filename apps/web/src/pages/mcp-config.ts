@@ -132,7 +132,6 @@ export function cleanJSON(raw: string): string {
  * Creates a clean default DraftServerConfig with normalized defaults.
  */
 export function createDefaultDraft(
-  _isEdit = false,
   existing?: Partial<DraftServerConfig>
 ): DraftServerConfig {
   let transport: 'stdio' | 'streamable_http' | 'sse' = 'stdio';
