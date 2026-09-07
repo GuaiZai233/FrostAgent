@@ -2,7 +2,7 @@
     "ws_url": {
         "description": "从 FrostAgent 实例概览复制 WebSocket 地址 (例如 ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot)",
         "type": "string",
-        "default": "ws://127.0.0.1:1234/ws/astrbot"
+        "default": ""
     },
     "http_base_url": {
         "description": "FrostAgent HTTP API 根地址，用于跨容器获取表情包图片",

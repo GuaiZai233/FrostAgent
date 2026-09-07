@@ -57,6 +57,7 @@ type Manager struct {
 	mu             sync.RWMutex
 	root           string
 	global         *instanceconfig.Store
+	wsListenAddr   string
 	registry       registry
 	instances      map[string]*managed
 	shared         *dialogue.Service
@@ -78,7 +79,11 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		return nil, err
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	m := &Manager{root: abs, global: global, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shared: dialogue.New(dialoguePath, nil), shutdown: shutdown, shutdownCancel: shutdownCancel}
+	wsListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
+	if wsListenAddr == "" {
+		wsListenAddr = "127.0.0.1:1234"
+	}
+	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shared: dialogue.New(dialoguePath, nil), shutdown: shutdown, shutdownCancel: shutdownCancel}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
 		if err = json.Unmarshal(data, &m.registry); err != nil {
@@ -203,7 +208,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 	if openErr != nil && c.AccessError() != nil {
 		return nil, c, openErr
 	}
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, c, m.global, i.logger, m.shared, m.billing, enabled)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
@@ -958,11 +963,21 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if ws && rt.Scope.Context().Err() != nil {
+	if (ws || stream) && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}
-	req := r.Clone(r.Context())
+	requestContext := r.Context()
+	if stream {
+		streamContext, streamCancel := context.WithCancel(requestContext)
+		stopRuntimeCancel := context.AfterFunc(rt.Scope.Context(), streamCancel)
+		defer func() {
+			stopRuntimeCancel()
+			streamCancel()
+		}()
+		requestContext = streamContext
+	}
+	req := r.Clone(requestContext)
 	urlCopy := *r.URL
 	urlCopy.Path = path
 	req.URL = &urlCopy

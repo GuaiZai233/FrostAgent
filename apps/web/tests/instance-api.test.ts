@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { createInstanceAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
+import { instanceWebSocketURL } from '../src/utils/websocket-url';
 const events = new EventTarget();
 Object.assign(globalThis, {
   window: Object.assign(events, { location: { origin: 'http://localhost' } }),
@@ -23,6 +24,21 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 };
 const a = { id: 'a1b2c3d4', name: 'a', enabled: false, created_at: '' };
 const b = { id: 'b1c2d3e4', name: 'b', enabled: false, created_at: '' };
+assert.equal(
+  instanceWebSocketURL(':1234', a.id, 'astrbot', 'http://localhost:8080'),
+  'ws://localhost:1234/instances/a1b2c3d4/ws/astrbot',
+  'adapter URL used the management HTTP port instead of WS_LISTEN_ADDR',
+);
+assert.equal(
+  instanceWebSocketURL(
+    '0.0.0.0:1234',
+    a.id,
+    'onebot',
+    'http://dashboard.example:8080',
+  ),
+  'ws://dashboard.example:1234/instances/a1b2c3d4/ws/onebot',
+  'wildcard listener host was exposed instead of the dashboard host',
+);
 instanceState.select(a);
 const oldPage = createInstanceAPI();
 // Simulates deferred FileReader/arrayBuffer continuations and the next item of

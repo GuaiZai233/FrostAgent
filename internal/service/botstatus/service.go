@@ -18,13 +18,18 @@ import (
 
 // Service implements frostagent.v1.BotStatusServiceHandler.
 type Service struct {
-	engine  *llm.Engine
-	version string
+	engine       *llm.Engine
+	version      string
+	wsListenAddr string
 }
 
 // New creates a new BotStatusService.
-func New(engine *llm.Engine, version string) *Service {
-	return &Service{engine: engine, version: version}
+func New(engine *llm.Engine, version, wsListenAddr string) *Service {
+	return &Service{
+		engine:       engine,
+		version:      version,
+		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:1234"),
+	}
 }
 
 // GetOverview returns bot status overview.
@@ -74,7 +79,7 @@ func (s *Service) GetOverview(
 	})
 
 	resp := &v1.GetOverviewResponse{
-		BotName:                "FrostAgent",
+		BotName:                envOrDefault(s.engine, "BOT_NAME", "FrostAgent"),
 		Version:                s.version,
 		UptimeSeconds:          uptime,
 		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
@@ -82,9 +87,24 @@ func (s *Service) GetOverview(
 		CurrentModel:           currentModelName(s.engine),
 		Status:                 status,
 		Tools:                  toolInfos,
+		WsListenAddr:           s.wsListenAddr,
 	}
 
 	return connect.NewResponse(resp), nil
+}
+
+func envOrDefault(engine *llm.Engine, key, fallback string) string {
+	if engine == nil {
+		return fallback
+	}
+	return defaultString(engine.Getenv(key), fallback)
+}
+
+func defaultString(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func currentModelName(engine *llm.Engine) string {

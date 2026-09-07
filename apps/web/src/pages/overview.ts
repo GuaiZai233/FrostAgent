@@ -5,6 +5,7 @@ import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
+import { instanceWebSocketURL } from '../utils/websocket-url';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
  const api = createInstanceAPI();
@@ -50,8 +51,20 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           ? 'badge-destructive'
           : 'badge-outline';
 
-      const botName = instance?.name || data.botName || 'FrostAgent';
+      const botName = data.botName || 'FrostAgent';
       const version = data.version || '-';
+      const oneBotURL = instanceWebSocketURL(
+        data.wsListenAddr,
+        instance?.id || '',
+        'onebot',
+        window.location.origin,
+      );
+      const astrBotURL = instanceWebSocketURL(
+        data.wsListenAddr,
+        instance?.id || '',
+        'astrbot',
+        window.location.origin,
+      );
 
       const toolsHtml =
         data.tools.length > 0
@@ -99,7 +112,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             </div>
           </div>
           <p class="page-description">智能体核心服务运行状态与已挂载工具能力</p>
- <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(window.location.origin.replace(/^http/, "ws"))}/instances/${instance?.id}/ws/onebot<br>AstrBot: ${escapeHtml(window.location.origin.replace(/^http/, "ws"))}/instances/${instance?.id}/ws/astrbot</p>
+          <p class="text-xs text-muted">实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span></p>
+          <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(oneBotURL)}<br>AstrBot: ${escapeHtml(astrBotURL)}</p>
         </header>
 
         <!-- KPI Summary Cards -->

@@ -31,6 +31,7 @@ message GetOverviewResponse {
   string current_model = 6;
   BotStatus status = 7;
   repeated ToolInfo tools = 8;
+  string ws_listen_addr = 9;
 }
 
 message GetSessionsRequest {

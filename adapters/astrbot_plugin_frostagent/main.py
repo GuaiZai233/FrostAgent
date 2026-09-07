@@ -34,8 +34,28 @@ class Settings:
 
 def load_settings(config: dict = None) -> Settings:
     config = config or {}
+    ws_url = str(
+        config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
+    ).strip()
+    if not ws_url:
+        raise ValueError(
+            "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
+            "WebSocket address from the instance overview"
+        )
+    parsed_ws_url = urlparse(ws_url)
+    if (
+        parsed_ws_url.scheme not in ("ws", "wss")
+        or not parsed_ws_url.netloc
+        or not re.fullmatch(
+            r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path
+        )
+    ):
+        raise ValueError(
+            "FrostAgent ws_url must use "
+            "ws(s)://host/instances/<instance-id>/ws/astrbot"
+        )
     return Settings(
-        ws_url=config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "ws://127.0.0.1:1234/ws/astrbot"),
+        ws_url=ws_url,
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),

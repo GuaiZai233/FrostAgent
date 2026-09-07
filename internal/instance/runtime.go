@@ -41,7 +41,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -217,7 +217,7 @@ func buildRuntime(dir, configDir, prefix string, config, global *instanceconfig.
 	engine.ToolRegistry[memTool.Name()] = memTool
 	mux := http.NewServeMux()
 	// ConnectRPC 服务注册
-	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version))
+	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version, wsListenAddr))
 	mux.Handle(botPath, botHandler)
 
 	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.NewScoped(config, global))

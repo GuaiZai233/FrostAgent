@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib
+import os
 import sys
 import types
 import unittest
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 
 class _Logger:
@@ -61,9 +63,35 @@ sys.modules["astrbot.api.event"] = event_module
 sys.modules["astrbot.api.star"] = star_module
 sys.modules["websockets"] = types.ModuleType("websockets")
 
-FrostAgentAdapter = importlib.import_module(
+adapter_module = importlib.import_module(
     "adapters.astrbot_plugin_frostagent.main"
-).FrostAgentAdapter
+)
+FrostAgentAdapter = adapter_module.FrostAgentAdapter
+load_settings = adapter_module.load_settings
+
+
+class SettingsTest(unittest.TestCase):
+    def test_ws_url_is_required_without_legacy_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ws_url is required"):
+                load_settings({})
+
+    def test_legacy_unscoped_ws_url_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "/instances/<instance-id>"):
+            load_settings({"ws_url": "ws://127.0.0.1:1234/ws/astrbot"})
+
+    def test_instance_scoped_ws_url_is_accepted(self):
+        settings = load_settings(
+            {
+                "ws_url": (
+                    "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot"
+                )
+            }
+        )
+        self.assertEqual(
+            settings.ws_url,
+            "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+        )
 
 
 class At:

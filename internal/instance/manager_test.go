@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/gorilla/websocket"
@@ -17,6 +18,133 @@ import (
 	"testing"
 	"time"
 )
+
+func TestStoppedRuntimeRejectsNewInstanceLogStreams(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "stream-stop")
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	item := m.instances[info.ID]
+	item.op.Lock()
+	defer item.op.Unlock()
+	if err := m.stop(info.ID, item); err != nil {
+		t.Fatal(err)
+	}
+	if item.runtime == nil || item.runtime.Scope.Context().Err() == nil {
+		t.Fatal("stop did not retain a cancelled runtime for the deletion window")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.LogService/StreamLogs",
+		strings.NewReader("{}"),
+	).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("new log stream entered cancelled runtime: code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestInstanceLogStreamTracksRuntimeCancellationAfterAdmission(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "stream-race")
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	item := m.instances[info.ID]
+	item.op.Lock()
+	defer item.op.Unlock()
+
+	body := newGatedRequestBody("\x00\x00\x00\x00\x02{}")
+	released := false
+	defer func() {
+		if !released {
+			close(body.release)
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.LogService/StreamLogs",
+		nil,
+	).WithContext(ctx)
+	req.Body = body
+	req.ContentLength = int64(body.reader.Len())
+	req.Header.Set("Content-Type", "application/connect+json")
+	req.Header.Set("Connect-Protocol-Version", "1")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		response <- w
+	}()
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		t.Fatal("log stream request did not reach body decoding")
+	}
+
+	if err := m.stop(info.ID, item); err != nil {
+		t.Fatal(err)
+	}
+	close(body.release)
+	released = true
+	select {
+	case <-response:
+	case <-time.After(time.Second):
+		cancel()
+		<-response
+		t.Fatal("log stream survived captured runtime cancellation")
+	}
+}
+
+func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "address-freeze")
+	assertAddress := func(manager *Manager, want string) {
+		t.Helper()
+		w := rpc(t, manager, info.ID, "BotStatusService/GetOverview", "{}", false)
+		if w.Code != http.StatusOK {
+			t.Fatalf("overview status = %d, body=%s", w.Code, w.Body.String())
+		}
+		var response struct {
+			WSListenAddr string `json:"wsListenAddr"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.WSListenAddr != want {
+			t.Fatalf("overview WS address = %q, want %q", response.WSListenAddr, want)
+		}
+	}
+
+	assertAddress(m, "127.0.0.1:1234")
+	if err := m.global.Update("WS_LISTEN_ADDR", ":4321", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	assertAddress(m, "127.0.0.1:1234")
+
+	m.Close()
+	next, err := New(
+		m.root,
+		m.global,
+		filepath.Join(filepath.Dir(m.root), "dialogue-restarted.yml"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(next.Close)
+	assertAddress(next, ":4321")
+}
 
 func testManager(t *testing.T) *Manager {
 	t.Helper()
