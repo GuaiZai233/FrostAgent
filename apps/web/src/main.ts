@@ -99,13 +99,16 @@ function initAppShell(): void {
         </nav>
 
         <div class="sidebar-footer">
- <button class="theme-toggle-btn instance-manager-btn">实例管理<span class="instance-selected-label text-xs text-muted">未选择</span></button>
           <button class="theme-toggle-btn" id="theme-toggle-desktop" title="切换主题">
             <span class="flex items-center gap-2">
               <span id="theme-icon-desktop" class="inline-flex">${icon(themeInfo.iconName)}</span>
               <span id="theme-label-desktop" class="text-xs">${themeInfo.label}</span>
             </span>
             <span class="text-muted text-xs">切换</span>
+          </button>
+          <button class="theme-toggle-btn instance-manager-btn">
+            <span>实例管理</span>
+            <span class="instance-selected-label text-xs text-muted">未选择</span>
           </button>
         </div>
       </aside>
@@ -147,7 +150,13 @@ function initAppShell(): void {
         </div>
         <nav class="sidebar-nav p-3" aria-label="移动端导航">
           ${buildNavigationLinks(true)}
-        </nav><div class="sidebar-footer"><button class="theme-toggle-btn instance-manager-btn">实例管理<span class="instance-selected-label text-xs text-muted">未选择</span></button></div>
+        </nav>
+        <div class="sidebar-footer">
+          <button class="theme-toggle-btn instance-manager-btn">
+            <span>实例管理</span>
+            <span class="instance-selected-label text-xs text-muted">未选择</span>
+          </button>
+        </div>
       </aside>
 
       <!-- Main Content Container -->

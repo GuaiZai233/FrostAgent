@@ -20,3 +20,4 @@ await import(
   'data:text/javascript;base64,' +
     Buffer.from(result.outputFiles[0].contents).toString('base64')
 );
+await import('./layout.test.mjs');
