@@ -25,7 +25,7 @@ var InstanceRestartKeys = map[string]bool{"ENABLE_ONEBOT_ADAPTER": true, "ENABLE
 var ControlPlaneRestartKeys = map[string]bool{
 	"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true,
 	"ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true,
-	"SANDBOX_ENABLED": true, "SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
+	"SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
 }
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
@@ -34,6 +34,7 @@ type Store struct {
 	mu        sync.RWMutex
 	path      string
 	values    map[string]string
+	overrides map[string]string
 	global    bool
 	raw       string
 	loadErr   error
@@ -41,7 +42,14 @@ type Store struct {
 }
 
 func Open(path string, global bool) (*Store, error) {
-	s := &Store{path: path, global: global, values: map[string]string{}}
+	s := &Store{path: path, global: global, values: map[string]string{}, overrides: map[string]string{}}
+	if global {
+		for key := range GlobalKeys {
+			if value, exists := os.LookupEnv(key); exists {
+				s.overrides[key] = value
+			}
+		}
+	}
 	info, err := os.Stat(path)
 	if err == nil {
 		if !info.Mode().IsRegular() {
@@ -91,12 +99,22 @@ func allowed(k string, global bool) bool {
 	}
 	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH" && k != "ASTRBOT_WS_PATH"
 }
-func (s *Store) Get(k string) string { s.mu.RLock(); defer s.mu.RUnlock(); return s.values[k] }
+func (s *Store) Get(k string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if value, exists := s.overrides[k]; exists {
+		return value
+	}
+	return s.values[k]
+}
 func (s *Store) Snapshot() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	v := map[string]string{}
 	for k, x := range s.values {
+		v[k] = x
+	}
+	for k, x := range s.overrides {
 		v[k] = x
 	}
 	return v

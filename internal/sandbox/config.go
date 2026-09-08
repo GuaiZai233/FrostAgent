@@ -32,7 +32,7 @@ func LoadConfig(getenv func(string) string) Config {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	enabled := parseBool(getenv("SANDBOX_ENABLED"), false)
+	enabled := ParseBool(getenv("SANDBOX_ENABLED"), false)
 	baseURL := strings.TrimSpace(getenv("SANDBOX_BASE_URL"))
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
@@ -54,6 +54,11 @@ func LoadConfig(getenv func(string) string) Config {
 
 // LoadConfigFromEnv reads sandbox configuration from process environment variables.
 func LoadConfigFromEnv() Config { return LoadConfig(os.Getenv) }
+
+// LoadConfigFromMap reads sandbox configuration from a key-value map.
+func LoadConfigFromMap(values map[string]string) Config {
+	return LoadConfig(func(key string) string { return values[key] })
+}
 
 // Validate checks whether the configuration is valid when sandbox execution is enabled.
 func (c Config) Validate() error {
@@ -81,7 +86,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func parseBool(val string, fallback bool) bool {
+// ParseBool parses common boolean string representations.
+func ParseBool(val string, fallback bool) bool {
 	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "1", "t", "true", "yes", "on":
 		return true

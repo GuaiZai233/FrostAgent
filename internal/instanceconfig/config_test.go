@@ -38,6 +38,43 @@ func TestStoresNeverMutateProcessEnvironment(t *testing.T) {
 		t.Fatal("partial raw update")
 	}
 }
+
+func TestGlobalStorePreservesProcessEnvironmentPrecedence(t *testing.T) {
+	t.Setenv("SANDBOX_ENABLED", "true")
+	t.Setenv("SANDBOX_AUTH_TOKEN", "external-synthetic-token")
+	t.Setenv("BOT_NAME", "external-instance-name")
+	dir := t.TempDir()
+	globalPath := filepath.Join(dir, "global.env")
+	if err := os.WriteFile(globalPath, []byte("SANDBOX_ENABLED=false\nSANDBOX_AUTH_TOKEN=file-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	global, err := Open(globalPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Get("SANDBOX_ENABLED") != "true" || global.Get("SANDBOX_AUTH_TOKEN") != "external-synthetic-token" {
+		t.Fatal("global Store did not preserve process environment precedence")
+	}
+	if err = global.Update("SANDBOX_ENABLED", "false", false); err != nil {
+		t.Fatal(err)
+	}
+	if global.Get("SANDBOX_ENABLED") != "true" {
+		t.Fatal("file edit bypassed the process environment override")
+	}
+
+	instancePath := filepath.Join(dir, "instance.env")
+	if err = os.WriteFile(instancePath, []byte("BOT_NAME=file-instance-name\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := Open(instancePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.Get("BOT_NAME") != "file-instance-name" {
+		t.Fatal("process environment leaked into instance-owned configuration")
+	}
+}
+
 func TestConcurrentUpdatesAreAtomic(t *testing.T) {
 	c, _ := Open(filepath.Join(t.TempDir(), "instance.env"), false)
 	var wg sync.WaitGroup
@@ -102,14 +139,14 @@ func TestApplyScopeMetadataIsDisjoint(t *testing.T) {
 	for _, key := range []string{
 		"LISTEN_ADDR", "WS_LISTEN_ADDR", "HTTP_ALLOWED_ORIGINS",
 		"ALCYONE_BASE_URL", "ALCYONE_SERVICE_TOKEN", "ALCYONE_TIMEOUT",
-		"SANDBOX_ENABLED", "SANDBOX_BASE_URL", "SANDBOX_AUTH_TOKEN", "SANDBOX_SESSION_NAMESPACE",
+		"SANDBOX_BASE_URL", "SANDBOX_AUTH_TOKEN", "SANDBOX_SESSION_NAMESPACE",
 		"MCP_CONTROL_TOKEN", "ADMIN_TOKEN", "ALLOW_REMOTE_MCP_MANAGEMENT", "MCP_ENFORCE_LOCAL_TOKEN",
 	} {
 		if !GlobalKeys[key] || !ControlPlaneRestartKeys[key] {
 			t.Fatalf("%s must require a Control Plane restart", key)
 		}
 	}
-	for _, key := range []string{"SYSTEM_PROMPT", "WS_ALLOWED_ORIGINS"} {
+	for _, key := range []string{"SYSTEM_PROMPT", "WS_ALLOWED_ORIGINS", "SANDBOX_ENABLED"} {
 		if !GlobalKeys[key] || ControlPlaneRestartKeys[key] {
 			t.Fatalf("%s must remain global and hot", key)
 		}

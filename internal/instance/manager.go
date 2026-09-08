@@ -67,7 +67,7 @@ type Manager struct {
 	shared         *dialogue.Service
 	billing        *billing.Client
 	mcpGetenv      func(string) string
-	sandbox        *sandbox.Config
+	sandbox        *sandbox.ConfigManager
 	endpointMu     sync.Mutex
 	endpointOwners map[string]string
 	general        http.Handler
@@ -168,11 +168,11 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		}
 	}
 	sandboxCfg := sandbox.LoadConfig(global.Get)
+	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
-			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效，已禁用隔离命令执行能力: %v", err))
+			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后重新启用）", err))
 		} else {
-			m.sandbox = &sandboxCfg
 			backend := codeinterpreter.New(sandboxCfg)
 			healthCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			healthErr := backend.Health(healthCtx)
@@ -183,6 +183,8 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 				logs.General.Info(logs.SYSTEM, fmt.Sprintf("沙箱执行运行时已就绪: %s", sandboxCfg.BaseURL))
 			}
 		}
+	} else {
+		logs.General.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
 	mcpEnvironment := map[string]string{
 		"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
@@ -258,19 +260,11 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, i.mcp, m.mcpGetenv, m.instanceSandboxConfig(id), enabled)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
 	return r, c, errors.Join(openErr, err)
-}
-func (m *Manager) instanceSandboxConfig(id string) *sandbox.Config {
-	if m.sandbox == nil {
-		return nil
-	}
-	cfg := *m.sandbox
-	cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + id
-	return &cfg
 }
 func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoint) error {
 	if err := modelrouter.PersistentRefs(endpoints); err != nil {

@@ -151,6 +151,7 @@ func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testi
 
 func testManager(t *testing.T) *Manager {
 	t.Helper()
+	t.Setenv("SANDBOX_ENABLED", "false")
 	dir := t.TempDir()
 	g, err := instanceconfig.Open(filepath.Join(dir, ".env"), true)
 	if err != nil {
@@ -198,15 +199,19 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 	dir := t.TempDir()
 	globalPath := filepath.Join(dir, ".env")
 	raw := strings.Join([]string{
-		"SANDBOX_ENABLED=true",
-		"SANDBOX_BASE_URL=" + gateway.URL,
-		"SANDBOX_AUTH_TOKEN=synthetic-token",
-		"SANDBOX_SESSION_NAMESPACE=frostagent-test",
+		"SANDBOX_ENABLED=false",
+		"SANDBOX_BASE_URL=http://file-value.invalid",
+		"SANDBOX_AUTH_TOKEN=file-token",
+		"SANDBOX_SESSION_NAMESPACE=file-namespace",
 		"",
 	}, "\n")
 	if err := os.WriteFile(globalPath, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("SANDBOX_ENABLED", "true")
+	t.Setenv("SANDBOX_BASE_URL", gateway.URL)
+	t.Setenv("SANDBOX_AUTH_TOKEN", "synthetic-token")
+	t.Setenv("SANDBOX_SESSION_NAMESPACE", "frostagent-test")
 	global, err := instanceconfig.Open(globalPath, true)
 	if err != nil {
 		t.Fatal(err)
@@ -241,11 +246,32 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 	if len(got) != 3 || got[0] == "" || got[0] == got[1] || got[0] != got[2] {
 		t.Fatalf("sandbox UUID isolation/stability failed: %v", got)
 	}
+	tool := m.instances[a.ID].runtime.Engine.ToolRegistry["execute_command"]
+	executor := tool.(interface {
+		ExecuteContext(context.Context, string) (string, error)
+	})
+	m.sandbox.SetEnabled(false)
+	result, err := executor.ExecuteContext(ctx, `{"command":"printf disabled"}`)
+	if err != nil || !strings.Contains(result, "已被禁用") {
+		t.Fatalf("disabled sandbox result = %q, %v", result, err)
+	}
+	m.sandbox.SetEnabled(true)
+	if _, err := executor.ExecuteContext(ctx, `{"command":"printf enabled"}`); err != nil {
+		t.Fatalf("re-enabled sandbox failed without instance restart: %v", err)
+	}
 
 	disabled := testManager(t)
 	disabledInfo := create(t, disabled, "sandbox-disabled")
-	if _, ok := disabled.instances[disabledInfo.ID].runtime.Engine.ToolRegistry["execute_command"]; ok {
-		t.Fatal("execute_command exposed while SANDBOX_ENABLED is false")
+	disabledTool, ok := disabled.instances[disabledInfo.ID].runtime.Engine.ToolRegistry["execute_command"]
+	if !ok {
+		t.Fatal("execute_command must remain registered while SANDBOX_ENABLED is false")
+	}
+	disabledExecutor := disabledTool.(interface {
+		ExecuteContext(context.Context, string) (string, error)
+	})
+	result, err = disabledExecutor.ExecuteContext(ctx, `{"command":"printf disabled"}`)
+	if err != nil || !strings.Contains(result, "已被禁用") {
+		t.Fatalf("initially disabled sandbox result = %q, %v", result, err)
 	}
 }
 

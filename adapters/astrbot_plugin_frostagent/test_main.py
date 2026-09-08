@@ -105,12 +105,19 @@ class SettingsTest(unittest.TestCase):
         create_task.assert_not_called()
 
     def test_plugin_starts_normally_with_instance_scoped_ws_url(self):
-        with patch.object(asyncio, "create_task", return_value=object()) as create_task:
+        created_task = object()
+
+        def capture_task(coroutine):
+            coroutine.close()
+            return created_task
+
+        with patch.object(asyncio, "create_task", side_effect=capture_task) as create_task:
             adapter = FrostAgentAdapter(
                 object(),
                 {"ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot"},
             )
         self.assertIsNone(adapter._configuration_error)
+        self.assertIs(adapter._init_task, created_task)
         create_task.assert_called_once()
 
 

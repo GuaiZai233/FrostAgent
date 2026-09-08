@@ -16,6 +16,10 @@ const overview = await readFile(
   new URL('../src/pages/overview.ts', import.meta.url),
   'utf8',
 );
+const backendSettings = await readFile(
+  new URL('../src/pages/backend-settings.ts', import.meta.url),
+  'utf8',
+);
 
 const desktopFooter = main.match(
   /<div class="sidebar-footer">([\s\S]*?)<\/div>\s*<\/aside>/,
@@ -71,6 +75,19 @@ assert.match(
   overview,
   /copyToClipboard\(target\)/,
   'overview copy action does not call copyToClipboard',
+);
+
+const globalSettings = backendSettings.match(
+  /const globalKeys = new Set\(\[([\s\S]*?)\]\);/,
+)?.[1];
+const controlPlaneRestartSettings = backendSettings.match(
+  /const controlPlaneRestartKeys = new Set\(\[([\s\S]*?)\]\);/,
+)?.[1];
+assert.ok(globalSettings?.includes("'SANDBOX_ENABLED'"));
+assert.equal(
+  controlPlaneRestartSettings?.includes("'SANDBOX_ENABLED'"),
+  false,
+  'SANDBOX_ENABLED must be shown as a hot Control Plane setting',
 );
 
 process.stdout.write(

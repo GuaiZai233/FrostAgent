@@ -2,8 +2,10 @@ package settings
 
 import (
 	"FrostAgent/internal/instanceconfig"
+	"FrostAgent/internal/sandbox"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,7 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	"github.com/joho/godotenv"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 )
@@ -52,7 +55,7 @@ var knownEnvVars = map[string]envEntry{
 	"ALCYONE_BASE_URL":            {"Alcyone 计费服务地址", false, true, false},
 	"ALCYONE_SERVICE_TOKEN":       {"Alcyone 计费服务通信 Token", true, true, false},
 	"ALCYONE_TIMEOUT":             {"计费请求超时时间", false, true, false},
-	"SANDBOX_ENABLED":             {"是否启用隔离命令执行", false, true, false},
+	"SANDBOX_ENABLED":             {"是否启用隔离命令执行", false, false, false},
 	"SANDBOX_BASE_URL":            {"Sandbox Gateway 地址", false, true, false},
 	"SANDBOX_AUTH_TOKEN":          {"Sandbox Gateway 认证 Token", true, true, false},
 	"SANDBOX_SESSION_NAMESPACE":   {"Sandbox 会话基础命名空间", false, true, false},
@@ -68,14 +71,65 @@ var knownEnvVars = map[string]envEntry{
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
 }
 
-// Service implements frostagent.v1.SettingsServiceHandler.
-type Service struct {
-	envPath        string
-	config, global *instanceconfig.Store
-	mu             sync.Mutex
+// SandboxManager propagates atomic Control Plane sandbox configuration updates.
+type SandboxManager interface {
+	ApplySnapshot(cfg sandbox.Config)
+	SetEnabled(enabled bool)
+	RefreshEnabled(load func() bool)
+	Get() sandbox.Config
 }
 
-func NewScoped(c, g *instanceconfig.Store) *Service { return &Service{config: c, global: g} }
+var (
+	processInitialEnv     map[string]string
+	processInitialEnvOnce sync.Once
+)
+
+func init() {
+	CaptureInitialEnv()
+}
+
+// CaptureInitialEnv snapshots environment values before a dotenv file is loaded.
+func CaptureInitialEnv() {
+	processInitialEnvOnce.Do(func() {
+		processInitialEnv = make(map[string]string)
+		for _, env := range os.Environ() {
+			if key, value, ok := strings.Cut(env, "="); ok {
+				processInitialEnv[key] = value
+			}
+		}
+	})
+}
+
+// Service implements frostagent.v1.SettingsServiceHandler.
+type Service struct {
+	envPath           string
+	config, global    *instanceconfig.Store
+	sandboxManager    SandboxManager
+	externalOverrides map[string]string
+	mu                sync.Mutex
+}
+
+func NewScoped(c, g *instanceconfig.Store, sandboxManager SandboxManager) *Service {
+	return &Service{config: c, global: g, sandboxManager: sandboxManager}
+}
+
+// SetSandboxConfigManager wires the shared sandbox configuration manager.
+func (s *Service) SetSandboxConfigManager(manager SandboxManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sandboxManager = manager
+}
+
+// SetExternalOverrideForTest explicitly registers a process-level override.
+func (s *Service) SetExternalOverrideForTest(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.externalOverrides == nil {
+		s.externalOverrides = make(map[string]string)
+	}
+	s.externalOverrides[key] = value
+}
+
 func (s *Service) store(k string) *instanceconfig.Store {
 	if instanceconfig.GlobalKeys[k] && s.global != nil {
 		return s.global
@@ -89,11 +143,28 @@ func New(envPath string) (*Service, error) {
 	if envPath == "" {
 		envPath = ".env"
 	}
-	s := &Service{envPath: envPath}
+	s := &Service{envPath: envPath, externalOverrides: make(map[string]string)}
 	if err := s.hardenPermissions(); err != nil {
 		return nil, fmt.Errorf("harden .env permissions: %w", err)
 	}
+	s.initExternalOverrides()
 	return s, nil
+}
+
+func (s *Service) initExternalOverrides() {
+	var fileEnv map[string]string
+	if data, err := os.ReadFile(s.envPath); err == nil {
+		fileEnv, _ = godotenv.Unmarshal(string(data))
+	}
+	maps.Copy(s.externalOverrides, processInitialEnv)
+	for _, env := range os.Environ() {
+		if key, value, ok := strings.Cut(env, "="); ok {
+			fileValue, inFile := fileEnv[key]
+			if !inFile || value != fileValue {
+				s.externalOverrides[key] = value
+			}
+		}
+	}
 }
 
 func (s *Service) hardenPermissions() error {
@@ -175,6 +246,10 @@ func (s *Service) UpdateEnvVar(
 		res := &v1.UpdateEnvVarResponse{Success: err == nil}
 		if err != nil {
 			res.Error = err.Error()
+		} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+			s.sandboxManager.RefreshEnabled(func() bool {
+				return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
+			})
 		}
 		return connect.NewResponse(res), nil
 	}
@@ -194,6 +269,10 @@ func (s *Service) UpdateEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("set in-process environment variable %q: %v", key, err),
 		}), nil
+	}
+	delete(s.externalOverrides, key)
+	if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+		s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
 	}
 
 	return connect.NewResponse(&v1.UpdateEnvVarResponse{Success: true}), nil
@@ -224,6 +303,10 @@ func (s *Service) DeleteEnvVar(
 		res := &v1.DeleteEnvVarResponse{Success: err == nil}
 		if err != nil {
 			res.Error = err.Error()
+		} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+			s.sandboxManager.RefreshEnabled(func() bool {
+				return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
+			})
 		}
 		return connect.NewResponse(res), nil
 	}
@@ -242,6 +325,10 @@ func (s *Service) DeleteEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("unset in-process environment variable %q: %v", key, err),
 		}), nil
+	}
+	delete(s.externalOverrides, key)
+	if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+		s.sandboxManager.SetEnabled(false)
 	}
 
 	return connect.NewResponse(&v1.DeleteEnvVarResponse{Success: true}), nil
@@ -272,7 +359,7 @@ func (s *Service) GetRawEnvFile(
 	return connect.NewResponse(&v1.GetRawEnvFileResponse{Content: string(data)}), nil
 }
 
-// UpdateRawEnvFile overwrites the .env file with the given content.
+// UpdateRawEnvFile overwrites the selected environment file.
 func (s *Service) UpdateRawEnvFile(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateRawEnvFileRequest],
@@ -287,8 +374,19 @@ func (s *Service) UpdateRawEnvFile(
 		}
 		return connect.NewResponse(res), nil
 	}
+	newEnv, err := godotenv.Unmarshal(content)
+	if err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("parse .env content: %v", err),
+		}), nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var oldEnv map[string]string
+	if oldData, readErr := os.ReadFile(s.envPath); readErr == nil {
+		oldEnv, _ = godotenv.Unmarshal(string(oldData))
+	}
 
 	if err := writeEnvAtomic(s.envPath, []byte(content)); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
@@ -296,8 +394,42 @@ func (s *Service) UpdateRawEnvFile(
 			Error:   err.Error(),
 		}), nil
 	}
+	for key := range oldEnv {
+		if _, exists := newEnv[key]; !exists {
+			if _, overridden := s.externalOverrides[key]; !overridden {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+	for key, value := range newEnv {
+		if _, overridden := s.externalOverrides[key]; !overridden {
+			_ = os.Setenv(key, value)
+		}
+	}
+	if s.sandboxManager != nil {
+		s.sandboxManager.ApplySnapshot(s.computeEffectiveSandboxConfig(newEnv))
+	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
+}
+
+func (s *Service) computeEffectiveSandboxConfig(newEnv map[string]string) sandbox.Config {
+	effective := make(map[string]string)
+	for _, key := range []string{
+		"SANDBOX_ENABLED",
+		"SANDBOX_BASE_URL",
+		"SANDBOX_AUTH_TOKEN",
+		"SANDBOX_SESSION_NAMESPACE",
+	} {
+		if value, overridden := s.externalOverrides[key]; overridden {
+			effective[key] = value
+		} else if value, exists := newEnv[key]; exists {
+			effective[key] = value
+		} else {
+			effective[key] = os.Getenv(key)
+		}
+	}
+	return sandbox.LoadConfigFromMap(effective)
 }
 
 // formatEnvEntry shares the audited serialization with instance configuration stores.

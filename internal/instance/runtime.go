@@ -45,7 +45,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxCfg *sandbox.Config, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -151,8 +151,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
-	if sandboxCfg != nil {
-		commandTool := tools.ExecuteCommandTool(codeinterpreter.New(*sandboxCfg, codeinterpreter.WithLogger(logger)))
+	if sandboxManager != nil {
+		dynamicBackend := sandbox.NewDynamicBackend(func() sandbox.Config {
+			cfg := sandboxManager.Get()
+			cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + instanceID
+			return cfg
+		}, func(cfg sandbox.Config) sandbox.Backend {
+			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger))
+		})
+		commandTool := tools.ExecuteCommandTool(dynamicBackend)
 		registry[commandTool.Name()] = commandTool
 	}
 
@@ -229,7 +236,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version, wsListenAddr))
 	mux.Handle(botPath, botHandler)
 
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.NewScoped(config, global))
+	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.NewScoped(config, global, sandboxManager))
 	mux.Handle(settingsPath, settingsHandler)
 
 	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(engine.ModelRouter))

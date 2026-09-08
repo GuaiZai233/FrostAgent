@@ -288,9 +288,10 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
   - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
+  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
-  - 当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，不向大模型注册 `execute_command` 工具；
+  - `execute_command` 工具常驻注册于 `ToolRegistry`；当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，工具在被模型调用时明确返回友好提示（“沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。”），避免弱模型因缺失工具而产生幻觉虚构执行结果；
   - 当沙箱服务离线、响应超时、认证失败或发生协议异常时，工具执行严格失败中断（Fail-Closed），向模型返回清晰错误提示；
   - 严禁在沙箱不可用时回退到宿主机的 PowerShell、Bash 或 Cmd 执行。
 - **会话级文件系统隔离与状态持久化 (Session-Scoped Filesystem Persistence)**：
@@ -300,6 +301,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 不同会话严格对应不同的 Worker/用户隔离空间，互不可见且杜绝跨会话状态穿透；禁止在单次命令调用后自动释放沙箱。
 - **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
+  - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；

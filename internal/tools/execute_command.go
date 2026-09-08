@@ -1,4 +1,4 @@
-﻿package tools
+package tools
 
 import (
 	"context"
@@ -65,7 +65,7 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 		},
 		executeContext: func(ctx context.Context, args string) (string, error) {
 			if backend == nil {
-				return "", errors.New("sandbox backend is not configured or unavailable")
+				return "沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。", nil
 			}
 
 			runCtx, ok := llm.RunContextFromContext(ctx)
@@ -121,6 +121,9 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 
 			result, err := backend.Exec(ctx, req)
 			if err != nil {
+				if errors.Is(err, sandbox.ErrSandboxDisabled) {
+					return "沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。", nil
+				}
 				return "", fmt.Errorf("sandbox 执行失败: %w", err)
 			}
 
