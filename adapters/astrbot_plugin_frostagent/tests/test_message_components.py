@@ -55,9 +55,15 @@ class InboundImage:
 
 
 class Reply:
-    def __init__(self, message_id: str, chain: list[object]) -> None:
-        self.id = message_id
-        self.chain = chain
+    def __init__(
+        self,
+        message_id: str | None = None,
+        chain: list[object] | None = None,
+        *,
+        id: str | None = None,
+    ) -> None:
+        self.id = id or message_id
+        self.chain = chain or []
 
 
 class MessageObject:
@@ -151,6 +157,7 @@ def load_plugin_module():
     components.At = FakeAt
     components.Image = FakeImage
     components.Plain = FakePlain
+    components.Reply = Reply
 
     modules = {
         "astrbot": astrbot,
@@ -338,6 +345,21 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual([type(part) for part in parts], [FakeAt, FakePlain])
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
+
+    def test_quote_and_plain_build_ordered_chain(self) -> None:
+        action = {
+            "messages": [
+                {"type": "quote", "message_id": "msg_reply_target"},
+                {"type": "plain", "text": "引用回复"},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual([type(part) for part in parts], [Reply, FakePlain])
+            self.assertEqual(parts[0].id, "msg_reply_target")
+            self.assertEqual(parts[1].text, "引用回复")
 
     def test_sticker_image_serializes_compatible_sub_types(self) -> None:
         """StickerImage must support snake-case and LLBot camel-case fields."""

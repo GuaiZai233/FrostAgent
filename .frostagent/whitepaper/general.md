@@ -103,6 +103,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；
   - 支持群聊无感 running compact 实时摄入与记忆反思；
   - 支持 Agent 工具调用阶段的 `sendHook` 中间消息流式即时下发；
+  - 群聊回复统一在出站协议边界应用 `ENABLE_REPLY_IN_GROUP_MSG` 与 `ENABLE_AT_IN_GROUP_MSG`：自动引用当前入站消息并提及触发用户，显式 `quote` 组件优先且不会重复注入引用；AstrBot 插件将引用映射为平台原生 `Reply` 消息段；
   - 包含客户端自动断线重连与周期心跳保活。
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。

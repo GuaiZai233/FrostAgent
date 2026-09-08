@@ -896,7 +896,7 @@ def action_contains_sticker(action: dict[str, Any]) -> bool:
 
 
 def action_to_message_components(action: dict[str, Any]) -> list[Any]:
-    from astrbot.api.message_components import At, Image, Plain
+    from astrbot.api.message_components import At, Image, Plain, Reply
 
     messages = action.get("messages") or []
     parts: list[Any] = []
@@ -907,6 +907,10 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
                 mention_user_id = str(message.get("mention_user_id") or "")
                 if mention_user_id:
                     parts.append(At(qq=mention_user_id))
+            elif message_type in ("quote", "reply"):
+                message_id = str(message.get("message_id") or "").strip()
+                if message_id:
+                    parts.append(Reply(id=message_id))
             elif message_type == "plain":
                 text = str(message.get("text") or "")
                 if text:
@@ -918,7 +922,7 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
                         parts.append(StickerImage(source))
                     else:
                         parts.append(Image(source))
-            elif message_type in ("record", "video", "file", "quote"):
+            elif message_type in ("record", "video", "file"):
                 logger.debug(f"[frostagent-adapter] 跳过暂不支持的消息组件: {message_type}")
         return parts
 
