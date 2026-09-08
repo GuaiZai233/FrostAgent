@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -921,6 +922,132 @@ func TestServerRuntimeToolListChangedNotification(t *testing.T) {
 	}
 	if _, ok := srv.Catalog().Get("tool_v2"); !ok {
 		t.Fatalf("expected tool_v2 in catalog after sync")
+	}
+}
+
+func TestDelayedToolListChangedDoesNotRestartInactiveRuntime(t *testing.T) {
+	newDynamicServer := func(name string) *officialmcp.Server {
+		server := officialmcp.NewServer(&officialmcp.Implementation{Name: name, Version: "1.0"}, &officialmcp.ServerOptions{
+			Capabilities: &officialmcp.ServerCapabilities{
+				Tools: &officialmcp.ToolCapabilities{ListChanged: true},
+			},
+		})
+		server.AddTool(&officialmcp.Tool{
+			Name:        "initial",
+			Description: "initial tool",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(context.Context, *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+			return &officialmcp.CallToolResult{}, nil
+		})
+		return server
+	}
+	newFactory := func(server *officialmcp.Server, starts *atomic.Int32) func(TransportConfig) (officialmcp.Transport, error) {
+		return func(TransportConfig) (officialmcp.Transport, error) {
+			starts.Add(1)
+			serverTransport, clientTransport := officialmcp.NewInMemoryTransports()
+			if _, err := server.Connect(context.Background(), serverTransport, nil); err != nil {
+				return nil, err
+			}
+			return clientTransport, nil
+		}
+	}
+	waitConnected := func(t *testing.T, srv *ServerRuntime) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for srv.Status() != StatusConnected {
+			if time.Now().After(deadline) {
+				t.Fatalf("server did not connect: status=%s error=%s", srv.Status(), srv.LastError())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	serverA := newDynamicServer("instance-a")
+	serverB := newDynamicServer("instance-b")
+	var startsA, startsB atomic.Int32
+	managerA := newManager(NewConfigStore(filepath.Join(t.TempDir(), "a.json")), nil, newFactory(serverA, &startsA), false)
+	managerB := newManager(NewConfigStore(filepath.Join(t.TempDir(), "b.json")), nil, newFactory(serverB, &startsB), false)
+	t.Cleanup(func() {
+		_ = managerA.Close()
+		_ = managerB.Close()
+	})
+
+	for _, item := range []struct {
+		manager *Manager
+		id      string
+	}{
+		{manager: managerA, id: "server-a"},
+		{manager: managerB, id: "server-b"},
+	} {
+		if err := item.manager.AddServer(context.Background(), ServerConfig{
+			ID:      item.id,
+			Name:    item.id,
+			Enabled: true,
+			Transport: TransportConfig{
+				Type:    TransportStdio,
+				Command: item.id,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srvA, _ := managerA.GetServer("server-a")
+	srvB, _ := managerB.GetServer("server-b")
+	notificationEntered := make(chan struct{})
+	releaseNotification := make(chan struct{})
+	notificationDone := make(chan struct{})
+	srvA.notificationSyncHook = func(ctx context.Context, generation uint64, session *officialmcp.ClientSession) error {
+		close(notificationEntered)
+		<-releaseNotification
+		err := srvA.syncCatalogForNotification(ctx, generation, session)
+		close(notificationDone)
+		return err
+	}
+
+	if err := managerA.SetRuntimeActive(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := managerB.SetRuntimeActive(true); err != nil {
+		t.Fatal(err)
+	}
+	waitConnected(t, srvA)
+	waitConnected(t, srvB)
+
+	serverA.AddTool(&officialmcp.Tool{
+		Name:        "late",
+		Description: "late tool",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *officialmcp.CallToolRequest) (*officialmcp.CallToolResult, error) {
+		return &officialmcp.CallToolResult{}, nil
+	})
+	select {
+	case <-notificationEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("real list_changed notification did not reach the refresh barrier")
+	}
+
+	if err := managerA.SetRuntimeActive(false); err != nil {
+		t.Fatal(err)
+	}
+	if srvA.Status() != StatusStopped || !srvA.IsEnabled() {
+		t.Fatalf("inactive instance lost desired state: status=%s enabled=%t", srvA.Status(), srvA.IsEnabled())
+	}
+	close(releaseNotification)
+	select {
+	case <-notificationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delayed notification refresh did not finish")
+	}
+
+	if got := startsA.Load(); got != 1 {
+		t.Fatalf("stale notification restarted inactive instance A: starts=%d", got)
+	}
+	if srvA.Status() != StatusStopped || !srvA.IsEnabled() {
+		t.Fatalf("stale notification changed inactive state: status=%s enabled=%t", srvA.Status(), srvA.IsEnabled())
+	}
+	if got := startsB.Load(); got != 1 || srvB.Status() != StatusConnected {
+		t.Fatalf("instance B was affected: starts=%d status=%s", got, srvB.Status())
 	}
 }
 

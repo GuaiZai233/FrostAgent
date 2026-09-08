@@ -4,6 +4,7 @@ import (
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/instanceconfig"
+	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/modelrouter"
@@ -904,20 +905,23 @@ func (m *Manager) Copy(target, source string) error {
 			return abort(err)
 		}
 	}
-		sourceDialogue, err := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
-		if err != nil && !os.IsNotExist(err) {
-			return abort(err)
-		}
-		if os.IsNotExist(err) && m.templateDialogue != "" {
-			sourceDialogue, _ = os.ReadFile(m.templateDialogue)
-		}
-		if len(sourceDialogue) == 0 {
-			sourceDialogue = []byte("[]\n")
-		}
-		if _, err = writeCopyFile(filepath.Join(stageDir, "dialogue.yml"), sourceDialogue, 0600); err != nil {
-			return abort(err)
-		}
-		if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
+	sourceDialogue, err := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
+	if err != nil && !os.IsNotExist(err) {
+		return abort(err)
+	}
+	if os.IsNotExist(err) && m.templateDialogue != "" {
+		sourceDialogue, _ = os.ReadFile(m.templateDialogue)
+	}
+	if len(sourceDialogue) == 0 {
+		sourceDialogue = []byte("[]\n")
+	}
+	if _, err = writeCopyFile(filepath.Join(stageDir, "dialogue.yml"), sourceDialogue, 0600); err != nil {
+		return abort(err)
+	}
+	if _, err = llm.ParseDialogueYAML(sourceDialogue); err != nil {
+		return abort(fmt.Errorf("来源实例 dialogue.yml 无效: %w", err))
+	}
+	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
 		return abort(err)
 	}
 	candidate, _, err := m.buildFresh(target, dst, false, stageDir)

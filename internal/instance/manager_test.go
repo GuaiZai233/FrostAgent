@@ -556,6 +556,86 @@ func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
 		t.Fatal("all data not deleted")
 	}
 }
+
+func TestCopyRejectsInvalidDialogueBeforeCommit(t *testing.T) {
+	m := testManager(t)
+	source := create(t, m, "source")
+	target := create(t, m, "target")
+	configureRouter(t, m, source.ID, "http://127.0.0.1:1")
+	configureRouter(t, m, target.ID, "http://127.0.0.1:2")
+	if err := m.instances[source.ID].config.Replace("BOT_NAME=source-generation\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.instances[target.ID].config.Replace("BOT_NAME=target-generation\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := rpc(t, m, source.ID, "DialogueService/SaveDialogues", `{"dialogues":[{"id":"source","user":"source","preferred":"source-persona"}]}`, false); w.Code != http.StatusOK {
+		t.Fatalf("save source dialogue: %d %s", w.Code, w.Body.String())
+	}
+	if w := rpc(t, m, target.ID, "DialogueService/SaveDialogues", `{"dialogues":[{"id":"target","user":"target","preferred":"target-persona"}]}`, false); w.Code != http.StatusOK {
+		t.Fatalf("save target dialogue: %d %s", w.Code, w.Body.String())
+	}
+	if err := os.WriteFile(filepath.Join(m.dir(source.ID), "dialogue.yml"), []byte("["), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	files := []string{".env", "model_router.json", "model_router_secrets.json", "dialogue.yml"}
+	before := make(map[string]string, len(files))
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(m.dir(target.ID), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = string(data)
+	}
+	targetRuntime := m.instances[target.ID].runtime
+	personaBefore := targetRuntime.Engine.PersonaDialogue()
+	m.endpointMu.Lock()
+	ownersBefore := make(map[string]string, len(m.endpointOwners))
+	for id, owner := range m.endpointOwners {
+		ownersBefore[id] = owner
+	}
+	m.endpointMu.Unlock()
+
+	err := m.Copy(target.ID, source.ID)
+	if err == nil || !strings.Contains(err.Error(), "dialogue.yml") {
+		t.Fatalf("copy error = %v, want invalid dialogue.yml", err)
+	}
+	for _, name := range files {
+		data, readErr := os.ReadFile(filepath.Join(m.dir(target.ID), name))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(data) != before[name] {
+			t.Fatalf("invalid dialogue changed target %s", name)
+		}
+	}
+	if m.instances[target.ID].runtime != targetRuntime {
+		t.Fatal("invalid dialogue replaced the target runtime")
+	}
+	if got := targetRuntime.Engine.PersonaDialogue(); got != personaBefore {
+		t.Fatalf("invalid dialogue changed in-memory persona: %q", got)
+	}
+	if _, statErr := os.Stat(transactionPath(m.dir(target.ID))); !os.IsNotExist(statErr) {
+		t.Fatalf("copy transaction residue remains: %v", statErr)
+	}
+	stages, globErr := filepath.Glob(filepath.Join(m.dir(target.ID), ".copy-stage-*"))
+	if globErr != nil || len(stages) != 0 {
+		t.Fatalf("copy stage residue = %v, err=%v", stages, globErr)
+	}
+	m.endpointMu.Lock()
+	defer m.endpointMu.Unlock()
+	if len(m.endpointOwners) != len(ownersBefore) {
+		t.Fatalf("invalid dialogue changed endpoint ownership: before=%v after=%v", ownersBefore, m.endpointOwners)
+	}
+	for id, owner := range ownersBefore {
+		if m.endpointOwners[id] != owner {
+			t.Fatalf("invalid dialogue changed endpoint owner %s: before=%s after=%s", id, owner, m.endpointOwners[id])
+		}
+	}
+}
+
 func TestLifecycleBusyBackendAndAutostart(t *testing.T) {
 	m := testManager(t)
 	info := create(t, m, "busy")
