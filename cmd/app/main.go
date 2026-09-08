@@ -49,6 +49,9 @@ var globalStickerStore *sticker.Store
 var globalStickerStealer *sticker.Stealer
 var globalStickerSummarizer *sticker.Summarizer
 
+// Sandbox subsystem
+var globalSandboxCfgMgr *sandbox.ConfigManager
+
 const version = "0.1.0"
 
 // brainPath returns the path to brain.json, defaulting to data/brain.json.
@@ -126,6 +129,9 @@ func positiveIntFromEnv(name string, fallback int) int {
 }
 
 func init() {
+	// 捕获进程原始环境变量（确保 Docker/Kubernetes/宿主机注入的变量具有高于 .env 的覆盖优先级）
+	settings.CaptureInitialEnv()
+
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("未找到 .env 文件，将使用默认配置")
@@ -239,27 +245,29 @@ func init() {
 		globalStickerSummarizer.EnqueueUnsummarized()
 	}
 
-	// Initialize sandbox subsystem (optional, enabled via SANDBOX_ENABLED=true)
-	sandboxCfg := sandbox.LoadConfigFromEnv()
+	// Initialize sandbox subsystem (always registered; availability checked dynamically at call time)
+	globalSandboxCfgMgr = sandbox.NewConfigManager(sandbox.LoadConfigFromEnv())
+	sbDynamic := sandbox.NewDynamicBackend(globalSandboxCfgMgr.Get, func(cfg sandbox.Config) sandbox.Backend {
+		return codeinterpreter.New(cfg)
+	})
+	sandboxCfg := globalSandboxCfgMgr.Get()
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效，已禁用隔离命令执行能力: %v", err))
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后立即生效）", err))
 		} else {
-			sbBackend := codeinterpreter.New(sandboxCfg)
-			// Startup health probe with short timeout; failure emits a warning and fails closed,
-			// allowing execution to automatically work once runtime is available.
 			healthCtx, healthCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			if err := sbBackend.Health(healthCtx); err != nil {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 沙箱运行时暂时不可达 (%v)；execute_command 将 fail-closed，恢复后自动生效", err))
+			if err := sbDynamic.Health(healthCtx); err != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 沙箱运行时暂时不可达 (%v)；恢复后自动生效", err))
 			} else {
 				logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 沙箱执行运行时已就绪: %s", sandboxCfg.BaseURL))
 			}
 			healthCancel()
-
-			cmdTool := tools.ExecuteCommandTool(sbBackend)
-			registry[cmdTool.Name()] = cmdTool
 		}
+	} else {
+		logs.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
+	cmdTool := tools.ExecuteCommandTool(sbDynamic)
+	registry[cmdTool.Name()] = cmdTool
 
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
@@ -359,6 +367,7 @@ func main() {
 	if err != nil {
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 无法将 .env 权限收紧至 0600，拒绝注册设置管理服务: %v", err))
 	} else {
+		settingsSvc.SetSandboxConfigManager(globalSandboxCfgMgr)
 		settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsSvc)
 		mux.Handle(settingsPath, settingsHandler)
 	}
