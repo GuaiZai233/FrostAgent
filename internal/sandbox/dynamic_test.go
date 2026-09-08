@@ -251,3 +251,87 @@ func TestDynamicBackend_ReleaseDelegates(t *testing.T) {
 		t.Fatal("release was not delegated to stub")
 	}
 }
+
+func TestConfigManager_LifecycleAndConcurrency(t *testing.T) {
+	initial := validTestConfig()
+	initial.Enabled = false
+	mgr := NewConfigManager(initial)
+
+	// Initial state
+	if mgr.Get().Enabled {
+		t.Fatal("expected initially disabled")
+	}
+
+	// SetEnabled
+	mgr.SetEnabled(true)
+	if !mgr.Get().Enabled {
+		t.Fatal("expected enabled after SetEnabled(true)")
+	}
+
+	// ApplySnapshot replaces everything atomically
+	newCfg := Config{
+		Enabled:          true,
+		BaseURL:          "http://127.0.0.1:9999",
+		AuthToken:        "new-secret",
+		SessionNamespace: "new-ns",
+		ClientTimeout:    100 * time.Second,
+	}
+	mgr.ApplySnapshot(newCfg)
+	got := mgr.Get()
+	if got.BaseURL != "http://127.0.0.1:9999" || got.AuthToken != "new-secret" || got.SessionNamespace != "new-ns" {
+		t.Fatalf("unexpected config snapshot: %+v", got)
+	}
+
+	// Concurrent reads and writes
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 100 {
+			if i%2 == 0 {
+				mgr.SetEnabled(true)
+			} else {
+				mgr.SetEnabled(false)
+			}
+		}
+	}()
+
+	for range 100 {
+		_ = mgr.Get()
+	}
+	<-done
+}
+
+func TestLoadConfigFromMap(t *testing.T) {
+	// Empty map uses defaults
+	emptyCfg := LoadConfigFromMap(map[string]string{})
+	if emptyCfg.Enabled {
+		t.Error("expected default Enabled=false")
+	}
+	if emptyCfg.BaseURL != DefaultBaseURL {
+		t.Errorf("expected default BaseURL %s, got %s", DefaultBaseURL, emptyCfg.BaseURL)
+	}
+	if emptyCfg.SessionNamespace != DefaultSessionNamespace {
+		t.Errorf("expected default SessionNamespace %s, got %s", DefaultSessionNamespace, emptyCfg.SessionNamespace)
+	}
+
+	// Populated map
+	m := map[string]string{
+		"SANDBOX_ENABLED":           "true",
+		"SANDBOX_BASE_URL":          "https://sandbox.corp.net",
+		"SANDBOX_AUTH_TOKEN":        "tok-12345",
+		"SANDBOX_SESSION_NAMESPACE": "corp-ns",
+	}
+	cfg := LoadConfigFromMap(m)
+	if !cfg.Enabled {
+		t.Error("expected Enabled=true")
+	}
+	if cfg.BaseURL != "https://sandbox.corp.net" {
+		t.Errorf("got BaseURL %s, want https://sandbox.corp.net", cfg.BaseURL)
+	}
+	if cfg.AuthToken != "tok-12345" {
+		t.Errorf("got AuthToken %s, want tok-12345", cfg.AuthToken)
+	}
+	if cfg.SessionNamespace != "corp-ns" {
+		t.Errorf("got SessionNamespace %s, want corp-ns", cfg.SessionNamespace)
+	}
+}

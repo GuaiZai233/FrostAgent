@@ -49,6 +49,9 @@ var globalStickerStore *sticker.Store
 var globalStickerStealer *sticker.Stealer
 var globalStickerSummarizer *sticker.Summarizer
 
+// Sandbox subsystem
+var globalSandboxCfgMgr *sandbox.ConfigManager
+
 const version = "0.1.0"
 
 // brainPath returns the path to brain.json, defaulting to data/brain.json.
@@ -240,10 +243,11 @@ func init() {
 	}
 
 	// Initialize sandbox subsystem (always registered; availability checked dynamically at call time)
-	sbDynamic := sandbox.NewDynamicBackend(sandbox.LoadConfigFromEnv, func(cfg sandbox.Config) sandbox.Backend {
+	globalSandboxCfgMgr = sandbox.NewConfigManager(sandbox.LoadConfigFromEnv())
+	sbDynamic := sandbox.NewDynamicBackend(globalSandboxCfgMgr.Get, func(cfg sandbox.Config) sandbox.Backend {
 		return codeinterpreter.New(cfg)
 	})
-	sandboxCfg := sandbox.LoadConfigFromEnv()
+	sandboxCfg := globalSandboxCfgMgr.Get()
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
 			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后立即生效）", err))
@@ -360,6 +364,7 @@ func main() {
 	if err != nil {
 		logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 无法将 .env 权限收紧至 0600，拒绝注册设置管理服务: %v", err))
 	} else {
+		settingsSvc.SetSandboxConfigManager(globalSandboxCfgMgr)
 		settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsSvc)
 		mux.Handle(settingsPath, settingsHandler)
 	}

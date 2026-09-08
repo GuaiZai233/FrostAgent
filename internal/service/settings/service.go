@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
+	"FrostAgent/internal/sandbox"
 )
 
 // envEntry defines metadata for a known environment variable.
@@ -60,15 +61,31 @@ var knownEnvVars = map[string]envEntry{
 	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true, false},
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
 	"SANDBOX_ENABLED":             {"是否启用隔离沙箱命令执行", false, false, false},
-	"SANDBOX_BASE_URL":            {"code-interpreter Gateway 地址", false, false, false},
-	"SANDBOX_AUTH_TOKEN":          {"Gateway 认证 Token", true, false, false},
-	"SANDBOX_SESSION_NAMESPACE":   {"沙箱会话命名空间（多实例共享 Gateway 时须不同）", false, false, false},
+	"SANDBOX_BASE_URL":            {"code-interpreter Gateway 地址", false, true, false},
+	"SANDBOX_AUTH_TOKEN":          {"Gateway 认证 Token", true, true, false},
+	"SANDBOX_SESSION_NAMESPACE":   {"沙箱会话命名空间（多实例共享 Gateway 时须不同）", false, true, false},
+}
+
+// SandboxManager allows SettingsService to propagate atomic configuration
+// updates to the runtime sandbox subsystem.
+type SandboxManager interface {
+	ApplySnapshot(cfg sandbox.Config)
+	SetEnabled(enabled bool)
+	Get() sandbox.Config
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
-	envPath string
-	mu      sync.Mutex
+	envPath        string
+	sandboxManager SandboxManager
+	mu             sync.Mutex
+}
+
+// SetSandboxConfigManager wires an atomic sandbox configuration manager to the settings service.
+func (s *Service) SetSandboxConfigManager(mgr SandboxManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sandboxManager = mgr
 }
 
 // New creates a new SettingsService and tightens permissions on existing .env.
@@ -170,6 +187,10 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
+	if s.sandboxManager != nil && key == "SANDBOX_ENABLED" {
+		s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
+	}
+
 	return connect.NewResponse(&v1.UpdateEnvVarResponse{Success: true}), nil
 }
 
@@ -210,6 +231,10 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 
+	if s.sandboxManager != nil && key == "SANDBOX_ENABLED" {
+		s.sandboxManager.SetEnabled(false)
+	}
+
 	return connect.NewResponse(&v1.DeleteEnvVarResponse{Success: true}), nil
 }
 
@@ -231,21 +256,61 @@ func (s *Service) GetRawEnvFile(
 	return connect.NewResponse(&v1.GetRawEnvFileResponse{Content: string(data)}), nil
 }
 
-// UpdateRawEnvFile overwrites the .env file with the given content.
+// UpdateRawEnvFile overwrites the .env file with the given content, validates its syntax,
+// synchronizes in-process environment variables (including unsetting removed keys), and
+// propagates an atomic configuration snapshot to the sandbox manager if configured.
 func (s *Service) UpdateRawEnvFile(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateRawEnvFileRequest],
 ) (*connect.Response[v1.UpdateRawEnvFileResponse], error) {
 	content := req.Msg.GetContent()
 
+	newEnv, err := godotenv.Unmarshal(content)
+	if err != nil {
+		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
+			Success: false,
+			Error:   fmt.Sprintf("parse .env content: %v", err),
+		}), nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var oldEnv map[string]string
+	if oldData, err := os.ReadFile(s.envPath); err == nil {
+		oldEnv, _ = godotenv.Unmarshal(string(oldData))
+	}
 
 	if err := writeEnvAtomic(s.envPath, []byte(content)); err != nil {
 		return connect.NewResponse(&v1.UpdateRawEnvFileResponse{
 			Success: false,
 			Error:   err.Error(),
 		}), nil
+	}
+
+	// Synchronize in-process environment variables.
+	// 1. Unset keys removed from the old .env file.
+	for k := range oldEnv {
+		if _, exists := newEnv[k]; !exists {
+			_ = os.Unsetenv(k)
+		}
+	}
+	// 2. Unset any knownEnvVars present in the process environment but missing from new .env.
+	for k := range knownEnvVars {
+		if _, exists := newEnv[k]; !exists {
+			if _, present := os.LookupEnv(k); present {
+				_ = os.Unsetenv(k)
+			}
+		}
+	}
+	// 3. Set all keys present in the new content.
+	for k, v := range newEnv {
+		_ = os.Setenv(k, v)
+	}
+
+	// 4. Atomically propagate complete sandbox configuration snapshot.
+	if s.sandboxManager != nil {
+		s.sandboxManager.ApplySnapshot(sandbox.LoadConfigFromMap(newEnv))
 	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil

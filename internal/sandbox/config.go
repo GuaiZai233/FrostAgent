@@ -29,7 +29,7 @@ type Config struct {
 
 // LoadConfigFromEnv reads sandbox configuration from environment variables.
 func LoadConfigFromEnv() Config {
-	enabled := parseBool(os.Getenv("SANDBOX_ENABLED"), false)
+	enabled := ParseBool(os.Getenv("SANDBOX_ENABLED"), false)
 	baseURL := strings.TrimSpace(os.Getenv("SANDBOX_BASE_URL"))
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
@@ -46,6 +46,28 @@ func LoadConfigFromEnv() Config {
 		AuthToken:        authToken,
 		SessionNamespace: sessionNamespace,
 		ClientTimeout:    135 * time.Second, // Max execution timeout (120s) + 15s envelope
+	}
+}
+
+// LoadConfigFromMap reads sandbox configuration from a key-value map (e.g. parsed from .env).
+func LoadConfigFromMap(m map[string]string) Config {
+	enabled := ParseBool(m["SANDBOX_ENABLED"], false)
+	baseURL := strings.TrimSpace(m["SANDBOX_BASE_URL"])
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
+	authToken := strings.TrimSpace(m["SANDBOX_AUTH_TOKEN"])
+	sessionNamespace := strings.TrimSpace(m["SANDBOX_SESSION_NAMESPACE"])
+	if sessionNamespace == "" {
+		sessionNamespace = DefaultSessionNamespace
+	}
+
+	return Config{
+		Enabled:          enabled,
+		BaseURL:          baseURL,
+		AuthToken:        authToken,
+		SessionNamespace: sessionNamespace,
+		ClientTimeout:    135 * time.Second,
 	}
 }
 
@@ -75,7 +97,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func parseBool(val string, fallback bool) bool {
+// ParseBool parses common boolean string representations.
+func ParseBool(val string, fallback bool) bool {
 	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "1", "t", "true", "yes", "on":
 		return true

@@ -13,6 +13,42 @@ var ErrSandboxDisabled = errors.New("sandbox is disabled")
 // BackendFactory creates a Backend from the given Config.
 type BackendFactory func(Config) Backend
 
+// ConfigManager manages atomic sandbox configuration snapshots.
+// It guarantees that connection endpoint (BaseURL) and credentials (AuthToken)
+// are applied together as atomic snapshots, eliminating mixed-configuration windows
+// during gateway migrations or token rotations.
+type ConfigManager struct {
+	mu      sync.RWMutex
+	current Config
+}
+
+// NewConfigManager creates a new ConfigManager with the initial configuration.
+func NewConfigManager(initial Config) *ConfigManager {
+	return &ConfigManager{current: initial}
+}
+
+// Get returns the current configuration snapshot.
+func (m *ConfigManager) Get() Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.current
+}
+
+// ApplySnapshot atomically updates the full configuration snapshot.
+// All fields (Enabled, BaseURL, AuthToken, SessionNamespace) are replaced at once.
+func (m *ConfigManager) ApplySnapshot(cfg Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current = cfg
+}
+
+// SetEnabled updates only the Enabled flag without altering endpoint or credential settings.
+func (m *ConfigManager) SetEnabled(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.Enabled = enabled
+}
+
 // DynamicBackend implements Backend with runtime-configurable sandbox support.
 // Configuration is re-read on each operation, allowing the sandbox to be
 // enabled or disabled via environment variables without restarting the process.
