@@ -32,13 +32,17 @@ class Settings:
     reconnect_interval: int
 
 
+class WSURLConfigurationError(ValueError):
+    """Raised when the persisted FrostAgent WebSocket URL needs repair."""
+
+
 def load_settings(config: dict = None) -> Settings:
     config = config or {}
     ws_url = str(
         config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
     ).strip()
     if not ws_url:
-        raise ValueError(
+        raise WSURLConfigurationError(
             "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
             "WebSocket address from the instance overview"
         )
@@ -50,7 +54,7 @@ def load_settings(config: dict = None) -> Settings:
             r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path
         )
     ):
-        raise ValueError(
+        raise WSURLConfigurationError(
             "FrostAgent ws_url must use "
             "ws(s)://host/instances/<instance-id>/ws/astrbot"
         )
@@ -353,12 +357,10 @@ class FrostAgentAdapter(Star):
         self._configuration_error: Optional[str] = None
         try:
             self.settings = load_settings(config)
-        except ValueError as exc:
+        except WSURLConfigurationError as exc:
             # v0.1.0 persisted an unscoped /ws/astrbot URL.  Reject it for
             # transport safety, but do not make AstrBot unload the plugin before
             # the user gets a chance to repair the saved configuration.
-            if not str(exc).startswith("FrostAgent ws_url"):
-                raise
             self.settings = _load_settings_unvalidated(config)
             self._configuration_error = str(exc)
             self.client = FrostAgentWSClient(self.settings, context)
