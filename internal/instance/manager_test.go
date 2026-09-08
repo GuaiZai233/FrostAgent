@@ -575,7 +575,7 @@ func TestLifecycleBusyBackendAndAutostart(t *testing.T) {
 	if !list[0].Enabled {
 		t.Fatal("zero connections must still be green")
 	}
-	if w = rpc(t, m, info.ID, "SettingsService/UpdateEnvVar", `{"key":"ENABLE_ONEBOT_ADAPTER","value":"false"}`, false); w.Code != 200 {
+	if w = rpc(t, m, info.ID, "SettingsService/UpdateEnvVar", `{"key":"MEMORY_REFLECTION_TIMEOUT","value":"2m"}`, false); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
 	list, _ = m.List()
