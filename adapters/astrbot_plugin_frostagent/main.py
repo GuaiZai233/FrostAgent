@@ -349,7 +349,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.2",
+    "0.1.3",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -447,7 +447,11 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     content = extract_message_text(event)
     is_wake, is_at = check_is_at_or_wake(event)
 
-    msg_id = str(getattr(event, "message_id", "") or f"ast_{int(time.time() * 1000)}")
+    msg_id = str(
+        getattr_chain(event, "message_obj", "message_id")
+        or getattr(event, "message_id", "")
+        or f"ast_{int(time.time() * 1000)}"
+    )
     attachments = await extract_attachments(event, msg_id)
     reply_message_id = extract_reply_message_id(event)
     platform = _extract_platform_name(event)
