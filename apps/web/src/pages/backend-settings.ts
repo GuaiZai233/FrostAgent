@@ -1,4 +1,49 @@
-import { api } from '../api/client';
+const globalKeys = new Set([
+  'LISTEN_ADDR',
+  'WS_LISTEN_ADDR',
+  'WS_ALLOWED_ORIGINS',
+  'HTTP_ALLOWED_ORIGINS',
+  'ALCYONE_BASE_URL',
+  'ALCYONE_SERVICE_TOKEN',
+  'ALCYONE_TIMEOUT',
+  'SANDBOX_ENABLED',
+  'SANDBOX_BASE_URL',
+  'SANDBOX_AUTH_TOKEN',
+  'SANDBOX_SESSION_NAMESPACE',
+  'MCP_CONTROL_TOKEN',
+  'ADMIN_TOKEN',
+  'ALLOW_REMOTE_MCP_MANAGEMENT',
+  'MCP_ENFORCE_LOCAL_TOKEN',
+]);
+const instanceRestartKeys = new Set([
+  'ENABLE_ONEBOT_ADAPTER',
+  'ENABLE_ASTRBOT_ADAPTER',
+  'MEMORY_REFLECTION_TIMEOUT',
+  'GROUP_COMPACT_BUFFER_SIZE',
+  'GROUP_COMPACT_MAX_BUFFER_SIZE',
+  'GROUP_COMPACT_MIN_INTERVAL',
+  'BILLING_ENABLED',
+  'BILLING_MAX_OUTPUT_TOKENS',
+  'BILLING_SAFETY_MULTIPLIER',
+  'BILLING_PROMPT_PRICE_PER_MILLION',
+  'BILLING_COMPLETION_PRICE_PER_MILLION',
+]);
+const controlPlaneRestartKeys = new Set([
+  'LISTEN_ADDR',
+  'WS_LISTEN_ADDR',
+  'HTTP_ALLOWED_ORIGINS',
+  'ALCYONE_BASE_URL',
+  'ALCYONE_SERVICE_TOKEN',
+  'ALCYONE_TIMEOUT',
+  'SANDBOX_BASE_URL',
+  'SANDBOX_AUTH_TOKEN',
+  'SANDBOX_SESSION_NAMESPACE',
+  'MCP_CONTROL_TOKEN',
+  'ADMIN_TOKEN',
+  'ALLOW_REMOTE_MCP_MANAGEMENT',
+  'MCP_ENFORCE_LOCAL_TOKEN',
+]);
+import { createInstanceAPI } from '../api/client';
 import { EnvVar } from '@frostagent/proto';
 import { escapeHtml, maskSecret } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -6,7 +51,20 @@ import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 
+function configurationBadges(key: string): string {
+  const ownership = globalKeys.has(key)
+    ? '<small class="badge badge-outline">全局共享</small>'
+    : '<small class="badge badge-outline">当前实例</small>';
+  const applyScope = controlPlaneRestartKeys.has(key)
+    ? '<small class="badge badge-warning">重启 FrostAgent 后生效</small>'
+    : instanceRestartKeys.has(key)
+      ? '<small class="badge badge-warning">重启实例后生效</small>'
+      : '<small class="badge badge-outline">立即生效</small>';
+  return ownership + applyScope;
+}
+
 export function mountBackendSettingsPage(container: HTMLElement): () => void {
+  const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let saving = false;
@@ -30,7 +88,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">Bot 服务端设置</h1>
-            <p class="page-description">修改服务端运行环境变量与群聊响应策略</p>
+            <p class="page-description">每项配置分别标明归属范围与生效方式；Control Plane 字段需要重启 FrostAgent 时会明确提示。</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -121,7 +179,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       <div id="tab-raw-content" class="flex flex-col gap-3" style="display: none;">
         <article class="card p-4 flex flex-col gap-3.5">
           <div class="flex items-center justify-between">
-            <label class="form-label" for="raw-env-textarea">.env 原始文件编辑</label>
+            <label class="form-label" for="raw-env-textarea">实例 .env 原始文件编辑（不含全局字段）</label>
             <button class="btn btn-primary btn-sm" id="save-raw-env-btn">
               ${icon('save', 'w-3.5 h-3.5')}
               <span>保存 .env 文件</span>
@@ -140,21 +198,30 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   `;
 
   // Elements
-  const tabTableBtn = container.querySelector<HTMLButtonElement>('#tab-table-btn')!;
+  const tabTableBtn =
+    container.querySelector<HTMLButtonElement>('#tab-table-btn')!;
   const tabRawBtn = container.querySelector<HTMLButtonElement>('#tab-raw-btn')!;
-  const tabTableContent = container.querySelector<HTMLElement>('#tab-table-content')!;
-  const tabRawContent = container.querySelector<HTMLElement>('#tab-raw-content')!;
+  const tabTableContent =
+    container.querySelector<HTMLElement>('#tab-table-content')!;
+  const tabRawContent =
+    container.querySelector<HTMLElement>('#tab-raw-content')!;
 
-  const refreshBtn = container.querySelector<HTMLButtonElement>('#backend-refresh-btn')!;
+  const refreshBtn = container.querySelector<HTMLButtonElement>(
+    '#backend-refresh-btn',
+  )!;
   const addEnvBtn = container.querySelector<HTMLButtonElement>('#add-env-btn')!;
 
-  const groupMentionCb = container.querySelector<HTMLInputElement>('#group-mention-cb')!;
+  const groupMentionCb =
+    container.querySelector<HTMLInputElement>('#group-mention-cb')!;
   const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
-  const groupReplyCb = container.querySelector<HTMLInputElement>('#group-reply-cb')!;
+  const groupReplyCb =
+    container.querySelector<HTMLInputElement>('#group-reply-cb')!;
 
   const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
-  const rawTextarea = container.querySelector<HTMLTextAreaElement>('#raw-env-textarea')!;
-  const saveRawEnvBtn = container.querySelector<HTMLButtonElement>('#save-raw-env-btn')!;
+  const rawTextarea =
+    container.querySelector<HTMLTextAreaElement>('#raw-env-textarea')!;
+  const saveRawEnvBtn =
+    container.querySelector<HTMLButtonElement>('#save-raw-env-btn')!;
 
   async function loadData() {
     if (isUnmounted) return;
@@ -162,7 +229,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     renderTable();
 
     try {
-      const [vars, raw] = await Promise.all([api.listEnvVars(), api.getRawEnvFile()]);
+      const [vars, raw] = await Promise.all([
+        api.listEnvVars(),
+        api.getRawEnvFile(),
+      ]);
       if (isUnmounted) return;
       envVars = vars;
       rawContent = raw;
@@ -178,7 +248,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       groupReplyCb.checked = enableReplyOther;
     } catch (err) {
       if (isUnmounted) return;
-      toast.error('加载环境变量失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(
+        '加载环境变量失败: ' +
+          (err instanceof Error ? err.message : String(err)),
+      );
       envVars = [];
     } finally {
       if (!isUnmounted) {
@@ -222,7 +295,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           return `
             <tr class="bg-muted">
               <td>
-                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>
+                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>${configurationBadges(item.key)}
               </td>
               <td>
                 <div class="flex items-center gap-2">
@@ -253,14 +326,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           `;
         }
 
-        const displayVal = isSecret && !isVisible ? maskSecret(item.value) : item.value;
+        const displayVal =
+          isSecret && !isVisible ? maskSecret(item.value) : item.value;
 
         return `
           <tr>
             <td>
               <div class="flex items-center gap-1.5">
                 ${isSecret ? `<span class="text-muted flex items-center" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>
+                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>${configurationBadges(item.key)}
               </div>
             </td>
             <td>
@@ -300,10 +374,16 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
     // Attach inline edit handlers if active
     if (editingKey) {
-      const editInput = tbody.querySelector<HTMLInputElement>('#edit-env-val-input');
-      const editSecretCb = tbody.querySelector<HTMLInputElement>('#edit-env-secret-cb');
-      const saveInlineBtn = tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
-      const cancelInlineBtn = tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
+      const editInput = tbody.querySelector<HTMLInputElement>(
+        '#edit-env-val-input',
+      );
+      const editSecretCb = tbody.querySelector<HTMLInputElement>(
+        '#edit-env-secret-cb',
+      );
+      const saveInlineBtn =
+        tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
+      const cancelInlineBtn =
+        tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
 
       editInput?.focus();
       editInput?.addEventListener('input', () => {
@@ -327,54 +407,63 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     }
 
     // Attach row button events
-    tbody.querySelectorAll<HTMLButtonElement>('[data-action="toggle-secret"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-        if (!key) return;
-        if (visibleSecrets.has(key)) visibleSecrets.delete(key);
-        else visibleSecrets.add(key);
-        renderTable();
-      });
-    });
-
-    tbody.querySelectorAll<HTMLButtonElement>('[data-action="edit-env"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-        const item = envVars.find((v) => v.key === key);
-        if (item) {
-          editingKey = item.key;
-          editingValue = item.value;
-          editingIsSecret = item.isSecret;
+    tbody
+      .querySelectorAll<HTMLButtonElement>('[data-action="toggle-secret"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const key = btn.dataset.key;
+          if (!key) return;
+          if (visibleSecrets.has(key)) visibleSecrets.delete(key);
+          else visibleSecrets.add(key);
           renderTable();
-        }
-      });
-    });
-
-    tbody.querySelectorAll<HTMLButtonElement>('[data-action="delete-env"]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const key = btn.dataset.key;
-        if (!key) return;
-        const confirmed = await confirmDialog({
-          title: '删除环境变量',
-          message: `确认删除环境变量 ${key} 吗？`,
-          confirmLabel: '删除',
-          destructive: true,
         });
-        if (confirmed) {
-          try {
-            const res = await api.deleteEnvVar(key);
-            if (res.success) {
-              toast.success('环境变量已删除');
-              void loadData();
-            } else {
-              toast.error('删除失败: ' + res.error);
-            }
-          } catch (err) {
-            toast.error('删除失败: ' + (err instanceof Error ? err.message : String(err)));
-          }
-        }
       });
-    });
+
+    tbody
+      .querySelectorAll<HTMLButtonElement>('[data-action="edit-env"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const key = btn.dataset.key;
+          const item = envVars.find((v) => v.key === key);
+          if (item) {
+            editingKey = item.key;
+            editingValue = item.value;
+            editingIsSecret = item.isSecret;
+            renderTable();
+          }
+        });
+      });
+
+    tbody
+      .querySelectorAll<HTMLButtonElement>('[data-action="delete-env"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          if (!key) return;
+          const confirmed = await confirmDialog({
+            title: '删除环境变量',
+            message: `确认删除环境变量 ${key} 吗？`,
+            confirmLabel: '删除',
+            destructive: true,
+          });
+          if (confirmed) {
+            try {
+              const res = await api.deleteEnvVar(key);
+              if (res.success) {
+                toast.success('环境变量已删除');
+                void loadData();
+              } else {
+                toast.error('删除失败: ' + res.error);
+              }
+            } catch (err) {
+              toast.error(
+                '删除失败: ' +
+                  (err instanceof Error ? err.message : String(err)),
+              );
+            }
+          }
+        });
+      });
   }
 
   async function saveEnvVar(key: string, value: string, isSecret: boolean) {
@@ -388,7 +477,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         toast.error('保存失败: ' + res.error);
       }
     } catch (err) {
-      toast.error('保存失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(
+        '保存失败: ' + (err instanceof Error ? err.message : String(err)),
+      );
     }
   }
 
@@ -421,11 +512,16 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         </button>
       `,
       onMount: (dialogEl, close) => {
-        const keyInput = dialogEl.querySelector<HTMLInputElement>('#add-env-key')!;
-        const valInput = dialogEl.querySelector<HTMLInputElement>('#add-env-val')!;
-        const secretCb = dialogEl.querySelector<HTMLInputElement>('#add-env-secret-cb')!;
-        const saveBtn = dialogEl.querySelector<HTMLButtonElement>('#add-env-save')!;
-        const cancelBtn = dialogEl.querySelector<HTMLButtonElement>('#add-env-cancel')!;
+        const keyInput =
+          dialogEl.querySelector<HTMLInputElement>('#add-env-key')!;
+        const valInput =
+          dialogEl.querySelector<HTMLInputElement>('#add-env-val')!;
+        const secretCb =
+          dialogEl.querySelector<HTMLInputElement>('#add-env-secret-cb')!;
+        const saveBtn =
+          dialogEl.querySelector<HTMLButtonElement>('#add-env-save')!;
+        const cancelBtn =
+          dialogEl.querySelector<HTMLButtonElement>('#add-env-cancel')!;
 
         secretCb.addEventListener('change', () => {
           valInput.type = secretCb.checked ? 'password' : 'text';
@@ -452,7 +548,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               toast.error('保存失败: ' + res.error);
             }
           } catch (err) {
-            toast.error('保存失败: ' + (err instanceof Error ? err.message : String(err)));
+            toast.error(
+              '保存失败: ' + (err instanceof Error ? err.message : String(err)),
+            );
           } finally {
             saveBtn.disabled = false;
           }
@@ -476,7 +574,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         toast.error('更新失败: ' + res.error);
       }
     } catch (err) {
-      toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(
+        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
+      );
     }
   }
 
@@ -495,7 +595,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         toast.error('更新失败: ' + res.error);
       }
     } catch (err) {
-      toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(
+        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
+      );
     } finally {
       saving = false;
       saveRawEnvBtn.disabled = false;
@@ -518,9 +620,23 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   });
 
   // Group cb handlers
-  groupMentionCb.addEventListener('change', () => void toggleGroupSetting('GROUP_REPLY_ON_MENTION', groupMentionCb.checked));
-  groupAtCb.addEventListener('change', () => void toggleGroupSetting('ENABLE_AT_IN_GROUP_MSG', groupAtCb.checked));
-  groupReplyCb.addEventListener('change', () => void toggleGroupSetting('ENABLE_REPLY_IN_GROUP_MSG', groupReplyCb.checked));
+  groupMentionCb.addEventListener(
+    'change',
+    () =>
+      void toggleGroupSetting('GROUP_REPLY_ON_MENTION', groupMentionCb.checked),
+  );
+  groupAtCb.addEventListener(
+    'change',
+    () => void toggleGroupSetting('ENABLE_AT_IN_GROUP_MSG', groupAtCb.checked),
+  );
+  groupReplyCb.addEventListener(
+    'change',
+    () =>
+      void toggleGroupSetting(
+        'ENABLE_REPLY_IN_GROUP_MSG',
+        groupReplyCb.checked,
+      ),
+  );
 
   addEnvBtn.addEventListener('click', openAddEnvModal);
   saveRawEnvBtn.addEventListener('click', () => void saveRawEnv());

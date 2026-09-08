@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"os"
+	"FrostAgent/internal/runtimescope"
 	"strconv"
 	"strings"
 )
@@ -26,9 +26,10 @@ func DefaultGroupRawContextConfig() GroupRawContextConfig {
 }
 
 // LoadGroupRawContextConfigFromEnv loads GroupRawContextConfig dynamically from runtime environment variables.
-func LoadGroupRawContextConfigFromEnv() GroupRawContextConfig {
+func LoadGroupRawContextConfigFromEnv(scopes ...*runtimescope.Scope) GroupRawContextConfig {
+	scope := runtimescope.First(scopes)
 	cfg := DefaultGroupRawContextConfig()
-	if v := strings.TrimSpace(os.Getenv("GROUP_RAW_CONTEXT_MAX_CHARS")); v != "" {
+	if v := strings.TrimSpace(scope.Getenv("GROUP_RAW_CONTEXT_MAX_CHARS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.MaxChars = n
 		}

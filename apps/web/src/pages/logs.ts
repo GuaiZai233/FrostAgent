@@ -1,4 +1,5 @@
-import { api } from '../api/client';
+import { instanceState } from '../instance-state';
+import { createInstanceAPI } from '../api/client';
 import { LogEntry, LogLevel } from '@frostagent/proto';
 import {
   escapeHtml,
@@ -13,10 +14,19 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
-import { renderPagination, attachPaginationEvents } from '../components/pagination';
-import { openPromptInspectorDialog, renderLoggedImagesInText } from '../components/prompt-inspector';
+import { RequestGeneration } from '../utils/request-generation';
+import {
+  renderPagination,
+  attachPaginationEvents,
+} from '../components/pagination';
+import {
+  openPromptInspectorDialog,
+  renderLoggedImagesInText,
+} from '../components/prompt-inspector';
 
 export function mountLogsPage(container: HTMLElement): () => void {
+  if (!instanceState.selected) instanceState.logSource = 'control-plane';
+  const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let streaming = false;
@@ -28,6 +38,8 @@ export function mountLogsPage(container: HTMLElement): () => void {
   let pageSize = 50;
   let total = 0;
   const tokenStack = new PageTokenStack();
+  const loadRequests = new RequestGeneration();
+  const streamRequests = new RequestGeneration();
   let streamAbortController: AbortController | null = null;
 
   container.innerHTML = `
@@ -48,6 +60,13 @@ export function mountLogsPage(container: HTMLElement): () => void {
         </div>
       </header>
 
+      <div class="form-group" style="width: 14rem;">
+        <label class="form-label" for="logs-source-select">日志来源</label>
+        <select id="logs-source-select" class="select text-xs">
+          <option value="instance" ${instanceState.logSource === 'instance' ? 'selected' : ''} ${instanceState.selected ? '' : 'disabled'}>当前实例</option>
+          <option value="control-plane" ${instanceState.logSource === 'control-plane' ? 'selected' : ''}>Control Plane (General)</option>
+        </select>
+      </div>
       <!-- Filter Card -->
       <section class="card p-3.5">
         <div class="flex items-end gap-3 flex-wrap">
@@ -140,44 +159,87 @@ export function mountLogsPage(container: HTMLElement): () => void {
     </div>
   `;
 
+  container.querySelector<HTMLSelectElement>('#logs-source-select')!.onchange =
+    (event) => {
+      instanceState.logSource = (event.target as HTMLSelectElement).value as
+        | 'instance'
+        | 'control-plane';
+      stopStream();
+      tokenStack.reset();
+      entries = [];
+      total = 0;
+      streamEntries = [];
+      selectedEntry = null;
+      renderDetail();
+      renderStreamEntries();
+      void loadLogs();
+    };
   // Elements
-  const refreshBtn = container.querySelector<HTMLButtonElement>('#logs-refresh-btn')!;
-  const clearBtn = container.querySelector<HTMLButtonElement>('#logs-clear-btn')!;
-  const levelSelect = container.querySelector<HTMLSelectElement>('#logs-level-select')!;
-  const sourceInput = container.querySelector<HTMLInputElement>('#logs-source-input')!;
-  const applyFilterBtn = container.querySelector<HTMLButtonElement>('#logs-apply-filter-btn')!;
+  const refreshBtn =
+    container.querySelector<HTMLButtonElement>('#logs-refresh-btn')!;
+  const clearBtn =
+    container.querySelector<HTMLButtonElement>('#logs-clear-btn')!;
+  const levelSelect =
+    container.querySelector<HTMLSelectElement>('#logs-level-select')!;
+  const sourceInput =
+    container.querySelector<HTMLInputElement>('#logs-source-input')!;
+  const applyFilterBtn = container.querySelector<HTMLButtonElement>(
+    '#logs-apply-filter-btn',
+  )!;
   const tbody = container.querySelector<HTMLElement>('#logs-table-body')!;
-  const paginationContainer = container.querySelector<HTMLElement>('#logs-pagination-container')!;
-  const detailContent = container.querySelector<HTMLElement>('#log-detail-content')!;
-  const streamToggleBtn = container.querySelector<HTMLButtonElement>('#stream-toggle-btn')!;
-  const streamToggleIcon = container.querySelector<HTMLElement>('#stream-toggle-icon')!;
-  const streamToggleLabel = container.querySelector<HTMLElement>('#stream-toggle-label')!;
-  const streamEntriesContainer = container.querySelector<HTMLElement>('#stream-entries-container')!;
+  const paginationContainer = container.querySelector<HTMLElement>(
+    '#logs-pagination-container',
+  )!;
+  const detailContent = container.querySelector<HTMLElement>(
+    '#log-detail-content',
+  )!;
+  const streamToggleBtn =
+    container.querySelector<HTMLButtonElement>('#stream-toggle-btn')!;
+  const streamToggleIcon = container.querySelector<HTMLElement>(
+    '#stream-toggle-icon',
+  )!;
+  const streamToggleLabel = container.querySelector<HTMLElement>(
+    '#stream-toggle-label',
+  )!;
+  const streamEntriesContainer = container.querySelector<HTMLElement>(
+    '#stream-entries-container',
+  )!;
 
   async function loadLogs() {
     if (isUnmounted) return;
+    const generation = loadRequests.next();
     loading = true;
     renderTable();
 
     try {
-      const resp = await api.listLogs(pageSize, tokenStack.currentToken, minLevel, sourceFilter);
-      if (isUnmounted) return;
+      const resp = await api.listLogs(
+        pageSize,
+        tokenStack.currentToken,
+        minLevel,
+        sourceFilter,
+      );
+      if (isUnmounted || !loadRequests.isCurrent(generation)) return;
       entries = resp.entries || [];
       tokenStack.setNextToken(resp.pagination?.pageToken ?? '');
       total = Number(resp.pagination?.total ?? entries.length);
 
-      if (entries.length > 0 && (!selectedEntry || !entries.some((e) => e.id === selectedEntry?.id))) {
+      if (
+        entries.length > 0 &&
+        (!selectedEntry || !entries.some((e) => e.id === selectedEntry?.id))
+      ) {
         selectedEntry = entries[0];
       } else if (entries.length === 0) {
         selectedEntry = null;
       }
     } catch (err) {
-      if (isUnmounted) return;
-      toast.error('加载日志失败: ' + (err instanceof Error ? err.message : String(err)));
+      if (isUnmounted || !loadRequests.isCurrent(generation)) return;
+      toast.error(
+        '加载日志失败: ' + (err instanceof Error ? err.message : String(err)),
+      );
       entries = [];
       selectedEntry = null;
     } finally {
-      if (!isUnmounted) {
+      if (!isUnmounted && loadRequests.isCurrent(generation)) {
         loading = false;
         renderTable();
         renderDetail();
@@ -228,7 +290,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
             </td>
             <td class="text-xs font-medium text-foreground">
               <div class="flex items-center gap-1.5">
-                <span>${escapeHtml(entry.source || '-')}</span>
+                <span>${escapeHtml(entry.instanceId ? 'Instance: ' + entry.instanceName : 'Control Plane')} · ${escapeHtml(entry.source || '-')}</span>
                 ${
                   hasPrompt
                     ? `<span class="text-info" title="包含 LLM Prompt">${icon('sparkles', 'w-3 h-3')}</span>`
@@ -275,33 +337,37 @@ export function mountLogsPage(container: HTMLElement): () => void {
     });
 
     // Attach row events
-    tbody.querySelectorAll<HTMLTableRowElement>('tr[data-id]').forEach((row) => {
-      row.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement;
-        if (target.closest('[data-action="view-summary"]')) return;
-        const id = row.dataset.id;
-        const entry = entries.find((e) => e.id === id);
-        if (entry) {
-          selectedEntry = entry;
-          renderTable();
-          renderDetail();
-        }
+    tbody
+      .querySelectorAll<HTMLTableRowElement>('tr[data-id]')
+      .forEach((row) => {
+        row.addEventListener('click', (e) => {
+          const target = e.target as HTMLElement;
+          if (target.closest('[data-action="view-summary"]')) return;
+          const id = row.dataset.id;
+          const entry = entries.find((e) => e.id === id);
+          if (entry) {
+            selectedEntry = entry;
+            renderTable();
+            renderDetail();
+          }
+        });
       });
-    });
 
-    tbody.querySelectorAll<HTMLButtonElement>('[data-action="view-summary"]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        const entry = entries.find((e) => e.id === id);
-        if (entry) {
-          selectedEntry = entry;
-          renderTable();
-          renderDetail();
-          openSummaryDialog(entry);
-        }
+    tbody
+      .querySelectorAll<HTMLButtonElement>('[data-action="view-summary"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.id;
+          const entry = entries.find((e) => e.id === id);
+          if (entry) {
+            selectedEntry = entry;
+            renderTable();
+            renderDetail();
+            openSummaryDialog(entry);
+          }
+        });
       });
-    });
   }
 
   function isPromptEntry(entry: LogEntry): boolean {
@@ -357,9 +423,14 @@ export function mountLogsPage(container: HTMLElement): () => void {
       </div>
     `;
 
-    const inspectBtn = detailContent.querySelector<HTMLButtonElement>('#detail-inspect-prompt-btn');
+    const inspectBtn = detailContent.querySelector<HTMLButtonElement>(
+      '#detail-inspect-prompt-btn',
+    );
     inspectBtn?.addEventListener('click', () => {
-      openPromptInspectorDialog(promptPayload, `LLM 请求检查 — ${selectedEntry?.source || 'LLM'} · ${formatDateTime(selectedEntry?.timestamp)}`);
+      openPromptInspectorDialog(
+        promptPayload,
+        `LLM 请求检查 — ${selectedEntry?.source || 'LLM'} · ${formatDateTime(selectedEntry?.timestamp)}`,
+      );
     });
   }
 
@@ -391,12 +462,19 @@ export function mountLogsPage(container: HTMLElement): () => void {
         </button>
       `,
       onMount: (dialogEl) => {
-        const inspectBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-inspect-btn');
+        const inspectBtn = dialogEl.querySelector<HTMLButtonElement>(
+          '#log-summary-inspect-btn',
+        );
         inspectBtn?.addEventListener('click', () => {
-          openPromptInspectorDialog(promptPayload, `LLM 请求检查 — ${entry.source || 'LLM'} · ${formatDateTime(entry.timestamp)}`);
+          openPromptInspectorDialog(
+            promptPayload,
+            `LLM 请求检查 — ${entry.source || 'LLM'} · ${formatDateTime(entry.timestamp)}`,
+          );
         });
 
-        const copyBtn = dialogEl.querySelector<HTMLButtonElement>('#log-summary-copy-btn');
+        const copyBtn = dialogEl.querySelector<HTMLButtonElement>(
+          '#log-summary-copy-btn',
+        );
         copyBtn?.addEventListener('click', async () => {
           const logText = formatConsoleLog(entry);
           const success = await copyToClipboard(logText);
@@ -423,25 +501,39 @@ export function mountLogsPage(container: HTMLElement): () => void {
     streamToggleBtn.classList.remove('btn-outline');
     streamToggleBtn.classList.add('btn-destructive');
 
-    streamAbortController = new AbortController();
+    const generation = streamRequests.next();
+    const controller = new AbortController();
+    streamAbortController = controller;
 
     try {
-      for await (const entry of api.streamLogs(minLevel, sourceFilter, streamAbortController.signal)) {
-        if (isUnmounted) break;
+      for await (const entry of api.streamLogs(
+        minLevel,
+        sourceFilter,
+        controller.signal,
+      )) {
+        if (isUnmounted || !streamRequests.isCurrent(generation)) break;
         streamEntries.unshift(entry);
+        streamEntries.sort(
+          (a, b) =>
+            b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id),
+        );
         if (streamEntries.length > 200) streamEntries.pop();
         renderStreamEntries();
       }
     } catch (err) {
-      if (!streamAbortController?.signal.aborted) {
-        toast.error('实时日志流异常: ' + (err instanceof Error ? err.message : String(err)));
+      if (!controller.signal.aborted && streamRequests.isCurrent(generation)) {
+        toast.error(
+          '实时日志流异常: ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
       }
     } finally {
-      stopStream();
+      if (streamRequests.isCurrent(generation)) stopStream();
     }
   }
 
   function stopStream() {
+    streamRequests.invalidate();
     if (streamAbortController) {
       streamAbortController.abort();
       streamAbortController = null;
@@ -456,7 +548,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
   function renderStreamEntries() {
     if (streamEntries.length === 0) {
       streamEntriesContainer.innerHTML = `
-        <p class="text-xs text-muted">实时流正在监听中，等待新日志到达...</p>
+        <p class="text-xs text-muted">${streaming ? '实时流正在监听中，等待新日志到达...' : '实时流尚未启动，点击右上角“开始监听”以订阅实时日志。'}</p>
       `;
       return;
     }
@@ -484,16 +576,22 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
   // Clear logs
   async function clearLogs() {
+    const selectedSource = instanceState.logSource;
+    const sourceLabel =
+      selectedSource === 'control-plane'
+        ? 'Control Plane (General)'
+        : '当前实例';
     const confirmed = await confirmDialog({
       title: '清理日志',
-      message: '确认清理当前内存日志缓冲区吗？此操作无法撤销。',
+      message: `确认仅清理“${sourceLabel}”内存日志缓冲区吗？此操作无法撤销。`,
       confirmLabel: '清理',
       destructive: true,
     });
     if (confirmed) {
       try {
+        if (instanceState.logSource !== selectedSource) return;
         const success = await api.clearLogs();
-        if (success) {
+        if (success && instanceState.logSource === selectedSource) {
           toast.success('日志已清理');
           entries = [];
           streamEntries = [];
@@ -503,7 +601,9 @@ export function mountLogsPage(container: HTMLElement): () => void {
           void loadLogs();
         }
       } catch (err) {
-        toast.error('清理日志失败: ' + (err instanceof Error ? err.message : String(err)));
+        toast.error(
+          '清理日志失败: ' + (err instanceof Error ? err.message : String(err)),
+        );
       }
     }
   }
@@ -542,6 +642,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    loadRequests.invalidate();
     stopStream();
   };
 }

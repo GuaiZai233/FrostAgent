@@ -3,6 +3,7 @@ package onebot
 import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -75,12 +76,12 @@ func (c *wsConnection) groupName(groupID int64) string {
 	})
 	if err != nil {
 		c.clearPendingGroupInfo(echo)
-		logs.Error(logs.WEBSOCKET, fmt.Sprintf("构造群信息查询失败: %v", err))
+		c.Log().Error(logs.WEBSOCKET, fmt.Sprintf("构造群信息查询失败: %v", err))
 		return ""
 	}
 	if err := c.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		c.clearPendingGroupInfo(echo)
-		logs.Error(logs.WEBSOCKET, fmt.Sprintf("发送群信息查询失败 group=%d: %v", groupID, err))
+		c.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送群信息查询失败 group=%d: %v", groupID, err))
 	}
 	return ""
 }
@@ -106,7 +107,7 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	pending, ok := c.pendingGroupByEcho[echo]
 	if !ok {
 		c.groupMu.Unlock()
-		logOneBotActionFailure(echo, response)
+		logOneBotActionFailure(echo, response, c.Scope)
 		return true
 	}
 	delete(c.pendingGroupByEcho, echo)
@@ -142,12 +143,12 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	c.groupMu.Unlock()
 
 	if success {
-		logs.Info(
+		c.Log().Info(
 			logs.WEBSOCKET,
 			fmt.Sprintf("群名称缓存已更新: group=%d name=%q", pending.GroupID, name),
 		)
 	} else {
-		logs.Warn(
+		c.Log().Warn(
 			logs.WEBSOCKET,
 			fmt.Sprintf("群信息查询失败，短暂负缓存: group=%d retcode=%d", pending.GroupID, response.RetCode),
 		)
@@ -155,7 +156,8 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	return true
 }
 
-func logOneBotActionFailure(echo string, response oneBotAPIResponse) {
+func logOneBotActionFailure(echo string, response oneBotAPIResponse, scopes ...*runtimescope.Scope) {
+	scope := runtimescope.First(scopes)
 	if response.RetCode == 0 && (response.Status == "" || response.Status == "ok") {
 		return
 	}
@@ -163,7 +165,7 @@ func logOneBotActionFailure(echo string, response oneBotAPIResponse) {
 	if detail == "" {
 		detail = strings.TrimSpace(response.Message)
 	}
-	logs.Error(
+	scope.Log().Error(
 		logs.WEBSOCKET,
 		fmt.Sprintf(
 			"OneBot action 失败: echo=%s status=%s retcode=%d detail=%q",

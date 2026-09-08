@@ -5,9 +5,9 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/runtimescope"
 	"fmt"
 	"math/rand/v2"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -745,6 +745,7 @@ const minHistory = 4
 
 // SessionManager 管理多个会话上下文，支持多用户/多群聊隔离
 type SessionManager struct {
+	*runtimescope.Scope
 	sessions          map[string]*SessionContext
 	mu                sync.RWMutex
 	groupSummaryStore *groupsummary.Store
@@ -753,21 +754,23 @@ type SessionManager struct {
 }
 
 // NewSessionManager 创建新的会话管理器
-func NewSessionManager() *SessionManager {
+func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
+	scope := runtimescope.First(scopes)
 	sm := &SessionManager{
+		Scope:      scope,
 		sessions:   make(map[string]*SessionContext),
 		MaxHistory: 50,
 		TTL:        24 * time.Hour,
 	}
 	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
 	// （见 agent.go effectiveMaxHistory）。
-	if v := os.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
+	if v := scope.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
 			sm.MaxHistory = n
 		}
 	}
 	// 启动定时清理协程
-	go sm.startCleanupRoutine()
+	sm.Go(sm.startCleanupRoutine)
 	return sm
 }
 
@@ -800,7 +803,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	if sm.groupSummaryStore != nil && isGroupSession {
 		record, ok, err := sm.groupSummaryStore.Get(sessionID)
 		if err != nil {
-			logs.Warn(logs.SYSTEM, "恢复群聊总结失败 ("+sessionID+"): "+err.Error())
+			sm.Log().Warn(logs.SYSTEM, "恢复群聊总结失败 ("+sessionID+"): "+err.Error())
 		} else if ok {
 			summary = record.Summary
 		}
@@ -819,7 +822,12 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 // startCleanupRoutine 定时清理过期会话
 func (sm *SessionManager) startCleanupRoutine() {
 	ticker := time.NewTicker(1 * time.Hour)
-	for range ticker.C {
+	for {
+		select {
+		case <-sm.Context().Done():
+			return
+		case <-ticker.C:
+		}
 		sm.Cleanup()
 	}
 }

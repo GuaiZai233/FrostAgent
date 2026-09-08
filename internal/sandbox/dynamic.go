@@ -49,6 +49,14 @@ func (m *ConfigManager) SetEnabled(enabled bool) {
 	m.current.Enabled = enabled
 }
 
+// RefreshEnabled updates Enabled from an authoritative source while holding the
+// manager lock, so concurrent Control Plane editors cannot publish stale values.
+func (m *ConfigManager) RefreshEnabled(load func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.Enabled = load()
+}
+
 // DynamicBackend implements Backend with runtime-configurable sandbox support.
 // Configuration is re-read on each operation, allowing the sandbox to be
 // enabled or disabled via environment variables without restarting the process.

@@ -2,6 +2,7 @@ package sticker
 
 import (
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ type VisionCaller interface {
 }
 
 type Summarizer struct {
+	*runtimescope.Scope
 	store  *Store
 	vision VisionCaller
 	queue  chan string
@@ -22,27 +24,36 @@ type Summarizer struct {
 	stop   chan struct{}
 }
 
-func NewSummarizer(store *Store, vision VisionCaller) *Summarizer {
+func NewSummarizer(store *Store, vision VisionCaller, scopes ...*runtimescope.Scope) *Summarizer {
 	s := &Summarizer{
+		Scope:  runtimescope.First(scopes),
 		store:  store,
 		vision: vision,
 		queue:  make(chan string, 256),
 		stop:   make(chan struct{}),
 	}
 	s.wg.Add(1)
-	go s.worker()
+	if !s.Go(s.worker) {
+		s.wg.Done()
+	}
 	return s
 }
 
 func (s *Summarizer) Enqueue(id string) {
+	if s.Context().Err() != nil {
+		return
+	}
 	select {
 	case s.queue <- id:
 	default:
-		logs.Warn(logs.SYSTEM, fmt.Sprintf("sticker summarizer: queue full, dropping %s", id[:12]))
+		s.Log().Warn(logs.SYSTEM, fmt.Sprintf("sticker summarizer: queue full, dropping %s", id[:12]))
 	}
 }
 
 func (s *Summarizer) EnqueueUnsummarized() int {
+	if s.Context().Err() != nil {
+		return 0
+	}
 	entries := s.store.Unsummarized()
 	count := 0
 	for _, e := range entries {
@@ -64,6 +75,8 @@ func (s *Summarizer) worker() {
 	defer s.wg.Done()
 	for {
 		select {
+		case <-s.Context().Done():
+			return
 		case <-s.stop:
 			return
 		case id := <-s.queue:
@@ -88,7 +101,7 @@ func (s *Summarizer) process(id string) {
 	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: read %s: %v", id[:12], err))
+		s.Log().Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: read %s: %v", id[:12], err))
 		return
 	}
 
@@ -97,14 +110,14 @@ func (s *Summarizer) process(id string) {
 
 	desc, keywords, suspectedInappropriate, err := s.vision.Describe(b64, mime)
 	if err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: vision call failed for %s: %v", id[:12], err))
+		s.Log().Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: vision call failed for %s: %v", id[:12], err))
 		return
 	}
 
 	if err := s.store.UpdateSummary(id, desc, keywords, suspectedInappropriate); err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: update %s: %v", id[:12], err))
+		s.Log().Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: update %s: %v", id[:12], err))
 	} else {
-		logs.Info(logs.SYSTEM, fmt.Sprintf("sticker summarizer: %s => %q %v", id[:12], desc, keywords))
+		s.Log().Info(logs.SYSTEM, fmt.Sprintf("sticker summarizer: %s => %q %v", id[:12], desc, keywords))
 	}
 }
 

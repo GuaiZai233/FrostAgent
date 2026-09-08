@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -52,13 +53,13 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 		} else if seg.Type == "image" || seg.Type == "mface" {
 			source := SegmentImageSource(seg)
 			if strings.TrimSpace(source) == "" {
-				logs.Warn(logs.WEBSOCKET, fmt.Sprintf("图片消息缺少可读取的数据: %+v", seg.Data))
+				runtimescope.FromContext(ctx).Log().Warn(logs.WEBSOCKET, fmt.Sprintf("图片消息缺少可读取的数据: %+v", seg.Data))
 				continue
 			}
-			if b64, err := imageSourceToBase64(source); err == nil {
+			if b64, err := imageSourceToBase64(source, ctx); err == nil {
 				imageBase64List = append(imageBase64List, b64)
 			} else {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("下载图片失败: %v", err))
+				runtimescope.FromContext(ctx).Log().Error(logs.WEBSOCKET, fmt.Sprintf("下载图片失败: %v", err))
 			}
 		}
 	}
@@ -78,7 +79,7 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 		}
 		jsonBytes, err := json.Marshal(contentBlocks)
 		if err != nil {
-			logs.Error(logs.WEBSOCKET, fmt.Sprintf("序列化消息失败: %v", err))
+			runtimescope.FromContext(ctx).Log().Error(logs.WEBSOCKET, fmt.Sprintf("序列化消息失败: %v", err))
 			return "无法读取图片"
 		}
 		return llm.CallVisionModel(ctx, provider, route, string(jsonBytes))
@@ -167,7 +168,11 @@ func downloadAndToBase64(url string) (string, error) {
 	return imageSourceToBase64(url)
 }
 
-func imageSourceToBase64(source string) (string, error) {
+func imageSourceToBase64(source string, contexts ...context.Context) (string, error) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	if strings.HasPrefix(source, "base64://") {
 		encoded := strings.TrimPrefix(source, "base64://")
 		if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
@@ -190,13 +195,17 @@ func imageSourceToBase64(source string) (string, error) {
 	if !trustedQQImageURL.MatchString(source) {
 		return "", fmt.Errorf("图片来源不是允许的 QQ 媒体地址")
 	}
-	resp, err := imageHTTPClient.Get(source)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := imageHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			logs.Warn(logs.WEBSOCKET, fmt.Sprintf("关闭图片响应体失败: %v", err))
+			runtimescope.FromContext(ctx).Log().Warn(logs.WEBSOCKET, fmt.Sprintf("关闭图片响应体失败: %v", err))
 		}
 	}()
 

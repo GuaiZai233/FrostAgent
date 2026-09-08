@@ -64,15 +64,19 @@
   - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
   - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 
-### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
+### 人设系统：系统提示词与少样本示例 (Persona System: System Prompt & Few-Shot Dialogues)
 
-为了增强智能体的人设表达（语气、口吻、句式格式），FrostAgent 支持通过 YAML 文件配置示例对话（默认为 `eval/dialogue/dialogue.yml`），并在会话执行时注入为系统提示词：
+为了增强智能体的人设表达（语气、口吻、句式格式与核心人设约束），FrostAgent 支持在各实例中独立配置系统提示词与 Few-Shot 示例对话，并在会话执行时注入为基础人设上下文：
 
+- **系统提示词（`SYSTEM_PROMPT`）**：彻底与 Control Plane 全局环境变量解耦，作为实例级核心环境变量存储于 `data/instance_<id>/.env` 中。新建实例时由 `instanceconfig.Template` 赋予默认基础助手设定（`SYSTEM_PROMPT=你是一个乐于助人的助手。`），在 Web 设置页中归属「当前实例」与「立即生效」作用域，修改后通过 Runtime Scope 实时内存映射即时热生效而无需重启实例。
 - **引导提示词**：`以下是示例对话，请仿照句子格式、语气等回应接下来的用户输入。`
-- **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范。
-- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：系统时间 -> 基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。
-- **Web UI 与热更新**：前端控制台提供独立的「示例对话」管理页面（入口位于「记忆」下方），支持无限增删改查对话卡片、调整提示词顺序、实时提示词片段预览以及直接编辑原始 YAML。后端提供 `DialogueService` ConnectRPC 服务，修改后自动原子更新 YAML 文件并实时热重载生效至全局智能体引擎 `GlobalEngine.DialoguePrompt`，无需重启服务。
-- **可配置与优雅降级**：可通过环境变量 `DIALOGUE_PATH` 指定路径，文件不存在或解析为空时平滑跳过，不影响正常对话。
+- **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范，持久化保存于各实例的 `data/instance_<id>/dialogue.yml`。
+- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：系统时间 -> 实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。
+- **实例级生命周期与模板初始化**：创建新实例时，系统自动从模板路径（默认为 `eval/dialogue/dialogue.yml`，可通过 Control Plane 的 `DEFAULT_DIALOGUE_TEMPLATE` 环境变量自定义）拷贝生成初始 `dialogue.yml`，并写入默认 `SYSTEM_PROMPT`；实例删除时彻底清理，不留孤儿数据。
+- **快速配置（Copy）两阶段事务**：在实例克隆复制过程中，包含 `SYSTEM_PROMPT` 的 `.env` 与 `dialogue.yml` 共同纳入事务配置清单，经历暂存（Stage）、校验、预备提交与崩溃恢复保障，确保整套人设（提示词与对话示例）与环境配置同步原子转移。
+- **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。
+- **升级兼容性边界与无隐式迁移（Breaking Migration Boundary）**：系统提示词下沉为实例级配置属于显式的破坏性迁移。系统坚决不执行隐式数据回填或跨层穿透读取：Control Plane 不再暴露全局 `SYSTEM_PROMPT`，存量实例目录中的 `.env` 若未定义 `SYSTEM_PROMPT`，在升级后将解析为空，绝不会隐式继承或持久化根级旧配置，避免造成隐蔽的状态污染；用户需在 Web 设置面板中显式为其赋予独立提示词。新建实例则由模板自动赋予默认助手设定。
+- **Web UI 管理**：前端控制台提供「人设对话」管理页面与「后端设置」页面，严格绑定当前选中的实例，支持可视化卡片增删改查、排序、实时提示词片段预览、直接编辑原始 YAML 以及实例专属环境变量热修改。
 
 ### 群聊滚动总结与容错压缩系统 (Group Running Compactor)
 
@@ -120,6 +124,15 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 前端基于 `@connectrpc/connect-web` 与 `@frostagent/proto`，实现端到端的 Protobuf 类型安全与请求/响应全量校验；
   - 支持 ConnectRPC Server-Streaming 实时日志长连接订阅与动态取消；
   - 敏感配置自动脱敏与按需显隐。
+- **Control Plane 与实例生命周期隔离**：
+  - General 日志通过根级 `LogService` 访问，不依赖当前选中实例的 Runtime、启用状态或操作锁；关闭 Control Plane 时会主动终止 General 与所有实例日志流，并拒绝已排队但尚未取得操作锁的生命周期写入；
+  - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
+  - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
+  - 概览分别展示实例管理名称与实例 `BOT_NAME`，并由 Control Plane 下发本次启动实际采用的 `WS_LISTEN_ADDR` 来生成实例专属适配器地址；设置页修改后的待重启值不会提前污染概览。AstrBot 插件要求显式配置该地址，不再回退到无实例路径。
+  - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
+  - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
+  - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
+  - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
@@ -206,7 +219,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - FrostAgent 严格扮演标准 MCP Host（Client 角色），将外部 MCP Server 视为动态工具提供者（External Tool Provider）；
   - **普通工具语义对齐**：对于大模型及智能体循环（Agent Loop），MCP 工具在调用流程、参数组织与执行协议上与系统内置工具（`memory`, `send_msg`, `send_sticker` 等）完全等价，统一归入 `core.ChatRequest.Tools` 并在执行时由 `ToolExecutor` 统一调度；
   - **编译期静态适配器与运行期动态发现**：系统通过编译期静态编写的通用工具适配器（`ToolAdapter`），结合运行期动态拉取的工具目录（`ToolCatalog`），兼具 Go 语言的静态类型安全与 MCP 外部服务的热插拔灵活性；
-  - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/mcp_servers.json`），不设全局主开关，避免多实例部署时的系统级配置耦合。
+  - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/instance_<id>/mcp_servers.json`），不设全局主开关，实例之间的配置、连接与工具状态完全隔离。
 - **官方 SDK 与多传输协议支持 (Official Go SDK & Multi-Transport Implementations)**：
   - 全面基于官方 Go SDK（`github.com/modelcontextprotocol/go-sdk/mcp`）构建，废弃私有 JSON-RPC 解析；
   - **Stdio 子进程传输 (`officialmcp.CommandTransport`)**：支持本地命令行子进程模式，托管 stdin/stdout 标准流管道交互与 SIGTERM 优雅退出；支持自定义可执行命令、参数列表、工作目录以及环境变量；
@@ -214,11 +227,11 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **SSE 传输 (`officialmcp.SSEClientTransport`) 与传输层精细化控制**：支持 2024-11-05 标准服务器推送流，并通过自定义 `HeaderTransport` 装饰器实现请求头（如认证 Token）注入。流式 HTTP 客户端显式配置 `Timeout: 0` 保证长挂起流不被底层自动中断，结合精细化底层超时（`DialContext` 15s、`ResponseHeaderTimeout` 30s、`TLSHandshakeTimeout` 15s、`IdleConnTimeout` 90s）确保连接稳健；
   - **会话生命周期解耦 (`lifecycleCtx`)**：建立会话时将其与短期 RPC 握手上下文完全解耦，仅在显式停止、重启或代数更迭时取消，防止瞬时请求超时意外掐断常驻 SSE 流；
   - **生命周期协商与能力同步**：启动时由官方 SDK 完成 `initialize` 握手与 `notifications/initialized`，随后自动拉取 `tools/list` 建立动态工具目录；同时注册 `ToolListChangedHandler` 监听外部服务端工具变更通知并自动异步热更新。
-- **两阶段启动加载 (Two-Phase Boot Loading)**：
-  - 系统启动时先通过 `mcpManager.Load()` 同步将持久化配置载入内存，保证 HTTP/ConnectRPC 端口监听就绪时配置已就绪，消除早期管理 API 请求的启动竞态；
-  - 在独立的后台协程中调用 `mcpManager.StartAll(ctx)` 并发连接各个已启用的外部 MCP 服务器，避免外部网络握手或慢子进程阻塞主引擎就绪。
+- **实例生命周期加载 (Instance Lifecycle Loading)**：
+  - Control Plane 构造实例时先同步载入该实例的持久化 MCP 配置，保证实例管理接口就绪时配置可读写；
+  - 实例启用后异步连接其已启用的外部 MCP 服务器；实例停用时同步断开实时连接但保留期望启用状态，重新启用后自动恢复连接。
 - **平台专属原生崩溃安全持久化 (Platform-Native Crash-Safe Atomic Persistence)**：
-  - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/mcp_servers.json`；
+  - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/instance_<id>/mcp_servers.json`；
   - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
   - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
 - **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：
@@ -280,7 +293,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
   - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
-  - 采用 `DynamicBackend` 与 `ConfigManager` 原子快照管理器封装后端，在运行时动态感知管理面板的启停状态与配置变更；
+  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
   - `execute_command` 工具常驻注册于 `ToolRegistry`；当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，工具在被模型调用时明确返回友好提示（“沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。”），避免弱模型因缺失工具而产生幻觉虚构执行结果；
@@ -293,10 +306,8 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 不同会话严格对应不同的 Worker/用户隔离空间，互不可见且杜绝跨会话状态穿透；禁止在单次命令调用后自动释放沙箱。
 - **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
-  - 沙箱网关配置采用原子快照（`ConfigManager.ApplySnapshot`）隔离更新，禁止在运行期逐字段修改端点与凭据（`SANDBOX_BASE_URL` 与 `SANDBOX_AUTH_TOKEN` 要求重启或原子文件更新），防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
-  - 管理面在重载原始 `.env` 文件时保持环境变量优先级与来源保护（Provenance Tracking）：外部环境（Docker / Kubernetes / 宿主机注入）的变量始终优先于 `.env` 默认值，不因保存 `.env` 被清除或覆盖；沙箱运行时快照基于最终有效配置计算；
+  - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
-

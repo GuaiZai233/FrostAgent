@@ -10,8 +10,8 @@ import (
 
 // corsMiddleware enforces strict origin and host boundaries.
 // It protects against DNS rebinding and malicious cross-origin requests.
-func corsMiddleware(next http.Handler) http.Handler {
-	allowedOrigins, allowedHosts := configuredHTTPOrigins()
+func corsMiddleware(next http.Handler, getters ...func(string) string) http.Handler {
+	allowedOrigins, allowedHosts := configuredHTTPOrigins(getters...)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Validate Host header to protect against DNS rebinding
 		if !isHostAllowed(r.Host, allowedHosts) {
@@ -31,7 +31,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 		}
 
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Connect-Protocol-Version")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Connect-Protocol-Version, X-FrostAgent-Log-Source, X-FrostAgent-General")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -42,10 +42,14 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func configuredHTTPOrigins() (map[string]struct{}, map[string]struct{}) {
+func configuredHTTPOrigins(getters ...func(string) string) (map[string]struct{}, map[string]struct{}) {
+	getenv := os.Getenv
+	if len(getters) > 0 {
+		getenv = getters[0]
+	}
 	origins := make(map[string]struct{})
 	hosts := make(map[string]struct{})
-	for _, value := range strings.Split(os.Getenv("HTTP_ALLOWED_ORIGINS"), ",") {
+	for _, value := range strings.Split(getenv("HTTP_ALLOWED_ORIGINS"), ",") {
 		origin := strings.TrimSpace(value)
 		if origin == "" {
 			continue

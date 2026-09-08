@@ -3,6 +3,7 @@ package llm
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 	"strings"
@@ -40,12 +41,12 @@ func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.
 		Route: route,
 	}
 
-	logs.Info(logs.SYSTEM, "即将传递消息给视觉模型")
+	runtimescope.FromContext(ctx).Log().InfoWithConsoleSummary(logs.SYSTEM, "即将传递消息给视觉模型", "即将传递消息给视觉模型")
 
 	// 调用 LLMProvider 接口
 	resp, err := provider.Chat(ctx, chatReq)
 	if err != nil {
-		logs.Error(logs.SYSTEM, "视觉模型调用失败: "+err.Error())
+		runtimescope.FromContext(ctx).Log().Error(logs.SYSTEM, "视觉模型调用失败: "+err.Error())
 		return ""
 	}
 
@@ -62,7 +63,7 @@ func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.
 		contentStr = "【视觉模型未返回内容】"
 	}
 
-	logs.Info(logs.SYSTEM, "调用视觉模型，描述："+contentStr)
+	runtimescope.FromContext(ctx).Log().Info(logs.SYSTEM, "调用视觉模型，描述："+contentStr)
 
 	return contentStr
 }

@@ -1,3 +1,4 @@
+import { instanceURL } from '../instance-state';
 import { icon } from './icons';
 import { escapeHtml } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
@@ -871,7 +872,7 @@ export function renderLoggedImagesInText(value: string): string {
         mimeType: match[1],
         size: Number(match[2]),
         hash,
-        url: `/api/log-images/${hash}`,
+        url: instanceURL(`/api/log-images/${hash}`),
       },
     ]);
     cursor = match.index + match[0].length;
@@ -891,7 +892,7 @@ function parsePromptImage(value: string | undefined): PromptImage | undefined {
       mimeType: placeholder[1],
       size: Number(placeholder[2]),
       hash,
-      url: `/api/log-images/${hash}`,
+      url: instanceURL(`/api/log-images/${hash}`),
     };
   }
 

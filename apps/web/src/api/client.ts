@@ -1,3 +1,4 @@
+import { instanceState } from '../instance-state';
 import { createClient } from '@connectrpc/connect';
 import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
@@ -96,356 +97,403 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-const transport = createConnectTransport({
-  baseUrl: window.location.origin,
-  interceptors: [authInterceptor],
-});
+export function createInstanceAPI() {
+  const instanceID = instanceState.selected?.id;
+  const selectionSignal = instanceState.signal;
+  const transport = createConnectTransport({
+    baseUrl: window.location.origin,
+    fetch: async (input, init) => {
+      const original = new Request(input, init);
+      const url = new URL(original.url);
+      selectionSignal.throwIfAborted();
+      const id = instanceID;
+      const isLogService = url.pathname.startsWith(
+        '/frostagent.v1.LogService/',
+      );
+      const isControlPlaneLog =
+        isLogService && instanceState.logSource === 'control-plane';
+      if (id && !isControlPlaneLog)
+        url.pathname = `/instances/${id}${url.pathname}`;
+      else if (!id && !isControlPlaneLog) throw new Error('请先选择实例');
+      const signal = AbortSignal.any([original.signal, selectionSignal]);
+      const headers = new Headers(original.headers);
+      headers.set('X-FrostAgent-Log-Source', instanceState.logSource);
+      const body =
+        original.method === 'GET' || original.method === 'HEAD'
+          ? undefined
+          : await original.arrayBuffer();
+      return fetch(url, { method: original.method, headers, signal, body });
+    },
+    interceptors: [authInterceptor],
+  });
 
-const botClient: Client<typeof BotStatusService> = createClient(
-  BotStatusService,
-  transport,
-);
+  const botClient: Client<typeof BotStatusService> = createClient(
+    BotStatusService,
+    transport,
+  );
 
-const logClient: Client<typeof LogService> = createClient(
-  LogService,
-  transport,
-);
+  const logClient: Client<typeof LogService> = createClient(
+    LogService,
+    transport,
+  );
 
-const settingsClient: Client<typeof SettingsService> = createClient(
-  SettingsService,
-  transport,
-);
+  const settingsClient: Client<typeof SettingsService> = createClient(
+    SettingsService,
+    transport,
+  );
 
-const memoryClient: Client<typeof MemoryService> = createClient(
-  MemoryService,
-  transport,
-);
+  const memoryClient: Client<typeof MemoryService> = createClient(
+    MemoryService,
+    transport,
+  );
 
-const modelRouterClient: Client<typeof ModelRouterService> = createClient(
-  ModelRouterService,
-  transport,
-);
+  const modelRouterClient: Client<typeof ModelRouterService> = createClient(
+    ModelRouterService,
+    transport,
+  );
 
-const dialogueClient: Client<typeof DialogueService> = createClient(
-  DialogueService,
-  transport,
-);
+  const dialogueClient: Client<typeof DialogueService> = createClient(
+    DialogueService,
+    transport,
+  );
 
-const stickerClient: Client<typeof StickerService> = createClient(
-  StickerService,
-  transport,
-);
+  const stickerClient: Client<typeof StickerService> = createClient(
+    StickerService,
+    transport,
+  );
 
-const mcpClient: Client<typeof MCPService> = createClient(
-  MCPService,
-  transport,
-);
+  const mcpClient: Client<typeof MCPService> = createClient(
+    MCPService,
+    transport,
+  );
 
-export const api = {
-  // Bot Overview & Sessions
-  getOverview(): Promise<GetOverviewResponse> {
-    return botClient.getOverview({});
-  },
+  return {
+    // Bot Overview & Sessions
+    getOverview(): Promise<GetOverviewResponse> {
+      return botClient.getOverview({});
+    },
 
-  getSessions(pageSize: number, pageToken = ''): Promise<GetSessionsResponse> {
-    return botClient.getSessions({
-      pagination: {
-        pageSize,
-        pageToken,
-      },
-    });
-  },
+    getSessions(
+      pageSize: number,
+      pageToken = '',
+    ): Promise<GetSessionsResponse> {
+      return botClient.getSessions({
+        pagination: {
+          pageSize,
+          pageToken,
+        },
+      });
+    },
 
-  getSessionContext(sessionId: string, recentLimit = 50): Promise<GetSessionContextResponse> {
-    return botClient.getSessionContext({
-      sessionId,
-      recentLimit,
-    });
-  },
+    getSessionContext(
+      sessionId: string,
+      recentLimit = 50,
+    ): Promise<GetSessionContextResponse> {
+      return botClient.getSessionContext({
+        sessionId,
+        recentLimit,
+      });
+    },
 
-  deleteGroupSummary(sessionId: string): Promise<DeleteGroupSummaryResponse> {
-    return botClient.deleteGroupSummary({ sessionId });
-  },
+    deleteGroupSummary(sessionId: string): Promise<DeleteGroupSummaryResponse> {
+      return botClient.deleteGroupSummary({ sessionId });
+    },
 
-  // Logs
-  listLogs(
-    pageSize: number,
-    pageToken: string,
-    minLevel: LogLevel,
-    sourceFilter: string,
-  ): Promise<ListLogsResponse> {
-    return logClient.listLogs({
-      pagination: {
-        pageSize,
-        pageToken,
-      },
-      minLevel,
-      sourceFilter,
-    });
-  },
-
-  streamLogs(
-    minLevel: LogLevel,
-    sourceFilter: string,
-    signal: AbortSignal,
-  ): AsyncIterable<LogEntry> {
-    return logClient.streamLogs(
-      {
+    // Logs
+    listLogs(
+      pageSize: number,
+      pageToken: string,
+      minLevel: LogLevel,
+      sourceFilter: string,
+    ): Promise<ListLogsResponse> {
+      return logClient.listLogs({
+        pagination: {
+          pageSize,
+          pageToken,
+        },
         minLevel,
         sourceFilter,
-      },
-      { signal },
-    );
-  },
+      });
+    },
 
-  clearLogs(): Promise<boolean> {
-    return logClient.clearLogs({}).then((res) => res.success);
-  },
+    streamLogs(
+      minLevel: LogLevel,
+      sourceFilter: string,
+      signal: AbortSignal,
+    ): AsyncIterable<LogEntry> {
+      return logClient.streamLogs(
+        {
+          minLevel,
+          sourceFilter,
+        },
+        { signal },
+      );
+    },
 
-  // Settings & Env Vars
-  listEnvVars(): Promise<EnvVar[]> {
-    return settingsClient
-      .listEnvVars({})
-      .then((res) => [...res.envVars].sort((a, b) => a.key.localeCompare(b.key)));
-  },
+    clearLogs(): Promise<boolean> {
+      return logClient.clearLogs({}).then((res) => res.success);
+    },
 
-  updateEnvVar(envVar: EnvVarUpdate): Promise<{ success: boolean; error: string }> {
-    return settingsClient.updateEnvVar({
-      key: envVar.key,
-      value: envVar.value,
-      isSecret: envVar.isSecret,
-    });
-  },
+    // Settings & Env Vars
+    listEnvVars(): Promise<EnvVar[]> {
+      return settingsClient
+        .listEnvVars({})
+        .then((res) =>
+          [...res.envVars].sort((a, b) => a.key.localeCompare(b.key)),
+        );
+    },
 
-  deleteEnvVar(key: string): Promise<{ success: boolean; error: string }> {
-    return settingsClient.deleteEnvVar({ key });
-  },
+    updateEnvVar(
+      envVar: EnvVarUpdate,
+    ): Promise<{ success: boolean; error: string }> {
+      return settingsClient.updateEnvVar({
+        key: envVar.key,
+        value: envVar.value,
+        isSecret: envVar.isSecret,
+      });
+    },
 
-  getRawEnvFile(): Promise<string> {
-    return settingsClient.getRawEnvFile({}).then((res) => res.content);
-  },
+    deleteEnvVar(key: string): Promise<{ success: boolean; error: string }> {
+      return settingsClient.deleteEnvVar({ key });
+    },
 
-  updateRawEnvFile(content: string): Promise<{ success: boolean; error: string }> {
-    return settingsClient.updateRawEnvFile({ content });
-  },
+    getRawEnvFile(): Promise<string> {
+      return settingsClient.getRawEnvFile({}).then((res) => res.content);
+    },
 
-  // Model Router
-  getModelRouterState(): Promise<GetStateResponse> {
-    return modelRouterClient.getState({});
-  },
+    updateRawEnvFile(
+      content: string,
+    ): Promise<{ success: boolean; error: string }> {
+      return settingsClient.updateRawEnvFile({ content });
+    },
 
-  saveModelRouterDraft(configuration: ModelRouterConfiguration): Promise<SaveDraftResponse> {
-    return modelRouterClient.saveDraft({ configuration });
-  },
+    // Model Router
+    getModelRouterState(): Promise<GetStateResponse> {
+      return modelRouterClient.getState({});
+    },
 
-  setDraftEndpointSecret(endpointId: string, apiKey: string): Promise<{ success: boolean; error: string; configured: boolean }> {
-    return modelRouterClient.setDraftEndpointSecret({ endpointId, apiKey });
-  },
+    saveModelRouterDraft(
+      configuration: ModelRouterConfiguration,
+    ): Promise<SaveDraftResponse> {
+      return modelRouterClient.saveDraft({ configuration });
+    },
 
-  clearDraftEndpointSecret(endpointId: string): Promise<{ success: boolean; error: string; configured: boolean }> {
-    return modelRouterClient.clearDraftEndpointSecret({ endpointId });
-  },
+    setDraftEndpointSecret(
+      endpointId: string,
+      apiKey: string,
+    ): Promise<{ success: boolean; error: string; configured: boolean }> {
+      return modelRouterClient.setDraftEndpointSecret({ endpointId, apiKey });
+    },
 
-  discardModelRouterDraft(): Promise<ModelRouterConfiguration | undefined> {
-    return modelRouterClient.discardDraft({}).then((res) => res.draft);
-  },
+    clearDraftEndpointSecret(
+      endpointId: string,
+    ): Promise<{ success: boolean; error: string; configured: boolean }> {
+      return modelRouterClient.clearDraftEndpointSecret({ endpointId });
+    },
 
-  publishModelRouter(): Promise<PublishResponse> {
-    return modelRouterClient.publish({});
-  },
+    discardModelRouterDraft(): Promise<ModelRouterConfiguration | undefined> {
+      return modelRouterClient.discardDraft({}).then((res) => res.draft);
+    },
 
-  listUpstreamModels(endpointId: string): Promise<{ models: string[]; error: string }> {
-    return modelRouterClient.listUpstreamModels({ endpointId });
-  },
+    publishModelRouter(): Promise<PublishResponse> {
+      return modelRouterClient.publish({});
+    },
 
-  testModel(modelId: string): Promise<TestModelResponse> {
-    return modelRouterClient.testModel({ modelId });
-  },
+    listUpstreamModels(
+      endpointId: string,
+    ): Promise<{ models: string[]; error: string }> {
+      return modelRouterClient.listUpstreamModels({ endpointId });
+    },
 
-  // Memory
-  listMemories(
-    pageSize: number,
-    pageToken = '',
-    owner = '',
-  ): Promise<ListMemoriesResponse> {
-    return memoryClient.listMemories({
-      pagination: { pageSize, pageToken },
-      owner,
-    });
-  },
+    testModel(modelId: string): Promise<TestModelResponse> {
+      return modelRouterClient.testModel({ modelId });
+    },
 
-  deleteMemory(id: string): Promise<DeleteMemoryResponse> {
-    return memoryClient.deleteMemory({ id });
-  },
+    // Memory
+    listMemories(
+      pageSize: number,
+      pageToken = '',
+      owner = '',
+    ): Promise<ListMemoriesResponse> {
+      return memoryClient.listMemories({
+        pagination: { pageSize, pageToken },
+        owner,
+      });
+    },
 
-  getMemoryStats(): Promise<GetMemoryStatsResponse> {
-    return memoryClient.getMemoryStats({});
-  },
+    deleteMemory(id: string): Promise<DeleteMemoryResponse> {
+      return memoryClient.deleteMemory({ id });
+    },
 
-  searchMemories(
-    query: string,
-    pageSize: number,
-    pageToken = '',
-  ): Promise<SearchMemoriesResponse> {
-    return memoryClient.searchMemories({
-      query,
-      pagination: { pageSize, pageToken },
-    });
-  },
+    getMemoryStats(): Promise<GetMemoryStatsResponse> {
+      return memoryClient.getMemoryStats({});
+    },
 
-  addMemory(
-    owner: string,
-    content: string,
-    tags: string[],
-    visibility: string,
-  ): Promise<AddMemoryResponse> {
-    return memoryClient.addMemory({ owner, content, tags, visibility });
-  },
+    searchMemories(
+      query: string,
+      pageSize: number,
+      pageToken = '',
+    ): Promise<SearchMemoriesResponse> {
+      return memoryClient.searchMemories({
+        query,
+        pagination: { pageSize, pageToken },
+      });
+    },
 
-  updateMemory(
-    id: string,
-    content: string,
-    tags: string[],
-    visibility: string,
-  ): Promise<UpdateMemoryResponse> {
-    return memoryClient.updateMemory({
-      id,
-      content,
-      tags,
-      visibility,
-    });
-  },
+    addMemory(
+      owner: string,
+      content: string,
+      tags: string[],
+      visibility: string,
+    ): Promise<AddMemoryResponse> {
+      return memoryClient.addMemory({ owner, content, tags, visibility });
+    },
 
-  exportMemories(): Promise<ExportMemoriesResponse> {
-    return memoryClient.exportMemories({});
-  },
+    updateMemory(
+      id: string,
+      content: string,
+      tags: string[],
+      visibility: string,
+    ): Promise<UpdateMemoryResponse> {
+      return memoryClient.updateMemory({
+        id,
+        content,
+        tags,
+        visibility,
+      });
+    },
 
-  importMemories(
-    jsonContent: string,
-    overwrite: boolean,
-  ): Promise<ImportMemoriesResponse> {
-    return memoryClient.importMemories({ jsonContent, overwrite });
-  },
+    exportMemories(): Promise<ExportMemoriesResponse> {
+      return memoryClient.exportMemories({});
+    },
 
-  triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
-    return memoryClient.triggerReflection({ owner });
-  },
+    importMemories(
+      jsonContent: string,
+      overwrite: boolean,
+    ): Promise<ImportMemoriesResponse> {
+      return memoryClient.importMemories({ jsonContent, overwrite });
+    },
 
-  // Dialogue Examples
-  listDialogues(): Promise<ListDialoguesResponse> {
-    return dialogueClient.listDialogues({});
-  },
+    triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
+      return memoryClient.triggerReflection({ owner });
+    },
 
-  saveDialogues(dialogues: DialogueItem[]): Promise<SaveDialoguesResponse> {
-    return dialogueClient.saveDialogues({ dialogues });
-  },
+    // Dialogue Examples
+    listDialogues(): Promise<ListDialoguesResponse> {
+      return dialogueClient.listDialogues({});
+    },
 
-  getRawDialogueFile(): Promise<GetRawDialogueFileResponse> {
-    return dialogueClient.getRawDialogueFile({});
-  },
+    saveDialogues(dialogues: DialogueItem[]): Promise<SaveDialoguesResponse> {
+      return dialogueClient.saveDialogues({ dialogues });
+    },
 
-  updateRawDialogueFile(content: string): Promise<UpdateRawDialogueFileResponse> {
-    return dialogueClient.updateRawDialogueFile({ content });
-  },
+    getRawDialogueFile(): Promise<GetRawDialogueFileResponse> {
+      return dialogueClient.getRawDialogueFile({});
+    },
 
-  // Sticker
-  listStickers(
-    pageSize: number,
-    pageToken = '',
-    statusFilter = '',
-    search = '',
-  ): Promise<ListStickersResponse> {
-    return stickerClient.listStickers({
-      pagination: { pageSize, pageToken },
-      statusFilter,
-      search,
-    });
-  },
+    updateRawDialogueFile(
+      content: string,
+    ): Promise<UpdateRawDialogueFileResponse> {
+      return dialogueClient.updateRawDialogueFile({ content });
+    },
 
-  deleteSticker(id: string): Promise<DeleteStickerResponse> {
-    return stickerClient.deleteSticker({ id });
-  },
+    // Sticker
+    listStickers(
+      pageSize: number,
+      pageToken = '',
+      statusFilter = '',
+      search = '',
+    ): Promise<ListStickersResponse> {
+      return stickerClient.listStickers({
+        pagination: { pageSize, pageToken },
+        statusFilter,
+        search,
+      });
+    },
 
-  updateStickerKeywords(
-    id: string,
-    description: string,
-    keywords: string[],
-  ): Promise<UpdateStickerKeywordsResponse> {
-    return stickerClient.updateStickerKeywords({ id, description, keywords });
-  },
+    deleteSticker(id: string): Promise<DeleteStickerResponse> {
+      return stickerClient.deleteSticker({ id });
+    },
 
-  markStickerInappropriateFlag(id: string): Promise<MarkStickerInappropriateFlagResponse> {
-    return stickerClient.markStickerInappropriateFlag({ id });
-  },
+    updateStickerKeywords(
+      id: string,
+      description: string,
+      keywords: string[],
+    ): Promise<UpdateStickerKeywordsResponse> {
+      return stickerClient.updateStickerKeywords({ id, description, keywords });
+    },
 
-  clearStickerInappropriateFlag(id: string): Promise<ClearStickerInappropriateFlagResponse> {
-    return stickerClient.clearStickerInappropriateFlag({ id });
-  },
+    markStickerInappropriateFlag(
+      id: string,
+    ): Promise<MarkStickerInappropriateFlagResponse> {
+      return stickerClient.markStickerInappropriateFlag({ id });
+    },
 
-  uploadSticker(fileContent: Uint8Array, filename: string): Promise<UploadStickerResponse> {
-    return stickerClient.uploadSticker({ fileContent, filename });
-  },
+    clearStickerInappropriateFlag(
+      id: string,
+    ): Promise<ClearStickerInappropriateFlagResponse> {
+      return stickerClient.clearStickerInappropriateFlag({ id });
+    },
 
-  retryAllUnsummarized(): Promise<RetryAllUnsummarizedResponse> {
-    return stickerClient.retryAllUnsummarized({});
-  },
+    uploadSticker(
+      fileContent: Uint8Array,
+      filename: string,
+    ): Promise<UploadStickerResponse> {
+      return stickerClient.uploadSticker({ fileContent, filename });
+    },
 
-  getStickerStats(): Promise<GetStickerStatsResponse> {
-    return stickerClient.getStickerStats({});
-  },
+    retryAllUnsummarized(): Promise<RetryAllUnsummarizedResponse> {
+      return stickerClient.retryAllUnsummarized({});
+    },
 
-  // MCP Servers
-  listMCPServers(): Promise<ListMCPServersResponse> {
-    return mcpClient.listMCPServers({});
-  },
+    getStickerStats(): Promise<GetStickerStatsResponse> {
+      return stickerClient.getStickerStats({});
+    },
 
-  getMCPServer(id: string): Promise<GetMCPServerResponse> {
-    return mcpClient.getMCPServer({ id });
-  },
+    // MCP
+    listMCPServers(): Promise<ListMCPServersResponse> {
+      return mcpClient.listMCPServers({});
+    },
+    getMCPServer(id: string): Promise<GetMCPServerResponse> {
+      return mcpClient.getMCPServer({ id });
+    },
+    addMCPServer(params: MCPServerParams): Promise<AddMCPServerResponse> {
+      return mcpClient.addMCPServer(params);
+    },
+    updateMCPServer(params: MCPServerParams): Promise<UpdateMCPServerResponse> {
+      return mcpClient.updateMCPServer(params);
+    },
+    deleteMCPServer(id: string): Promise<DeleteMCPServerResponse> {
+      return mcpClient.deleteMCPServer({ id });
+    },
+    toggleMCPServer(
+      id: string,
+      enabled: boolean,
+    ): Promise<ToggleMCPServerResponse> {
+      return mcpClient.toggleMCPServer({ id, enabled });
+    },
+    toggleMCPTool(
+      serverId: string,
+      toolName: string,
+      enabled: boolean,
+    ): Promise<ToggleMCPToolResponse> {
+      return mcpClient.toggleMCPTool({ serverId, toolName, enabled });
+    },
+    syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
+      return mcpClient.syncMCPServer({ id });
+    },
+  };
+}
 
-  addMCPServer(params: {
-    id: string;
-    name: string;
-    enabled: boolean;
-    transportType: string;
-    command?: string;
-    args?: string[];
-    env?: Record<string, string>;
-    workingDir?: string;
-    url?: string;
-    headers?: Record<string, string>;
-  }): Promise<AddMCPServerResponse> {
-    return mcpClient.addMCPServer(params);
-  },
-
-  updateMCPServer(params: {
-    id: string;
-    name: string;
-    enabled: boolean;
-    transportType: string;
-    command?: string;
-    args?: string[];
-    env?: Record<string, string>;
-    workingDir?: string;
-    url?: string;
-    headers?: Record<string, string>;
-  }): Promise<UpdateMCPServerResponse> {
-    return mcpClient.updateMCPServer(params);
-  },
-
-  deleteMCPServer(id: string): Promise<DeleteMCPServerResponse> {
-    return mcpClient.deleteMCPServer({ id });
-  },
-
-  toggleMCPServer(id: string, enabled: boolean): Promise<ToggleMCPServerResponse> {
-    return mcpClient.toggleMCPServer({ id, enabled });
-  },
-
-  toggleMCPTool(serverId: string, toolName: string, enabled: boolean): Promise<ToggleMCPToolResponse> {
-    return mcpClient.toggleMCPTool({ serverId, toolName, enabled });
-  },
-
-  syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
-    return mcpClient.syncMCPServer({ id });
-  },
-};
+interface MCPServerParams {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transportType: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  workingDir?: string;
+  url?: string;
+  headers?: Record<string, string>;
+}

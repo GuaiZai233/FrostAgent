@@ -3,11 +3,12 @@
 }
 
 html {
-  zoom: 1.1;
+  --ui-zoom: 1.1;
+  zoom: var(--ui-zoom);
 }
 
 html, body {
-  min-height: 100vh;
+  min-height: calc(100dvh / var(--ui-zoom));
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);

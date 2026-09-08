@@ -127,7 +127,7 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 				})
 			}
 		default:
-			logs.Warn(logs.WEBSOCKET, fmt.Sprintf("OneBot: 未知或不支持的附件类型 %q，已忽略", att.Type))
+			a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("OneBot: 未知或不支持的附件类型 %q，已忽略", att.Type))
 		}
 	}
 
@@ -154,7 +154,7 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			logs.Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
+			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
 			errs = append(errs, err)
 		}
 	}
@@ -193,25 +193,40 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		done, ok := a.engine.Enter()
+		if !ok {
+			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+			return
+		}
+		defer done()
+		localUpgrader := upgrader
+		if a.engine.Scope != nil {
+			localUpgrader.CheckOrigin = a.engine.CheckOrigin
+		}
+
+		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			logs.Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
+			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
 			return
 		}
 		wsConn := newWSConnection(conn)
 		wsConn.stealer = a.stealer
+		wsConn.Scope = a.engine.Scope
 		a.registerConn(wsConn)
+		if a.engine.Context().Err() != nil {
+			wsConn.Close()
+		}
 		defer func() {
 			a.unregisterConn(wsConn)
 			wsConn.Close()
 		}()
 
-		logs.Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
 				break
 			}
 
@@ -221,7 +236,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
-				logs.Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
 				continue
 			}
 
@@ -252,7 +267,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
 			}
-			go processEvent(wsConn, event, a.engine, turn, routeSnapshot)
+			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot) }) && turn != nil {
+				turn.Done()
+			}
 		}
 	}
 }
@@ -308,5 +325,13 @@ func isStickerSubType(value any) bool {
 		return stickerType.String() == "1"
 	default:
 		return false
+	}
+}
+
+func (a *Adapter) CloseConnections() {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for c := range a.conns {
+		c.Close()
 	}
 }

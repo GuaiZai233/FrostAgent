@@ -3,6 +3,7 @@ package subagent
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 )
@@ -18,7 +19,7 @@ func CallCoder(ctx context.Context, provider core.LLMProvider, route core.RouteC
 		Route: route,
 	})
 	if err != nil {
-		logs.Error(logs.SYSTEM, err.Error())
+		runtimescope.FromContext(ctx).Log().Error(logs.SYSTEM, err.Error())
 		return "", err
 	}
 	if content, ok := responseMsg.Message.Content.(string); ok {

@@ -5,7 +5,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
-	"context"
+	"FrostAgent/internal/runtimescope"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -81,6 +81,7 @@ type pendingPersistRecord struct {
 // GroupCompactor asynchronously turns a bounded group-message ring into a
 // running summary. Only one request per group may be in flight.
 type GroupCompactor struct {
+	*runtimescope.Scope
 	provider      core.LLMProvider
 	store         *groupsummary.Store
 	model         string
@@ -158,7 +159,7 @@ func (c *GroupCompactor) SetMaxBufferSize(size int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if size < c.bufferSize {
-		logs.Warn(
+		c.Log().Warn(
 			logs.SYSTEM,
 			fmt.Sprintf(
 				"GroupCompactor: maxBufferSize (%d) < bufferSize (%d)，已自动修正为 bufferSize (%d) 以维持 invariants",
@@ -181,7 +182,7 @@ func (c *GroupCompactor) SetBufferSize(size int) {
 	defer c.mu.Unlock()
 	c.bufferSize = size
 	if c.maxBufferSize < c.bufferSize {
-		logs.Warn(
+		c.Log().Warn(
 			logs.SYSTEM,
 			fmt.Sprintf(
 				"GroupCompactor: maxBufferSize (%d) < bufferSize (%d)，已自动扩展为 bufferSize (%d)",
@@ -257,7 +258,7 @@ func (c *GroupCompactor) TriggerWithScope(session *SessionContext, owner string,
 	key := session.ConversationID
 
 	c.mu.Lock()
-	if c.inflight[key] {
+	if c.Context().Err() != nil || c.inflight[key] {
 		c.mu.Unlock()
 		return
 	}
@@ -292,12 +293,19 @@ func (c *GroupCompactor) TriggerWithScope(session *SessionContext, owner string,
 	if c.store != nil {
 		storeGeneration = c.store.Generation(owner)
 	}
-	go c.compact(session, owner, routeScope, snapshot, storeGeneration)
+	c.Go(func() { c.compact(session, owner, routeScope, snapshot, storeGeneration) })
 }
 
+func (c *GroupCompactor) StopTimers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.scheduled {
+		c.cancelScheduledLocked(key)
+	}
+}
 func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, routeScope modelrouter.Scope, delay time.Duration) {
 	key := session.ConversationID
-	if c.scheduled[key] != nil {
+	if c.Context().Err() != nil || c.scheduled[key] != nil {
 		return
 	}
 	if delay < 0 {
@@ -376,24 +384,24 @@ func (c *GroupCompactor) compact(
 			GroupID:  routeScope.GroupID,
 		},
 	}
-	response, err := c.provider.Chat(context.Background(), request)
+	response, err := c.provider.Chat(c.Context(), request)
 	if err != nil {
-		logs.Error(logs.LLM_RESPONSE, fmt.Sprintf("群聊 running compact LLM调用失败 (%s): %v", owner, err))
-		logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 失败 (%s): %v", owner, err))
+		c.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("群聊 running compact LLM调用失败 (%s): %v", owner, err))
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 失败 (%s): %v", owner, err))
 		return
 	}
 	summary, ok := response.Message.Content.(string)
 	summary = strings.TrimSpace(summary)
 	if !ok || summary == "" {
-		logs.Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 返回空总结 (%s)", owner))
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 返回空总结 (%s)", owner))
 		return
 	}
 
 	if !session.CommitGroupCompact(snapshot, summary) {
-		logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
+		c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
 		return
 	}
-	logs.Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
+	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
@@ -430,11 +438,14 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 	c.persistActive[owner] = true
 	wakeCh := make(chan struct{}, 1)
 	c.persistWake[owner] = wakeCh
-	go c.persistWorker(owner, wakeCh)
+	c.Go(func() { c.persistWorker(owner, wakeCh) })
 }
 
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 	for {
+		if c.Context().Err() != nil {
+			return
+		}
 		c.mu.Lock()
 		target := c.pendingPersist[owner]
 		if target == nil {
@@ -448,7 +459,7 @@ func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 
 		applied, err := c.store.Upsert(rec.owner, rec.summary, rec.storeGeneration)
 		if err != nil {
-			logs.Warn(
+			c.Log().Warn(
 				logs.SYSTEM,
 				fmt.Sprintf("群聊总结持久化失败，将后台独立重试 (%s, retry %d): %v", owner, rec.retryCount, err),
 			)
@@ -469,6 +480,9 @@ func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 
 			timer := time.NewTimer(delay)
 			select {
+			case <-c.Context().Done():
+				timer.Stop()
+				return
 			case <-timer.C:
 			case <-wakeCh:
 				if !timer.Stop() {
@@ -482,7 +496,7 @@ func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 		}
 
 		if !applied {
-			logs.Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结持久化 (%s)", owner))
+			c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结持久化 (%s)", owner))
 		}
 
 		c.mu.Lock()

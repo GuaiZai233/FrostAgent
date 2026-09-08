@@ -2,6 +2,7 @@ package sticker
 
 import (
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ type observedSticker struct {
 }
 
 type Stealer struct {
+	*runtimescope.Scope
 	store      *Store
 	summarizer *Summarizer
 	sem        chan struct{}
@@ -49,7 +51,12 @@ type Stealer struct {
 }
 
 func NewStealer(store *Store, summarizer *Summarizer) *Stealer {
+	var scope *runtimescope.Scope
+	if summarizer != nil {
+		scope = summarizer.Scope
+	}
 	return &Stealer{
+		Scope:      scope,
 		store:      store,
 		summarizer: summarizer,
 		sem:        make(chan struct{}, maxConcurrent),
@@ -98,14 +105,14 @@ func (s *Stealer) Observe(
 		return
 	}
 
-	go func() {
+	if !s.Go(func() {
 		defer func() { <-s.sem }()
-		data, err := loader(context.Background())
+		data, err := loader(s.Context())
 		if err == nil {
-			_, err = s.collect(context.Background(), data)
+			_, err = s.collect(s.Context(), data)
 		}
 		if err != nil {
-			logs.Error(logs.SYSTEM, fmt.Sprintf(
+			s.Log().Error(logs.SYSTEM, fmt.Sprintf(
 				"sticker: automatic steal failed for session=%s message=%s index=%d: %v",
 				sessionID,
 				messageID,
@@ -113,7 +120,9 @@ func (s *Stealer) Observe(
 				err,
 			))
 		}
-	}()
+	}) {
+		<-s.sem
+	}
 }
 
 // StealObserved collects a trusted sticker previously observed in the same
@@ -197,12 +206,14 @@ func (s *Stealer) TrySteal(data []byte) {
 	}
 
 	data = append([]byte(nil), data...)
-	go func() {
+	if !s.Go(func() {
 		defer func() { <-s.sem }()
-		if _, err := s.collect(context.Background(), data); err != nil {
-			logs.Error(logs.SYSTEM, fmt.Sprintf("sticker: steal failed: %v", err))
+		if _, err := s.collect(s.Context(), data); err != nil {
+			s.Log().Error(logs.SYSTEM, fmt.Sprintf("sticker: steal failed: %v", err))
 		}
-	}()
+	}) {
+		<-s.sem
+	}
 }
 
 // Steal deterministically collects trusted image bytes. It skips the
@@ -235,7 +246,7 @@ func (s *Stealer) collect(ctx context.Context, data []byte) (StealResult, error)
 		if err := s.store.IncrementWeight(hash); err != nil {
 			return StealResult{}, fmt.Errorf("increment sticker weight: %w", err)
 		}
-		logs.Debug(logs.SYSTEM, fmt.Sprintf("sticker: duplicate %s, weight incremented", hash[:12]))
+		s.Log().Debug(logs.SYSTEM, fmt.Sprintf("sticker: duplicate %s, weight incremented", hash[:12]))
 		return StealResult{ID: hash, Duplicate: true}, nil
 	}
 
@@ -254,7 +265,7 @@ func (s *Stealer) collect(ctx context.Context, data []byte) (StealResult, error)
 		return StealResult{}, fmt.Errorf("add sticker: %w", err)
 	}
 
-	logs.Info(logs.SYSTEM, fmt.Sprintf("sticker: stolen %s%s", hash[:12], ext))
+	s.Log().Info(logs.SYSTEM, fmt.Sprintf("sticker: stolen %s%s", hash[:12], ext))
 
 	if s.summarizer != nil {
 		s.summarizer.Enqueue(hash)

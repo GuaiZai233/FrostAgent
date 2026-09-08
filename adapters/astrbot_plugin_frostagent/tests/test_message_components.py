@@ -182,6 +182,20 @@ def load_plugin_module():
 
 class MessageComponentTests(unittest.TestCase):
 
+    def test_instance_sticker_endpoint_keeps_prefix_and_origin(self) -> None:
+        with load_plugin_module() as module:
+            path = "/instances/a1b2c3d4/api/sticker/synthetic/image"
+            base = "http://127.0.0.1:8080"
+            self.assertEqual(module.sticker_download_url(path, base), base + path)
+            for invalid in (
+                "/instances/invalid/api/sticker/synthetic/image",
+                "/instances/a1b2c3d4/api/sticker/synthetic/other",
+                "http://example.com" + path,
+            ):
+                with self.assertRaises(module.StickerFetchError):
+                    module.sticker_download_url(invalid, base)
+
+
     def test_current_and_quoted_images_are_forwarded_as_base64(self) -> None:
         current_data = b"current-sticker"
         quoted_data = b"quoted-sticker"

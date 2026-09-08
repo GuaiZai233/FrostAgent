@@ -70,6 +70,7 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	}
 	req.Model = target.UpstreamModel
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
+	client.Logger = p.manager.Log()
 	return client.Chat(ctx, req)
 }
 
@@ -143,6 +144,7 @@ func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
 		return "", 0, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}
 	client := openai.NewClient(endpoint.BaseURL, apiKey)
+	client.Logger = m.Log()
 	started := time.Now()
 	response, err := client.Chat(context.Background(), core.ChatRequest{
 		Model: model.UpstreamModel,

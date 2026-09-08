@@ -41,3 +41,14 @@ func TestFollowDialogueUsesEffectiveGroupDialogue(t *testing.T) {
 		t.Fatalf("vision model = %q, want group dialogue model", target.ModelID)
 	}
 }
+
+func TestUnconfiguredCopiedCredentialIsPlannedAsDeletion(t *testing.T) {
+	actions := PlanCredentialPromotions(
+		"guaitech.frostagent/transaction/a1b2c3d4/test",
+		[]CredentialChange{{Target: "guaitech.frostagent/endpoint/endpoint_test"}},
+		nil,
+	)
+	if len(actions) != 1 || !actions[0].Delete || actions[0].StagedTarget != "" {
+		t.Fatalf("empty credential must not depend on a nonexistent staged secret: %+v", actions)
+	}
+}

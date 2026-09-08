@@ -491,7 +491,7 @@ func (e *Engine) RunWithSession(sessionID string, prompt string) string {
     messages := session.History
 
     if len(messages) == 0 {
-        systemPrompt := os.Getenv("SYSTEM_PROMPT")
+        systemPrompt := e.Scope.Getenv("SYSTEM_PROMPT")
 
         // ★ 召回 → 网关过滤 → 注入
         if e.MemoryReader != nil && e.MemoryGateway != nil {

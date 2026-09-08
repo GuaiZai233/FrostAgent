@@ -55,6 +55,7 @@ type chatResponse struct {
 
 // Client implements the core.LLMProvider interface for OpenAI-compatible APIs.
 type Client struct {
+	Logger     *logs.Store
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
@@ -152,9 +153,9 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	logSafeReq := redactChatRequestForLogging(openAIReq)
 	if logSafeData, err := json.Marshal(logSafeReq); err == nil {
-		logs.LLMRequest(string(logSafeData))
+		c.log().LLMRequest(string(logSafeData))
 	} else {
-		logs.LLMRequest("[failed to marshal log-safe request]")
+		c.log().LLMRequest("[failed to marshal log-safe request]")
 	}
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
@@ -179,7 +180,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		logs.Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
+		c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
 		return nil, &HTTPError{Status: resp.Status, Body: string(body)}
 	}
 
@@ -190,15 +191,15 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	var openAIResp chatResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
-		logs.LLMResponse(fmt.Sprintf("[malformed response body: len=%d]", len(respBody)))
+		c.log().LLMResponse(fmt.Sprintf("[malformed response body: len=%d]", len(respBody)))
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	logSafeResp := redactChatResponseForLogging(openAIResp)
 	if logSafeBytes, err := json.Marshal(logSafeResp); err == nil {
-		logs.LLMResponse(string(logSafeBytes))
+		c.log().LLMResponse(string(logSafeBytes))
 	} else {
-		logs.LLMResponse("[failed to marshal log-safe response]")
+		c.log().LLMResponse("[failed to marshal log-safe response]")
 	}
 
 	if openAIResp.Error != nil {
@@ -219,7 +220,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			if tool.Name != staySilentFallbackToolName {
 				continue
 			}
-			logs.Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
+			c.log().Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
 			return &core.ChatResponse{
 				Message: core.ChatMessage{
 					Role: core.RoleAssistant,
@@ -258,6 +259,13 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		Message: coreMsg,
 		Usage:   usage,
 	}, nil
+}
+
+func (c *Client) log() *logs.Store {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return logs.General
 }
 
 // redactExecuteCommandArgs replaces raw shell command strings with metadata

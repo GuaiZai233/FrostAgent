@@ -46,6 +46,7 @@ type Client struct {
 	sessionNamespace string
 	httpClient       *http.Client
 	projectNamespace [16]byte
+	logger           *logs.Store
 }
 
 // Option configures a Client.
@@ -65,6 +66,11 @@ func WithProjectNamespace(ns [16]byte) Option {
 	return func(c *Client) {
 		c.projectNamespace = ns
 	}
+}
+
+// WithLogger routes sandbox audit metadata to the owning instance log store.
+func WithLogger(logger *logs.Store) Option {
+	return func(c *Client) { c.logger = logger }
 }
 
 // New creates a new code-interpreter sandbox Backend client.
@@ -273,7 +279,7 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		logs.Warn(logs.SYSTEM, fmt.Sprintf(
+		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
 			"沙箱命令执行网络失败 [session: %s, cmd_len: %d, cmd_hash: %s]: %v",
 			uuidShort, len(req.Command), hex.EncodeToString(cmdHash[:4]), err,
 		))
@@ -284,7 +290,7 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	if resp.StatusCode != http.StatusOK {
 		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
 		safeErr := sanitizeGatewayExecError(resp.StatusCode, errBody, req, c.authToken)
-		logs.Warn(logs.SYSTEM, fmt.Sprintf(
+		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
 			"沙箱网关返回错误状态 [status: %d, session: %s, cmd_len: %d]: %s",
 			resp.StatusCode, uuidShort, len(req.Command), safeErr,
 		))
@@ -330,7 +336,7 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 		exitCodeStr = fmt.Sprintf("%d", *gatewayResp.ExitCode)
 	}
 
-	logs.Info(logs.SYSTEM, fmt.Sprintf(
+	c.log().Info(logs.SYSTEM, fmt.Sprintf(
 		"✓ 沙箱命令执行完成 [session: %s, exit_code: %s, timed_out: %t, duration: %s]",
 		uuidShort, exitCodeStr, gatewayResp.TimedOut, execDuration,
 	))
@@ -344,6 +350,13 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 		StderrTruncated: gatewayResp.StderrTruncated,
 		Duration:        execDuration,
 	}, nil
+}
+
+func (c *Client) log() *logs.Store {
+	if c.logger != nil {
+		return c.logger
+	}
+	return logs.General
 }
 
 func readBoundedString(r io.Reader, limit int64) string {

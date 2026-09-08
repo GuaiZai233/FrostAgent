@@ -27,15 +27,18 @@ type Config struct {
 	ClientTimeout    time.Duration
 }
 
-// LoadConfigFromEnv reads sandbox configuration from environment variables.
-func LoadConfigFromEnv() Config {
-	enabled := ParseBool(os.Getenv("SANDBOX_ENABLED"), false)
-	baseURL := strings.TrimSpace(os.Getenv("SANDBOX_BASE_URL"))
+// LoadConfig reads sandbox configuration through the supplied lookup function.
+func LoadConfig(getenv func(string) string) Config {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	enabled := ParseBool(getenv("SANDBOX_ENABLED"), false)
+	baseURL := strings.TrimSpace(getenv("SANDBOX_BASE_URL"))
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	authToken := strings.TrimSpace(os.Getenv("SANDBOX_AUTH_TOKEN"))
-	sessionNamespace := strings.TrimSpace(os.Getenv("SANDBOX_SESSION_NAMESPACE"))
+	authToken := strings.TrimSpace(getenv("SANDBOX_AUTH_TOKEN"))
+	sessionNamespace := strings.TrimSpace(getenv("SANDBOX_SESSION_NAMESPACE"))
 	if sessionNamespace == "" {
 		sessionNamespace = DefaultSessionNamespace
 	}
@@ -49,26 +52,12 @@ func LoadConfigFromEnv() Config {
 	}
 }
 
-// LoadConfigFromMap reads sandbox configuration from a key-value map (e.g. parsed from .env).
-func LoadConfigFromMap(m map[string]string) Config {
-	enabled := ParseBool(m["SANDBOX_ENABLED"], false)
-	baseURL := strings.TrimSpace(m["SANDBOX_BASE_URL"])
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
-	authToken := strings.TrimSpace(m["SANDBOX_AUTH_TOKEN"])
-	sessionNamespace := strings.TrimSpace(m["SANDBOX_SESSION_NAMESPACE"])
-	if sessionNamespace == "" {
-		sessionNamespace = DefaultSessionNamespace
-	}
+// LoadConfigFromEnv reads sandbox configuration from process environment variables.
+func LoadConfigFromEnv() Config { return LoadConfig(os.Getenv) }
 
-	return Config{
-		Enabled:          enabled,
-		BaseURL:          baseURL,
-		AuthToken:        authToken,
-		SessionNamespace: sessionNamespace,
-		ClientTimeout:    135 * time.Second,
-	}
+// LoadConfigFromMap reads sandbox configuration from a key-value map.
+func LoadConfigFromMap(values map[string]string) Config {
+	return LoadConfig(func(key string) string { return values[key] })
 }
 
 // Validate checks whether the configuration is valid when sandbox execution is enabled.

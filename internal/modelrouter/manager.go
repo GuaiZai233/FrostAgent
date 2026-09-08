@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"FrostAgent/internal/runtimescope"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -19,17 +20,20 @@ type Snapshot struct {
 }
 
 type Manager struct {
-	mu      sync.RWMutex
-	path    string
-	active  Configuration
-	draft   Configuration
-	secrets *SecretBackend
-	loadErr error
+	*runtimescope.Scope
+	mu               sync.RWMutex
+	path             string
+	active           Configuration
+	draft            Configuration
+	secrets          *SecretBackend
+	loadErr          error
+	ReserveEndpoints func([]Endpoint) error
 }
 
-func New(path string) *Manager {
+func New(path string, scopes ...*runtimescope.Scope) *Manager {
 	secrets, secretErr := newSecretBackend(path)
 	m := &Manager{
+		Scope:   runtimescope.First(scopes),
 		path:    path,
 		active:  defaultConfiguration(),
 		secrets: secrets,
@@ -38,6 +42,9 @@ func New(path string) *Manager {
 		m.loadErr = secretErr
 	} else if err := m.load(); err != nil {
 		m.loadErr = err
+	}
+	if secrets != nil {
+		secrets.getenv = m.Getenv
 	}
 	m.draft = cloneConfiguration(m.active)
 	return m
@@ -162,6 +169,11 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
 		return err
+	}
+	if m.ReserveEndpoints != nil {
+		if err := m.ReserveEndpoints(cfg.Endpoints); err != nil {
+			return err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

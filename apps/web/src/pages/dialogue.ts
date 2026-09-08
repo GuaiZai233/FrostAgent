@@ -1,4 +1,4 @@
-import { api } from '../api/client';
+import { createInstanceAPI } from '../api/client';
 import { DialogueItem } from '@frostagent/proto';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -7,10 +7,11 @@ import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 
 export function mountDialoguePage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let dialogues: DialogueItem[] = [];
-  let filePath = 'eval/dialogue/dialogue.yml';
+  let filePath = 'dialogue.yml';
   let promptPreview = '';
   let searchQuery = '';
   let selectedRelation = '';
@@ -24,10 +25,10 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="page-title">人设对话示例</h1>
+            <h1 class="page-title">人设对话</h1>
             <span class="badge badge-outline text-xs font-mono" id="dialogue-filepath">${escapeHtml(filePath)}</span>
           </div>
-          <p class="page-description">管理 Few-shot 示例库，让智能体在特定场景与人物关系下展现精准细腻的语气与性格</p>
+          <p class="page-description">管理当前实例的 Few-shot 示例库，让智能体在特定场景与人物关系下展现精准细腻的语气与性格</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="tabs">

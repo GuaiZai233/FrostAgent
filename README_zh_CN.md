@@ -12,7 +12,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 ## Websocket
 
-在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/ws/frostagent` (端口取决于环境变量中的`WS_LISTEN_ADDR`)。
+在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot` (端口取决于环境变量中的`WS_LISTEN_ADDR`)。
 
 ## 与 ActionsCat 协同
 
@@ -26,7 +26,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
 
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 快速开始
 
@@ -57,13 +57,17 @@ make build-web    # 仅构建前端
 
 ### 2. 配置环境变量
 
-创建 `.env` 文件或在系统环境变量中设置相关字段。
+复制 `.env.example` 为 `.env`，其中只保存 Control Plane 的监听地址、允许的 Origin 和共享 Alcyone 上游。Bot 配置与系统提示词独立保存于 `data/instance_<实例ID>/.env`。
+
+> **升级与兼容性说明（破坏性变更）**：早期版本中 `SYSTEM_PROMPT` 曾定义在根目录 `.env` 中全局共享。本次更新已将系统提示词彻底下沉为实例级配置（`data/instance_<实例ID>/.env`）。存量根级 `.env` 或进程环境变量中的 `SYSTEM_PROMPT` 将被主动忽略，且**不会**隐式迁移或回填至存量实例中；已有实例升级后若未在自身配置中指定 `SYSTEM_PROMPT`，将不再回退到旧的全局提示词，需在控制台「设置」或对应实例的 `.env` 中单独配置。新建实例将由模板自动赋予默认系统提示词。
 
 ### 3. 启动服务
 
 ```bash
 go run ./cmd/app
 ```
+
+打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。刷新页面后需要重新选择实例。各实例的配置（含系统提示词）、记忆、会话、表情包、日志和人设预设示例对话彼此完全隔离（新建实例时从 `eval/dialogue/dialogue.yml` 模板初始化，之后独立保存于 `data/instance_<实例ID>/dialogue.yml` 并支持热更新与克隆）。
 
 ## 许可证
 

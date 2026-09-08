@@ -4,7 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
-	"context"
+	"FrostAgent/internal/runtimescope"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +16,7 @@ import (
 
 // Writer handles memory writing.
 type Writer struct {
+	*runtimescope.Scope
 	store *Store
 	// LLM fields (set via SetLLM)
 	provider core.LLMProvider
@@ -126,12 +127,12 @@ func (w *Writer) ExtractByOwnerWithRoute(
 		Route:       route,
 	}
 
-	resp, err := w.provider.Chat(context.Background(), req)
+	resp, err := w.provider.Chat(w.Context(), req)
 	if err != nil {
 		if errors.Is(err, modelrouter.ErrDisabled) {
 			return nil
 		}
-		logs.Error(logs.SYSTEM, fmt.Sprintf("记忆提取LLM调用失败: %v", err))
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆提取LLM调用失败: %v", err))
 		return err
 	}
 
@@ -165,7 +166,7 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 
 	var entries []extractedEntry
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("记忆提取JSON解析失败: %v, raw: %s", err, raw))
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆提取JSON解析失败: %v, raw: %s", err, raw))
 		return err
 	}
 
@@ -189,13 +190,13 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 			UpdatedAt:  time.Now(),
 		}
 		if err := w.store.Save(entry); err != nil {
-			logs.Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
+			w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
 			continue
 		}
 	}
 
 	if len(entries) > 0 {
-		logs.Info(logs.SYSTEM, fmt.Sprintf("从对话中提取了 %d 条记忆 (owner: %s)", len(entries), owner))
+		w.Log().Info(logs.SYSTEM, fmt.Sprintf("从对话中提取了 %d 条记忆 (owner: %s)", len(entries), owner))
 	}
 	return nil
 }

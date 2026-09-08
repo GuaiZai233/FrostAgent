@@ -94,3 +94,15 @@ func GetPrice(model string) (ModelPrice, bool) {
 func CalculateCost(model string, promptTokens, completionTokens int) int64 {
 	return defaultRegistry.CalculateCost(model, promptTokens, completionTokens)
 }
+
+// Price applies only this instance\'s overrides; the shared registry remains unchanged.
+func (c Config) Price(model string) ModelPrice {
+	p, _ := GetPrice(model)
+	if c.CustomPromptPricePerMillion != nil {
+		p.PromptPricePerMillion = *c.CustomPromptPricePerMillion
+	}
+	if c.CustomCompletionPricePerMillion != nil {
+		p.CompletionPricePerMillion = *c.CustomCompletionPricePerMillion
+	}
+	return p
+}

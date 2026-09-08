@@ -2,16 +2,81 @@ package botstatus
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	"FrostAgent/internal/groupsummary"
+	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/runtimescope"
 
 	"connectrpc.com/connect"
 )
+
+func TestGetOverviewUsesEffectiveInstanceAndControlPlaneSettings(t *testing.T) {
+	tests := []struct {
+		name               string
+		instanceEnv        string
+		wantBotName        string
+		effectiveWSAddress string
+	}{
+		{
+			name:               "configured",
+			instanceEnv:        "BOT_NAME=Instance Fox\n",
+			wantBotName:        "Instance Fox",
+			effectiveWSAddress: ":4321",
+		},
+		{
+			name:        "fallbacks",
+			wantBotName: "FrostAgent",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			instancePath := filepath.Join(dir, "instance.env")
+			globalPath := filepath.Join(dir, "global.env")
+			if err := os.WriteFile(instancePath, []byte(tt.instanceEnv), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(globalPath, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			instanceConfig, err := instanceconfig.Open(instancePath, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			globalConfig, err := instanceconfig.Open(globalPath, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope := runtimescope.New(instanceConfig, globalConfig, nil)
+			t.Cleanup(scope.Cancel)
+			service := New(&llm.Engine{Scope: scope}, "test", tt.effectiveWSAddress)
+
+			response, err := service.GetOverview(
+				context.Background(),
+				connect.NewRequest(&v1.GetOverviewRequest{}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Msg.GetBotName() != tt.wantBotName {
+				t.Fatalf("bot name = %q, want %q", response.Msg.GetBotName(), tt.wantBotName)
+			}
+			wantWSAddress := tt.effectiveWSAddress
+			if wantWSAddress == "" {
+				wantWSAddress = "127.0.0.1:1234"
+			}
+			if response.Msg.GetWsListenAddr() != wantWSAddress {
+				t.Fatalf("WS address = %q, want %q", response.Msg.GetWsListenAddr(), wantWSAddress)
+			}
+		})
+	}
+}
 
 func TestDerivePlatform(t *testing.T) {
 	tests := []struct {
@@ -89,7 +154,7 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 		ModelName:         "test-model",
 	}
 
-	svc := New(engine, "test-v1")
+	svc := New(engine, "test-v1", "")
 
 	// 1. Add active session in sessionManager
 	activeSession := sessionManager.GetOrCreate("aiocqhttp:group:100001")
@@ -172,7 +237,7 @@ func TestGetSessionContext(t *testing.T) {
 		ModelName:         "test-model",
 	}
 
-	svc := New(engine, "test-v1")
+	svc := New(engine, "test-v1", "")
 
 	sessionID := "aiohttp:group:100001"
 	sess := sessionManager.GetOrCreate(sessionID)

@@ -32,10 +32,55 @@ class Settings:
     reconnect_interval: int
 
 
+class WSURLConfigurationError(ValueError):
+    """Raised when the persisted FrostAgent WebSocket URL needs repair."""
+
+
 def load_settings(config: dict = None) -> Settings:
     config = config or {}
+    ws_url = str(
+        config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
+    ).strip()
+    if not ws_url:
+        raise WSURLConfigurationError(
+            "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
+            "WebSocket address from the instance overview"
+        )
+    parsed_ws_url = urlparse(ws_url)
+    if (
+        parsed_ws_url.scheme not in ("ws", "wss")
+        or not parsed_ws_url.netloc
+        or not re.fullmatch(
+            r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path
+        )
+    ):
+        raise WSURLConfigurationError(
+            "FrostAgent ws_url must use "
+            "ws(s)://host/instances/<instance-id>/ws/astrbot"
+        )
     return Settings(
-        ws_url=config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "ws://127.0.0.1:1234/ws/astrbot"),
+        ws_url=ws_url,
+        http_base_url=config.get("http_base_url")
+        or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
+        forward_all_group_messages=config.get("forward_all_group_messages", True),
+        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
+        reconnect_interval=int(config.get("reconnect_interval", 5)),
+    )
+
+
+def _load_settings_unvalidated(config: dict = None) -> Settings:
+    """Load persisted settings without rejecting a legacy ws_url.
+
+    AstrBot instantiates the plugin before users can repair persisted plugin
+    configuration.  Keeping this path non-validating lets upgrades from the
+    old unscoped /ws/astrbot URL load in an inactive state instead of making
+    the whole plugin unloadable.
+    """
+    config = config or {}
+    return Settings(
+        ws_url=str(
+            config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
+        ).strip(),
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
@@ -99,6 +144,10 @@ MARKET_FACE_URL_PREFIX = "https://gxh.vip.qq.com/club/item/parcel/item/"
 MARKET_FACE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{2,128}")
 
 
+def is_sticker_endpoint_path(path: str) -> bool:
+    return bool(re.fullmatch(r"(?:/instances/[a-f0-9]{8})?/api/sticker/[^/]+/image", path))
+
+
 def sticker_download_url(source: str, http_base_url: str) -> str:
     base = urlparse(http_base_url)
     if base.scheme not in ("http", "https") or not base.netloc:
@@ -110,14 +159,14 @@ def sticker_download_url(source: str, http_base_url: str) -> str:
             raise StickerFetchError("sticker source must use HTTP(S) or base64")
         absolute_url = source
     else:
-        if not source.startswith(STICKER_IMAGE_PATH_PREFIX):
+        if not is_sticker_endpoint_path(source):
             raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
         absolute_url = urljoin(http_base_url.rstrip("/") + "/", source)
 
     target = urlparse(absolute_url)
     if (target.scheme, target.netloc) != (base.scheme, base.netloc):
         raise StickerFetchError("sticker source origin does not match FrostAgent http_base_url")
-    if not target.path.startswith(STICKER_IMAGE_PATH_PREFIX):
+    if not is_sticker_endpoint_path(target.path):
         raise StickerFetchError("sticker source is not a FrostAgent image endpoint")
     return absolute_url
 
@@ -300,17 +349,36 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.1",
+    "0.1.3",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
-        self.settings = load_settings(config)
+        self._configuration_error: Optional[str] = None
+        try:
+            self.settings = load_settings(config)
+        except WSURLConfigurationError as exc:
+            # v0.1.0 persisted an unscoped /ws/astrbot URL.  Reject it for
+            # transport safety, but do not make AstrBot unload the plugin before
+            # the user gets a chance to repair the saved configuration.
+            self.settings = _load_settings_unvalidated(config)
+            self._configuration_error = str(exc)
+            self.client = FrostAgentWSClient(self.settings, context)
+            self._init_task = None
+            logger.error(
+                f"[frostagent-adapter] {self._configuration_error}. "
+                "插件已保持加载但暂停连接；请在插件配置中复制目标实例概览里的 "
+                "AstrBot WebSocket 地址，然后重新加载插件。"
+            )
+            return
         self.client = FrostAgentWSClient(self.settings, context)
         self._init_task = asyncio.create_task(self.client.start())
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        if self._configuration_error:
+            return
+
         payload = await build_frostagent_payload(event)
         msg_id = payload["message_id"]
 
@@ -379,7 +447,11 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     content = extract_message_text(event)
     is_wake, is_at = check_is_at_or_wake(event)
 
-    msg_id = str(getattr(event, "message_id", "") or f"ast_{int(time.time() * 1000)}")
+    msg_id = str(
+        getattr_chain(event, "message_obj", "message_id")
+        or getattr(event, "message_id", "")
+        or f"ast_{int(time.time() * 1000)}"
+    )
     attachments = await extract_attachments(event, msg_id)
     reply_message_id = extract_reply_message_id(event)
     platform = _extract_platform_name(event)

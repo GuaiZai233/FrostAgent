@@ -34,8 +34,6 @@ type cachedImage struct {
 	refCount    int
 }
 
-var imageCache = make(map[string]*cachedImage)
-
 func prepareInlineImages(images []InlineImage) ([]retainedImage, []string) {
 	retainedImages := make([]retainedImage, 0, len(images))
 	placeholders := make([]string, 0, len(images))
@@ -107,20 +105,20 @@ func redactInlineImages(content string) (string, []retainedImage) {
 	return redacted, retainedImages
 }
 
-func retainImagesLocked(images []retainedImage) []string {
+func (s *Store) retainImagesLocked(images []retainedImage) []string {
 	if len(images) == 0 {
 		return nil
 	}
 
 	refs := make([]string, 0, len(images))
 	for _, image := range images {
-		cached, ok := imageCache[image.hash]
+		cached, ok := s.imageCache[image.hash]
 		if !ok {
 			cached = &cachedImage{
 				contentType: image.contentType,
 				data:        image.data,
 			}
-			imageCache[image.hash] = cached
+			s.imageCache[image.hash] = cached
 		}
 		cached.refCount++
 		refs = append(refs, image.hash)
@@ -128,21 +126,21 @@ func retainImagesLocked(images []retainedImage) []string {
 	return refs
 }
 
-func releaseImagesLocked(refs []string) {
+func (s *Store) releaseImagesLocked(refs []string) {
 	for _, hash := range refs {
-		cached, ok := imageCache[hash]
+		cached, ok := s.imageCache[hash]
 		if !ok {
 			continue
 		}
 		cached.refCount--
 		if cached.refCount <= 0 {
-			delete(imageCache, hash)
+			delete(s.imageCache, hash)
 		}
 	}
 }
 
 // ImageHandler serves an inline image retained by a currently buffered log entry.
-func ImageHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Store) ImageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -159,15 +157,15 @@ func ImageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.RLock()
-	image, ok := imageCache[hash]
+	s.mu.RLock()
+	image, ok := s.imageCache[hash]
 	if ok {
 		image = &cachedImage{
 			contentType: image.contentType,
 			data:        image.data,
 		}
 	}
-	mu.RUnlock()
+	s.mu.RUnlock()
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -183,3 +181,5 @@ func ImageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = w.Write(image.data)
 }
+
+func ImageHandler(w http.ResponseWriter, r *http.Request) { General.ImageHandler(w, r) }

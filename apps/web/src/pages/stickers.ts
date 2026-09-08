@@ -1,4 +1,5 @@
-import { api } from '../api/client';
+import { instanceURL } from '../instance-state';
+import { createInstanceAPI } from '../api/client';
 import type { StickerItem, GetStickerStatsResponse } from '@frostagent/proto';
 import { escapeHtml, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -16,6 +17,7 @@ function formatTimestamp(ts: bigint | number | string | undefined | null): strin
 }
 
 export function mountStickersPage(container: HTMLElement): () => void {
+ const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let stickers: StickerItem[] = [];
@@ -233,7 +235,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
   }
 
   function stickerImageUrl(id: string): string {
-    return `${window.location.origin}/api/sticker/${encodeURIComponent(id)}/image`;
+    return `${window.location.origin}${instanceURL(`/api/sticker/${encodeURIComponent(id)}/image`)}`;
   }
 
   function renderGrid() {
@@ -499,8 +501,10 @@ export function mountStickersPage(container: HTMLElement): () => void {
     let fail = 0;
 
     for (const file of Array.from(files)) {
+ if(isUnmounted)break;
       try {
         const buf = await file.arrayBuffer();
+ if(isUnmounted)break;
         const res = await api.uploadSticker(new Uint8Array(buf), file.name);
         if (res.success) {
           success++;

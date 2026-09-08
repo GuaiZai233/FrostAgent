@@ -2,12 +2,14 @@ package sticker
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/runtimescope"
 	"context"
 	"fmt"
 	"time"
 )
 
 type LLMVisionCaller struct {
+	*runtimescope.Scope
 	Provider  core.LLMProvider
 	ModelName string
 }
@@ -45,7 +47,7 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(v.Context(), 60*time.Second)
 	defer cancel()
 
 	resp, err := v.Provider.Chat(ctx, req)

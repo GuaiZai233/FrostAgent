@@ -48,6 +48,7 @@ node_modules
 
 .claude/worktrees
 .claude/settings.local.json
+.claude/pr
 
 # Local runtime data
 /data/

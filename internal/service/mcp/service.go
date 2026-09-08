@@ -95,14 +95,21 @@ func isLoopbackAddr(addr string) bool {
 // for the MCP control plane. Host, Origin, and DNS rebinding protections are enforced
 // at the HTTP gateway layer via corsMiddleware in cmd/app/cors.go.
 func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
+	return checkControlPlaneAuth(peerAddr, header, os.Getenv)
+}
+
+func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(string) string) error {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 	var authHeader string
 	if header != nil {
 		authHeader = strings.TrimSpace(header.Get("Authorization"))
 	}
 
-	token := strings.TrimSpace(os.Getenv("MCP_CONTROL_TOKEN"))
+	token := strings.TrimSpace(getenv("MCP_CONTROL_TOKEN"))
 	if token == "" {
-		token = strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+		token = strings.TrimSpace(getenv("ADMIN_TOKEN"))
 	}
 
 	isLoopback := isLoopbackAddr(peerAddr)
@@ -117,7 +124,7 @@ func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
 			return nil
 		}
 		// No token configured on server, but client sent one:
-		if isLoopback || os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
+		if isLoopback || getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
 			return nil
 		}
 		return connect.NewError(connect.CodePermissionDenied, errors.New("MCP control plane access is restricted to localhost"))
@@ -125,7 +132,7 @@ func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
 
 	// Client did NOT provide an Authorization header:
 	// If the request comes from a remote address:
-	if !isLoopback && os.Getenv("ALLOW_REMOTE_MCP_MANAGEMENT") != "true" {
+	if !isLoopback && getenv("ALLOW_REMOTE_MCP_MANAGEMENT") != "true" {
 		if token != "" {
 			return connect.NewError(connect.CodeUnauthenticated, errors.New("missing MCP control plane token for remote access"))
 		}
@@ -134,7 +141,7 @@ func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
 
 	// Request is from local loopback (or ALLOW_REMOTE_MCP_MANAGEMENT is true):
 	// Check if local token enforcement is explicitly requested.
-	if token != "" && os.Getenv("MCP_ENFORCE_LOCAL_TOKEN") == "true" {
+	if token != "" && getenv("MCP_ENFORCE_LOCAL_TOKEN") == "true" {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("missing MCP control plane token"))
 	}
 
@@ -146,19 +153,28 @@ func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
 // Service implements frostagent.v1.MCPServiceHandler.
 type Service struct {
 	manager *mcp.Manager
+	getenv  func(string) string
 }
 
 var _ frostagentv1connect.MCPServiceHandler = (*Service)(nil)
 
 func New(manager *mcp.Manager) *Service {
-	return &Service{manager: manager}
+	return &Service{manager: manager, getenv: os.Getenv}
+}
+
+func NewScoped(manager *mcp.Manager, getenv func(string) string) *Service {
+	return &Service{manager: manager, getenv: getenv}
+}
+
+func (s *Service) checkAuth(peerAddr string, header http.Header) error {
+	return checkControlPlaneAuth(peerAddr, header, s.getenv)
 }
 
 func (s *Service) ListMCPServers(
 	ctx context.Context,
 	req *connect.Request[v1.ListMCPServersRequest],
 ) (*connect.Response[v1.ListMCPServersResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -179,7 +195,7 @@ func (s *Service) GetMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.GetMCPServerRequest],
 ) (*connect.Response[v1.GetMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -201,7 +217,7 @@ func (s *Service) AddMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.AddMCPServerRequest],
 ) (*connect.Response[v1.AddMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -242,7 +258,7 @@ func (s *Service) UpdateMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateMCPServerRequest],
 ) (*connect.Response[v1.UpdateMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -306,7 +322,7 @@ func (s *Service) DeleteMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.DeleteMCPServerRequest],
 ) (*connect.Response[v1.DeleteMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -331,7 +347,7 @@ func (s *Service) ToggleMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.ToggleMCPServerRequest],
 ) (*connect.Response[v1.ToggleMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -356,7 +372,7 @@ func (s *Service) ToggleMCPTool(
 	ctx context.Context,
 	req *connect.Request[v1.ToggleMCPToolRequest],
 ) (*connect.Response[v1.ToggleMCPToolResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 
@@ -381,7 +397,7 @@ func (s *Service) SyncMCPServer(
 	ctx context.Context,
 	req *connect.Request[v1.SyncMCPServerRequest],
 ) (*connect.Response[v1.SyncMCPServerResponse], error) {
-	if err := CheckControlPlaneAuth(req.Peer().Addr, req.Header()); err != nil {
+	if err := s.checkAuth(req.Peer().Addr, req.Header()); err != nil {
 		return nil, err
 	}
 

@@ -44,8 +44,14 @@ jobs:
       - name: Run AstrBot plugin unit tests
         run: python3 -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
 
+      - name: Run frontend instance isolation regression
+        run: pnpm --filter @frostagent/web test
+
       - name: Run checks
         run: make ci
+
+      - name: Run instance lifecycle race regression
+        run: go test -race ./internal/instance/... -timeout 120s
 
   windows-smoke:
     name: Windows Smoke

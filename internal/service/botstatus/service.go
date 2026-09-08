@@ -18,13 +18,18 @@ import (
 
 // Service implements frostagent.v1.BotStatusServiceHandler.
 type Service struct {
-	engine  *llm.Engine
-	version string
+	engine       *llm.Engine
+	version      string
+	wsListenAddr string
 }
 
 // New creates a new BotStatusService.
-func New(engine *llm.Engine, version string) *Service {
-	return &Service{engine: engine, version: version}
+func New(engine *llm.Engine, version, wsListenAddr string) *Service {
+	return &Service{
+		engine:       engine,
+		version:      version,
+		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:1234"),
+	}
 }
 
 // GetOverview returns bot status overview.
@@ -38,6 +43,9 @@ func (s *Service) GetOverview(
 	}
 
 	status := v1.BotStatus_BOT_STATUS_RUNNING
+	if s.engine.Scope != nil && s.engine.Context().Err() != nil {
+		status = v1.BotStatus_BOT_STATUS_STOPPED
+	}
 	if s.engine.SessionManager == nil {
 		status = v1.BotStatus_BOT_STATUS_INITIALIZING
 	}
@@ -71,7 +79,7 @@ func (s *Service) GetOverview(
 	})
 
 	resp := &v1.GetOverviewResponse{
-		BotName:                "FrostAgent",
+		BotName:                envOrDefault(s.engine, "BOT_NAME", "FrostAgent"),
 		Version:                s.version,
 		UptimeSeconds:          uptime,
 		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
@@ -79,9 +87,24 @@ func (s *Service) GetOverview(
 		CurrentModel:           currentModelName(s.engine),
 		Status:                 status,
 		Tools:                  toolInfos,
+		WsListenAddr:           s.wsListenAddr,
 	}
 
 	return connect.NewResponse(resp), nil
+}
+
+func envOrDefault(engine *llm.Engine, key, fallback string) string {
+	if engine == nil {
+		return fallback
+	}
+	return defaultString(engine.Getenv(key), fallback)
+}
+
+func defaultString(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func currentModelName(engine *llm.Engine) string {
@@ -152,7 +175,7 @@ func (s *Service) GetSessions(
 	if s.engine.GroupSummaryStore != nil {
 		records, err := s.engine.GroupSummaryStore.List()
 		if err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
+			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
 				if existing, ok := viewsByID[record.SessionID]; ok {
@@ -363,7 +386,7 @@ func (s *Service) DeleteGroupSummary(
 			Error: err.Error(),
 		}), nil
 	}
-	logs.Info(logs.SYSTEM, "群聊总结已删除 ("+sessionID+")")
+	s.engine.Log().Info(logs.SYSTEM, "群聊总结已删除 ("+sessionID+")")
 	return connect.NewResponse(&v1.DeleteGroupSummaryResponse{Success: true}), nil
 }
 

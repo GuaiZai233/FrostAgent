@@ -37,6 +37,9 @@ type ServerRuntime struct {
 
 	// Transport constructor hook (allows injecting mock/in-memory transport for tests)
 	transportFactory func(cfg TransportConfig) (officialmcp.Transport, error)
+	// notificationSyncHook allows lifecycle tests to delay a real list_changed
+	// callback after it has captured its originating session.
+	notificationSyncHook func(context.Context, uint64, *officialmcp.ClientSession) error
 }
 
 type startReservation struct {
@@ -292,10 +295,18 @@ func (s *ServerRuntime) runReservedStart(ctx context.Context, reservation *start
 		Version: "0.1.0",
 	}, &officialmcp.ClientOptions{
 		ToolListChangedHandler: func(changedCtx context.Context, req *officialmcp.ToolListChangedRequest) {
+			notifiedSession, ok := req.GetSession().(*officialmcp.ClientSession)
+			if !ok || notifiedSession == nil {
+				return
+			}
 			go func() {
 				syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				_ = s.SyncCatalog(syncCtx)
+				syncNotification := s.syncCatalogForNotification
+				if s.notificationSyncHook != nil {
+					syncNotification = s.notificationSyncHook
+				}
+				_ = syncNotification(syncCtx, gen, notifiedSession)
 			}()
 		},
 	})
@@ -450,7 +461,47 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 	return nil
 }
 
+// syncCatalogForNotification refreshes only the connection that emitted the
+// notification. Unlike an explicit management sync, it must never reconnect:
+// Stop, Restart, or instance deactivation advances the generation and makes
+// delayed work from the previous session stale.
+func (s *ServerRuntime) syncCatalogForNotification(ctx context.Context, generation uint64, session *officialmcp.ClientSession) error {
+	s.mu.RLock()
+	current := !s.retired && s.cfg.Enabled && s.status == StatusConnected &&
+		s.generation == generation && s.session == session && session != nil
+	policies := maps.Clone(s.cfg.Tools)
+	s.mu.RUnlock()
+	if !current {
+		return errors.New("tool catalog notification belongs to a stale session")
+	}
+
+	toolsRes, err := session.ListTools(ctx, nil)
+	if err != nil {
+		s.mu.Lock()
+		if s.generation == generation && s.session == session && !s.retired {
+			s.lastError = fmt.Sprintf("sync catalog failed: %v", err)
+		}
+		s.mu.Unlock()
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retired || !s.cfg.Enabled || s.status != StatusConnected ||
+		s.generation != generation || s.session != session {
+		return errors.New("tool catalog notification was superseded")
+	}
+	s.catalog.UpdateRemote(toolsRes.Tools, policies)
+	return nil
+}
+
 func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
+	return s.SetEnabledForRuntime(ctx, enabled, true)
+}
+
+// SetEnabledForRuntime updates the desired persisted state while allowing an
+// inactive owning instance to keep the connection stopped.
+func (s *ServerRuntime) SetEnabledForRuntime(ctx context.Context, enabled, runtimeActive bool) error {
 	s.mu.Lock()
 	if s.retired {
 		s.mu.Unlock()
@@ -461,7 +512,7 @@ func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 			s.mu.Unlock()
 			return nil
 		}
-		if enabled && (s.status == StatusStarting || s.status == StatusConnected) {
+		if enabled && runtimeActive && (s.status == StatusStarting || s.status == StatusConnected) {
 			s.mu.Unlock()
 			return nil
 		}
@@ -469,7 +520,7 @@ func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 	s.cfg.Enabled = enabled
 	s.mu.Unlock()
 
-	if enabled {
+	if enabled && runtimeActive {
 		if ctx == nil {
 			ctx = context.Background()
 		}
