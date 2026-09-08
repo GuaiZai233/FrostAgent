@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -69,7 +70,6 @@ type AgentRunResult struct {
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
 	*runtimescope.Scope
-	SharedDialogue         func() string
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
 	Provider               core.LLMProvider // LLM 供应商接口
@@ -99,6 +99,7 @@ type Engine struct {
 
 	// DialoguePrompt carries formatted few-shot persona examples (optional)
 	DialoguePrompt string
+	dialogueMu     sync.RWMutex
 
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
@@ -974,10 +975,15 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	return res
 }
 
+func (e *Engine) SetDialoguePrompt(prompt string) {
+	e.dialogueMu.Lock()
+	defer e.dialogueMu.Unlock()
+	e.DialoguePrompt = prompt
+}
+
 func (e *Engine) PersonaDialogue() string {
-	if e.SharedDialogue != nil {
-		return e.SharedDialogue()
-	}
+	e.dialogueMu.RLock()
+	defer e.dialogueMu.RUnlock()
 	return e.DialoguePrompt
 }
 

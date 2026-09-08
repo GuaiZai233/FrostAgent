@@ -88,9 +88,16 @@ assert.equal(
   '/instances/b1c2d3e4/frostagent.v1.MCPService/ListMCPServers',
   'MCP requests bypassed their owning instance',
 );
+await createInstanceAPI().listDialogues();
+assert.equal(
+  new URL(calls[5]).pathname,
+  '/instances/b1c2d3e4/frostagent.v1.DialogueService/ListDialogues',
+  'dialogue requests bypassed their owning instance',
+);
 instanceState.select(null);
 await assert.rejects(createInstanceAPI().listMCPServers(), /请先选择实例/);
-assert.equal(calls.length, 5, 'zero-instance MCP request reached the network');
+await assert.rejects(createInstanceAPI().listDialogues(), /请先选择实例/);
+assert.equal(calls.length, 6, 'zero-instance request reached the network');
 instanceState.logSource = 'instance';
 await assert.rejects(
   createInstanceAPI().listLogs(10, '', 0, ''),
@@ -98,13 +105,13 @@ await assert.rejects(
 );
 assert.equal(
   calls.length,
-  5,
+  6,
   'zero-instance log request silently used General',
 );
 instanceState.logSource = 'control-plane';
 await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(
-  new URL(calls[5]).pathname,
+  new URL(calls[6]).pathname,
   '/frostagent.v1.LogService/ListLogs',
   'explicit zero-instance General log request did not use the root endpoint',
 );

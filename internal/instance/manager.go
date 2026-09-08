@@ -9,7 +9,6 @@ import (
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
-	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
 	"context"
 	"crypto/rand"
@@ -62,10 +61,10 @@ type Manager struct {
 	root           string
 	global         *instanceconfig.Store
 	wsListenAddr   string
-	registry       registry
-	instances      map[string]*managed
-	shared         *dialogue.Service
-	billing        *billing.Client
+	registry         registry
+	instances        map[string]*managed
+	templateDialogue string
+	billing          *billing.Client
 	mcpGetenv      func(string) string
 	sandbox        *sandbox.ConfigManager
 	endpointMu     sync.Mutex
@@ -89,7 +88,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if wsListenAddr == "" {
 		wsListenAddr = "127.0.0.1:1234"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shared: dialogue.New(dialoguePath, nil), shutdown: shutdown, shutdownCancel: shutdownCancel}
+	if dialoguePath == "" {
+		dialoguePath = "eval/dialogue/dialogue.yml"
+	}
+	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
 		if err = json.Unmarshal(data, &m.registry); err != nil {
@@ -260,7 +262,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
@@ -430,6 +432,16 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 		resultErr = errors.Join(resultErr, cleanupErr)
 	}()
 	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), ".env"), []byte(instanceconfig.Template), 0600); err != nil {
+		return Info{}, err
+	}
+	var dialogueContent []byte
+	if m.templateDialogue != "" {
+		dialogueContent, _ = os.ReadFile(m.templateDialogue)
+	}
+	if len(dialogueContent) == 0 {
+		dialogueContent = []byte("[]\n")
+	}
+	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), "dialogue.yml"), dialogueContent, 0600); err != nil {
 		return Info{}, err
 	}
 	i := &managed{id: id, logger: logs.New(id, name, 5000)}
@@ -728,7 +740,7 @@ func (m *Manager) Delete(id string, all bool) error {
 	if all {
 		err = os.RemoveAll(m.dir(id))
 	} else {
-		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json"} {
+		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json", "dialogue.yml"} {
 			e := os.Remove(filepath.Join(m.dir(id), name))
 			if e != nil && !os.IsNotExist(e) {
 				err = e
@@ -892,7 +904,20 @@ func (m *Manager) Copy(target, source string) error {
 			return abort(err)
 		}
 	}
-	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
+		sourceDialogue, err := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
+		if err != nil && !os.IsNotExist(err) {
+			return abort(err)
+		}
+		if os.IsNotExist(err) && m.templateDialogue != "" {
+			sourceDialogue, _ = os.ReadFile(m.templateDialogue)
+		}
+		if len(sourceDialogue) == 0 {
+			sourceDialogue = []byte("[]\n")
+		}
+		if _, err = writeCopyFile(filepath.Join(stageDir, "dialogue.yml"), sourceDialogue, 0600); err != nil {
+			return abort(err)
+		}
+		if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
 		return abort(err)
 	}
 	candidate, _, err := m.buildFresh(target, dst, false, stageDir)

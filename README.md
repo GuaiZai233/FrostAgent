@@ -65,7 +65,7 @@ Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed ori
 go run ./cmd/app
 ```
 
-Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings, memory, sessions, stickers and logs. The shared example dialogues remain at `eval/dialogue/dialogue.yml`.
+Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings, memory, sessions, stickers, logs and persona dialogue examples (initialized from template `eval/dialogue/dialogue.yml` and isolated per instance at `data/instance_<instance-id>/dialogue.yml`).
 
 ## License
 

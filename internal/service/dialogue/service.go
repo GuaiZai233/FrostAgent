@@ -106,7 +106,7 @@ func (s *Service) SaveDialogues(
 
 	prompt := llm.FormatDialoguePrompt(examples)
 	if s.engine != nil {
-		s.engine.DialoguePrompt = prompt
+		s.engine.SetDialoguePrompt(prompt)
 	}
 	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新示例对话配置 (%d 条)，同步生效至系统提示词", len(examples)))
 
@@ -167,7 +167,7 @@ func (s *Service) UpdateRawDialogueFile(
 
 	prompt := llm.FormatDialoguePrompt(examples)
 	if s.engine != nil {
-		s.engine.DialoguePrompt = prompt
+		s.engine.SetDialoguePrompt(prompt)
 	}
 	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
 
@@ -206,10 +206,13 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0644)
 }
 
-// Prompt provides the shared persona snapshot under the same lock as file edits.
+// Prompt provides the persona snapshot under the same lock as file edits.
 func (s *Service) Prompt() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.engine != nil {
+		return s.engine.PersonaDialogue()
+	}
 	p, _ := llm.LoadDialoguePrompt(s.filePath)
 	return p
 }

@@ -27,6 +27,7 @@ import (
 	"FrostAgent/internal/tools"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -194,6 +195,22 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	billingCfg := billing.LoadConfig(scope.Getenv)
 	dispatcher := core.NewDefaultDispatcher()
 
+	dialoguePath := filepath.Join(configDir, "dialogue.yml")
+	if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
+		var dialogueContent []byte
+		if templateDialogue != "" {
+			dialogueContent, _ = os.ReadFile(templateDialogue)
+		}
+		if len(dialogueContent) == 0 {
+			dialogueContent = []byte("[]\n")
+		}
+		_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
+	}
+	dialoguePrompt, err := llm.LoadDialoguePrompt(dialoguePath)
+	if err != nil && !os.IsNotExist(err) {
+		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
+	}
+
 	engine := &llm.Engine{Scope: scope,
 		MaxIterations:  5,
 		ToolRegistry:   executorMap,
@@ -218,7 +235,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		GroupCompactor:    groupCompactor,
 		GroupSummaryStore: groupSummaryStore,
 		// Persona dialogue prompt
-		SharedDialogue: shared.Prompt,
+		DialoguePrompt: dialoguePrompt,
 	}
 	compactSummary := fmt.Sprintf(
 		"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
@@ -254,8 +271,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	)
 	mux.Handle(memoryPath, memoryHandler)
 
+	dialogueSvc := dialogue.New(dialoguePath, engine)
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
-		shared,
+		dialogueSvc,
 	)
 	mux.Handle(dialogueServicePath, dialogueHandler)
 
