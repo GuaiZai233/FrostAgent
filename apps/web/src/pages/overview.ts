@@ -6,6 +6,7 @@ import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { instanceWebSocketURL } from '../utils/websocket-url';
+import { copyToClipboard } from '../utils/clipboard';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
  const api = createInstanceAPI();
@@ -113,7 +114,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           </div>
           <p class="page-description">智能体核心服务运行状态与已挂载工具能力</p>
           <p class="text-xs text-muted">实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span></p>
-          <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(oneBotURL)}<br>AstrBot: ${escapeHtml(astrBotURL)}</p>
+          <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(oneBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(oneBotURL)}">复制</a><br>AstrBot: ${escapeHtml(astrBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(astrBotURL)}">复制</a></p>
         </header>
 
         <!-- KPI Summary Cards -->
@@ -167,8 +168,21 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           </div>
         </section>
       `;
- contentEl.querySelector("#quick-config")!.addEventListener("click",()=>void openQuickConfig());
- contentEl.querySelector<HTMLInputElement>("#instance-enabled")!.onchange = async (event) => {
+      contentEl.querySelector("#quick-config")!.addEventListener("click",()=>void openQuickConfig());
+      contentEl.querySelectorAll<HTMLAnchorElement>('[data-copy-url]').forEach((el) => {
+        el.addEventListener('click', async (e) => {
+          e.preventDefault();
+          const target = el.dataset.copyUrl;
+          if (!target) return;
+          const ok = await copyToClipboard(target);
+          if (ok) {
+            toast.success('已复制到剪贴板');
+          } else {
+            toast.error('复制失败');
+          }
+        });
+      });
+      contentEl.querySelector<HTMLInputElement>("#instance-enabled")!.onchange = async (event) => {
  const enabled=(event.target as HTMLInputElement).checked;
  try {if(instance)await instanceRequest("/"+instance.id+"/enable",{enabled});}catch(err){toast.error(String(err));}
  if(!isUnmounted)void loadData();

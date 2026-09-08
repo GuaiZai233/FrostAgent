@@ -12,6 +12,10 @@ const layout = await readFile(
   new URL('../src/styles/layout.css', import.meta.url),
   'utf8',
 );
+const overview = await readFile(
+  new URL('../src/pages/overview.ts', import.meta.url),
+  'utf8',
+);
 
 const desktopFooter = main.match(
   /<div class="sidebar-footer">([\s\S]*?)<\/div>\s*<\/aside>/,
@@ -51,6 +55,22 @@ assert.match(layout, /\.sidebar-nav\s*{[\s\S]*?min-height:\s*0;/);
 assert.match(
   layout,
   /\.instance-selected-label\s*{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/,
+);
+
+assert.match(
+  overview,
+  /OneBot:\s*\$\{escapeHtml\(oneBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(oneBotURL\)\}"[^>]*>复制<\/a>/,
+  'OneBot WebSocket URL is missing the copy link',
+);
+assert.match(
+  overview,
+  /AstrBot:\s*\$\{escapeHtml\(astrBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(astrBotURL\)\}"[^>]*>复制<\/a>/,
+  'AstrBot WebSocket URL is missing the copy link',
+);
+assert.match(
+  overview,
+  /copyToClipboard\(target\)/,
+  'overview copy action does not call copyToClipboard',
 );
 
 process.stdout.write(
