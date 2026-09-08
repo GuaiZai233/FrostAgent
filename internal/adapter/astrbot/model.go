@@ -66,12 +66,26 @@ func (a Action) MarshalJSON() ([]byte, error) {
 	return json.Marshal(actionAlias(normalized))
 }
 
+func (a Action) containsSticker() bool {
+	for _, message := range a.Messages {
+		if message.IsSticker {
+			return true
+		}
+	}
+	for _, attachment := range a.Attachments {
+		if attachment.Type == core.AttachmentTypeImage && attachment.SubType == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a Action) withConfiguredGroupMention() Action {
 	return a.withConfiguredGroupMentionScope(nil)
 }
 
 func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Action {
-	if a.Action != "send_message" || a.MessageType != "group" || scope.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
+	if a.Action != "send_message" || a.MessageType != "group" || a.containsSticker() || scope.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
 		return a
 	}
 
@@ -117,7 +131,7 @@ func (a Action) withConfiguredGroupReply() Action {
 }
 
 func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action {
-	if a.Action != "send_message" || a.MessageType != "group" || scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
+	if a.Action != "send_message" || a.MessageType != "group" || a.containsSticker() || scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
 		return a
 	}
 
