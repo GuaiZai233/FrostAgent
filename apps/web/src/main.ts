@@ -56,18 +56,15 @@ function buildNavigationLinks(isMobile = false): string {
     .join('');
 }
 
-function getThemeIconAndLabel(mode: ThemeMode): {
-  iconName: string;
-  label: string;
-} {
+function getThemeIconName(mode: ThemeMode): string {
   switch (mode) {
     case 'light':
-      return { iconName: 'sun', label: '浅色模式' };
+      return 'sun';
     case 'dark':
-      return { iconName: 'moon', label: '深色模式' };
+      return 'moon';
     case 'system':
     default:
-      return { iconName: 'sun_medium', label: '跟随系统' };
+      return 'sun_medium';
   }
 }
 
@@ -76,7 +73,7 @@ function initAppShell(): void {
   if (!appEl) return;
 
   const currentTheme = themeManager.getMode();
-  const themeInfo = getThemeIconAndLabel(currentTheme);
+  const themeIconName = getThemeIconName(currentTheme);
 
   appEl.innerHTML = `
     <div class="app-layout">
@@ -99,13 +96,6 @@ function initAppShell(): void {
         </nav>
 
         <div class="sidebar-footer">
-          <button class="theme-toggle-btn" id="theme-toggle-desktop" title="切换主题">
-            <span class="flex items-center gap-2">
-              <span id="theme-icon-desktop" class="inline-flex">${icon(themeInfo.iconName)}</span>
-              <span id="theme-label-desktop" class="text-xs">${themeInfo.label}</span>
-            </span>
-            <span class="text-muted text-xs">切换</span>
-          </button>
           <button class="theme-toggle-btn instance-manager-btn">
             <span>实例管理</span>
             <span class="instance-selected-label text-xs text-muted">未选择</span>
@@ -125,7 +115,7 @@ function initAppShell(): void {
           <span class="font-bold text-sm">FrostAgent</span>
         </div>
         <button class="btn btn-ghost btn-icon-sm" id="theme-toggle-mobile" aria-label="切换主题">
-          <span id="theme-icon-mobile" class="inline-flex">${icon(themeInfo.iconName)}</span>
+          <span id="theme-icon-mobile" class="inline-flex">${icon(themeIconName)}</span>
         </button>
       </header>
 
@@ -193,14 +183,9 @@ function initAppShell(): void {
 
   // Update theme UI elements
   const updateThemeUI = (mode: ThemeMode) => {
-    const info = getThemeIconAndLabel(mode);
-    const iconDesktop = document.getElementById('theme-icon-desktop');
-    const labelDesktop = document.getElementById('theme-label-desktop');
     const iconMobile = document.getElementById('theme-icon-mobile');
 
-    if (iconDesktop) iconDesktop.innerHTML = icon(info.iconName);
-    if (labelDesktop) labelDesktop.textContent = info.label;
-    if (iconMobile) iconMobile.innerHTML = icon(info.iconName);
+    if (iconMobile) iconMobile.innerHTML = icon(getThemeIconName(mode));
   };
 
   // Quick theme toggle helper
@@ -211,9 +196,6 @@ function initAppShell(): void {
     else themeManager.setMode('light');
   };
 
-  document
-    .getElementById('theme-toggle-desktop')
-    ?.addEventListener('click', handleQuickThemeToggle);
   document
     .getElementById('theme-toggle-mobile')
     ?.addEventListener('click', handleQuickThemeToggle);
