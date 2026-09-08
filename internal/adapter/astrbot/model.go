@@ -54,15 +54,16 @@ type Action struct {
 	Attachments    []core.Attachment `json:"attachments,omitempty"`     // 附件列表 (图片等)
 	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 是否为工具调用产生的中间消息 (sendHook)
 	Echo           string            `json:"echo,omitempty"`            // 回显标识
+	ReplyMessageID string            `json:"-"`                         // 当前回复对应的入站消息 ID，仅用于出站规范化
 }
 
 // MarshalJSON normalizes outbound AstrBot actions at the wire boundary. This keeps
-// ENABLE_AT_IN_GROUP_MSG behavior consistent with the native OneBot adapter without
+// group reply decorations consistent with the native OneBot adapter without
 // requiring every AstrBot reply path (normal, direct error, SendHook) to remember to
-// inject the same platform-native mention component independently.
+// inject the same platform-native components independently.
 func (a Action) MarshalJSON() ([]byte, error) {
 	type actionAlias Action
-	normalized := a.withConfiguredGroupMention()
+	normalized := a.withConfiguredGroupMention().withConfiguredGroupReply()
 	return json.Marshal(actionAlias(normalized))
 }
 
@@ -85,8 +86,13 @@ func (a Action) withConfiguredGroupMention() Action {
 	mention := ActionMessage{Type: "mention_user", MentionUserID: userID}
 	if len(a.Messages) > 0 {
 		messages := make([]ActionMessage, 0, len(a.Messages)+1)
+		insertAt := 0
+		for insertAt < len(a.Messages) && isQuoteMessage(a.Messages[insertAt]) {
+			insertAt++
+		}
+		messages = append(messages, a.Messages[:insertAt]...)
 		messages = append(messages, mention)
-		messages = append(messages, a.Messages...)
+		messages = append(messages, a.Messages[insertAt:]...)
 		a.Messages = messages
 		return a
 	}
@@ -101,4 +107,41 @@ func (a Action) withConfiguredGroupMention() Action {
 		}
 	}
 	return a
+}
+
+func (a Action) withConfiguredGroupReply() Action {
+	if a.Action != "send_message" || a.MessageType != "group" || os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
+		return a
+	}
+
+	replyMessageID := strings.TrimSpace(a.ReplyMessageID)
+	if replyMessageID == "" {
+		return a
+	}
+	for _, message := range a.Messages {
+		if isQuoteMessage(message) {
+			return a
+		}
+	}
+
+	quote := ActionMessage{Type: "quote", MessageID: replyMessageID}
+	if len(a.Messages) > 0 {
+		messages := make([]ActionMessage, 0, len(a.Messages)+1)
+		messages = append(messages, quote)
+		messages = append(messages, a.Messages...)
+		a.Messages = messages
+		return a
+	}
+
+	if strings.TrimSpace(a.Content) != "" {
+		a.Messages = []ActionMessage{
+			quote,
+			{Type: "plain", Text: a.Content},
+		}
+	}
+	return a
+}
+
+func isQuoteMessage(message ActionMessage) bool {
+	return message.Type == "quote" || message.Type == "reply"
 }
