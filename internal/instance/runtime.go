@@ -265,12 +265,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
 	dispatcher.RegisterAdapter(ab)
-	if scope.Getenv("ENABLE_ONEBOT_ADAPTER") != "false" {
-		mux.HandleFunc("/ws/onebot", ob.Handler())
-	}
-	if scope.Getenv("ENABLE_ASTRBOT_ADAPTER") != "false" {
-		mux.HandleFunc("/ws/astrbot", ab.Handler())
-	}
+	// Both built-in IM adapters stay available for every instance for now.
+	// Adapter selection is intentionally deferred; legacy ENABLE_*_ADAPTER
+	// values are ignored so they cannot disable OneBot or AstrBot.
+	mux.HandleFunc("/ws/onebot", ob.Handler())
+	mux.HandleFunc("/ws/astrbot", ab.Handler())
 	if !enabled {
 		engine.StartedAt = time.Time{}
 		logger.Clear()
