@@ -140,12 +140,12 @@ class FakeEvent:
         components = [At("bot_self")] if mention_bot else []
         if image_url:
             components.append(Image(image_url))
-        self.message_id = "msg_test"
         self.platform = "test"
         self.is_at_or_wake_command = is_wake
         self.call_llm = False
         self.should_call_llm_calls: list[bool] = []
         self.message_obj = SimpleNamespace(
+            message_id="msg_test",
             message=components,
             sender=SimpleNamespace(nickname="测试用户", card=""),
             group=SimpleNamespace(group_name="测试群"),
@@ -224,6 +224,15 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(results, [])
         self.assertEqual(adapter.client.sent_events, [])
+
+    async def test_uses_message_obj_message_id(self):
+        event = FakeEvent(content="hello")
+        self.assertFalse(hasattr(event, "message_id"))
+
+        sent = await self.forward(event)
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["message_id"], "msg_test")
 
     async def test_empty_group_message_is_dropped(self):
         sent = await self.forward(FakeEvent(group_id="group_test"))

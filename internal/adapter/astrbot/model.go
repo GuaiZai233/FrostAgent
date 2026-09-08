@@ -2,8 +2,8 @@ package astrbot
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/runtimescope"
 	"encoding/json"
-	"os"
 	"strings"
 )
 
@@ -57,10 +57,9 @@ type Action struct {
 	ReplyMessageID string            `json:"-"`                         // 当前回复对应的入站消息 ID，仅用于出站规范化
 }
 
-// MarshalJSON normalizes outbound AstrBot actions at the wire boundary. This keeps
-// group reply decorations consistent with the native OneBot adapter without
-// requiring every AstrBot reply path (normal, direct error, SendHook) to remember to
-// inject the same platform-native components independently.
+// MarshalJSON preserves the legacy process-env normalization path for callers
+// that serialize Action directly. Instance-bound WebSocket delivery bypasses
+// this method after normalizing with the connection's runtime scope.
 func (a Action) MarshalJSON() ([]byte, error) {
 	type actionAlias Action
 	normalized := a.withConfiguredGroupMention().withConfiguredGroupReply()
@@ -68,7 +67,11 @@ func (a Action) MarshalJSON() ([]byte, error) {
 }
 
 func (a Action) withConfiguredGroupMention() Action {
-	if a.Action != "send_message" || a.MessageType != "group" || os.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
+	return a.withConfiguredGroupMentionScope(nil)
+}
+
+func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Action {
+	if a.Action != "send_message" || a.MessageType != "group" || scope.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
 		return a
 	}
 
@@ -110,7 +113,11 @@ func (a Action) withConfiguredGroupMention() Action {
 }
 
 func (a Action) withConfiguredGroupReply() Action {
-	if a.Action != "send_message" || a.MessageType != "group" || os.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
+	return a.withConfiguredGroupReplyScope(nil)
+}
+
+func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action {
+	if a.Action != "send_message" || a.MessageType != "group" || scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
 		return a
 	}
 

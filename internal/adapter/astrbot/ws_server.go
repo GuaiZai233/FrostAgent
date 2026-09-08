@@ -94,6 +94,21 @@ func (c *wsConn) WriteJSON(v any) error {
 	if c.conn == nil {
 		return errors.New("connection closed")
 	}
+
+	// Action.MarshalJSON retains process-env behavior for legacy direct callers.
+	// Instance-bound WebSocket delivery must normalize with this connection's
+	// runtime scope, then marshal an alias so MarshalJSON cannot re-read globals.
+	type actionAlias Action
+	switch action := v.(type) {
+	case Action:
+		normalized := action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
+		v = actionAlias(normalized)
+	case *Action:
+		if action != nil {
+			normalized := action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
+			v = actionAlias(normalized)
+		}
+	}
 	return c.conn.WriteJSON(v)
 }
 
