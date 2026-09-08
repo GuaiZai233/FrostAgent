@@ -25,14 +25,7 @@ func run() error {
 		return err
 	}
 	defer manager.Close()
-	mux := http.NewServeMux()
-	mux.Handle("/api/instances", manager)
-	mux.Handle("/api/instances/", manager)
-	mux.Handle("/instances/", manager)
-	mux.Handle("/frostagent.v1.LogService/", manager)
-	mux.Handle("/frostagent.v1.MCPService/", manager)
-	mux.Handle("/api/log-images/", manager)
-	mux.Handle("/", frontend.Handler())
+	mux := managementMux(manager)
 	listen := global.Get("LISTEN_ADDR")
 	if listen == "" {
 		listen = "127.0.0.1:8080"
@@ -67,6 +60,18 @@ func run() error {
 		return nil
 	}
 	return err
+}
+
+func managementMux(manager http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/api/instances", manager)
+	mux.Handle("/api/instances/", manager)
+	mux.Handle("/instances/", manager)
+	mux.Handle("/frostagent.v1.LogService/", manager)
+	mux.Handle("/frostagent.v1.MCPService/", http.NotFoundHandler())
+	mux.Handle("/api/log-images/", manager)
+	mux.Handle("/", frontend.Handler())
+	return mux
 }
 
 // Keep the adapter listener separate from the HTTP management surface.

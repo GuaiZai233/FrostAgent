@@ -124,7 +124,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`，并由 Control Plane 下发本次启动实际采用的 `WS_LISTEN_ADDR` 来生成实例专属适配器地址；设置页修改后的待重启值不会提前污染概览。AstrBot 插件要求显式配置该地址，不再回退到无实例路径。
-  - MCP 配置与连接管理器属于 Control Plane，持久化在 `data/mcp_servers.json`，根级 `MCPService` 在零实例或实例停用时仍可访问；所有实例运行时共享该动态工具目录，但实例停止不会关闭 Control Plane 的 MCP 连接。
+  - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
   - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
@@ -213,7 +213,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - FrostAgent 严格扮演标准 MCP Host（Client 角色），将外部 MCP Server 视为动态工具提供者（External Tool Provider）；
   - **普通工具语义对齐**：对于大模型及智能体循环（Agent Loop），MCP 工具在调用流程、参数组织与执行协议上与系统内置工具（`memory`, `send_msg`, `send_sticker` 等）完全等价，统一归入 `core.ChatRequest.Tools` 并在执行时由 `ToolExecutor` 统一调度；
   - **编译期静态适配器与运行期动态发现**：系统通过编译期静态编写的通用工具适配器（`ToolAdapter`），结合运行期动态拉取的工具目录（`ToolCatalog`），兼具 Go 语言的静态类型安全与 MCP 外部服务的热插拔灵活性；
-  - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/mcp_servers.json`），不设全局主开关，避免多实例部署时的系统级配置耦合。
+  - **实例作用域配置**：MCP 服务器配置依附于具体运行实例（`data/instance_<id>/mcp_servers.json`），不设全局主开关，实例之间的配置、连接与工具状态完全隔离。
 - **官方 SDK 与多传输协议支持 (Official Go SDK & Multi-Transport Implementations)**：
   - 全面基于官方 Go SDK（`github.com/modelcontextprotocol/go-sdk/mcp`）构建，废弃私有 JSON-RPC 解析；
   - **Stdio 子进程传输 (`officialmcp.CommandTransport`)**：支持本地命令行子进程模式，托管 stdin/stdout 标准流管道交互与 SIGTERM 优雅退出；支持自定义可执行命令、参数列表、工作目录以及环境变量；
@@ -221,11 +221,11 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **SSE 传输 (`officialmcp.SSEClientTransport`) 与传输层精细化控制**：支持 2024-11-05 标准服务器推送流，并通过自定义 `HeaderTransport` 装饰器实现请求头（如认证 Token）注入。流式 HTTP 客户端显式配置 `Timeout: 0` 保证长挂起流不被底层自动中断，结合精细化底层超时（`DialContext` 15s、`ResponseHeaderTimeout` 30s、`TLSHandshakeTimeout` 15s、`IdleConnTimeout` 90s）确保连接稳健；
   - **会话生命周期解耦 (`lifecycleCtx`)**：建立会话时将其与短期 RPC 握手上下文完全解耦，仅在显式停止、重启或代数更迭时取消，防止瞬时请求超时意外掐断常驻 SSE 流；
   - **生命周期协商与能力同步**：启动时由官方 SDK 完成 `initialize` 握手与 `notifications/initialized`，随后自动拉取 `tools/list` 建立动态工具目录；同时注册 `ToolListChangedHandler` 监听外部服务端工具变更通知并自动异步热更新。
-- **两阶段启动加载 (Two-Phase Boot Loading)**：
-  - 系统启动时先通过 `mcpManager.Load()` 同步将持久化配置载入内存，保证 HTTP/ConnectRPC 端口监听就绪时配置已就绪，消除早期管理 API 请求的启动竞态；
-  - 在独立的后台协程中调用 `mcpManager.StartAll(ctx)` 并发连接各个已启用的外部 MCP 服务器，避免外部网络握手或慢子进程阻塞主引擎就绪。
+- **实例生命周期加载 (Instance Lifecycle Loading)**：
+  - Control Plane 构造实例时先同步载入该实例的持久化 MCP 配置，保证实例管理接口就绪时配置可读写；
+  - 实例启用后异步连接其已启用的外部 MCP 服务器；实例停用时同步断开实时连接但保留期望启用状态，重新启用后自动恢复连接。
 - **平台专属原生崩溃安全持久化 (Platform-Native Crash-Safe Atomic Persistence)**：
-  - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/mcp_servers.json`；
+  - 配置存储（`ConfigStore`）负责将服务器配置与工具策略安全持久化至 `data/instance_<id>/mcp_servers.json`；
   - **Windows NTFS 原生原子替换**：在 Windows 平台采用 `golang.org/x/sys/windows` 直接调用 Win32 核心 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，实现文件系统层级的原子覆盖落盘，消除传统 `os.Rename` 在 Windows 上的文件占用与删除空窗期风险；
   - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
 - **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：

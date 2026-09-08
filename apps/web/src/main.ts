@@ -254,7 +254,6 @@ function initAppShell(): void {
   router.register('/dialogue', '人设对话', mountDialoguePage);
   router.register('/prompt', 'Prompt 检查', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
-  router.register('/mcp', 'MCP服务器', mountMCPPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
   router.register(
@@ -277,6 +276,7 @@ function initAppShell(): void {
     '/dialogue',
     '/prompt',
     '/stickers',
+    '/mcp',
     '/settings/backend',
     '/model-router',
   ];
@@ -287,6 +287,7 @@ function initAppShell(): void {
     mountDialoguePage,
     mountPromptPage,
     mountStickersPage,
+    mountMCPPage,
     mountBackendSettingsPage,
     mountModelRouterPage,
   ];

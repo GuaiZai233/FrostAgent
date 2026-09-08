@@ -18,6 +18,7 @@ import (
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
+	mcpsvc "FrostAgent/internal/service/mcp"
 	memsvc "FrostAgent/internal/service/memory"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
@@ -44,7 +45,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, sandboxCfg *sandbox.Config, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, shared *dialogue.Service, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxCfg *sandbox.Config, enabled bool) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -237,6 +238,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	logsPath, logsHandler := pbconnect.NewLogServiceHandler(logsvc.New(logger))
 	mux.Handle(logsPath, logsHandler)
 	mux.HandleFunc(logs.LogImagePathPrefix, logger.ImageHandler)
+
+	mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.NewScoped(mcpManager, mcpGetenv))
+	mux.Handle(mcpPath, mcpHandler)
 
 	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
 		memsvc.New(store, engine.MemoryReflections),

@@ -1,4 +1,4 @@
-import { api, type MCPServerInfo, type MCPToolInfo } from '../api/client';
+import { createInstanceAPI, type MCPServerInfo, type MCPToolInfo } from '../api/client';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -18,6 +18,7 @@ import {
 } from './mcp-config';
 
 export function mountMCPPage(container: HTMLElement): () => void {
+  const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let servers: MCPServerInfo[] = [];

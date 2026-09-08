@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { api, createInstanceAPI } from '../src/api/client';
+import { createInstanceAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
@@ -82,18 +82,31 @@ assert.equal(
   '/instances/b1c2d3e4/frostagent.v1.LogService/ListLogs',
   'instance logs bypassed their instance route',
 );
-await api.listMCPServers();
+await createInstanceAPI().listMCPServers();
 assert.equal(
   new URL(calls[4]).pathname,
-  '/frostagent.v1.MCPService/ListMCPServers',
-  'Control Plane MCP requests were routed through the selected instance',
+  '/instances/b1c2d3e4/frostagent.v1.MCPService/ListMCPServers',
+  'MCP requests bypassed their owning instance',
 );
 instanceState.select(null);
-await api.listMCPServers();
+await assert.rejects(createInstanceAPI().listMCPServers(), /请先选择实例/);
+assert.equal(calls.length, 5, 'zero-instance MCP request reached the network');
+instanceState.logSource = 'instance';
+await assert.rejects(
+  createInstanceAPI().listLogs(10, '', 0, ''),
+  /请先选择实例/,
+);
+assert.equal(
+  calls.length,
+  5,
+  'zero-instance log request silently used General',
+);
+instanceState.logSource = 'control-plane';
+await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(
   new URL(calls[5]).pathname,
-  '/frostagent.v1.MCPService/ListMCPServers',
-  'Control Plane MCP requests required a selected instance',
+  '/frostagent.v1.LogService/ListLogs',
+  'explicit zero-instance General log request did not use the root endpoint',
 );
 
 const requestGeneration = new RequestGeneration();

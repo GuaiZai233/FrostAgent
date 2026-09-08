@@ -91,14 +91,14 @@ func TestCORSMiddlewareRejectsDNSRebinding(t *testing.T) {
 func TestCORSMiddlewareRejectsDNSRebindingOnMCPControlPlane(t *testing.T) {
 	// DNS Rebinding attack against MCP Control Plane:
 	// Attacker binds attacker.example to 127.0.0.1.
-	// Browser sends POST to /frostagent.v1.MCPService/AddMCPServer with:
+	// Browser sends POST to an instance-scoped MCPService/AddMCPServer with:
 	// Origin: http://attacker.example:8080, Host: attacker.example:8080, RemoteAddr: 127.0.0.1:12345
 	t.Setenv("HTTP_ALLOWED_ORIGINS", "")
 	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/frostagent.v1.MCPService/AddMCPServer", nil)
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/instances/a1b2c3d4/frostagent.v1.MCPService/AddMCPServer", nil)
 	request.Host = "attacker.example:8080"
 	request.Header.Set("Origin", "http://attacker.example:8080")
 	request.RemoteAddr = "127.0.0.1:12345"
@@ -182,5 +182,19 @@ func TestControlPlaneOriginsUseGlobalStoreGetter(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("%s status=%d", host, w.Code)
 		}
+	}
+}
+
+func TestManagementMuxRejectsRootMCPService(t *testing.T) {
+	mux := managementMux(http.NotFoundHandler())
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/frostagent.v1.MCPService/ListMCPServers",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("root MCP endpoint status = %d, want 404", response.Code)
 	}
 }

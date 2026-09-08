@@ -218,6 +218,122 @@ func TestManagerCloseRetiresRuntime(t *testing.T) {
 	}
 }
 
+func TestInactiveManagerPersistsEnabledServerWithoutStarting(t *testing.T) {
+	started := make(chan struct{}, 1)
+	store := NewConfigStore(filepath.Join(t.TempDir(), "mcp_servers.json"))
+	manager := NewManagerWithFactory(store, nil, func(cfg TransportConfig) (officialmcp.Transport, error) {
+		started <- struct{}{}
+		return nil, errors.New("synthetic transport failure")
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.SetRuntimeActive(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddServer(context.Background(), ServerConfig{
+		ID:      "offline",
+		Name:    "Offline",
+		Enabled: true,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "synthetic",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+		t.Fatal("inactive manager started an enabled MCP server")
+	case <-time.After(50 * time.Millisecond):
+	}
+	updated := manager.ListServers()[0].Config()
+	updated.Name = "Updated Offline"
+	if err := manager.UpdateServer(context.Background(), updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetServerEnabled(context.Background(), "offline", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetServerEnabled(context.Background(), "offline", true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+		t.Fatal("editing inactive MCP configuration started a connection")
+	case <-time.After(50 * time.Millisecond):
+	}
+	srv, ok := manager.GetServer("offline")
+	if !ok {
+		t.Fatal("inactive manager lost the configured server")
+	}
+	if !srv.IsEnabled() || srv.Status() != StatusStopped {
+		t.Fatalf("inactive desired state was not retained: enabled=%t status=%v", srv.IsEnabled(), srv.Status())
+	}
+	persisted, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Servers) != 1 || !persisted.Servers[0].Enabled {
+		t.Fatalf("inactive enabled state was not persisted: %+v", persisted.Servers)
+	}
+	if err = manager.SetRuntimeActive(true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("activating the owning instance did not start configured MCP servers")
+	}
+}
+
+func TestClosedManagerRejectsAllMutationsWithoutWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp_servers.json")
+	manager := NewManager(NewConfigStore(path), nil)
+	cfg := ServerConfig{
+		ID:      "existing",
+		Name:    "Existing",
+		Enabled: false,
+		Transport: TransportConfig{
+			Type:    TransportStdio,
+			Command: "synthetic",
+		},
+	}
+	if err := manager.AddServer(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	late := cfg
+	late.ID = "late"
+	for name, mutate := range map[string]func() error{
+		"add":         func() error { return manager.AddServer(context.Background(), late) },
+		"update":      func() error { return manager.UpdateServer(context.Background(), cfg) },
+		"remove":      func() error { return manager.RemoveServer(cfg.ID) },
+		"toggle":      func() error { return manager.SetServerEnabled(context.Background(), cfg.ID, true) },
+		"tool policy": func() error { return manager.SetToolEnabled(cfg.ID, "tool", true) },
+		"sync":        func() error { return manager.SyncServer(context.Background(), cfg.ID) },
+		"restart":     func() error { return manager.RestartServer(context.Background(), cfg.ID) },
+		"activate":    func() error { return manager.SetRuntimeActive(true) },
+		"load":        manager.Load,
+	} {
+		if err := mutate(); !errors.Is(err, ErrManagerClosed) {
+			t.Fatalf("%s after close error = %v, want ErrManagerClosed", name, err)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("closed manager changed its persisted configuration")
+	}
+}
+
 func TestReservedAsyncStartCannotSupersedeNewerRestart(t *testing.T) {
 	factoryCalls := 0
 	factory := func(cfg TransportConfig) (officialmcp.Transport, error) {

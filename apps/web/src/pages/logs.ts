@@ -25,6 +25,7 @@ import {
 } from '../components/prompt-inspector';
 
 export function mountLogsPage(container: HTMLElement): () => void {
+  if (!instanceState.selected) instanceState.logSource = 'control-plane';
   const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
@@ -62,7 +63,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
       <div class="form-group" style="width: 14rem;">
         <label class="form-label" for="logs-source-select">日志来源</label>
         <select id="logs-source-select" class="select text-xs">
-          <option value="instance" ${instanceState.logSource === 'instance' ? 'selected' : ''}>当前实例</option>
+          <option value="instance" ${instanceState.logSource === 'instance' ? 'selected' : ''} ${instanceState.selected ? '' : 'disabled'}>当前实例</option>
           <option value="control-plane" ${instanceState.logSource === 'control-plane' ? 'selected' : ''}>Control Plane (General)</option>
         </select>
       </div>

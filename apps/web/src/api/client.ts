@@ -97,14 +97,6 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-function createMCPClient(): Client<typeof MCPService> {
-  const transport = createConnectTransport({
-    baseUrl: window.location.origin,
-    interceptors: [authInterceptor],
-  });
-  return createClient(MCPService, transport);
-}
-
 export function createInstanceAPI() {
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
@@ -122,8 +114,7 @@ export function createInstanceAPI() {
         isLogService && instanceState.logSource === 'control-plane';
       if (id && !isControlPlaneLog)
         url.pathname = `/instances/${id}${url.pathname}`;
-      else if (!id && !isLogService)
-        throw new Error('请先选择实例');
+      else if (!id && !isControlPlaneLog) throw new Error('请先选择实例');
       const signal = AbortSignal.any([original.signal, selectionSignal]);
       const headers = new Headers(original.headers);
       headers.set('X-FrostAgent-Log-Source', instanceState.logSource);
@@ -168,6 +159,11 @@ export function createInstanceAPI() {
 
   const stickerClient: Client<typeof StickerService> = createClient(
     StickerService,
+    transport,
+  );
+
+  const mcpClient: Client<typeof MCPService> = createClient(
+    MCPService,
     transport,
   );
 
@@ -454,6 +450,38 @@ export function createInstanceAPI() {
       return stickerClient.getStickerStats({});
     },
 
+    // MCP
+    listMCPServers(): Promise<ListMCPServersResponse> {
+      return mcpClient.listMCPServers({});
+    },
+    getMCPServer(id: string): Promise<GetMCPServerResponse> {
+      return mcpClient.getMCPServer({ id });
+    },
+    addMCPServer(params: MCPServerParams): Promise<AddMCPServerResponse> {
+      return mcpClient.addMCPServer(params);
+    },
+    updateMCPServer(params: MCPServerParams): Promise<UpdateMCPServerResponse> {
+      return mcpClient.updateMCPServer(params);
+    },
+    deleteMCPServer(id: string): Promise<DeleteMCPServerResponse> {
+      return mcpClient.deleteMCPServer({ id });
+    },
+    toggleMCPServer(
+      id: string,
+      enabled: boolean,
+    ): Promise<ToggleMCPServerResponse> {
+      return mcpClient.toggleMCPServer({ id, enabled });
+    },
+    toggleMCPTool(
+      serverId: string,
+      toolName: string,
+      enabled: boolean,
+    ): Promise<ToggleMCPToolResponse> {
+      return mcpClient.toggleMCPTool({ serverId, toolName, enabled });
+    },
+    syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
+      return mcpClient.syncMCPServer({ id });
+    },
   };
 }
 
@@ -469,23 +497,3 @@ interface MCPServerParams {
   url?: string;
   headers?: Record<string, string>;
 }
-
-// MCP belongs to the Control Plane and never captures instance selection state.
-export const api = {
-  listMCPServers: (): Promise<ListMCPServersResponse> =>
-    createMCPClient().listMCPServers({}),
-  getMCPServer: (id: string): Promise<GetMCPServerResponse> =>
-    createMCPClient().getMCPServer({ id }),
-  addMCPServer: (params: MCPServerParams): Promise<AddMCPServerResponse> =>
-    createMCPClient().addMCPServer(params),
-  updateMCPServer: (params: MCPServerParams): Promise<UpdateMCPServerResponse> =>
-    createMCPClient().updateMCPServer(params),
-  deleteMCPServer: (id: string): Promise<DeleteMCPServerResponse> =>
-    createMCPClient().deleteMCPServer({ id }),
-  toggleMCPServer: (id: string, enabled: boolean): Promise<ToggleMCPServerResponse> =>
-    createMCPClient().toggleMCPServer({ id, enabled }),
-  toggleMCPTool: (serverId: string, toolName: string, enabled: boolean): Promise<ToggleMCPToolResponse> =>
-    createMCPClient().toggleMCPTool({ serverId, toolName, enabled }),
-  syncMCPServer: (id: string): Promise<SyncMCPServerResponse> =>
-    createMCPClient().syncMCPServer({ id }),
-};

@@ -11,7 +11,6 @@ import (
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
-	mcpsvc "FrostAgent/internal/service/mcp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -56,6 +55,7 @@ type managed struct {
 	runtime *Runtime
 	config  *instanceconfig.Store
 	logger  *logs.Store
+	mcp     *mcp.Manager
 }
 type Manager struct {
 	mu             sync.RWMutex
@@ -66,7 +66,7 @@ type Manager struct {
 	instances      map[string]*managed
 	shared         *dialogue.Service
 	billing        *billing.Client
-	mcp            *mcp.Manager
+	mcpGetenv      func(string) string
 	sandbox        *sandbox.Config
 	endpointMu     sync.Mutex
 	endpointOwners map[string]string
@@ -184,24 +184,13 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			}
 		}
 	}
-	m.mcp = mcp.NewManager(
-		mcp.NewConfigStore(filepath.Join(abs, "mcp_servers.json")),
-		[]string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command"},
-	)
-	if err := m.mcp.Load(); err != nil {
-		logs.General.Warn(logs.SYSTEM, fmt.Sprintf("加载 MCP 配置失败: %v", err))
-	} else {
-		logs.General.Info(logs.SYSTEM, "MCP 配置文件加载完成")
-	}
 	mcpEnvironment := map[string]string{
 		"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
 		"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
 		"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
 		"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
 	}
-	mcpGetenv := func(key string) string { return mcpEnvironment[key] }
-	mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.NewScoped(m.mcp, mcpGetenv))
-	mux.Handle(mcpPath, mcpHandler)
+	m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
 		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
@@ -232,17 +221,28 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			}
 		}
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(m.shutdown, 60*time.Second)
-		defer cancel()
-		m.mcp.StartAll(ctx)
-		if m.shutdown.Err() == nil {
-			logs.General.Info(logs.SYSTEM, "MCP 外部工具连接已就绪")
-		}
-	}()
 	return m, nil
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
+
+var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command"}
+
+func (m *Manager) ensureInstanceMCP(i *managed) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.mcp != nil {
+		return
+	}
+	manager := mcp.NewInactiveManager(
+		mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json")),
+		mcpBuiltinNames,
+	)
+	if err := manager.Load(); err != nil {
+		i.logger.Warn(logs.SYSTEM, fmt.Sprintf("加载实例 MCP 配置失败: %v", err))
+	}
+	i.mcp = manager
+}
+
 func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir string) (*Runtime, *instanceconfig.Store, error) {
 	id = i.id
 	if err := safeTree(m.dir(id)); err != nil {
@@ -257,7 +257,8 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 	if openErr != nil && c.AccessError() != nil {
 		return nil, c, openErr
 	}
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, m.mcp, m.instanceSandboxConfig(id), enabled)
+	m.ensureInstanceMCP(i)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.shared, m.billing, i.mcp, m.mcpGetenv, m.instanceSandboxConfig(id), enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
@@ -417,12 +418,16 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	committed := false
 	var partialRuntime *Runtime
+	var partialMCP *mcp.Manager
 	defer func() {
 		if committed {
 			return
 		}
 		if partialRuntime != nil {
 			partialRuntime.Stop()
+		}
+		if partialMCP != nil {
+			_ = partialMCP.Close()
 		}
 		cleanupErr := safeTree(m.dir(id))
 		if cleanupErr == nil {
@@ -435,6 +440,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	i := &managed{id: id, logger: logs.New(id, name, 5000)}
 	r, c, err := m.buildFresh(id, i, false, m.dir(id))
+	partialMCP = i.mcp
 	if err != nil {
 		return Info{}, err
 	}
@@ -499,6 +505,11 @@ func (m *Manager) Rename(id, name string) error {
 func (m *Manager) stop(id string, i *managed) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.mcp != nil {
+		if err := i.mcp.SetRuntimeActive(false); err != nil && !errors.Is(err, mcp.ErrManagerClosed) {
+			i.logger.Warn(logs.SYSTEM, fmt.Sprintf("停止实例 MCP 连接失败: %v", err))
+		}
+	}
 	if i.runtime != nil {
 		i.runtime.Stop()
 	}
@@ -578,8 +589,26 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	i.runtime = r
 	i.config = c
 	i.mu.Unlock()
+	if m.shutdown.Err() != nil {
+		r.Stop()
+		if i.mcp != nil {
+			_ = i.mcp.SetRuntimeActive(false)
+		}
+		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = ErrClosing.Error() })
+		return ErrClosing
+	}
+	if enabled && i.mcp != nil {
+		if err = i.mcp.SetRuntimeActive(true); err != nil {
+			r.Stop()
+			_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+			return err
+		}
+	}
 	if err = m.update(id, func(info *Info) { info.Enabled = enabled; info.Error = ""; info.RestartRequired = false }); err != nil {
 		r.Stop()
+		if i.mcp != nil {
+			_ = i.mcp.SetRuntimeActive(false)
+		}
 		return err
 	}
 	lifecycleLog := fmt.Sprintf("实例 %s enabled=%t", id, enabled)
@@ -689,6 +718,9 @@ func (m *Manager) Delete(id string, all bool) error {
 	if err = m.update(id, func(info *Info) { info.Deleting = true; info.CredentialTargets = targets }); err != nil {
 		return fail(err)
 	}
+	if i.mcp != nil {
+		_ = i.mcp.Close()
+	}
 	// A failed deletion remains manageable only through retry-delete; stale stores
 	// cannot recreate files or expose a half-deleted configuration.
 	i.mu.Lock()
@@ -702,7 +734,7 @@ func (m *Manager) Delete(id string, all bool) error {
 	if all {
 		err = os.RemoveAll(m.dir(id))
 	} else {
-		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json"} {
+		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json"} {
 			e := os.Remove(filepath.Join(m.dir(id), name))
 			if e != nil && !os.IsNotExist(e) {
 				err = e
@@ -936,16 +968,22 @@ func (m *Manager) Close() {
 		m.mu.RUnlock()
 		for _, i := range items {
 			i.logger.EndStreams()
+			i.mu.RLock()
+			closingMCP := i.mcp
+			i.mu.RUnlock()
+			if closingMCP != nil {
+				_ = closingMCP.Close()
+			}
 			i.op.Lock()
 			i.mu.Lock()
+			if i.mcp != nil && i.mcp != closingMCP {
+				_ = i.mcp.Close()
+			}
 			if i.runtime != nil {
 				i.runtime.Stop()
 			}
 			i.mu.Unlock()
 			i.op.Unlock()
-		}
-		if m.mcp != nil {
-			_ = m.mcp.Close()
 		}
 	})
 }

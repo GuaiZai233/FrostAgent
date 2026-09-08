@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
@@ -248,7 +249,7 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 	}
 }
 
-func TestMCPControlPlaneDoesNotDependOnAnInstanceRuntime(t *testing.T) {
+func TestMCPIsIsolatedPerInstanceAndHasNoRootEndpoint(t *testing.T) {
 	m := testManager(t)
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -259,19 +260,60 @@ func TestMCPControlPlaneDoesNotDependOnAnInstanceRuntime(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("root MCP request with zero instances returned %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("root MCP endpoint status = %d, want 404", w.Code)
 	}
 
-	info := create(t, m, "mcp-shared")
-	runtime := m.instances[info.ID].runtime
-	if runtime == nil || runtime.Engine.MCPManager != m.mcp {
-		t.Fatal("instance runtime does not use the Control Plane MCP manager")
+	a := create(t, m, "mcp-a")
+	b := create(t, m, "mcp-b")
+	if m.instances[a.ID].mcp == m.instances[b.ID].mcp {
+		t.Fatal("instances share an MCP manager")
+	}
+	for _, info := range []Info{a, b} {
+		runtime := m.instances[info.ID].runtime
+		if runtime == nil || runtime.Engine.MCPManager != m.instances[info.ID].mcp {
+			t.Fatalf("instance %s runtime does not use its own MCP manager", info.ID)
+		}
+	}
+
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/instances/"+a.ID+"/frostagent.v1.MCPService/AddMCPServer",
+		strings.NewReader(`{"id":"only-a","name":"Only A","enabled":false,"transportType":"stdio","command":"synthetic"}`),
+	)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add MCP server status = %d: %s", w.Code, w.Body.String())
+	}
+	if _, ok := m.instances[a.ID].mcp.GetServer("only-a"); !ok {
+		t.Fatal("instance A did not retain its MCP server")
+	}
+	if _, ok := m.instances[b.ID].mcp.GetServer("only-a"); ok {
+		t.Fatal("instance B observed instance A MCP server")
+	}
+	if _, err := os.Stat(filepath.Join(m.dir(a.ID), "mcp_servers.json")); err != nil {
+		t.Fatalf("instance MCP config was not persisted in its directory: %v", err)
+	}
+	m.Close()
+	restarted, err := New(m.root, m.global, m.sharedPathForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restarted.Close)
+	if _, ok := restarted.instances[a.ID].mcp.GetServer("only-a"); !ok {
+		t.Fatal("instance A MCP configuration was not restored after restart")
+	}
+	if _, ok := restarted.instances[b.ID].mcp.GetServer("only-a"); ok {
+		t.Fatal("instance B loaded instance A MCP configuration after restart")
 	}
 }
 
-func TestMCPControlPlaneAuthUsesStartupSnapshot(t *testing.T) {
+func TestInstanceMCPAuthUsesControlPlaneStartupSnapshot(t *testing.T) {
 	m := testManager(t)
+	info := create(t, m, "mcp-auth")
 	if err := m.global.Update("MCP_CONTROL_TOKEN", "synthetic-control-token", false); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +322,7 @@ func TestMCPControlPlaneAuthUsesStartupSnapshot(t *testing.T) {
 	}
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/frostagent.v1.MCPService/ListMCPServers",
+		"/instances/"+info.ID+"/frostagent.v1.MCPService/ListMCPServers",
 		strings.NewReader("{}"),
 	)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -409,6 +451,17 @@ func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
 	configureRouter(t, m, src.ID, "http://127.0.0.1:1")
 	source := m.instances[src.ID]
 	target := m.instances[dst.ID]
+	if err := target.mcp.AddServer(context.Background(), mcp.ServerConfig{
+		ID:      "target-only",
+		Name:    "Target Only",
+		Enabled: false,
+		Transport: mcp.TransportConfig{
+			Type:    mcp.TransportStdio,
+			Command: "synthetic",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := source.config.Replace("# copied raw settings\nBOT_NAME=source\nBILLING_ENABLED=false\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +504,9 @@ func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
 	if string(saved) != string(brain) {
 		t.Fatal("memory changed")
 	}
+	if _, ok := target.mcp.GetServer("target-only"); !ok {
+		t.Fatal("quick config overwrote target MCP configuration")
+	}
 	rawEnv, _ := target.config.Raw()
 	if !strings.HasPrefix(rawEnv, "# copied raw settings") {
 		t.Fatal("raw env changed")
@@ -461,7 +517,7 @@ func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
 	if _, err := os.Stat(brainPath); err != nil {
 		t.Fatal("retained memory missing", err)
 	}
-	for _, name := range []string{".env", "model_router.json", "model_router_secrets.json"} {
+	for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json"} {
 		if _, err := os.Stat(filepath.Join(m.dir(dst.ID), name)); !os.IsNotExist(err) {
 			t.Fatal("configuration retained", name, err)
 		}
@@ -1246,6 +1302,66 @@ func (b *gatedRequestBody) Read(p []byte) (int, error) {
 }
 
 func (*gatedRequestBody) Close() error { return nil }
+
+func TestCloseRejectsInstanceMCPMutationStillReadingBody(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "mcp-close-gate")
+	body := newGatedRequestBody(`{"id":"late","name":"Late","enabled":false,"transportType":"stdio","command":"synthetic"}`)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.MCPService/AddMCPServer",
+		nil,
+	)
+	req.Body = body
+	req.ContentLength = int64(body.reader.Len())
+	req.Header.Set("Content-Type", "application/json")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		response <- w
+	}()
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		t.Fatal("MCP request did not begin reading its body")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := m.instances[info.ID].mcp.SetRuntimeActive(false)
+		if errors.Is(err, mcp.ErrManagerClosed) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("instance MCP manager did not close before request admission resumed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(body.release)
+	select {
+	case <-response:
+	case <-time.After(time.Second):
+		t.Fatal("MCP request did not finish after body release")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Control Plane close did not finish")
+	}
+	if _, ok := m.instances[info.ID].mcp.GetServer("late"); ok {
+		t.Fatal("MCP request mutated a closed instance manager")
+	}
+	if _, err := os.Stat(filepath.Join(m.dir(info.ID), "mcp_servers.json")); !os.IsNotExist(err) {
+		t.Fatalf("closed MCP request created a config file: %v", err)
+	}
+}
 
 func TestCloseRejectsLifecycleRequestsStillReadingBodies(t *testing.T) {
 	t.Run("enable", func(t *testing.T) {

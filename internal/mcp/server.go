@@ -451,6 +451,12 @@ func (s *ServerRuntime) SyncCatalog(ctx context.Context) error {
 }
 
 func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
+	return s.SetEnabledForRuntime(ctx, enabled, true)
+}
+
+// SetEnabledForRuntime updates the desired persisted state while allowing an
+// inactive owning instance to keep the connection stopped.
+func (s *ServerRuntime) SetEnabledForRuntime(ctx context.Context, enabled, runtimeActive bool) error {
 	s.mu.Lock()
 	if s.retired {
 		s.mu.Unlock()
@@ -461,7 +467,7 @@ func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 			s.mu.Unlock()
 			return nil
 		}
-		if enabled && (s.status == StatusStarting || s.status == StatusConnected) {
+		if enabled && runtimeActive && (s.status == StatusStarting || s.status == StatusConnected) {
 			s.mu.Unlock()
 			return nil
 		}
@@ -469,7 +475,7 @@ func (s *ServerRuntime) SetEnabled(ctx context.Context, enabled bool) error {
 	s.cfg.Enabled = enabled
 	s.mu.Unlock()
 
-	if enabled {
+	if enabled && runtimeActive {
 		if ctx == nil {
 			ctx = context.Background()
 		}
