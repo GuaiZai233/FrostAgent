@@ -64,6 +64,27 @@ def load_settings(config: dict = None) -> Settings:
     )
 
 
+def _load_settings_unvalidated(config: dict = None) -> Settings:
+    """Load persisted settings without rejecting a legacy ws_url.
+
+    AstrBot instantiates the plugin before users can repair persisted plugin
+    configuration.  Keeping this path non-validating lets upgrades from the
+    old unscoped /ws/astrbot URL load in an inactive state instead of making
+    the whole plugin unloadable.
+    """
+    config = config or {}
+    return Settings(
+        ws_url=str(
+            config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
+        ).strip(),
+        http_base_url=config.get("http_base_url")
+        or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
+        forward_all_group_messages=config.get("forward_all_group_messages", True),
+        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
+        reconnect_interval=int(config.get("reconnect_interval", 5)),
+    )
+
+
 def is_ws_open(ws: Any) -> bool:
     """兼容不同版本 websockets 的连接开启状态检查。"""
     if ws is None:
@@ -324,17 +345,38 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.1",
+    "0.1.2",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
-        self.settings = load_settings(config)
+        self._configuration_error: Optional[str] = None
+        try:
+            self.settings = load_settings(config)
+        except ValueError as exc:
+            # v0.1.0 persisted an unscoped /ws/astrbot URL.  Reject it for
+            # transport safety, but do not make AstrBot unload the plugin before
+            # the user gets a chance to repair the saved configuration.
+            if not str(exc).startswith("FrostAgent ws_url"):
+                raise
+            self.settings = _load_settings_unvalidated(config)
+            self._configuration_error = str(exc)
+            self.client = FrostAgentWSClient(self.settings, context)
+            self._init_task = None
+            logger.error(
+                f"[frostagent-adapter] {self._configuration_error}. "
+                "插件已保持加载但暂停连接；请在插件配置中复制目标实例概览里的 "
+                "AstrBot WebSocket 地址，然后重新加载插件。"
+            )
+            return
         self.client = FrostAgentWSClient(self.settings, context)
         self._init_task = asyncio.create_task(self.client.start())
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        if self._configuration_error:
+            return
+
         payload = await build_frostagent_payload(event)
         msg_id = payload["message_id"]
 
