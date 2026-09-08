@@ -239,27 +239,28 @@ func init() {
 		globalStickerSummarizer.EnqueueUnsummarized()
 	}
 
-	// Initialize sandbox subsystem (optional, enabled via SANDBOX_ENABLED=true)
+	// Initialize sandbox subsystem (always registered; availability checked dynamically at call time)
+	sbDynamic := sandbox.NewDynamicBackend(sandbox.LoadConfigFromEnv, func(cfg sandbox.Config) sandbox.Backend {
+		return codeinterpreter.New(cfg)
+	})
 	sandboxCfg := sandbox.LoadConfigFromEnv()
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
-			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效，已禁用隔离命令执行能力: %v", err))
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后立即生效）", err))
 		} else {
-			sbBackend := codeinterpreter.New(sandboxCfg)
-			// Startup health probe with short timeout; failure emits a warning and fails closed,
-			// allowing execution to automatically work once runtime is available.
 			healthCtx, healthCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			if err := sbBackend.Health(healthCtx); err != nil {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 沙箱运行时暂时不可达 (%v)；execute_command 将 fail-closed，恢复后自动生效", err))
+			if err := sbDynamic.Health(healthCtx); err != nil {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("⚠️ 沙箱运行时暂时不可达 (%v)；恢复后自动生效", err))
 			} else {
 				logs.Info(logs.SYSTEM, fmt.Sprintf("✓ 沙箱执行运行时已就绪: %s", sandboxCfg.BaseURL))
 			}
 			healthCancel()
-
-			cmdTool := tools.ExecuteCommandTool(sbBackend)
-			registry[cmdTool.Name()] = cmdTool
 		}
+	} else {
+		logs.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
+	cmdTool := tools.ExecuteCommandTool(sbDynamic)
+	registry[cmdTool.Name()] = cmdTool
 
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {

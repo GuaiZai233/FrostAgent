@@ -59,6 +59,10 @@ var knownEnvVars = map[string]envEntry{
 	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true, false},
 	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true, false},
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
+	"SANDBOX_ENABLED":             {"是否启用隔离沙箱命令执行", false, false, false},
+	"SANDBOX_BASE_URL":            {"code-interpreter Gateway 地址", false, false, false},
+	"SANDBOX_AUTH_TOKEN":          {"Gateway 认证 Token", true, false, false},
+	"SANDBOX_SESSION_NAMESPACE":   {"沙箱会话命名空间（多实例共享 Gateway 时须不同）", false, false, false},
 }
 
 // Service implements frostagent.v1.SettingsServiceHandler.

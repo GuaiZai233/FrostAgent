@@ -480,3 +480,37 @@ func TestExecuteCommandTool_ConcurrentSessionIsolation(t *testing.T) {
 		t.Errorf("expected %d unique sessions, got %d", concurrentCount, len(seenSessions))
 	}
 }
+
+func TestExecuteCommandTool_DisabledSandboxReturnsMessage(t *testing.T) {
+	disabled := &fakeSandboxBackend{
+		execFunc: func(_ context.Context, _ sandbox.ExecRequest) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{}, sandbox.ErrSandboxDisabled
+		},
+	}
+	tool := tools.ExecuteCommandTool(disabled)
+
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "s1"})
+	result, err := tool.ExecuteContext(ctx, `{"command":"echo hello"}`)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !strings.Contains(result, "沙箱功能已被禁用") {
+		t.Fatalf("expected disabled message, got %q", result)
+	}
+	if !strings.Contains(result, "管理面板") {
+		t.Fatalf("expected management panel hint in message, got %q", result)
+	}
+}
+
+func TestExecuteCommandTool_NilBackendReturnsMessage(t *testing.T) {
+	tool := tools.ExecuteCommandTool(nil)
+
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "s1"})
+	result, err := tool.ExecuteContext(ctx, `{"command":"echo hello"}`)
+	if err != nil {
+		t.Fatalf("expected nil error for nil backend, got %v", err)
+	}
+	if !strings.Contains(result, "沙箱功能已被禁用") {
+		t.Fatalf("expected disabled message for nil backend, got %q", result)
+	}
+}
