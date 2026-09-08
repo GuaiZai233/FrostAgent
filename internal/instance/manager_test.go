@@ -1591,3 +1591,74 @@ func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestInstanceSystemPromptIsolation(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "instance-a")
+	b := create(t, m, "instance-b")
+
+	// 1. Initial template verification: both instances receive default SYSTEM_PROMPT.
+	const defaultPrompt = "你是一个乐于助人的助手。"
+	if got := m.instances[a.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance A default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance A runtime scope default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+
+	// 2. Update instance A via SettingsService/UpdateEnvVar with multiline prompt.
+	const customPromptA = "你是实例A的专属助手\n请严格遵守A的人设设定。"
+	updateBodyA := fmt.Sprintf(`{"key":"SYSTEM_PROMPT","value":%q}`, customPromptA)
+	wA := rpc(t, m, a.ID, "SettingsService/UpdateEnvVar", updateBodyA, false)
+	if wA.Code != http.StatusOK || !strings.Contains(wA.Body.String(), `"success":true`) {
+		t.Fatalf("UpdateEnvVar for A failed: code=%d body=%s", wA.Code, wA.Body.String())
+	}
+
+	// 3. Verify instance A reflects the new prompt in config, scope, and persisted .env file.
+	if got := m.instances[a.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("instance A config SYSTEM_PROMPT not updated: got %q", got)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("instance A runtime Scope.Getenv(SYSTEM_PROMPT) not hot-reloaded: got %q", got)
+	}
+	rawA, err := os.ReadFile(filepath.Join(m.dir(a.ID), ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawA), "SYSTEM_PROMPT=") {
+		t.Fatalf("instance A .env file missing SYSTEM_PROMPT: %s", string(rawA))
+	}
+
+	// 4. Verify instance B and global config are completely isolated from instance A's mutation.
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B config contaminated: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[b.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B runtime Scope contaminated: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.global.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("global store contaminated with SYSTEM_PROMPT: %q", got)
+	}
+
+	// 5. Test Copy: cloning A to B should propagate A's custom SYSTEM_PROMPT into B.
+	if err := m.Copy(b.ID, a.ID); err != nil {
+		t.Fatalf("Copy A to B failed: %v", err)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Copy, instance B config missing cloned prompt: got %q, want %q", got, customPromptA)
+	}
+	if got := m.instances[b.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Copy, instance B runtime Scope missing cloned prompt: got %q, want %q", got, customPromptA)
+	}
+
+	// 6. Test Delete: deleting instance A should not affect instance B's prompt.
+	if err := m.Delete(a.ID, true); err != nil {
+		t.Fatalf("Delete A failed: %v", err)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Delete A, instance B prompt altered: got %q", got)
+	}
+}

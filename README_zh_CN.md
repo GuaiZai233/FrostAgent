@@ -57,7 +57,7 @@ make build-web    # 仅构建前端
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env`，其中只保存 Control Plane 的监听地址、允许的 Origin、共享 Alcyone 上游和共享系统提示词。Bot 配置独立保存于 `data/instance_<实例ID>/.env`。
+复制 `.env.example` 为 `.env`，其中只保存 Control Plane 的监听地址、允许的 Origin 和共享 Alcyone 上游。Bot 配置与系统提示词独立保存于 `data/instance_<实例ID>/.env`。
 
 ### 3. 启动服务
 
@@ -65,7 +65,7 @@ make build-web    # 仅构建前端
 go run ./cmd/app
 ```
 
-打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。刷新页面后需要重新选择实例。各实例的配置、记忆、会话、表情包、日志和人设预设示例对话彼此完全隔离（新建实例时从 `eval/dialogue/dialogue.yml` 模板初始化，之后独立保存于 `data/instance_<实例ID>/dialogue.yml` 并支持热更新与克隆）。
+打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。刷新页面后需要重新选择实例。各实例的配置（含系统提示词）、记忆、会话、表情包、日志和人设预设示例对话彼此完全隔离（新建实例时从 `eval/dialogue/dialogue.yml` 模板初始化，之后独立保存于 `data/instance_<实例ID>/dialogue.yml` 并支持热更新与克隆）。
 
 ## 许可证
 

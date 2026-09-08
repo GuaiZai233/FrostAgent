@@ -38,7 +38,13 @@ func (s *Scope) Getenv(k string) string {
 		return os.Getenv(k)
 	}
 	if instanceconfig.GlobalKeys[k] {
+		if s.Global == nil {
+			return ""
+		}
 		return s.Global.Get(k)
+	}
+	if s.Config == nil {
+		return ""
 	}
 	return s.Config.Get(k)
 }

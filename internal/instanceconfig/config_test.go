@@ -26,12 +26,18 @@ func TestStoresNeverMutateProcessEnvironment(t *testing.T) {
 	if raw != "# preserve comment\nBOT_NAME=b\nCUSTOM_VALUE=test\n" {
 		t.Fatal(raw)
 	}
-	for _, key := range []string{"LISTEN_ADDR", "BRAIN_PATH", "DIALOGUE_PATH", "SYSTEM_PROMPT"} {
+	for _, key := range []string{"LISTEN_ADDR", "BRAIN_PATH", "DIALOGUE_PATH"} {
 		if err := a.Update(key, "bad", false); err == nil {
 			t.Fatal("foreign scope allowed", key)
 		}
 	}
-	if err := a.Replace("BOT_NAME=valid\nSYSTEM_PROMPT=bad"); err == nil {
+	if err := a.Update("SYSTEM_PROMPT", "valid prompt\nmultiline", false); err != nil {
+		t.Fatalf("SYSTEM_PROMPT must be allowed on instance store: %v", err)
+	}
+	if a.Get("SYSTEM_PROMPT") != "valid prompt\nmultiline" {
+		t.Fatalf("SYSTEM_PROMPT value mismatch: %q", a.Get("SYSTEM_PROMPT"))
+	}
+	if err := a.Replace("BOT_NAME=valid\nLISTEN_ADDR=bad"); err == nil {
 		t.Fatal("raw foreign key accepted")
 	}
 	if a.Get("BOT_NAME") != "b" {
@@ -146,10 +152,13 @@ func TestApplyScopeMetadataIsDisjoint(t *testing.T) {
 			t.Fatalf("%s must require a Control Plane restart", key)
 		}
 	}
-	for _, key := range []string{"SYSTEM_PROMPT", "WS_ALLOWED_ORIGINS", "SANDBOX_ENABLED"} {
+	for _, key := range []string{"WS_ALLOWED_ORIGINS", "SANDBOX_ENABLED"} {
 		if !GlobalKeys[key] || ControlPlaneRestartKeys[key] {
 			t.Fatalf("%s must remain global and hot", key)
 		}
+	}
+	if GlobalKeys["SYSTEM_PROMPT"] {
+		t.Fatal("SYSTEM_PROMPT must not be in GlobalKeys")
 	}
 }
 
