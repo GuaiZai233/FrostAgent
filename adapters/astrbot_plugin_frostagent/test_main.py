@@ -93,6 +93,26 @@ class SettingsTest(unittest.TestCase):
             "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
         )
 
+    def test_plugin_keeps_loading_with_legacy_ws_url(self):
+        with patch.object(asyncio, "create_task") as create_task:
+            adapter = FrostAgentAdapter(
+                object(),
+                {"ws_url": "ws://127.0.0.1:1234/ws/astrbot"},
+            )
+        self.assertIn("/instances/<instance-id>", adapter._configuration_error)
+        self.assertEqual(adapter.settings.ws_url, "ws://127.0.0.1:1234/ws/astrbot")
+        self.assertIsNone(adapter._init_task)
+        create_task.assert_not_called()
+
+    def test_plugin_starts_normally_with_instance_scoped_ws_url(self):
+        with patch.object(asyncio, "create_task", return_value=object()) as create_task:
+            adapter = FrostAgentAdapter(
+                object(),
+                {"ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot"},
+            )
+        self.assertIsNone(adapter._configuration_error)
+        create_task.assert_called_once()
+
 
 class At:
     def __init__(self, qq: str):
@@ -181,6 +201,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         forward_all_group_messages: bool = True,
     ) -> list[dict[str, Any]]:
         adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
         adapter.settings = SimpleNamespace(
             forward_all_group_messages=forward_all_group_messages,
             http_base_url="http://127.0.0.1:8080",
@@ -191,6 +212,18 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
             pass
 
         return adapter.client.sent_events
+
+    async def test_invalid_configuration_drops_events_without_forwarding(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = "invalid ws_url"
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.client = FakeClient()
+        event = FakeEvent(content="hello")
+
+        results = [result async for result in adapter.forward_to_frostagent(event)]
+
+        self.assertEqual(results, [])
+        self.assertEqual(adapter.client.sent_events, [])
 
     async def test_empty_group_message_is_dropped(self):
         sent = await self.forward(FakeEvent(group_id="group_test"))
@@ -219,6 +252,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_reply_disables_astrbot_default_llm(self):
         adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
         adapter.settings = SimpleNamespace(
             forward_all_group_messages=True,
             http_base_url="http://127.0.0.1:8080",
@@ -236,6 +270,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_multiple_responses_disable_default_llm_once(self):
         adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
         adapter.settings = SimpleNamespace(
             forward_all_group_messages=True,
             http_base_url="http://127.0.0.1:8080",
@@ -262,6 +297,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_noop_keeps_event_propagation_unchanged(self):
         adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
         adapter.settings = SimpleNamespace(forward_all_group_messages=True)
         adapter.client = FakeClient()
         event = FakeEvent(group_id="group_test", content="普通群聊消息")
