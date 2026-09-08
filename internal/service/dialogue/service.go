@@ -15,22 +15,47 @@ import (
 	"FrostAgent/internal/logs"
 )
 
+// Option configures DialogueService.
+type Option func(*Service)
+
+// WithLogger sets the logger for DialogueService.
+func WithLogger(logger *logs.Store) Option {
+	return func(s *Service) {
+		s.logger = logger
+	}
+}
+
 // Service implements frostagent.v1.DialogueServiceHandler.
 type Service struct {
 	mu       sync.RWMutex
 	filePath string
 	engine   *llm.Engine
+	logger   *logs.Store
 }
 
 // New creates a new DialogueService.
-func New(filePath string, engine *llm.Engine) *Service {
+func New(filePath string, engine *llm.Engine, opts ...Option) *Service {
 	if filePath == "" {
 		filePath = "eval/dialogue/dialogue.yml"
 	}
-	return &Service{
+	s := &Service{
 		filePath: filePath,
 		engine:   engine,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *Service) log() *logs.Store {
+	if s.logger != nil {
+		return s.logger
+	}
+	if s.engine != nil && s.engine.Scope != nil && s.engine.Log() != nil {
+		return s.engine.Log()
+	}
+	return logs.General
 }
 
 // ListDialogues returns the list of dialogue examples and the current formatted prompt preview.
@@ -108,7 +133,7 @@ func (s *Service) SaveDialogues(
 	if s.engine != nil {
 		s.engine.SetDialoguePrompt(prompt)
 	}
-	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新示例对话配置 (%d 条)，同步生效至系统提示词", len(examples)))
+	s.log().Info(logs.SYSTEM, fmt.Sprintf("已更新示例对话配置 (%d 条)，同步生效至系统提示词", len(examples)))
 
 	return connect.NewResponse(&v1.SaveDialoguesResponse{
 		Success:       true,
@@ -169,7 +194,7 @@ func (s *Service) UpdateRawDialogueFile(
 	if s.engine != nil {
 		s.engine.SetDialoguePrompt(prompt)
 	}
-	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
+	s.log().Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
 
 	return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
 		Success:       true,

@@ -11,6 +11,7 @@ import (
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 )
 
 func TestDialogueService_CRUD(t *testing.T) {
@@ -119,5 +120,38 @@ func TestDialogueService_CRUD(t *testing.T) {
 	}
 	if !strings.Contains(invalidRawResp.Msg.GetError(), "YAML") {
 		t.Errorf("expected YAML error message, got: %q", invalidRawResp.Msg.GetError())
+	}
+}
+
+func TestDialogueService_LogProvenance(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "dialogue.yml")
+	engine := &llm.Engine{}
+	instanceLogger := logs.New("inst-1", "TestInstance", 100)
+	svc := New(filePath, engine, WithLogger(instanceLogger))
+	ctx := context.Background()
+
+	saveReq := &v1.SaveDialoguesRequest{
+		Dialogues: []*v1.DialogueItem{
+			{Id: "1", User: "hello", Preferred: "world"},
+		},
+	}
+	if _, err := svc.SaveDialogues(ctx, connect.NewRequest(saveReq)); err != nil {
+		t.Fatal(err)
+	}
+	entries := instanceLogger.Snapshot()
+	if len(entries) == 0 || !strings.Contains(entries[len(entries)-1].Content, "已更新示例对话配置 (1 条)") {
+		t.Fatalf("instance logger missing SaveDialogues log: %v", entries)
+	}
+
+	updateRawReq := &v1.UpdateRawDialogueFileRequest{
+		Content: "- id: \"1\"\n  user: hi\n  preferred: hey\n",
+	}
+	if _, err := svc.UpdateRawDialogueFile(ctx, connect.NewRequest(updateRawReq)); err != nil {
+		t.Fatal(err)
+	}
+	entries = instanceLogger.Snapshot()
+	if len(entries) < 2 || !strings.Contains(entries[len(entries)-1].Content, "已更新原始示例对话文件 (1 条)") {
+		t.Fatalf("instance logger missing UpdateRawDialogueFile log: %v", entries)
 	}
 }

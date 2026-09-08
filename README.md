@@ -59,6 +59,8 @@ make build-web    # Build frontend only
 
 Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed origins, and shared Alcyone upstream). Each instance owns its bot settings and system prompt under `data/instance_<instance-id>/.env`.
 
+> **Upgrade Notice (Breaking Change)**: In previous versions, `SYSTEM_PROMPT` was defined globally in the root `.env`. System prompts are now strictly isolated per instance (`data/instance_<instance-id>/.env`). Legacy shared `SYSTEM_PROMPT` values from the root `.env` or process environment are intentionally discarded and will **not** be implicitly backfilled into existing instances. If an existing instance does not have `SYSTEM_PROMPT` configured, it will not fall back to the old shared prompt; configure it in the dashboard Settings or in the instance's `.env`. Newly created instances automatically receive the template default prompt.
+
 ### 3. Start the Service
 
 ```bash

@@ -271,7 +271,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	)
 	mux.Handle(memoryPath, memoryHandler)
 
-	dialogueSvc := dialogue.New(dialoguePath, engine)
+	dialogueSvc := dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
 		dialogueSvc,
 	)

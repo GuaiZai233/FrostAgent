@@ -1662,3 +1662,118 @@ func TestInstanceSystemPromptIsolation(t *testing.T) {
 		t.Fatalf("after Delete A, instance B prompt altered: got %q", got)
 	}
 }
+
+func TestInstanceDialogueLogProvenance(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "instance-a")
+	b := create(t, m, "instance-b")
+
+	genBefore := len(logs.General.Snapshot())
+	aBefore := len(m.instances[a.ID].logger.Snapshot())
+	bBefore := len(m.instances[b.ID].logger.Snapshot())
+
+	saveBodyA := `{"dialogues":[{"id":"1","scene":"问候","relation":"master","user":"你好","preferred":"你好喵"}]}`
+	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
+	if wA.Code != http.StatusOK {
+		t.Fatalf("SaveDialogues failed: %d %s", wA.Code, wA.Body.String())
+	}
+
+	aLogs := m.instances[a.ID].logger.Snapshot()[aBefore:]
+	bLogs := m.instances[b.ID].logger.Snapshot()[bBefore:]
+	genLogs := logs.General.Snapshot()[genBefore:]
+
+	foundInA := false
+	for _, entry := range aLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			foundInA = true
+			break
+		}
+	}
+	if !foundInA {
+		t.Fatalf("instance A logger missing dialogue update log entry: %v", aLogs)
+	}
+
+	for _, entry := range bLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			t.Fatalf("instance B logger contaminated with instance A dialogue update: %v", entry)
+		}
+	}
+
+	for _, entry := range genLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			t.Fatalf("Control Plane logs.General contaminated with instance A dialogue update: %v", entry)
+		}
+	}
+}
+
+func TestLegacySharedSystemPromptBreakingMigrationBoundary(t *testing.T) {
+	// Simulate upgrading from a legacy setup where SYSTEM_PROMPT was defined globally in root .env
+	// and instances did NOT have SYSTEM_PROMPT in their local .env files.
+	root := t.TempDir()
+	globalPath := filepath.Join(root, "global.env")
+	// Legacy root .env had SYSTEM_PROMPT.
+	if err := os.WriteFile(globalPath, []byte("LISTEN_ADDR=127.0.0.1:8080\nSYSTEM_PROMPT=legacy-shared-sentinel\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	global, err := instanceconfig.Open(globalPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy instance directory created before the persona split (no SYSTEM_PROMPT in .env).
+	legacyID := "12345678"
+	legacyDir := filepath.Join(root, "instance_"+legacyID)
+	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacyEnv := "BOT_NAME=legacy-fox\nBOT_ALIASES=fox\n"
+	if err := os.WriteFile(filepath.Join(legacyDir, ".env"), []byte(legacyEnv), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Write registry with legacy instance.
+	registryData := fmt.Sprintf(`{"instances":[{"id":%q,"name":"LegacyInstance","enabled":true}]}`, legacyID)
+	if err := os.WriteFile(filepath.Join(root, "instances.json"), []byte(registryData), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := New(root, global, filepath.Join(root, "template-dialogue.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	// 1. Verify global store does not expose SYSTEM_PROMPT (it is no longer in GlobalKeys).
+	if got := global.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("global store exposed non-global key SYSTEM_PROMPT: %q", got)
+	}
+
+	// 2. Verify legacy instance does NOT silently migrate/backfill legacy shared prompt.
+	inst := m.instances[legacyID]
+	if inst == nil {
+		t.Fatalf("legacy instance not loaded")
+	}
+	if got := inst.config.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("legacy instance unexpectedly migrated/backfilled SYSTEM_PROMPT in config: %q", got)
+	}
+	if got := inst.runtime.Scope.Getenv("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("legacy instance runtime Scope unexpectedly resolved legacy shared prompt: %q", got)
+	}
+
+	// 3. Verify .env file on disk was not modified with implicit migration data.
+	diskEnv, err := os.ReadFile(filepath.Join(legacyDir, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(diskEnv), "SYSTEM_PROMPT") {
+		t.Fatalf("legacy instance .env was modified by implicit migration: %s", string(diskEnv))
+	}
+
+	// 4. In contrast, freshly created instances explicitly receive the new default template.
+	fresh, err := m.Create("fresh-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.instances[fresh.ID].config.Get("SYSTEM_PROMPT"); got != "你是一个乐于助人的助手。" {
+		t.Fatalf("fresh instance did not receive template prompt: %q", got)
+	}
+}
