@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { readFile } from 'node:fs/promises';
+import process from 'node:process';
+import { URL } from 'node:url';
 
 const main = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
 const base = await readFile(
@@ -51,4 +53,4 @@ assert.match(
   /\.instance-selected-label\s*{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/,
 );
 
-console.log('PASS: sidebar controls remain inside the scaled viewport');
+process.stdout.write('PASS: sidebar controls remain inside the scaled viewport\n');
