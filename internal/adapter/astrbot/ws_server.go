@@ -642,6 +642,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Attachments:    attachments,
 				IsIntermediate: true,
 				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
+				ReplyMessageID: event.MessageID,
 			}
 			if err := conn.WriteJSON(action); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
@@ -828,6 +829,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Content:        text,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
+		ReplyMessageID: event.MessageID,
 	}
 	if err := conn.WriteJSON(action); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
