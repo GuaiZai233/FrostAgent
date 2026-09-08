@@ -15,22 +15,47 @@ import (
 	"FrostAgent/internal/logs"
 )
 
+// Option configures DialogueService.
+type Option func(*Service)
+
+// WithLogger sets the logger for DialogueService.
+func WithLogger(logger *logs.Store) Option {
+	return func(s *Service) {
+		s.logger = logger
+	}
+}
+
 // Service implements frostagent.v1.DialogueServiceHandler.
 type Service struct {
 	mu       sync.RWMutex
 	filePath string
 	engine   *llm.Engine
+	logger   *logs.Store
 }
 
 // New creates a new DialogueService.
-func New(filePath string, engine *llm.Engine) *Service {
+func New(filePath string, engine *llm.Engine, opts ...Option) *Service {
 	if filePath == "" {
 		filePath = "eval/dialogue/dialogue.yml"
 	}
-	return &Service{
+	s := &Service{
 		filePath: filePath,
 		engine:   engine,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *Service) log() *logs.Store {
+	if s.logger != nil {
+		return s.logger
+	}
+	if s.engine != nil && s.engine.Scope != nil && s.engine.Log() != nil {
+		return s.engine.Log()
+	}
+	return logs.General
 }
 
 // ListDialogues returns the list of dialogue examples and the current formatted prompt preview.
@@ -106,9 +131,9 @@ func (s *Service) SaveDialogues(
 
 	prompt := llm.FormatDialoguePrompt(examples)
 	if s.engine != nil {
-		s.engine.DialoguePrompt = prompt
+		s.engine.SetDialoguePrompt(prompt)
 	}
-	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新示例对话配置 (%d 条)，同步生效至系统提示词", len(examples)))
+	s.log().Info(logs.SYSTEM, fmt.Sprintf("已更新示例对话配置 (%d 条)，同步生效至系统提示词", len(examples)))
 
 	return connect.NewResponse(&v1.SaveDialoguesResponse{
 		Success:       true,
@@ -167,9 +192,9 @@ func (s *Service) UpdateRawDialogueFile(
 
 	prompt := llm.FormatDialoguePrompt(examples)
 	if s.engine != nil {
-		s.engine.DialoguePrompt = prompt
+		s.engine.SetDialoguePrompt(prompt)
 	}
-	logs.Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
+	s.log().Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
 
 	return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
 		Success:       true,
@@ -206,10 +231,13 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0644)
 }
 
-// Prompt provides the shared persona snapshot under the same lock as file edits.
+// Prompt provides the persona snapshot under the same lock as file edits.
 func (s *Service) Prompt() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.engine != nil {
+		return s.engine.PersonaDialogue()
+	}
 	p, _ := llm.LoadDialoguePrompt(s.filePath)
 	return p
 }

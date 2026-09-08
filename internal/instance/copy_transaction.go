@@ -24,7 +24,7 @@ const (
 var copyStagePattern = regexp.MustCompile(`^\.copy-stage-[a-f0-9]{16}$`)
 var credentialStageSuffixPattern = regexp.MustCompile(`^[0-9]+$`)
 
-var copyConfigFiles = []string{".env", "model_router.json", "model_router_secrets.json"}
+var copyConfigFiles = []string{".env", "model_router.json", "model_router_secrets.json", "dialogue.yml"}
 var writeCopyFile = instanceconfig.WriteAtomicDurable
 
 type copyTransaction struct {
@@ -166,6 +166,9 @@ func (m *Manager) recoverCopyTransaction(id string) error {
 		for _, name := range copyConfigFiles {
 			data, err = os.ReadFile(filepath.Join(stageDir, name))
 			if err != nil {
+				if name == "dialogue.yml" && os.IsNotExist(err) {
+					continue
+				}
 				return err
 			}
 			if _, err := writeCopyFile(filepath.Join(dir, name), data, 0600); err != nil {

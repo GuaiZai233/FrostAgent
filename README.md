@@ -57,7 +57,9 @@ make build-web    # Build frontend only
 
 ### 2. Configure Environment Variables
 
-Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed origins, shared Alcyone upstream and shared system prompt). Each instance owns its bot settings under `data/instance_<instance-id>/.env`.
+Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed origins, and shared Alcyone upstream). Each instance owns its bot settings and system prompt under `data/instance_<instance-id>/.env`.
+
+> **Upgrade Notice (Breaking Change)**: In previous versions, `SYSTEM_PROMPT` was defined globally in the root `.env`. System prompts are now strictly isolated per instance (`data/instance_<instance-id>/.env`). Legacy shared `SYSTEM_PROMPT` values from the root `.env` or process environment are intentionally discarded and will **not** be implicitly backfilled into existing instances. If an existing instance does not have `SYSTEM_PROMPT` configured, it will not fall back to the old shared prompt; configure it in the dashboard Settings or in the instance's `.env`. Newly created instances automatically receive the template default prompt.
 
 ### 3. Start the Service
 
@@ -65,7 +67,7 @@ Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed ori
 go run ./cmd/app
 ```
 
-Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings, memory, sessions, stickers and logs. The shared example dialogues remain at `eval/dialogue/dialogue.yml`.
+Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings (including system prompt), memory, sessions, stickers, logs and persona dialogue examples (initialized from template `eval/dialogue/dialogue.yml` and isolated per instance at `data/instance_<instance-id>/dialogue.yml`).
 
 ## License
 

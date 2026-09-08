@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
 	"net/http"
@@ -684,7 +685,11 @@ func stageTestCopy(t *testing.T, m *Manager, target, source string) copyTransact
 	if err = os.Mkdir(stageDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets} {
+	dialogueContent, _ := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
+	if len(dialogueContent) == 0 {
+		dialogueContent = []byte("[]\n")
+	}
+	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets, "dialogue.yml": dialogueContent} {
 		if _, err = writeCopyFile(filepath.Join(stageDir, name), data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -1489,5 +1494,286 @@ func TestLifecycleRejectsNonCanonicalIdentifiers(t *testing.T) {
 	}
 	if _, err := os.Stat(m.dir(info.ID)); err != nil {
 		t.Fatal("valid instance affected", err)
+	}
+}
+
+func TestInstanceDialogueIsolation(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "instance-a")
+	b := create(t, m, "instance-b")
+
+	pathA := filepath.Join(m.dir(a.ID), "dialogue.yml")
+	pathB := filepath.Join(m.dir(b.ID), "dialogue.yml")
+	if _, err := os.Stat(pathA); err != nil {
+		t.Fatalf("instance A dialogue file missing: %v", err)
+	}
+	if _, err := os.Stat(pathB); err != nil {
+		t.Fatalf("instance B dialogue file missing: %v", err)
+	}
+
+	saveBodyA := `{"dialogues":[{"id":"1","scene":"日常问候","relation":"master","user":"早上好","preferred":"主人早上好呀嗷呜~"}]}`
+	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
+	if wA.Code != http.StatusOK {
+		t.Fatalf("SaveDialogues for A failed: %d %s", wA.Code, wA.Body.String())
+	}
+
+	rawA, err := os.ReadFile(pathA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawA), "主人早上好呀嗷呜~") {
+		t.Fatalf("instance A dialogue.yml does not contain saved content: %s", string(rawA))
+	}
+	promptA := m.instances[a.ID].runtime.Engine.PersonaDialogue()
+	if !strings.Contains(promptA, "主人早上好呀嗷呜~") {
+		t.Fatalf("instance A Engine.PersonaDialogue() not updated: %s", promptA)
+	}
+
+	rawB, err := os.ReadFile(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawB), "主人早上好呀嗷呜~") {
+		t.Fatalf("instance B dialogue.yml was contaminated by instance A!")
+	}
+	promptB := m.instances[b.ID].runtime.Engine.PersonaDialogue()
+	if strings.Contains(promptB, "主人早上好呀嗷呜~") {
+		t.Fatalf("instance B Engine.PersonaDialogue() was contaminated by instance A!")
+	}
+
+	if err := m.Copy(b.ID, a.ID); err != nil {
+		t.Fatalf("Copy A to B failed: %v", err)
+	}
+	rawBCopied, err := os.ReadFile(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawBCopied), "主人早上好呀嗷呜~") {
+		t.Fatalf("after Copy, instance B dialogue.yml missing cloned dialogue: %s", string(rawBCopied))
+	}
+	promptBCopied := m.instances[b.ID].runtime.Engine.PersonaDialogue()
+	if !strings.Contains(promptBCopied, "主人早上好呀嗷呜~") {
+		t.Fatalf("after Copy, instance B Engine.PersonaDialogue() missing cloned dialogue: %s", promptBCopied)
+	}
+
+	if err := m.Delete(a.ID, true); err != nil {
+		t.Fatalf("Delete A failed: %v", err)
+	}
+	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
+		t.Fatalf("after Delete, instance A dialogue file still exists!")
+	}
+	if _, err := os.Stat(pathB); err != nil {
+		t.Fatalf("instance B dialogue file was affected by instance A delete: %v", err)
+	}
+}
+
+func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {
+	m := testManager(t)
+	inst := create(t, m, "race-dialogue")
+	engine := m.instances[inst.ID].runtime.Engine
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			body := fmt.Sprintf(`{"dialogues":[{"id":"%d","user":"hi","preferred":"hello %d"}]}`, idx, idx)
+			rpc(t, m, inst.ID, "DialogueService/SaveDialogues", body, false)
+		}(i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = engine.PersonaDialogue()
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestInstanceSystemPromptIsolation(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "instance-a")
+	b := create(t, m, "instance-b")
+
+	// 1. Initial template verification: both instances receive default SYSTEM_PROMPT.
+	const defaultPrompt = "你是一个乐于助人的助手。"
+	if got := m.instances[a.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance A default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance A runtime scope default SYSTEM_PROMPT mismatch: got %q, want %q", got, defaultPrompt)
+	}
+
+	// 2. Update instance A via SettingsService/UpdateEnvVar with multiline prompt.
+	const customPromptA = "你是实例A的专属助手\n请严格遵守A的人设设定。"
+	updateBodyA := fmt.Sprintf(`{"key":"SYSTEM_PROMPT","value":%q}`, customPromptA)
+	wA := rpc(t, m, a.ID, "SettingsService/UpdateEnvVar", updateBodyA, false)
+	if wA.Code != http.StatusOK || !strings.Contains(wA.Body.String(), `"success":true`) {
+		t.Fatalf("UpdateEnvVar for A failed: code=%d body=%s", wA.Code, wA.Body.String())
+	}
+
+	// 3. Verify instance A reflects the new prompt in config, scope, and persisted .env file.
+	if got := m.instances[a.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("instance A config SYSTEM_PROMPT not updated: got %q", got)
+	}
+	if got := m.instances[a.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("instance A runtime Scope.Getenv(SYSTEM_PROMPT) not hot-reloaded: got %q", got)
+	}
+	rawA, err := os.ReadFile(filepath.Join(m.dir(a.ID), ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawA), "SYSTEM_PROMPT=") {
+		t.Fatalf("instance A .env file missing SYSTEM_PROMPT: %s", string(rawA))
+	}
+
+	// 4. Verify instance B and global config are completely isolated from instance A's mutation.
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B config contaminated: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.instances[b.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != defaultPrompt {
+		t.Fatalf("instance B runtime Scope contaminated: got %q, want %q", got, defaultPrompt)
+	}
+	if got := m.global.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("global store contaminated with SYSTEM_PROMPT: %q", got)
+	}
+
+	// 5. Test Copy: cloning A to B should propagate A's custom SYSTEM_PROMPT into B.
+	if err := m.Copy(b.ID, a.ID); err != nil {
+		t.Fatalf("Copy A to B failed: %v", err)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Copy, instance B config missing cloned prompt: got %q, want %q", got, customPromptA)
+	}
+	if got := m.instances[b.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Copy, instance B runtime Scope missing cloned prompt: got %q, want %q", got, customPromptA)
+	}
+
+	// 6. Test Delete: deleting instance A should not affect instance B's prompt.
+	if err := m.Delete(a.ID, true); err != nil {
+		t.Fatalf("Delete A failed: %v", err)
+	}
+	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("after Delete A, instance B prompt altered: got %q", got)
+	}
+}
+
+func TestInstanceDialogueLogProvenance(t *testing.T) {
+	m := testManager(t)
+	a := create(t, m, "instance-a")
+	b := create(t, m, "instance-b")
+
+	genBefore := len(logs.General.Snapshot())
+	aBefore := len(m.instances[a.ID].logger.Snapshot())
+	bBefore := len(m.instances[b.ID].logger.Snapshot())
+
+	saveBodyA := `{"dialogues":[{"id":"1","scene":"问候","relation":"master","user":"你好","preferred":"你好喵"}]}`
+	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
+	if wA.Code != http.StatusOK {
+		t.Fatalf("SaveDialogues failed: %d %s", wA.Code, wA.Body.String())
+	}
+
+	aLogs := m.instances[a.ID].logger.Snapshot()[aBefore:]
+	bLogs := m.instances[b.ID].logger.Snapshot()[bBefore:]
+	genLogs := logs.General.Snapshot()[genBefore:]
+
+	foundInA := false
+	for _, entry := range aLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			foundInA = true
+			break
+		}
+	}
+	if !foundInA {
+		t.Fatalf("instance A logger missing dialogue update log entry: %v", aLogs)
+	}
+
+	for _, entry := range bLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			t.Fatalf("instance B logger contaminated with instance A dialogue update: %v", entry)
+		}
+	}
+
+	for _, entry := range genLogs {
+		if strings.Contains(entry.Content, "已更新示例对话配置") {
+			t.Fatalf("Control Plane logs.General contaminated with instance A dialogue update: %v", entry)
+		}
+	}
+}
+
+func TestLegacySharedSystemPromptBreakingMigrationBoundary(t *testing.T) {
+	// Simulate upgrading from a legacy setup where SYSTEM_PROMPT was defined globally in root .env
+	// and instances did NOT have SYSTEM_PROMPT in their local .env files.
+	root := t.TempDir()
+	globalPath := filepath.Join(root, "global.env")
+	// Legacy root .env had SYSTEM_PROMPT.
+	if err := os.WriteFile(globalPath, []byte("LISTEN_ADDR=127.0.0.1:8080\nSYSTEM_PROMPT=legacy-shared-sentinel\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	global, err := instanceconfig.Open(globalPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy instance directory created before the persona split (no SYSTEM_PROMPT in .env).
+	legacyID := "12345678"
+	legacyDir := filepath.Join(root, "instance_"+legacyID)
+	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacyEnv := "BOT_NAME=legacy-fox\nBOT_ALIASES=fox\n"
+	if err := os.WriteFile(filepath.Join(legacyDir, ".env"), []byte(legacyEnv), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Write registry with legacy instance.
+	registryData := fmt.Sprintf(`{"instances":[{"id":%q,"name":"LegacyInstance","enabled":true}]}`, legacyID)
+	if err := os.WriteFile(filepath.Join(root, "instances.json"), []byte(registryData), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := New(root, global, filepath.Join(root, "template-dialogue.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	// 1. Verify global store does not expose SYSTEM_PROMPT (it is no longer in GlobalKeys).
+	if got := global.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("global store exposed non-global key SYSTEM_PROMPT: %q", got)
+	}
+
+	// 2. Verify legacy instance does NOT silently migrate/backfill legacy shared prompt.
+	inst := m.instances[legacyID]
+	if inst == nil {
+		t.Fatalf("legacy instance not loaded")
+	}
+	if got := inst.config.Get("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("legacy instance unexpectedly migrated/backfilled SYSTEM_PROMPT in config: %q", got)
+	}
+	if got := inst.runtime.Scope.Getenv("SYSTEM_PROMPT"); got != "" {
+		t.Fatalf("legacy instance runtime Scope unexpectedly resolved legacy shared prompt: %q", got)
+	}
+
+	// 3. Verify .env file on disk was not modified with implicit migration data.
+	diskEnv, err := os.ReadFile(filepath.Join(legacyDir, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(diskEnv), "SYSTEM_PROMPT") {
+		t.Fatalf("legacy instance .env was modified by implicit migration: %s", string(diskEnv))
+	}
+
+	// 4. In contrast, freshly created instances explicitly receive the new default template.
+	fresh, err := m.Create("fresh-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.instances[fresh.ID].config.Get("SYSTEM_PROMPT"); got != "你是一个乐于助人的助手。" {
+		t.Fatalf("fresh instance did not receive template prompt: %q", got)
 	}
 }

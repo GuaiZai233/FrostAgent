@@ -64,15 +64,19 @@
   - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
   - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 
-### 人设与少样本示例系统 (Persona & Few-Shot Dialogues)
+### 人设系统：系统提示词与少样本示例 (Persona System: System Prompt & Few-Shot Dialogues)
 
-为了增强智能体的人设表达（语气、口吻、句式格式），FrostAgent 支持通过 YAML 文件配置示例对话（默认为 `eval/dialogue/dialogue.yml`），并在会话执行时注入为系统提示词：
+为了增强智能体的人设表达（语气、口吻、句式格式与核心人设约束），FrostAgent 支持在各实例中独立配置系统提示词与 Few-Shot 示例对话，并在会话执行时注入为基础人设上下文：
 
+- **系统提示词（`SYSTEM_PROMPT`）**：彻底与 Control Plane 全局环境变量解耦，作为实例级核心环境变量存储于 `data/instance_<id>/.env` 中。新建实例时由 `instanceconfig.Template` 赋予默认基础助手设定（`SYSTEM_PROMPT=你是一个乐于助人的助手。`），在 Web 设置页中归属「当前实例」与「立即生效」作用域，修改后通过 Runtime Scope 实时内存映射即时热生效而无需重启实例。
 - **引导提示词**：`以下是示例对话，请仿照句子格式、语气等回应接下来的用户输入。`
-- **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范。
-- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：系统时间 -> 基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。
-- **Web UI 与热更新**：前端控制台提供独立的「示例对话」管理页面（入口位于「记忆」下方），支持无限增删改查对话卡片、调整提示词顺序、实时提示词片段预览以及直接编辑原始 YAML。后端提供 `DialogueService` ConnectRPC 服务，修改后自动原子更新 YAML 文件并实时热重载生效至全局智能体引擎 `GlobalEngine.DialoguePrompt`，无需重启服务。
-- **可配置与优雅降级**：可通过环境变量 `DIALOGUE_PATH` 指定路径，文件不存在或解析为空时平滑跳过，不影响正常对话。
+- **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范，持久化保存于各实例的 `data/instance_<id>/dialogue.yml`。
+- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：系统时间 -> 实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。
+- **实例级生命周期与模板初始化**：创建新实例时，系统自动从模板路径（默认为 `eval/dialogue/dialogue.yml`，可通过 Control Plane 的 `DEFAULT_DIALOGUE_TEMPLATE` 环境变量自定义）拷贝生成初始 `dialogue.yml`，并写入默认 `SYSTEM_PROMPT`；实例删除时彻底清理，不留孤儿数据。
+- **快速配置（Copy）两阶段事务**：在实例克隆复制过程中，包含 `SYSTEM_PROMPT` 的 `.env` 与 `dialogue.yml` 共同纳入事务配置清单，经历暂存（Stage）、校验、预备提交与崩溃恢复保障，确保整套人设（提示词与对话示例）与环境配置同步原子转移。
+- **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。
+- **升级兼容性边界与无隐式迁移（Breaking Migration Boundary）**：系统提示词下沉为实例级配置属于显式的破坏性迁移。系统坚决不执行隐式数据回填或跨层穿透读取：Control Plane 不再暴露全局 `SYSTEM_PROMPT`，存量实例目录中的 `.env` 若未定义 `SYSTEM_PROMPT`，在升级后将解析为空，绝不会隐式继承或持久化根级旧配置，避免造成隐蔽的状态污染；用户需在 Web 设置面板中显式为其赋予独立提示词。新建实例则由模板自动赋予默认助手设定。
+- **Web UI 管理**：前端控制台提供「人设对话」管理页面与「后端设置」页面，严格绑定当前选中的实例，支持可视化卡片增删改查、排序、实时提示词片段预览、直接编辑原始 YAML 以及实例专属环境变量热修改。
 
 ### 群聊滚动总结与容错压缩系统 (Group Running Compactor)
 
@@ -126,6 +130,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`，并由 Control Plane 下发本次启动实际采用的 `WS_LISTEN_ADDR` 来生成实例专属适配器地址；设置页修改后的待重启值不会提前污染概览。AstrBot 插件要求显式配置该地址，不再回退到无实例路径。
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
+  - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
   - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：

@@ -89,6 +89,11 @@ assert.equal(
   false,
   'SANDBOX_ENABLED must be shown as a hot Control Plane setting',
 );
+assert.equal(
+  globalSettings?.includes("'SYSTEM_PROMPT'"),
+  false,
+  'SYSTEM_PROMPT must be an instance-level setting, not in globalKeys',
+);
 
 process.stdout.write(
   'PASS: sidebar controls remain inside the scaled viewport\n',

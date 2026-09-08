@@ -20,7 +20,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	manager, err := instance.New("data", global, "eval/dialogue/dialogue.yml")
+	templateDialogue := global.Get("DEFAULT_DIALOGUE_TEMPLATE")
+	if templateDialogue == "" {
+		templateDialogue = "eval/dialogue/dialogue.yml"
+	}
+	manager, err := instance.New("data", global, templateDialogue)
 	if err != nil {
 		return err
 	}

@@ -14,7 +14,6 @@ const globalKeys = new Set([
   'ADMIN_TOKEN',
   'ALLOW_REMOTE_MCP_MANAGEMENT',
   'MCP_ENFORCE_LOCAL_TOKEN',
-  'SYSTEM_PROMPT',
 ]);
 const instanceRestartKeys = new Set([
   'ENABLE_ONEBOT_ADAPTER',

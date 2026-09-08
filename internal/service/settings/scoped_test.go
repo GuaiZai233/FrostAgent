@@ -54,12 +54,12 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 			t.Fatalf("unsafe update accepted: %s", test.key)
 		}
 	}
-	if !update("SYSTEM_PROMPT", "line1\nline2") || g.Get("SYSTEM_PROMPT") != "shared-process-sentinel" || c.Get("SYSTEM_PROMPT") != "" {
-		t.Fatal("shared prompt scope or roundtrip broken")
+	if !update("SYSTEM_PROMPT", "line1\nline2") || c.Get("SYSTEM_PROMPT") != "line1\nline2" || g.Get("SYSTEM_PROMPT") != "" {
+		t.Fatal("instance prompt scope or roundtrip broken")
 	}
-	globalRaw, err := g.Raw()
-	if err != nil || !strings.Contains(globalRaw, "line1\\nline2") {
-		t.Fatalf("shared prompt file was not updated behind its process override: raw=%q error=%v", globalRaw, err)
+	instanceRaw, err := c.Raw()
+	if err != nil || !strings.Contains(instanceRaw, "line1\\nline2") {
+		t.Fatalf("instance prompt file was not updated: raw=%q error=%v", instanceRaw, err)
 	}
 	if !update("SANDBOX_ENABLED", "true") || !sandboxManager.Get().Enabled || g.Get("SANDBOX_ENABLED") != "true" {
 		t.Fatal("shared sandbox enable did not apply immediately")
