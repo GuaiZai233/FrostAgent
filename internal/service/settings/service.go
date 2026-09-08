@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -74,11 +75,35 @@ type SandboxManager interface {
 	Get() sandbox.Config
 }
 
+var (
+	processInitialEnv     map[string]string
+	processInitialEnvOnce sync.Once
+)
+
+func init() {
+	CaptureInitialEnv()
+}
+
+// CaptureInitialEnv snapshots the process environment before .env is loaded.
+// It runs automatically during package initialization (which occurs before main.init()),
+// but can be invoked manually if needed.
+func CaptureInitialEnv() {
+	processInitialEnvOnce.Do(func() {
+		processInitialEnv = make(map[string]string)
+		for _, env := range os.Environ() {
+			if k, v, ok := strings.Cut(env, "="); ok {
+				processInitialEnv[k] = v
+			}
+		}
+	})
+}
+
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
-	envPath        string
-	sandboxManager SandboxManager
-	mu             sync.Mutex
+	envPath           string
+	sandboxManager    SandboxManager
+	externalOverrides map[string]string
+	mu                sync.Mutex
 }
 
 // SetSandboxConfigManager wires an atomic sandbox configuration manager to the settings service.
@@ -88,17 +113,53 @@ func (s *Service) SetSandboxConfigManager(mgr SandboxManager) {
 	s.sandboxManager = mgr
 }
 
+// SetExternalOverrideForTest allows tests to explicitly register an external override.
+func (s *Service) SetExternalOverrideForTest(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.externalOverrides == nil {
+		s.externalOverrides = make(map[string]string)
+	}
+	s.externalOverrides[key] = value
+}
+
 // New creates a new SettingsService and tightens permissions on existing .env.
 // If tightening permissions on an existing file fails, New returns an error (fail-closed).
 func New(envPath string) (*Service, error) {
 	if envPath == "" {
 		envPath = ".env"
 	}
-	s := &Service{envPath: envPath}
+	s := &Service{
+		envPath:           envPath,
+		externalOverrides: make(map[string]string),
+	}
 	if err := s.hardenPermissions(); err != nil {
 		return nil, fmt.Errorf("harden .env permissions: %w", err)
 	}
+	s.initExternalOverrides()
 	return s, nil
+}
+
+func (s *Service) initExternalOverrides() {
+	var fileEnv map[string]string
+	if data, err := os.ReadFile(s.envPath); err == nil {
+		fileEnv, _ = godotenv.Unmarshal(string(data))
+	}
+
+	// 1. Process environment captured at process startup (before godotenv.Load).
+	maps.Copy(s.externalOverrides, processInitialEnv)
+
+	// 2. Also check any current process env variable that is either:
+	//    - not present in the .env file, OR
+	//    - has a value different from the .env file (external override precedence).
+	for _, env := range os.Environ() {
+		if k, v, ok := strings.Cut(env, "="); ok {
+			fileVal, inOld := fileEnv[k]
+			if !inOld || v != fileVal {
+				s.externalOverrides[k] = v
+			}
+		}
+	}
 }
 
 func (s *Service) hardenPermissions() error {
@@ -187,6 +248,8 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
+	delete(s.externalOverrides, key)
+
 	if s.sandboxManager != nil && key == "SANDBOX_ENABLED" {
 		s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
 	}
@@ -231,6 +294,8 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 
+	delete(s.externalOverrides, key)
+
 	if s.sandboxManager != nil && key == "SANDBOX_ENABLED" {
 		s.sandboxManager.SetEnabled(false)
 	}
@@ -257,8 +322,8 @@ func (s *Service) GetRawEnvFile(
 }
 
 // UpdateRawEnvFile overwrites the .env file with the given content, validates its syntax,
-// synchronizes in-process environment variables (including unsetting removed keys), and
-// propagates an atomic configuration snapshot to the sandbox manager if configured.
+// synchronizes in-process environment variables (preserving external environment overrides),
+// and propagates an atomic configuration snapshot to the sandbox manager if configured.
 func (s *Service) UpdateRawEnvFile(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateRawEnvFileRequest],
@@ -288,32 +353,48 @@ func (s *Service) UpdateRawEnvFile(
 		}), nil
 	}
 
-	// Synchronize in-process environment variables.
-	// 1. Unset keys removed from the old .env file.
+	// Synchronize in-process environment variables while preserving external environment overrides.
+	// 1. Unset keys removed from old .env file, UNLESS they were injected as external overrides.
 	for k := range oldEnv {
 		if _, exists := newEnv[k]; !exists {
-			_ = os.Unsetenv(k)
-		}
-	}
-	// 2. Unset any knownEnvVars present in the process environment but missing from new .env.
-	for k := range knownEnvVars {
-		if _, exists := newEnv[k]; !exists {
-			if _, present := os.LookupEnv(k); present {
+			if _, isOverride := s.externalOverrides[k]; !isOverride {
 				_ = os.Unsetenv(k)
 			}
 		}
 	}
-	// 3. Set all keys present in the new content.
+
+	// 2. Set all keys present in the new content that are NOT overridden by external process environment.
 	for k, v := range newEnv {
-		_ = os.Setenv(k, v)
+		if _, isOverride := s.externalOverrides[k]; !isOverride {
+			_ = os.Setenv(k, v)
+		}
 	}
 
-	// 4. Atomically propagate complete sandbox configuration snapshot.
+	// 3. Atomically propagate complete sandbox configuration snapshot based on effective environment.
 	if s.sandboxManager != nil {
-		s.sandboxManager.ApplySnapshot(sandbox.LoadConfigFromMap(newEnv))
+		s.sandboxManager.ApplySnapshot(s.computeEffectiveSandboxConfig(newEnv))
 	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
+}
+
+func (s *Service) computeEffectiveSandboxConfig(newEnv map[string]string) sandbox.Config {
+	effectiveMap := make(map[string]string)
+	for _, key := range []string{
+		"SANDBOX_ENABLED",
+		"SANDBOX_BASE_URL",
+		"SANDBOX_AUTH_TOKEN",
+		"SANDBOX_SESSION_NAMESPACE",
+	} {
+		if overrideVal, isOverride := s.externalOverrides[key]; isOverride {
+			effectiveMap[key] = overrideVal
+		} else if val, exists := newEnv[key]; exists {
+			effectiveMap[key] = val
+		} else {
+			effectiveMap[key] = os.Getenv(key)
+		}
+	}
+	return sandbox.LoadConfigFromMap(effectiveMap)
 }
 
 // formatEnvEntry formats key=value for .env with secure dotenv-compatible serialization

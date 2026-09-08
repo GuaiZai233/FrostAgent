@@ -249,3 +249,126 @@ func TestSettingsService_DynamicBackend_Integration(t *testing.T) {
 		t.Fatalf("Phase 8: unexpected stdout: %s", res.Stdout)
 	}
 }
+
+func TestSettingsService_ExternalEnvPrecedence_Regression(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+
+	// Initial .env file contains BOT_NAME and sandbox endpoint settings,
+	// but does NOT contain UPSTREAM_API_KEY or SANDBOX_AUTH_TOKEN.
+	initialContent := "BOT_NAME=OriginalBot\n" +
+		"SANDBOX_ENABLED=true\n" +
+		"SANDBOX_BASE_URL=http://127.0.0.1:3874\n"
+	if err := os.WriteFile(envPath, []byte(initialContent), 0600); err != nil {
+		t.Fatalf("write initial .env: %v", err)
+	}
+
+	// Simulate external environment injection (e.g. Docker, systemd, Kubernetes secrets).
+	const externalUpstreamSecret = "external-upstream-prod-secret"
+	const externalSandboxSecret = "external-sandbox-token-secret"
+	t.Setenv("UPSTREAM_API_KEY", externalUpstreamSecret)
+	t.Setenv("SANDBOX_AUTH_TOKEN", externalSandboxSecret)
+	t.Setenv("BOT_NAME", "OriginalBot")
+	t.Setenv("SANDBOX_ENABLED", "true")
+	t.Setenv("SANDBOX_BASE_URL", "http://127.0.0.1:3874")
+
+	cfgMgr := sandbox.NewConfigManager(sandbox.LoadConfigFromEnv())
+	if cfgMgr.Get().AuthToken != externalSandboxSecret {
+		t.Fatalf("initial snapshot should have external token, got %q", cfgMgr.Get().AuthToken)
+	}
+
+	svc, err := settings.New(envPath)
+	if err != nil {
+		t.Fatalf("settings.New failed: %v", err)
+	}
+	svc.SetSandboxConfigManager(cfgMgr)
+
+	db := sandbox.NewDynamicBackend(cfgMgr.Get, func(cfg sandbox.Config) sandbox.Backend {
+		return &integrationStubBackend{cfg: cfg}
+	})
+
+	ctx := context.Background()
+	req := sandbox.ExecRequest{SessionID: "s1", Command: "echo test"}
+
+	// Initial execution succeeds using externally injected token
+	res, err := db.Exec(ctx, req)
+	if err != nil {
+		t.Fatalf("initial Exec failed: %v", err)
+	}
+	expectedOutput := fmt.Sprintf("executed on http://127.0.0.1:3874 with token %s", externalSandboxSecret)
+	if res.Stdout != expectedOutput {
+		t.Fatalf("want %q, got %q", expectedOutput, res.Stdout)
+	}
+
+	// Step 1: Admin edits unrelated key (BOT_NAME) in Raw .env editor and saves.
+	unrelatedRawUpdate := "BOT_NAME=UpdatedBot\n" +
+		"SANDBOX_ENABLED=true\n" +
+		"SANDBOX_BASE_URL=http://127.0.0.1:3874\n"
+	rawResp, err := svc.UpdateRawEnvFile(ctx, connect.NewRequest(&v1.UpdateRawEnvFileRequest{
+		Content: unrelatedRawUpdate,
+	}))
+	if err != nil || !rawResp.Msg.GetSuccess() {
+		t.Fatalf("UpdateRawEnvFile failed: %v, resp: %v", err, rawResp)
+	}
+
+	// Verify intended edit took effect
+	if os.Getenv("BOT_NAME") != "UpdatedBot" {
+		t.Fatalf("expected BOT_NAME to be UpdatedBot, got %q", os.Getenv("BOT_NAME"))
+	}
+
+	// Verify externally injected secrets NOT present in .env were NOT unset or wiped!
+	if os.Getenv("UPSTREAM_API_KEY") != externalUpstreamSecret {
+		t.Fatalf("UPSTREAM_API_KEY was corrupted or unset: want %q, got %q", externalUpstreamSecret, os.Getenv("UPSTREAM_API_KEY"))
+	}
+	if os.Getenv("SANDBOX_AUTH_TOKEN") != externalSandboxSecret {
+		t.Fatalf("SANDBOX_AUTH_TOKEN was corrupted or unset: want %q, got %q", externalSandboxSecret, os.Getenv("SANDBOX_AUTH_TOKEN"))
+	}
+
+	// Verify runtime sandbox snapshot retained the external secret as effective configuration
+	if cfgMgr.Get().AuthToken != externalSandboxSecret {
+		t.Fatalf("sandbox snapshot token was corrupted or wiped: want %q, got %q", externalSandboxSecret, cfgMgr.Get().AuthToken)
+	}
+	res, err = db.Exec(ctx, req)
+	if err != nil {
+		t.Fatalf("Exec failed after raw update: %v", err)
+	}
+	if res.Stdout != expectedOutput {
+		t.Fatalf("Exec should continue with external token: want %q, got %q", expectedOutput, res.Stdout)
+	}
+
+	// Step 2: If raw .env contains a value for an externally overridden key,
+	// the external environment retains precedence in process environment.
+	conflictRawUpdate := "BOT_NAME=UpdatedBot\n" +
+		"UPSTREAM_API_KEY=file-should-not-override\n" +
+		"SANDBOX_ENABLED=true\n" +
+		"SANDBOX_BASE_URL=http://127.0.0.1:3874\n"
+	rawResp, err = svc.UpdateRawEnvFile(ctx, connect.NewRequest(&v1.UpdateRawEnvFileRequest{
+		Content: conflictRawUpdate,
+	}))
+	if err != nil || !rawResp.Msg.GetSuccess() {
+		t.Fatalf("conflict UpdateRawEnvFile failed: %v", err)
+	}
+	if os.Getenv("UPSTREAM_API_KEY") != externalUpstreamSecret {
+		t.Fatalf("external UPSTREAM_API_KEY should retain precedence over .env file: want %q, got %q", externalUpstreamSecret, os.Getenv("UPSTREAM_API_KEY"))
+	}
+
+	// Step 3: Variables owned by .env (not externally overridden, like BOT_NAME) DO get unset when removed.
+	rawWithoutBotName := "SANDBOX_ENABLED=true\n" +
+		"SANDBOX_BASE_URL=http://127.0.0.1:3874\n"
+	rawResp, err = svc.UpdateRawEnvFile(ctx, connect.NewRequest(&v1.UpdateRawEnvFileRequest{
+		Content: rawWithoutBotName,
+	}))
+	if err != nil || !rawResp.Msg.GetSuccess() {
+		t.Fatalf("rawWithoutBotName failed: %v", err)
+	}
+	if os.Getenv("BOT_NAME") != "" {
+		t.Fatalf("BOT_NAME should be unset after removal from .env, got %q", os.Getenv("BOT_NAME"))
+	}
+	// While external secrets remain intact
+	if os.Getenv("UPSTREAM_API_KEY") != externalUpstreamSecret {
+		t.Fatalf("UPSTREAM_API_KEY should still exist: want %q, got %q", externalUpstreamSecret, os.Getenv("UPSTREAM_API_KEY"))
+	}
+	if os.Getenv("SANDBOX_AUTH_TOKEN") != externalSandboxSecret {
+		t.Fatalf("SANDBOX_AUTH_TOKEN should still exist: want %q, got %q", externalSandboxSecret, os.Getenv("SANDBOX_AUTH_TOKEN"))
+	}
+}

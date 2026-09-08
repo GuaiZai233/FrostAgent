@@ -293,6 +293,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - 沙箱网关配置采用原子快照（`ConfigManager.ApplySnapshot`）隔离更新，禁止在运行期逐字段修改端点与凭据（`SANDBOX_BASE_URL` 与 `SANDBOX_AUTH_TOKEN` 要求重启或原子文件更新），防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
+  - 管理面在重载原始 `.env` 文件时保持环境变量优先级与来源保护（Provenance Tracking）：外部环境（Docker / Kubernetes / 宿主机注入）的变量始终优先于 `.env` 默认值，不因保存 `.env` 被清除或覆盖；沙箱运行时快照基于最终有效配置计算；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；

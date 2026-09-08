@@ -129,6 +129,9 @@ func positiveIntFromEnv(name string, fallback int) int {
 }
 
 func init() {
+	// 捕获进程原始环境变量（确保 Docker/Kubernetes/宿主机注入的变量具有高于 .env 的覆盖优先级）
+	settings.CaptureInitialEnv()
+
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("未找到 .env 文件，将使用默认配置")
