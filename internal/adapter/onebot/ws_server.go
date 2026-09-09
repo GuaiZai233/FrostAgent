@@ -527,7 +527,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.TrimSession(session)
 			}
 			if receiptText == "" {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", historyKey(event)))
+				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", historyKey(event)))
 				return
 			}
 		}

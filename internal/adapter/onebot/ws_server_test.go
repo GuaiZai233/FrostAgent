@@ -4,7 +4,9 @@ import (
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -450,6 +452,65 @@ func TestHandleWSGroupMessageWithEmptyFinalSkipsMention(t *testing.T) {
 	history := engine.SessionManager.GetOrCreate("group:700000002").Snapshot()
 	if len(history) != 1 || history[0].Role != string(core.RoleUser) {
 		t.Fatalf("空最终回复只能保留 user 历史，实际=%+v", history)
+	}
+}
+
+func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
+	logs.General.Clear()
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{{
+		Message: core.ChatMessage{Role: core.RoleAssistant, Content: nil},
+	}}}
+	engine := newTestEngine(provider)
+	instanceLog := logs.New("instance-log-test", "日志测试实例", 100)
+	engine.Scope = runtimescope.New(nil, nil, instanceLog)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      700000031,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      700000032,
+		MessageID:   700000033,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("空最终回复不应发送消息")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("期望等待消息超时，实际错误=%v", err)
+	}
+
+	warning := "本轮收到空最终回复，跳过发送: session=private:700000032"
+	foundInstanceWarning := false
+	for _, entry := range instanceLog.Snapshot() {
+		if entry.Content == warning {
+			foundInstanceWarning = true
+			if entry.InstanceID != "instance-log-test" {
+				t.Fatalf("空终态告警实例 ID 错误: %+v", entry)
+			}
+		}
+	}
+	if !foundInstanceWarning {
+		t.Fatalf("实例日志未记录空终态告警，实际=%+v", instanceLog.Snapshot())
+	}
+	for _, entry := range logs.General.Snapshot() {
+		if entry.Content == warning {
+			t.Fatalf("空终态告警不应写入全局日志，实际=%+v", entry)
+		}
 	}
 }
 
