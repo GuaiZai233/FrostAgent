@@ -334,6 +334,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		receiptText string
 		runResult   llm.AgentRunResult
 	)
+	commitAssistantHistory := func(string) {}
 
 	owner, ownerType := memory.OwnerForPrivate(strconv.FormatInt(event.UserID, 10))
 	if event.MessageType == "group" {
@@ -364,6 +365,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			messages[len(messages)-1].Content = requestPrompt
 		}
 
+		var deliveredToolReplies []string
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages []tools.Msg `json:"messages"`
@@ -406,7 +408,72 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, historyKey(event))
+			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
+				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
+			}
 			return nil
+		}
+
+		commitAssistantHistory = func(replyText string) {
+			if session == nil {
+				return
+			}
+			if strings.TrimSpace(replyText) == "" {
+				engine.TrimSession(session)
+				return
+			}
+
+			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
+			engine.TrimSession(session)
+
+			if event.MessageType == "group" {
+				botReply := extractBotReplyText(replyText)
+				if strings.TrimSpace(botReply) != "" {
+					botName := engine.Getenv("BOT_NAME")
+					if botName == "" {
+						botName = defaultBotName
+					}
+					var maxBufferSize int
+					if engine.GroupCompactor != nil {
+						maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+					}
+					session.AppendGroupCompactMessage(
+						llm.GroupCompactMessage{
+							Role:    "assistant",
+							Sender:  botName,
+							Content: strings.TrimSpace(botReply),
+							Time:    time.Now().Format("15:04:05"),
+						},
+						maxBufferSize,
+					)
+					if engine.GroupCompactor != nil {
+						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+					}
+				}
+			}
+
+			if runResult.MemoryWritten {
+				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+			} else if strings.TrimSpace(userText) != "" {
+				pendingUserText := userText
+				if event.MessageType == "group" {
+					pendingUserText = formatGroupSpeakerMessage(event, userText)
+				}
+				engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					{
+						Owner:     owner,
+						OwnerType: ownerType,
+						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+						Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
+					},
+					{
+						Owner:     owner,
+						OwnerType: ownerType,
+						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+						Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+					},
+				})
+			}
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
@@ -448,6 +515,21 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.TrimSession(session)
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", historyKey(event)))
 			return
+		}
+
+		// Some OpenAI-compatible providers use a null assistant content when
+		// they finish without text or tool calls. Do not turn that malformed
+		// terminal response into an empty group message with an @ mention.
+		if strings.TrimSpace(replyText) == "" {
+			if len(deliveredToolReplies) > 0 {
+				commitAssistantHistory(strings.Join(deliveredToolReplies, "\n"))
+			} else {
+				engine.TrimSession(session)
+			}
+			if receiptText == "" {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", historyKey(event)))
+				return
+			}
 		}
 	} else {
 		replyText = "系统出错，引擎未初始化"
@@ -500,17 +582,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if event.MessageType == "group" {
-			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段
-			enableAt := engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
-			enableReply := engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
-			if enableAt || enableReply {
-				textSeg := tools.OneBotSegment{
-					Type: "text",
-					Data: map[string]any{"text": " " + displayText},
-				}
-				finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
-			} else {
+			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段。
+			// 计费回执可能是空最终回复的唯一正文，不应因此 @ 用户。
+			if strings.TrimSpace(replyText) == "" {
 				finalMessage = displayText
+			} else {
+				enableAt := engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+				enableReply := engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+				if enableAt || enableReply {
+					textSeg := tools.OneBotSegment{
+						Type: "text",
+						Data: map[string]any{"text": " " + displayText},
+					}
+					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
+				} else {
+					finalMessage = displayText
+				}
 			}
 
 		} else {
@@ -533,64 +620,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err == nil {
 		conn.rememberActionMessageSession(ackResp, historyKey(event))
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
-		if session != nil {
-			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
-			if engine != nil {
-				engine.TrimSession(session)
-			}
-		}
-
-		if event.MessageType == "group" && engine != nil && session != nil {
-			botReply := extractBotReplyText(replyText)
-			if strings.TrimSpace(botReply) != "" {
-				botName := engine.Getenv("BOT_NAME")
-				if botName == "" {
-					botName = defaultBotName
-				}
-				var maxBufferSize int
-				if engine.GroupCompactor != nil {
-					maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-				}
-				session.AppendGroupCompactMessage(
-					llm.GroupCompactMessage{
-						Role:    "assistant",
-						Sender:  botName,
-						Content: strings.TrimSpace(botReply),
-						Time:    time.Now().Format("15:04:05"),
-					},
-					maxBufferSize,
-				)
-				if engine.GroupCompactor != nil {
-					owner, _ := memory.OwnerForGroup(event.GroupID)
-					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
-				}
-			}
-		}
-
-		if engine != nil && session != nil {
-			if runResult.MemoryWritten {
-				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-			} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(replyText) != "" {
-				pendingUserText := userText
-				if event.MessageType == "group" {
-					pendingUserText = formatGroupSpeakerMessage(event, userText)
-				}
-				engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-					{
-						Owner:     owner,
-						OwnerType: ownerType,
-						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-						Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-					},
-					{
-						Owner:     owner,
-						OwnerType: ownerType,
-						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-						Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-					},
-				})
-			}
-		}
+		commitAssistantHistory(replyText)
 	} else {
 		// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
 		reason := strings.TrimSpace(ackResp.Wording)
