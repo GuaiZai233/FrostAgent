@@ -781,41 +781,72 @@ func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
 	sm.groupSummaryStore = store
 }
 
-// GetOrCreate 获取或创建会话
+// GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	aliases := memory.SessionKeyAliases(sessionID)
+
 	sm.mu.RLock()
-	session, exists := sm.sessions[sessionID]
-	sm.mu.RUnlock()
-	if exists {
+	if session, exists := sm.sessions[sessionID]; exists {
+		sm.mu.RUnlock()
 		return session
 	}
+	if session, exists := sm.sessions[canonicalID]; exists {
+		sm.mu.RUnlock()
+		return session
+	}
+	for _, alias := range aliases {
+		if session, exists := sm.sessions[alias]; exists {
+			sm.mu.RUnlock()
+			sm.mu.Lock()
+			sm.sessions[canonicalID] = session
+			sm.sessions[sessionID] = session
+			sm.mu.Unlock()
+			return session
+		}
+	}
+	sm.mu.RUnlock()
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	// 双重检查
-	if session, exists = sm.sessions[sessionID]; exists {
+	if session, exists := sm.sessions[sessionID]; exists {
 		return session
+	}
+	if session, exists := sm.sessions[canonicalID]; exists {
+		sm.sessions[sessionID] = session
+		return session
+	}
+	for _, alias := range aliases {
+		if session, exists := sm.sessions[alias]; exists {
+			sm.sessions[canonicalID] = session
+			sm.sessions[sessionID] = session
+			return session
+		}
 	}
 
 	summary := ""
-	s := strings.ToLower(sessionID)
+	s := strings.ToLower(canonicalID)
 	isGroupSession := strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:")
 	if sm.groupSummaryStore != nil && isGroupSession {
-		record, ok, err := sm.groupSummaryStore.Get(sessionID)
+		record, ok, err := sm.groupSummaryStore.Get(canonicalID)
 		if err != nil {
-			sm.Log().Warn(logs.SYSTEM, "恢复群聊总结失败 ("+sessionID+"): "+err.Error())
+			sm.Log().Warn(logs.SYSTEM, "恢复群聊总结失败 ("+canonicalID+"): "+err.Error())
 		} else if ok {
 			summary = record.Summary
 		}
 	}
-	session = &SessionContext{
-		ConversationID:      sessionID,
+	session := &SessionContext{
+		ConversationID:      canonicalID,
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
 		groupCompactSummary: summary,
 	}
-	sm.sessions[sessionID] = session
+	sm.sessions[canonicalID] = session
+	if sessionID != canonicalID {
+		sm.sessions[sessionID] = session
+	}
 	return session
 }
 

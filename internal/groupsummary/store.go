@@ -80,7 +80,17 @@ func load(path string) (fileData, error) {
 	return data, nil
 }
 
-// Get returns one persisted summary.
+func canonicalSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+		if cut, ok := strings.CutPrefix(sessionID, prefix); ok {
+			return "group:" + cut
+		}
+	}
+	return sessionID
+}
+
+// Get returns one persisted summary, checking direct match, canonical key, and legacy aliases.
 func (s *Store) Get(sessionID string) (Record, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -88,8 +98,21 @@ func (s *Store) Get(sessionID string) (Record, bool, error) {
 	if s.blockedErr != nil {
 		return Record{}, false, s.blockedErr
 	}
-	record, ok := s.records[sessionID]
-	return record, ok, nil
+	if record, ok := s.records[sessionID]; ok {
+		return record, true, nil
+	}
+	canonical := canonicalSessionID(sessionID)
+	if record, ok := s.records[canonical]; ok {
+		return record, true, nil
+	}
+	if groupID, ok := strings.CutPrefix(canonical, "group:"); ok {
+		for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+			if record, ok := s.records[prefix+groupID]; ok {
+				return record, true, nil
+			}
+		}
+	}
+	return Record{}, false, nil
 }
 
 // List returns a stable snapshot ordered by most recently updated first.

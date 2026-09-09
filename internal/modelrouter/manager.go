@@ -355,7 +355,7 @@ func effectiveBinding(cfg Configuration, workload Workload, scope Scope) (Bindin
 	binding, inherited := globalBinding(cfg, workload, scope.GroupID != "")
 	if scope.GroupID != "" {
 		for _, override := range cfg.GroupOverrides {
-			if strings.EqualFold(strings.TrimSpace(override.Platform), scope.Platform) && strings.TrimSpace(override.GroupID) == scope.GroupID {
+			if platformsMatch(override.Platform, scope.Platform) && strings.TrimSpace(override.GroupID) == scope.GroupID {
 				if binding, ok := override.Bindings[workload]; ok && binding.Mode != "" && binding.Mode != BindingInherit {
 					if workload != WorkloadDialogue && binding.Mode == BindingFollowDialogue {
 						dialogue, _ := effectiveBinding(cfg, WorkloadDialogue, scope)
@@ -372,6 +372,22 @@ func effectiveBinding(cfg Configuration, workload Workload, scope Scope) (Bindin
 		return dialogue, true
 	}
 	return binding, inherited
+}
+
+func platformsMatch(a, b string) bool {
+	aNorm := strings.ToLower(strings.TrimSpace(a))
+	bNorm := strings.ToLower(strings.TrimSpace(b))
+	if aNorm == bNorm {
+		return true
+	}
+	if isQQPlatform(aNorm) && isQQPlatform(bNorm) {
+		return true
+	}
+	return false
+}
+
+func isQQPlatform(p string) bool {
+	return p == "" || p == "qq" || p == "onebot" || p == "aiocqhttp"
 }
 
 func globalBinding(cfg Configuration, workload Workload, inherited bool) (Binding, bool) {

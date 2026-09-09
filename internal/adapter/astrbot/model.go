@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
@@ -38,6 +39,7 @@ type ActionMessage struct {
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
 	IsSticker     bool   `json:"is_sticker,omitempty"`
+	SubType       int    `json:"sub_type,omitempty"`
 }
 
 // Action 表示 FrostAgent 发送给 AstrBot 插件的出站动作。
@@ -68,7 +70,7 @@ func (a Action) MarshalJSON() ([]byte, error) {
 
 func (a Action) containsSticker() bool {
 	for _, message := range a.Messages {
-		if message.IsSticker {
+		if message.IsSticker || message.Type == "mface" || message.Type == "sticker" || message.SubType == 1 {
 			return true
 		}
 	}
@@ -95,7 +97,8 @@ func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Actio
 	}
 
 	for _, message := range a.Messages {
-		if message.Type == "mention_user" && strings.TrimSpace(message.MentionUserID) == userID {
+		if (message.Type == "mention_user" && strings.TrimSpace(message.MentionUserID) == userID) ||
+			(message.Type == "at" && strings.TrimSpace(message.MentionUserID) == userID) {
 			return a
 		}
 	}
@@ -136,13 +139,8 @@ func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action 
 	}
 
 	replyMessageID := strings.TrimSpace(a.ReplyMessageID)
-	if replyMessageID == "" {
+	if replyMessageID == "" || slices.ContainsFunc(a.Messages, isQuoteMessage) {
 		return a
-	}
-	for _, message := range a.Messages {
-		if isQuoteMessage(message) {
-			return a
-		}
 	}
 
 	quote := ActionMessage{Type: "quote", MessageID: replyMessageID}

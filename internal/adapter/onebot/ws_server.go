@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -270,6 +271,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		contextMap["group_id"] = event.GroupID
 		if groupName := conn.groupName(event.GroupID); groupName != "" {
 			contextMap["group_name"] = groupName
+		}
+		mentionOnly := parity.IsMentionOnlyOneBot(event.MessageType == "group", IsMentionedBot(event), userText, currentHasImage || replyHasImage)
+		contextMap["mention_only"] = mentionOnly
+		if mentionOnly {
+			contextMap["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
 	}
 	if sender := senderContext(event); len(sender) > 0 {
@@ -749,25 +755,12 @@ func extractBotReplyText(replyText string) string {
 
 // wrapGroupReply 按 env 开关为群聊回复前置 reply 段（引用原消息）与 at 段。
 // 顺序：reply → at → base；两个开关都关闭时返回 base 原样，方便无条件调用。
+// 贴纸不进行回复与@包装；显式引用与显式@自动去重。
 func wrapGroupReply(base []tools.OneBotSegment, event model.OneBotEvent, scopes ...*runtimescope.Scope) []tools.OneBotSegment {
 	scope := runtimescope.First(scopes)
-	out := make([]tools.OneBotSegment, 0, len(base)+2)
-	if scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true" {
-		out = append(out, tools.OneBotSegment{
-			Type: "reply",
-			Data: map[string]interface{}{"id": strconv.FormatInt(int64(event.MessageID), 10)},
-		})
-	}
-	if scope.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" {
-		out = append(out, tools.OneBotSegment{
-			Type: "at",
-			Data: map[string]interface{}{"qq": strconv.FormatInt(event.UserID, 10)},
-		})
-	}
-	if len(out) == 0 {
-		return base
-	}
-	return append(out, base...)
+	enableReply := scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+	enableAt := scope.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+	return parity.WrapGroupReplyOneBot(base, int64(event.MessageID), event.UserID, enableReply, enableAt)
 }
 
 func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []llm.ChatMessage {

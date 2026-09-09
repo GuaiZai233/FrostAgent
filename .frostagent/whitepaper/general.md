@@ -110,6 +110,16 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 支持 Agent 工具调用阶段的 `sendHook` 中间消息流式即时下发；
   - 群聊回复统一在出站协议边界应用 `ENABLE_REPLY_IN_GROUP_MSG` 与 `ENABLE_AT_IN_GROUP_MSG`：自动引用当前入站消息并提及触发用户，显式 `quote` 组件优先且不会重复注入引用；AstrBot 插件将引用映射为平台原生 `Reply` 消息段；
   - 包含客户端自动断线重连与周期心跳保活。
+- **AstrBot ↔ 原生 OneBot 语义对齐架构 (Semantic Parity Engine, `internal/adapter/parity`)**：
+  - 为保障在切换或共存运行 AstrBot 与原生 OneBot (OneBot v11) 适配器时具备完全一致的行为与无缝用户体验，系统在 8 大语义维度实现了双向对齐与规范化（Parity）：
+    1. **表情包出站装饰对齐 (Sticker Outbound Decoration)**：出站消息若包含表情包/动画表情（`mface`、`sticker`、`sub_type == 1`、`is_sticker`），两端适配器均统一跳过群聊自动回复引用与 @ 提及装饰，杜绝表情包被多余文本段破坏视觉呈现；
+    2. **引用去重对齐 (Quote Deduplication)**：当工具调用或消息链中已包含显式引用（`reply` 或 `quote`）时，两端均抑制自动引用包装，彻底杜绝双重引用；
+    3. **提及去重对齐 (Mention Deduplication)**：当消息链中已包含显式针对目标用户的 @ 提及（`at` 或 `mention_user`）时，两端均抑制自动 @ 装饰，彻底杜绝重复 @ 提醒；
+    4. **会话命名空间对齐 (Session Namespace Parity)**：`SessionManager` 与 `groupsummary.Store` 实现双向别名解析（`SessionKeyAliases`），规范化 QQ 生态下的会话键（如 `group:<id>` ↔ `aiocqhttp:group:<id>` ↔ `qq:group:<id>` ↔ `onebot:group:<id>`），适配器迁移或切换时无缝保留连续会话历史与群聊滚动摘要；
+    5. **记忆所有权命名空间对齐 (Memory Owner Namespace Parity)**：记忆存储引擎（`memory.Store`）在写入时自动规范化 QQ 记忆所有者（`CanonicalOwner`），并在检索与召回门禁（`memory.Gateway`）中通过 `OwnersMatch` 与 `OwnerAliases` 实现跨 `aiocqhttp:` / `onebot:` / `qq:` 别名的无感匹配，杜绝记忆数据孤岛与跨适配器丢失；
+    6. **模型路由平台作用域对齐 (Model Router Platform Scope Parity)**：模型路由器的群组覆盖策略统一识别 QQ 生态协议（`qq`、`onebot`、`aiocqhttp`），在两端适配器下为群聊匹配一致的模型绑定规则；
+    7. **计费外部身份对齐 (Billing External Identity Parity)**：计费系统外部身份识别统一规范化为 canonical `"qq"` 平台与标准 QQ 任务 ID（`BillingTaskID`），确保无论通过哪种传输通道均计入相同的用户账单与余额体系；
+    8. **纯 @ 提及交互引导对齐 (Mention-Only Interaction Guidance)**：两端统一判定纯 @Bot 交互（无附加文本与附件的纯唤醒），并注入对齐的 `mention_only: true` 标记与标准 `parity.MentionOnlyGuidance` 提示词引导，保证大模型理解上下文的一致性。
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
