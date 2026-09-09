@@ -101,7 +101,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - `MessageDispatcher`：管理各平台的适配器实例，按目标平台路由分发出站消息；
   - `IncomingMessage` / `OutgoingMessage`：与具体平台解耦的通用入站/出站消息结构。
 - **OneBot 适配器 (`internal/adapter/onebot`)**：
-  - 支持 OneBot v11 Reverse WebSocket 协议，负责原生 QQ 消息段解析、群聊/私聊事件处理与会话轮次锁定。
+  - 支持 OneBot v11 Reverse WebSocket 协议，负责原生 QQ 消息段解析、群聊/私聊事件处理与会话轮次锁定；
+  - 对上游返回的空最终回复执行发送门禁，避免在群聊中发送空消息或单独的 @ 提及。
 - **AstrBot 适配器 (`internal/adapter/astrbot` 与 `adapters/astrbot_plugin_frostagent`)**：
   - 基于双向 WebSocket 长连接的轻量 JSON 专有协议；
   - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；

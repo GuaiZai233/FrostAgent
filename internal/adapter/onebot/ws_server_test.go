@@ -4,12 +4,15 @@ import (
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -372,6 +375,325 @@ func TestHandleWSGroupMessageMentioned(t *testing.T) {
 	}
 
 	t.Logf("✅ 群聊@消息测试通过，回复内容: %v", params["message"])
+}
+
+func TestHandleWSGroupMessageWithEmptyFinalSkipsMention(t *testing.T) {
+	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{{
+			Message: core.ChatMessage{
+				Role:    core.RoleAssistant,
+				Content: nil,
+			},
+		}},
+	}
+	engine := newTestEngine(provider)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      700000001,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     700000002,
+		UserID:      700000003,
+		MessageID:   700000004,
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"700000001"}},{"type":"text","data":{"text":"你好"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// 首次遇到群聊时先响应非阻塞的群信息查询。
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取群信息查询失败: %v", err)
+	}
+	var groupInfoAction model.OneBotAction
+	if err := json.Unmarshal(respBytes, &groupInfoAction); err != nil {
+		t.Fatalf("解析群信息查询失败: %v", err)
+	}
+	if groupInfoAction.Action != "get_group_info" {
+		t.Fatalf("期望首个 action=get_group_info, 实际=%s", groupInfoAction.Action)
+	}
+	groupInfoResponse := map[string]any{
+		"status":  "ok",
+		"retcode": 0,
+		"data": map[string]any{
+			"group_id":   event.GroupID,
+			"group_name": "空回复测试群",
+		},
+		"echo": groupInfoAction.Echo,
+	}
+	responseBytes, _ := json.Marshal(groupInfoResponse)
+	if err := conn.WriteMessage(websocket.TextMessage, responseBytes); err != nil {
+		t.Fatalf("发送群信息响应失败: %v", err)
+	}
+
+	// content:null must not become a group message containing only an @.
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("空最终回复不应发送群消息或 @ 段")
+	}
+	if !websocket.IsUnexpectedCloseError(err) {
+		if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+			t.Fatalf("期望等待回复超时，实际错误=%v", err)
+		}
+	}
+
+	history := engine.SessionManager.GetOrCreate("group:700000002").Snapshot()
+	if len(history) != 1 || history[0].Role != string(core.RoleUser) {
+		t.Fatalf("空最终回复只能保留 user 历史，实际=%+v", history)
+	}
+}
+
+func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
+	logs.General.Clear()
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{{
+		Message: core.ChatMessage{Role: core.RoleAssistant, Content: nil},
+	}}}
+	engine := newTestEngine(provider)
+	instanceLog := logs.New("instance-log-test", "日志测试实例", 100)
+	engine.Scope = runtimescope.New(nil, nil, instanceLog)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      700000031,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      700000032,
+		MessageID:   700000033,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("空最终回复不应发送消息")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("期望等待消息超时，实际错误=%v", err)
+	}
+
+	warning := "本轮收到空最终回复，跳过发送: session=private:700000032"
+	foundInstanceWarning := false
+	for _, entry := range instanceLog.Snapshot() {
+		if entry.Content == warning {
+			foundInstanceWarning = true
+			if entry.InstanceID != "instance-log-test" {
+				t.Fatalf("空终态告警实例 ID 错误: %+v", entry)
+			}
+		}
+	}
+	if !foundInstanceWarning {
+		t.Fatalf("实例日志未记录空终态告警，实际=%+v", instanceLog.Snapshot())
+	}
+	for _, entry := range logs.General.Snapshot() {
+		if entry.Content == warning {
+			t.Fatalf("空终态告警不应写入全局日志，实际=%+v", entry)
+		}
+	}
+}
+
+func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *testing.T) {
+	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{
+					ID:   "call_tool_empty_final",
+					Type: "function",
+					Function: core.ToolCallFunction{
+						Name:      "send_message",
+						Arguments: `{"messages":[{"type":"plain","text":"工具已发送"}]}`,
+					},
+				}},
+			}},
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: nil}},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      700000011,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     700000012,
+		UserID:      700000013,
+		MessageID:   700000014,
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"700000011"}},{"type":"text","data":{"text":"你好"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, responseBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取群信息查询失败: %v", err)
+	}
+	var groupInfoAction model.OneBotAction
+	if err := json.Unmarshal(responseBytes, &groupInfoAction); err != nil {
+		t.Fatalf("解析群信息查询失败: %v", err)
+	}
+	if groupInfoAction.Action != "get_group_info" {
+		t.Fatalf("期望首个 action=get_group_info, 实际=%s", groupInfoAction.Action)
+	}
+	groupInfoResponse, _ := json.Marshal(map[string]any{
+		"status": "ok", "retcode": 0,
+		"data": map[string]any{"group_id": event.GroupID, "group_name": "工具空回复测试群"},
+		"echo": groupInfoAction.Echo,
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, groupInfoResponse); err != nil {
+		t.Fatalf("发送群信息响应失败: %v", err)
+	}
+
+	_, actionBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取工具发送 action 失败: %v", err)
+	}
+	var toolAction model.OneBotAction
+	if err := json.Unmarshal(actionBytes, &toolAction); err != nil {
+		t.Fatalf("解析工具发送 action 失败: %v", err)
+	}
+	if toolAction.Action != "send_group_msg" {
+		t.Fatalf("期望工具发送 action=send_group_msg, 实际=%s", toolAction.Action)
+	}
+	ackBytes, _ := json.Marshal(map[string]any{
+		"status": "ok", "retcode": 0, "echo": toolAction.Echo,
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, ackBytes); err != nil {
+		t.Fatalf("发送工具 ACK 失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("工具回复后的空最终回复不应再发送第二条群消息")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("期望等待终态消息超时，实际错误=%v", err)
+	}
+
+	history := engine.SessionManager.GetOrCreate("group:700000012").Snapshot()
+	if len(history) != 2 || history[1].Role != string(core.RoleAssistant) || history[1].Content != "工具已发送" {
+		t.Fatalf("期望保留 user 与工具 assistant 历史，实际=%+v", history)
+	}
+	compact := engine.SessionManager.GetOrCreate("group:700000012").SnapshotGroupContext(20, 4000, "")
+	foundToolReply := false
+	for _, message := range compact.RecentMessages {
+		if strings.Contains(message, "工具已发送") {
+			foundToolReply = true
+			break
+		}
+	}
+	if !foundToolReply {
+		t.Fatalf("群聊 compact 未包含工具实际发送文本，实际=%+v", compact.RecentMessages)
+	}
+}
+
+func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T) {
+	t.Setenv("ONEBOT_ACTION_TIMEOUT", "200ms")
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{
+					ID:   "call_tool_ack_failure",
+					Type: "function",
+					Function: core.ToolCallFunction{
+						Name:      "send_message",
+						Arguments: `{"messages":[{"type":"plain","text":"不应提交"}]}`,
+					},
+				}},
+			}},
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: nil}},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      700000021,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      700000022,
+		MessageID:   700000023,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	_, actionBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取工具发送 action 失败: %v", err)
+	}
+	var toolAction model.OneBotAction
+	if err := json.Unmarshal(actionBytes, &toolAction); err != nil {
+		t.Fatalf("解析工具发送 action 失败: %v", err)
+	}
+	if toolAction.Action != "send_private_msg" {
+		t.Fatalf("期望工具发送 action=send_private_msg, 实际=%s", toolAction.Action)
+	}
+	ackBytes, _ := json.Marshal(map[string]any{
+		"status": "failed", "retcode": 100, "echo": toolAction.Echo,
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, ackBytes); err != nil {
+		t.Fatalf("发送失败 ACK 失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("工具失败 ACK 后不应发送空终态消息")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("期望等待消息超时，实际错误=%v", err)
+	}
+
+	history := engine.SessionManager.GetOrCreate("private:700000022").Snapshot()
+	if len(history) != 1 || history[0].Role != string(core.RoleUser) {
+		t.Fatalf("失败 ACK 后不应提交 assistant 历史，实际=%+v", history)
+	}
 }
 
 func TestSenderContextKeepsDistinctNicknameAndCard(t *testing.T) {
