@@ -89,6 +89,42 @@ export function setControlToken(token: string): void {
   }
 }
 
+export interface LockedPrincipal {
+  principal: { platform: string; user_id: string };
+  reason?: string;
+  locked_at?: string;
+}
+
+// Security controls belong to the control plane, never to a selected instance.
+async function securityRequest<T>(path: string, body?: unknown): Promise<T> {
+  const headers = new Headers({ Accept: 'application/json' });
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (body !== undefined) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/security/${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const message = (await response.text()).trim();
+    throw new Error(message || response.statusText || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const securityAPI = {
+  listLockedPrincipals(): Promise<{ locked: LockedPrincipal[] | null }> {
+    return securityRequest('locked');
+  },
+  unlockPrincipal(
+    platform: string,
+    userID: string,
+  ): Promise<{ unlocked: LockedPrincipal['principal'] }> {
+    return securityRequest('unlock', { platform, user_id: userID });
+  },
+};
+
 const authInterceptor: Interceptor = (next) => async (req) => {
   const token = getControlToken();
   if (token && !req.header.has('Authorization')) {

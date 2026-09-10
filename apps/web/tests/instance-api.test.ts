@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { createInstanceAPI } from '../src/api/client';
+import { createInstanceAPI, securityAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
@@ -108,10 +108,16 @@ assert.equal(
   6,
   'zero-instance log request silently used General',
 );
+const locked = await securityAPI.listLockedPrincipals();
+assert.deepEqual(locked, { success: true });
+assert.equal(new URL(calls[6], 'http://localhost').pathname, '/api/security/locked');
+await securityAPI.unlockPrincipal('test', 'user');
+assert.equal(new URL(calls[7], 'http://localhost').pathname, '/api/security/unlock');
+assert.equal(calls.length, 8, 'security requests must use the global REST API');
 instanceState.logSource = 'control-plane';
 await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(
-  new URL(calls[6]).pathname,
+  new URL(calls[8], 'http://localhost').pathname,
   '/frostagent.v1.LogService/ListLogs',
   'explicit zero-instance General log request did not use the root endpoint',
 );

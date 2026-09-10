@@ -22,6 +22,7 @@ import { mountSettingsPage } from './pages/settings';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountModelRouterPage } from './pages/model-router';
+import { mountSecurityPage } from './pages/security';
 
 // Initialize Theme
 themeManager.init();
@@ -37,6 +38,7 @@ const navItems = [
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
   { path: '/settings', label: '系统设置', iconName: 'settings' },
+  { path: '/security', label: '安全控制', iconName: 'lock' },
 ];
 
 function buildNavigationLinks(isMobile = false): string {
@@ -258,6 +260,8 @@ function initAppShell(): void {
     mountFrontendSettingsPage,
   );
   router.register('/model-router', '模型路由器', mountModelRouterPage);
+  // Security is a control-plane page and must remain available without an instance.
+  router.register('/security', '安全控制', mountSecurityPage);
 
   const register = router.register.bind(router);
   const guardedPaths = [
