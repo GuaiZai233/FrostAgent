@@ -16,7 +16,7 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
     `FrostAgent 错误：Request rejected by security inspector: 不合适的内容！`
   - **安全网关封禁拦截（Security Gateway）**：当主体在安全访问控制网关中处于封禁/锁定状态（已在 `AccessStore` 中处于 `LOCKED` 状态，或由 Strike 升级为 `WatchdogLock`），返回：
     `FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`
-  - **前置安全不变量与群聊礼貌拦截**：拦截报错在适配器 Ingress 入口最前沿发送（早于消息会话映射、群聊上下文缓冲、贴纸观察、视觉处理与 LLM 调用）；在私聊场景下始终返回报错；而在群聊场景中，仅当机器人被显式触发（@机器人、别名/唤醒词唤醒、引用回复机器人，或配置了 `GROUP_REPLY_ON_MENTION=false`）时才发送拦截报错，避免在未艾特机器人的群聊背景对话中因出现敏感词或被封禁用户发言而产生非预期的机器人报错打扰。
+  - **前置安全不变量与群聊礼貌拦截**：拦截报错在适配器 Ingress 入口最前沿发送（早于消息会话映射、群聊上下文缓冲、贴纸观察、视觉处理与 LLM 调用）；在私聊场景下始终返回报错；而在群聊场景中，仅当机器人被显式触发（@机器人、别名/唤醒词唤醒，或配置了 `GROUP_REPLY_ON_MENTION=false`）时才发送拦截报错，避免在未艾特机器人的群聊背景对话中因出现敏感词或被封禁用户发言而产生非预期的机器人报错打扰。群聊唤醒判定严格限定于本地 Ingress 元数据，严禁在安全判定阻断后为解析引用回复发起 `get_msg` 等上游平台 RPC，杜绝针对被拦截主体的额外网络消耗与潜在滥用面。
 - **有界归一化与组合式规避解码（Compositional Normalization Pipeline）**：
   - Watchdog 设置明确的安全审查上限（256 KiB）。超出上限的超大输入直接 Fail-Closed 阻断，坚决杜绝静默截断放行导致的尾部走私注入。
   - 编码归一化采用容错百分号扫描器（`tolerantPercentUnescape`），按字节逐个解码有效的 `%[0-9a-fA-F]{2}` 序列，同时完整保留混杂的畸形转义（如 `%ZZ`、末尾悬空 `%`、未截断十六进制）和字面加号（`+`），彻底避免传统全有或全无解码器在遇到畸形字符时直接中断解码导致危险载荷漏检，并杜绝将 `C++` 或 `A+B` 误判为编码规避。
@@ -42,4 +42,4 @@ Key design guarantees:
 6. **Explicit Security Rejections & Boundary Decoupling**: Security interventions return explicit FrostAgent-level error notifications rather than dropping requests silently:
    - Content violation for active principals: `FrostAgent 错误：Request rejected by security inspector: 不合适的内容！`
    - Banned/locked principals at the gateway: `FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`
-   In group chats, rejection notifications are sent only when the bot was explicitly addressed (via `@bot`, name wake word, or quote reply), preventing unsolicited interruptions during unaddressed background conversations.
+   In group chats, rejection notifications are sent only when the bot was explicitly addressed locally (via `@bot`, name wake word, or `GROUP_REPLY_ON_MENTION=false`), preventing unsolicited interruptions during unaddressed background conversations. The decision relies exclusively on ingress-local metadata and strictly avoids upstream platform RPCs (such as OneBot `get_msg` for quoted reply resolution) on behalf of rejected principals.

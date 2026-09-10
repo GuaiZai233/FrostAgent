@@ -285,7 +285,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
-					if shouldSendSecurityDirectReply(event, wsConn, a.engine) {
+					if shouldSendSecurityDirectReply(event, a.engine) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						action := "send_private_msg"
 						type1 := "user_id"
@@ -397,7 +397,7 @@ func (a *Adapter) CloseConnections() {
 	}
 }
 
-func shouldSendSecurityDirectReply(event model.OneBotEvent, conn *wsConnection, engine *llm.Engine) bool {
+func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) bool {
 	if event.MessageType == "private" {
 		return true
 	}
@@ -408,9 +408,6 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, conn *wsConnection, 
 		return true
 	}
 	if engine != nil && DetectGroupWakeSignals(event, engine.Scope).Any() {
-		return true
-	}
-	if conn != nil && conn.lookupReplyContext(event).MentionsBot {
 		return true
 	}
 	return false
