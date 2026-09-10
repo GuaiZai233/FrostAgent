@@ -4,6 +4,8 @@
 
 此大纲只简略地阐述各组成的实现概要，不涉及具体代码细节。
 
+全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
+
 ## FrostAgent 的组成
 
 ### 记忆系统

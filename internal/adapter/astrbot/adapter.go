@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
@@ -242,6 +243,26 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
+			}
+			if a.engine != nil && a.engine.Security != nil &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				platform := event.Platform
+				if platform == "" {
+					platform = "astrbot"
+				}
+				principal, principalErr := security.NewPrincipal(platform, event.UserID)
+				if principalErr != nil {
+					continue
+				}
+				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
+				if security.Blocks(decision.Action) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
+					if shouldReply(event, a.engine.Scope) {
+						msg := a.engine.Security.RejectMessage(principal, decision)
+						_ = sendDirectReply(event, c, msg)
+					}
+					continue
+				}
 			}
 
 			var routeSnapshot *modelrouter.Snapshot

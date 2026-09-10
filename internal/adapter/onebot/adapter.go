@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
@@ -275,6 +276,30 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				if principalErr != nil {
+					continue
+				}
+				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				if security.Blocks(decision.Action) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
+					if shouldSendSecurityDirectReply(event, a.engine) {
+						msg := a.engine.Security.RejectMessage(principal, decision)
+						action := "send_private_msg"
+						type1 := "user_id"
+						id := strconv.FormatInt(event.UserID, 10)
+						if event.MessageType == "group" {
+							action = "send_group_msg"
+							type1 = "group_id"
+							id = strconv.FormatInt(event.GroupID, 10)
+						}
+						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
+					}
+					continue
+				}
+			}
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
@@ -370,4 +395,20 @@ func (a *Adapter) CloseConnections() {
 	for c := range a.conns {
 		c.Close()
 	}
+}
+
+func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	if engine != nil && engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return true
+	}
+	if engine != nil && DetectGroupWakeSignals(event, engine.Scope).Any() {
+		return true
+	}
+	return false
 }

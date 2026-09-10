@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/security"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -103,6 +104,10 @@ type Engine struct {
 
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
+
+	// Security is shared by every runtime owned by the Control Plane.
+	Security   *security.Controller
+	InstanceID string
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -171,6 +176,9 @@ func (e *Engine) RunMessagesWithContext(
 	messages []ChatMessage,
 	runContext RunContext,
 ) AgentRunResult {
+	if err := e.securityAccess(runContext); err != nil {
+		return AgentRunResult{Silent: true, Error: err}
+	}
 	owner := runContext.Owner
 	if owner != "" && e.MemoryWriter != nil {
 		e.MemoryWriter.RememberRoute(owner, core.RouteContext{
@@ -456,6 +464,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	// 主循环
 	for i := 0; i < e.MaxIterations; i++ {
+		if err := e.securityAccess(runCtx); err != nil {
+			return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+		}
 		if err := ctx.Err(); err != nil {
 			return AgentRunResult{Silent: true, Error: err}
 		}
@@ -689,6 +700,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
+			if e.securityBlocks(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, "") {
+				contentStr = "FrostAgent安全控制：模型输出已拦截。"
+			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
 				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
 				return AgentRunResult{
@@ -718,6 +732,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
+			if e.securityBlocks(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name) {
+				messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
+				continue
+			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
@@ -764,6 +782,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
+			if e.securityBlocks(runCtx, security.StageToolResult, security.SourceToolResult, toolResult, tc.Function.Name) {
+				toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
+				toolSucceeded = false
+			}
 			toolResultLog := formatToolResultLog(tc.Function.Name, toolResult)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 

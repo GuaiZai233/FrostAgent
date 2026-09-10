@@ -95,7 +95,13 @@ func isLoopbackAddr(addr string) bool {
 // for the MCP control plane. Host, Origin, and DNS rebinding protections are enforced
 // at the HTTP gateway layer via corsMiddleware in cmd/app/cors.go.
 func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
-	return checkControlPlaneAuth(peerAddr, header, os.Getenv)
+	return CheckControlPlaneAuthScoped(peerAddr, header, os.Getenv)
+}
+
+// CheckControlPlaneAuthScoped validates control plane peer address and token authorization
+// using the provided environment/configuration lookup function.
+func CheckControlPlaneAuthScoped(peerAddr string, header http.Header, getenv func(string) string) error {
+	return checkControlPlaneAuth(peerAddr, header, getenv)
 }
 
 func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(string) string) error {
