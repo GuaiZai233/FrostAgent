@@ -117,7 +117,8 @@ func (r *Reflector) Reflect(ctx context.Context) error {
 	owners := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.Owner != "" {
-			owners[entry.Owner] = true
+			canonical := CanonicalOwner(entry.Owner)
+			owners[canonical] = true
 		}
 	}
 	names := make([]string, 0, len(owners))
@@ -143,7 +144,7 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 	if !r.Available() {
 		return fmt.Errorf("LLM provider or model not configured for reflector")
 	}
-	owner = strings.TrimSpace(owner)
+	owner = CanonicalOwner(owner)
 	if owner == "" {
 		return fmt.Errorf("owner is required")
 	}

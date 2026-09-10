@@ -139,28 +139,31 @@ func TestDecorationNormalWrap(t *testing.T) {
 }
 
 func TestMentionOnlyDetection(t *testing.T) {
-	if !IsMentionOnlyOneBot(true, true, "", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "", false) {
 		t.Errorf("expected OneBot pure @ to be mention only")
 	}
-	if !IsMentionOnlyOneBot(true, true, "   ", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "   ", false) {
 		t.Errorf("expected OneBot whitespace-only text to be mention only")
 	}
-	if !IsMentionOnlyOneBot(true, true, "[@123456] ", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "[@123456] ", false) {
 		t.Errorf("expected OneBot extracted token text to be mention only")
 	}
-	if IsMentionOnlyOneBot(false, true, "", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] [@654321]", false) {
+		t.Errorf("expected mention of bot and other user to NOT be mention only")
+	}
+	if IsMentionOnlyOneBot(false, 123456, true, "", false) {
 		t.Errorf("private message should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, false, "", false) {
+	if IsMentionOnlyOneBot(true, 123456, false, "", false) {
 		t.Errorf("unmentioned message should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, true, "hello", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "hello", false) {
 		t.Errorf("message with text should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, true, "[@123456] hello", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] hello", false) {
 		t.Errorf("message with token and text should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, true, "", true) {
+	if IsMentionOnlyOneBot(true, 123456, true, "", true) {
 		t.Errorf("message with image should not be mention only")
 	}
 

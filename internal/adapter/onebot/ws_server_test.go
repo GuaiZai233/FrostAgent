@@ -457,6 +457,92 @@ func TestHandleWSGroupMessagePureMentionOnly(t *testing.T) {
 	}
 }
 
+func TestHandleWSGroupMessageMentionBotAndOtherNotMentionOnly(t *testing.T) {
+	mockProv := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到 @bot 和 @other",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockProv)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 构造同时 @ 机器人和 @ 其他用户的群聊消息
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     20002,
+		UserID:      987654,
+		MessageID:   888,
+		Message: json.RawMessage(
+			`[{"type":"at","data":{"qq":"123456"}},{"type":"at","data":{"qq":"654321"}}]`,
+		),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// 处理群信息查询
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取群信息查询失败: %v", err)
+	}
+	var groupInfoAction model.OneBotAction
+	if err := json.Unmarshal(respBytes, &groupInfoAction); err != nil {
+		t.Fatalf("解析群信息查询失败: %v", err)
+	}
+	if groupInfoAction.Action == "get_group_info" {
+		groupInfoResponse := map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"data": map[string]any{
+				"group_id":   event.GroupID,
+				"group_name": "测试群",
+			},
+			"echo": groupInfoAction.Echo,
+		}
+		responseBytes, _ := json.Marshal(groupInfoResponse)
+		if err := conn.WriteMessage(websocket.TextMessage, responseBytes); err != nil {
+			t.Fatalf("发送群信息响应失败: %v", err)
+		}
+		_, respBytes, err = conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取最终回复失败: %v", err)
+		}
+	}
+
+	mockProv.mu.Lock()
+	reqs := mockProv.requests
+	mockProv.mu.Unlock()
+
+	if len(reqs) == 0 {
+		t.Fatalf("未收到 LLM 请求")
+	}
+	for _, msg := range reqs[0].Messages {
+		contentStr := fmt.Sprintf("%v", msg.Content)
+		if strings.Contains(contentStr, `"mention_only":true`) {
+			t.Fatalf("同时 @ 机器人和其他用户不应被判定为 mention_only=true，实际消息: %s", contentStr)
+		}
+		if strings.Contains(contentStr, parity.MentionOnlyGuidance) {
+			t.Fatalf("同时 @ 机器人和其他用户不应注入 interaction_guidance，实际消息: %s", contentStr)
+		}
+	}
+}
+
 func TestHandleWSGroupMessageWithEmptyFinalSkipsMention(t *testing.T) {
 	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
 	provider := &mockLLMProvider{

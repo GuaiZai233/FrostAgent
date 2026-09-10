@@ -14,19 +14,32 @@ const MentionOnlyGuidance = "This is an explicit mention-only invitation to resp
 
 var mentionTokenRegex = regexp.MustCompile(`\[@\d+\]`)
 
+// StripBotSelfMentionTokens strips only the bot's own [@<selfID>] token from the text.
+// Mentions of other users (e.g. [@<otherQQ>]) are preserved.
+func StripBotSelfMentionTokens(text string, selfID int64) string {
+	if selfID == 0 {
+		return text
+	}
+	pattern := `\[@` + strconv.FormatInt(selfID, 10) + `\]`
+	re := regexp.MustCompile(pattern)
+	return strings.TrimSpace(re.ReplaceAllString(text, ""))
+}
+
 // StripBotMentionTokens strips [@<qq>] tokens formatted by OneBot extractUserText.
+// Deprecated: prefer StripBotSelfMentionTokens to avoid stripping mentions of other users.
 func StripBotMentionTokens(text string) string {
 	return strings.TrimSpace(mentionTokenRegex.ReplaceAllString(text, ""))
 }
 
 // IsMentionOnlyOneBot reports whether a OneBot group message is a mention-only interaction:
 // group message, explicitly wakes/mentions the bot, has empty text (or text consisting solely
-// of formatted [@<qq>] tokens and whitespace) and no images.
-func IsMentionOnlyOneBot(isGroup bool, mentionedBot bool, userText string, hasImages bool) bool {
+// of formatted [@<selfID>] tokens and whitespace) and no images.
+// Mentions of other users in userText will prevent this from returning true.
+func IsMentionOnlyOneBot(isGroup bool, selfID int64, mentionedBot bool, userText string, hasImages bool) bool {
 	if !isGroup || !mentionedBot || hasImages {
 		return false
 	}
-	return strings.TrimSpace(StripBotMentionTokens(userText)) == ""
+	return strings.TrimSpace(StripBotSelfMentionTokens(userText, selfID)) == ""
 }
 
 // IsMentionOnlyOneBotSegments checks whether raw OneBot message segments constitute

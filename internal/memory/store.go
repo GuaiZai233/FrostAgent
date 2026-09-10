@@ -40,6 +40,9 @@ func (s *Store) load() (*BrainData, error) {
 	if err := json.Unmarshal(data, &brain); err != nil {
 		return nil, fmt.Errorf("failed to parse brain: %w", err)
 	}
+	for i := range brain.Entries {
+		brain.Entries[i].Owner = CanonicalOwner(brain.Entries[i].Owner)
+	}
 	return &brain, nil
 }
 
@@ -278,6 +281,8 @@ func (s *Store) applyReflectionWithMerges(
 		return reflectionApplyResult{}, err
 	}
 
+	canonicalOwner := CanonicalOwner(owner)
+
 	outdated := make(map[string]bool, len(outdatedIDs))
 	for _, id := range outdatedIDs {
 		outdated[id] = true
@@ -359,6 +364,7 @@ func (s *Store) applyReflectionWithMerges(
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
 			}
+			entry.Owner = canonicalOwner
 		}
 		remainingAll = append(remainingAll, entry)
 	}
@@ -389,7 +395,7 @@ func (s *Store) applyReflectionWithMerges(
 
 func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 	return current.ID == snapshot.ID &&
-		current.Owner == snapshot.Owner &&
+		OwnersMatch(current.Owner, snapshot.Owner) &&
 		current.Content == snapshot.Content &&
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
