@@ -143,7 +143,16 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     5. **记忆所有权命名空间与反思目录对齐 (Memory Owner Namespace & Reflection Catalog Parity)**：记忆存储引擎（`memory.Store`）在写入与加载时全面规范化 QQ 记忆所有者（`CanonicalOwner`），并在检索与召回门禁（`memory.Gateway`）中通过 `OwnersMatch` 与 `OwnerAliases` 实现跨 `aiocqhttp:` / `onebot:` / `qq:` 别名的无感匹配，杜绝记忆数据孤岛与跨适配器丢失；记忆反思器（`Reflector`）在全量反思时基于 `CanonicalOwner` 进行聚类分组，保证同一逻辑 QQ 用户每轮仅触发一次反思请求（避免旧前缀与新规范所有者并发调用导致的重复 LLM 开销与状态覆盖）；主题目录存储（`CatalogStore`）全生命周期统一至单一 canonical bucket 存储，对旧版别名支持自动迁移与别名感知检索，避免目录命名空间分叉；
     6. **模型路由平台作用域与冲突校验对齐 (Model Router Platform Scope & Conflict Validation Parity)**：模型路由器的群组覆盖策略统一识别 QQ 生态协议（`qq`、`onebot`、`aiocqhttp`），在两端适配器下为群聊匹配一致的模型绑定规则；在配置校验阶段引入基于规范平台（`canonicalPlatform`）的重复性校验，若配置中同时出现针对同一群号的别名冲突覆盖（如同时显式配置 `onebot` 与 `aiocqhttp` 覆盖），校验阶段主动拒绝并明确报错，杜绝因配置顺序导致第二条规则静默失效（Silent First-Wins）；
     7. **计费外部身份对齐 (Billing External Identity Parity)**：计费系统外部身份识别统一规范化为 canonical `"qq"` 平台与标准 QQ 任务 ID（`BillingTaskID`），确保无论通过哪种传输通道均计入相同的用户账单与余额体系；
-    8. **纯 @ 提及交互引导对齐 (Mention-Only Interaction Guidance & Raw Segment Inspection)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身的 mention 标记以防止误判 `@Bot @OtherUser`），与 AstrBot 统一注入对齐的 `mention_only: true` 标记与标准 `parity.MentionOnlyGuidance` 提示词引导，保证大模型理解上下文的一致性；并在已覆盖的 QQ 语义契约范围内通过跨适配器差分测试（`parity_differential_test.go`）验证可观测语义同构。
+    8. **纯 @ 提及交互引导与引用上下文隔离对齐 (Mention-Only Interaction Guidance, Reply Isolation & Raw Segment Inspection)**：
+       - **统一入站交互契约 (Canonical Inbound Interaction Invariant)**：在 `internal/adapter/parity` 中定义统一的 `MentionInteraction` 结构与 `IsMentionOnly` 规则引擎。一条群聊消息判定为显式纯 @Bot 邀请响应（`mention_only: true`）必须严格满足 6 项不变量：
+         1. `IsGroup == true`（仅群聊生效）；
+         2. `IsMentionedBot == true`（显式针对机器人唤醒/@）；
+         3. `HasOtherMention == false`（未同时 @ 其他群成员）；
+         4. `HasReply == false`（未包含回复引用上下文；引用先验发言代表存在前置对话依赖，而非纯粹的向 Bot 打招呼）；
+         5. `HasImages == false`（未包含图片/表情等多媒体附件）；
+         6. `strings.TrimSpace(UserText) == ""`（未包含除空格外的正文内容）。
+       - **引用隔离与双端一致性 (Reply Isolation Parity)**：修复了此前 AstrBot 因仅依据文本而忽略 `reply_message_id`、导致在 `Reply + @Bot`（无文本）时误判为 `mention_only: true` 的语义漂移（Semantic Drift）。两端适配器（AstrBot 检查 `event.Metadata["reply_message_id"]`，OneBot 检查原始 `reply` 消息段及已解析 `replyContext`）统一向 `hasReply` 收敛，确保该场景下两端均一致判定为常规上下文对话轮次（`mention_only: false`，不注入 `MentionOnlyGuidance`）；
+       - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，杜绝未来语义回归。
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 

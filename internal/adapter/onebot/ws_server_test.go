@@ -543,6 +543,113 @@ func TestHandleWSGroupMessageMentionBotAndOtherNotMentionOnly(t *testing.T) {
 	}
 }
 
+func TestHandleWSGroupMessageReplyAndAtBotNotMentionOnly(t *testing.T) {
+	mockProv := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到引用消息回复！",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockProv)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 构造包含 reply segment 和 @ 机器人但没有文本的群聊消息
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     20002,
+		UserID:      987654,
+		MessageID:   889,
+		Message: json.RawMessage(
+			`[{"type":"reply","data":{"id":"777"}},{"type":"at","data":{"qq":"123456"}}]`,
+		),
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// 处理服务端发起的中间动作（如 get_msg、get_group_info）直至最终回复
+	for {
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取响应失败: %v", err)
+		}
+		var action model.OneBotAction
+		if err := json.Unmarshal(respBytes, &action); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if action.Action == "get_msg" {
+			getMsgResponse := map[string]any{
+				"status":  "ok",
+				"retcode": 0,
+				"data": map[string]any{
+					"message_id":   777,
+					"message_type": "group",
+					"group_id":     event.GroupID,
+					"sender":       map[string]any{"user_id": 55555, "nickname": "原作者"},
+					"message":      []map[string]any{{"type": "text", "data": map[string]any{"text": "原消息内容"}}},
+				},
+				"echo": action.Echo,
+			}
+			resBytes, _ := json.Marshal(getMsgResponse)
+			if err := conn.WriteMessage(websocket.TextMessage, resBytes); err != nil {
+				t.Fatalf("发送 get_msg 响应失败: %v", err)
+			}
+			continue
+		}
+		if action.Action == "get_group_info" {
+			groupInfoResponse := map[string]any{
+				"status":  "ok",
+				"retcode": 0,
+				"data": map[string]any{
+					"group_id":   event.GroupID,
+					"group_name": "测试群",
+				},
+				"echo": action.Echo,
+			}
+			resBytes, _ := json.Marshal(groupInfoResponse)
+			if err := conn.WriteMessage(websocket.TextMessage, resBytes); err != nil {
+				t.Fatalf("发送群信息响应失败: %v", err)
+			}
+			continue
+		}
+		if action.Action == "send_group_msg" {
+			break
+		}
+	}
+
+	mockProv.mu.Lock()
+	reqs := mockProv.requests
+	mockProv.mu.Unlock()
+
+	if len(reqs) == 0 {
+		t.Fatalf("未收到 LLM 请求")
+	}
+	for _, msg := range reqs[0].Messages {
+		contentStr := fmt.Sprintf("%v", msg.Content)
+		if strings.Contains(contentStr, `"mention_only":true`) {
+			t.Fatalf("Reply + @Bot 不应被判定为 mention_only=true，实际消息: %s", contentStr)
+		}
+		if strings.Contains(contentStr, parity.MentionOnlyGuidance) {
+			t.Fatalf("Reply + @Bot 不应注入 interaction_guidance，实际消息: %s", contentStr)
+		}
+	}
+}
+
 func TestHandleWSGroupMessageWithEmptyFinalSkipsMention(t *testing.T) {
 	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
 	provider := &mockLLMProvider{

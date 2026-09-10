@@ -2,9 +2,11 @@ package astrbot
 
 import (
 	"FrostAgent/internal/adapter/parity"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/tools"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -298,6 +300,233 @@ func TestCrossAdapterDecorationDifferential(t *testing.T) {
 			// 3. Differential assertion: observable semantics must match identically
 			if !reflect.DeepEqual(astrbotSemantics, onebotSemantics) {
 				t.Fatalf("Differential parity mismatch for %q:\nAstrBot: %+v\nOneBot:  %+v", tt.name, astrbotSemantics, onebotSemantics)
+			}
+		})
+	}
+}
+
+func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
+	const (
+		botSelfID   int64 = 100001
+		otherUserID int64 = 200002
+	)
+
+	tests := []struct {
+		name            string
+		isGroup         bool
+		isAtBot         bool
+		hasReply        bool
+		replyMessageID  string
+		hasOtherMention bool
+		hasImages       bool
+		text            string
+		wantMentionOnly bool
+	}{
+		{
+			name:            "pure_at_bot",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "",
+			wantMentionOnly: true,
+		},
+		{
+			name:            "whitespace_only_at_bot",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "   \n  \t  ",
+			wantMentionOnly: true,
+		},
+		{
+			name:            "reply_and_at_bot_no_text_no_attachment",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        true,
+			replyMessageID:  "msg_target_999",
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "",
+			wantMentionOnly: false, // Contract invariant: Reply + @Bot is never mention-only
+		},
+		{
+			name:            "reply_and_at_bot_with_whitespace",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        true,
+			replyMessageID:  "msg_target_999",
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "  ",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "at_bot_and_other_user",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: true,
+			hasImages:       false,
+			text:            "",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "at_bot_with_plain_text",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "hello bot",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "at_bot_with_image",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       true,
+			text:            "",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "private_at_bot",
+			isGroup:         false,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "unmentioned_group_message",
+			isGroup:         true,
+			isAtBot:         false,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "reply_at_bot_and_text",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        true,
+			replyMessageID:  "msg_target_999",
+			hasOtherMention: false,
+			hasImages:       false,
+			text:            "check this out",
+			wantMentionOnly: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgType := "group"
+			if !tt.isGroup {
+				msgType = "private"
+			}
+
+			// 1. Evaluate via AstrBot adapter path
+			astrbotContent := tt.text
+			if tt.hasOtherMention {
+				if astrbotContent == "" {
+					astrbotContent = "[@" + strconv.FormatInt(otherUserID, 10) + "]"
+				} else {
+					astrbotContent = "[@" + strconv.FormatInt(otherUserID, 10) + "] " + astrbotContent
+				}
+			}
+			astrbotEvent := Event{
+				MessageType: msgType,
+				IsAt:        tt.isAtBot,
+				Content:     astrbotContent,
+				Metadata:    map[string]any{},
+			}
+			if tt.hasReply {
+				astrbotEvent.Metadata["reply_message_id"] = tt.replyMessageID
+			}
+			if tt.hasImages {
+				astrbotEvent.Attachments = []core.Attachment{{Type: core.AttachmentTypeImage}}
+			}
+			astrbotResult := isMentionOnlyInteraction(astrbotEvent)
+
+			// 2. Evaluate via OneBot raw segments adapter path
+			var onebotSegs []tools.OneBotSegment
+			if tt.hasReply {
+				onebotSegs = append(onebotSegs, tools.OneBotSegment{
+					Type: "reply",
+					Data: map[string]any{"id": tt.replyMessageID},
+				})
+			}
+			if tt.isAtBot {
+				onebotSegs = append(onebotSegs, tools.OneBotSegment{
+					Type: "at",
+					Data: map[string]any{"qq": strconv.FormatInt(botSelfID, 10)},
+				})
+			}
+			if tt.hasOtherMention {
+				onebotSegs = append(onebotSegs, tools.OneBotSegment{
+					Type: "at",
+					Data: map[string]any{"qq": strconv.FormatInt(otherUserID, 10)},
+				})
+			}
+			if tt.text != "" {
+				onebotSegs = append(onebotSegs, tools.OneBotSegment{
+					Type: "text",
+					Data: map[string]any{"text": tt.text},
+				})
+			}
+			if tt.hasImages {
+				onebotSegs = append(onebotSegs, tools.OneBotSegment{
+					Type: "image",
+					Data: map[string]any{"file": "http://example.com/img.png"},
+				})
+			}
+			onebotSegmentResult := parity.IsMentionOnlyOneBotSegments(
+				tt.isGroup,
+				botSelfID,
+				onebotSegs,
+				tt.hasImages,
+				tt.hasReply,
+			)
+
+			// 3. Evaluate via OneBot text fallback path
+			userTextParts := make([]string, 0, 3)
+			if tt.isAtBot {
+				userTextParts = append(userTextParts, "[@"+strconv.FormatInt(botSelfID, 10)+"]")
+			}
+			if tt.hasOtherMention {
+				userTextParts = append(userTextParts, "[@"+strconv.FormatInt(otherUserID, 10)+"]")
+			}
+			if tt.text != "" {
+				userTextParts = append(userTextParts, tt.text)
+			}
+			onebotFallbackUserText := strings.Join(userTextParts, " ")
+			onebotFallbackResult := parity.IsMentionOnlyOneBot(
+				tt.isGroup,
+				botSelfID,
+				tt.isAtBot,
+				onebotFallbackUserText,
+				tt.hasImages,
+				tt.hasReply,
+			)
+
+			// 4. Differential assertions
+			if astrbotResult != onebotSegmentResult {
+				t.Fatalf("Differential parity mismatch between AstrBot (%v) and OneBot raw segments (%v)", astrbotResult, onebotSegmentResult)
+			}
+			if astrbotResult != onebotFallbackResult {
+				t.Fatalf("Differential parity mismatch between AstrBot (%v) and OneBot text fallback (%v)", astrbotResult, onebotFallbackResult)
+			}
+			if astrbotResult != tt.wantMentionOnly {
+				t.Fatalf("Expected mention_only=%v, got %v", tt.wantMentionOnly, astrbotResult)
 			}
 		})
 	}

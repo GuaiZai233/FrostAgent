@@ -139,32 +139,38 @@ func TestDecorationNormalWrap(t *testing.T) {
 }
 
 func TestMentionOnlyDetection(t *testing.T) {
-	if !IsMentionOnlyOneBot(true, 123456, true, "", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "", false, false) {
 		t.Errorf("expected OneBot pure @ to be mention only")
 	}
-	if !IsMentionOnlyOneBot(true, 123456, true, "   ", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "   ", false, false) {
 		t.Errorf("expected OneBot whitespace-only text to be mention only")
 	}
-	if !IsMentionOnlyOneBot(true, 123456, true, "[@123456] ", false) {
+	if !IsMentionOnlyOneBot(true, 123456, true, "[@123456] ", false, false) {
 		t.Errorf("expected OneBot extracted token text to be mention only")
 	}
-	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] [@654321]", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] [@654321]", false, false) {
 		t.Errorf("expected mention of bot and other user to NOT be mention only")
 	}
-	if IsMentionOnlyOneBot(false, 123456, true, "", false) {
+	if IsMentionOnlyOneBot(false, 123456, true, "", false, false) {
 		t.Errorf("private message should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, 123456, false, "", false) {
+	if IsMentionOnlyOneBot(true, 123456, false, "", false, false) {
 		t.Errorf("unmentioned message should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, 123456, true, "hello", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "hello", false, false) {
 		t.Errorf("message with text should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] hello", false) {
+	if IsMentionOnlyOneBot(true, 123456, true, "[@123456] hello", false, false) {
 		t.Errorf("message with token and text should not be mention only")
 	}
-	if IsMentionOnlyOneBot(true, 123456, true, "", true) {
+	if IsMentionOnlyOneBot(true, 123456, true, "", true, false) {
 		t.Errorf("message with image should not be mention only")
+	}
+	if IsMentionOnlyOneBot(true, 123456, true, "", false, true) {
+		t.Errorf("message with reply should not be mention only")
+	}
+	if IsMentionOnlyOneBot(true, 123456, true, "[@123456]", false, true) {
+		t.Errorf("message with reply and self token should not be mention only")
 	}
 
 	// Raw segment based
@@ -172,15 +178,27 @@ func TestMentionOnlyDetection(t *testing.T) {
 		{Type: "at", Data: map[string]any{"qq": "123456"}},
 		{Type: "text", Data: map[string]any{"text": "   "}},
 	}
-	if !IsMentionOnlyOneBotSegments(true, 123456, pureAtSegs, false) {
+	if !IsMentionOnlyOneBotSegments(true, 123456, pureAtSegs, false, false) {
 		t.Errorf("expected pureAtSegs to be mention only")
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, pureAtSegs, false, true) {
+		t.Errorf("pureAtSegs with hasReply=true should not be mention only")
+	}
+
+	replyAndAtSegs := []tools.OneBotSegment{
+		{Type: "reply", Data: map[string]any{"id": "999"}},
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "text", Data: map[string]any{"text": "   "}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, replyAndAtSegs, false, false) {
+		t.Errorf("replyAndAtSegs should not be mention only")
 	}
 
 	atWithContentSegs := []tools.OneBotSegment{
 		{Type: "at", Data: map[string]any{"qq": "123456"}},
 		{Type: "text", Data: map[string]any{"text": "hello"}},
 	}
-	if IsMentionOnlyOneBotSegments(true, 123456, atWithContentSegs, false) {
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithContentSegs, false, false) {
 		t.Errorf("atWithContentSegs should not be mention only")
 	}
 
@@ -188,7 +206,7 @@ func TestMentionOnlyDetection(t *testing.T) {
 		{Type: "at", Data: map[string]any{"qq": "123456"}},
 		{Type: "at", Data: map[string]any{"qq": "999999"}},
 	}
-	if IsMentionOnlyOneBotSegments(true, 123456, atOtherUserSegs, false) {
+	if IsMentionOnlyOneBotSegments(true, 123456, atOtherUserSegs, false, false) {
 		t.Errorf("atOtherUserSegs should not be mention only")
 	}
 
@@ -196,28 +214,46 @@ func TestMentionOnlyDetection(t *testing.T) {
 		{Type: "at", Data: map[string]any{"qq": "123456"}},
 		{Type: "image", Data: map[string]any{"file": "abc"}},
 	}
-	if IsMentionOnlyOneBotSegments(true, 123456, atWithMediaSegs, false) {
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithMediaSegs, false, false) {
 		t.Errorf("atWithMediaSegs should not be mention only")
 	}
 
 	// AstrBot
-	if !IsMentionOnlyAstrBot(true, true, "", 0) {
+	if !IsMentionOnlyAstrBot(true, true, "", 0, false) {
 		t.Errorf("expected AstrBot pure @ to be mention only")
 	}
-	if !IsMentionOnlyAstrBot(true, true, "   ", 0) {
+	if !IsMentionOnlyAstrBot(true, true, "   ", 0, false) {
 		t.Errorf("expected AstrBot whitespace text to be mention only")
 	}
-	if IsMentionOnlyAstrBot(false, true, "", 0) {
+	if IsMentionOnlyAstrBot(false, true, "", 0, false) {
 		t.Errorf("AstrBot private should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, false, "", 0) {
+	if IsMentionOnlyAstrBot(true, false, "", 0, false) {
 		t.Errorf("AstrBot not @ should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "test", 0) {
+	if IsMentionOnlyAstrBot(true, true, "test", 0, false) {
 		t.Errorf("AstrBot with text should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 1) {
+	if IsMentionOnlyAstrBot(true, true, "", 1, false) {
 		t.Errorf("AstrBot with attachment should not be mention only")
+	}
+	if IsMentionOnlyAstrBot(true, true, "", 0, true) {
+		t.Errorf("AstrBot with reply should not be mention only")
+	}
+
+	// Canonical interaction contract
+	if !IsMentionOnly(MentionInteraction{
+		IsGroup:        true,
+		IsMentionedBot: true,
+	}) {
+		t.Errorf("canonical pure @ interaction should be mention only")
+	}
+	if IsMentionOnly(MentionInteraction{
+		IsGroup:        true,
+		IsMentionedBot: true,
+		HasReply:       true,
+	}) {
+		t.Errorf("canonical interaction with reply should not be mention only")
 	}
 }
 

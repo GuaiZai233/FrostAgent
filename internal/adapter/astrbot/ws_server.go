@@ -356,7 +356,13 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 }
 
 func isMentionOnlyInteraction(event Event) bool {
-	return parity.IsMentionOnlyAstrBot(event.MessageType == "group", event.IsAt, event.Content, len(event.Attachments))
+	hasReply := false
+	if event.Metadata != nil {
+		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
+			hasReply = true
+		}
+	}
+	return parity.IsMentionOnlyAstrBot(event.MessageType == "group", event.IsAt, event.Content, len(event.Attachments), hasReply)
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {

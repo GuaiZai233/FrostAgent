@@ -280,11 +280,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		for i, s := range segments {
 			toolSegs[i] = tools.OneBotSegment{Type: s.Type, Data: s.Data}
 		}
+		hasReply := replyContext.Prompt != "" || replyContext.MessageID != ""
+		if !hasReply {
+			for _, s := range segments {
+				if s.Type == "reply" {
+					hasReply = true
+					break
+				}
+			}
+		}
 		var mentionOnly bool
 		if len(toolSegs) > 0 {
-			mentionOnly = parity.IsMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage || replyHasImage || replyContext.Prompt != "")
+			mentionOnly = parity.IsMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage || replyHasImage || replyContext.Prompt != "", hasReply)
 		} else {
-			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", event.SelfID, IsMentionedBot(event), userText, currentHasImage || replyHasImage || replyContext.Prompt != "")
+			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", event.SelfID, IsMentionedBot(event), userText, currentHasImage || replyHasImage || replyContext.Prompt != "", hasReply)
 		}
 		contextMap["mention_only"] = mentionOnly
 		if mentionOnly {
