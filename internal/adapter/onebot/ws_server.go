@@ -25,6 +25,8 @@ import (
 
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -241,13 +243,45 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		} else {
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
+				if engine != nil && engine.Security != nil {
+					principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+					if pErr == nil {
+						decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+							Instance: engine.InstanceID,
+							Session:  historyKey(event),
+						})
+						if security.Blocks(decision.Action) {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述包含高风险内容，已被安全机制隔离剔除: %s", event.UserID, decision.Reason))
+							imageDesc = ""
+						}
+					}
+				}
+			}
+			if imageDesc != "" {
 				userText = userText + " 【图片内容】：" + imageDesc
 			}
 		}
 	}
 	if replyHasImage && visionEnabled {
 		imageDesc := content.ProcessImage(routeCtx, replyContext.Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
-		replyContext.addImageDescription(imageDesc, engine.Scope)
+		if imageDesc != "" {
+			if engine != nil && engine.Security != nil {
+				principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				if pErr == nil {
+					decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						Instance: engine.InstanceID,
+						Session:  historyKey(event),
+					})
+					if security.Blocks(decision.Action) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+						imageDesc = ""
+					}
+				}
+			}
+		}
+		if imageDesc != "" {
+			replyContext.addImageDescription(imageDesc, engine.Scope)
+		}
 	}
 
 	// 检查单条用户消息输入上限保护
@@ -273,11 +307,53 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if event.GroupID != 0 {
 		contextMap["group_id"] = event.GroupID
 		if groupName := conn.groupName(event.GroupID); groupName != "" {
-			contextMap["group_name"] = groupName
+			if engine != nil && engine.Security != nil {
+				principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				if pErr == nil {
+					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+						Instance: engine.InstanceID,
+						Session:  historyKey(event),
+					})
+					if security.Blocks(decision.Action) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
+						groupName = ""
+					}
+				}
+			}
+			if groupName != "" {
+				contextMap["group_name"] = groupName
+			}
 		}
 	}
 	if sender := senderContext(event); len(sender) > 0 {
-		contextMap["sender"] = sender
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			if pErr == nil {
+				if nickname, ok := sender["nickname"].(string); ok && nickname != "" {
+					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
+						Instance: engine.InstanceID,
+						Session:  historyKey(event),
+					})
+					if security.Blocks(decision.Action) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者昵称 [%s] 包含高风险内容，已被安全机制隔离剔除", nickname))
+						delete(sender, "nickname")
+					}
+				}
+				if card, ok := sender["card"].(string); ok && card != "" {
+					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, card, security.AuditEvent{
+						Instance: engine.InstanceID,
+						Session:  historyKey(event),
+					})
+					if security.Blocks(decision.Action) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者群名片 [%s] 包含高风险内容，已被安全机制隔离剔除", card))
+						delete(sender, "card")
+					}
+				}
+			}
+		}
+		if len(sender) > 0 {
+			contextMap["sender"] = sender
+		}
 	}
 	contextBytes, _ := json.Marshal(contextMap)
 
@@ -315,21 +391,70 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	var vettedSummary string
 	if groupSnapshot.RunningSummary != "" {
+		vettedSummary = groupSnapshot.RunningSummary
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			if pErr == nil {
+				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  historyKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+					vettedSummary = ""
+				}
+			}
+		}
+	}
+	if vettedSummary != "" {
 		requestPrompt += fmt.Sprintf(
 			"\n\n<group_running_summary>\n%s\n</group_running_summary>",
-			groupSnapshot.RunningSummary,
+			vettedSummary,
 		)
 	}
 	if recentContext := llm.FormatRecentGroupMessagesContext(groupSnapshot.RecentStructuredMessages); recentContext != "" {
-		requestPrompt += "\n\n" + recentContext
+		vettedRecent := recentContext
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			if pErr == nil {
+				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  historyKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+					vettedRecent = ""
+				}
+			}
+		}
+		if vettedRecent != "" {
+			requestPrompt += "\n\n" + vettedRecent
+		}
 	}
 	if responseContext != "" {
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 	if replyContext.Prompt != "" {
-		requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", replyContext.Prompt)
+		vettedReply := replyContext.Prompt
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			if pErr == nil {
+				decision := engine.Security.EvaluateContext(principal, security.SourceUserQuote, replyContext.Prompt, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  historyKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+					vettedReply = ""
+				}
+			}
+		}
+		if vettedReply != "" {
+			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
+		}
 	}
 
 	// 4. Call the agent engine with history
@@ -489,6 +614,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Owner:            owner,
 			OwnerType:        ownerType,
 			ActorUserID:      strconv.FormatInt(event.UserID, 10),
+			ActorPlatform:    "onebot",
+			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
 			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
@@ -545,7 +672,18 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		engine.Log().Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
 	}
 
-	// 5. Prepare the final message for OneBot by parsing the engine's response
+	// 5. Inspect the final model output before preparing the platform message.
+	if engine != nil && engine.Security != nil && engine.Security.Watchdog != nil {
+		if principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10)); principalErr == nil {
+			decision := engine.Security.Watchdog.Evaluate(principal, security.StageModelOutput, security.SourceModelOutput, replyText, security.AuditEvent{Instance: engine.InstanceID, Session: historyKey(event)})
+			if security.Blocks(decision.Action) {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 模型输出被安全控制拦截: user=%d reason=%s", event.UserID, decision.Reason))
+				replyText = "FrostAgent安全控制：模型输出已拦截。"
+			}
+		}
+	}
+
+	// 6. Prepare the final message for OneBot by parsing the engine's response
 	var finalMessage any
 
 	var toolOutput struct {

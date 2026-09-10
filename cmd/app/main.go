@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/instance"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
+	secsvc "FrostAgent/internal/service/security"
 	"context"
 	"fmt"
 	"net/http"
@@ -69,6 +70,9 @@ func run() error {
 func managementMux(manager http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/api/instances", manager)
+	if registry, ok := manager.(*instance.Manager); ok {
+		mux.Handle("/api/security/", secsvc.NewScoped(registry.SecurityController(), registry.ControlPlaneGetenv()))
+	}
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)
 	mux.Handle("/frostagent.v1.LogService/", manager)

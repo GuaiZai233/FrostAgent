@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
@@ -487,6 +488,21 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 			imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
+				if engine != nil && engine.Security != nil {
+					principal, pErr := security.NewPrincipal(platform, event.UserID)
+					if pErr == nil {
+						decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+							Instance: engine.InstanceID,
+							Session:  sessionKey(event),
+						})
+						if security.Blocks(decision.Action) {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+							imageDesc = ""
+						}
+					}
+				}
+			}
+			if imageDesc != "" {
 				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 			}
 		}
@@ -518,11 +534,41 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		owner, ownerType = memory.OwnerForPlatformPrivate(platform, event.UserID)
 	}
 
+	senderName := senderDisplayName(event)
+	groupName := event.GroupName
+	if engine != nil && engine.Security != nil {
+		principal, pErr := security.NewPrincipal(platform, event.UserID)
+		if pErr == nil {
+			if senderName != "" {
+				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  sessionKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含高风险内容，已被安全机制隔离剔除", senderName))
+					senderName = ""
+				}
+			}
+			if groupName != "" {
+				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  sessionKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
+					groupName = ""
+				}
+			}
+		}
+	}
+
 	contextData := map[string]any{
-		"message_id":  event.MessageID,
-		"sender_id":   event.UserID,
-		"sender_name": senderDisplayName(event),
-		"platform":    platform,
+		"message_id": event.MessageID,
+		"sender_id":  event.UserID,
+		"platform":   platform,
+	}
+	if senderName != "" {
+		contextData["sender_name"] = senderName
 	}
 	if event.Metadata != nil {
 		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
@@ -531,7 +577,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	if event.MessageType == "group" {
 		contextData["group_id"] = event.GroupID
-		contextData["group_name"] = event.GroupName
+		if groupName != "" {
+			contextData["group_name"] = groupName
+		}
 		contextData["is_wake"] = event.IsWake
 		contextData["is_at"] = event.IsAt
 		mentionOnly := isMentionOnlyInteraction(event)
@@ -553,14 +601,47 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 		}
 	}
+	var vettedSummary string
 	if groupSnapshot.RunningSummary != "" {
+		vettedSummary = groupSnapshot.RunningSummary
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			if pErr == nil {
+				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  sessionKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+					vettedSummary = ""
+				}
+			}
+		}
+	}
+	if vettedSummary != "" {
 		requestPrompt += fmt.Sprintf(
 			"\n\n<group_running_summary>\n%s\n</group_running_summary>",
-			groupSnapshot.RunningSummary,
+			vettedSummary,
 		)
 	}
 	if recentContext := llm.FormatRecentGroupMessagesContext(groupSnapshot.RecentStructuredMessages); recentContext != "" {
-		requestPrompt += "\n\n" + recentContext
+		vettedRecent := recentContext
+		if engine != nil && engine.Security != nil {
+			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			if pErr == nil {
+				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
+					Instance: engine.InstanceID,
+					Session:  sessionKey(event),
+				})
+				if security.Blocks(decision.Action) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+					vettedRecent = ""
+				}
+			}
+		}
+		if vettedRecent != "" {
+			requestPrompt += "\n\n" + vettedRecent
+		}
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
@@ -673,11 +754,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:   sessionKey(event),
-			Owner:       owner,
-			OwnerType:   ownerType,
-			ActorUserID: event.UserID,
-			SendHook:    sendHook,
+			SessionID:     sessionKey(event),
+			Owner:         owner,
+			OwnerType:     ownerType,
+			ActorUserID:   event.UserID,
+			ActorPlatform: platform,
+			InstanceID:    engine.InstanceID,
+			SendHook:      sendHook,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},

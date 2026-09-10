@@ -10,6 +10,7 @@ import (
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
+	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
 	"context"
 	"crypto/rand"
@@ -58,22 +59,23 @@ type managed struct {
 	mcp     *mcp.Manager
 }
 type Manager struct {
-	mu             sync.RWMutex
-	root           string
-	global         *instanceconfig.Store
-	wsListenAddr   string
+	mu               sync.RWMutex
+	root             string
+	global           *instanceconfig.Store
+	wsListenAddr     string
 	registry         registry
 	instances        map[string]*managed
 	templateDialogue string
 	billing          *billing.Client
-	mcpGetenv      func(string) string
-	sandbox        *sandbox.ConfigManager
-	endpointMu     sync.Mutex
-	endpointOwners map[string]string
-	general        http.Handler
-	shutdown       context.Context
-	shutdownCancel context.CancelFunc
-	closeOnce      sync.Once
+	mcpGetenv        func(string) string
+	sandbox          *sandbox.ConfigManager
+	security         *security.Controller
+	endpointMu       sync.Mutex
+	endpointOwners   map[string]string
+	general          http.Handler
+	shutdown         context.Context
+	shutdownCancel   context.CancelFunc
+	closeOnce        sync.Once
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
@@ -92,7 +94,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if dialoguePath == "" {
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel}
+	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs)}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
 		if err = json.Unmarshal(data, &m.registry); err != nil {
@@ -263,7 +265,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
@@ -330,6 +332,36 @@ func (m *Manager) List() ([]Info, int) {
 	defer m.mu.RUnlock()
 	return append([]Info{}, m.registry.Instances...), m.registry.NextNumber
 }
+
+// SecurityController returns the single controller shared by every runtime.
+func (m *Manager) SecurityController() *security.Controller { return m.security }
+
+// ControlPlaneGetenv returns the configuration getter used for control plane authorization.
+func (m *Manager) ControlPlaneGetenv() func(string) string { return m.mcpGetenv }
+
+// Engine returns an instance engine by its canonical registry ID.
+func (m *Manager) Engine(id string) (*llm.Engine, error) {
+	if id == "default" {
+		items, _ := m.List()
+		for _, item := range items {
+			if item.Enabled {
+				id = item.ID
+				break
+			}
+		}
+	}
+	i, err := m.lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if i.runtime == nil {
+		return nil, fs.ErrNotExist
+	}
+	return i.runtime.Engine, nil
+}
+
 func (m *Manager) lookup(id string) (*managed, error) {
 	if !idPattern.MatchString(id) {
 		return nil, fs.ErrNotExist

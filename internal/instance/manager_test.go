@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1855,5 +1856,41 @@ func TestLegacySharedSystemPromptBreakingMigrationBoundary(t *testing.T) {
 	}
 	if got := m.instances[fresh.ID].config.Get("SYSTEM_PROMPT"); got != "你是一个乐于助人的助手。" {
 		t.Fatalf("fresh instance did not receive template prompt: %q", got)
+	}
+}
+
+func TestRuntimesShareGlobalSecurityController(t *testing.T) {
+	m := testManager(t)
+	first := create(t, m, "security-a")
+	second := create(t, m, "security-b")
+	if err := m.Enable(first.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	engineA, err := m.Engine(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engineB, err := m.Engine(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engineA.Security == nil || engineA.Security != engineB.Security || engineA.Security != m.SecurityController() {
+		t.Fatal("runtime engines do not share the manager security controller")
+	}
+	principal, err := security.NewPrincipal("eval", "client:attacker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SecurityController().Lock(principal, "test lock"); err != nil {
+		t.Fatal(err)
+	}
+	if err := engineA.Security.CheckAccess(principal); !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("engine A access=%v", err)
+	}
+	if err := engineB.Security.CheckAccess(principal); !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("engine B access=%v", err)
 	}
 }

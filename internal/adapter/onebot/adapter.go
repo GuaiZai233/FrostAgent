@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
@@ -274,6 +275,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.MetaEventType == "heartbeat" {
 				continue
+			}
+			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				if principalErr != nil {
+					continue
+				}
+				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				if security.Blocks(decision.Action) {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
+					continue
+				}
 			}
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {

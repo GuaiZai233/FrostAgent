@@ -15,6 +15,7 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
@@ -46,7 +47,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -223,6 +224,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		Security:       securityController,
+		InstanceID:     instanceID,
 		// Billing components
 		BillingClient: billingClient,
 		BillingConfig: billingCfg,
