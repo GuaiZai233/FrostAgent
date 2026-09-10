@@ -10,6 +10,13 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
   - 直接用户输入的首次违规（包括模糊匹配与主动编码）仅阻断内容（`BLOCK`），记录阻断哈希与时间，strike 计数保持为 0，不施加用户级处罚。
   - 唯有在已有阻断历史的窗口期内发生明显重复提交或真正编码规避尝试时，才累计 `STRIKE`，并在达到阈值（3 次）后升级为全局锁定（`LOCK`）。
   - **精准规避判定与良性编码解耦**：规避证据（`isEvasion` / `encoded=true`）仅在归一化揭示了原始输入中不存在的危险规则（`!rawMatches && normMatches`），或通过归一化还原了此前被阻断的标准载荷哈希（`normHash == lastBlockedHash && rawHash != normHash`）时才被采信并计入惩罚；包含良性 URL 编码（如 `https://example.com/foo%20bar`）或良性字符但危险指令本就以明文出现的直接违规输入，仅做常规阻断，绝不滥记编码规避 Strike。
+- **显式安全拦截报错与双重安全边界解耦（Inspector vs. Gateway）**：
+  当用户请求被安全控制拦截时，不再静默丢弃（"一声不吭"），而是向用户返回具有明确安全责任边界的 FrostAgent 层面标准报错：
+  - **安全审查员拦截（Security Inspector）**：当活跃用户的消息内容命中 Watchdog 阻断或违规规则时，返回：
+    `FrostAgent 错误：Request rejected by security inspector: 不合适的内容！`
+  - **安全网关封禁拦截（Security Gateway）**：当主体在安全访问控制网关中处于封禁/锁定状态（已在 `AccessStore` 中处于 `LOCKED` 状态，或由 Strike 升级为 `WatchdogLock`），返回：
+    `FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`
+  - **前置安全不变量与群聊礼貌拦截**：拦截报错在适配器 Ingress 入口最前沿发送（早于消息会话映射、群聊上下文缓冲、贴纸观察、视觉处理与 LLM 调用）；在私聊场景下始终返回报错；而在群聊场景中，仅当机器人被显式触发（@机器人、别名/唤醒词唤醒、引用回复机器人，或配置了 `GROUP_REPLY_ON_MENTION=false`）时才发送拦截报错，避免在未艾特机器人的群聊背景对话中因出现敏感词或被封禁用户发言而产生非预期的机器人报错打扰。
 - **有界归一化与组合式规避解码（Compositional Normalization Pipeline）**：
   - Watchdog 设置明确的安全审查上限（256 KiB）。超出上限的超大输入直接 Fail-Closed 阻断，坚决杜绝静默截断放行导致的尾部走私注入。
   - 编码归一化采用容错百分号扫描器（`tolerantPercentUnescape`），按字节逐个解码有效的 `%[0-9a-fA-F]{2}` 序列，同时完整保留混杂的畸形转义（如 `%ZZ`、末尾悬空 `%`、未截断十六进制）和字面加号（`+`），彻底避免传统全有或全无解码器在遇到畸形字符时直接中断解码导致危险载荷漏检，并杜绝将 `C++` 或 `A+B` 误判为编码规避。
@@ -30,5 +37,9 @@ Key design guarantees:
 1. **Scope**: Global Access Control + Watchdog foundation for all FrostAgent platform adapters. (Telegram Adapter and Telegram-based adversarial E2E testing are tracked separately and not part of this foundation PR).
 2. **Platform Canonicalization**: Decouples transport protocol names (`onebot`, `aiocqhttp`) from user principals (`qq:<user_id>`), guaranteeing that security policies and lock states apply to the human actor across transports.
 3. **Indirect Context Checkpoints**: Injected prompt context (quoted reply messages, group running summaries, and recent group history) is vetted via distinct Watchdog provenance sources (`USER_QUOTE_REPLY_CONTEXT`, `GROUP_CONTEXT`), isolating dangerous injection without penalizing the current caller.
-4. **Graduated Enforcement**: Lower threshold for blocking content, higher threshold for penalizing users. Single fuzzy or encoded violations result in silent content blocking; only deliberate, repeated evasion attempts within the sliding window accrue strikes toward a permanent lock.
+4. **Graduated Enforcement**: Lower threshold for blocking content, higher threshold for penalizing users. Single fuzzy or encoded violations result in content blocking; only deliberate, repeated evasion attempts within the sliding window accrue strikes toward a permanent lock.
 5. **Fail-Closed Atomic Persistence**: Windows `MoveFileExW` and POSIX atomic renames prevent corrupted or missing security state files from failing open under high concurrency.
+6. **Explicit Security Rejections & Boundary Decoupling**: Security interventions return explicit FrostAgent-level error notifications rather than dropping requests silently:
+   - Content violation for active principals: `FrostAgent 错误：Request rejected by security inspector: 不合适的内容！`
+   - Banned/locked principals at the gateway: `FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`
+   In group chats, rejection notifications are sent only when the bot was explicitly addressed (via `@bot`, name wake word, or quote reply), preventing unsolicited interruptions during unaddressed background conversations.

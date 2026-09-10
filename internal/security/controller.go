@@ -10,6 +10,11 @@ var (
 	ErrBlocked = errors.New("content blocked by watchdog")
 )
 
+const (
+	RejectInspectorMsg = "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！"
+	RejectGatewayMsg   = "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。"
+)
+
 type Controller struct {
 	Access   *AccessStore
 	Watchdog *Watchdog
@@ -108,4 +113,26 @@ func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content
 
 func Blocks(action WatchdogAction) bool {
 	return action == WatchdogBlock || action == WatchdogStrike || action == WatchdogLock
+}
+
+// IsLocked checks whether the principal is currently locked in the access store.
+func (c *Controller) IsLocked(p Principal) bool {
+	if c == nil || c.Access == nil {
+		return false
+	}
+	locked, _, err := c.Access.IsLocked(p)
+	return err == nil && locked
+}
+
+// RejectMessage returns the user-facing error message for a blocked security decision.
+// If the principal is locked (in AccessStore, via WatchdogLock action, or with ErrLocked reason),
+// it returns RejectGatewayMsg. Otherwise, it returns RejectInspectorMsg.
+func (c *Controller) RejectMessage(p Principal, decision WatchdogDecision) string {
+	if c != nil && c.IsLocked(p) {
+		return RejectGatewayMsg
+	}
+	if decision.Action == WatchdogLock || decision.Reason == ErrLocked.Error() {
+		return RejectGatewayMsg
+	}
+	return RejectInspectorMsg
 }
