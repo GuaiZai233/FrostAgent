@@ -194,11 +194,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	// 1. Extract user's visible message
-	var segments []content.MessageSegment
-	segments = []content.MessageSegment{}
-	if err := json.Unmarshal(event.Message, &segments); err != nil {
-		engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("解析消息段失败: %v", err))
-		// Don't return, just work with an empty segment list
+	segments := ParseMessageSegments(event.Message)
+	if segments == nil {
+		segments = []content.MessageSegment{}
 	}
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
@@ -822,9 +820,9 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage, sco
 			texts = append(texts, fmt.Sprintf("[@%v] ", seg.Data["qq"]))
 		case "face":
 			texts = append(texts, fmt.Sprintf("[表情:%v] ", seg.Data["id"]))
-		case "image":
+		case "image", "mface":
 			texts = append(texts, "[图片] ")
-		case "record":
+		case "record", "audio", "voice":
 			texts = append(texts, "[语音] ")
 		case "video":
 			texts = append(texts, "[视频] ")

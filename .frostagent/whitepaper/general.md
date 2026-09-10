@@ -102,7 +102,26 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - `IncomingMessage` / `OutgoingMessage`：与具体平台解耦的通用入站/出站消息结构。
 - **OneBot 适配器 (`internal/adapter/onebot`)**：
   - 支持 OneBot v11 Reverse WebSocket 协议，负责原生 QQ 消息段解析、群聊/私聊事件处理与会话轮次锁定；
-  - 对上游返回的空最终回复执行发送门禁，避免在群聊中发送空消息或单独的 @ 提及。
+  - 对上游返回的空最终回复执行发送门禁，避免在群聊中发送空消息或单独的 @ 提及；
+  - **NapCat 优先基线与多上游兼容原则 (NapCat-First Baseline & Vendor Parity)**：
+    - 明确将 NapCat 作为 OneBot v11 的首要支持目标与规范兼容基线（Canonical Compatibility Baseline）；
+    - 针对 LuckyLillia (LLBot) 等其他 OneBot 协议实现的差异，统一在 OneBot 适配器/内容解析边界执行入站归一化与兼容 Shim，严禁将具体 vendor 的条件分支穿透泄漏至 Core、LLM、Memory 或 Sticker 层；
+    - 在遇到两者无法同时保持的语义冲突时，无条件优先保持 NapCat 既有稳定行为，不因兼容其他上游而引入回归；
+  - **消息段入站归一化 (Inbound Segment Normalization)**：
+    - 贴纸 Subtype 归一：NapCat 入站采用蛇形命名 `sub_type = 1`，LuckyLillia 采用驼峰命名 `subType = 1`。适配器入站解析时统一规范化，双向补全 `sub_type` 与 `subType`，保证无论连接何种上游均能准确识别贴纸并触发自动抓取、`steal_sticker` 与视觉处理；
+    - 商城表情统一语义 (Market Face Canonical Semantics)：NapCat 将商城表情上报为带有 `emoji_id` / `emoji_package_id` 元数据的 `image` 段，LuckyLillia 采用原生 `mface` 段。适配器将其统一抽象为规范图像语义：文本占位符统一输出 `[图片] `（视觉关闭时静默擦除，视觉开启时追加 `【图片内容】：...`），`IsContainImage` 均判定为含图，通过 VIP QQ CDN 规范地址获取图片并纳入表情包偷取与多模态视觉管线；
+    - 语音与多媒体段：统一兼容 `record` 原生段及 `audio`/`voice` 别名，规范化提取为 `[语音]` 占位符；
+  - **出站双写兼容保证 (Outbound Dual-Write Guarantee)**：
+    - 在出站消息链（`BuildOneBotMessage`）中构造贴纸图片段时，显式且强制双写 `sub_type: 1` 与 `subType: 1`，分别满足 NapCat 与 LuckyLillia 的字段消费需求，严禁删减；
+  - **Message ID 生命周期与非跨上游稳定标识 (Vendor-Local Message ID Handle)**：
+    - NapCat 基于内存映射生成正数 int32 短 ID，LuckyLillia 基于数据库生成有符号 int32 短 ID。同一条真实 QQ 消息在不同上游下的 `message_id` 不可认为相同，亦不可跨上游连接或进程重启复用；
+    - FrostAgent 明确将 OneBot `message_id` 界定为连接级不透明句柄（Opaque Handle），仅用于当轮会话上下文中的 quote/reply 引用查询与临时 sticker 溯源，不将其作为全局持久或跨上游稳定标识；
+    - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），回退为空引用上下文，绝不中断或阻断核心对话事件分发；
+  - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
+    - 前置校验：本地文件与贴纸在组装消息链时严格执行前置强校验（Fail-Fast），文件缺失或为空时立即拒绝发送；
+    - 上游 ACK 门禁：通过 `SendActionAndWait` 监听平台响应。若上游返回错误码（如 LuckyLillia 在媒体转换抛错时整体报错，或群禁言/风控），FrostAgent 坚决不向持久历史提交该 assistant 消息，记录瞬态 `DeliveryFailure` 并向工具调用返回错误；若上游返回成功（如 NapCat 部分元素转换异常时局部过滤但整体返回成功），FrostAgent 尊重平台 ACK 并正常提交历史；
+  - **入站媒体异常可观测性 (Inbound Media Resolution Observability)**：
+    - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。
 - **AstrBot 适配器 (`internal/adapter/astrbot` 与 `adapters/astrbot_plugin_frostagent`)**：
   - 基于双向 WebSocket 长连接的轻量 JSON 专有协议；
   - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；
@@ -202,7 +221,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；
-  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
+  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` / `subType: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，同时双写 `sub_type: 1` 与 `subType: 1` 确保 NapCat 与 LuckyLillia 均可正确处理，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
   - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
 - **Web 控制台表情包管理 (Web Dashboard Management)**：
   - Web 控制台在「Prompt 检查」下方提供「表情包摘取」独立管理页面（`/#stickers`）；

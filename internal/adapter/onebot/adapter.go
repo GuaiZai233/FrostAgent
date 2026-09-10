@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -278,7 +279,7 @@ func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
 	var sources []string
 	for _, seg := range segments {
 		if seg.Type != "mface" &&
-			(seg.Type != "image" || (!isStickerSubType(seg.Data["sub_type"]) && !content.IsMarketFaceSegment(seg))) {
+			(seg.Type != "image" || (!isStickerSubType(content.ImageSubType(seg.Data)) && !content.IsMarketFaceSegment(seg))) {
 			continue
 		}
 		if source := content.SegmentImageSource(seg); source != "" {
@@ -317,10 +318,12 @@ func isStickerSubType(value any) bool {
 	switch stickerType := value.(type) {
 	case int:
 		return stickerType == 1
+	case int64:
+		return stickerType == 1
 	case float64:
 		return stickerType == 1
 	case string:
-		return stickerType == "1"
+		return strings.TrimSpace(stickerType) == "1"
 	case json.Number:
 		return stickerType.String() == "1"
 	default:

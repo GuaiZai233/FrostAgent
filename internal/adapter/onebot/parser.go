@@ -165,6 +165,7 @@ func EventRawMessages(event model.OneBotEvent) []json.RawMessage {
 // ParseMessageSegments 兼容解析 OneBot 消息字段。
 // 标准 OneBot 消息是 []MessageSegment；部分实现或上游适配层会传入纯字符串，
 // 这里统一转换成 text 消息段，避免多上下文/连续消息场景下解析失败后把 JSON 原文发给模型。
+// 对解析得到的消息段统一进行入站规范化（NapCat 为基线，兼容 LuckyLillia 的 subType/camelCase 等）。
 func ParseMessageSegments(raw json.RawMessage) []content.MessageSegment {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -172,7 +173,7 @@ func ParseMessageSegments(raw json.RawMessage) []content.MessageSegment {
 
 	var segments []content.MessageSegment
 	if err := json.Unmarshal(raw, &segments); err == nil {
-		return segments
+		return content.NormalizeMessageSegments(segments)
 	}
 
 	var text string
