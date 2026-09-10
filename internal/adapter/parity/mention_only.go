@@ -39,6 +39,7 @@ type MentionInteraction struct {
 	HasOtherMention bool
 	HasReply        bool
 	HasImages       bool
+	HasOtherContent bool
 	UserText        string
 }
 
@@ -48,12 +49,13 @@ type MentionInteraction struct {
 // 3. Must NOT mention any other user (HasOtherMention == false).
 // 4. Must NOT have reply/quote context (HasReply == false).
 // 5. Must NOT contain images or media attachments (HasImages == false).
-// 6. Must NOT contain non-whitespace text (strings.TrimSpace(UserText) == "").
+// 6. Must NOT contain non-text/non-image components like Face, Record, Video (HasOtherContent == false).
+// 7. Must NOT contain non-whitespace text (strings.TrimSpace(UserText) == "").
 func IsMentionOnly(interaction MentionInteraction) bool {
 	if !interaction.IsGroup || !interaction.IsMentionedBot {
 		return false
 	}
-	if interaction.HasOtherMention || interaction.HasReply || interaction.HasImages {
+	if interaction.HasOtherMention || interaction.HasReply || interaction.HasImages || interaction.HasOtherContent {
 		return false
 	}
 	return strings.TrimSpace(interaction.UserText) == ""
@@ -72,6 +74,7 @@ func IsMentionOnlyOneBot(isGroup bool, selfID int64, mentionedBot bool, userText
 		HasOtherMention: hasOtherMention,
 		HasReply:        hasReply,
 		HasImages:       hasImages,
+		HasOtherContent: false,
 		UserText:        stripped,
 	})
 }
@@ -91,6 +94,9 @@ func IsMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.On
 
 	selfIDStr := strconv.FormatInt(selfID, 10)
 	hasBotMention := false
+	hasOtherMention := false
+	hasOtherContent := false
+	var textBuilder strings.Builder
 
 	for _, seg := range segments {
 		switch seg.Type {
@@ -112,31 +118,50 @@ func IsMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.On
 			if atQQ == selfIDStr {
 				hasBotMention = true
 			} else {
-				return false
+				hasOtherMention = true
 			}
 		case "text":
 			text, ok := seg.Data["text"].(string)
-			if !ok || strings.TrimSpace(text) != "" {
-				return false
+			if ok {
+				textBuilder.WriteString(text)
 			}
 		default:
-			return false
+			hasOtherContent = true
 		}
 	}
 
-	return hasBotMention
+	return IsMentionOnly(MentionInteraction{
+		IsGroup:         isGroup,
+		IsMentionedBot:  hasBotMention,
+		HasOtherMention: hasOtherMention,
+		HasReply:        hasReply,
+		HasImages:       hasImages,
+		HasOtherContent: hasOtherContent,
+		UserText:        textBuilder.String(),
+	})
 }
 
 // IsMentionOnlyAstrBot reports whether an AstrBot event is a mention-only interaction:
-// group message, at bot, empty text, no attachments, and no reply context.
+// group message, at bot, empty text, no attachments, no reply context, no other mentions,
+// and no non-text components.
 // When hasReply is true (e.g. metadata carries reply_message_id), mention-only is false
 // to maintain semantic parity with OneBot's reply segment detection.
-func IsMentionOnlyAstrBot(isGroup bool, isAt bool, content string, attachmentCount int, hasReply bool) bool {
+func IsMentionOnlyAstrBot(
+	isGroup bool,
+	isAt bool,
+	content string,
+	attachmentCount int,
+	hasReply bool,
+	hasOtherMention bool,
+	hasOtherContent bool,
+) bool {
 	return IsMentionOnly(MentionInteraction{
-		IsGroup:        isGroup,
-		IsMentionedBot: isAt,
-		HasReply:       hasReply,
-		HasImages:      attachmentCount > 0,
-		UserText:       content,
+		IsGroup:         isGroup,
+		IsMentionedBot:  isAt,
+		HasOtherMention: hasOtherMention,
+		HasReply:        hasReply,
+		HasImages:       attachmentCount > 0,
+		HasOtherContent: hasOtherContent,
+		UserText:        content,
 	})
 }

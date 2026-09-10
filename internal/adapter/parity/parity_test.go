@@ -218,27 +218,49 @@ func TestMentionOnlyDetection(t *testing.T) {
 		t.Errorf("atWithMediaSegs should not be mention only")
 	}
 
+	atWithFaceSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "face", Data: map[string]any{"id": "14"}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithFaceSegs, false, false) {
+		t.Errorf("atWithFaceSegs should not be mention only")
+	}
+
+	atWithRecordSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "record", Data: map[string]any{"file": "voice.amr"}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithRecordSegs, false, false) {
+		t.Errorf("atWithRecordSegs should not be mention only")
+	}
+
 	// AstrBot
-	if !IsMentionOnlyAstrBot(true, true, "", 0, false) {
+	if !IsMentionOnlyAstrBot(true, true, "", 0, false, false, false) {
 		t.Errorf("expected AstrBot pure @ to be mention only")
 	}
-	if !IsMentionOnlyAstrBot(true, true, "   ", 0, false) {
+	if !IsMentionOnlyAstrBot(true, true, "   ", 0, false, false, false) {
 		t.Errorf("expected AstrBot whitespace text to be mention only")
 	}
-	if IsMentionOnlyAstrBot(false, true, "", 0, false) {
+	if IsMentionOnlyAstrBot(false, true, "", 0, false, false, false) {
 		t.Errorf("AstrBot private should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, false, "", 0, false) {
+	if IsMentionOnlyAstrBot(true, false, "", 0, false, false, false) {
 		t.Errorf("AstrBot not @ should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "test", 0, false) {
+	if IsMentionOnlyAstrBot(true, true, "test", 0, false, false, false) {
 		t.Errorf("AstrBot with text should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 1, false) {
+	if IsMentionOnlyAstrBot(true, true, "", 1, false, false, false) {
 		t.Errorf("AstrBot with attachment should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 0, true) {
+	if IsMentionOnlyAstrBot(true, true, "", 0, true, false, false) {
 		t.Errorf("AstrBot with reply should not be mention only")
+	}
+	if IsMentionOnlyAstrBot(true, true, "", 0, false, true, false) {
+		t.Errorf("AstrBot with other mention should not be mention only")
+	}
+	if IsMentionOnlyAstrBot(true, true, "", 0, false, false, true) {
+		t.Errorf("AstrBot with other content should not be mention only")
 	}
 
 	// Canonical interaction contract
@@ -254,6 +276,20 @@ func TestMentionOnlyDetection(t *testing.T) {
 		HasReply:       true,
 	}) {
 		t.Errorf("canonical interaction with reply should not be mention only")
+	}
+	if IsMentionOnly(MentionInteraction{
+		IsGroup:         true,
+		IsMentionedBot:  true,
+		HasOtherMention: true,
+	}) {
+		t.Errorf("canonical interaction with other mention should not be mention only")
+	}
+	if IsMentionOnly(MentionInteraction{
+		IsGroup:         true,
+		IsMentionedBot:  true,
+		HasOtherContent: true,
+	}) {
+		t.Errorf("canonical interaction with other content should not be mention only")
 	}
 }
 

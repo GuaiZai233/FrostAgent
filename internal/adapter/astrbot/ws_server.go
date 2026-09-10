@@ -357,12 +357,38 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 
 func isMentionOnlyInteraction(event Event) bool {
 	hasReply := false
+	hasOtherMention := false
+	hasOtherContent := false
 	if event.Metadata != nil {
 		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
 			hasReply = true
 		}
+		if v, ok := event.Metadata["has_other_mention"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasOtherMention = val
+			case string:
+				hasOtherMention = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
+		if v, ok := event.Metadata["has_other_content"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasOtherContent = val
+			case string:
+				hasOtherContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
 	}
-	return parity.IsMentionOnlyAstrBot(event.MessageType == "group", event.IsAt, event.Content, len(event.Attachments), hasReply)
+	return parity.IsMentionOnlyAstrBot(
+		event.MessageType == "group",
+		event.IsAt,
+		event.Content,
+		len(event.Attachments),
+		hasReply,
+		hasOtherMention,
+		hasOtherContent,
+	)
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {

@@ -318,8 +318,10 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 		hasReply        bool
 		replyMessageID  string
 		hasOtherMention bool
+		hasOtherContent bool
 		hasImages       bool
 		text            string
+		nonTextSegment  *tools.OneBotSegment
 		wantMentionOnly bool
 	}{
 		{
@@ -372,6 +374,36 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 			hasOtherMention: true,
 			hasImages:       false,
 			text:            "",
+			wantMentionOnly: false,
+		},
+		{
+			name:            "at_bot_with_face",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasOtherContent: true,
+			hasImages:       false,
+			text:            "",
+			nonTextSegment: &tools.OneBotSegment{
+				Type: "face",
+				Data: map[string]any{"id": "14"},
+			},
+			wantMentionOnly: false,
+		},
+		{
+			name:            "at_bot_with_record",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasOtherContent: true,
+			hasImages:       false,
+			text:            "",
+			nonTextSegment: &tools.OneBotSegment{
+				Type: "record",
+				Data: map[string]any{"file": "voice.amr"},
+			},
 			wantMentionOnly: false,
 		},
 		{
@@ -434,20 +466,17 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 				msgType = "private"
 			}
 
-			// 1. Evaluate via AstrBot adapter path
-			astrbotContent := tt.text
-			if tt.hasOtherMention {
-				if astrbotContent == "" {
-					astrbotContent = "[@" + strconv.FormatInt(otherUserID, 10) + "]"
-				} else {
-					astrbotContent = "[@" + strconv.FormatInt(otherUserID, 10) + "] " + astrbotContent
-				}
-			}
+			// 1. Evaluate via AstrBot adapter path.
+			// In AstrBot, At and non-text components are omitted from Content and
+			// instead preserved as structural metadata (has_other_mention, has_other_content).
 			astrbotEvent := Event{
 				MessageType: msgType,
 				IsAt:        tt.isAtBot,
-				Content:     astrbotContent,
-				Metadata:    map[string]any{},
+				Content:     tt.text,
+				Metadata: map[string]any{
+					"has_other_mention": tt.hasOtherMention,
+					"has_other_content": tt.hasOtherContent,
+				},
 			}
 			if tt.hasReply {
 				astrbotEvent.Metadata["reply_message_id"] = tt.replyMessageID
@@ -477,6 +506,9 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 					Data: map[string]any{"qq": strconv.FormatInt(otherUserID, 10)},
 				})
 			}
+			if tt.nonTextSegment != nil {
+				onebotSegs = append(onebotSegs, *tt.nonTextSegment)
+			}
 			if tt.text != "" {
 				onebotSegs = append(onebotSegs, tools.OneBotSegment{
 					Type: "text",
@@ -498,12 +530,15 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 			)
 
 			// 3. Evaluate via OneBot text fallback path
-			userTextParts := make([]string, 0, 3)
+			userTextParts := make([]string, 0, 4)
 			if tt.isAtBot {
 				userTextParts = append(userTextParts, "[@"+strconv.FormatInt(botSelfID, 10)+"]")
 			}
 			if tt.hasOtherMention {
 				userTextParts = append(userTextParts, "[@"+strconv.FormatInt(otherUserID, 10)+"]")
+			}
+			if tt.hasOtherContent {
+				userTextParts = append(userTextParts, "[表情/媒体]")
 			}
 			if tt.text != "" {
 				userTextParts = append(userTextParts, tt.text)
