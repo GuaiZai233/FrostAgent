@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -888,5 +889,102 @@ func TestVendorParity_QuoteScoping_CrossGenerationIsolation(t *testing.T) {
 	quoteBotSent := []tools.Msg{{Type: "quote", MessageID: "40004"}}
 	if err := validateQuoteMessages(connB, quoteBotSent, sessionID); err != nil {
 		t.Fatalf("connB should allow quoting message 40004 recorded via action ACK: %v", err)
+	}
+}
+
+func TestVendorParity_QuoteScoping_ResolvedGetMsgTargetRegistered(t *testing.T) {
+	// Proves that when an inbound reply references an older message not previously
+	// observed on the active connection generation, a successful and session-matching
+	// get_msg resolution registers the message_id as trusted in messageSessions, allowing
+	// it to be quoted in send_message. Cross-generation IDs that cannot be resolved or do not
+	// match the session remain rejected.
+	conn := newWSConnection(nil)
+	sessionID := "group:1001"
+	const olderMsgID int64 = 50005
+	olderMsgIDStr := strconv.FormatInt(olderMsgID, 10)
+
+	// 1. Initially, olderMsgID is not observed on this connection generation.
+	// Quoting it MUST be rejected.
+	quoteOlder := []tools.Msg{{Type: "quote", MessageID: olderMsgIDStr}}
+	if err := validateQuoteMessages(conn, quoteOlder, sessionID); err == nil {
+		t.Fatalf("older unobserved message %d should not be quoteable before resolution", olderMsgID)
+	}
+
+	// 2. An inbound event arrives in group 1001 referencing olderMsgID.
+	event := model.OneBotEvent{
+		MessageType: "group",
+		GroupID:     1001,
+		UserID:      20002,
+		MessageID:   60006,
+	}
+
+	// 3. get_msg lookup fails (e.g. retcode != 0 or upstream cannot find it).
+	// Message ID must NOT be registered, and quoting it remains rejected.
+	failedResp := oneBotAPIResponse{
+		Status:  "failed",
+		RetCode: 100,
+		Message: "message not found",
+	}
+	unresolvedCtx := conn.resolveReplyResponse(event, olderMsgID, failedResp)
+	if unresolvedCtx.MessageID != "" {
+		t.Fatalf("expected empty context for failed get_msg, got %+v", unresolvedCtx)
+	}
+	if err := validateQuoteMessages(conn, quoteOlder, sessionID); err == nil {
+		t.Fatalf("failed get_msg resolution must not register message as trusted")
+	}
+
+	// 4. get_msg returns a message belonging to a different group (group 9999).
+	// Message ID must NOT be registered for group 1001, and quoting it remains rejected.
+	crossSessionData, err := json.Marshal(map[string]any{
+		"message_id":   olderMsgID,
+		"message_type": "group",
+		"group_id":     9999,
+		"user_id":      30003,
+		"message":      "hello from another group",
+	})
+	if err != nil {
+		t.Fatalf("marshal cross-session data: %v", err)
+	}
+	crossSessionCtx := conn.resolveReplyResponse(event, olderMsgID, oneBotAPIResponse{
+		Status:  "ok",
+		RetCode: 0,
+		Data:    crossSessionData,
+	})
+	if crossSessionCtx.MessageID != "" {
+		t.Fatalf("expected empty context for cross-session message, got %+v", crossSessionCtx)
+	}
+	if err := validateQuoteMessages(conn, quoteOlder, sessionID); err == nil {
+		t.Fatalf("cross-session get_msg must not register message as trusted for group 1001")
+	}
+
+	// 5. get_msg succeeds and matches the session (group 1001).
+	// resolveReplyResponse succeeds and registers olderMsgID in messageSessions.
+	validData, err := json.Marshal(map[string]any{
+		"message_id":   olderMsgID,
+		"message_type": "group",
+		"group_id":     1001,
+		"user_id":      20002,
+		"message":      "valid historical message in group 1001",
+	})
+	if err != nil {
+		t.Fatalf("marshal valid data: %v", err)
+	}
+	validCtx := conn.resolveReplyResponse(event, olderMsgID, oneBotAPIResponse{
+		Status:  "ok",
+		RetCode: 0,
+		Data:    validData,
+	})
+	if validCtx.MessageID != olderMsgIDStr {
+		t.Fatalf("expected resolved MessageID=%s, got %s", olderMsgIDStr, validCtx.MessageID)
+	}
+
+	// 6. Quoting olderMsgID now SUCCEEDS on this connection for group:1001!
+	if err := validateQuoteMessages(conn, quoteOlder, sessionID); err != nil {
+		t.Fatalf("resolved get_msg message %d should now be allowed to quote: %v", olderMsgID, err)
+	}
+
+	// 7. But quoting olderMsgID for a different session still fails.
+	if err := validateQuoteMessages(conn, quoteOlder, "group:9999"); err == nil {
+		t.Fatalf("message %d should not be quoteable in unmatching session group:9999", olderMsgID)
 	}
 }

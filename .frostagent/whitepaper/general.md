@@ -117,7 +117,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - NapCat 基于内存映射生成正数 int32 短 ID，LuckyLillia 基于数据库生成有符号 int32 短 ID。同一条真实 QQ 消息在不同上游下的 `message_id` 不可认为相同，亦不可跨上游连接或进程重启复用；
     - FrostAgent 明确将 OneBot `message_id` 界定为连接级不透明句柄（Opaque Handle），仅用于当轮会话上下文中的 quote/reply 引用查询与临时 sticker 溯源，不将其作为全局持久或跨上游稳定标识；
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
-    - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话；跨连接代、未曾观测或跨会话的过时 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
+    - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话（包括当前连接代收发的消息，以及经由当前连接 `get_msg` 查询成功并验证属于当前会话的历史引用目标）；跨连接代、未曾观测或跨会话的过时/未验证 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
     - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），回退为空引用上下文，绝不中断或阻断核心对话事件分发；
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
     - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；

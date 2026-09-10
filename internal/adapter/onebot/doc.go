@@ -48,9 +48,10 @@
 //     teardown flushes its scoped cache.
 //   - Outbound quote/reply validation at SendHook boundary: When `send_message` or final structured
 //     output contains a `quote` component, the adapter validates that the referenced `message_id`
-//     was observed or sent on the active connection generation for that exact session. Stale or
-//     cross-generation IDs are rejected before wire serialization, preventing upstream vendor
-//     divergence where NapCat vs LuckyLillia handle stale reply segments inconsistently.
+//     was observed, sent, or successfully resolved via session-validated `get_msg` on the active
+//     connection generation for that exact session. Stale, unresolvable, or cross-generation IDs
+//     are rejected before wire serialization, preventing upstream vendor divergence where NapCat vs
+//     LuckyLillia handle stale reply segments inconsistently.
 // All lookups via `get_msg` (for quotes, replies, or historical stickers)
 // strictly degrade to empty context on failure, stale IDs, deleted messages, or timeouts,
 // ensuring upstream discrepancies never stall the core dialogue pipeline.
