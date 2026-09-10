@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"FrostAgent/internal/model"
@@ -76,10 +77,13 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
+var nextConnGeneration uint64
+
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	*runtimescope.Scope
 	conn                *websocket.Conn
+	generation          string
 	stealer             *sticker.Stealer
 	writeMu             sync.Mutex
 	messageMu           sync.Mutex
@@ -96,8 +100,10 @@ type wsConnection struct {
 }
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
+	gen := fmt.Sprintf("onebot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
 	return &wsConnection{
 		conn:               conn,
+		generation:         gen,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
@@ -194,11 +200,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	// 1. Extract user's visible message
-	var segments []content.MessageSegment
-	segments = []content.MessageSegment{}
-	if err := json.Unmarshal(event.Message, &segments); err != nil {
-		engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("解析消息段失败: %v", err))
-		// Don't return, just work with an empty segment list
+	segments := ParseMessageSegments(event.Message)
+	if segments == nil {
+		segments = []content.MessageSegment{}
 	}
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
@@ -374,6 +378,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
+			if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+				engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("SendHook: 引用消息校验未通过: %v", err))
+				return err
+			}
 			oneBotSegments, err := tools.BuildOneBotMessage(toolOutput.Messages)
 			if err != nil {
 				return fmt.Errorf("组装 OneBot 消息失败: %w", err)
@@ -477,11 +485,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:   historyKey(event),
-			Owner:       owner,
-			OwnerType:   ownerType,
-			ActorUserID: strconv.FormatInt(event.UserID, 10),
-			SendHook:    sendHook,
+			SessionID:        historyKey(event),
+			Owner:            owner,
+			OwnerType:        ownerType,
+			ActorUserID:      strconv.FormatInt(event.UserID, 10),
+			SendHook:         sendHook,
+			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
 			},
@@ -546,6 +555,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
+		if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
+			return
+		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
@@ -822,9 +836,9 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage, sco
 			texts = append(texts, fmt.Sprintf("[@%v] ", seg.Data["qq"]))
 		case "face":
 			texts = append(texts, fmt.Sprintf("[表情:%v] ", seg.Data["id"]))
-		case "image":
+		case "image", "mface":
 			texts = append(texts, "[图片] ")
-		case "record":
+		case "record", "audio", "voice":
 			texts = append(texts, "[语音] ")
 		case "video":
 			texts = append(texts, "[视频] ")
@@ -868,4 +882,19 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage, sco
 	}
 
 	return strings.TrimSpace(strings.Join(texts, ""))
+}
+
+func validateQuoteMessages(conn *wsConnection, msgs []tools.Msg, sessionID string) error {
+	if conn == nil {
+		return fmt.Errorf("active websocket connection is nil")
+	}
+	for _, m := range msgs {
+		if m.Type == "quote" {
+			mid, ok := numericMessageID(m.MessageID)
+			if !ok || !conn.messageSessionMatches(mid, sessionID) {
+				return fmt.Errorf("quote message_id %q is not valid or not observed on the active connection generation for session %s", m.MessageID, sessionID)
+			}
+		}
+	}
+	return nil
 }

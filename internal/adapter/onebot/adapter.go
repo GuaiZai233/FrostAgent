@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,14 +42,42 @@ func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
 }
 
-func (a *Adapter) observeStickers(event model.OneBotEvent) {
-	if a.stealer == nil || event.PostType != "message" ||
+func (c *wsConnection) observeStickers(event model.OneBotEvent) {
+	if c == nil || c.stealer == nil || event.PostType != "message" ||
 		(event.MessageType != "group" && event.MessageType != "private") {
 		return
 	}
 	messageID := strconv.FormatInt(int64(event.MessageID), 10)
 	observeStickerSources(
+		c.stealer,
+		c.generation,
+		historyKey(event),
+		messageID,
+		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		event.MessageType == "group",
+	)
+}
+
+func (a *Adapter) observeStickers(event model.OneBotEvent) {
+	if a.stealer == nil || event.PostType != "message" ||
+		(event.MessageType != "group" && event.MessageType != "private") {
+		return
+	}
+	a.mu.RLock()
+	var firstConn *wsConnection
+	for c := range a.conns {
+		firstConn = c
+		break
+	}
+	a.mu.RUnlock()
+	scope := ""
+	if firstConn != nil {
+		scope = firstConn.generation
+	}
+	messageID := strconv.FormatInt(int64(event.MessageID), 10)
+	observeStickerSources(
 		a.stealer,
+		scope,
 		historyKey(event),
 		messageID,
 		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
@@ -218,6 +247,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		}
 		defer func() {
 			a.unregisterConn(wsConn)
+			if wsConn.stealer != nil {
+				wsConn.stealer.ClearObservedScope(wsConn.generation)
+			}
 			wsConn.Close()
 		}()
 
@@ -261,7 +293,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			a.observeStickers(event)
+			wsConn.observeStickers(event)
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -278,7 +310,7 @@ func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
 	var sources []string
 	for _, seg := range segments {
 		if seg.Type != "mface" &&
-			(seg.Type != "image" || (!isStickerSubType(seg.Data["sub_type"]) && !content.IsMarketFaceSegment(seg))) {
+			(seg.Type != "image" || (!isStickerSubType(content.ImageSubType(seg.Data)) && !content.IsMarketFaceSegment(seg))) {
 			continue
 		}
 		if source := content.SegmentImageSource(seg); source != "" {
@@ -290,6 +322,7 @@ func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
 
 func observeStickerSources(
 	stealer *sticker.Stealer,
+	scope string,
 	sessionID string,
 	messageID string,
 	sources []string,
@@ -303,10 +336,11 @@ func observeStickerSources(
 				return sticker.LoadImageSource(ctx, source)
 			}
 		}
-		stealer.Observe(
+		stealer.ObserveScoped(
 			sessionID,
 			messageID,
 			index,
+			scope,
 			loader,
 			autoCollect,
 		)
@@ -317,10 +351,12 @@ func isStickerSubType(value any) bool {
 	switch stickerType := value.(type) {
 	case int:
 		return stickerType == 1
+	case int64:
+		return stickerType == 1
 	case float64:
 		return stickerType == 1
 	case string:
-		return stickerType == "1"
+		return strings.TrimSpace(stickerType) == "1"
 	case json.Number:
 		return stickerType.String() == "1"
 	default:

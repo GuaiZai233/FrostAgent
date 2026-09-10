@@ -36,6 +36,7 @@ type observedSticker struct {
 	sessionID  string
 	messageID  string
 	index      int
+	scope      string
 	observedAt time.Time
 }
 
@@ -74,6 +75,19 @@ func (s *Stealer) Observe(
 	loader ImageLoader,
 	autoCollect bool,
 ) {
+	s.ObserveScoped(sessionID, messageID, index, "", loader, autoCollect)
+}
+
+// ObserveScoped registers lightweight metadata for one sticker scoped to a
+// specific connection or upstream generation.
+func (s *Stealer) ObserveScoped(
+	sessionID string,
+	messageID string,
+	index int,
+	scope string,
+	loader ImageLoader,
+	autoCollect bool,
+) {
 	if s == nil || sessionID == "" || messageID == "" || index < 0 || (autoCollect && loader == nil) {
 		return
 	}
@@ -82,7 +96,7 @@ func (s *Stealer) Observe(
 	s.observedMu.Lock()
 	s.pruneObservedLocked(now)
 	for _, existing := range s.observed {
-		if existing.sessionID == sessionID && existing.messageID == messageID && existing.index == index {
+		if existing.sessionID == sessionID && existing.messageID == messageID && existing.index == index && existing.scope == scope {
 			s.observedMu.Unlock()
 			return
 		}
@@ -91,6 +105,7 @@ func (s *Stealer) Observe(
 		sessionID:  sessionID,
 		messageID:  messageID,
 		index:      index,
+		scope:      scope,
 		observedAt: now,
 	})
 	s.pruneObservedLocked(now)
@@ -135,11 +150,24 @@ func (s *Stealer) StealObserved(
 	stickerIndex int,
 	loader func(context.Context, string, int) ([]byte, error),
 ) (StealResult, string, error) {
+	return s.StealObservedScoped(ctx, sessionID, messageID, stickerIndex, "", loader)
+}
+
+// StealObservedScoped collects a trusted sticker observed in the same session
+// and matching the caller's connection/upstream scope.
+func (s *Stealer) StealObservedScoped(
+	ctx context.Context,
+	sessionID string,
+	messageID string,
+	stickerIndex int,
+	scope string,
+	loader func(context.Context, string, int) ([]byte, error),
+) (StealResult, string, error) {
 	if s == nil || sessionID == "" || stickerIndex < 0 {
 		return StealResult{}, "", ErrStickerNotInScope
 	}
 
-	found, resolvedMessageID := s.findObserved(sessionID, messageID, stickerIndex)
+	found, resolvedMessageID := s.findObserved(sessionID, messageID, stickerIndex, scope)
 	if !found {
 		return StealResult{}, resolvedMessageID, ErrStickerNotInScope
 	}
@@ -156,7 +184,7 @@ func (s *Stealer) StealObserved(
 	return result, resolvedMessageID, err
 }
 
-func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (bool, string) {
+func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int, scope string) (bool, string) {
 	s.observedMu.Lock()
 	defer s.observedMu.Unlock()
 	s.pruneObservedLocked(time.Now())
@@ -164,8 +192,9 @@ func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (b
 	resolvedMessageID := messageID
 	if resolvedMessageID == "" {
 		for i := len(s.observed) - 1; i >= 0; i-- {
-			if s.observed[i].sessionID == sessionID {
-				resolvedMessageID = s.observed[i].messageID
+			entry := s.observed[i]
+			if entry.sessionID == sessionID && (scope == "" || entry.scope == "" || entry.scope == scope) {
+				resolvedMessageID = entry.messageID
 				break
 			}
 		}
@@ -173,10 +202,35 @@ func (s *Stealer) findObserved(sessionID, messageID string, stickerIndex int) (b
 	for i := len(s.observed) - 1; i >= 0; i-- {
 		entry := s.observed[i]
 		if entry.sessionID == sessionID && entry.messageID == resolvedMessageID && entry.index == stickerIndex {
+			if scope != "" && entry.scope != "" && entry.scope != scope {
+				// Reject cross-connection/upstream message IDs to prevent stale or colliding handle lookups
+				return false, resolvedMessageID
+			}
 			return true, resolvedMessageID
 		}
 	}
 	return false, resolvedMessageID
+}
+
+// ClearObservedScope removes all observed stickers matching scope (or all if scope is empty).
+// Used when an upstream connection closes or identity changes to prevent stale message handles.
+func (s *Stealer) ClearObservedScope(scope string) {
+	if s == nil {
+		return
+	}
+	s.observedMu.Lock()
+	defer s.observedMu.Unlock()
+	if scope == "" {
+		s.observed = nil
+		return
+	}
+	kept := s.observed[:0]
+	for _, entry := range s.observed {
+		if entry.scope != scope {
+			kept = append(kept, entry)
+		}
+	}
+	s.observed = kept
 }
 
 func (s *Stealer) pruneObservedLocked(now time.Time) {

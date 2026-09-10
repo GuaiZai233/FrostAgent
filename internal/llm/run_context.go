@@ -28,6 +28,7 @@ type RunContext struct {
 	ActorUserID         string // Trusted sender ID supplied by the platform adapter.
 	SendHook            func(toolResultJSON string) error
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
+	ObservationScope    string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
 	Billing             *BillingRunState
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot

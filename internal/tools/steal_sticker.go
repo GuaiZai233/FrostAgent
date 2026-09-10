@@ -60,11 +60,12 @@ func StealStickerTool(stealer *sticker.Stealer) Tool {
 				return "", fmt.Errorf("sticker_index 不能小于 0")
 			}
 
-			result, resolvedMessageID, err := stealer.StealObserved(
+			result, resolvedMessageID, err := stealer.StealObservedScoped(
 				ctx,
 				runContext.SessionID,
 				strings.TrimSpace(payload.MessageID),
 				payload.StickerIndex,
+				runContext.ObservationScope,
 				runContext.LoadObservedSticker,
 			)
 			if err != nil {
