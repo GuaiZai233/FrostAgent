@@ -117,9 +117,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - NapCat 基于内存映射生成正数 int32 短 ID，LuckyLillia 基于数据库生成有符号 int32 短 ID。同一条真实 QQ 消息在不同上游下的 `message_id` 不可认为相同，亦不可跨上游连接或进程重启复用；
     - FrostAgent 明确将 OneBot `message_id` 界定为连接级不透明句柄（Opaque Handle），仅用于当轮会话上下文中的 quote/reply 引用查询与临时 sticker 溯源，不将其作为全局持久或跨上游稳定标识；
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
+    - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话；跨连接代、未曾观测或跨会话的过时 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
     - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），回退为空引用上下文，绝不中断或阻断核心对话事件分发；
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
-    - 通用前置强校验：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast），本地文件读取失败或内容为空时立即向调用方返回错误，杜绝不合法文件进入底层序列化或导致上游不可控崩溃；
+    - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；
+    - 跨容器文件系统边界说明：前置校验验证的是 FrostAgent 本地视角下的文件可读性。由于非贴纸媒体通过 `file://<local path>` 穿越 OneBot 协议边界，若 OneBot 上游独立容器化部署，必须与 FrostAgent 共享存储卷（Shared Volume）以解析本地路径；跨隔离容器或远程文件系统的路径穿透明确不在归一化保证范围内；
     - 上游 ACK 门禁：通过 `SendActionAndWait` 监听平台响应。若上游返回错误码（如 LuckyLillia 在媒体转换抛错时整体报错，或群禁言/风控），FrostAgent 坚决不向持久历史提交该 assistant 消息，记录瞬态 `DeliveryFailure` 并向工具调用返回错误；若上游返回成功（如 NapCat 部分元素转换异常时局部过滤但整体返回成功），FrostAgent 尊重平台 ACK 并正常提交历史；
   - **入站媒体异常可观测性 (Inbound Media Resolution Observability)**：
     - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。

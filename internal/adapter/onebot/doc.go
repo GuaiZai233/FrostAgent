@@ -41,19 +41,30 @@
 // signed int32 keys backed by a database. The same real QQ message will NOT share
 // the same OneBot `message_id` across different upstreams or reconnects.
 // FrostAgent does not treat OneBot `message_id` as a globally portable or stable message
-// identity. In addition, sticker observations are explicitly tagged with connection
-// generations (ObservationScope), ensuring that after an upstream switch or reconnect,
-// stale `message_id` handles from an older connection cannot be queried against the
-// new connection or collide with short IDs; connection teardown flushes its scoped cache.
+// identity. In addition:
+//   - Sticker observations are explicitly tagged with connection generations (ObservationScope),
+//     ensuring that after an upstream switch or reconnect, stale `message_id` handles from an older
+//     connection cannot be queried against the new connection or collide with short IDs; connection
+//     teardown flushes its scoped cache.
+//   - Outbound quote/reply validation at SendHook boundary: When `send_message` or final structured
+//     output contains a `quote` component, the adapter validates that the referenced `message_id`
+//     was observed or sent on the active connection generation for that exact session. Stale or
+//     cross-generation IDs are rejected before wire serialization, preventing upstream vendor
+//     divergence where NapCat vs LuckyLillia handle stale reply segments inconsistently.
 // All lookups via `get_msg` (for quotes, replies, or historical stickers)
 // strictly degrade to empty context on failure, stale IDs, deleted messages, or timeouts,
 // ensuring upstream discrepancies never stall the core dialogue pipeline.
 //
 // 6. Canonical Send Failure Semantics:
-//   - Pre-flight validation: Outbound messages are validated locally before dispatch;
-//     local paths for every media type (`image`, `record`, `video`, `file`) are validated
-//     for existence, readability, and non-emptiness upfront (Fail-Fast), failing immediately
-//     before wire serialization.
+//   - Pre-flight validation (O(1) memory): Outbound messages are validated locally before dispatch;
+//     local paths for every media type (`image`, `record`, `video`, `file`) are validated for
+//     existence, readability, and non-emptiness upfront (Fail-Fast) using file metadata inspection
+//     (`os.Stat`) and 1-byte probing (`os.Open` + read) to avoid loading multi-megabyte/gigabyte
+//     media into RAM. Full payload buffering into memory is strictly reserved for sticker base64 encoding.
+//   - Cross-container filesystem boundary: Pre-flight validation confirms readability within FrostAgent's
+//     filesystem context. Because non-sticker media is transmitted over OneBot v11 as `file://<local path>`,
+//     separately-containerized OneBot upstreams require a shared filesystem mount (e.g. shared Docker volume)
+//     to resolve local file paths. Remote or isolated-container path virtualization is out of scope.
 //   - Upstream ACK semantics: Dispatched actions wait for upstream ACK (`SendActionAndWait`).
 //     If upstream returns an error (retcode != 0, as LuckyLillia does on converter error,
 //     or on mute/risk control), FrostAgent treats the message as undelivered, prevents

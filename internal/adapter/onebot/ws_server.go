@@ -378,6 +378,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
+			if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+				engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("SendHook: 引用消息校验未通过: %v", err))
+				return err
+			}
 			oneBotSegments, err := tools.BuildOneBotMessage(toolOutput.Messages)
 			if err != nil {
 				return fmt.Errorf("组装 OneBot 消息失败: %w", err)
@@ -551,6 +555,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
+		if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
+			return
+		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
@@ -873,4 +882,19 @@ func extractUserText(segments []content.MessageSegment, raw json.RawMessage, sco
 	}
 
 	return strings.TrimSpace(strings.Join(texts, ""))
+}
+
+func validateQuoteMessages(conn *wsConnection, msgs []tools.Msg, sessionID string) error {
+	if conn == nil {
+		return fmt.Errorf("active websocket connection is nil")
+	}
+	for _, m := range msgs {
+		if m.Type == "quote" {
+			mid, ok := numericMessageID(m.MessageID)
+			if !ok || !conn.messageSessionMatches(mid, sessionID) {
+				return fmt.Errorf("quote message_id %q is not valid or not observed on the active connection generation for session %s", m.MessageID, sessionID)
+			}
+		}
+	}
+	return nil
 }

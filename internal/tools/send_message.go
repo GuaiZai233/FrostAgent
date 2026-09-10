@@ -169,17 +169,45 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 
 func buildOneBotMediaFile(msg Msg) (string, error) {
 	if msg.Path != "" {
-		content, err := os.ReadFile(msg.Path)
-		if err != nil {
-			return "", fmt.Errorf("读取本地媒体文件 %q 失败: %w", msg.Path, err)
-		}
-		if len(content) == 0 {
-			return "", fmt.Errorf("本地媒体文件 %q 为空", msg.Path)
-		}
 		if msg.Type == "image" && msg.IsSticker {
+			content, err := os.ReadFile(msg.Path)
+			if err != nil {
+				return "", fmt.Errorf("读取本地媒体文件 %q 失败: %w", msg.Path, err)
+			}
+			if len(content) == 0 {
+				return "", fmt.Errorf("本地媒体文件 %q 为空", msg.Path)
+			}
 			return "base64://" + base64.StdEncoding.EncodeToString(content), nil
+		}
+
+		if err := validateLocalMediaFile(msg.Path); err != nil {
+			return "", err
 		}
 		return fmt.Sprintf("file://%s", msg.Path), nil
 	}
 	return msg.URL, nil
+}
+
+func validateLocalMediaFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("读取本地媒体文件 %q 失败: %w", path, err)
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("本地媒体文件 %q 是目录", path)
+	}
+	if fi.Size() == 0 {
+		return fmt.Errorf("本地媒体文件 %q 为空", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("读取本地媒体文件 %q 失败: %w", path, err)
+	}
+	defer f.Close()
+
+	var probe [1]byte
+	if _, err := f.Read(probe[:]); err != nil {
+		return fmt.Errorf("读取本地媒体文件 %q 失败: %w", path, err)
+	}
+	return nil
 }

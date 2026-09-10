@@ -835,3 +835,58 @@ func TestVendorParity_StickerObservation_ConnectionScoped(t *testing.T) {
 		t.Fatalf("cleared observation should not be retrievable, got err=%v", err)
 	}
 }
+
+func TestVendorParity_QuoteScoping_CrossGenerationIsolation(t *testing.T) {
+	// Proves that message_id scoping protects quote/reply segments at the SendHook boundary:
+	// an ID observed/sent on connection generation A cannot be emitted as a reply.id on generation B.
+	connA := newWSConnection(nil)
+	connB := newWSConnection(nil)
+
+	if connA.generation == "" || connB.generation == "" || connA.generation == connB.generation {
+		t.Fatalf("connections must have unique generations: connA=%q, connB=%q", connA.generation, connB.generation)
+	}
+
+	sessionID := "group:1001"
+	// Generation A receives message 10001
+	connA.rememberMessageSession(10001, sessionID)
+	// Generation B receives message 20002
+	connB.rememberMessageSession(20002, sessionID)
+
+	quoteGenA := []tools.Msg{{Type: "quote", MessageID: "10001"}}
+	quoteGenB := []tools.Msg{{Type: "quote", MessageID: "20002"}}
+
+	// 1. Quoting 10001 on Generation A succeeds
+	if err := validateQuoteMessages(connA, quoteGenA, sessionID); err != nil {
+		t.Fatalf("connA should allow quoting its own message 10001: %v", err)
+	}
+
+	// 2. Quoting 10001 from Generation A on Generation B MUST fail (preventing stale quote emission)
+	if err := validateQuoteMessages(connB, quoteGenA, sessionID); err == nil {
+		t.Fatalf("connB unexpectedly allowed quoting generation A message 10001")
+	}
+
+	// 3. Quoting 20002 on Generation B succeeds
+	if err := validateQuoteMessages(connB, quoteGenB, sessionID); err != nil {
+		t.Fatalf("connB should allow quoting its own message 20002: %v", err)
+	}
+
+	// 4. Quoting a message from another session on Generation B MUST fail
+	otherSession := "group:9999"
+	connB.rememberMessageSession(30003, otherSession)
+	quoteOtherSession := []tools.Msg{{Type: "quote", MessageID: "30003"}}
+	if err := validateQuoteMessages(connB, quoteOtherSession, sessionID); err == nil {
+		t.Fatalf("connB unexpectedly allowed quoting cross-session message 30003")
+	}
+
+	// 5. Assistant message sent on Generation B recorded via action ACK can be quoted
+	ackResp := oneBotAPIResponse{
+		RetCode: 0,
+		Status:  "ok",
+		Data:    []byte(`{"message_id": 40004}`),
+	}
+	connB.rememberActionMessageSession(ackResp, sessionID)
+	quoteBotSent := []tools.Msg{{Type: "quote", MessageID: "40004"}}
+	if err := validateQuoteMessages(connB, quoteBotSent, sessionID); err != nil {
+		t.Fatalf("connB should allow quoting message 40004 recorded via action ACK: %v", err)
+	}
+}

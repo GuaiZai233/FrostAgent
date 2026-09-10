@@ -191,3 +191,30 @@ func TestBuildOneBotMessage_PreflightFailFastForAllMediaTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildOneBotMessage_SparseLargeFileDoesNotExhaustMemory(t *testing.T) {
+	// Create a 1GB sparse file to verify preflight validation uses O(1) memory and does not read full file
+	path := filepath.Join(t.TempDir(), "sparse_video.mp4")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sparse file: %v", err)
+	}
+	const oneGB = int64(1024 * 1024 * 1024)
+	if err := f.Truncate(oneGB); err != nil {
+		f.Close()
+		t.Fatalf("truncate sparse file to 1GB: %v", err)
+	}
+	if _, err := f.WriteAt([]byte{0x01}, 0); err != nil {
+		f.Close()
+		t.Fatalf("write probe byte: %v", err)
+	}
+	f.Close()
+
+	segments, err := BuildOneBotMessage([]Msg{{Type: "video", Path: path}})
+	if err != nil {
+		t.Fatalf("expected success for 1GB sparse file, got err: %v", err)
+	}
+	if len(segments) != 1 || segments[0].Data["file"] != "file://"+path {
+		t.Fatalf("unexpected segments for 1GB sparse file: %+v", segments)
+	}
+}
