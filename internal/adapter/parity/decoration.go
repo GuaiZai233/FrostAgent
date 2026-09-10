@@ -25,10 +25,65 @@ func IsStickerSubType(value any) bool {
 	}
 }
 
+// IsStickerType reports whether the segment or message type represents a sticker / meme.
+func IsStickerType(msgType string) bool {
+	t := strings.ToLower(strings.TrimSpace(msgType))
+	return t == "mface" || t == "sticker"
+}
+
+// IsQuoteType reports whether the segment or message type represents a quote or reply.
+func IsQuoteType(msgType string) bool {
+	t := strings.ToLower(strings.TrimSpace(msgType))
+	return t == "quote" || t == "reply"
+}
+
+// IsMentionType reports whether the segment or message type represents a user mention or at.
+func IsMentionType(msgType string) bool {
+	t := strings.ToLower(strings.TrimSpace(msgType))
+	return t == "at" || t == "mention_user"
+}
+
+// DecorationPlan represents the determined decoration action for an outbound group reply.
+type DecorationPlan struct {
+	ShouldQuote   bool
+	QuoteID       string
+	ShouldMention bool
+	MentionUserID string
+}
+
+// PlanGroupDecoration computes whether quote and mention decorations should be applied
+// according to shared parity rules:
+// 1. If not a group message or if the message contains a sticker/meme, no decoration is applied.
+// 2. If reply is enabled, replyMessageID is non-empty, and the message does not already contain a quote, ShouldQuote is true.
+// 3. If mention is enabled, targetUserID is non-empty, and the message does not already mention targetUserID, ShouldMention is true.
+// 4. Decoration ordering is always Quote first, then Mention, then original message content.
+func PlanGroupDecoration(
+	isGroup bool,
+	hasSticker bool,
+	enableReply bool,
+	enableAt bool,
+	replyMessageID string,
+	targetUserID string,
+	hasQuote bool,
+	hasMention bool,
+) DecorationPlan {
+	if !isGroup || hasSticker {
+		return DecorationPlan{}
+	}
+	replyMessageID = strings.TrimSpace(replyMessageID)
+	targetUserID = strings.TrimSpace(targetUserID)
+	return DecorationPlan{
+		ShouldQuote:   enableReply && replyMessageID != "" && !hasQuote,
+		QuoteID:       replyMessageID,
+		ShouldMention: enableAt && targetUserID != "" && !hasMention,
+		MentionUserID: targetUserID,
+	}
+}
+
 // ContainsStickerOneBot reports whether a sequence of OneBot segments contains a sticker or meme.
 func ContainsStickerOneBot(segments []tools.OneBotSegment) bool {
 	for _, seg := range segments {
-		if seg.Type == "mface" || seg.Type == "sticker" {
+		if IsStickerType(seg.Type) {
 			return true
 		}
 		if seg.Type == "image" {
@@ -49,7 +104,7 @@ func ContainsStickerOneBot(segments []tools.OneBotSegment) bool {
 // HasQuoteOneBot reports whether the segment list already contains a reply/quote segment.
 func HasQuoteOneBot(segments []tools.OneBotSegment) bool {
 	for _, seg := range segments {
-		if seg.Type == "reply" || seg.Type == "quote" {
+		if IsQuoteType(seg.Type) {
 			return true
 		}
 	}
@@ -64,6 +119,9 @@ func HasMentionOneBot(segments []tools.OneBotSegment, targetUserID string) bool 
 	}
 
 	for _, seg := range segments {
+		if !IsMentionType(seg.Type) {
+			continue
+		}
 		switch seg.Type {
 		case "at":
 			qqVal := seg.Data["qq"]
@@ -93,36 +151,59 @@ func HasMentionOneBot(segments []tools.OneBotSegment, targetUserID string) bool 
 }
 
 // WrapGroupReplyOneBot applies automatic reply and at decoration to OneBot group messages,
-// enforcing strict semantic parity with AstrBot:
-// 1. If base contains any sticker, no automatic reply or at is added.
-// 2. If base already contains an explicit quote/reply, no duplicate quote is added.
-// 3. If base already contains an explicit mention for the user, no duplicate at is added.
-// 4. Decoration order: reply first, then at, then base.
+// delegating decoration decision to PlanGroupDecoration.
 func WrapGroupReplyOneBot(base []tools.OneBotSegment, messageID int64, userID int64, enableReply bool, enableAt bool) []tools.OneBotSegment {
-	if ContainsStickerOneBot(base) {
+	hasSticker := ContainsStickerOneBot(base)
+	hasQuote := HasQuoteOneBot(base)
+	var userIDStr string
+	if userID != 0 {
+		userIDStr = strconv.FormatInt(userID, 10)
+	}
+	hasMention := HasMentionOneBot(base, userIDStr)
+	var messageIDStr string
+	if messageID != 0 {
+		messageIDStr = strconv.FormatInt(messageID, 10)
+	}
+
+	plan := PlanGroupDecoration(true, hasSticker, enableReply, enableAt, messageIDStr, userIDStr, hasQuote, hasMention)
+	if !plan.ShouldQuote && !plan.ShouldMention {
 		return base
 	}
 
-	userIDStr := strconv.FormatInt(userID, 10)
-	needsReply := enableReply && messageID != 0 && !HasQuoteOneBot(base)
-	needsAt := enableAt && userID != 0 && !HasMentionOneBot(base, userIDStr)
-
-	if !needsReply && !needsAt {
-		return base
-	}
-
-	out := make([]tools.OneBotSegment, 0, len(base)+2)
-	if needsReply {
-		out = append(out, tools.OneBotSegment{
+	// Canonical decoration ordering: Quote first, then Mention, then original message content.
+	var quoteSegs []tools.OneBotSegment
+	if plan.ShouldQuote {
+		quoteSegs = append(quoteSegs, tools.OneBotSegment{
 			Type: "reply",
-			Data: map[string]any{"id": strconv.FormatInt(messageID, 10)},
+			Data: map[string]any{"id": plan.QuoteID},
 		})
 	}
-	if needsAt {
-		out = append(out, tools.OneBotSegment{
+
+	var mentionSegs []tools.OneBotSegment
+	if plan.ShouldMention {
+		mentionSegs = append(mentionSegs, tools.OneBotSegment{
 			Type: "at",
-			Data: map[string]any{"qq": userIDStr},
+			Data: map[string]any{"qq": plan.MentionUserID},
 		})
 	}
-	return append(out, base...)
+
+	if plan.ShouldQuote {
+		out := make([]tools.OneBotSegment, 0, len(base)+len(quoteSegs)+len(mentionSegs))
+		out = append(out, quoteSegs...)
+		out = append(out, mentionSegs...)
+		return append(out, base...)
+	}
+
+	// When quote is already present in base and we only need to add mention,
+	// insert mention after any leading quote segments to preserve [Quote, Mention, Content] ordering.
+	insertAt := 0
+	for insertAt < len(base) && IsQuoteType(base[insertAt].Type) {
+		insertAt++
+	}
+
+	out := make([]tools.OneBotSegment, 0, len(base)+len(mentionSegs))
+	out = append(out, base[:insertAt]...)
+	out = append(out, mentionSegs...)
+	out = append(out, base[insertAt:]...)
+	return out
 }

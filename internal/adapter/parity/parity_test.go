@@ -145,6 +145,9 @@ func TestMentionOnlyDetection(t *testing.T) {
 	if !IsMentionOnlyOneBot(true, true, "   ", false) {
 		t.Errorf("expected OneBot whitespace-only text to be mention only")
 	}
+	if !IsMentionOnlyOneBot(true, true, "[@123456] ", false) {
+		t.Errorf("expected OneBot extracted token text to be mention only")
+	}
 	if IsMentionOnlyOneBot(false, true, "", false) {
 		t.Errorf("private message should not be mention only")
 	}
@@ -154,8 +157,44 @@ func TestMentionOnlyDetection(t *testing.T) {
 	if IsMentionOnlyOneBot(true, true, "hello", false) {
 		t.Errorf("message with text should not be mention only")
 	}
+	if IsMentionOnlyOneBot(true, true, "[@123456] hello", false) {
+		t.Errorf("message with token and text should not be mention only")
+	}
 	if IsMentionOnlyOneBot(true, true, "", true) {
 		t.Errorf("message with image should not be mention only")
+	}
+
+	// Raw segment based
+	pureAtSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "text", Data: map[string]any{"text": "   "}},
+	}
+	if !IsMentionOnlyOneBotSegments(true, 123456, pureAtSegs, false) {
+		t.Errorf("expected pureAtSegs to be mention only")
+	}
+
+	atWithContentSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "text", Data: map[string]any{"text": "hello"}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithContentSegs, false) {
+		t.Errorf("atWithContentSegs should not be mention only")
+	}
+
+	atOtherUserSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "at", Data: map[string]any{"qq": "999999"}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, atOtherUserSegs, false) {
+		t.Errorf("atOtherUserSegs should not be mention only")
+	}
+
+	atWithMediaSegs := []tools.OneBotSegment{
+		{Type: "at", Data: map[string]any{"qq": "123456"}},
+		{Type: "image", Data: map[string]any{"file": "abc"}},
+	}
+	if IsMentionOnlyOneBotSegments(true, 123456, atWithMediaSegs, false) {
+		t.Errorf("atWithMediaSegs should not be mention only")
 	}
 
 	// AstrBot

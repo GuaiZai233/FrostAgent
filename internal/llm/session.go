@@ -783,25 +783,25 @@ func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
 
 // GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
+	sessionID = strings.TrimSpace(sessionID)
 	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
 	aliases := memory.SessionKeyAliases(sessionID)
 
 	sm.mu.RLock()
-	if session, exists := sm.sessions[sessionID]; exists {
+	if session, exists := sm.sessions[canonicalID]; exists {
 		sm.mu.RUnlock()
 		return session
 	}
-	if session, exists := sm.sessions[canonicalID]; exists {
+	if session, exists := sm.sessions[sessionID]; exists {
 		sm.mu.RUnlock()
 		return session
 	}
 	for _, alias := range aliases {
 		if session, exists := sm.sessions[alias]; exists {
 			sm.mu.RUnlock()
-			sm.mu.Lock()
-			sm.sessions[canonicalID] = session
-			sm.sessions[sessionID] = session
-			sm.mu.Unlock()
 			return session
 		}
 	}
@@ -810,17 +810,18 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	// 双重检查
-	if session, exists := sm.sessions[sessionID]; exists {
+	if session, exists := sm.sessions[canonicalID]; exists {
 		return session
 	}
-	if session, exists := sm.sessions[canonicalID]; exists {
-		sm.sessions[sessionID] = session
+	if session, exists := sm.sessions[sessionID]; exists {
+		delete(sm.sessions, sessionID)
+		sm.sessions[canonicalID] = session
 		return session
 	}
 	for _, alias := range aliases {
 		if session, exists := sm.sessions[alias]; exists {
+			delete(sm.sessions, alias)
 			sm.sessions[canonicalID] = session
-			sm.sessions[sessionID] = session
 			return session
 		}
 	}
@@ -837,16 +838,13 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		}
 	}
 	session := &SessionContext{
-		ConversationID:      canonicalID,
+		ConversationID:      sessionID,
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
 		groupCompactSummary: summary,
 	}
 	sm.sessions[canonicalID] = session
-	if sessionID != canonicalID {
-		sm.sessions[sessionID] = session
-	}
 	return session
 }
 
@@ -941,8 +939,24 @@ func (s *SessionContext) Clear() {
 // ResetGroupCompact clears one active group's compact state without deleting
 // its normal conversation history.
 func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	aliases := memory.SessionKeyAliases(sessionID)
+
 	sm.mu.RLock()
-	session, ok := sm.sessions[sessionID]
+	session, ok := sm.sessions[canonicalID]
+	if !ok {
+		session, ok = sm.sessions[sessionID]
+	}
+	if !ok {
+		for _, alias := range aliases {
+			if s, found := sm.sessions[alias]; found {
+				session = s
+				ok = true
+				break
+			}
+		}
+	}
 	sm.mu.RUnlock()
 	if !ok {
 		return false
@@ -955,13 +969,25 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 
 // Get 获取指定会话，返回 core.Session 接口
 func (sm *SessionManager) Get(sessionID string) (core.Session, bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	s, ok := sm.sessions[sessionID]
-	if !ok {
-		return nil, false
+	if s, ok := sm.sessions[canonicalID]; ok {
+		return s, true
 	}
-	return s, true
+	if s, ok := sm.sessions[sessionID]; ok {
+		return s, true
+	}
+	for _, alias := range memory.SessionKeyAliases(sessionID) {
+		if s, ok := sm.sessions[alias]; ok {
+			return s, true
+		}
+	}
+	return nil, false
 }
 
 // Create 创建一个新的会话并返回 core.Session 接口
@@ -971,9 +997,19 @@ func (sm *SessionManager) Create(sessionID string) core.Session {
 
 // Delete 删除指定会话
 func (sm *SessionManager) Delete(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	aliases := memory.SessionKeyAliases(sessionID)
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if canonicalID != "" {
+		delete(sm.sessions, canonicalID)
+	}
 	delete(sm.sessions, sessionID)
+	for _, alias := range aliases {
+		delete(sm.sessions, alias)
+	}
 }
 
 // Count returns the number of active sessions.

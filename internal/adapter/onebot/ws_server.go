@@ -197,9 +197,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 1. Extract user's visible message
 	var segments []content.MessageSegment
 	segments = []content.MessageSegment{}
-	if err := json.Unmarshal(event.Message, &segments); err != nil {
-		engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("解析消息段失败: %v", err))
-		// Don't return, just work with an empty segment list
+	if err := json.Unmarshal(event.Message, &segments); err != nil || len(segments) == 0 {
+		segments = ParseMessageSegments(event.Message)
 	}
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
@@ -272,7 +271,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if groupName := conn.groupName(event.GroupID); groupName != "" {
 			contextMap["group_name"] = groupName
 		}
-		mentionOnly := parity.IsMentionOnlyOneBot(event.MessageType == "group", IsMentionedBot(event), userText, currentHasImage || replyHasImage)
+		toolSegs := make([]tools.OneBotSegment, len(segments))
+		for i, s := range segments {
+			toolSegs[i] = tools.OneBotSegment{Type: s.Type, Data: s.Data}
+		}
+		mentionOnly := parity.IsMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage || replyHasImage || replyContext.Prompt != "")
+		if !mentionOnly {
+			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", IsMentionedBot(event), userText, currentHasImage || replyHasImage || replyContext.Prompt != "")
+		}
 		contextMap["mention_only"] = mentionOnly
 		if mentionOnly {
 			contextMap["interaction_guidance"] = parity.MentionOnlyGuidance
