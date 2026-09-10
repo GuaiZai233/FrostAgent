@@ -236,6 +236,8 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		return resolvedReplyContext{}
 	}
 
+	c.rememberMessageSession(messageID, historyKey(event))
+
 	segments := ParseMessageSegments(data.Message)
 	visibleText := extractUserText(segments, data.Message, c.Scope)
 	context := map[string]interface{}{
@@ -373,6 +375,7 @@ func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resol
 	}
 	observeStickerSources(
 		c.stealer,
+		c.generation,
 		historyKey(event),
 		reply.MessageID,
 		stickerSourcesFromSegments(reply.Segments),

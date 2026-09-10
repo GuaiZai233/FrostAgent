@@ -127,7 +127,10 @@ func TestBuildOneBotMessageReturnsStickerReadError(t *testing.T) {
 }
 
 func TestBuildOneBotMessageKeepsRegularImagePath(t *testing.T) {
-	path := filepath.Join("data", "images", "regular.png")
+	path := filepath.Join(t.TempDir(), "regular.png")
+	if err := os.WriteFile(path, []byte("regular image payload"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
 	segments, err := BuildOneBotMessage([]Msg{{Type: "image", Path: path}})
 	if err != nil {
 		t.Fatalf("BuildOneBotMessage returned error: %v", err)
@@ -140,5 +143,78 @@ func TestBuildOneBotMessageKeepsRegularImagePath(t *testing.T) {
 	}
 	if _, ok := segments[0].Data["subType"]; ok {
 		t.Fatalf("regular image unexpectedly has LLBot sticker subtype: %+v", segments[0])
+	}
+}
+
+func TestBuildOneBotMessage_PreflightFailFastForAllMediaTypes(t *testing.T) {
+	mediaTypes := []string{"image", "record", "video", "file"}
+
+	// 1. Missing file fails fast for all media types
+	for _, mt := range mediaTypes {
+		missingPath := filepath.Join(t.TempDir(), "nonexistent_"+mt+".dat")
+		segments, err := BuildOneBotMessage([]Msg{{Type: mt, Path: missingPath}})
+		if err == nil {
+			t.Fatalf("expected preflight error for missing %s, got segments: %+v", mt, segments)
+		}
+		if !strings.Contains(err.Error(), missingPath) {
+			t.Fatalf("error %q should mention missing path %q", err, missingPath)
+		}
+	}
+
+	// 2. Empty file fails fast for all media types
+	for _, mt := range mediaTypes {
+		emptyPath := filepath.Join(t.TempDir(), "empty_"+mt+".dat")
+		if err := os.WriteFile(emptyPath, []byte{}, 0o600); err != nil {
+			t.Fatalf("write empty fixture: %v", err)
+		}
+		segments, err := BuildOneBotMessage([]Msg{{Type: mt, Path: emptyPath}})
+		if err == nil {
+			t.Fatalf("expected preflight error for empty %s, got segments: %+v", mt, segments)
+		}
+		if !strings.Contains(err.Error(), "为空") {
+			t.Fatalf("error %q should mention '为空' for empty path %q", err, emptyPath)
+		}
+	}
+
+	// 3. Valid local file succeeds for all media types
+	for _, mt := range mediaTypes {
+		validPath := filepath.Join(t.TempDir(), "valid_"+mt+".dat")
+		if err := os.WriteFile(validPath, []byte("valid content"), 0o600); err != nil {
+			t.Fatalf("write valid fixture: %v", err)
+		}
+		segments, err := BuildOneBotMessage([]Msg{{Type: mt, Path: validPath}})
+		if err != nil {
+			t.Fatalf("expected success for valid %s, got err: %v", mt, err)
+		}
+		if len(segments) != 1 || segments[0].Type != mt {
+			t.Fatalf("unexpected segments for %s: %+v", mt, segments)
+		}
+	}
+}
+
+func TestBuildOneBotMessage_SparseLargeFileDoesNotExhaustMemory(t *testing.T) {
+	// Create a 1GB sparse file to verify preflight validation uses O(1) memory and does not read full file
+	path := filepath.Join(t.TempDir(), "sparse_video.mp4")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sparse file: %v", err)
+	}
+	const oneGB = int64(1024 * 1024 * 1024)
+	if err := f.Truncate(oneGB); err != nil {
+		f.Close()
+		t.Fatalf("truncate sparse file to 1GB: %v", err)
+	}
+	if _, err := f.WriteAt([]byte{0x01}, 0); err != nil {
+		f.Close()
+		t.Fatalf("write probe byte: %v", err)
+	}
+	f.Close()
+
+	segments, err := BuildOneBotMessage([]Msg{{Type: "video", Path: path}})
+	if err != nil {
+		t.Fatalf("expected success for 1GB sparse file, got err: %v", err)
+	}
+	if len(segments) != 1 || segments[0].Data["file"] != "file://"+path {
+		t.Fatalf("unexpected segments for 1GB sparse file: %+v", segments)
 	}
 }
