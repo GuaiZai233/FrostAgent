@@ -4,10 +4,14 @@ import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -525,18 +529,43 @@ func TestVendorParity_QuoteStickerStaleMessageID_GracefulError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVendorParity_OutgoingPreflightFailure(t *testing.T) {
-	// FrostAgent pre-flight validates local files upfront: missing local sticker fails immediately
-	toolMsgs := []tools.Msg{
-		{
-			Type:      "image",
-			Path:      filepath.Join(t.TempDir(), "nonexistent_sticker.png"),
-			IsSticker: true,
-		},
-	}
+	// FrostAgent pre-flight validates local files upfront: missing or empty local media fails immediately
+	// across all component types (image, record, video, file), preventing upstream converter divergence.
+	mediaTypes := []string{"image", "record", "video", "file"}
 
-	_, err := tools.BuildOneBotMessage(toolMsgs)
-	if err == nil {
-		t.Fatalf("expected pre-flight error for missing sticker file, got nil")
+	for _, mt := range mediaTypes {
+		missingPath := filepath.Join(t.TempDir(), "nonexistent_"+mt+".dat")
+		toolMsgs := []tools.Msg{
+			{
+				Type: mt,
+				Path: missingPath,
+			},
+		}
+		_, err := tools.BuildOneBotMessage(toolMsgs)
+		if err == nil {
+			t.Fatalf("expected pre-flight error for missing %s file, got nil", mt)
+		}
+		if !strings.Contains(err.Error(), missingPath) {
+			t.Fatalf("error %q should mention missing path %q", err, missingPath)
+		}
+
+		emptyPath := filepath.Join(t.TempDir(), "empty_"+mt+".dat")
+		if err := os.WriteFile(emptyPath, []byte{}, 0o600); err != nil {
+			t.Fatalf("write empty fixture: %v", err)
+		}
+		toolMsgsEmpty := []tools.Msg{
+			{
+				Type: mt,
+				Path: emptyPath,
+			},
+		}
+		_, errEmpty := tools.BuildOneBotMessage(toolMsgsEmpty)
+		if errEmpty == nil {
+			t.Fatalf("expected pre-flight error for empty %s file, got nil", mt)
+		}
+		if !strings.Contains(errEmpty.Error(), "为空") {
+			t.Fatalf("error %q should mention '为空' for empty path %q", errEmpty, emptyPath)
+		}
 	}
 }
 
@@ -672,16 +701,137 @@ func TestVendorParity_SendSuccess_NapCatPartialModel(t *testing.T) {
 }
 
 func TestVendorParity_ActionACKTimeout(t *testing.T) {
-	// When platform action times out, FrostAgent records delivery failure and refuses history commit
-	conn := newWSConnection(nil)
+	// When platform action times out, FrostAgent records delivery failure and refuses history commit.
+	// Uses a real WebSocket peer that accepts the action frame and deliberately withholds any ACK response.
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	receivedAction := make(chan []byte, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		for {
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			receivedAction <- msg
+			// Deliberately do not send any ACK response to simulate upstream timeout/drop
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial dummy upstream: %v", err)
+	}
+	defer clientConn.Close()
+
+	conn := newWSConnection(clientConn)
 	act := model.OneBotAction{
 		Action: "send_private_msg",
 		Params: map[string]any{"user_id": testUserID, "message": "hello"},
 	}
 
-	// Timeout quickly with small timeout
-	_, err := conn.SendActionAndWait(act, 10*time.Millisecond)
-	if err == nil {
-		t.Fatalf("expected timeout error, got nil")
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.SendActionAndWait(act, 50*time.Millisecond)
+		errCh <- err
+	}()
+
+	// Verify upstream actually received the action over the wire
+	select {
+	case data := <-receivedAction:
+		var sentAct model.OneBotAction
+		if err := json.Unmarshal(data, &sentAct); err != nil {
+			t.Fatalf("unmarshal sent action: %v", err)
+		}
+		if sentAct.Action != "send_private_msg" {
+			t.Fatalf("received action = %q, want 'send_private_msg'", sentAct.Action)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("upstream did not receive action message over websocket")
+	}
+
+	// Verify SendActionAndWait timed out with expected error message
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatalf("expected timeout error, got nil")
+		}
+		if !strings.Contains(err.Error(), "timeout") {
+			t.Fatalf("expected timeout error containing 'timeout', got: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("SendActionAndWait did not return after timeout")
+	}
+}
+
+func TestVendorParity_StickerObservation_ConnectionScoped(t *testing.T) {
+	// Verifies that sticker observations are scoped to the connection generation,
+	// preventing cross-upstream/reconnect stale message ID lookups or ID collisions.
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	stealer := sticker.NewStealer(store, nil)
+
+	conn1 := newWSConnection(nil)
+	conn1.stealer = stealer
+	conn2 := newWSConnection(nil)
+	conn2.stealer = stealer
+
+	if conn1.generation == "" || conn2.generation == "" || conn1.generation == conn2.generation {
+		t.Fatalf("each connection must have a unique generation: conn1=%q, conn2=%q", conn1.generation, conn2.generation)
+	}
+
+	event1 := model.OneBotEvent{
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     testGroupID,
+		UserID:      testUserID,
+		MessageID:   12345,
+		Message:     []byte(`[{"type":"image","data":{"url":"https://example.com/s1.png","sub_type":1}}]`),
+	}
+	conn1.observeStickers(event1)
+
+	loaderCalled := false
+	loader := func(ctx context.Context, msgID string, idx int) ([]byte, error) {
+		loaderCalled = true
+		return []byte("GIF89a payload"), nil
+	}
+
+	// 1. Connection 1 can steal its observed sticker
+	loaderCalled = false
+	_, resolvedID, err := stealer.StealObservedScoped(context.Background(), historyKey(event1), "", 0, conn1.generation, loader)
+	if err != nil || resolvedID != "12345" || !loaderCalled {
+		t.Fatalf("conn1 steal failed: resolvedID=%q err=%v", resolvedID, err)
+	}
+
+	// 2. Connection 2 (different upstream or reconnected) must NOT pick conn1's sticker when message_id is omitted
+	loaderCalled = false
+	_, _, err = stealer.StealObservedScoped(context.Background(), historyKey(event1), "", 0, conn2.generation, loader)
+	if err != sticker.ErrStickerNotInScope {
+		t.Fatalf("conn2 should not pick conn1's sticker with empty message_id, got err=%v", err)
+	}
+	if loaderCalled {
+		t.Fatalf("loader must not be called when sticker is not in scope")
+	}
+
+	// 3. Explicit message_id from conn1 passed to conn2 must be rejected to prevent stale handle lookup
+	loaderCalled = false
+	_, _, err = stealer.StealObservedScoped(context.Background(), historyKey(event1), "12345", 0, conn2.generation, loader)
+	if err != sticker.ErrStickerNotInScope {
+		t.Fatalf("conn2 should reject conn1's explicit message_id, got err=%v", err)
+	}
+
+	// 4. When conn1 disconnects, its observations are cleared
+	stealer.ClearObservedScope(conn1.generation)
+	_, _, err = stealer.StealObservedScoped(context.Background(), historyKey(event1), "12345", 0, "", loader)
+	if err != sticker.ErrStickerNotInScope {
+		t.Fatalf("cleared observation should not be retrievable, got err=%v", err)
 	}
 }

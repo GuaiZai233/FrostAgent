@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"FrostAgent/internal/model"
@@ -76,10 +77,13 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
+var nextConnGeneration uint64
+
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	*runtimescope.Scope
 	conn                *websocket.Conn
+	generation          string
 	stealer             *sticker.Stealer
 	writeMu             sync.Mutex
 	messageMu           sync.Mutex
@@ -96,8 +100,10 @@ type wsConnection struct {
 }
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
+	gen := fmt.Sprintf("onebot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
 	return &wsConnection{
 		conn:               conn,
+		generation:         gen,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
@@ -475,11 +481,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:   historyKey(event),
-			Owner:       owner,
-			OwnerType:   ownerType,
-			ActorUserID: strconv.FormatInt(event.UserID, 10),
-			SendHook:    sendHook,
+			SessionID:        historyKey(event),
+			Owner:            owner,
+			OwnerType:        ownerType,
+			ActorUserID:      strconv.FormatInt(event.UserID, 10),
+			SendHook:         sendHook,
+			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
 			},

@@ -348,3 +348,70 @@ func TestDownloadImage_RejectsUntrustedURL(t *testing.T) {
 		t.Fatalf("downloadImage error = %v, want untrusted URL rejection", err)
 	}
 }
+
+func TestStealerObservationScoped_CrossGenerationIsolation(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	stealer := NewStealer(store, nil)
+	stickerBytes := []byte("GIF89a generation test")
+
+	// Connection Generation 1 observes a sticker
+	stealer.ObserveScoped("group:1001", "msg-gen1", 0, "conn-gen-1", nil, false)
+
+	loaderCalled := false
+	loader := func(ctx context.Context, msgID string, idx int) ([]byte, error) {
+		loaderCalled = true
+		return stickerBytes, nil
+	}
+
+	// Case 1: Within the same connection generation (conn-gen-1), StealObserved succeeds
+	loaderCalled = false
+	res, resolvedID, err := stealer.StealObservedScoped(context.Background(), "group:1001", "", 0, "conn-gen-1", loader)
+	if err != nil || resolvedID != "msg-gen1" || !loaderCalled {
+		t.Fatalf("expected successful steal in same generation, got res=%+v id=%q err=%v", res, resolvedID, err)
+	}
+
+	// Case 2: Across connection generations (upstream switch to conn-gen-2):
+	// Omitted message_id must NOT pick the sticker from conn-gen-1
+	loaderCalled = false
+	_, _, err = stealer.StealObservedScoped(context.Background(), "group:1001", "", 0, "conn-gen-2", loader)
+	if err != ErrStickerNotInScope {
+		t.Fatalf("expected ErrStickerNotInScope for cross-generation empty message_id, got: %v", err)
+	}
+	if loaderCalled {
+		t.Fatalf("loader must not be invoked when sticker is rejected across generations")
+	}
+
+	// Explicit message_id from conn-gen-1 must be rejected when operating on conn-gen-2
+	loaderCalled = false
+	_, _, err = stealer.StealObservedScoped(context.Background(), "group:1001", "msg-gen1", 0, "conn-gen-2", loader)
+	if err != ErrStickerNotInScope {
+		t.Fatalf("expected ErrStickerNotInScope for cross-generation explicit message_id, got: %v", err)
+	}
+	if loaderCalled {
+		t.Fatalf("loader must not be invoked for cross-generation explicit message_id")
+	}
+
+	// Case 3: Connection Generation 2 observes its own sticker
+	stealer.ObserveScoped("group:1001", "msg-gen2", 0, "conn-gen-2", nil, false)
+	loaderCalled = false
+	_, resolvedID, err = stealer.StealObservedScoped(context.Background(), "group:1001", "", 0, "conn-gen-2", loader)
+	if err != nil || resolvedID != "msg-gen2" {
+		t.Fatalf("expected conn-gen-2 to resolve its own sticker 'msg-gen2', got id=%q err=%v", resolvedID, err)
+	}
+
+	// Case 4: ClearObservedScope removes only the specified connection's observations
+	stealer.ClearObservedScope("conn-gen-1")
+	// Verify conn-gen-1 is gone even if scope is unspecified
+	_, _, err = stealer.StealObservedScoped(context.Background(), "group:1001", "msg-gen1", 0, "", loader)
+	if err != ErrStickerNotInScope {
+		t.Fatalf("expected cleared conn-gen-1 sticker to be gone, got: %v", err)
+	}
+	// Verify conn-gen-2 is still retained
+	_, resolvedID, err = stealer.StealObservedScoped(context.Background(), "group:1001", "msg-gen2", 0, "conn-gen-2", loader)
+	if err != nil || resolvedID != "msg-gen2" {
+		t.Fatalf("conn-gen-2 sticker should still exist after clearing conn-gen-1, got: %v", err)
+	}
+}

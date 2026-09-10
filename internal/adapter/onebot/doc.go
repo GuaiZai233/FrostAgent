@@ -35,19 +35,25 @@
 // and `subType: 1` in `data`. Neither field may be removed, guaranteeing delivery across
 // both NapCat and LuckyLillia.
 //
-// 5. Vendor-Local Message ID Handle:
+// 5. Vendor-Local Message ID Handle & Connection Scoping:
 // OneBot `message_id` values are vendor-local, opaque, connection-scoped handles.
 // NapCat computes positive int32 hashes mapped in memory, while LuckyLillia uses
 // signed int32 keys backed by a database. The same real QQ message will NOT share
 // the same OneBot `message_id` across different upstreams or reconnects.
 // FrostAgent does not treat OneBot `message_id` as a globally portable or stable message
-// identity. All lookups via `get_msg` (for quotes, replies, or historical stickers)
+// identity. In addition, sticker observations are explicitly tagged with connection
+// generations (ObservationScope), ensuring that after an upstream switch or reconnect,
+// stale `message_id` handles from an older connection cannot be queried against the
+// new connection or collide with short IDs; connection teardown flushes its scoped cache.
+// All lookups via `get_msg` (for quotes, replies, or historical stickers)
 // strictly degrade to empty context on failure, stale IDs, deleted messages, or timeouts,
 // ensuring upstream discrepancies never stall the core dialogue pipeline.
 //
 // 6. Canonical Send Failure Semantics:
 //   - Pre-flight validation: Outbound messages are validated locally before dispatch;
-//     unreadable local media or empty files fail immediately within FrostAgent.
+//     local paths for every media type (`image`, `record`, `video`, `file`) are validated
+//     for existence, readability, and non-emptiness upfront (Fail-Fast), failing immediately
+//     before wire serialization.
 //   - Upstream ACK semantics: Dispatched actions wait for upstream ACK (`SendActionAndWait`).
 //     If upstream returns an error (retcode != 0, as LuckyLillia does on converter error,
 //     or on mute/risk control), FrostAgent treats the message as undelivered, prevents

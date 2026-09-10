@@ -373,6 +373,7 @@ func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resol
 	}
 	observeStickerSources(
 		c.stealer,
+		c.generation,
 		historyKey(event),
 		reply.MessageID,
 		stickerSourcesFromSegments(reply.Segments),

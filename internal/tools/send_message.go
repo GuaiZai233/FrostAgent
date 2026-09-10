@@ -168,18 +168,17 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 }
 
 func buildOneBotMediaFile(msg Msg) (string, error) {
-	if msg.Type == "image" && msg.IsSticker && msg.Path != "" {
+	if msg.Path != "" {
 		content, err := os.ReadFile(msg.Path)
 		if err != nil {
-			return "", fmt.Errorf("读取贴纸文件 %q 失败: %w", msg.Path, err)
+			return "", fmt.Errorf("读取本地媒体文件 %q 失败: %w", msg.Path, err)
 		}
 		if len(content) == 0 {
-			return "", fmt.Errorf("贴纸文件 %q 为空", msg.Path)
+			return "", fmt.Errorf("本地媒体文件 %q 为空", msg.Path)
 		}
-		return "base64://" + base64.StdEncoding.EncodeToString(content), nil
-	}
-
-	if msg.Path != "" {
+		if msg.Type == "image" && msg.IsSticker {
+			return "base64://" + base64.StdEncoding.EncodeToString(content), nil
+		}
 		return fmt.Sprintf("file://%s", msg.Path), nil
 	}
 	return msg.URL, nil
