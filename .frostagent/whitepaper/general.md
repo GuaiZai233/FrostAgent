@@ -149,11 +149,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
          2. `IsMentionedBot == true`（显式针对机器人唤醒/@）；
          3. `HasOtherMention == false`（未同时 @ 其他群成员）；
          4. `HasReply == false`（未包含回复引用上下文；引用先验发言代表存在前置对话依赖，而非纯粹的向 Bot 打招呼）；
-         5. `HasImages == false`（未包含图片/表情等多媒体附件）；
+         5. `HasImages == false`（未包含图片/表情等多媒体附件或媒体组件结构）；
          6. `HasOtherContent == false`（未包含非文本/非图片组件，如 Face 表情、语音 Record、视频 Video、文件 File 等特殊段）；
          7. `strings.TrimSpace(UserText) == ""`（未包含除空格外的正文内容）。
-       - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（`adapters/astrbot_plugin_frostagent/main.py`）将非纯文本段（At、Face、Record 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）与 `has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他富媒体或特殊组件），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser` 或 `@Bot + Face` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
-       - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷与非文本段（Face/Record）进行语义一致性回归校验。
+       - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（`adapters/astrbot_plugin_frostagent/main.py`）将非纯文本段（At、Face、Record、Image 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）、`has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他特殊组件）以及 `has_media_content`（是否存在图片/表情等多媒体结构，无论附件是否成功下载/转换 Base64），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser`、`@Bot + Face` 以及媒体转换失败时的 `@Bot + Image` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
+       - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 

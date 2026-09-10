@@ -359,6 +359,7 @@ func isMentionOnlyInteraction(event Event) bool {
 	hasReply := false
 	hasOtherMention := false
 	hasOtherContent := false
+	hasMediaContent := false
 	if event.Metadata != nil {
 		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
 			hasReply = true
@@ -379,12 +380,28 @@ func isMentionOnlyInteraction(event Event) bool {
 				hasOtherContent = strings.EqualFold(strings.TrimSpace(val), "true")
 			}
 		}
+		if v, ok := event.Metadata["has_media_content"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasMediaContent = val
+			case string:
+				hasMediaContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		} else if v, ok := event.Metadata["has_images"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasMediaContent = val
+			case string:
+				hasMediaContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
 	}
+	hasImages := len(event.Attachments) > 0 || hasMediaContent
 	return parity.IsMentionOnlyAstrBot(
 		event.MessageType == "group",
 		event.IsAt,
 		event.Content,
-		len(event.Attachments),
+		hasImages,
 		hasReply,
 		hasOtherMention,
 		hasOtherContent,

@@ -142,15 +142,15 @@ func IsMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.On
 }
 
 // IsMentionOnlyAstrBot reports whether an AstrBot event is a mention-only interaction:
-// group message, at bot, empty text, no attachments, no reply context, no other mentions,
-// and no non-text components.
+// group message, at bot, empty text, no attachments or media structures, no reply context,
+// no other mentions, and no non-text components.
 // When hasReply is true (e.g. metadata carries reply_message_id), mention-only is false
 // to maintain semantic parity with OneBot's reply segment detection.
 func IsMentionOnlyAstrBot(
 	isGroup bool,
 	isAt bool,
 	content string,
-	attachmentCount int,
+	hasImages bool,
 	hasReply bool,
 	hasOtherMention bool,
 	hasOtherContent bool,
@@ -160,7 +160,7 @@ func IsMentionOnlyAstrBot(
 		IsMentionedBot:  isAt,
 		HasOtherMention: hasOtherMention,
 		HasReply:        hasReply,
-		HasImages:       attachmentCount > 0,
+		HasImages:       hasImages,
 		HasOtherContent: hasOtherContent,
 		UserText:        content,
 	})

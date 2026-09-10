@@ -235,31 +235,31 @@ func TestMentionOnlyDetection(t *testing.T) {
 	}
 
 	// AstrBot
-	if !IsMentionOnlyAstrBot(true, true, "", 0, false, false, false) {
+	if !IsMentionOnlyAstrBot(true, true, "", false, false, false, false) {
 		t.Errorf("expected AstrBot pure @ to be mention only")
 	}
-	if !IsMentionOnlyAstrBot(true, true, "   ", 0, false, false, false) {
+	if !IsMentionOnlyAstrBot(true, true, "   ", false, false, false, false) {
 		t.Errorf("expected AstrBot whitespace text to be mention only")
 	}
-	if IsMentionOnlyAstrBot(false, true, "", 0, false, false, false) {
+	if IsMentionOnlyAstrBot(false, true, "", false, false, false, false) {
 		t.Errorf("AstrBot private should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, false, "", 0, false, false, false) {
+	if IsMentionOnlyAstrBot(true, false, "", false, false, false, false) {
 		t.Errorf("AstrBot not @ should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "test", 0, false, false, false) {
+	if IsMentionOnlyAstrBot(true, true, "test", false, false, false, false) {
 		t.Errorf("AstrBot with text should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 1, false, false, false) {
+	if IsMentionOnlyAstrBot(true, true, "", true, false, false, false) {
 		t.Errorf("AstrBot with attachment should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 0, true, false, false) {
+	if IsMentionOnlyAstrBot(true, true, "", false, true, false, false) {
 		t.Errorf("AstrBot with reply should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 0, false, true, false) {
+	if IsMentionOnlyAstrBot(true, true, "", false, false, true, false) {
 		t.Errorf("AstrBot with other mention should not be mention only")
 	}
-	if IsMentionOnlyAstrBot(true, true, "", 0, false, false, true) {
+	if IsMentionOnlyAstrBot(true, true, "", false, false, false, true) {
 		t.Errorf("AstrBot with other content should not be mention only")
 	}
 

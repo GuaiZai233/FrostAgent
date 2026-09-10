@@ -594,6 +594,50 @@ class MessageComponentTests(unittest.TestCase):
             self.assertTrue(payload["is_at"])
             self.assertFalse(payload["metadata"]["has_other_mention"])
             self.assertFalse(payload["metadata"]["has_other_content"])
+            self.assertFalse(payload["metadata"]["has_media_content"])
+            self.assertFalse(payload["metadata"]["has_images"])
+
+    def test_build_payload_preserves_media_content_when_image_conversion_fails(self) -> None:
+        class CorruptedImage:
+            async def convert_to_base64(self) -> str:
+                raise RuntimeError("image download failed / decoder crash")
+
+        event = InboundEvent([FakeAt(qq="bot_self"), CorruptedImage()])
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["content"], "")
+            self.assertTrue(payload["is_at"])
+            self.assertEqual(payload["attachments"], [])
+            self.assertFalse(payload["metadata"]["has_other_mention"])
+            self.assertFalse(payload["metadata"]["has_other_content"])
+            self.assertTrue(payload["metadata"]["has_media_content"])
+            self.assertTrue(payload["metadata"]["has_images"])
+
+    def test_build_payload_preserves_media_content_when_image_base64_invalid(self) -> None:
+        class InvalidBase64Image:
+            async def convert_to_base64(self) -> str:
+                return "invalid-base64!@#$"
+
+        event = InboundEvent([FakeAt(qq="bot_self"), InvalidBase64Image()])
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["content"], "")
+            self.assertTrue(payload["is_at"])
+            self.assertEqual(payload["attachments"], [])
+            self.assertTrue(payload["metadata"]["has_media_content"])
+            self.assertTrue(payload["metadata"]["has_images"])
 
 
 if __name__ == "__main__":

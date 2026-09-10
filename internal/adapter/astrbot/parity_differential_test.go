@@ -319,6 +319,7 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 		replyMessageID  string
 		hasOtherMention bool
 		hasOtherContent bool
+		hasMediaContent bool
 		hasImages       bool
 		text            string
 		nonTextSegment  *tools.OneBotSegment
@@ -427,6 +428,22 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 			wantMentionOnly: false,
 		},
 		{
+			name:            "at_bot_with_failed_image_extraction",
+			isGroup:         true,
+			isAtBot:         true,
+			hasReply:        false,
+			hasOtherMention: false,
+			hasOtherContent: false,
+			hasMediaContent: true,
+			hasImages:       false, // image extraction/conversion failed, attachments is empty
+			text:            "",
+			nonTextSegment: &tools.OneBotSegment{
+				Type: "image",
+				Data: map[string]any{"file": "corrupted_or_failed"},
+			},
+			wantMentionOnly: false,
+		},
+		{
 			name:            "private_at_bot",
 			isGroup:         false,
 			isAtBot:         true,
@@ -476,6 +493,8 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 				Metadata: map[string]any{
 					"has_other_mention": tt.hasOtherMention,
 					"has_other_content": tt.hasOtherContent,
+					"has_media_content": tt.hasMediaContent || tt.hasImages,
+					"has_images":        tt.hasMediaContent || tt.hasImages,
 				},
 			}
 			if tt.hasReply {
@@ -537,7 +556,7 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 			if tt.hasOtherMention {
 				userTextParts = append(userTextParts, "[@"+strconv.FormatInt(otherUserID, 10)+"]")
 			}
-			if tt.hasOtherContent {
+			if tt.hasOtherContent || tt.hasMediaContent {
 				userTextParts = append(userTextParts, "[表情/媒体]")
 			}
 			if tt.text != "" {
@@ -549,7 +568,7 @@ func TestCrossAdapterInboundMentionOnlyDifferential(t *testing.T) {
 				botSelfID,
 				tt.isAtBot,
 				onebotFallbackUserText,
-				tt.hasImages,
+				tt.hasImages || tt.hasMediaContent,
 				tt.hasReply,
 			)
 
