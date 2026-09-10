@@ -1,6 +1,7 @@
 package security
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"strings"
@@ -543,15 +544,20 @@ func TestMixedPercentEscapesNormalizedAndBlocked(t *testing.T) {
 		},
 	}
 
+	classifier := NewCalibratedClassifier()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			normalized, _ := normalizeBounded(tc.input)
 			if normalized != tc.expected {
 				t.Fatalf("expected normalized %q, got %q", tc.expected, normalized)
 			}
-			isDangerous := dangerousContent(normalized)
+			res, err := classifier.Classify(context.Background(), ClassificationInput{Normalized: normalized, Origin: SourceUserDirect})
+			if err != nil {
+				t.Fatalf("classification failed: %v", err)
+			}
+			isDangerous := res.IsRisky()
 			if isDangerous != tc.blocked {
-				t.Fatalf("expected dangerousContent=%v, got %v for %q", tc.blocked, isDangerous, normalized)
+				t.Fatalf("expected dangerous=%v, got %v for %q (res=%+v)", tc.blocked, isDangerous, normalized, res)
 			}
 		})
 	}

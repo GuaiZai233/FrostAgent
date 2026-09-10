@@ -27,6 +27,12 @@ func NewController(dataDir string) *Controller {
 	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit)}
 }
 
+func (c *Controller) SetClassifier(classifier Classifier) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetClassifier(classifier)
+	}
+}
+
 // GateIngress applies the global lock before any stateful ingress processing,
 // then evaluates user-controlled content. Store failures are fail-closed.
 func (c *Controller) CheckAccess(p Principal) error {

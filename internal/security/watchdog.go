@@ -1,7 +1,7 @@
 package security
 
 import (
-	"encoding/base64"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,9 +16,10 @@ type WatchdogSource string
 type WatchdogAction string
 
 type WatchdogDecision struct {
-	Action WatchdogAction `json:"action"`
-	Reason string         `json:"reason,omitempty"`
-	Event  AuditEvent     `json:"-"`
+	Action         WatchdogAction        `json:"action"`
+	Reason         string                `json:"reason,omitempty"`
+	Classification *ClassificationResult `json:"classification,omitempty"`
+	Event          AuditEvent            `json:"-"`
 }
 
 const (
@@ -43,19 +44,23 @@ const (
 )
 
 type AuditEvent struct {
-	ID        string         `json:"id"`
-	At        time.Time      `json:"at"`
-	Principal Principal      `json:"principal"`
-	Instance  string         `json:"instance,omitempty"`
-	Session   string         `json:"session,omitempty"`
-	Tool      string         `json:"tool,omitempty"`
-	Stage     WatchdogStage  `json:"stage"`
-	Source    WatchdogSource `json:"source"`
-	Action    WatchdogAction `json:"action"`
-	Reason    string         `json:"reason,omitempty"`
-	Hash      string         `json:"content_hash"`
-	Preview   string         `json:"preview,omitempty"`
-	Encoded   bool           `json:"encoded,omitempty"`
+	ID         string         `json:"id"`
+	At         time.Time      `json:"at"`
+	Principal  Principal      `json:"principal"`
+	Instance   string         `json:"instance,omitempty"`
+	Session    string         `json:"session,omitempty"`
+	Tool       string         `json:"tool,omitempty"`
+	Stage      WatchdogStage  `json:"stage"`
+	Source     WatchdogSource `json:"source"`
+	Action     WatchdogAction `json:"action"`
+	Reason     string         `json:"reason,omitempty"`
+	Hash       string         `json:"content_hash"`
+	Preview    string         `json:"preview,omitempty"`
+	Encoded    bool           `json:"encoded,omitempty"`
+	Category   RiskCategory   `json:"category,omitempty"`
+	RiskLevel  RiskLevel      `json:"risk_level,omitempty"`
+	Intent     ActorIntent    `json:"intent,omitempty"`
+	Confidence float64        `json:"confidence,omitempty"`
 }
 
 type AuditStore struct {
@@ -161,12 +166,29 @@ func (s *AuditStore) List(limit int) ([]AuditEvent, error) {
 type Watchdog struct {
 	access       *AccessStore
 	audit        *AuditStore
+	classifier   Classifier
 	strikeWindow time.Duration
 	lockAfter    int
 }
 
 func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
-	return &Watchdog{access: access, audit: audit, strikeWindow: 15 * time.Minute, lockAfter: 3}
+	return &Watchdog{
+		access:       access,
+		audit:        audit,
+		classifier:   NewHybridClassifier(nil, NewCalibratedClassifier()),
+		strikeWindow: 15 * time.Minute,
+		lockAfter:    3,
+	}
+}
+
+func (w *Watchdog) SetClassifier(classifier Classifier) {
+	if classifier != nil {
+		w.classifier = classifier
+	}
+}
+
+func (w *Watchdog) Classifier() Classifier {
+	return w.classifier
 }
 
 const (
@@ -186,42 +208,104 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 		if w.audit != nil {
 			_ = w.audit.Append(meta)
 		}
-		return WatchdogDecision{Action: WatchdogBlock, Reason: meta.Reason, Event: meta}
+		return WatchdogDecision{
+			Action: WatchdogBlock,
+			Reason: meta.Reason,
+			Event:  meta,
+		}
 	}
+
 	rawContent := content
-	content, _ = normalizeBounded(content)
-	rawMatches := dangerousContent(rawContent)
-	normMatches := dangerousContent(content)
+	normalized, _ := normalizeBounded(content)
 
 	rawHash := ContentHash(rawContent)
-	normHash := ContentHash(content)
+	normHash := ContentHash(normalized)
 
 	var lastBlockedHash string
+	hasPriorBlock := false
 	if w.access != nil {
 		lastBlockedHash = w.access.LastBlockedHash(p, time.Now().UTC().Add(-w.strikeWindow))
+		hasPriorBlock = lastBlockedHash != ""
 	}
 
-	isEvasion := (!rawMatches && normMatches) || (lastBlockedHash != "" && normHash == lastBlockedHash && rawHash != normHash)
+	classifier := w.classifier
+	if classifier == nil {
+		classifier = NewCalibratedClassifier()
+	}
+
+	ctx := context.Background()
+
+	normInput := ClassificationInput{
+		Content:         rawContent,
+		Normalized:      normalized,
+		Stage:           stage,
+		Origin:          source,
+		Principal:       p,
+		LastBlockedHash: lastBlockedHash,
+		HasPriorBlock:   hasPriorBlock,
+	}
+	normClassification, err := classifier.Classify(ctx, normInput)
+	if err != nil {
+		// Fail-closed on classifier failure
+		normClassification = ClassificationResult{
+			Category:   RiskCategoryPromptInjection,
+			RiskLevel:  RiskLevelMedium,
+			Intent:     IntentAmbiguous,
+			Confidence: 0.5,
+			Origin:     source,
+			Reason:     "classifier evaluation error; fail-closed block",
+		}
+	}
+
+	rawInput := normInput
+	rawInput.Normalized = rawContent
+	rawClassification, err := classifier.Classify(ctx, rawInput)
+	if err != nil {
+		rawClassification = normClassification
+	}
+
+	rawMatches := rawClassification.IsRisky()
+	normMatches := normClassification.IsRisky()
+
+	isEvasion := (!rawMatches && normMatches) || (hasPriorBlock && normHash == lastBlockedHash && rawHash != normHash)
 
 	action := WatchdogPass
 	reason := ""
-	if normMatches {
-		reason = "content matched deterministic high-risk rule"
+
+	isRisky := normMatches || rawMatches
+	classification := normClassification
+	if !normMatches && rawMatches {
+		classification = rawClassification
+	}
+
+	if isRisky {
+		reason = classification.Reason
+		if reason == "" {
+			reason = "content matched security policy violation"
+		}
 		switch source {
 		case SourceUserDirect:
-			strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
-			if err == nil && locked {
-				action = WatchdogLock
-				reason = "repeated active attempts to evade watchdog blocks"
-			} else if err == nil && strikes > 0 {
-				action = WatchdogStrike
-			} else {
+			// A single ambiguous classifier result cannot lock or strike a principal
+			if classification.Intent == IntentAmbiguous || classification.Confidence < 0.70 {
 				action = WatchdogBlock
+			} else {
+				strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
+				if err == nil && locked {
+					action = WatchdogLock
+					reason = "repeated active attempts to evade watchdog blocks"
+				} else if err == nil && strikes > 0 {
+					action = WatchdogStrike
+				} else {
+					action = WatchdogBlock
+				}
 			}
 		default:
+			// Non-direct sources (quotes, group summaries, tool arguments/results, model outputs, vision, platform meta)
+			// strictly block content without adding strikes or locking the user.
 			action = WatchdogBlock
 		}
 	}
+
 	meta.At = time.Now().UTC()
 	meta.Principal = p
 	meta.Stage = stage
@@ -231,10 +315,21 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 	meta.Hash = normHash
 	meta.Encoded = isEvasion
 	meta.Preview = safePreview(content)
+	meta.Category = classification.Category
+	meta.RiskLevel = classification.RiskLevel
+	meta.Intent = classification.Intent
+	meta.Confidence = classification.Confidence
+
 	if w.audit != nil && action != WatchdogPass {
 		_ = w.audit.Append(meta)
 	}
-	return WatchdogDecision{Action: action, Reason: reason, Event: meta}
+
+	return WatchdogDecision{
+		Action:         action,
+		Reason:         reason,
+		Classification: &classification,
+		Event:          meta,
+	}
 }
 
 func (w *Watchdog) IsLocked(p Principal) bool {
@@ -243,135 +338,6 @@ func (w *Watchdog) IsLocked(p Principal) bool {
 	}
 	locked, _, err := w.access.IsLocked(p)
 	return err == nil && locked
-}
-
-var dangerousPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)ignore\s+(all|any|the)\s+previous`),
-	regexp.MustCompile(`(?i)disable\s+(the\s+)?safety|bypass\s+(the\s+)?(watchdog|policy|lock)`),
-	regexp.MustCompile(`(?i)(rm\s+-rf\s+/|del\s+/f\s+/s\s+/q|format\s+[a-z]:)`),
-	regexp.MustCompile(`(?i)(curl|wget)\s+[^\n|]{0,512}\|\s*(sh|bash|powershell)`),
-	regexp.MustCompile(`(?i)exfiltrat(e|ion)|steal\s+(api|access|session)\s*keys`),
-}
-
-func dangerousContent(content string) bool {
-	for _, pattern := range dangerousPatterns {
-		if pattern.MatchString(content) {
-			return true
-		}
-	}
-	return false
-}
-
-// tolerantPercentUnescape scans s and decodes any valid %[0-9a-fA-F]{2} sequence
-// into its single byte value, while preserving malformed escapes (e.g. %ZZ, dangling %)
-// and '+' verbatim.
-func tolerantPercentUnescape(s string) (string, bool) {
-	if !strings.Contains(s, "%") {
-		return s, false
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	changed := false
-	for i := 0; i < len(s); {
-		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
-			b.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
-			i += 3
-			changed = true
-		} else {
-			b.WriteByte(s[i])
-			i++
-		}
-	}
-	if !changed {
-		return s, false
-	}
-	return b.String(), true
-}
-
-func isHex(c byte) bool {
-	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
-}
-
-func unhex(c byte) byte {
-	switch {
-	case '0' <= c && c <= '9':
-		return c - '0'
-	case 'a' <= c && c <= 'f':
-		return c - 'a' + 10
-	case 'A' <= c && c <= 'F':
-		return c - 'A' + 10
-	}
-	return 0
-}
-
-func stripZeroWidthAndControl(s string) (string, bool) {
-	stripped := strings.Map(func(r rune) rune {
-		switch r {
-		case rune(0x200b), rune(0x200c), rune(0x200d), rune(0x200e), rune(0x200f), rune(0x2060), rune(0xfeff):
-			return -1
-		default:
-			if (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
-				return -1
-			}
-			return r
-		}
-	}, s)
-	return stripped, stripped != s
-}
-
-func normalizeBounded(content string) (string, bool) {
-	if len(content) > MaxInspectionSize {
-		content = content[:MaxInspectionSize]
-	}
-	content, stripped := stripZeroWidthAndControl(content)
-	modified := stripped
-
-	for range 3 {
-		layerChanged := false
-
-		// 1. Use tolerant percent unescape so mixed valid/malformed escapes (%xx with %ZZ)
-		// are decoded without error, while '+' (e.g. in C++ or A+B) is preserved literally.
-		if decoded, ok := tolerantPercentUnescape(content); ok && decoded != content && len(decoded) <= MaxInspectionSize {
-			content = decoded
-			modified = true
-			layerChanged = true
-			if s, st := stripZeroWidthAndControl(content); st {
-				content = s
-			}
-		}
-
-		// 2. Base64 unescape
-		trimmed := strings.TrimSpace(content)
-		decodedBytes, err := base64.StdEncoding.DecodeString(trimmed)
-		if err == nil && len(decodedBytes) > 0 && len(decodedBytes) <= MaxInspectionSize {
-			decoded := string(decodedBytes)
-			if decoded != content && isValidPrintableText(decoded) {
-				content = decoded
-				modified = true
-				layerChanged = true
-				if s, st := stripZeroWidthAndControl(content); st {
-					content = s
-				}
-			}
-		}
-
-		if !layerChanged {
-			break
-		}
-	}
-	return content, modified
-}
-
-func isValidPrintableText(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for _, r := range s {
-		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' {
-			return false
-		}
-	}
-	return true
 }
 
 func ensureParent(path string) error {
