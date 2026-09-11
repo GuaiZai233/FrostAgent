@@ -25,12 +25,19 @@ func (h *HybridClassifier) SetLLM(llm *LLMClassifier) {
 	h.llm = llm
 }
 
+func (h *HybridClassifier) LLM() *LLMClassifier {
+	return h.llm
+}
+
 func (h *HybridClassifier) Classify(ctx context.Context, input ClassificationInput) (ClassificationResult, error) {
 	if h.llm != nil {
 		res, err := h.llm.Classify(ctx, input)
-		if err == nil && res.Category != "" {
+		if err == nil && res.Validate() == nil {
 			return res, nil
 		}
+	}
+	if h.fallback == nil {
+		h.fallback = NewCalibratedClassifier()
 	}
 	// Fallback to local calibrated classifier
 	return h.fallback.Classify(ctx, input)

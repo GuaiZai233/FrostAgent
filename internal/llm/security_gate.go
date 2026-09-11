@@ -36,7 +36,7 @@ func (e *Engine) securityBlocks(run RunContext, stage security.WatchdogStage, so
 	if instance == "" {
 		instance = run.InstanceID
 	}
-	decision := e.Security.Watchdog.Evaluate(p, stage, source, content, security.AuditEvent{
+	decision := e.Security.Watchdog.EvaluateWithContext(e.Context(), p, stage, source, content, security.AuditEvent{
 		Instance: instance, Session: run.SessionID, Tool: tool,
 	})
 	return security.Blocks(decision.Action)

@@ -1,6 +1,7 @@
 package security
 
 import (
+	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"os"
@@ -181,10 +182,33 @@ func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
 	}
 }
 
+func NewWatchdogWithProvider(access *AccessStore, audit *AuditStore, provider core.LLMProvider, model string) *Watchdog {
+	wd := NewWatchdog(access, audit)
+	if provider != nil {
+		wd.SetLLMProvider(provider, model)
+	}
+	return wd
+}
+
 func (w *Watchdog) SetClassifier(classifier Classifier) {
 	if classifier != nil {
 		w.classifier = classifier
 	}
+}
+
+func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
+	if w == nil {
+		return
+	}
+	if provider == nil {
+		w.classifier = NewCalibratedClassifier()
+		return
+	}
+	if model == "" {
+		model = "security-gateway"
+	}
+	llmCls := NewLLMClassifier(provider, model, 5*time.Second)
+	w.classifier = NewHybridClassifier(llmCls, NewCalibratedClassifier())
 }
 
 func (w *Watchdog) Classifier() Classifier {
@@ -196,6 +220,13 @@ const (
 )
 
 func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return w.EvaluateWithContext(context.Background(), p, stage, source, content, meta)
+}
+
+func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(content) > MaxInspectionSize {
 		meta.At = time.Now().UTC()
 		meta.Principal = p
@@ -233,8 +264,6 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 		classifier = NewCalibratedClassifier()
 	}
 
-	ctx := context.Background()
-
 	normInput := ClassificationInput{
 		Content:         rawContent,
 		Normalized:      normalized,
@@ -244,14 +273,17 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 		LastBlockedHash: lastBlockedHash,
 		HasPriorBlock:   hasPriorBlock,
 	}
+
+	classifierErr := false
 	normClassification, err := classifier.Classify(ctx, normInput)
 	if err != nil {
-		// Fail-closed on classifier failure
+		// Fail-closed on classifier failure: guaranteed block without striking/locking user
+		classifierErr = true
 		normClassification = ClassificationResult{
 			Category:   RiskCategoryPromptInjection,
-			RiskLevel:  RiskLevelMedium,
+			RiskLevel:  RiskLevelHigh,
 			Intent:     IntentAmbiguous,
-			Confidence: 0.5,
+			Confidence: 0.90,
 			Origin:     source,
 			Reason:     "classifier evaluation error; fail-closed block",
 		}
@@ -259,20 +291,23 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 
 	rawInput := normInput
 	rawInput.Normalized = rawContent
-	rawClassification, err := classifier.Classify(ctx, rawInput)
-	if err != nil {
+	rawClassification, errRaw := classifier.Classify(ctx, rawInput)
+	if errRaw != nil {
 		rawClassification = normClassification
 	}
 
 	rawMatches := rawClassification.IsRisky()
 	normMatches := normClassification.IsRisky()
+	if classifierErr {
+		normMatches = true
+	}
 
 	isEvasion := (!rawMatches && normMatches) || (hasPriorBlock && normHash == lastBlockedHash && rawHash != normHash)
 
 	action := WatchdogPass
 	reason := ""
 
-	isRisky := normMatches || rawMatches
+	isRisky := normMatches || rawMatches || classifierErr
 	classification := normClassification
 	if !normMatches && rawMatches {
 		classification = rawClassification
@@ -283,26 +318,32 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 		if reason == "" {
 			reason = "content matched security policy violation"
 		}
-		switch source {
-		case SourceUserDirect:
-			// A single ambiguous classifier result cannot lock or strike a principal
-			if classification.Intent == IntentAmbiguous || classification.Confidence < 0.70 {
-				action = WatchdogBlock
-			} else {
-				strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
-				if err == nil && locked {
-					action = WatchdogLock
-					reason = "repeated active attempts to evade watchdog blocks"
-				} else if err == nil && strikes > 0 {
-					action = WatchdogStrike
-				} else {
-					action = WatchdogBlock
-				}
-			}
-		default:
-			// Non-direct sources (quotes, group summaries, tool arguments/results, model outputs, vision, platform meta)
-			// strictly block content without adding strikes or locking the user.
+		if classifierErr {
+			// Fail-closed block directly without accumulating strikes or locks
 			action = WatchdogBlock
+			reason = "classifier evaluation error; fail-closed block"
+		} else {
+			switch source {
+			case SourceUserDirect:
+				// A single ambiguous classifier result cannot lock or strike a principal
+				if classification.Intent == IntentAmbiguous || classification.Confidence < 0.70 {
+					action = WatchdogBlock
+				} else {
+					strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
+					if err == nil && locked {
+						action = WatchdogLock
+						reason = "repeated active attempts to evade watchdog blocks"
+					} else if err == nil && strikes > 0 {
+						action = WatchdogStrike
+					} else {
+						action = WatchdogBlock
+					}
+				}
+			default:
+				// Non-direct sources (quotes, group summaries, tool arguments/results, model outputs, vision, platform meta)
+				// strictly block content without adding strikes or locking the user.
+				action = WatchdogBlock
+			}
 		}
 	}
 

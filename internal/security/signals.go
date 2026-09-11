@@ -1,6 +1,11 @@
 package security
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+)
 
 type RiskCategory string
 
@@ -17,6 +22,53 @@ const (
 	RiskCategoryFraud              RiskCategory = "fraud_gambling"
 )
 
+func (c RiskCategory) IsValid() bool {
+	switch c {
+	case RiskCategoryNone,
+		RiskCategoryPromptInjection,
+		RiskCategoryMaliciousExecution,
+		RiskCategoryExfiltration,
+		RiskCategoryPlatformPolicy,
+		RiskCategoryTencentCompliance,
+		RiskCategoryPolitical,
+		RiskCategoryViolence,
+		RiskCategoryVulgarity,
+		RiskCategoryFraud:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeRiskCategory canonicalizes category strings from LLM or external sources.
+func NormalizeRiskCategory(s string) (RiskCategory, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "none", "":
+		return RiskCategoryNone, true
+	case "prompt_injection", "promptinjection", "jailbreak":
+		return RiskCategoryPromptInjection, true
+	case "malicious_execution", "maliciousexecution", "execution", "command_execution":
+		return RiskCategoryMaliciousExecution, true
+	case "data_exfiltration", "dataexfiltration", "exfiltration", "leak":
+		return RiskCategoryExfiltration, true
+	case "platform_policy", "platformpolicy":
+		return RiskCategoryPlatformPolicy, true
+	case "tencent_compliance", "tencentcompliance":
+		return RiskCategoryTencentCompliance, true
+	case "political_sensitive", "political":
+		return RiskCategoryPolitical, true
+	case "violence_terrorism", "violence":
+		return RiskCategoryViolence, true
+	case "pornography_vulgarity", "vulgarity", "pornography":
+		return RiskCategoryVulgarity, true
+	case "fraud_gambling", "fraud", "gambling":
+		return RiskCategoryFraud, true
+	default:
+		return RiskCategory(s), false
+	}
+}
+
 type RiskLevel string
 
 const (
@@ -27,6 +79,34 @@ const (
 	RiskLevelCritical RiskLevel = "critical"
 )
 
+func (l RiskLevel) IsValid() bool {
+	switch l {
+	case RiskLevelNone, RiskLevelLow, RiskLevelMedium, RiskLevelHigh, RiskLevelCritical:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeRiskLevel canonicalizes risk level strings.
+func NormalizeRiskLevel(s string) (RiskLevel, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "none", "":
+		return RiskLevelNone, true
+	case "low":
+		return RiskLevelLow, true
+	case "medium", "med":
+		return RiskLevelMedium, true
+	case "high":
+		return RiskLevelHigh, true
+	case "critical", "crit":
+		return RiskLevelCritical, true
+	default:
+		return RiskLevel(s), false
+	}
+}
+
 type ActorIntent string
 
 const (
@@ -34,6 +114,30 @@ const (
 	IntentAmbiguous ActorIntent = "ambiguous"
 	IntentMalicious ActorIntent = "malicious"
 )
+
+func (i ActorIntent) IsValid() bool {
+	switch i {
+	case IntentBenign, IntentAmbiguous, IntentMalicious:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeActorIntent canonicalizes actor intent strings.
+func NormalizeActorIntent(s string) (ActorIntent, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "benign", "":
+		return IntentBenign, true
+	case "ambiguous":
+		return IntentAmbiguous, true
+	case "malicious":
+		return IntentMalicious, true
+	default:
+		return ActorIntent(s), false
+	}
+}
 
 // ClassificationInput carries content, provenance, and historical context
 // required for calibrated policy evaluation.
@@ -56,6 +160,35 @@ type ClassificationResult struct {
 	Origin     WatchdogSource `json:"origin"`
 	Reason     string         `json:"reason"`
 	Details    []string       `json:"details,omitempty"`
+}
+
+func (r ClassificationResult) Validate() error {
+	if !r.Category.IsValid() {
+		return fmt.Errorf("invalid risk category: %q", r.Category)
+	}
+	if !r.RiskLevel.IsValid() {
+		return fmt.Errorf("invalid risk level: %q", r.RiskLevel)
+	}
+	if !r.Intent.IsValid() {
+		return fmt.Errorf("invalid actor intent: %q", r.Intent)
+	}
+	if math.IsNaN(r.Confidence) || math.IsInf(r.Confidence, 0) || r.Confidence < 0.0 || r.Confidence > 1.0 {
+		return fmt.Errorf("confidence out of range [0.0, 1.0]: %v", r.Confidence)
+	}
+	// Invariant consistency checks
+	if r.Category == RiskCategoryNone {
+		if r.RiskLevel != RiskLevelNone {
+			return fmt.Errorf("category none requires risk_level none, got %q", r.RiskLevel)
+		}
+		if r.Intent == IntentMalicious {
+			return fmt.Errorf("category none cannot have malicious intent")
+		}
+	} else {
+		if r.RiskLevel == RiskLevelNone {
+			return fmt.Errorf("non-none category %q cannot have risk_level none", r.Category)
+		}
+	}
+	return nil
 }
 
 func (r ClassificationResult) IsRisky() bool {

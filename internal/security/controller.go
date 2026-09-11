@@ -1,6 +1,8 @@
 package security
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"errors"
 	"path/filepath"
 )
@@ -31,6 +33,18 @@ func (c *Controller) SetClassifier(classifier Classifier) {
 	if c != nil && c.Watchdog != nil {
 		c.Watchdog.SetClassifier(classifier)
 	}
+}
+
+func (c *Controller) SetLLMProvider(provider core.LLMProvider, model string) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetLLMProvider(provider, model)
+	}
+}
+
+func NewControllerWithProvider(dataDir string, provider core.LLMProvider, model string) *Controller {
+	ctrl := NewController(dataDir)
+	ctrl.SetLLMProvider(provider, model)
+	return ctrl
 }
 
 // GateIngress applies the global lock before any stateful ingress processing,
@@ -79,6 +93,10 @@ func (c *Controller) Unlock(p Principal) error {
 }
 
 func (c *Controller) GateIngress(p Principal, content string, meta AuditEvent) WatchdogDecision {
+	return c.GateIngressWithContext(context.Background(), p, content, meta)
+}
+
+func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, content string, meta AuditEvent) WatchdogDecision {
 	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
@@ -99,15 +117,19 @@ func (c *Controller) GateIngress(p Principal, content string, meta AuditEvent) W
 		_ = c.Audit.Append(meta)
 		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta}
 	}
-	return c.Watchdog.Evaluate(p, StageIngress, SourceUserDirect, content, meta)
+	return c.Watchdog.EvaluateWithContext(ctx, p, StageIngress, SourceUserDirect, content, meta)
 }
 
 // Evaluate passes content to the underlying Watchdog with explicit stage and provenance source.
 func (c *Controller) Evaluate(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateWithContext(context.Background(), p, stage, source, content, meta)
+}
+
+func (c *Controller) EvaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	if c == nil || c.Watchdog == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
-	return c.Watchdog.Evaluate(p, stage, source, content, meta)
+	return c.Watchdog.EvaluateWithContext(ctx, p, stage, source, content, meta)
 }
 
 // EvaluateContext evaluates indirect context (such as quoted reply context or group running summary)

@@ -111,12 +111,31 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 		return ClassificationResult{}, fmt.Errorf("parse llm classification json: %w (raw: %s)", err, rawText)
 	}
 
-	return ClassificationResult{
-		Category:   RiskCategory(strings.ToLower(strings.TrimSpace(payload.Category))),
-		RiskLevel:  RiskLevel(strings.ToLower(strings.TrimSpace(payload.RiskLevel))),
-		Intent:     ActorIntent(strings.ToLower(strings.TrimSpace(payload.Intent))),
+	category, okCat := NormalizeRiskCategory(payload.Category)
+	if !okCat {
+		return ClassificationResult{}, fmt.Errorf("unknown category from llm: %q", payload.Category)
+	}
+	level, okLvl := NormalizeRiskLevel(payload.RiskLevel)
+	if !okLvl {
+		return ClassificationResult{}, fmt.Errorf("unknown risk_level from llm: %q", payload.RiskLevel)
+	}
+	intent, okInt := NormalizeActorIntent(payload.Intent)
+	if !okInt {
+		return ClassificationResult{}, fmt.Errorf("unknown intent from llm: %q", payload.Intent)
+	}
+
+	res := ClassificationResult{
+		Category:   category,
+		RiskLevel:  level,
+		Intent:     intent,
 		Confidence: payload.Confidence,
 		Origin:     input.Origin,
 		Reason:     payload.Reason,
-	}, nil
+	}
+
+	if err := res.Validate(); err != nil {
+		return ClassificationResult{}, fmt.Errorf("invalid structured classification output: %w", err)
+	}
+
+	return res, nil
 }

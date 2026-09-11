@@ -7,9 +7,12 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
 - **可插拔分类器架构与 LLM 安全网关（Classifier Gateway & Hybrid Fallback）**：
   - 彻底移除了原先硬编码在 `watchdog.go` 内的脆弱静态正则表达式列表（`dangerousPatterns`），避免攻击者通过小语种多语言翻译、语法倒装或同义替换轻易绕过。
   - 抽象出标准 `Classifier` 接口，支持多层级安全审查组件：
-    - **`LLMClassifier`（语义安全网关）**：基于 `core.LLMProvider` 驱动的高鲁棒性安全网关，通过结构化 JSON 输出对输入文本进行语义级越狱、注入意图、破坏性命令与数据窃取分析，天然具备极高跨语言防御能力。
+    - **`LLMClassifier`（语义安全网关）**：基于 `core.LLMProvider` 驱动的高鲁棒性安全网关，采用 `<content>...</content>` 隔离定界符防御定界符注入逃逸，通过严格结构化 JSON 输出对输入文本进行语义级越狱、注入意图、破坏性命令与数据窃取分析，天然具备极高跨语言防御能力。
     - **`CalibratedClassifier`（多语言校准分类器）**：本地确定性多语言分类器，涵盖英、中、意、俄、日、西、法、德等主流语言提示词注入与越狱规则、破坏性执行指令（反弹 Shell、破坏性删除、Fork Bomb）、凭据收割以及腾讯平台合规策略规则，内置**教育与分析上下文检测**（识别 "what is rm -rf"、"如何防范提示词注入" 等良性科普讨论），彻底杜绝敏感词盲目误报。
     - **`HybridClassifier`（生产级混合分类器）**：首选调用 LLM 安全网关进行深层语义判断，当 LLM 未配置或遭遇网络/超时异常时自动无缝降级至确定性校准分类器，确保系统 Fail-Closed 安全不变量与极高可用性。
+    - **生产环境运行链路装配（Production Path Wiring）**：在实例运行时初始化（`internal/instance/runtime.go` `buildRuntime`）中，生产控制器统一通过 `securityController.SetLLMProvider(routerManager.Provider(modelrouter.WorkloadDialogue, false, 5*time.Second), "model-router-security-gateway")` 注入真实模型路由器提供者；在适配器 Ingress 与 Engine 处理阶段传递运行时上下文（`GateIngressWithContext` / `EvaluateWithContext`），确保实例销毁与超时能够及时级联取消安全网关的在途请求。
+    - **严格结构化输出强校验（Structured Output Validation）**：LLM 返回的 JSON 载荷解析后通过 `ClassificationResult.Validate()` 执行全面强校验，严格检查枚举值规范化（`NormalizeRiskCategory`、`NormalizeRiskLevel`、`NormalizeActorIntent`）、置信度区间 `[0.0, 1.0]`（严防 `math.NaN` 与 `math.Inf`）以及类别与风险等级一致性不变量（`none` 类别必须对应 `none` 风险等级且不可标记恶意意图；非 `none` 类别严禁标记 `none` 风险等级）。任何畸形、未知枚举或不变量违规均被作为分类器失败处理，由 `HybridClassifier` 安全回退至本地校准分类器，杜绝结构化污染。
+    - **分类器异常 Fail-Closed 与无辜用户免罚保证**：分类器报错或超时被严格设计为无条件阻断（`WatchdogBlock`），同时明确隔离用户惩戒，绝不给触发用户记录 Strike 或添加锁定，兼顾安全底线与用户体验。
 - **结构化风险信号体系（Structured Risk Signals）**：
   审查结果输出为标准 `ClassificationResult`，包含多维细粒度信号：
   - **风险类别（`RiskCategory`）**：提示词注入/越狱（`PROMPT_INJECTION`）、恶意破坏性执行（`MALICIOUS_EXECUTION`）、凭据与数据窃取（`EXFILTRATION`）、平台合规策略违规（`POLITICAL`、`VIOLENCE`、`FRAUD`、`VULGARITY`）、无风险（`NONE`）。
@@ -48,8 +51,8 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
     - **误阻断率（False Block Rate）**：衡量良性科普、编程讨论、安全分析等查询被误拦的比例，基准测试目标为 0.00%。
     - **误封禁率（False Lock Rate）**：严禁无恶意或存疑用户被非预期锁定，实施 **Zero-Tolerance** 零容忍指标（基准测试达到 0.00%）。
     - **严重漏报率（Severe Miss Rate）**：多语言越狱、破坏性命令与敏感信息窃取载荷漏检率，基准测试达到 0.00%。
-    - **综合准确率（Accuracy）**：全语料决策匹配准确率达到 100.00%。
-  - 配套自动化重复规避升级测试（`RunRepeatedEvasionSuite`）与跨实例一致性测试（`RunCrossInstanceConsistencySuite`），确保多实例共享 `AccessStore` 在并发环境下的状态安全性与一致性。
+    - **综合准确率（Accuracy）**：全语料决策匹配准确率达到 100.00%（根据语料中显式定义的 `ExpectedAction` 与 `ExpectedCategory` 逐条严密断言，杜绝非预期放行或误报在未配置特殊标记时被静默统计为成功的缺陷）。
+  - 配套自动化重复规避升级测试（`RunRepeatedEvasionSuite`）与跨实例一致性测试（`RunCrossInstanceConsistencySuite`），在测试多实例共享 `AccessStore` 时不仅检验良性并发读取，更通过跨实例并发变动 Strike 与锁定状态，验证多实例在强并发竞争下状态更新的原子同步与一致性。
 - **安全审计凭据脱敏与最小化存储**：安全审计日志记录（`security_audit.jsonl`）的摘要预览（`safePreview`）在截断前必须经过严格的凭据脱敏处理（Redaction），过滤 Bearer Token、URL 查询凭据、API Key（如 `sk-...`、`glpat-...`、`xoxb-...`）、GitHub 经典 PAT 及各类 Token（`ghp_`、`gho_`、`ghu_`、`ghs_`、`ghr_`）、GitHub 细粒度 PAT（`github_pat_...`）以及密码字段，防止敏感鉴权凭据持久化到本地日志造成横向移动风险。
 - **统一工具边界**：Engine 公共工具循环在执行内置工具和 MCP 工具前审查参数，执行后隔离高风险工具结果，模型输出后进行出站审查，中间 SendHook 也经过严格管控。
 - **管理面板与控制面接口**：控制面根路径提供受 Bearer 认证保护的 `/api/security/locked` 与 `/api/security/unlock` REST 端点，与 MCP 控制面深度复用统一的 Scoped `instanceconfig.Store` 鉴权源，在无需将 Token 镜像到操作系统进程环境变量的配置存储模式下依然能够严格受控，配合 Web 控制台「安全控制」页提供全局锁定状态的可视化查看与人工解锁支持。

@@ -85,6 +85,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		memoryConfig.ReflectTimeout,
 	)
 	reflectionProvider := routerManager.Provider(modelrouter.WorkloadReflection, false, memoryConfig.ReflectTimeout)
+	securityProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 5*time.Second)
+	if securityController != nil {
+		securityController.SetLLMProvider(securityProvider, "model-router-security-gateway")
+	}
 
 	// Initialize memory system
 	store := memory.NewStore(filepath.Join(dir, "brain.json"))

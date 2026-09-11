@@ -254,7 +254,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
+				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
 					if shouldReply(event, a.engine.Scope) {
