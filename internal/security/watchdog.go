@@ -178,7 +178,7 @@ func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
 	return &Watchdog{
 		access:              access,
 		audit:               audit,
-		classifier:          NewHybridClassifier(nil, NewCalibratedClassifier()),
+		classifier:          nil,
 		instanceClassifiers: make(map[string]Classifier),
 		strikeWindow:        15 * time.Minute,
 		lockAfter:           3,
@@ -199,9 +199,7 @@ func (w *Watchdog) SetClassifier(classifier Classifier) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if classifier != nil {
-		w.classifier = classifier
-	}
+	w.classifier = classifier
 }
 
 func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
@@ -211,14 +209,13 @@ func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if provider == nil {
-		w.classifier = NewCalibratedClassifier()
+		w.classifier = nil
 		return
 	}
 	if model == "" {
 		model = "security-gateway"
 	}
-	llmCls := NewLLMClassifier(provider, model, 5*time.Second)
-	w.classifier = NewHybridClassifier(llmCls, NewCalibratedClassifier())
+	w.classifier = NewLLMClassifier(provider, model, 5*time.Second)
 }
 
 func (w *Watchdog) SetInstanceProvider(instanceID string, provider core.LLMProvider, model string) {
@@ -237,8 +234,7 @@ func (w *Watchdog) SetInstanceProvider(instanceID string, provider core.LLMProvi
 	if model == "" {
 		model = "security-gateway"
 	}
-	llmCls := NewLLMClassifier(provider, model, 5*time.Second)
-	w.instanceClassifiers[instanceID] = NewHybridClassifier(llmCls, NewCalibratedClassifier())
+	w.instanceClassifiers[instanceID] = NewLLMClassifier(provider, model, 5*time.Second)
 }
 
 func (w *Watchdog) SetInstanceClassifier(instanceID string, classifier Classifier) {
@@ -346,9 +342,6 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		}
 		w.mu.RUnlock()
 	}
-	if classifier == nil {
-		classifier = NewCalibratedClassifier()
-	}
 
 	normInput := ClassificationInput{
 		Content:         rawContent,
@@ -361,9 +354,9 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	classifierErr := false
-	normClassification, err := classifier.Classify(ctx, normInput)
-	if err != nil {
-		// Fail-closed on classifier failure: guaranteed block without striking/locking user
+	var normClassification ClassificationResult
+	if classifier == nil {
+		// No LLM security provider configured: strict Option A fail-closed block without strikes or locks
 		classifierErr = true
 		normClassification = ClassificationResult{
 			Category:   RiskCategoryPromptInjection,
@@ -371,7 +364,22 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 			Intent:     IntentAmbiguous,
 			Confidence: 0.90,
 			Origin:     source,
-			Reason:     "classifier evaluation error; fail-closed block",
+			Reason:     "llm security provider not configured; fail-closed block",
+		}
+	} else {
+		var err error
+		normClassification, err = classifier.Classify(ctx, normInput)
+		if err != nil {
+			// Fail-closed on classifier failure: guaranteed block without striking/locking user
+			classifierErr = true
+			normClassification = ClassificationResult{
+				Category:   RiskCategoryPromptInjection,
+				RiskLevel:  RiskLevelHigh,
+				Intent:     IntentAmbiguous,
+				Confidence: 0.90,
+				Origin:     source,
+				Reason:     "classifier evaluation error; fail-closed block",
+			}
 		}
 	}
 

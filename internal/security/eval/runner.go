@@ -1,4 +1,4 @@
-package eval
+﻿package eval
 
 import (
 	"FrostAgent/internal/security"
@@ -209,7 +209,9 @@ func (r *EvalRunner) RunCrossInstanceConsistencySuite(path string) error {
 	storeB := security.NewAccessStore(path)
 
 	wdA := security.NewWatchdog(storeA, nil)
+	wdA.SetClassifier(security.NewCalibratedClassifier())
 	wdB := security.NewWatchdog(storeB, nil)
+	wdB.SetClassifier(security.NewCalibratedClassifier())
 
 	// Phase 1: Verify concurrent benign queries across instances do not false-block
 	var wg sync.WaitGroup

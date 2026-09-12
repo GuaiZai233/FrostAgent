@@ -1,4 +1,4 @@
-package instance
+﻿package instance
 
 import (
 	"FrostAgent/internal/core"
@@ -94,12 +94,12 @@ func TestProductionRuntimeWiresLLMSecurityGateway(t *testing.T) {
 	}
 
 	classifier := secCtrl.Watchdog.ClassifierForInstance(info.ID)
-	hybrid, ok := classifier.(*security.HybridClassifier)
+	llmCls, ok := classifier.(*security.LLMClassifier)
 	if !ok {
-		t.Fatalf("expected classifier to be *security.HybridClassifier, got %T", classifier)
+		t.Fatalf("expected classifier to be *security.LLMClassifier, got %T", classifier)
 	}
-	if hybrid.LLM() == nil {
-		t.Fatal("expected LLM classifier to be wired in production runtime, but LLM() is nil")
+	if llmCls == nil {
+		t.Fatal("expected LLM classifier to be wired in production runtime, but is nil")
 	}
 
 	instItem := m.instances[info.ID]
@@ -248,14 +248,20 @@ func TestTwoInstancesUseDistinctLLMProvidersWithoutBleed(t *testing.T) {
 	if err := m.Enable(infoB.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	// After disabling B, its classifier should fall back to default non-LLM classifier
+	// After disabling B, its provider is removed and it fails closed under Option A
 	clsB := secCtrl.Watchdog.ClassifierForInstance(infoB.ID)
-	hybridB, ok := clsB.(*security.HybridClassifier)
-	if !ok {
-		t.Fatalf("expected disabled instance B classifier to be *security.HybridClassifier, got %T", clsB)
+	if clsB != nil {
+		t.Fatalf("expected disabled instance B classifier to be nil, got %T", clsB)
 	}
-	if hybridB.LLM() != nil {
-		t.Fatalf("expected disabled instance B to have nil LLM classifier, got %v", hybridB.LLM())
+	decB2 := engineB.Security.GateIngress(principalB, payloadB, security.AuditEvent{
+		Instance: infoB.ID,
+		Session:  "sess-b-2",
+	})
+	if decB2.Action != security.WatchdogBlock {
+		t.Fatalf("expected fail-closed WatchdogBlock for disabled instance B, got %s", decB2.Action)
+	}
+	if secCtrl.Watchdog.IsLocked(principalB) {
+		t.Fatalf("disabled instance B fail-closed must not lock principal")
 	}
 
 	// Instance A still invokes spyA normally (escalates to STRIKE on repeated malicious payload)
@@ -446,12 +452,12 @@ func TestProductionRuntimeHybridFailClosedOnLLMError(t *testing.T) {
 
 			// Verify production hybrid classifier is wired with non-nil LLM
 			cls := secCtrl.Watchdog.ClassifierForInstance(info.ID)
-			hybrid, ok := cls.(*security.HybridClassifier)
+			llmCls, ok := cls.(*security.LLMClassifier)
 			if !ok {
-				t.Fatalf("expected *security.HybridClassifier, got %T", cls)
+				t.Fatalf("expected *security.LLMClassifier, got %T", cls)
 			}
-			if hybrid.LLM() == nil {
-				t.Fatal("expected LLM classifier to be wired in production hybrid")
+			if llmCls == nil {
+				t.Fatal("expected LLM classifier to be wired in production")
 			}
 
 			// 5 repeated submissions under classifier failure:

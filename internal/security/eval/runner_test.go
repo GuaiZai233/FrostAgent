@@ -1,4 +1,4 @@
-package eval
+﻿package eval
 
 import (
 	"FrostAgent/internal/security"
@@ -11,6 +11,7 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 	access := security.NewAccessStore(filepath.Join(tempDir, "eval_access.json"))
 	audit := security.NewAuditStore(filepath.Join(tempDir, "eval_audit.jsonl"), 1000)
 	watchdog := security.NewWatchdog(access, audit)
+	watchdog.SetClassifier(security.NewCalibratedClassifier())
 
 	runner := NewEvalRunner(DefaultCorpus())
 	report, err := runner.Run(watchdog, access)
@@ -49,6 +50,7 @@ func TestRepeatedEvasionSuite(t *testing.T) {
 	access := security.NewAccessStore(filepath.Join(tempDir, "evasion_access.json"))
 	audit := security.NewAuditStore(filepath.Join(tempDir, "evasion_audit.jsonl"), 100)
 	watchdog := security.NewWatchdog(access, audit)
+	watchdog.SetClassifier(security.NewCalibratedClassifier())
 
 	runner := NewEvalRunner(nil)
 	if err := runner.RunRepeatedEvasionSuite(watchdog, access); err != nil {
@@ -70,6 +72,7 @@ func TestPolicyThresholdsSeparation(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "threshold_access.json"))
 	watchdog := security.NewWatchdog(access, nil)
+	watchdog.SetClassifier(security.NewCalibratedClassifier())
 
 	p, err := security.NewPrincipal("qq", "synthetic-user-threshold")
 	if err != nil {

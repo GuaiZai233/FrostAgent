@@ -2,23 +2,22 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
-// HybridClassifier coordinates an LLM-based security gateway with a local
-// deterministic calibrated fallback. In production mode (when an LLM classifier is configured),
-// classifier errors, timeouts, and validation failures strictly fail-closed (Option A),
-// returning an error to Watchdog to ensure content is blocked without penalizing the user.
-// In offline or disabled mode (when LLM is nil), the deterministic calibrated classifier is used.
+// ErrNoLLMProvider indicates that no LLM security gateway provider is configured.
+var ErrNoLLMProvider = errors.New("llm security provider not configured")
+
+// HybridClassifier coordinates an LLM-based security gateway with an optional fallback classifier.
+// In the LLM-only architecture, if no LLM classifier and no fallback is configured,
+// Classify returns ErrNoLLMProvider to ensure strict Option A fail-closed behavior.
 type HybridClassifier struct {
 	llm      *LLMClassifier
-	fallback *CalibratedClassifier
+	fallback Classifier
 }
 
-func NewHybridClassifier(llm *LLMClassifier, fallback *CalibratedClassifier) *HybridClassifier {
-	if fallback == nil {
-		fallback = NewCalibratedClassifier()
-	}
+func NewHybridClassifier(llm *LLMClassifier, fallback Classifier) *HybridClassifier {
 	return &HybridClassifier{
 		llm:      llm,
 		fallback: fallback,
@@ -33,7 +32,7 @@ func (h *HybridClassifier) LLM() *LLMClassifier {
 	return h.llm
 }
 
-func (h *HybridClassifier) Fallback() *CalibratedClassifier {
+func (h *HybridClassifier) Fallback() Classifier {
 	return h.fallback
 }
 
@@ -45,10 +44,9 @@ func (h *HybridClassifier) Classify(ctx context.Context, input ClassificationInp
 		}
 		return res, nil
 	}
-	if h.fallback == nil {
-		h.fallback = NewCalibratedClassifier()
+	if h.fallback != nil {
+		return h.fallback.Classify(ctx, input)
 	}
-	// Fallback to local calibrated classifier in offline/no-LLM mode
-	return h.fallback.Classify(ctx, input)
+	return ClassificationResult{}, ErrNoLLMProvider
 }
 

@@ -424,6 +424,7 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetClassifier(security.NewCalibratedClassifier())
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -548,6 +549,7 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	engine := newTestEngine(dialogueProvider)
 	engine.VisionProvider = visionProvider
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetClassifier(security.NewCalibratedClassifier())
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -636,6 +638,7 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetClassifier(security.NewCalibratedClassifier())
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
