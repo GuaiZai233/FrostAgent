@@ -313,46 +313,6 @@ input[type="checkbox"].checkbox:indeterminate::after {
   font-size: 0.875rem;
 }
 
-.table-fixed {
-  table-layout: fixed;
-}
-
-.env-table {
-  table-layout: fixed;
-  width: 100%;
-}
-
-.env-table th,
-.env-table td {
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
-
-.env-table td {
-  vertical-align: top;
-}
-
-.env-table-key-col {
-  width: 11rem;
-}
-
-@media (min-width: 640px) {
-  .env-table-key-col {
-    width: 14rem;
-  }
-}
-
-@media (min-width: 1024px) {
-  .env-table-key-col {
-    width: 17rem;
-  }
-}
-
-.env-table-action-col {
-  width: 5.5rem;
-  text-align: right;
-}
-
 .table th {
   padding: 0.625rem 0.875rem;
   font-size: 0.8125rem;
@@ -377,6 +337,47 @@ input[type="checkbox"].checkbox:indeterminate::after {
 
 .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.table-fixed {
+  table-layout: fixed;
+}
+
+.env-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.env-table th,
+.env-table td {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.table.env-table td,
+.env-table td {
+  vertical-align: top;
+}
+
+.env-table-key-col {
+  width: 11rem;
+}
+
+@media (min-width: 640px) {
+  .env-table-key-col {
+    width: 14rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .env-table-key-col {
+    width: 17rem;
+  }
+}
+
+.env-table-action-col {
+  width: 5.5rem;
+  text-align: right;
 }
 
 /* ==================== DIALOGUE SPECIALIZED CARDS ==================== */
