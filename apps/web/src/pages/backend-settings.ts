@@ -154,12 +154,12 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         <!-- Env Vars Table Card -->
         <div class="card table-card overflow-hidden">
           <div class="table-container">
-            <table class="table">
+            <table class="table env-table">
               <thead>
                 <tr>
-                  <th style="width: 18rem;">变量名 (Key)</th>
-                  <th>变量值 (Value)</th>
-                  <th style="width: 6rem; text-align: right;">操作</th>
+                  <th class="env-table-key-col">变量名 (Key)</th>
+                  <th class="env-table-val-col">变量值 (Value)</th>
+                  <th class="env-table-action-col">操作</th>
                 </tr>
               </thead>
               <tbody id="env-table-body">
@@ -292,27 +292,59 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         const isVisible = visibleSecrets.has(item.key);
 
         if (isEditing) {
+          const isMultiline =
+            !editingIsSecret &&
+            (editingValue.includes('\n') || editingValue.length > 60);
+
           return `
             <tr class="bg-muted">
-              <td>
-                <span class="font-mono text-xs font-semibold text-foreground">${escapeHtml(item.key)}</span>${configurationBadges(item.key)}
+              <td class="align-top">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="font-mono text-xs font-semibold text-foreground break-all">${escapeHtml(item.key)}</span>
+                  <div class="flex items-center gap-1 flex-wrap">
+                    ${configurationBadges(item.key)}
+                  </div>
+                </div>
               </td>
-              <td>
-                <div class="flex items-center gap-2">
-                  <input
-                    type="${editingIsSecret ? 'password' : 'text'}"
-                    class="input font-mono text-xs"
-                    id="edit-env-val-input"
-                    value="${escapeHtml(editingValue)}"
-                    style="height: 1.875rem;"
-                  />
-                  <label class="flex items-center gap-1.5 cursor-pointer text-xs select-none" style="white-space: nowrap;">
+              <td class="align-top">
+                <div class="flex items-start gap-2 min-w-0">
+                  ${
+                    editingIsSecret
+                      ? `
+                    <input
+                      type="password"
+                      class="input font-mono text-xs flex-1 min-w-0"
+                      id="edit-env-val-input"
+                      value="${escapeHtml(editingValue)}"
+                      style="height: 1.875rem;"
+                    />
+                  `
+                      : isMultiline
+                        ? `
+                    <textarea
+                      class="textarea font-mono text-xs flex-1 min-w-0 leading-relaxed"
+                      id="edit-env-val-input"
+                      rows="${Math.min(8, Math.max(3, editingValue.split('\n').length))}"
+                      style="resize: vertical; min-height: 2.25rem;"
+                    >${escapeHtml(editingValue)}</textarea>
+                  `
+                        : `
+                    <input
+                      type="text"
+                      class="input font-mono text-xs flex-1 min-w-0"
+                      id="edit-env-val-input"
+                      value="${escapeHtml(editingValue)}"
+                      style="height: 1.875rem;"
+                    />
+                  `
+                  }
+                  <label class="flex items-center gap-1.5 cursor-pointer text-xs select-none shrink-0" style="white-space: nowrap; flex-shrink: 0; margin-top: 0.25rem;">
                     <input type="checkbox" id="edit-env-secret-cb" class="checkbox" ${editingIsSecret ? 'checked' : ''} />
                     <span class="text-muted">敏感</span>
                   </label>
                 </div>
               </td>
-              <td style="text-align: right;">
+              <td class="align-top" style="text-align: right;">
                 <div class="flex items-center justify-end gap-1">
                   <button class="btn btn-primary btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="save-inline-btn" title="保存">
                     ${icon('check', 'w-3.5 h-3.5')}
@@ -331,19 +363,22 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
         return `
           <tr>
-            <td>
-              <div class="flex items-center gap-1.5">
-                ${isSecret ? `<span class="text-muted flex items-center" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground">${escapeHtml(item.key)}</span>${configurationBadges(item.key)}
+            <td class="align-top">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                ${isSecret ? `<span class="text-muted flex items-center shrink-0" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
+                <span class="font-mono text-xs font-medium select-text text-foreground break-all">${escapeHtml(item.key)}</span>
+                <div class="flex items-center gap-1 flex-wrap">
+                  ${configurationBadges(item.key)}
+                </div>
               </div>
             </td>
-            <td>
-              <div class="flex items-center gap-1.5">
-                <span class="font-mono text-xs break-all select-text text-foreground">${escapeHtml(displayVal || '（空）')}</span>
+            <td class="align-top">
+              <div class="flex items-start gap-1.5 min-w-0">
+                <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
                 ${
                   isSecret
                     ? `
-                  <button class="btn btn-ghost btn-icon-sm text-muted" style="width: 1.5rem; height: 1.5rem; padding: 0;" data-action="toggle-secret" data-key="${escapeHtml(
+                  <button class="btn btn-ghost btn-icon-sm text-muted shrink-0" style="width: 1.5rem; height: 1.5rem; padding: 0; flex-shrink: 0;" data-action="toggle-secret" data-key="${escapeHtml(
                     item.key,
                   )}" title="${isVisible ? '隐藏' : '显示'}">
                     ${icon(isVisible ? 'eye_off' : 'eye', 'w-3 h-3')}
@@ -353,7 +388,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                 }
               </div>
             </td>
-            <td style="text-align: right;">
+            <td class="align-top" style="text-align: right;">
               <div class="flex items-center justify-end gap-1">
                 <button class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" data-action="edit-env" data-key="${escapeHtml(
                   item.key,
@@ -374,7 +409,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
     // Attach inline edit handlers if active
     if (editingKey) {
-      const editInput = tbody.querySelector<HTMLInputElement>(
+      const editInput = tbody.querySelector<HTMLInputElement | HTMLTextAreaElement>(
         '#edit-env-val-input',
       );
       const editSecretCb = tbody.querySelector<HTMLInputElement>(
@@ -386,12 +421,19 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
 
       editInput?.focus();
+      if (editInput && typeof editInput.setSelectionRange === 'function') {
+        const len = editInput.value.length;
+        editInput.setSelectionRange(len, len);
+      }
       editInput?.addEventListener('input', () => {
         editingValue = editInput.value;
       });
       editSecretCb?.addEventListener('change', () => {
         editingIsSecret = editSecretCb.checked;
-        if (editInput) editInput.type = editingIsSecret ? 'password' : 'text';
+        if (editInput) {
+          editingValue = editInput.value;
+        }
+        renderTable();
       });
 
       saveInlineBtn?.addEventListener('click', async () => {
@@ -404,6 +446,19 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         editingKey = null;
         renderTable();
       });
+
+      editInput?.addEventListener('keydown', ((e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelInlineBtn?.click();
+        } else if (
+          (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ||
+          (e.key === 'Enter' && editInput instanceof HTMLInputElement)
+        ) {
+          e.preventDefault();
+          saveInlineBtn?.click();
+        }
+      }) as EventListener);
     }
 
     // Attach row button events

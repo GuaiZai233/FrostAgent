@@ -20,6 +20,10 @@ const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
 );
+const components = await readFile(
+  new URL('../src/styles/components.css', import.meta.url),
+  'utf8',
+);
 
 const desktopFooter = main.match(
   /<div class="sidebar-footer">([\s\S]*?)<\/div>\s*<\/aside>/,
@@ -93,6 +97,27 @@ assert.equal(
   globalSettings?.includes("'SYSTEM_PROMPT'"),
   false,
   'SYSTEM_PROMPT must be an instance-level setting, not in globalKeys',
+);
+
+assert.match(
+  backendSettings,
+  /<table class="table env-table">/,
+  'backend settings table must use env-table class for fixed wrapping layout',
+);
+assert.match(
+  backendSettings,
+  /whitespace-pre-wrap/,
+  'backend settings display values must support whitespace-pre-wrap to wrap long values',
+);
+assert.match(
+  components,
+  /\.env-table\s*{[^}]*table-layout:\s*fixed;/,
+  '.env-table must have table-layout: fixed to prevent wide columns from breaking layout',
+);
+assert.match(
+  components,
+  /\.env-table\s+td\s*{[^}]*overflow-wrap:\s*anywhere;/,
+  '.env-table cells must have overflow-wrap: anywhere for responsive wrapping',
 );
 
 process.stdout.write(
