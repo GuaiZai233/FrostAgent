@@ -1,9 +1,11 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
@@ -38,6 +40,7 @@ type ActionMessage struct {
 	Path          string `json:"path,omitempty"`
 	URL           string `json:"url,omitempty"`
 	IsSticker     bool   `json:"is_sticker,omitempty"`
+	SubType       int    `json:"sub_type,omitempty"`
 }
 
 // Action 表示 FrostAgent 发送给 AstrBot 插件的出站动作。
@@ -68,12 +71,31 @@ func (a Action) MarshalJSON() ([]byte, error) {
 
 func (a Action) containsSticker() bool {
 	for _, message := range a.Messages {
-		if message.IsSticker {
+		if message.IsSticker || parity.IsStickerType(message.Type) || parity.IsStickerSubType(message.SubType) {
 			return true
 		}
 	}
 	for _, attachment := range a.Attachments {
-		if attachment.Type == core.AttachmentTypeImage && attachment.SubType == 1 {
+		if attachment.Type == core.AttachmentTypeImage && parity.IsStickerSubType(attachment.SubType) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a Action) hasQuote() bool {
+	return slices.ContainsFunc(a.Messages, func(m ActionMessage) bool {
+		return parity.IsQuoteType(m.Type)
+	})
+}
+
+func (a Action) hasMention(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	for _, message := range a.Messages {
+		if parity.IsMentionType(message.Type) && strings.TrimSpace(message.MentionUserID) == userID {
 			return true
 		}
 	}
@@ -85,26 +107,27 @@ func (a Action) withConfiguredGroupMention() Action {
 }
 
 func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Action {
-	if a.Action != "send_message" || a.MessageType != "group" || a.containsSticker() || scope.Getenv("ENABLE_AT_IN_GROUP_MSG") != "true" {
+	enableAt := scope.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
+	isGroup := a.Action == "send_message" && a.MessageType == "group"
+	plan := parity.PlanGroupDecoration(
+		isGroup,
+		a.containsSticker(),
+		false,
+		enableAt,
+		"",
+		a.UserID,
+		false,
+		a.hasMention(a.UserID),
+	)
+	if !plan.ShouldMention {
 		return a
 	}
 
-	userID := strings.TrimSpace(a.UserID)
-	if userID == "" {
-		return a
-	}
-
-	for _, message := range a.Messages {
-		if message.Type == "mention_user" && strings.TrimSpace(message.MentionUserID) == userID {
-			return a
-		}
-	}
-
-	mention := ActionMessage{Type: "mention_user", MentionUserID: userID}
+	mention := ActionMessage{Type: "mention_user", MentionUserID: plan.MentionUserID}
 	if len(a.Messages) > 0 {
 		messages := make([]ActionMessage, 0, len(a.Messages)+1)
 		insertAt := 0
-		for insertAt < len(a.Messages) && isQuoteMessage(a.Messages[insertAt]) {
+		for insertAt < len(a.Messages) && parity.IsQuoteType(a.Messages[insertAt].Type) {
 			insertAt++
 		}
 		messages = append(messages, a.Messages[:insertAt]...)
@@ -131,21 +154,23 @@ func (a Action) withConfiguredGroupReply() Action {
 }
 
 func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action {
-	if a.Action != "send_message" || a.MessageType != "group" || a.containsSticker() || scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") != "true" {
+	enableReply := scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
+	isGroup := a.Action == "send_message" && a.MessageType == "group"
+	plan := parity.PlanGroupDecoration(
+		isGroup,
+		a.containsSticker(),
+		enableReply,
+		false,
+		a.ReplyMessageID,
+		"",
+		a.hasQuote(),
+		false,
+	)
+	if !plan.ShouldQuote {
 		return a
 	}
 
-	replyMessageID := strings.TrimSpace(a.ReplyMessageID)
-	if replyMessageID == "" {
-		return a
-	}
-	for _, message := range a.Messages {
-		if isQuoteMessage(message) {
-			return a
-		}
-	}
-
-	quote := ActionMessage{Type: "quote", MessageID: replyMessageID}
+	quote := ActionMessage{Type: "quote", MessageID: plan.QuoteID}
 	if len(a.Messages) > 0 {
 		messages := make([]ActionMessage, 0, len(a.Messages)+1)
 		messages = append(messages, quote)
@@ -161,8 +186,4 @@ func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action 
 		}
 	}
 	return a
-}
-
-func isQuoteMessage(message ActionMessage) bool {
-	return message.Type == "quote" || message.Type == "reply"
 }

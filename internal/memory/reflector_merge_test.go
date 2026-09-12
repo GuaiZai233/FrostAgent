@@ -1,8 +1,15 @@
 package memory
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -232,5 +239,223 @@ func seedMemoryEntries(t *testing.T, store *Store, entries []MemoryEntry) {
 		if err := store.Save(entry); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+type mockReflectLLMProvider struct {
+	mu      sync.Mutex
+	calls   int
+	prompts []string
+}
+
+func (m *mockReflectLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	m.prompts = append(m.prompts, fmt.Sprintf("%v", req.Messages[0].Content))
+	m.mu.Unlock()
+
+	payload, _ := json.Marshal(reflectResult{
+		Topics: []MemoryTopic{{Name: "舞萌"}},
+		Merges: []reflectMerge{{
+			SourceIDs: []string{"mem_001", "mem_002"},
+			Content:   "用户是 dx rating 为 w6 的舞萌爱好者",
+			Tags:      []string{"舞萌", "dx rating", "w6"},
+		}},
+	})
+	return &core.ChatResponse{
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: string(payload),
+		},
+	}, nil
+}
+
+func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
+	dir := t.TempDir()
+	brainPath := filepath.Join(dir, "brain.json")
+	catalogPath := filepath.Join(dir, "catalog.json")
+
+	// 1. Seed raw brain.json containing mixed legacy aiocqhttp:user:X and canonical X entries
+	legacyBrain := BrainData{
+		Entries: []MemoryEntry{
+			{
+				ID:         "mem_001",
+				Owner:      "aiocqhttp:user:test_user_42",
+				Content:    "用户喜欢打舞萌",
+				Tags:       []string{"舞萌"},
+				Source:     SourceExtract,
+				Visibility: VisibilityPrivate,
+			},
+			{
+				ID:         "mem_002",
+				Owner:      "test_user_42",
+				Content:    "用户的舞萌 dx rating 为 w6",
+				Tags:       []string{"w6"},
+				Source:     SourceExtract,
+				Visibility: VisibilityPrivate,
+			},
+		},
+	}
+	brainBytes, err := json.MarshalIndent(legacyBrain, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brainPath, brainBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Seed legacy catalog on disk
+	legacyCatalog := catalogFile{
+		Version:   currentCatalogVersion,
+		UpdatedAt: time.Now(),
+		Users: map[string]UserMemoryCatalog{
+			"aiocqhttp:user:test_user_42": {
+				Owner:       "aiocqhttp:user:test_user_42",
+				Topics:      []MemoryTopic{{Name: "旧主题"}},
+				MemoryCount: 1,
+				GeneratedAt: time.Now().Add(-1 * time.Hour),
+			},
+		},
+	}
+	catalogBytes, err := json.MarshalIndent(legacyCatalog, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, catalogBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(brainPath)
+	catalog := NewCatalogStore(catalogPath)
+	mockLLM := &mockReflectLLMProvider{}
+
+	reflector := NewReflector(
+		store,
+		catalog,
+		mockLLM,
+		"test-model",
+		Config{ReflectTimeout: 5 * time.Second},
+	)
+
+	// 3. Perform full reflection
+	ctx := context.Background()
+	if err := reflector.Reflect(ctx); err != nil {
+		t.Fatalf("Reflect failed: %v", err)
+	}
+
+	// 4. Assert LLM was called EXACTLY ONCE for this logical QQ owner
+	mockLLM.mu.Lock()
+	calls := mockLLM.calls
+	prompts := mockLLM.prompts
+	mockLLM.mu.Unlock()
+
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 LLM reflection call for the unified QQ owner, got %d", calls)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("expected 1 prompt recorded, got %d", len(prompts))
+	}
+	// Both memories must enter the SAME reflection cycle
+	if !strings.Contains(prompts[0], "mem_001") || !strings.Contains(prompts[0], "mem_002") {
+		t.Fatalf("expected both mem_001 and mem_002 in reflection prompt: %s", prompts[0])
+	}
+
+	// 5. Assert catalog on disk contains ONLY ONE canonical bucket
+	catFile, err := catalog.load()
+	if err != nil {
+		t.Fatalf("catalog.load() failed: %v", err)
+	}
+	if len(catFile.Users) != 1 {
+		t.Fatalf("expected exactly 1 catalog entry in Users, got %d: %+v", len(catFile.Users), catFile.Users)
+	}
+	if _, ok := catFile.Users["test_user_42"]; !ok {
+		t.Fatalf("expected canonical key 'test_user_42' in catalog.Users, got keys: %+v", catFile.Users)
+	}
+
+	// 6. Assert alias lookup works for both canonical and legacy aliases
+	catCanonical, err := catalog.Get("test_user_42")
+	if err != nil || catCanonical == nil {
+		t.Fatalf("Get('test_user_42') failed: %v", err)
+	}
+	catLegacy, err := catalog.Get("aiocqhttp:user:test_user_42")
+	if err != nil || catLegacy == nil {
+		t.Fatalf("Get('aiocqhttp:user:test_user_42') failed: %v", err)
+	}
+	if catCanonical.Owner != "test_user_42" || catLegacy.Owner != "test_user_42" {
+		t.Fatalf("expected canonical owner in retrieved catalog: canonical=%s legacy=%s", catCanonical.Owner, catLegacy.Owner)
+	}
+
+	// 7. FormatForPrompt also succeeds on both
+	promptCanonical, err := catalog.FormatForPrompt("test_user_42")
+	if err != nil || promptCanonical == "" {
+		t.Fatalf("FormatForPrompt('test_user_42') failed: %v", err)
+	}
+	promptLegacy, err := catalog.FormatForPrompt("aiocqhttp:user:test_user_42")
+	if err != nil || promptLegacy == "" {
+		t.Fatalf("FormatForPrompt('aiocqhttp:user:test_user_42') failed: %v", err)
+	}
+	if promptCanonical != promptLegacy {
+		t.Fatalf("expected identical prompt format for alias: canonical=%q legacy=%q", promptCanonical, promptLegacy)
+	}
+
+	// 8. Assert store memories have been migrated to canonical owner
+	entries, err := store.ListAll()
+	if err != nil {
+		t.Fatalf("store.ListAll() failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 merged memory entry, got %d", len(entries))
+	}
+	if entries[0].Owner != "test_user_42" {
+		t.Fatalf("expected merged memory owner to be canonical 'test_user_42', got %q", entries[0].Owner)
+	}
+}
+
+func TestCatalogStoreAliasGetAndReplace(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	catalog := NewCatalogStore(catalogPath)
+
+	// Save using legacy alias
+	err := catalog.Replace(UserMemoryCatalog{
+		Owner:       "aiocqhttp:user:test_user_99",
+		Topics:      []MemoryTopic{{Name: "测试主题"}},
+		MemoryCount: 2,
+		GeneratedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Replace failed: %v", err)
+	}
+
+	// In memory and on disk, it should be canonical "test_user_99"
+	catFile, err := catalog.load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if len(catFile.Users) != 1 {
+		t.Fatalf("expected 1 user in catalog, got %d", len(catFile.Users))
+	}
+	if _, ok := catFile.Users["test_user_99"]; !ok {
+		t.Fatalf("expected key 'test_user_99', got %+v", catFile.Users)
+	}
+
+	// Retrieve via other aliases
+	for _, query := range []string{"test_user_99", "aiocqhttp:user:test_user_99", "onebot:user:test_user_99", "qq:user:test_user_99"} {
+		got, err := catalog.Get(query)
+		if err != nil || got == nil {
+			t.Errorf("Get(%q) failed: %v, got=%v", query, err, got)
+		}
+	}
+
+	// Delete via onebot alias
+	if err := catalog.Delete("onebot:user:test_user_99"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	got, err := catalog.Get("test_user_99")
+	if err != nil {
+		t.Fatalf("Get after Delete failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil after Delete, got %+v", got)
 	}
 }

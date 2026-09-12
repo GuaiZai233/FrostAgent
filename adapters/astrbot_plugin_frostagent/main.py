@@ -470,6 +470,10 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
             group_name = str(getattr(group_obj, "group_name", "") or getattr(group_obj, "name", "") or "")
 
     session_id = f"{platform}:group:{group_id}" if message_type == "group" else f"{platform}:private:{user_id}"
+    self_id = extract_self_id(event)
+    has_other_mention, has_other_content, has_media_content = extract_interaction_metadata(event, self_id)
+    if attachments:
+        has_media_content = True
 
     payload = {
         "type": "event",
@@ -489,8 +493,15 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "is_at": is_at,
         "timestamp": int(time.time()),
     }
+    metadata: dict[str, Any] = {
+        "has_other_mention": has_other_mention,
+        "has_other_content": has_other_content,
+        "has_media_content": has_media_content,
+        "has_images": has_media_content,
+    }
     if reply_message_id:
-        payload["metadata"] = {"reply_message_id": reply_message_id}
+        metadata["reply_message_id"] = reply_message_id
+    payload["metadata"] = metadata
     return payload
 
 
@@ -508,6 +519,74 @@ def _extract_platform_name(event: AstrMessageEvent) -> str:
     return raw[:32] if raw else "astrbot"
 
 
+def extract_self_id(event: AstrMessageEvent) -> str:
+    """提取机器人自身账号 ID（如 QQ 号）。"""
+    value = call_noargs(event, "get_self_id")
+    if value is not None and str(value).strip():
+        return str(value).strip()
+    message_obj = getattr_chain(event, "message_obj")
+    raw_event = first_attr(message_obj, "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    if isinstance(raw_event, dict):
+        self_id = first_attr(raw_event, "self_id")
+        if self_id is not None and str(self_id).strip():
+            return str(self_id).strip()
+    return ""
+
+
+def extract_interaction_metadata(
+    event: AstrMessageEvent,
+    self_id: str,
+) -> tuple[bool, bool, bool]:
+    """提取入站消息结构特征，用于跨适配器 mention-only 等语义判定：
+    - has_other_mention: 是否包含除 Bot 之外的其他 @ 提及（如 @其他群友 或 @全体成员）
+    - has_other_content: 是否包含非文本、非图片、非引用、非提及的其它消息组件（如 Face, Record, Video, File 等）
+    - has_media_content: 是否包含图片或表情等多媒体结构（Image, MFace），无论媒体附件是否成功提取/下载
+    """
+    has_other_mention = False
+    has_other_content = False
+    has_media_content = False
+
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if isinstance(components, list) and components:
+        for comp in components:
+            comp_type = type(comp).__name__.lower()
+            if comp_type == "at" or comp_type.endswith("at"):
+                target_qq = str(first_attr(comp, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target_qq != self_id:
+                    has_other_mention = True
+            elif "plain" in comp_type or "reply" in comp_type:
+                continue
+            elif "image" in comp_type or "mface" in comp_type:
+                has_media_content = True
+            else:
+                has_other_content = True
+
+    # 互补检查原始 OneBot 消息段（当底层平台/协议栈提供原始 segments 时）
+    raw_segs = raw_onebot_segments(event)
+    if isinstance(raw_segs, list) and raw_segs:
+        for seg in raw_segs:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = str(first_attr(seg, "type") or "").lower()
+            data = first_attr(seg, "data")
+            if not isinstance(data, dict):
+                data = {}
+            if seg_type == "at":
+                target_qq = str(first_attr(data, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target_qq != self_id:
+                    has_other_mention = True
+            elif seg_type in ("text", "reply"):
+                continue
+            elif seg_type in ("image", "mface"):
+                has_media_content = True
+            else:
+                has_other_content = True
+
+    return has_other_mention, has_other_content, has_media_content
+
+
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
     """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。
 
@@ -519,20 +598,37 @@ def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
     is_wake = bool(getattr(event, "is_at_or_wake_command", False))
     is_at = False
 
-    self_id = str(call_noargs(event, "get_self_id") or "")
+    self_id = extract_self_id(event)
     components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
-            if comp_type == "at":
+            if comp_type == "at" or comp_type.endswith("at"):
                 target_qq = str(first_attr(comp, "qq", "target_id", "user_id") or "")
                 if self_id and target_qq == self_id:
                     is_at = True
                     is_wake = True
-            elif comp_type == "reply":
+            elif "reply" in comp_type:
                 sender_id = str(first_attr(comp, "sender_id", "user_id") or "")
                 if self_id and sender_id == self_id:
                     is_wake = True
+
+    # 补充检查 raw_onebot_segments
+    if not is_at and self_id:
+        raw_segs = raw_onebot_segments(event)
+        if isinstance(raw_segs, list):
+            for seg in raw_segs:
+                if not isinstance(seg, dict):
+                    continue
+                if str(first_attr(seg, "type") or "").lower() == "at":
+                    data = first_attr(seg, "data")
+                    if isinstance(data, dict):
+                        target_qq = str(first_attr(data, "qq", "target_id", "user_id") or "")
+                        if target_qq == self_id:
+                            is_at = True
+                            is_wake = True
+                            break
+
     return is_wake, is_at
 
 

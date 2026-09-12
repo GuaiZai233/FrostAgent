@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/memory"
@@ -8,6 +9,7 @@ import (
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -361,6 +363,15 @@ func TestAstrBotMentionOnlyInteractionRequiresAt(t *testing.T) {
 		{
 			name:  "private mention",
 			event: Event{MessageType: "private", IsWake: true, IsAt: true},
+		},
+		{
+			name: "reply and at bot no text",
+			event: Event{
+				MessageType: "group",
+				IsAt:        true,
+				Metadata:    map[string]any{"reply_message_id": "msg_prev_123"},
+			},
+			want: false,
 		},
 	}
 
@@ -1164,6 +1175,79 @@ func TestAstrBotTransportWriteFailureDoesNotCommitAssistantState(t *testing.T) {
 	}
 	if !strings.Contains(failure.Wording, "connection closed") {
 		t.Fatalf("DeliveryFailure 应包含传输错误，实际: %+v", failure)
+	}
+}
+
+func TestAstrBotGroupMessageReplyAndAtBotNotMentionOnly(t *testing.T) {
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到引用消息回复！",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_reply_at_001",
+		UserID:      "usr_test_reply",
+		SenderName:  "用户B",
+		GroupID:     "grp_reply_parity",
+		GroupName:   "对齐测试群",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		IsAt:        true,
+		Content:     "",
+		Metadata: map[string]any{
+			"reply_message_id": "msg_target_888",
+		},
+		Timestamp: time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var respAction Action
+	_ = json.Unmarshal(respBytes, &respAction)
+	if respAction.Action != "send_message" {
+		t.Fatalf("期望 action=send_message, 实际=%s", respAction.Action)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) == 0 {
+		provider.mu.Unlock()
+		t.Fatal("期望收到 LLM 请求")
+	}
+	lastReq := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+
+	for _, msg := range lastReq.Messages {
+		contentStr := fmt.Sprintf("%v", msg.Content)
+		if strings.Contains(contentStr, `"mention_only":true`) {
+			t.Fatalf("Reply + @Bot 不应被判定为 mention_only=true, 实际消息: %s", contentStr)
+		}
+		if strings.Contains(contentStr, parity.MentionOnlyGuidance) {
+			t.Fatalf("Reply + @Bot 不应注入 mention_only guidance, 实际消息: %s", contentStr)
+		}
 	}
 }
 

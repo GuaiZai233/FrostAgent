@@ -355,7 +355,7 @@ func effectiveBinding(cfg Configuration, workload Workload, scope Scope) (Bindin
 	binding, inherited := globalBinding(cfg, workload, scope.GroupID != "")
 	if scope.GroupID != "" {
 		for _, override := range cfg.GroupOverrides {
-			if strings.EqualFold(strings.TrimSpace(override.Platform), scope.Platform) && strings.TrimSpace(override.GroupID) == scope.GroupID {
+			if platformsMatch(override.Platform, scope.Platform) && strings.TrimSpace(override.GroupID) == scope.GroupID {
 				if binding, ok := override.Bindings[workload]; ok && binding.Mode != "" && binding.Mode != BindingInherit {
 					if workload != WorkloadDialogue && binding.Mode == BindingFollowDialogue {
 						dialogue, _ := effectiveBinding(cfg, WorkloadDialogue, scope)
@@ -372,6 +372,30 @@ func effectiveBinding(cfg Configuration, workload Workload, scope Scope) (Bindin
 		return dialogue, true
 	}
 	return binding, inherited
+}
+
+func platformsMatch(a, b string) bool {
+	aNorm := strings.ToLower(strings.TrimSpace(a))
+	bNorm := strings.ToLower(strings.TrimSpace(b))
+	if aNorm == bNorm {
+		return true
+	}
+	if isQQPlatform(aNorm) && isQQPlatform(bNorm) {
+		return true
+	}
+	return false
+}
+
+func isQQPlatform(p string) bool {
+	return p == "" || p == "qq" || p == "onebot" || p == "aiocqhttp"
+}
+
+func canonicalPlatform(p string) string {
+	norm := strings.ToLower(strings.TrimSpace(p))
+	if isQQPlatform(norm) {
+		return "qq"
+	}
+	return norm
 }
 
 func globalBinding(cfg Configuration, workload Workload, inherited bool) (Binding, bool) {
@@ -511,16 +535,21 @@ func validateConfiguration(cfg Configuration) error {
 			return fmt.Errorf("global %s binding: %w", workload, err)
 		}
 	}
-	groupKeys := make(map[string]struct{})
+	groupKeys := make(map[string]string)
 	for _, group := range cfg.GroupOverrides {
-		if group.Platform == "" || group.GroupID == "" {
+		if strings.TrimSpace(group.Platform) == "" || strings.TrimSpace(group.GroupID) == "" {
 			return fmt.Errorf("group override platform and group id are required")
 		}
-		key := strings.ToLower(group.Platform) + "\x00" + group.GroupID
-		if _, exists := groupKeys[key]; exists {
-			return fmt.Errorf("group override %s/%s is duplicated", group.Platform, group.GroupID)
+		canonPlatform := canonicalPlatform(group.Platform)
+		canonGroupID := strings.TrimSpace(group.GroupID)
+		key := canonPlatform + "\x00" + canonGroupID
+		if firstPlatform, exists := groupKeys[key]; exists {
+			if strings.EqualFold(strings.TrimSpace(firstPlatform), strings.TrimSpace(group.Platform)) {
+				return fmt.Errorf("group override %s/%s is duplicated", group.Platform, group.GroupID)
+			}
+			return fmt.Errorf("group override %s/%s conflicts with canonical QQ platform override %s/%s", group.Platform, group.GroupID, firstPlatform, group.GroupID)
 		}
-		groupKeys[key] = struct{}{}
+		groupKeys[key] = group.Platform
 		for workload, binding := range group.Bindings {
 			if !knownWorkload(workload) {
 				return fmt.Errorf("group %s/%s has unknown workload %q", group.Platform, group.GroupID, workload)

@@ -40,6 +40,9 @@ func (s *Store) load() (*BrainData, error) {
 	if err := json.Unmarshal(data, &brain); err != nil {
 		return nil, fmt.Errorf("failed to parse brain: %w", err)
 	}
+	for i := range brain.Entries {
+		brain.Entries[i].Owner = CanonicalOwner(brain.Entries[i].Owner)
+	}
 	return &brain, nil
 }
 
@@ -72,6 +75,7 @@ func (s *Store) Save(entry MemoryEntry) error {
 	if entry.OwnerType == "" {
 		entry.OwnerType = OwnerUser
 	}
+	entry.Owner = CanonicalOwner(entry.Owner)
 
 	brain.Entries = append(brain.Entries, entry)
 	return s.save(brain)
@@ -188,7 +192,7 @@ func matchEntry(entry MemoryEntry, queryLower string) bool {
 	return false
 }
 
-// ListByOwner returns all memories owned by the specified user.
+// ListByOwner returns all memories owned by the specified user, matching canonical and aliased owners.
 func (s *Store) ListByOwner(owner string) ([]MemoryEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -200,7 +204,7 @@ func (s *Store) ListByOwner(owner string) ([]MemoryEntry, error) {
 
 	var results []MemoryEntry
 	for _, entry := range brain.Entries {
-		if entry.Owner == owner {
+		if OwnersMatch(entry.Owner, owner) {
 			results = append(results, entry)
 		}
 	}
@@ -277,6 +281,8 @@ func (s *Store) applyReflectionWithMerges(
 		return reflectionApplyResult{}, err
 	}
 
+	canonicalOwner := CanonicalOwner(owner)
+
 	outdated := make(map[string]bool, len(outdatedIDs))
 	for _, id := range outdatedIDs {
 		outdated[id] = true
@@ -313,7 +319,7 @@ func (s *Store) applyReflectionWithMerges(
 		valid := true
 		for _, snapshot := range merge.Sources {
 			current, ok := currentByID[snapshot.ID]
-			if !ok || current.Owner != owner || seenSources[current.ID] || consumed[current.ID] ||
+			if !ok || !OwnersMatch(current.Owner, owner) || seenSources[current.ID] || consumed[current.ID] ||
 				!sameMergeSource(current, snapshot) {
 				valid = false
 				break
@@ -330,11 +336,12 @@ func (s *Store) applyReflectionWithMerges(
 			mergedID = generateID()
 		}
 		existingIDs[mergedID] = true
-		merged := buildMergedEntry(mergedID, owner, merge, currentSources, now)
+		canonicalOwner := CanonicalOwner(owner)
+		merged := buildMergedEntry(mergedID, canonicalOwner, merge, currentSources, now)
 		mergedEntries = append(mergedEntries, merged)
 		archives = append(archives, MemoryMergeArchive{
 			MergedID: mergedID,
-			Owner:    owner,
+			Owner:    canonicalOwner,
 			Sources:  currentSources,
 			MergedAt: now,
 		})
@@ -347,7 +354,7 @@ func (s *Store) applyReflectionWithMerges(
 	removedIDs := make([]string, 0, len(consumed)+len(outdated))
 	appliedOutdated := make([]string, 0, len(outdated))
 	for _, entry := range brain.Entries {
-		if entry.Owner == owner {
+		if OwnersMatch(entry.Owner, owner) {
 			if consumed[entry.ID] {
 				removedIDs = append(removedIDs, entry.ID)
 				continue
@@ -357,6 +364,7 @@ func (s *Store) applyReflectionWithMerges(
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
 			}
+			entry.Owner = canonicalOwner
 		}
 		remainingAll = append(remainingAll, entry)
 	}
@@ -372,7 +380,7 @@ func (s *Store) applyReflectionWithMerges(
 
 	remaining := make([]MemoryEntry, 0)
 	for _, entry := range brain.Entries {
-		if entry.Owner == owner {
+		if OwnersMatch(entry.Owner, owner) {
 			remaining = append(remaining, entry)
 		}
 	}
@@ -387,7 +395,7 @@ func (s *Store) applyReflectionWithMerges(
 
 func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 	return current.ID == snapshot.ID &&
-		current.Owner == snapshot.Owner &&
+		OwnersMatch(current.Owner, snapshot.Owner) &&
 		current.Content == snapshot.Content &&
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&

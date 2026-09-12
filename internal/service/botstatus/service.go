@@ -3,6 +3,7 @@ package botstatus
 import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"context"
 	"errors"
@@ -178,7 +179,19 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
-				if existing, ok := viewsByID[record.SessionID]; ok {
+				targetID := ""
+				if _, ok := viewsByID[record.SessionID]; ok {
+					targetID = record.SessionID
+				} else {
+					for _, alias := range memory.SessionKeyAliases(record.SessionID) {
+						if _, ok := viewsByID[alias]; ok {
+							targetID = alias
+							break
+						}
+					}
+				}
+				if targetID != "" {
+					existing := viewsByID[targetID]
 					if existing.info.GroupSummary == "" {
 						existing.info.GroupSummary = record.Summary
 					}
@@ -190,7 +203,7 @@ func (s *Service) GetSessions(
 						existing.updatedAt = record.UpdatedAt
 						existing.info.LastActive = record.UpdatedAt.Format(time.RFC3339)
 					}
-					viewsByID[record.SessionID] = existing
+					viewsByID[targetID] = existing
 					continue
 				}
 				viewsByID[record.SessionID] = sessionView{
