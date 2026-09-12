@@ -552,6 +552,9 @@ func (m *Manager) stop(id string, i *managed) error {
 	if i.runtime != nil {
 		i.runtime.Stop()
 	}
+	if m.security != nil {
+		m.security.RemoveInstanceProvider(id)
+	}
 	i.logger.EndStreams()
 	i.logger.Clear()
 	err := m.update(id, func(info *Info) { info.Enabled = false })
@@ -804,6 +807,9 @@ func (m *Manager) Delete(id string, all bool) error {
 		return err
 	}
 	delete(m.instances, id)
+	if m.security != nil {
+		m.security.RemoveInstanceProvider(id)
+	}
 	return nil
 }
 

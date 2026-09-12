@@ -282,7 +282,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
 					if shouldSendSecurityDirectReply(event, a.engine) {
