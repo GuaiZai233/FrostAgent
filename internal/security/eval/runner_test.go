@@ -234,19 +234,83 @@ func TestAdversarialCorpusEvaluation_GatewayFailClosed(t *testing.T) {
 	}
 }
 
+// resolveLiveEvalAPIKey resolves the API key for live LLM security gateway evaluation.
+// To prevent ambient OPENAI_API_KEY environment variables on developer machines from
+// accidentally triggering paid/networked tests during normal `go test ./...`, live evaluation
+// requires an explicit opt-in signal: either a dedicated FROSTAGENT_SECURITY_EVAL_API_KEY, or
+// an explicit opt-in flag FROSTAGENT_SECURITY_EVAL_LIVE=1 (or "true") before reusing OPENAI_API_KEY.
+func resolveLiveEvalAPIKey() string {
+	if apiKey := strings.TrimSpace(os.Getenv("FROSTAGENT_SECURITY_EVAL_API_KEY")); apiKey != "" {
+		return apiKey
+	}
+	liveFlag := strings.TrimSpace(os.Getenv("FROSTAGENT_SECURITY_EVAL_LIVE"))
+	if liveFlag == "1" || strings.EqualFold(liveFlag, "true") {
+		return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	}
+	return ""
+}
+
+func TestLiveGatewayOptInGating(t *testing.T) {
+	// Case 1: Ambient OPENAI_API_KEY alone must NOT opt-in
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "" {
+		t.Fatalf("ambient OPENAI_API_KEY must not activate live evaluation without explicit opt-in, got %q", key)
+	}
+
+	// Case 2: Dedicated FROSTAGENT_SECURITY_EVAL_API_KEY opts in directly
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "sk-dedicated-test-key")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "sk-dedicated-test-key" {
+		t.Fatalf("expected dedicated key sk-dedicated-test-key, got %q", key)
+	}
+
+	// Case 3: Explicit FROSTAGENT_SECURITY_EVAL_LIVE=1 allows reusing OPENAI_API_KEY
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "1")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "sk-ambient-test-key" {
+		t.Fatalf("expected OPENAI_API_KEY when FROSTAGENT_SECURITY_EVAL_LIVE=1, got %q", key)
+	}
+
+	// Case 4: Explicit FROSTAGENT_SECURITY_EVAL_LIVE=true allows reusing OPENAI_API_KEY
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "true")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "sk-ambient-test-key" {
+		t.Fatalf("expected OPENAI_API_KEY when FROSTAGENT_SECURITY_EVAL_LIVE=true, got %q", key)
+	}
+
+	// Case 5: FROSTAGENT_SECURITY_EVAL_LIVE=0 disables reuse
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "0")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "" {
+		t.Fatalf("expected empty key when FROSTAGENT_SECURITY_EVAL_LIVE=0, got %q", key)
+	}
+
+	// Case 6: Dedicated key takes precedence over OPENAI_API_KEY even if LIVE=1
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_API_KEY", "sk-dedicated-test-key")
+	t.Setenv("FROSTAGENT_SECURITY_EVAL_LIVE", "1")
+	t.Setenv("OPENAI_API_KEY", "sk-ambient-test-key")
+	if key := resolveLiveEvalAPIKey(); key != "sk-dedicated-test-key" {
+		t.Fatalf("dedicated key must take precedence, got %q", key)
+	}
+}
+
 // TestLiveGatewayAdversarialEvaluation is an opt-in adversarial evaluation that runs the DefaultCorpus
 // against a live, configured LLM security gateway model.
 //
-// It is skipped in ordinary CI runs unless FROSTAGENT_SECURITY_EVAL_API_KEY or OPENAI_API_KEY is present
-// in the test environment, ensuring PR CI remains fast, deterministic, and self-contained while allowing
-// maintainers and operators to benchmark any chosen production model on demand.
+// It is skipped in ordinary CI runs unless an explicit opt-in signal is provided: either via
+// FROSTAGENT_SECURITY_EVAL_API_KEY, or by explicitly setting FROSTAGENT_SECURITY_EVAL_LIVE=1 (or "true")
+// alongside OPENAI_API_KEY. This guarantees that developer workstations with ambient OPENAI_API_KEY
+// credentials do not unexpectedly trigger paid external network calls during normal test runs.
 func TestLiveGatewayAdversarialEvaluation(t *testing.T) {
-	apiKey := os.Getenv("FROSTAGENT_SECURITY_EVAL_API_KEY")
+	apiKey := resolveLiveEvalAPIKey()
 	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-	}
-	if apiKey == "" {
-		t.Skip("skipping live LLM security gateway evaluation; set FROSTAGENT_SECURITY_EVAL_API_KEY or OPENAI_API_KEY to run against a real model")
+		t.Skip("skipping live LLM security gateway evaluation; set FROSTAGENT_SECURITY_EVAL_API_KEY or set FROSTAGENT_SECURITY_EVAL_LIVE=1 with OPENAI_API_KEY to opt-in to real model execution")
 	}
 
 	baseURL := os.Getenv("FROSTAGENT_SECURITY_EVAL_BASE_URL")
