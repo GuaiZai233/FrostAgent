@@ -417,6 +417,31 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 	}
 }
 
+
+type stubSecurityClassifier struct{}
+
+func (s *stubSecurityClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	text := strings.ToLower(input.Normalized)
+	if strings.Contains(text, "ignore all previous") {
+		return security.ClassificationResult{
+			Category:   security.RiskCategoryPromptInjection,
+			RiskLevel:  security.RiskLevelHigh,
+			Intent:     security.IntentMalicious,
+			Confidence: 0.90,
+			Origin:     input.Origin,
+			Reason:     "scripted test stub prompt injection",
+		}, nil
+	}
+	return security.ClassificationResult{
+		Category:   security.RiskCategoryNone,
+		RiskLevel:  security.RiskLevelNone,
+		Intent:     security.IntentBenign,
+		Confidence: 0.0,
+		Origin:     input.Origin,
+		Reason:     "benign",
+	}, nil
+}
+
 func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	dialogueProvider := &mockLLMProvider{responses: []*core.ChatResponse{{
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "正常回复"},
@@ -424,7 +449,7 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
-	engine.Security.SetClassifier(security.NewCalibratedClassifier())
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -549,7 +574,7 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	engine := newTestEngine(dialogueProvider)
 	engine.VisionProvider = visionProvider
 	engine.Security = security.NewController(t.TempDir())
-	engine.Security.SetClassifier(security.NewCalibratedClassifier())
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -638,7 +663,7 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
-	engine.Security.SetClassifier(security.NewCalibratedClassifier())
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()

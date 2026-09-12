@@ -399,13 +399,13 @@ func TestConcurrentRuntimeRebuildAndEvaluationRace(t *testing.T) {
 	wg.Wait()
 }
 
-// TestProductionRuntimeHybridFailClosedOnLLMError verifies Option A strict fail-closed
-// across the production runtime wiring (Manager -> SecurityController -> HybridClassifier).
+// TestProductionRuntimeFailClosedOnLLMError verifies Option A strict fail-closed
+// across the production runtime wiring (Manager -> SecurityController -> LLMClassifier).
 // When the security LLM times out, disconnects, or returns malformed/invalid JSON,
 // GateIngress must unconditionally return WatchdogBlock with fail-closed reason,
 // while strictly isolating classifier failures from user punishment (0 strikes accrued, never locked)
 // even across 5 repeated submissions.
-func TestProductionRuntimeHybridFailClosedOnLLMError(t *testing.T) {
+func TestProductionRuntimeFailClosedOnLLMError(t *testing.T) {
 	cases := []struct {
 		name     string
 		err      error

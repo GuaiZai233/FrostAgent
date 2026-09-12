@@ -195,7 +195,10 @@ func (r *EvalRunner) RunRepeatedEvasionSuite(watchdog *security.Watchdog, access
 
 // RunCrossInstanceConsistencySuite verifies that multiple instances sharing an AccessStore
 // observe and apply strikes and locks consistently under concurrent evaluation.
-func (r *EvalRunner) RunCrossInstanceConsistencySuite(path string) error {
+func (r *EvalRunner) RunCrossInstanceConsistencySuite(path string, classifier security.Classifier) error {
+	if classifier == nil {
+		return fmt.Errorf("classifier must not be nil for cross-instance consistency suite")
+	}
 	benignPrincipal, err := security.NewPrincipal("eval-platform", "concurrent-benign-actor")
 	if err != nil {
 		return err
@@ -209,9 +212,9 @@ func (r *EvalRunner) RunCrossInstanceConsistencySuite(path string) error {
 	storeB := security.NewAccessStore(path)
 
 	wdA := security.NewWatchdog(storeA, nil)
-	wdA.SetClassifier(security.NewCalibratedClassifier())
+	wdA.SetClassifier(classifier)
 	wdB := security.NewWatchdog(storeB, nil)
-	wdB.SetClassifier(security.NewCalibratedClassifier())
+	wdB.SetClassifier(classifier)
 
 	// Phase 1: Verify concurrent benign queries across instances do not false-block
 	var wg sync.WaitGroup

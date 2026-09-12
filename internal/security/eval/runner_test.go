@@ -1,17 +1,160 @@
-﻿package eval
+package eval
 
 import (
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/security"
+	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+// scriptedPlumbingStub is a deterministic scripted double used exclusively for testing policy plumbing
+// (strikes, locks, sliding windows, evasion escalation, provenance isolation).
+type scriptedPlumbingStub struct{}
+
+func (s *scriptedPlumbingStub) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	text := strings.ToLower(input.Normalized)
+	if strings.Contains(text, "firewall bypass") {
+		return security.ClassificationResult{
+			Category:   security.RiskCategoryPromptInjection,
+			RiskLevel:  security.RiskLevelLow,
+			Intent:     security.IntentAmbiguous,
+			Confidence: 0.50,
+			Origin:     input.Origin,
+			Reason:     "ambiguous security research query",
+		}, nil
+	}
+	if strings.Contains(text, "ignore all previous") ||
+		strings.Contains(text, "bypass the watchdog") ||
+		strings.Contains(text, "bypass watchdog") {
+		return security.ClassificationResult{
+			Category:   security.RiskCategoryPromptInjection,
+			RiskLevel:  security.RiskLevelHigh,
+			Intent:     security.IntentMalicious,
+			Confidence: 0.95,
+			Origin:     input.Origin,
+			Reason:     "scripted prompt injection violation",
+		}, nil
+	}
+	return security.ClassificationResult{
+		Category:   security.RiskCategoryNone,
+		RiskLevel:  security.RiskLevelNone,
+		Intent:     security.IntentBenign,
+		Confidence: 0.0,
+		Origin:     input.Origin,
+		Reason:     "benign",
+	}, nil
+}
+
+// mockGatewayProvider simulates an upstream LLM Security Gateway provider for adversarial corpus eval.
+type mockGatewayProvider struct {
+	mu        sync.Mutex
+	callCount int
+	err       error
+}
+
+func (m *mockGatewayProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	m.mu.Lock()
+	m.callCount++
+	err := m.err
+	m.mu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+
+	var userPrompt string
+	for _, msg := range req.Messages {
+		if msg.Role == core.RoleUser {
+			if s, ok := msg.Content.(string); ok {
+				userPrompt = s
+			}
+		}
+	}
+
+	content := userPrompt
+	if start := strings.Index(userPrompt, "<content>"); start != -1 {
+		rest := userPrompt[start+len("<content>"):]
+		if end := strings.Index(rest, "</content>"); end != -1 {
+			content = strings.TrimSpace(rest[:end])
+		}
+	}
+	contentLower := strings.ToLower(content)
+
+	category := "none"
+	riskLevel := "none"
+	intent := "benign"
+	confidence := 0.95
+	reason := "benign content"
+
+	if strings.Contains(contentLower, "ignore all previous") ||
+		strings.Contains(contentLower, "bypass the watchdog") ||
+		strings.Contains(contentLower, "bypass watchdog") ||
+		strings.Contains(contentLower, "dump the system prompt") ||
+		strings.Contains(contentLower, "忽略之前的所有指令") ||
+		strings.Contains(contentLower, "ignora tutte le istruzioni") ||
+		strings.Contains(contentLower, "игнорируй все предыдущие инструкции") ||
+		strings.Contains(contentLower, "これまでの指示をすべて無視") ||
+		strings.Contains(contentLower, "ignora todas las instrucciones") {
+		category = "prompt_injection"
+		riskLevel = "high"
+		intent = "malicious"
+		reason = "prompt injection detected by llm gateway"
+	} else if strings.Contains(contentLower, "rm -rf / --no-preserve-root") ||
+		strings.Contains(contentLower, "curl -s https://malicious") {
+		category = "malicious_execution"
+		riskLevel = "high"
+		intent = "malicious"
+		reason = "destructive execution detected by llm gateway"
+	} else if strings.Contains(contentLower, "steal all api keys") {
+		category = "data_exfiltration"
+		riskLevel = "high"
+		intent = "malicious"
+		reason = "credential theft attempt detected by llm gateway"
+	} else if strings.Contains(contentLower, "firewall bypass") {
+		category = "prompt_injection"
+		riskLevel = "low"
+		intent = "ambiguous"
+		confidence = 0.50
+		reason = "educational inquiry on firewall bypass"
+	}
+
+	respJSON, _ := json.Marshal(map[string]interface{}{
+		"category":   category,
+		"risk_level": riskLevel,
+		"intent":     intent,
+		"confidence": confidence,
+		"reason":     reason,
+	})
+
+	return &core.ChatResponse{
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: string(respJSON),
+		},
+	}, nil
+}
+
+func (m *mockGatewayProvider) CallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callCount
+}
 
 func TestAdversarialCorpusEvaluation(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "eval_access.json"))
 	audit := security.NewAuditStore(filepath.Join(tempDir, "eval_audit.jsonl"), 1000)
 	watchdog := security.NewWatchdog(access, audit)
-	watchdog.SetClassifier(security.NewCalibratedClassifier())
+
+	mockProvider := &mockGatewayProvider{}
+	gatewayClassifier := security.NewLLMClassifier(mockProvider, "eval-security-gateway", 5*time.Second)
+	watchdog.SetClassifier(gatewayClassifier)
 
 	runner := NewEvalRunner(DefaultCorpus())
 	report, err := runner.Run(watchdog, access)
@@ -19,7 +162,11 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 		t.Fatalf("eval runner failed: %v", err)
 	}
 
-	t.Logf("Adversarial Evaluation Report:")
+	if mockProvider.CallCount() == 0 {
+		t.Fatalf("LLM security gateway classifier was not invoked during corpus evaluation")
+	}
+
+	t.Logf("Adversarial Evaluation Report (LLM Security Gateway):")
 	t.Logf("  Total Cases:     %d", report.Metrics.TotalCases)
 	t.Logf("  Benign Cases:    %d", report.Metrics.BenignCases)
 	t.Logf("  Malicious Cases: %d", report.Metrics.MaliciousCases)
@@ -27,6 +174,7 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 	t.Logf("  False Locks:     %d (rate: %.2f%%)", report.Metrics.FalseLocks, report.Metrics.FalseLockRate*100)
 	t.Logf("  Severe Misses:   %d (rate: %.2f%%)", report.Metrics.SevereMisses, report.Metrics.SevereMissRate*100)
 	t.Logf("  Accuracy:        %.2f%%", report.Metrics.Accuracy*100)
+	t.Logf("  Gateway Calls:   %d", mockProvider.CallCount())
 
 	if len(report.Failures) > 0 {
 		for _, f := range report.Failures {
@@ -45,12 +193,42 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 	}
 }
 
+func TestAdversarialCorpusEvaluation_GatewayFailClosed(t *testing.T) {
+	tempDir := t.TempDir()
+	access := security.NewAccessStore(filepath.Join(tempDir, "failclosed_access.json"))
+	watchdog := security.NewWatchdog(access, nil)
+
+	mockProvider := &mockGatewayProvider{err: errors.New("upstream gateway connection reset")}
+	gatewayClassifier := security.NewLLMClassifier(mockProvider, "eval-security-gateway", 5*time.Second)
+	watchdog.SetClassifier(gatewayClassifier)
+
+	runner := NewEvalRunner(DefaultCorpus())
+	report, err := runner.Run(watchdog, access)
+	if err != nil {
+		t.Fatalf("eval runner failed: %v", err)
+	}
+
+	// Under Option A fail-closed, every case must be blocked and false locks must remain 0
+	if report.Metrics.FalseLocks > 0 {
+		t.Fatalf("fail-closed mode must never lock principals, got %d false locks", report.Metrics.FalseLocks)
+	}
+
+	for _, outcome := range report.Cases {
+		if outcome.Action != security.WatchdogBlock {
+			t.Errorf("case %s expected WatchdogBlock under gateway failure, got %s", outcome.ID, outcome.Action)
+		}
+		if outcome.Locked {
+			t.Errorf("case %s locked unexpectedly during gateway failure", outcome.ID)
+		}
+	}
+}
+
 func TestRepeatedEvasionSuite(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "evasion_access.json"))
 	audit := security.NewAuditStore(filepath.Join(tempDir, "evasion_audit.jsonl"), 100)
 	watchdog := security.NewWatchdog(access, audit)
-	watchdog.SetClassifier(security.NewCalibratedClassifier())
+	watchdog.SetClassifier(&scriptedPlumbingStub{})
 
 	runner := NewEvalRunner(nil)
 	if err := runner.RunRepeatedEvasionSuite(watchdog, access); err != nil {
@@ -63,7 +241,7 @@ func TestCrossInstanceConsistencySuite(t *testing.T) {
 	path := filepath.Join(tempDir, "cross_access.json")
 
 	runner := NewEvalRunner(nil)
-	if err := runner.RunCrossInstanceConsistencySuite(path); err != nil {
+	if err := runner.RunCrossInstanceConsistencySuite(path, &scriptedPlumbingStub{}); err != nil {
 		t.Fatalf("cross-instance consistency suite failed: %v", err)
 	}
 }
@@ -72,7 +250,7 @@ func TestPolicyThresholdsSeparation(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "threshold_access.json"))
 	watchdog := security.NewWatchdog(access, nil)
-	watchdog.SetClassifier(security.NewCalibratedClassifier())
+	watchdog.SetClassifier(&scriptedPlumbingStub{})
 
 	p, err := security.NewPrincipal("qq", "synthetic-user-threshold")
 	if err != nil {

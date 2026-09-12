@@ -99,9 +99,7 @@ func TestClassifierFailClosedOnError(t *testing.T) {
 			wd := NewWatchdog(access, nil)
 
 			llmCls := NewLLMClassifier(tc.provider, "test-gateway", 50*time.Millisecond)
-			// Exercise production HybridClassifier path under Option A fail-closed guarantee
-			hybrid := NewHybridClassifier(llmCls, NewCalibratedClassifier())
-			wd.SetClassifier(hybrid)
+			wd.SetClassifier(llmCls)
 
 			principal := testPrincipal(t, "test-platform", "fail-closed-actor")
 
@@ -132,7 +130,7 @@ func TestClassifierFailClosedOnError(t *testing.T) {
 
 // TestLLMStructuredOutputValidation verifies that invalid, malformed, out-of-bounds,
 // or contradictory LLM JSON output is strictly rejected by ClassificationResult.Validate()
-// and causes the classifier to report an error, allowing HybridClassifier to safely fall back.
+// and causes the classifier to report an error, allowing Watchdog to safely fail closed.
 func TestLLMStructuredOutputValidation(t *testing.T) {
 	invalidResponses := []struct {
 		name        string
@@ -245,18 +243,10 @@ func TestLLMStructuredOutputValidation(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tc.expectedErr, err.Error())
 			}
 
-			// Under Option A (strict fail-closed), HybridClassifier propagates LLM errors and validation failures
-			// to Watchdog, ensuring guaranteed content block without punishing the user.
-			hybrid := NewHybridClassifier(cls, NewCalibratedClassifier())
-			_, hybridErr := hybrid.Classify(context.Background(), input)
-			if hybridErr == nil {
-				t.Fatalf("expected hybrid classifier to propagate validation error for %s, got nil", tc.name)
-			}
-
 			// When evaluated through Watchdog in production mode, this results in fail-closed WatchdogBlock with 0 strikes and no lock
 			access := NewAccessStore(t.TempDir() + "/access.json")
 			wd := NewWatchdog(access, nil)
-			wd.SetClassifier(hybrid)
+			wd.SetClassifier(cls)
 			principal := testPrincipal(t, "test-platform", "test-user")
 			decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, "test content", AuditEvent{})
 			if decision.Action != WatchdogBlock {
@@ -311,10 +301,10 @@ func TestClassificationResultValidateInvariants(t *testing.T) {
 	}
 }
 
-// TestHybridClassifierInvokesLLMAndParsesResponse verifies the complete pipeline:
+// TestLLMClassifierInvokesProviderAndParsesResponse verifies the complete pipeline:
 // LLM prompt formatted with XML tags <content>...</content>, JSON response parsed,
 // and decision properly rendered.
-func TestHybridClassifierInvokesLLMAndParsesResponse(t *testing.T) {
+func TestLLMClassifierInvokesProviderAndParsesResponse(t *testing.T) {
 	mock := &mockLLMProvider{
 		response: `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.95, "reason": "semantic injection detected"}`,
 	}
@@ -378,63 +368,6 @@ func TestIntentBenignCannotAccrueStrikesOrLock(t *testing.T) {
 	}
 	if len(record.StrikeTimes) != 0 {
 		t.Fatalf("actor with benign intent must have 0 strikes, got %d", len(record.StrikeTimes))
-	}
-}
-
-// TestLinuxCpCommandNotClassifiedAsExploitation verifies that normal Linux 'cp' commands
-// are not misclassified as child exploitation (vulgarity/platform policy) by the deterministic
-// fallback classifier and never result in false blocks or false locks.
-func TestLinuxCpCommandNotClassifiedAsExploitation(t *testing.T) {
-	calibrated := NewCalibratedClassifier()
-	access := NewAccessStore(t.TempDir() + "/access.json")
-	wd := NewWatchdog(access, nil)
-	wd.SetClassifier(calibrated)
-
-	principal := testPrincipal(t, "test-platform", "cp-command-user")
-
-	commands := []string{
-		"cp a.txt b.txt",
-		"cp -r /path/to/src /path/to/dst",
-		"cp config.example.json config.json",
-		"use cp to copy files in linux",
-	}
-
-	for _, cmd := range commands {
-		input := ClassificationInput{
-			Content:    cmd,
-			Normalized: cmd,
-			Stage:      StageIngress,
-			Origin:     SourceUserDirect,
-		}
-		res, err := calibrated.Classify(context.Background(), input)
-		if err != nil {
-			t.Fatalf("unexpected error for %q: %v", cmd, err)
-		}
-		if res.Category == RiskCategoryVulgarity {
-			t.Fatalf("command %q misclassified as vulgarity/child exploitation: %+v", cmd, res)
-		}
-		if res.IsRisky() {
-			t.Fatalf("command %q misclassified as risky: %+v", cmd, res)
-		}
-
-		// Repeat 5 times through Watchdog to ensure zero strikes and no lock
-		for i := range 5 {
-			decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, cmd, AuditEvent{})
-			if decision.Action != WatchdogPass {
-				t.Fatalf("command %q iteration %d expected WatchdogPass, got %s", cmd, i, decision.Action)
-			}
-		}
-	}
-
-	if wd.IsLocked(principal) {
-		t.Fatal("normal cp usage must not lock user")
-	}
-	locked, record, err := access.IsLocked(principal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if locked || len(record.StrikeTimes) != 0 {
-		t.Fatalf("normal cp usage must have 0 strikes and not locked: locked=%v, strikes=%d", locked, len(record.StrikeTimes))
 	}
 }
 
@@ -599,10 +532,9 @@ func TestTransformedInputRawClassificationErrorFailsClosed(t *testing.T) {
 
 			access := NewAccessStore(t.TempDir() + "/access.json")
 			llmCls := NewLLMClassifier(provider, "test-model", time.Second)
-			hybrid := NewHybridClassifier(llmCls, NewCalibratedClassifier())
 
 			wd := NewWatchdog(access, nil)
-			wd.SetClassifier(hybrid)
+			wd.SetClassifier(llmCls)
 
 			principal := testPrincipal(t, "test-platform", "user-transformed-failclosed-"+tc.name)
 			// Input where rawContent != normalized (contains zero-width space)
