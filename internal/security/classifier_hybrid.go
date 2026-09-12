@@ -2,10 +2,14 @@ package security
 
 import (
 	"context"
+	"fmt"
 )
 
 // HybridClassifier coordinates an LLM-based security gateway with a local
-// deterministic calibrated fallback to guarantee high robustness and offline resiliency.
+// deterministic calibrated fallback. In production mode (when an LLM classifier is configured),
+// classifier errors, timeouts, and validation failures strictly fail-closed (Option A),
+// returning an error to Watchdog to ensure content is blocked without penalizing the user.
+// In offline or disabled mode (when LLM is nil), the deterministic calibrated classifier is used.
 type HybridClassifier struct {
 	llm      *LLMClassifier
 	fallback *CalibratedClassifier
@@ -29,16 +33,22 @@ func (h *HybridClassifier) LLM() *LLMClassifier {
 	return h.llm
 }
 
+func (h *HybridClassifier) Fallback() *CalibratedClassifier {
+	return h.fallback
+}
+
 func (h *HybridClassifier) Classify(ctx context.Context, input ClassificationInput) (ClassificationResult, error) {
 	if h.llm != nil {
 		res, err := h.llm.Classify(ctx, input)
-		if err == nil && res.Validate() == nil {
-			return res, nil
+		if err != nil {
+			return ClassificationResult{}, fmt.Errorf("hybrid llm gateway error: %w", err)
 		}
+		return res, nil
 	}
 	if h.fallback == nil {
 		h.fallback = NewCalibratedClassifier()
 	}
-	// Fallback to local calibrated classifier
+	// Fallback to local calibrated classifier in offline/no-LLM mode
 	return h.fallback.Classify(ctx, input)
 }
+

@@ -375,11 +375,17 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		}
 	}
 
-	rawInput := normInput
-	rawInput.Normalized = rawContent
-	rawClassification, errRaw := classifier.Classify(ctx, rawInput)
-	if errRaw != nil {
+	var rawClassification ClassificationResult
+	if classifierErr || rawContent == normalized {
 		rawClassification = normClassification
+	} else {
+		rawInput := normInput
+		rawInput.Normalized = rawContent
+		var errRaw error
+		rawClassification, errRaw = classifier.Classify(ctx, rawInput)
+		if errRaw != nil {
+			rawClassification = normClassification
+		}
 	}
 
 	rawMatches := rawClassification.IsRisky()
