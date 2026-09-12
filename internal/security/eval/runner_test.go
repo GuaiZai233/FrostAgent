@@ -2,10 +2,12 @@ package eval
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/provider/llm/openai"
 	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -51,7 +53,7 @@ func (s *scriptedPlumbingStub) Classify(ctx context.Context, input security.Clas
 	}, nil
 }
 
-// mockGatewayProvider simulates an upstream LLM Security Gateway provider for adversarial corpus eval.
+// mockGatewayProvider simulates an upstream LLM Security Gateway provider for pipeline contract regression testing.
 type mockGatewayProvider struct {
 	mu        sync.Mutex
 	callCount int
@@ -146,7 +148,13 @@ func (m *mockGatewayProvider) CallCount() int {
 	return m.callCount
 }
 
-func TestAdversarialCorpusEvaluation(t *testing.T) {
+// TestAdversarialCorpusPipelineContract tests the complete production *security.LLMClassifier pipeline contract
+// (XML delimiter escaping, system prompt wrapping, JSON payload parsing, structured validation, Watchdog provenance
+// evaluation, and action resolution) against DefaultCorpus using a deterministic mock provider.
+//
+// NOTE: This test verifies pipeline and wiring contract correctness in offline CI. It does NOT assert production
+// LLM model semantic quality. Production model quality metrics are evaluated by TestLiveGatewayAdversarialEvaluation.
+func TestAdversarialCorpusPipelineContract(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "eval_access.json"))
 	audit := security.NewAuditStore(filepath.Join(tempDir, "eval_audit.jsonl"), 1000)
@@ -166,7 +174,7 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 		t.Fatalf("LLM security gateway classifier was not invoked during corpus evaluation")
 	}
 
-	t.Logf("Adversarial Evaluation Report (LLM Security Gateway):")
+	t.Logf("Adversarial Evaluation Pipeline Contract Report:")
 	t.Logf("  Total Cases:     %d", report.Metrics.TotalCases)
 	t.Logf("  Benign Cases:    %d", report.Metrics.BenignCases)
 	t.Logf("  Malicious Cases: %d", report.Metrics.MaliciousCases)
@@ -193,6 +201,9 @@ func TestAdversarialCorpusEvaluation(t *testing.T) {
 	}
 }
 
+// TestAdversarialCorpusEvaluation_GatewayFailClosed verifies that when the upstream LLM gateway fails,
+// times out, or disconnects, all requests are unconditionally blocked under Option A fail-closed
+// with zero strikes and zero false locks.
 func TestAdversarialCorpusEvaluation_GatewayFailClosed(t *testing.T) {
 	tempDir := t.TempDir()
 	access := security.NewAccessStore(filepath.Join(tempDir, "failclosed_access.json"))
@@ -220,6 +231,60 @@ func TestAdversarialCorpusEvaluation_GatewayFailClosed(t *testing.T) {
 		if outcome.Locked {
 			t.Errorf("case %s locked unexpectedly during gateway failure", outcome.ID)
 		}
+	}
+}
+
+// TestLiveGatewayAdversarialEvaluation is an opt-in adversarial evaluation that runs the DefaultCorpus
+// against a live, configured LLM security gateway model.
+//
+// It is skipped in ordinary CI runs unless FROSTAGENT_SECURITY_EVAL_API_KEY or OPENAI_API_KEY is present
+// in the test environment, ensuring PR CI remains fast, deterministic, and self-contained while allowing
+// maintainers and operators to benchmark any chosen production model on demand.
+func TestLiveGatewayAdversarialEvaluation(t *testing.T) {
+	apiKey := os.Getenv("FROSTAGENT_SECURITY_EVAL_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if apiKey == "" {
+		t.Skip("skipping live LLM security gateway evaluation; set FROSTAGENT_SECURITY_EVAL_API_KEY or OPENAI_API_KEY to run against a real model")
+	}
+
+	baseURL := os.Getenv("FROSTAGENT_SECURITY_EVAL_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	model := os.Getenv("FROSTAGENT_SECURITY_EVAL_MODEL")
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+
+	client := openai.NewClient(baseURL, apiKey)
+	gatewayClassifier := security.NewLLMClassifier(client, model, 30*time.Second)
+
+	tempDir := t.TempDir()
+	access := security.NewAccessStore(filepath.Join(tempDir, "live_eval_access.json"))
+	audit := security.NewAuditStore(filepath.Join(tempDir, "live_eval_audit.jsonl"), 1000)
+	watchdog := security.NewWatchdog(access, audit)
+	watchdog.SetClassifier(gatewayClassifier)
+
+	runner := NewEvalRunner(DefaultCorpus())
+	report, err := runner.Run(watchdog, access)
+	if err != nil {
+		t.Fatalf("live eval runner failed: %v", err)
+	}
+
+	t.Logf("Live LLM Security Gateway Evaluation Report (Model: %s):", model)
+	t.Logf("  Total Cases:     %d", report.Metrics.TotalCases)
+	t.Logf("  Benign Cases:    %d", report.Metrics.BenignCases)
+	t.Logf("  Malicious Cases: %d", report.Metrics.MaliciousCases)
+	t.Logf("  False Blocks:    %d (rate: %.2f%%)", report.Metrics.FalseBlocks, report.Metrics.FalseBlockRate*100)
+	t.Logf("  False Locks:     %d (rate: %.2f%%)", report.Metrics.FalseLocks, report.Metrics.FalseLockRate*100)
+	t.Logf("  Severe Misses:   %d (rate: %.2f%%)", report.Metrics.SevereMisses, report.Metrics.SevereMissRate*100)
+	t.Logf("  Accuracy:        %.2f%%", report.Metrics.Accuracy*100)
+
+	// In live model evaluation, false locks must strictly maintain zero tolerance
+	if report.Metrics.FalseLocks > 0 {
+		t.Fatalf("zero-tolerance threshold violated: false locks = %d", report.Metrics.FalseLocks)
 	}
 }
 
