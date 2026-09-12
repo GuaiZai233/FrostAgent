@@ -123,6 +123,46 @@ func TestLLMStructuredOutputValidation(t *testing.T) {
 		expectedErr string
 	}{
 		{
+			name:        "EmptyObject",
+			jsonOutput:  `{}`,
+			expectedErr: "missing required field: category",
+		},
+		{
+			name:        "MissingIntentAndConfidence",
+			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high"}`,
+			expectedErr: "missing required field: intent",
+		},
+		{
+			name:        "MissingConfidence",
+			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious"}`,
+			expectedErr: "missing required field: confidence",
+		},
+		{
+			name:        "MissingCategory",
+			jsonOutput:  `{"risk_level": "high", "intent": "malicious", "confidence": 0.9}`,
+			expectedErr: "missing required field: category",
+		},
+		{
+			name:        "MissingRiskLevel",
+			jsonOutput:  `{"category": "prompt_injection", "intent": "malicious", "confidence": 0.9}`,
+			expectedErr: "missing required field: risk_level",
+		},
+		{
+			name:        "EmptyStringCategory",
+			jsonOutput:  `{"category": "", "risk_level": "none", "intent": "benign", "confidence": 0.0}`,
+			expectedErr: "empty required field: category",
+		},
+		{
+			name:        "EmptyStringRiskLevel",
+			jsonOutput:  `{"category": "none", "risk_level": "", "intent": "benign", "confidence": 0.0}`,
+			expectedErr: "empty required field: risk_level",
+		},
+		{
+			name:        "EmptyStringIntent",
+			jsonOutput:  `{"category": "none", "risk_level": "none", "intent": "", "confidence": 0.0}`,
+			expectedErr: "empty required field: intent",
+		},
+		{
 			name:        "MalformedJSON",
 			jsonOutput:  `{"category": "prompt_injection", `,
 			expectedErr: "parse llm classification json",
@@ -266,5 +306,97 @@ func TestHybridClassifierInvokesLLMAndParsesResponse(t *testing.T) {
 	}
 	if decision.Classification == nil || decision.Classification.Category != RiskCategoryPromptInjection {
 		t.Fatalf("expected RiskCategoryPromptInjection, got %+v", decision.Classification)
+	}
+}
+
+// TestIntentBenignCannotAccrueStrikesOrLock verifies that when a classifier returns
+// HIGH risk content with IntentBenign and high confidence, the content is blocked
+// but the user NEVER accumulates strikes or gets locked, even after repeated submissions.
+func TestIntentBenignCannotAccrueStrikesOrLock(t *testing.T) {
+	mock := &mockLLMProvider{
+		response: `{"category": "malicious_execution", "risk_level": "high", "intent": "benign", "confidence": 0.95, "reason": "educational discussion of dangerous commands"}`,
+	}
+	access := NewAccessStore(t.TempDir() + "/access.json")
+	wd := NewWatchdogWithProvider(access, nil, mock, "security-gateway")
+
+	principal := testPrincipal(t, "test-platform", "benign-actor-1")
+
+	// Submit repeated high-risk, benign-intent content 5 times
+	for i := range 5 {
+		decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, "explain why rm -rf / is dangerous", AuditEvent{})
+		if decision.Action != WatchdogBlock {
+			t.Fatalf("iteration %d: expected WatchdogBlock, got %s", i, decision.Action)
+		}
+		if wd.IsLocked(principal) {
+			t.Fatalf("iteration %d: actor with benign intent must not be locked", i)
+		}
+	}
+
+	locked, record, err := access.IsLocked(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("actor with benign intent must not be locked in access store")
+	}
+	if len(record.StrikeTimes) != 0 {
+		t.Fatalf("actor with benign intent must have 0 strikes, got %d", len(record.StrikeTimes))
+	}
+}
+
+// TestLinuxCpCommandNotClassifiedAsExploitation verifies that normal Linux 'cp' commands
+// are not misclassified as child exploitation (vulgarity/platform policy) by the deterministic
+// fallback classifier and never result in false blocks or false locks.
+func TestLinuxCpCommandNotClassifiedAsExploitation(t *testing.T) {
+	calibrated := NewCalibratedClassifier()
+	access := NewAccessStore(t.TempDir() + "/access.json")
+	wd := NewWatchdog(access, nil)
+	wd.SetClassifier(calibrated)
+
+	principal := testPrincipal(t, "test-platform", "cp-command-user")
+
+	commands := []string{
+		"cp a.txt b.txt",
+		"cp -r /path/to/src /path/to/dst",
+		"cp config.example.json config.json",
+		"use cp to copy files in linux",
+	}
+
+	for _, cmd := range commands {
+		input := ClassificationInput{
+			Content:    cmd,
+			Normalized: cmd,
+			Stage:      StageIngress,
+			Origin:     SourceUserDirect,
+		}
+		res, err := calibrated.Classify(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", cmd, err)
+		}
+		if res.Category == RiskCategoryVulgarity {
+			t.Fatalf("command %q misclassified as vulgarity/child exploitation: %+v", cmd, res)
+		}
+		if res.IsRisky() {
+			t.Fatalf("command %q misclassified as risky: %+v", cmd, res)
+		}
+
+		// Repeat 5 times through Watchdog to ensure zero strikes and no lock
+		for i := range 5 {
+			decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, cmd, AuditEvent{})
+			if decision.Action != WatchdogPass {
+				t.Fatalf("command %q iteration %d expected WatchdogPass, got %s", cmd, i, decision.Action)
+			}
+		}
+	}
+
+	if wd.IsLocked(principal) {
+		t.Fatal("normal cp usage must not lock user")
+	}
+	locked, record, err := access.IsLocked(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked || len(record.StrikeTimes) != 0 {
+		t.Fatalf("normal cp usage must have 0 strikes and not locked: locked=%v, strikes=%d", locked, len(record.StrikeTimes))
 	}
 }

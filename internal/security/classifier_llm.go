@@ -54,11 +54,11 @@ func NewLLMClassifier(provider core.LLMProvider, model string, timeout time.Dura
 }
 
 type llmResponsePayload struct {
-	Category   string  `json:"category"`
-	RiskLevel  string  `json:"risk_level"`
-	Intent     string  `json:"intent"`
-	Confidence float64 `json:"confidence"`
-	Reason     string  `json:"reason"`
+	Category   *string  `json:"category"`
+	RiskLevel  *string  `json:"risk_level"`
+	Intent     *string  `json:"intent"`
+	Confidence *float64 `json:"confidence"`
+	Reason     *string  `json:"reason"`
 }
 
 func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput) (ClassificationResult, error) {
@@ -111,26 +111,53 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 		return ClassificationResult{}, fmt.Errorf("parse llm classification json: %w (raw: %s)", err, rawText)
 	}
 
-	category, okCat := NormalizeRiskCategory(payload.Category)
+	if payload.Category == nil {
+		return ClassificationResult{}, errors.New("missing required field: category")
+	}
+	if strings.TrimSpace(*payload.Category) == "" {
+		return ClassificationResult{}, errors.New("empty required field: category")
+	}
+	if payload.RiskLevel == nil {
+		return ClassificationResult{}, errors.New("missing required field: risk_level")
+	}
+	if strings.TrimSpace(*payload.RiskLevel) == "" {
+		return ClassificationResult{}, errors.New("empty required field: risk_level")
+	}
+	if payload.Intent == nil {
+		return ClassificationResult{}, errors.New("missing required field: intent")
+	}
+	if strings.TrimSpace(*payload.Intent) == "" {
+		return ClassificationResult{}, errors.New("empty required field: intent")
+	}
+	if payload.Confidence == nil {
+		return ClassificationResult{}, errors.New("missing required field: confidence")
+	}
+
+	category, okCat := NormalizeRiskCategory(*payload.Category)
 	if !okCat {
-		return ClassificationResult{}, fmt.Errorf("unknown category from llm: %q", payload.Category)
+		return ClassificationResult{}, fmt.Errorf("unknown category from llm: %q", *payload.Category)
 	}
-	level, okLvl := NormalizeRiskLevel(payload.RiskLevel)
+	level, okLvl := NormalizeRiskLevel(*payload.RiskLevel)
 	if !okLvl {
-		return ClassificationResult{}, fmt.Errorf("unknown risk_level from llm: %q", payload.RiskLevel)
+		return ClassificationResult{}, fmt.Errorf("unknown risk_level from llm: %q", *payload.RiskLevel)
 	}
-	intent, okInt := NormalizeActorIntent(payload.Intent)
+	intent, okInt := NormalizeActorIntent(*payload.Intent)
 	if !okInt {
-		return ClassificationResult{}, fmt.Errorf("unknown intent from llm: %q", payload.Intent)
+		return ClassificationResult{}, fmt.Errorf("unknown intent from llm: %q", *payload.Intent)
+	}
+
+	reason := ""
+	if payload.Reason != nil {
+		reason = *payload.Reason
 	}
 
 	res := ClassificationResult{
 		Category:   category,
 		RiskLevel:  level,
 		Intent:     intent,
-		Confidence: payload.Confidence,
+		Confidence: *payload.Confidence,
 		Origin:     input.Origin,
-		Reason:     payload.Reason,
+		Reason:     reason,
 	}
 
 	if err := res.Validate(); err != nil {

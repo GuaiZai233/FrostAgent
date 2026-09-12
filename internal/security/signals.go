@@ -44,7 +44,7 @@ func (c RiskCategory) IsValid() bool {
 func NormalizeRiskCategory(s string) (RiskCategory, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "none", "":
+	case "none":
 		return RiskCategoryNone, true
 	case "prompt_injection", "promptinjection", "jailbreak":
 		return RiskCategoryPromptInjection, true
@@ -92,7 +92,7 @@ func (l RiskLevel) IsValid() bool {
 func NormalizeRiskLevel(s string) (RiskLevel, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "none", "":
+	case "none":
 		return RiskLevelNone, true
 	case "low":
 		return RiskLevelLow, true
@@ -128,7 +128,7 @@ func (i ActorIntent) IsValid() bool {
 func NormalizeActorIntent(s string) (ActorIntent, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "benign", "":
+	case "benign":
 		return IntentBenign, true
 	case "ambiguous":
 		return IntentAmbiguous, true

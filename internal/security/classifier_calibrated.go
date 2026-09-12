@@ -250,7 +250,7 @@ var platformPolicyPatterns = []struct {
 	category RiskCategory
 	desc     string
 }{
-	{regexp.MustCompile(`(?i)\b(child\s*porn|cp|pedophilia|csam)\b`), RiskCategoryVulgarity, "child_exploitation"},
+	{regexp.MustCompile(`(?i)\b(child\s*porn(?:ography)?|pedophilia|paedophilia|csam)\b`), RiskCategoryVulgarity, "child_exploitation"},
 	{regexp.MustCompile(`(?i)(制造|合成)(炸药|毒品|爆炸物|炭疽|沙林)`), RiskCategoryViolence, "weapons_contraband"},
 	{regexp.MustCompile(`(?i)(代开|办理|出售)(假发票|假证件|高仿枪支)`), RiskCategoryFraud, "illicit_services"},
 	{regexp.MustCompile(`(?i)(境外特务|煽动颠覆|分裂国家)`), RiskCategoryPolitical, "political_extremism"},

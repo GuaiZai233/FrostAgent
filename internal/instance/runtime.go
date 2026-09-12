@@ -87,7 +87,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflectionProvider := routerManager.Provider(modelrouter.WorkloadReflection, false, memoryConfig.ReflectTimeout)
 	securityProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 5*time.Second)
 	if securityController != nil {
-		securityController.SetLLMProvider(securityProvider, "model-router-security-gateway")
+		if enabled {
+			securityController.SetInstanceProvider(instanceID, securityProvider, "model-router-security-gateway")
+		} else {
+			securityController.RemoveInstanceProvider(instanceID)
+		}
 	}
 
 	// Initialize memory system

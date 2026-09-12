@@ -165,20 +165,23 @@ func (s *AuditStore) List(limit int) ([]AuditEvent, error) {
 // Watchdog evaluates content and never directly locks on model/tool output.
 // Locking is reserved for active, repeatable, attributable user behavior.
 type Watchdog struct {
-	access       *AccessStore
-	audit        *AuditStore
-	classifier   Classifier
-	strikeWindow time.Duration
-	lockAfter    int
+	mu                  sync.RWMutex
+	access              *AccessStore
+	audit               *AuditStore
+	classifier          Classifier
+	instanceClassifiers map[string]Classifier
+	strikeWindow        time.Duration
+	lockAfter           int
 }
 
 func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
 	return &Watchdog{
-		access:       access,
-		audit:        audit,
-		classifier:   NewHybridClassifier(nil, NewCalibratedClassifier()),
-		strikeWindow: 15 * time.Minute,
-		lockAfter:    3,
+		access:              access,
+		audit:               audit,
+		classifier:          NewHybridClassifier(nil, NewCalibratedClassifier()),
+		instanceClassifiers: make(map[string]Classifier),
+		strikeWindow:        15 * time.Minute,
+		lockAfter:           3,
 	}
 }
 
@@ -191,6 +194,11 @@ func NewWatchdogWithProvider(access *AccessStore, audit *AuditStore, provider co
 }
 
 func (w *Watchdog) SetClassifier(classifier Classifier) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if classifier != nil {
 		w.classifier = classifier
 	}
@@ -200,6 +208,8 @@ func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
 	if w == nil {
 		return
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if provider == nil {
 		w.classifier = NewCalibratedClassifier()
 		return
@@ -211,7 +221,73 @@ func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
 	w.classifier = NewHybridClassifier(llmCls, NewCalibratedClassifier())
 }
 
+func (w *Watchdog) SetInstanceProvider(instanceID string, provider core.LLMProvider, model string) {
+	if w == nil || instanceID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.instanceClassifiers == nil {
+		w.instanceClassifiers = make(map[string]Classifier)
+	}
+	if provider == nil {
+		delete(w.instanceClassifiers, instanceID)
+		return
+	}
+	if model == "" {
+		model = "security-gateway"
+	}
+	llmCls := NewLLMClassifier(provider, model, 5*time.Second)
+	w.instanceClassifiers[instanceID] = NewHybridClassifier(llmCls, NewCalibratedClassifier())
+}
+
+func (w *Watchdog) SetInstanceClassifier(instanceID string, classifier Classifier) {
+	if w == nil || instanceID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.instanceClassifiers == nil {
+		w.instanceClassifiers = make(map[string]Classifier)
+	}
+	if classifier == nil {
+		delete(w.instanceClassifiers, instanceID)
+		return
+	}
+	w.instanceClassifiers[instanceID] = classifier
+}
+
+func (w *Watchdog) RemoveInstanceProvider(instanceID string) {
+	if w == nil || instanceID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.instanceClassifiers != nil {
+		delete(w.instanceClassifiers, instanceID)
+	}
+}
+
 func (w *Watchdog) Classifier() Classifier {
+	if w == nil {
+		return nil
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.classifier
+}
+
+func (w *Watchdog) ClassifierForInstance(instanceID string) Classifier {
+	if w == nil {
+		return nil
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if instanceID != "" && w.instanceClassifiers != nil {
+		if cls, ok := w.instanceClassifiers[instanceID]; ok {
+			return cls
+		}
+	}
 	return w.classifier
 }
 
@@ -259,7 +335,17 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		hasPriorBlock = lastBlockedHash != ""
 	}
 
-	classifier := w.classifier
+	var classifier Classifier
+	if w != nil {
+		w.mu.RLock()
+		if meta.Instance != "" && w.instanceClassifiers != nil {
+			classifier = w.instanceClassifiers[meta.Instance]
+		}
+		if classifier == nil {
+			classifier = w.classifier
+		}
+		w.mu.RUnlock()
+	}
 	if classifier == nil {
 		classifier = NewCalibratedClassifier()
 	}
@@ -325,8 +411,9 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		} else {
 			switch source {
 			case SourceUserDirect:
-				// A single ambiguous classifier result cannot lock or strike a principal
-				if classification.Intent == IntentAmbiguous || classification.Confidence < 0.70 {
+				// Only attributable malicious intent with high confidence can accumulate strikes or lock a principal.
+				// Benign or ambiguous intent, as well as low-confidence results, strictly block content without penalizing the user.
+				if classification.Intent != IntentMalicious || classification.Confidence < 0.70 {
 					action = WatchdogBlock
 				} else {
 					strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
