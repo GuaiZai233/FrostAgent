@@ -384,7 +384,16 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		var errRaw error
 		rawClassification, errRaw = classifier.Classify(ctx, rawInput)
 		if errRaw != nil {
-			rawClassification = normClassification
+			classifierErr = true
+			rawClassification = ClassificationResult{
+				Category:   RiskCategoryPromptInjection,
+				RiskLevel:  RiskLevelHigh,
+				Intent:     IntentAmbiguous,
+				Confidence: 0.90,
+				Origin:     source,
+				Reason:     "classifier evaluation error; fail-closed block",
+			}
+			normClassification = rawClassification
 		}
 	}
 
@@ -392,9 +401,13 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	normMatches := normClassification.IsRisky()
 	if classifierErr {
 		normMatches = true
+		rawMatches = true
 	}
 
-	isEvasion := (!rawMatches && normMatches) || (hasPriorBlock && normHash == lastBlockedHash && rawHash != normHash)
+	isEvasion := false
+	if !classifierErr {
+		isEvasion = (!rawMatches && normMatches) || (hasPriorBlock && normHash == lastBlockedHash && rawHash != normHash)
+	}
 
 	action := WatchdogPass
 	reason := ""

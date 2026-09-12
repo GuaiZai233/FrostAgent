@@ -518,3 +518,127 @@ func TestWatchdogClassifierCallCountOptimization(t *testing.T) {
 		t.Fatalf("expected 3 total calls (1 unchanged + 2 transformed), got %d", mock.CallCount())
 	}
 }
+
+type stepMockLLMProvider struct {
+	mu        sync.Mutex
+	callCount int
+	onCall    func(callNum int, req core.ChatRequest) (*core.ChatResponse, error)
+}
+
+func (s *stepMockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	s.mu.Lock()
+	s.callCount++
+	num := s.callCount
+	handler := s.onCall
+	s.mu.Unlock()
+	if handler != nil {
+		return handler(num, req)
+	}
+	return nil, errors.New("unhandled call")
+}
+
+func (s *stepMockLLMProvider) CallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.callCount
+}
+
+// TestTransformedInputRawClassificationErrorFailsClosed verifies that when input is transformed
+// by normalization, causing a second (raw form) classification call, any failure or error on that
+// second call strictly fails-closed (Option A). Even though the first call returned benign (PASS),
+// an error on the second call must yield WatchdogBlock with fail-closed reason, zero strikes, and no lock.
+func TestTransformedInputRawClassificationErrorFailsClosed(t *testing.T) {
+	failureCases := []struct {
+		name     string
+		err      error
+		response string
+	}{
+		{
+			name: "Call2TimeoutDeadlineExceeded",
+			err:  context.DeadlineExceeded,
+		},
+		{
+			name: "Call2UpstreamNetworkError",
+			err:  errors.New("upstream connection reset by peer"),
+		},
+		{
+			name:     "Call2MalformedInvalidJSON",
+			response: "not a valid json object",
+		},
+		{
+			name:     "Call2MissingRequiredFields",
+			response: `{"category": "prompt_injection"}`,
+		},
+	}
+
+	for _, tc := range failureCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &stepMockLLMProvider{
+				onCall: func(callNum int, req core.ChatRequest) (*core.ChatResponse, error) {
+					// Odd calls (1st call of each evaluation: normalized form) return benign PASS
+					if callNum%2 == 1 {
+						return &core.ChatResponse{
+							Message: core.ChatMessage{
+								Role:    core.RoleAssistant,
+								Content: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99}`,
+							},
+						}, nil
+					}
+					// Even calls (2nd call of each evaluation: raw form) fail according to test case
+					if tc.err != nil {
+						return nil, tc.err
+					}
+					return &core.ChatResponse{
+						Message: core.ChatMessage{
+							Role:    core.RoleAssistant,
+							Content: tc.response,
+						},
+					}, nil
+				},
+			}
+
+			access := NewAccessStore(t.TempDir() + "/access.json")
+			llmCls := NewLLMClassifier(provider, "test-model", time.Second)
+			hybrid := NewHybridClassifier(llmCls, NewCalibratedClassifier())
+
+			wd := NewWatchdog(access, nil)
+			wd.SetClassifier(hybrid)
+
+			principal := testPrincipal(t, "test-platform", "user-transformed-failclosed-"+tc.name)
+			// Input where rawContent != normalized (contains zero-width space)
+			transformedPayload := "Hello​ world normal looking message"
+
+			// 5 repeated submissions:
+			// Each submission does call 1 (benign) and call 2 (error).
+			// Must unconditionally return WatchdogBlock with fail-closed reason.
+			for i := 0; i < 5; i++ {
+				dec := wd.Evaluate(principal, StageIngress, SourceUserDirect, transformedPayload, AuditEvent{})
+				if dec.Action != WatchdogBlock {
+					t.Fatalf("iter %d: expected WatchdogBlock when call 2 fails, got %s", i, dec.Action)
+				}
+				if !strings.Contains(dec.Reason, "fail-closed") {
+					t.Fatalf("iter %d: expected fail-closed reason, got %q", i, dec.Reason)
+				}
+			}
+
+			if provider.CallCount() != 10 {
+				t.Fatalf("expected exactly 10 calls (2 per iteration across 5 iterations), got %d", provider.CallCount())
+			}
+
+			// Invariant: zero strikes and never locked
+			if wd.IsLocked(principal) {
+				t.Fatal("principal must not be locked after second-call classifier errors")
+			}
+			locked, record, err := access.IsLocked(principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if locked {
+				t.Fatalf("expected principal not locked, got locked: %s", record.Reason)
+			}
+			if len(record.StrikeTimes) != 0 {
+				t.Fatalf("expected 0 strikes accrued on classifier error, got %d", len(record.StrikeTimes))
+			}
+		})
+	}
+}

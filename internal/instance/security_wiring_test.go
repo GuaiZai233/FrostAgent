@@ -489,3 +489,91 @@ func TestProductionRuntimeHybridFailClosedOnLLMError(t *testing.T) {
 	}
 }
 
+type stepSecurityLLMProvider struct {
+	mu        sync.Mutex
+	callCount int
+	onCall    func(callNum int, req core.ChatRequest) (*core.ChatResponse, error)
+}
+
+func (s *stepSecurityLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	s.mu.Lock()
+	s.callCount++
+	num := s.callCount
+	handler := s.onCall
+	s.mu.Unlock()
+	if handler != nil {
+		return handler(num, req)
+	}
+	return nil, errors.New("unhandled call")
+}
+
+func (s *stepSecurityLLMProvider) CallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.callCount
+}
+
+// TestProductionRuntimeTransformedInputCall2ErrorFailsClosed verifies Option A strict fail-closed
+// in the production runtime wiring when transformed input causes a second (raw form) classification call
+// and that second call fails. Despite the first call returning benign (PASS), the second call failure
+// must immediately trigger WatchdogBlock with fail-closed reason, zero strikes, and no lock.
+func TestProductionRuntimeTransformedInputCall2ErrorFailsClosed(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "fc-call2-trans")
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	stepProvider := &stepSecurityLLMProvider{
+		onCall: func(callNum int, req core.ChatRequest) (*core.ChatResponse, error) {
+			if callNum%2 == 1 {
+				// 1st call (normalized) succeeds with benign
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99}`,
+					},
+				}, nil
+			}
+			// 2nd call (raw) fails with upstream network error
+			return nil, errors.New("upstream connection reset on raw classification")
+		},
+	}
+
+	secCtrl := m.SecurityController()
+	secCtrl.SetInstanceProvider(info.ID, stepProvider, "model-router-security-gateway")
+
+	engine := m.instances[info.ID].runtime.Engine
+	principal, err := security.NewPrincipal("test-platform", "actor-call2-error")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transformedPayload := "Hello​ safe looking text"
+	for i := 0; i < 5; i++ {
+		dec := engine.Security.GateIngress(principal, transformedPayload, security.AuditEvent{
+			Instance: info.ID,
+			Session:  fmt.Sprintf("sess-%d", i),
+		})
+		if dec.Action != security.WatchdogBlock {
+			t.Fatalf("iter %d: expected WatchdogBlock, got %s", i, dec.Action)
+		}
+		if !strings.Contains(dec.Reason, "fail-closed") {
+			t.Fatalf("iter %d: expected fail-closed reason, got %q", i, dec.Reason)
+		}
+	}
+
+	if stepProvider.CallCount() != 10 {
+		t.Fatalf("expected 10 calls to provider (2 calls per evaluation * 5 iterations), got %d", stepProvider.CallCount())
+	}
+
+	locked, record, err := secCtrl.Access.IsLocked(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked || len(record.StrikeTimes) != 0 {
+		t.Fatalf("expected 0 strikes and not locked, got locked=%v strikes=%d", locked, len(record.StrikeTimes))
+	}
+}
+
+
