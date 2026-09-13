@@ -21,6 +21,7 @@ import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
+import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
@@ -259,6 +260,11 @@ function initAppShell(): void {
     '网页端外观设置',
     mountFrontendSettingsPage,
   );
+  router.register(
+    '/settings/commands',
+    '指令设置',
+    mountCommandSettingsPage,
+  );
   router.register('/model-router', '模型路由器', mountModelRouterPage);
   // Security is a control-plane page and must remain available without an instance.
   router.register('/security', '安全控制', mountSecurityPage);
@@ -273,6 +279,7 @@ function initAppShell(): void {
     '/stickers',
     '/mcp',
     '/settings/backend',
+    '/settings/commands',
     '/model-router',
   ];
   const mounts = [
@@ -284,6 +291,7 @@ function initAppShell(): void {
     mountStickersPage,
     mountMCPPage,
     mountBackendSettingsPage,
+    mountCommandSettingsPage,
     mountModelRouterPage,
   ];
   guardedPaths.forEach((path, index) =>

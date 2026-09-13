@@ -257,6 +257,9 @@ func (e *Engine) RunMessagesWithContext(
 					}
 					sess.SetLastPromptTrace(sysContent, modelName)
 				}
+				var cancelRun func()
+				ctx, _, cancelRun = sess.BeginRun(ctx)
+				defer cancelRun()
 			}
 		}
 	}

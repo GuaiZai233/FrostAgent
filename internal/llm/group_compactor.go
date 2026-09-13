@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -296,6 +297,59 @@ func (c *GroupCompactor) TriggerWithScope(session *SessionContext, owner string,
 	c.Go(func() { c.compact(session, owner, routeScope, snapshot, storeGeneration) })
 }
 
+// ForceCompact manually triggers an immediate compaction for the group session,
+// bypassing the minInterval cooldown and batch threshold (requiring at least 1 message in ring).
+// Optional onComplete callback is invoked when the background compaction completes.
+func (c *GroupCompactor) ForceCompact(
+	session *SessionContext,
+	owner string,
+	routeScope modelrouter.Scope,
+	onComplete ...func(err error),
+) error {
+	if c == nil || session == nil || c.provider == nil || c.model == "" || owner == "" {
+		return errors.New("group compactor unavailable")
+	}
+	key := session.ConversationID
+
+	c.mu.Lock()
+	if c.Context().Err() != nil {
+		c.mu.Unlock()
+		return c.Context().Err()
+	}
+	if c.inflight[key] {
+		c.mu.Unlock()
+		return ErrAlreadyCompacting
+	}
+
+	snapshot, ready := session.SnapshotGroupCompact(1)
+	if !ready {
+		c.mu.Unlock()
+		return ErrNothingToCompact
+	}
+
+	c.cancelScheduledLocked(key)
+	c.inflight[key] = true
+	c.lastRun[key] = time.Now()
+	c.mu.Unlock()
+
+	storeGeneration := uint64(0)
+	if c.store != nil {
+		storeGeneration = c.store.Generation(owner)
+	}
+	c.Go(func() { c.compact(session, owner, routeScope, snapshot, storeGeneration, onComplete...) })
+	return nil
+}
+
+// IsCompacting reports whether compaction is currently in-flight for the given conversation ID.
+func (c *GroupCompactor) IsCompacting(conversationID string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inflight[conversationID]
+}
+
 func (c *GroupCompactor) StopTimers() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -343,6 +397,7 @@ func (c *GroupCompactor) compact(
 	routeScope modelrouter.Scope,
 	snapshot GroupCompactSnapshot,
 	storeGeneration uint64,
+	onComplete ...func(err error),
 ) {
 	succeeded := false
 	defer func() {
@@ -388,23 +443,45 @@ func (c *GroupCompactor) compact(
 	if err != nil {
 		c.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("群聊 running compact LLM调用失败 (%s): %v", owner, err))
 		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 失败 (%s): %v", owner, err))
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(err)
+			}
+		}
 		return
 	}
 	summary, ok := response.Message.Content.(string)
 	summary = strings.TrimSpace(summary)
 	if !ok || summary == "" {
 		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊 running compact 返回空总结 (%s)", owner))
+		compErr := errors.New("empty summary returned")
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(compErr)
+			}
+		}
 		return
 	}
 
 	if !session.CommitGroupCompact(snapshot, summary) {
 		c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
+		compErr := errors.New("compaction aborted due to session reset or change")
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(compErr)
+			}
+		}
 		return
 	}
 	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
+	for _, cb := range onComplete {
+		if cb != nil {
+			cb(nil)
+		}
+	}
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {

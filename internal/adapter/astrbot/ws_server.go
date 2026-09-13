@@ -413,6 +413,23 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						if conn != nil {
+							_ = conn.WriteJSON(Action{
+								Type:      "action",
+								Action:    "noop",
+								SessionID: event.SessionID,
+								Echo:      "reply_" + event.MessageID,
+							})
+						}
+						return
+					}
+				}
+			}
+		}
 	}
 
 	if event.Type != "event" && event.Type != "" {
@@ -557,9 +574,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	var session *llm.SessionContext
+	var startEpoch uint64
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
 		session = engine.SessionManager.GetOrCreate(sessionKey(event))
+		startEpoch = session.Epoch()
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -813,6 +832,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			RouteSnapshot: routeSnapshot,
 		})
 		replyText = runResult.Content
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 
 		if billingState != nil && billingState.BillingActive {
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {

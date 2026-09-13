@@ -6,6 +6,8 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/runtimescope"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"sort"
@@ -154,9 +156,10 @@ type GroupCompactSnapshot struct {
 // separate from the history mutex because a full LLM turn calls methods that
 // briefly lock session state themselves.
 type SessionTurn struct {
-	wait <-chan struct{}
-	done chan struct{}
-	once sync.Once
+	wait  <-chan struct{}
+	done  chan struct{}
+	once  sync.Once
+	epoch uint64
 }
 
 func (t *SessionTurn) Wait() {
@@ -169,6 +172,21 @@ func (t *SessionTurn) Done() {
 	if t != nil {
 		t.once.Do(func() { close(t.done) })
 	}
+}
+
+func (t *SessionTurn) Epoch() uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.epoch
+}
+
+// IsValid reports whether this turn matches the session's current generation epoch.
+func (t *SessionTurn) IsValid(s *SessionContext) bool {
+	if t == nil || s == nil {
+		return true
+	}
+	return t.epoch == s.Epoch()
 }
 
 // DeliveryFailure records a transient failure when an assistant response could not be delivered to the platform.
@@ -213,6 +231,10 @@ type SessionContext struct {
 	mu             sync.Mutex // 保护单个会话的并发访问
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
+
+	activeCancel      context.CancelFunc
+	epoch             uint64
+	privateCompacting bool
 
 	groupCompactSummary    string
 	groupCompactBuffer     []groupCompactItem
@@ -276,9 +298,191 @@ func (s *SessionContext) ReserveTurn() *SessionTurn {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{})}
+	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{}), epoch: s.Epoch()}
 	s.turnTail = turn.done
 	return turn
+}
+
+// Epoch returns the current generation epoch of the session.
+func (s *SessionContext) Epoch() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch
+}
+
+// BeginRun attaches a cancellable context to this session's currently active execution.
+// If another run was active, it is cancelled first.
+// The returned cleanup function must be called when the run ends.
+func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.activeCancel = cancel
+	currentEpoch := s.epoch
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			cancel()
+			s.activeCancel = nil
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelActiveRun immediately aborts any in-flight execution context for this session.
+func (s *SessionContext) CancelActiveRun() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+}
+
+// ResetSession completely resets this session's state:
+// 1. Cancels active in-flight execution context immediately.
+// 2. Increments the epoch to invalidate in-flight or queued FIFO turns.
+// 3. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
+// 4. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
+func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+	s.epoch++
+	s.History = nil
+	s.groupCompactSummary = ""
+	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
+	s.groupCompactGeneration++
+	s.pendingTurns = nil
+	s.extractionThreshold = 0
+	s.deliveryFailure = nil
+	s.lastSystemPrompt = ""
+	s.lastModelName = ""
+	s.privateCompacting = false
+	s.UpdatedAt = time.Now()
+	conversationID := s.ConversationID
+	s.mu.Unlock()
+
+	if groupSummaryStore != nil && conversationID != "" {
+		_ = groupSummaryStore.Delete(conversationID)
+	}
+}
+
+// PrivateCompactSnapshot captures messages to be summarized in private chat.
+type PrivateCompactSnapshot struct {
+	Messages []ChatMessage
+	Count    int
+	Epoch    uint64
+}
+
+var (
+	ErrAlreadyCompacting = errors.New("压缩正在进行中，请勿重复触发。")
+	ErrNothingToCompact  = errors.New("当前没有需要压缩的消息。")
+)
+
+// SnapshotPrivateCompact captures current history for private chat compaction.
+func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error) {
+	if s == nil {
+		return PrivateCompactSnapshot{}, errors.New("会话不可用")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.privateCompacting {
+		return PrivateCompactSnapshot{}, ErrAlreadyCompacting
+	}
+	if len(s.History) == 0 {
+		return PrivateCompactSnapshot{}, ErrNothingToCompact
+	}
+
+	s.privateCompacting = true
+	snapshotMsgs := make([]ChatMessage, len(s.History))
+	copy(snapshotMsgs, s.History)
+
+	return PrivateCompactSnapshot{
+		Messages: snapshotMsgs,
+		Count:    len(s.History),
+		Epoch:    s.epoch,
+	}, nil
+}
+
+// CommitPrivateCompact commits a private chat summary, replacing the summarized messages
+// while preserving messages that arrived during the compaction LLM call.
+func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, summary string) bool {
+	if s == nil {
+		return false
+	}
+	summary = strings.TrimSpace(summary)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { s.privateCompacting = false }()
+
+	if s.epoch != snapshot.Epoch {
+		return false
+	}
+	if summary == "" {
+		return false
+	}
+
+	var remaining []ChatMessage
+	if len(s.History) > snapshot.Count {
+		remaining = append([]ChatMessage(nil), s.History[snapshot.Count:]...)
+	}
+
+	newHistory := []ChatMessage{
+		{Role: "user", Content: "[先前对话总结] " + summary},
+		{Role: "assistant", Content: "了解，我已记住上述先前的对话背景。"},
+	}
+	newHistory = append(newHistory, remaining...)
+
+	s.History = newHistory
+	s.UpdatedAt = time.Now()
+	return true
+}
+
+// CancelPrivateCompact releases the private compaction lock if compaction fails.
+func (s *SessionContext) CancelPrivateCompact() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.privateCompacting = false
+}
+
+// IsPrivateCompacting reports whether private chat compaction is currently in flight.
+func (s *SessionContext) IsPrivateCompacting() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.privateCompacting
 }
 
 // Lock 锁定会话
@@ -963,6 +1167,44 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 	}
 	session.ResetGroupCompact()
 	return true
+}
+
+// ResetSession resets the specified session across canonical keys and aliases,
+// cancelling active generation, clearing history/buffers/summaries, and removing
+// persisted group summary from disk.
+func (sm *SessionManager) ResetSession(sessionID string) {
+	if sm == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	aliases := memory.SessionKeyAliases(sessionID)
+
+	sm.mu.RLock()
+	session, ok := sm.sessions[canonicalID]
+	if !ok {
+		session, ok = sm.sessions[sessionID]
+	}
+	if !ok {
+		for _, alias := range aliases {
+			if s, found := sm.sessions[alias]; found {
+				session = s
+				ok = true
+				break
+			}
+		}
+	}
+	store := sm.groupSummaryStore
+	sm.mu.RUnlock()
+
+	if ok && session != nil {
+		session.ResetSession(store)
+	} else if store != nil {
+		_ = store.Delete(canonicalID)
+	}
 }
 
 // ── core.SessionStore interface implementation ──

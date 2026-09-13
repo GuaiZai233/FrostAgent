@@ -145,6 +145,15 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						return
+					}
+				}
+			}
+		}
 	}
 	if event.PostType != "message" {
 		return
@@ -382,9 +391,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	contextBytes, _ := json.Marshal(contextMap)
 
 	var session *llm.SessionContext
+	var startEpoch uint64
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
 		session = engine.SessionManager.GetOrCreate(historyKey(event))
+		startEpoch = session.Epoch()
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -650,6 +661,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			RouteSnapshot: routeSnapshot,
 		})
 		replyText = runResult.Content
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 
 		// 计费回执处理与历史保护
 		if billingState != nil && billingState.BillingActive {

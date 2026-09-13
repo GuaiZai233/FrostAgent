@@ -159,6 +159,61 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
+### 管理员消息指令系统 (Administrator Message Commands System)
+
+为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：
+
+- **入站早期拦截与管线旁路 (Early Ingress Interception & Pipeline Bypass)**：
+  - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
+  - 即使当前会话被模型路由规则全局禁用、对话模型未配置或处于故障降级状态，管理员运维指令依然具备最高优先级的执行通路与完全可用性；
+  - 指令交互完全旁路对话管线：不向会话持久历史提交消息（`Session.AddMessage`）、不进入群聊未压缩环形缓冲（`groupCompactBuffer`）、不触发记忆提取，杜绝运维指令污染日常对话语境或模型长期记忆。
+- **真实 @ 机器人强门禁 (Real-At Targeting Bot Verification)**：
+  - 无论在群聊还是私聊场景下，触发指令均严格强制要求当前消息显式包含针对 Bot 自身的**真实 @ 提及**；
+  - 严禁裸指令词触发、文本唤醒词误触、自定义别名/代称识别、引用回复偷渡以及历史消息 @ 冒充；
+  - **OneBot 端适配**：严格扫描消息段数组（`[]content.MessageSegment`），仅当匹配到 `seg.Type == "at"` 且目标 QQ 与当前登录账号一致（`seg.Data["qq"] == event.SelfID`）时判定有效，并在判定成功后从消息链中精准剥离该 Bot @ 元素以提取纯指令文本；
+  - **AstrBot 端适配**：严格依赖协议层 `event.IsAt == true` 强元数据标识，并由 `StripLeadingMention` 剔除文本首部的提及前缀。
+- **自适应前缀解析规范 (Adaptive Prefix Parsing)**：
+  - 默认前缀为 `/`，由实例环境变量 `ADMIN_COMMAND_PREFIX` 控制；
+  - **符号型前缀**（以标点符号结尾，如 `/`、`!`、`#`）：允许与指令名直接紧凑相连（如 `@bot /reset`）或留有任意空格（如 `@bot / reset`）；
+  - **单词型前缀**（以字母、数字或文字结尾，如 `execute`、`cmd`、`指令`）：强制要求前缀与后续指令名之间必须存在至少一个空白分隔符（如 `@bot execute reset`），前缀直接粘连（如 `executereset`）将被判定为普通聊天文本而非指令候选；
+  - 指令名称（`reset`, `ban`, `unban`, `compact`, `reflect`）统一解析为不区分大小写的标准小写指令。
+- **Option A 受信身份鉴权与零泄漏静默丢弃 (Option A Auth & Zero-Leak Silent Dropping)**：
+  - 鉴权源严格且仅沿用实例专属环境变量 `ADMIN_QQ_IDS`（以逗号、分号或空白分隔）；未配置或为空时，没有任何用户具备管理员指令权限；
+  - 调用者身份唯一源自协议层提供的真实发送者元数据（`event.UserID`），严禁信任大模型输出、用户昵称、聊天正文自称，亦不向群主、群管理员或 AstrBot 宿主管理员提供任何隐式提权；
+  - **非管理员静默丢弃（防探测）**：对于满足「真实 @ 机器人 + 匹配指令前缀」但发送者非管理员的消息，系统坚决不向聊天端返回任何提示、拒绝信息或报错回复，彻底杜绝普通群友或恶意攻击者探测 Bot 指令系统的存在性：
+    - OneBot 适配器直接返回并中断处理，不发送任何响应动作；
+    - AstrBot 适配器向协议端下发 `Action{Type: "action", Action: "noop", Echo: "reply_" + event.MessageID}` 动作，既优雅关闭了上游平台的等待状态，又不在用户界面产生任何文本输出；
+  - **管理员语法错误提示**：当已鉴权的管理员输入未知指令或参数语法错误时，系统返回紧凑的参数错误说明与当前前缀下的完整指令用法速查卡。
+- **五大核心运维指令语义与调度保障 (Core Command Semantics)**：
+  - **`reset` 会话重置与 In-Flight 及时打断**：
+    - 原子重置当前会话（支持群聊与私聊），清空持久历史记录、内存滚动摘要、未压缩消息缓冲及映射、待处理记忆提取项；
+    - 物理删除 `groupsummary.Store` 磁盘上的持久化群摘要文件；
+    - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
+    - 递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交检测到 Epoch 变动时主动放弃写入持久历史与发送回复；
+    - 回复文本：「当前会话已重置。」；
+  - **`ban <userID>` 全局封禁**：
+    - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；
+    - 防御性拦截：严禁封禁管理员调用者自身，严禁封禁 `ADMIN_QQ_IDS` 列表中的任何管理员；
+    - 跨平台规范化：将目标 ID 映射为标准 QQ Principal（`Principal{Platform: "qq", ID: userID}`）；
+    - 回复文本：「已成功封禁用户 <userID>。」；
+  - **`unban <userID>` 全局解封**：
+    - 通过 `security.Controller.Unlock` 解除目标用户的全局锁定状态；
+    - 回复文本：「已成功解封用户 <userID>。」；
+  - **`compact` 强制即时上下文压缩**：
+    - 突破常规自动化压缩的缓冲区消息条数阈值（`bufferSize`）与时间冷却限制（`minInterval`），立即对当前会话启动总结压缩；
+    - 群聊会话调用 `GroupCompactor.ForceCompact`，私聊会话启动专属单轮压缩工作流并在后台完成原子提交；
+    - 具备防重入状态防护：无可压缩内容或已有压缩任务正在执行时返回友好提示；
+    - 双阶段异步回执：触发时立即发送「已开始...压缩总结...」起始回执（AstrBot 携带 `IsIntermediate: true` 标识），后台异步执行完毕后追发最终成功/失败通知；
+  - **`reflect` 即时记忆反思**：
+    - 针对当前会话所有者（`group:<id>` 或 `private:<id>`）调度 `ReflectionManager.Start` 进行深度记忆反思提炼；
+    - 内部维护互斥运行锁，已有任务进行中时阻止重复触发；
+    - 同样采用起始回执与完成回执的双阶段异步反馈机制。
+- **Web 端指令设置与多实例隔离 (`#/settings/commands`)**：
+  - 前端控制台在「系统设置」第三张卡片独立提供「指令设置」入口（卡片严格排列次序：1. Bot 服务端设置，2. 网页端外观设置，3. 指令设置）；
+  - **路由守卫拦截**：当用户未选择任何激活实例进入 `#/settings/commands` 时，友好提示「请选择实例」，杜绝空指针异常；
+  - **实例级独立持久化与即时生效**：指令前缀配置绑定当前实例环境并写入 `data/instance_<id>/.env`，通过 Runtime Scope 内存映射热生效，互不串扰、不产生跨实例污染；
+  - **动态语法联动预览**：前缀修改时，页面自适应动态刷新并重绘 5 种核心指令的标准调用范式与说明表格。
+
 ### 管理控制台架构 (Web Dashboard Architecture)
 
 FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeScript + Vite + 原生 HTML/CSS + ConnectRPC）架构，具备极高的加载速度、极致简单的构建管道与出色的可维护性：

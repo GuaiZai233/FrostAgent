@@ -265,6 +265,12 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			if event.MessageType == "group" || event.MessageType == "private" {
+				if handleAdminCommand(c, event, a.engine) {
+					continue
+				}
+			}
+
 			var routeSnapshot *modelrouter.Snapshot
 			if a.engine != nil && a.engine.ModelRouter != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {

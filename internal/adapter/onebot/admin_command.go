@@ -1,0 +1,146 @@
+package onebot
+
+import (
+	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/admincmd"
+	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
+	"FrostAgent/internal/model"
+	"FrostAgent/internal/runtimescope"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// extractOneBotAdminCommand parses a OneBot event to see if it is an administrator command candidate.
+// It strictly requires a real @ targeting the bot (matching event.SelfID).
+func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *runtimescope.Scope) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
+	selfIDStr := strconv.FormatInt(event.SelfID, 10)
+	raws := EventRawMessages(event)
+	if len(raws) == 0 {
+		return cmd, false, nil
+	}
+
+	hasRealAt := false
+	var remainingSegments []content.MessageSegment
+
+	for _, raw := range raws {
+		segments := ParseMessageSegments(raw)
+		for _, seg := range segments {
+			if seg.Type == "at" {
+				qqVal := seg.Data["qq"]
+				var atQQ string
+				switch v := qqVal.(type) {
+				case string:
+					atQQ = v
+				case float64:
+					atQQ = strconv.FormatFloat(v, 'f', -1, 64)
+				case json.Number:
+					atQQ = v.String()
+				case int:
+					atQQ = strconv.Itoa(v)
+				case int64:
+					atQQ = strconv.FormatInt(v, 10)
+				}
+				if selfIDStr != "0" && selfIDStr != "" && atQQ == selfIDStr {
+					hasRealAt = true
+					continue // Strip the bot's @ component
+				}
+			}
+			remainingSegments = append(remainingSegments, seg)
+		}
+	}
+
+	var text string
+	if hasRealAt {
+		text = extractUserText(remainingSegments, nil, scope)
+	} else if selfIDStr != "0" && selfIDStr != "" {
+		// Fallback for text representation: [@<selfID>] ...
+		fullText := extractUserText(remainingSegments, nil, scope)
+		prefixTag := fmt.Sprintf("[@%s]", selfIDStr)
+		trimmedFull := strings.TrimSpace(fullText)
+		if strings.HasPrefix(trimmedFull, prefixTag) {
+			hasRealAt = true
+			text = strings.TrimSpace(trimmedFull[len(prefixTag):])
+		}
+	}
+
+	if !hasRealAt {
+		return cmd, false, nil
+	}
+
+	text = strings.TrimSpace(text)
+	return admincmd.ParseCandidate(text, prefix)
+}
+
+func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
+	if conn == nil || text == "" {
+		return
+	}
+	action := "send_private_msg"
+	type1 := "user_id"
+	id := strconv.FormatInt(event.UserID, 10)
+	if event.MessageType == "group" {
+		action = "send_group_msg"
+		type1 = "group_id"
+		id = strconv.FormatInt(event.GroupID, 10)
+	}
+	sendDirectReply(action, type1, id, "echo_admin_cmd", event, conn, text)
+}
+
+func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
+	if engine == nil {
+		return false
+	}
+	prefix := engine.Getenv(admincmd.AdminCommandPrefixEnv)
+	cmd, isCandidate, parseErr := extractOneBotAdminCommand(event, prefix, engine.Scope)
+	if !isCandidate {
+		return false
+	}
+
+	callerID := strconv.FormatInt(event.UserID, 10)
+	if !admincmd.IsAdmin(callerID, engine.Scope) {
+		engine.Log().Debug(logs.WEBSOCKET, fmt.Sprintf("OneBot: 非管理员 [%s] 触发指令候选，静默丢弃", callerID))
+		return true // Non-admin: silently dropped without hints
+	}
+
+	if parseErr != nil {
+		sendOneBotReply(event, conn, fmt.Sprintf("%v\n\n%s", parseErr, admincmd.FormatUsage(prefix)))
+		return true
+	}
+
+	owner := ""
+	if event.MessageType == "group" {
+		owner, _ = memory.OwnerForGroup(event.GroupID)
+	} else {
+		owner, _ = memory.OwnerForPrivate(callerID)
+	}
+
+	sessionID := historyKey(event)
+	routeScope := oneBotRouteScope(event)
+
+	if !engine.Go(func() {
+		exec := admincmd.NewExecutor(engine)
+		cmdCtx := admincmd.CommandContext{
+			SessionID:    sessionID,
+			Owner:        owner,
+			IsGroup:      event.MessageType == "group",
+			CallerUserID: callerID,
+			RouteScope:   routeScope,
+			Reply: func(ctx context.Context, text string, isIntermediate bool) error {
+				sendOneBotReply(event, conn, text)
+				return nil
+			},
+		}
+		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
+			sendOneBotReply(event, conn, fmt.Sprintf("执行指令失败：%v", err))
+		}
+	}) {
+		sendOneBotReply(event, conn, "实例未就绪，无法执行指令。")
+	}
+
+	return true
+}
