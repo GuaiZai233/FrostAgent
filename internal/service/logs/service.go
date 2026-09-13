@@ -172,6 +172,7 @@ func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 		Source:       string(e.Category),
 		Summary:      e.Content,
 		HasDetail:    strings.TrimSpace(e.Content) != "",
+		TraceId:      e.TraceID,
 	}
 	switch e.Category {
 	case logspkg.LLM_REQUEST:

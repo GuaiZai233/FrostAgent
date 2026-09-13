@@ -21,16 +21,19 @@ func runPrincipal(run RunContext) (security.Principal, error) {
 	return security.NewPrincipal(platform, run.ActorUserID)
 }
 
-func (e *Engine) securityBlocks(run RunContext, stage security.WatchdogStage, source security.WatchdogSource, content, tool string) bool {
+func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, source security.WatchdogSource, content, tool string) (bool, security.WatchdogDecision) {
 	if e.Security == nil {
-		return false
+		return false, security.WatchdogDecision{}
 	}
-	if e.securityAccess(run) != nil || e.Security.Watchdog == nil {
-		return true
+	if e.securityAccess(run) != nil {
+		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "access denied / locked"}
+	}
+	if e.Security.Watchdog == nil {
+		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "watchdog unconfigured", IsFailure: true}
 	}
 	p, err := runPrincipal(run)
 	if err != nil {
-		return true
+		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "invalid principal", IsFailure: true}
 	}
 	instance := e.InstanceID
 	if instance == "" {
@@ -39,5 +42,10 @@ func (e *Engine) securityBlocks(run RunContext, stage security.WatchdogStage, so
 	decision := e.Security.Watchdog.EvaluateWithContext(e.Context(), p, stage, source, content, security.AuditEvent{
 		Instance: instance, Session: run.SessionID, Tool: tool,
 	})
-	return security.Blocks(decision.Action)
+	return security.Blocks(decision.Action), decision
+}
+
+func (e *Engine) securityBlocks(run RunContext, stage security.WatchdogStage, source security.WatchdogSource, content, tool string) bool {
+	blocked, _ := e.securityEvaluate(run, stage, source, content, tool)
+	return blocked
 }
