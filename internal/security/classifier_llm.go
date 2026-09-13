@@ -79,7 +79,12 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 	defer cancel()
 
 	escapedContent := EscapeXML(input.Normalized)
-	userPrompt := fmt.Sprintf("Content (Stage: %s, Origin: %s):\n<content>\n%s\n</content>", input.Stage, input.Origin, escapedContent)
+	var userPrompt string
+	if input.EvaluationID != "" {
+		userPrompt = fmt.Sprintf("Evaluation ID: %s\nContent (Stage: %s, Origin: %s):\n<content>\n%s\n</content>", input.EvaluationID, input.Stage, input.Origin, escapedContent)
+	} else {
+		userPrompt = fmt.Sprintf("Content (Stage: %s, Origin: %s):\n<content>\n%s\n</content>", input.Stage, input.Origin, escapedContent)
+	}
 
 	resp, err := l.provider.Chat(evalCtx, core.ChatRequest{
 		Model: l.model,
@@ -89,6 +94,7 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 		},
 		Temperature: 0.0,
 		MaxTokens:   256,
+		TraceID:     input.EvaluationID,
 	})
 	if err != nil {
 		return ClassificationResult{}, fmt.Errorf("llm classification failed: %w", err)

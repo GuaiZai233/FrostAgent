@@ -153,9 +153,9 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	logSafeReq := redactChatRequestForLogging(openAIReq)
 	if logSafeData, err := json.Marshal(logSafeReq); err == nil {
-		c.log().LLMRequest(string(logSafeData))
+		c.log().LLMRequest(string(logSafeData), req.TraceID)
 	} else {
-		c.log().LLMRequest("[failed to marshal log-safe request]")
+		c.log().LLMRequest("[failed to marshal log-safe request]", req.TraceID)
 	}
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
@@ -191,15 +191,15 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	var openAIResp chatResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
-		c.log().LLMResponse(fmt.Sprintf("[malformed response body: len=%d]", len(respBody)))
+		c.log().LLMResponse(fmt.Sprintf("[malformed response body: len=%d]", len(respBody)), req.TraceID)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	logSafeResp := redactChatResponseForLogging(openAIResp)
 	if logSafeBytes, err := json.Marshal(logSafeResp); err == nil {
-		c.log().LLMResponse(string(logSafeBytes))
+		c.log().LLMResponse(string(logSafeBytes), req.TraceID)
 	} else {
-		c.log().LLMResponse("[failed to marshal log-safe response]")
+		c.log().LLMResponse("[failed to marshal log-safe response]", req.TraceID)
 	}
 
 	if openAIResp.Error != nil {

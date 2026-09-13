@@ -256,7 +256,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
 				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
+					if decision.IsFailure {
+						logs.Error(logs.SYSTEM, fmt.Sprintf("AstrBot 安全审查服务异常 (Fail-Closed): user=%s reason=%s eval_id=%s", event.UserID, decision.Reason, decision.EvaluationID))
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+					}
 					if shouldReply(event, a.engine.Scope) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						_ = sendDirectReply(event, c, msg)

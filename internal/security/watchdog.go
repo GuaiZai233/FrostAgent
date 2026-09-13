@@ -3,7 +3,10 @@ package security
 import (
 	"FrostAgent/internal/core"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +24,17 @@ type WatchdogDecision struct {
 	Reason         string                `json:"reason,omitempty"`
 	Classification *ClassificationResult `json:"classification,omitempty"`
 	Event          AuditEvent            `json:"-"`
+	EvaluationID   string                `json:"evaluation_id,omitempty"`
+	IsFailure      bool                  `json:"is_failure,omitempty"`
+}
+
+func generateEvaluationID(stage WatchdogStage) string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	if stage != "" {
+		return fmt.Sprintf("eval_%s_%s", strings.ToLower(string(stage)), hex.EncodeToString(b))
+	}
+	return "eval_" + hex.EncodeToString(b)
 }
 
 const (
@@ -299,6 +313,11 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	evaluationID := meta.ID
+	if evaluationID == "" {
+		evaluationID = generateEvaluationID(stage)
+		meta.ID = evaluationID
+	}
 	if len(content) > MaxInspectionSize {
 		meta.At = time.Now().UTC()
 		meta.Principal = p
@@ -312,9 +331,10 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 			_ = w.audit.Append(meta)
 		}
 		return WatchdogDecision{
-			Action: WatchdogBlock,
-			Reason: meta.Reason,
-			Event:  meta,
+			Action:       WatchdogBlock,
+			Reason:       meta.Reason,
+			Event:        meta,
+			EvaluationID: evaluationID,
 		}
 	}
 
@@ -344,6 +364,9 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	normInput := ClassificationInput{
+		EvaluationID:    evaluationID,
+		Instance:        meta.Instance,
+		Session:         meta.Session,
 		Content:         rawContent,
 		Normalized:      normalized,
 		Stage:           stage,
@@ -434,7 +457,9 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		if classifierErr {
 			// Fail-closed block directly without accumulating strikes or locks
 			action = WatchdogBlock
-			reason = "classifier evaluation error; fail-closed block"
+			if reason == "" {
+				reason = "classifier evaluation error; fail-closed block"
+			}
 		} else {
 			switch source {
 			case SourceUserDirect:
@@ -484,6 +509,8 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		Reason:         reason,
 		Classification: &classification,
 		Event:          meta,
+		EvaluationID:   evaluationID,
+		IsFailure:      classifierErr,
 	}
 }
 

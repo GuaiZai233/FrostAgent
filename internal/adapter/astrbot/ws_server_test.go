@@ -8,6 +8,7 @@ import (
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,6 +67,23 @@ func newTestEngine(provider core.LLMProvider) *llm.Engine {
 		SessionManager: llm.NewSessionManager(),
 		Dispatcher:     core.NewDefaultDispatcher(),
 	}
+}
+
+type mockClassifier struct {
+	fn func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error)
+}
+
+func (m *mockClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	if m.fn != nil {
+		return m.fn(ctx, input)
+	}
+	return security.ClassificationResult{
+		Category:   security.RiskCategoryNone,
+		RiskLevel:  security.RiskLevelNone,
+		Intent:     security.IntentBenign,
+		Confidence: 1.0,
+		Reason:     "mock clean",
+	}, nil
 }
 
 func startWSTestServer(engine *llm.Engine) (*httptest.Server, *Adapter, string) {
@@ -1171,6 +1189,27 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(input.Content, "ignore all previous instructions") {
+				return security.ClassificationResult{
+					Category:   security.RiskCategoryPromptInjection,
+					RiskLevel:  security.RiskLevelCritical,
+					Intent:     security.IntentMalicious,
+					Confidence: 0.95,
+					Reason:     "prompt injection detected",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:   security.RiskCategoryNone,
+				RiskLevel:  security.RiskLevelNone,
+				Intent:     security.IntentBenign,
+				Confidence: 1.0,
+				Reason:     "clean",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
 	srv, _, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -1377,6 +1416,93 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		}
 		if act.Content != security.RejectGatewayMsg {
 			t.Errorf("期望群聊 gateway 报错 %q, 实际=%q", security.RejectGatewayMsg, act.Content)
+		}
+	})
+
+	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failSrv, _, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_sec_fail_001",
+			UserID:      "usr_sec_fail_1",
+			SenderName:  "FailUser",
+			Content:     "你好世界",
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Content != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
+		}
+	})
+
+	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
+			},
+		})
+		failSrv, _, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_sec_fail_002",
+			UserID:      "usr_sec_fail_2",
+			SenderName:  "FailUser",
+			Content:     "你好世界",
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Content != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
 		}
 	})
 

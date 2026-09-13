@@ -672,18 +672,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		engine.Log().Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
 	}
 
-	// 5. Inspect the final model output before preparing the platform message.
-	if engine != nil && engine.Security != nil && engine.Security.Watchdog != nil {
-		if principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10)); principalErr == nil {
-			decision := engine.Security.Watchdog.Evaluate(principal, security.StageModelOutput, security.SourceModelOutput, replyText, security.AuditEvent{Instance: engine.InstanceID, Session: historyKey(event)})
-			if security.Blocks(decision.Action) {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 模型输出被安全控制拦截: user=%d reason=%s", event.UserID, decision.Reason))
-				replyText = "FrostAgent安全控制：模型输出已拦截。"
-			}
-		}
-	}
-
-	// 6. Prepare the final message for OneBot by parsing the engine's response
+	// 5. Prepare the final message for OneBot by parsing the engine's response.
+	// (Note: Terminal model output security inspection is centrally owned by llm.Engine at StageModelOutput).
 	var finalMessage any
 
 	var toolOutput struct {

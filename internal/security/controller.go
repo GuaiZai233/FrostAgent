@@ -15,6 +15,7 @@ var (
 const (
 	RejectInspectorMsg = "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！"
 	RejectGatewayMsg   = "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。"
+	RejectFailureMsg   = "FrostAgent 错误：Request rejected by security service: 安全审查服务暂时不可用，请稍后重试。"
 )
 
 type Controller struct {
@@ -155,12 +156,15 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
+	if meta.ID == "" {
+		meta.ID = generateEvaluationID(StageIngress)
+	}
 	if c.Access == nil || c.Watchdog == nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable", IsFailure: true, EvaluationID: meta.ID}
 	}
 	locked, record, err := c.Access.IsLocked(p)
 	if err != nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "access-control state unavailable"}
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "access-control state unavailable", IsFailure: true, EvaluationID: meta.ID}
 	}
 	if locked {
 		meta.Principal = p
@@ -169,8 +173,10 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 		meta.Action = WatchdogBlock
 		meta.Reason = record.Reason
 		meta.Hash = ContentHash(content)
-		_ = c.Audit.Append(meta)
-		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta}
+		if c.Audit != nil {
+			_ = c.Audit.Append(meta)
+		}
+		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta, EvaluationID: meta.ID}
 	}
 	return c.Watchdog.EvaluateWithContext(ctx, p, StageIngress, SourceUserDirect, content, meta)
 }
@@ -209,13 +215,17 @@ func (c *Controller) IsLocked(p Principal) bool {
 
 // RejectMessage returns the user-facing error message for a blocked security decision.
 // If the principal is locked (in AccessStore, via WatchdogLock action, or with ErrLocked reason),
-// it returns RejectGatewayMsg. Otherwise, it returns RejectInspectorMsg.
+// it returns RejectGatewayMsg. If the block is due to classifier/infrastructure failure (IsFailure),
+// it returns RejectFailureMsg. Otherwise, it returns RejectInspectorMsg.
 func (c *Controller) RejectMessage(p Principal, decision WatchdogDecision) string {
 	if c != nil && c.IsLocked(p) {
 		return RejectGatewayMsg
 	}
 	if decision.Action == WatchdogLock || decision.Reason == ErrLocked.Error() {
 		return RejectGatewayMsg
+	}
+	if decision.IsFailure {
+		return RejectFailureMsg
 	}
 	return RejectInspectorMsg
 }

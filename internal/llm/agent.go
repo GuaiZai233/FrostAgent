@@ -616,6 +616,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				Platform: runCtx.RouteScope.Platform,
 				GroupID:  runCtx.RouteScope.GroupID,
 			},
+			TraceID: runCtx.SessionID,
 		}
 		resp, err := e.Provider.Chat(ctx, chatReq)
 		if err != nil {

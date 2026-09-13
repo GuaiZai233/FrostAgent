@@ -142,6 +142,9 @@ func NormalizeActorIntent(s string) (ActorIntent, bool) {
 // ClassificationInput carries content, provenance, and historical context
 // required for calibrated policy evaluation.
 type ClassificationInput struct {
+	EvaluationID    string         `json:"evaluation_id,omitempty"`
+	Instance        string         `json:"instance,omitempty"`
+	Session         string         `json:"session,omitempty"`
 	Content         string         `json:"content"`
 	Normalized      string         `json:"normalized"`
 	Stage           WatchdogStage  `json:"stage"`

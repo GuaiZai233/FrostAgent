@@ -64,6 +64,23 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 	}, nil
 }
 
+type mockClassifier struct {
+	fn func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error)
+}
+
+func (m *mockClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	if m.fn != nil {
+		return m.fn(ctx, input)
+	}
+	return security.ClassificationResult{
+		Category:   security.RiskCategoryNone,
+		RiskLevel:  security.RiskLevelNone,
+		Intent:     security.IntentBenign,
+		Confidence: 0.95,
+		Reason:     "benign",
+	}, nil
+}
+
 // newTestEngine 创建一个用于测试的 Engine
 func newTestEngine(provider core.LLMProvider) *llm.Engine {
 	return &llm.Engine{
@@ -3548,6 +3565,27 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(strings.ToLower(input.Normalized), "ignore all previous") {
+				return security.ClassificationResult{
+					Category:   security.RiskCategoryPromptInjection,
+					RiskLevel:  security.RiskLevelHigh,
+					Intent:     security.IntentMalicious,
+					Confidence: 0.95,
+					Reason:     "prompt injection detected",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:   security.RiskCategoryNone,
+				RiskLevel:  security.RiskLevelNone,
+				Intent:     security.IntentBenign,
+				Confidence: 0.95,
+				Reason:     "benign",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -3806,8 +3844,182 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 		}
 	})
 
+	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir()) // No classifier configured
+		failSrv, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "private",
+			UserID:      987654,
+			MessageID:   1008,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好世界"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
+		}
+	})
+
+	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
+			},
+		})
+		failSrv, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "private",
+			UserID:      987654,
+			MessageID:   1009,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好世界"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
+		}
+	})
+
 	// 验证整个过程中 LLM 从未被调用（前置 Ingress 拦截）
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
+	}
+}
+
+func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是模型的最终安全回复文本。",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+
+	var mu sync.Mutex
+	stageCallCounts := make(map[security.WatchdogStage]int)
+	evalIDs := make([]string, 0)
+
+	cls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			mu.Lock()
+			stageCallCounts[input.Stage]++
+			if input.EvaluationID != "" {
+				evalIDs = append(evalIDs, input.EvaluationID)
+			}
+			mu.Unlock()
+			return security.ClassificationResult{
+				Category:   security.RiskCategoryNone,
+				RiskLevel:  security.RiskLevelNone,
+				Intent:     security.IntentBenign,
+				Confidence: 0.99,
+				Reason:     "clean benign content",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(cls)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	// Send a benign private message to trigger the OneBot pipeline
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   2001,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好，请帮我写一首诗"}}]`),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("failed to send message: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	var act model.OneBotAction
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("failed to parse action: %v", err)
+	}
+	if act.Action != "send_private_msg" {
+		t.Errorf("expected action=send_private_msg, got %s", act.Action)
+	}
+
+	mu.Lock()
+	ingressCalls := stageCallCounts[security.StageIngress]
+	modelOutputCalls := stageCallCounts[security.StageModelOutput]
+	mu.Unlock()
+
+	if ingressCalls != 1 {
+		t.Errorf("expected exactly 1 StageIngress classification call, got %d", ingressCalls)
+	}
+	// Regression assertion: terminal model output must be inspected exactly ONCE (owned by llm.Engine),
+	// never redundantly re-classified by adapter ws_server.go.
+	if modelOutputCalls != 1 {
+		t.Fatalf("expected exactly 1 StageModelOutput classification call (centralized in llm.Engine), got %d", modelOutputCalls)
+	}
+	if len(evalIDs) < 2 {
+		t.Errorf("expected EvaluationID to be propagated for ingress and model output, got %d", len(evalIDs))
 	}
 }

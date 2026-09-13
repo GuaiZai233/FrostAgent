@@ -397,3 +397,52 @@ func TestClient_Chat_PreservesNonExecuteCommandLogging(t *testing.T) {
 		t.Fatalf("expected normal tool result to be logged in LLM_REQUEST")
 	}
 }
+
+func TestClient_Chat_PropagatesTraceIDToLogEntries(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "trace correlation verified",
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	expectedTraceID := "eval-test-correlation-12345"
+	client := NewClient(server.URL, "test-api-key")
+	_, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "trace-model",
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: "ping"},
+		},
+		TraceID: expectedTraceID,
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+
+	snapshot := logs.Snapshot()
+	var foundReqTrace, foundRespTrace bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.LLM_REQUEST && entry.TraceID == expectedTraceID {
+			foundReqTrace = true
+		}
+		if entry.Category == logs.LLM_RESPONSE && entry.TraceID == expectedTraceID {
+			foundRespTrace = true
+		}
+	}
+	if !foundReqTrace {
+		t.Errorf("expected LLM_REQUEST log entry to carry TraceID=%q", expectedTraceID)
+	}
+	if !foundRespTrace {
+		t.Errorf("expected LLM_RESPONSE log entry to carry TraceID=%q", expectedTraceID)
+	}
+}
+
