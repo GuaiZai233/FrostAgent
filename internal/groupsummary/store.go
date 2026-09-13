@@ -56,7 +56,15 @@ func NewStore(path string) (*Store, error) {
 		if record.SessionID == "" || record.Summary == "" {
 			continue
 		}
-		store.records[record.SessionID] = record
+		canonical := CanonicalSessionID(record.SessionID)
+		record.SessionID = canonical
+		if existing, ok := store.records[canonical]; ok {
+			if record.UpdatedAt.After(existing.UpdatedAt) {
+				store.records[canonical] = record
+			}
+		} else {
+			store.records[canonical] = record
+		}
 	}
 	return store, nil
 }
@@ -80,7 +88,34 @@ func load(path string) (fileData, error) {
 	return data, nil
 }
 
-// Get returns one persisted summary.
+// CanonicalSessionID converts any QQ group session alias into its canonical form ("group:<id>").
+func CanonicalSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+		if cut, ok := strings.CutPrefix(sessionID, prefix); ok {
+			return "group:" + cut
+		}
+	}
+	return sessionID
+}
+
+func sessionIDAliases(sessionID string) []string {
+	canonical := CanonicalSessionID(sessionID)
+	if canonical == "" {
+		return nil
+	}
+	if groupID, ok := strings.CutPrefix(canonical, "group:"); ok {
+		return []string{
+			canonical,
+			"aiocqhttp:group:" + groupID,
+			"qq:group:" + groupID,
+			"onebot:group:" + groupID,
+		}
+	}
+	return []string{canonical}
+}
+
+// Get returns one persisted summary using canonical session identity.
 func (s *Store) Get(sessionID string) (Record, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -88,8 +123,14 @@ func (s *Store) Get(sessionID string) (Record, bool, error) {
 	if s.blockedErr != nil {
 		return Record{}, false, s.blockedErr
 	}
-	record, ok := s.records[sessionID]
-	return record, ok, nil
+	canonical := CanonicalSessionID(sessionID)
+	if record, ok := s.records[canonical]; ok {
+		return record, true, nil
+	}
+	if record, ok := s.records[sessionID]; ok {
+		return record, true, nil
+	}
+	return Record{}, false, nil
 }
 
 // List returns a stable snapshot ordered by most recently updated first.
@@ -113,11 +154,12 @@ func (s *Store) List() ([]Record, error) {
 	return records, nil
 }
 
-// Generation returns the deletion epoch used to reject stale compact writes.
+// Generation returns the deletion epoch used to reject stale compact writes across all aliases.
 func (s *Store) Generation(sessionID string) uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.generations[sessionID]
+	canonical := CanonicalSessionID(sessionID)
+	return s.generations[canonical]
 }
 
 // SetSaveHook allows tests to intercept persistence writes or inject transient failures.
@@ -142,10 +184,12 @@ func (s *Store) Upsert(
 		return false, fmt.Errorf("session ID and summary are required")
 	}
 
+	canonical := CanonicalSessionID(sessionID)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.generations[sessionID] != expectedGeneration {
+	if s.generations[canonical] != expectedGeneration {
 		return false, nil
 	}
 	if s.blockedErr != nil {
@@ -154,17 +198,21 @@ func (s *Store) Upsert(
 
 	now := time.Now()
 	record := Record{
-		SessionID: sessionID,
+		SessionID: canonical,
 		Summary:   summary,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if existing, ok := s.records[sessionID]; ok {
+	if existing, ok := s.records[canonical]; ok {
 		record.CreatedAt = existing.CreatedAt
 	}
 
 	next := cloneRecords(s.records)
-	next[sessionID] = record
+	for _, alias := range sessionIDAliases(sessionID) {
+		delete(next, alias)
+	}
+	next[canonical] = record
+
 	if s.saveHook != nil {
 		if err := s.saveHook(next); err != nil {
 			return false, err
@@ -180,19 +228,41 @@ func (s *Store) Upsert(
 // Delete removes one summary and advances its deletion epoch even if the disk
 // operation fails, preventing an older in-flight compact from recreating it.
 func (s *Store) Delete(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	canonical := CanonicalSessionID(sessionID)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.generations[sessionID]++
+	s.generations[canonical]++
+	for _, alias := range sessionIDAliases(sessionID) {
+		if alias != canonical {
+			s.generations[alias] = s.generations[canonical]
+		}
+	}
 	if s.blockedErr != nil {
 		return s.blockedErr
 	}
-	if _, ok := s.records[sessionID]; !ok {
+
+	next := cloneRecords(s.records)
+	deleted := false
+	for _, alias := range sessionIDAliases(sessionID) {
+		if _, ok := next[alias]; ok {
+			delete(next, alias)
+			deleted = true
+		}
+	}
+	if _, ok := next[canonical]; ok {
+		delete(next, canonical)
+		deleted = true
+	}
+	if !deleted {
 		return nil
 	}
 
-	next := cloneRecords(s.records)
-	delete(next, sessionID)
 	if s.saveHook != nil {
 		if err := s.saveHook(next); err != nil {
 			return err

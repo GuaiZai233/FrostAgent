@@ -339,6 +339,47 @@ input[type="checkbox"].checkbox:indeterminate::after {
   border-bottom: none;
 }
 
+.table-fixed {
+  table-layout: fixed;
+}
+
+.env-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.env-table th,
+.env-table td {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.table.env-table td,
+.env-table td {
+  vertical-align: top;
+}
+
+.env-table-key-col {
+  width: 11rem;
+}
+
+@media (min-width: 640px) {
+  .env-table-key-col {
+    width: 14rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .env-table-key-col {
+    width: 17rem;
+  }
+}
+
+.env-table-action-col {
+  width: 5.5rem;
+  text-align: right;
+}
+
 /* ==================== DIALOGUE SPECIALIZED CARDS ==================== */
 .dialogue-card > header {
   padding-inline: 0;

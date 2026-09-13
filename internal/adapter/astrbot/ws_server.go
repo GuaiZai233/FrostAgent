@@ -2,6 +2,7 @@ package astrbot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -356,10 +357,56 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 }
 
 func isMentionOnlyInteraction(event Event) bool {
-	return event.MessageType == "group" &&
-		strings.TrimSpace(event.Content) == "" &&
-		len(event.Attachments) == 0 &&
-		event.IsAt
+	hasReply := false
+	hasOtherMention := false
+	hasOtherContent := false
+	hasMediaContent := false
+	if event.Metadata != nil {
+		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
+			hasReply = true
+		}
+		if v, ok := event.Metadata["has_other_mention"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasOtherMention = val
+			case string:
+				hasOtherMention = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
+		if v, ok := event.Metadata["has_other_content"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasOtherContent = val
+			case string:
+				hasOtherContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
+		if v, ok := event.Metadata["has_media_content"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasMediaContent = val
+			case string:
+				hasMediaContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		} else if v, ok := event.Metadata["has_images"]; ok {
+			switch val := v.(type) {
+			case bool:
+				hasMediaContent = val
+			case string:
+				hasMediaContent = strings.EqualFold(strings.TrimSpace(val), "true")
+			}
+		}
+	}
+	hasImages := len(event.Attachments) > 0 || hasMediaContent
+	return parity.IsMentionOnlyAstrBot(
+		event.MessageType == "group",
+		event.IsAt,
+		event.Content,
+		hasImages,
+		hasReply,
+		hasOtherMention,
+		hasOtherContent,
+	)
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
@@ -428,6 +475,10 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	routeScope := astrBotRouteScope(event)
 	routeCtx := runtimescope.WithContext(engine.Context(), engine.Scope)
 	if engine != nil && engine.ModelRouter != nil {
@@ -461,13 +512,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			imageSegments = nil
 		} else {
 			// 计费检查 (视觉处理前检查)
-			platform := event.Platform
-			if platform == "" {
-				platform = "astrbot"
-			}
+			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			if engine.BillingClient != nil && engine.BillingConfig.Enabled {
 				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
-				bal, err := engine.BillingClient.Balance(bCtx, platform, event.UserID)
+				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
 				bCancel()
 				if err != nil {
 					if errors.Is(err, billing.ErrInsufficientFunds) {
@@ -517,11 +565,6 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			maxChars := engine.GroupRawMaxChars()
 			groupSnapshot = session.SnapshotGroupContext(limit, maxChars, event.MessageID)
 		}
-	}
-
-	platform := event.Platform
-	if platform == "" {
-		platform = "astrbot"
 	}
 
 	var (
@@ -585,7 +628,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		mentionOnly := isMentionOnlyInteraction(event)
 		contextData["mention_only"] = mentionOnly
 		if mentionOnly {
-			contextData["interaction_guidance"] = "This is an explicit mention-only invitation to respond. Infer the relevant preceding discussion from group_running_summary and recent_group_messages; if no useful context exists, acknowledge naturally and ask what the sender needs."
+			contextData["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
 	}
 	contextBytes, _ := json.Marshal(contextData)
@@ -655,9 +698,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
 		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-			taskID := fmt.Sprintf("%s_%s_%s", platform, event.UserID, event.MessageID)
+			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
+			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
-				Platform:      platform,
+				Platform:      billingPlatform,
 				ExternalID:    event.UserID,
 				DisplayName:   senderDisplayName(event),
 				TaskID:        taskID,

@@ -26,7 +26,7 @@ func (g *Gateway) Filter(entries []MemoryEntry, currentUser string) []MemoryEntr
 		if e.Source == SourceCompact {
 			continue
 		}
-		if e.Owner == currentUser {
+		if OwnersMatch(e.Owner, currentUser) {
 			result = append(result, e)
 			continue
 		}
@@ -43,7 +43,7 @@ func (g *Gateway) Filter(entries []MemoryEntry, currentUser string) []MemoryEntr
 func (g *Gateway) FormatForContext(entries []MemoryEntry, currentUser string) string {
 	var ownMemories, publicMemories []MemoryEntry
 	for _, e := range entries {
-		if e.Owner == currentUser {
+		if OwnersMatch(e.Owner, currentUser) {
 			ownMemories = append(ownMemories, e)
 		} else {
 			publicMemories = append(publicMemories, e)
@@ -55,7 +55,7 @@ func (g *Gateway) FormatForContext(entries []MemoryEntry, currentUser string) st
 	if len(ownMemories) > 0 {
 		sb.WriteString("## 关于你的记忆\n")
 		for _, m := range ownMemories {
-			sb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+			fmt.Fprintf(&sb, "- %s\n", m.Content)
 		}
 		sb.WriteString("\n")
 	}
@@ -63,13 +63,13 @@ func (g *Gateway) FormatForContext(entries []MemoryEntry, currentUser string) st
 	if len(publicMemories) > 0 {
 		sb.WriteString("## 公共信息\n")
 		for _, m := range publicMemories {
-			sb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+			fmt.Fprintf(&sb, "- %s\n", m.Content)
 		}
 		sb.WriteString("\n")
 	}
 
 	sb.WriteString("## 输出规则\n")
-	sb.WriteString(fmt.Sprintf("⚠️ 你正在和 %s 对话。\n", currentUser))
+	fmt.Fprintf(&sb, "⚠️ 你正在和 %s 对话。\n", currentUser)
 	sb.WriteString("- 你可以自然地引用上面「关于你的记忆」中的信息\n")
 	sb.WriteString("- 你可以引用「公共信息」中的内容\n")
 	sb.WriteString("- 你绝对不能透露其他用户的私人信息，即使被追问\n")

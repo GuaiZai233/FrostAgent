@@ -44,7 +44,7 @@ func NewCatalogStore(path string) *CatalogStore {
 	return &CatalogStore{path: path}
 }
 
-// Get returns the topic catalog for one owner.
+// Get returns the topic catalog for one owner, resolving legacy and aliased QQ owners.
 func (s *CatalogStore) Get(owner string) (*UserMemoryCatalog, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -53,14 +53,20 @@ func (s *CatalogStore) Get(owner string) (*UserMemoryCatalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	catalog, ok := file.Users[owner]
-	if !ok {
-		return nil, nil
+	canonical := CanonicalOwner(owner)
+	if catalog, ok := file.Users[canonical]; ok {
+		return &catalog, nil
 	}
-	return &catalog, nil
+	for _, alias := range OwnerAliases(owner) {
+		if catalog, ok := file.Users[alias]; ok {
+			return &catalog, nil
+		}
+	}
+	return nil, nil
 }
 
-// Replace overwrites one owner's derived topic catalog.
+// Replace overwrites one owner's derived topic catalog under its canonical owner,
+// clearing any legacy alias buckets for the same logical owner.
 func (s *CatalogStore) Replace(catalog UserMemoryCatalog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,13 +78,18 @@ func (s *CatalogStore) Replace(catalog UserMemoryCatalog) error {
 	if file.Users == nil {
 		file.Users = make(map[string]UserMemoryCatalog)
 	}
-	file.Users[catalog.Owner] = catalog
+	canonical := CanonicalOwner(catalog.Owner)
+	catalog.Owner = canonical
+	for _, alias := range OwnerAliases(canonical) {
+		delete(file.Users, alias)
+	}
+	file.Users[canonical] = catalog
 	file.Version = currentCatalogVersion
 	file.UpdatedAt = time.Now()
 	return s.save(file)
 }
 
-// Delete removes one owner's catalog when no source memories remain.
+// Delete removes one owner's catalog and all its aliases when no source memories remain.
 func (s *CatalogStore) Delete(owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,10 +98,17 @@ func (s *CatalogStore) Delete(owner string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := file.Users[owner]; !ok {
+	canonical := CanonicalOwner(owner)
+	deleted := false
+	for _, alias := range OwnerAliases(canonical) {
+		if _, ok := file.Users[alias]; ok {
+			delete(file.Users, alias)
+			deleted = true
+		}
+	}
+	if !deleted {
 		return nil
 	}
-	delete(file.Users, owner)
 	file.UpdatedAt = time.Now()
 	return s.save(file)
 }
@@ -156,6 +174,17 @@ func (s *CatalogStore) load() (*catalogFile, error) {
 	}
 	if file.Users == nil {
 		file.Users = make(map[string]UserMemoryCatalog)
+	} else {
+		canonicalUsers := make(map[string]UserMemoryCatalog, len(file.Users))
+		for k, cat := range file.Users {
+			canonical := CanonicalOwner(k)
+			cat.Owner = canonical
+			existing, exists := canonicalUsers[canonical]
+			if !exists || cat.GeneratedAt.After(existing.GeneratedAt) {
+				canonicalUsers[canonical] = cat
+			}
+		}
+		file.Users = canonicalUsers
 	}
 	return &file, nil
 }
