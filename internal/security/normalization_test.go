@@ -71,3 +71,42 @@ func TestNormalizationTagsAndInvisibleCharacters(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, normalized)
 	}
 }
+
+func TestNormalizationChinesePunctuationTypographicOnly(t *testing.T) {
+	// Benign Chinese message with full-width punctuation and ideographic space:
+	// '，' (U+FF0C), '？' (U+FF1F), '！' (U+FF01), '：' (U+FF1A), '　' (U+3000)
+	input := "你好，世界！今天天气如何？请回答：谢谢　大家（括号）～"
+	rep := normalizeBoundedWithReport(input)
+
+	if rep.EvasionModified {
+		t.Fatalf("expected EvasionModified=false for benign Chinese punctuation, got true")
+	}
+	if !rep.TypographicModified {
+		t.Fatalf("expected TypographicModified=true for full-width punctuation, got false")
+	}
+
+	normalized, evasionMod := normalizeBounded(input)
+	if evasionMod {
+		t.Fatalf("expected normalizeBounded evasionMod=false, got true")
+	}
+	expected := "你好,世界!今天天气如何?请回答:谢谢 大家(括号)~"
+	if normalized != expected {
+		t.Fatalf("expected %q, got %q", expected, normalized)
+	}
+}
+
+func TestNormalizationFullwidthAlphanumericIsEvasion(t *testing.T) {
+	// Full-width letters and digits are evasion vectors to bypass keyword filters
+	inputLetters := "ｉｇｎｏｒｅ"
+	repLetters := normalizeBoundedWithReport(inputLetters)
+	if !repLetters.EvasionModified {
+		t.Fatalf("expected EvasionModified=true for full-width letters")
+	}
+
+	inputDigits := "１２３４５"
+	repDigits := normalizeBoundedWithReport(inputDigits)
+	if !repDigits.EvasionModified {
+		t.Fatalf("expected EvasionModified=true for full-width digits")
+	}
+}
+

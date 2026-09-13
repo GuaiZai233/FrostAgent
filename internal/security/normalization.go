@@ -49,41 +49,59 @@ func unhex(c byte) byte {
 	return 0
 }
 
+func isFullWidthAlphanumeric(r rune) bool {
+	return (r >= 0xff10 && r <= 0xff19) || // ０-９
+		(r >= 0xff21 && r <= 0xff3a) || // Ａ-Ｚ
+		(r >= 0xff41 && r <= 0xff5a) // ａ-ｚ
+}
+
 // stripZeroWidthAndControl removes invisible characters, zero-width spaces,
 // directional formatters, full-width confusables, and mathematical stylized runes.
-func stripZeroWidthAndControl(s string) (string, bool) {
-	stripped := strings.Map(func(r rune) rune {
-		// Zero-width & invisible formatters
-		switch r {
-		case rune(0x200b), rune(0x200c), rune(0x200d), rune(0x200e), rune(0x200f), rune(0x2060), rune(0xfeff):
-			return -1
-		case rune(0x180e), rune(0x00ad):
-			return -1
-		case rune(0x3000): // ideographic full-width space
-			return ' '
-		default:
+// It tracks evasion-relevant modifications (zero-width, BiDi, tags, math runes, full-width alphanumeric)
+// separately from harmless typographic normalization (full-width punctuation, ideographic space).
+func stripZeroWidthAndControl(s string) (normalized string, evasionModified bool, typographicModified bool) {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == 0x200b || r == 0x200c || r == 0x200d || r == 0x200e || r == 0x200f || r == 0x2060 || r == 0xfeff || r == 0x180e || r == 0x00ad:
+			// Zero-width & invisible formatters
+			evasionModified = true
+			// stripped
+		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
 			// Directional formatting
-			if (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
-				return -1
-			}
+			evasionModified = true
+			// stripped
+		case r >= 0xe0000 && r <= 0xe007f:
 			// Tags block
-			if r >= 0xe0000 && r <= 0xe007f {
-				return -1
+			evasionModified = true
+			// stripped
+		case r == 0x3000:
+			// Ideographic full-width space -> ASCII space (harmless typographic normalization)
+			b.WriteByte(' ')
+			typographicModified = true
+		case r >= 0x1d400 && r <= 0x1d7ff:
+			// Mathematical Alphanumeric Symbols
+			if ascii := normalizeMathRune(r); ascii != 0 {
+				b.WriteRune(ascii)
+				evasionModified = true
+			} else {
+				b.WriteRune(r)
 			}
-			// Full-width ASCII normalization: 0xFF01..0xFF5E -> 0x0021..0x007E
-			if r >= 0xff01 && r <= 0xff5e {
-				return r - 0xfee0
+		case r >= 0xff01 && r <= 0xff5e:
+			// Full-width ASCII block: 0xFF01..0xFF5E -> 0x0021..0x007E
+			mapped := r - 0xfee0
+			b.WriteRune(mapped)
+			if isFullWidthAlphanumeric(r) {
+				evasionModified = true
+			} else {
+				typographicModified = true
 			}
-			// Mathematical Alphanumeric Symbols: U+1D400..U+1D7FF
-			if r >= 0x1d400 && r <= 0x1d7ff {
-				if ascii := normalizeMathRune(r); ascii != 0 {
-					return ascii
-				}
-			}
-			return r
+		default:
+			b.WriteRune(r)
 		}
-	}, s)
-	return stripped, stripped != s
+	}
+	return b.String(), evasionModified, typographicModified
 }
 
 // normalizeMixedScriptCyrillic replaces Cyrillic lookalikes with Latin equivalents ONLY
@@ -320,18 +338,27 @@ func tryDecodeBase64(s string) (string, bool) {
 	return "", false
 }
 
-// normalizeBounded applies bounded multi-pass normalization to uncover
-// obfuscated, percent-escaped, zero-width, full-width, homoglyph, and Base64-encoded payloads.
-func normalizeBounded(content string) (string, bool) {
+// NormalizationReport summarizes the result of normalizeBounded, separating
+// security-relevant evasion transformations from harmless typographic normalization.
+type NormalizationReport struct {
+	Normalized          string
+	EvasionModified     bool // true if evasion-relevant transforms occurred (zero-width, base64, percent, homoglyphs, full-width alphanumerics)
+	TypographicModified bool // true if harmless typographic normalization occurred (full-width punctuation, ideographic space)
+}
+
+// normalizeBoundedWithReport applies bounded multi-pass normalization and returns
+// both the normalized string and fine-grained classification of the transformations performed.
+func normalizeBoundedWithReport(content string) NormalizationReport {
 	if len(content) > MaxInspectionSize {
 		content = content[:MaxInspectionSize]
 	}
-	content, stripped := stripZeroWidthAndControl(content)
-	modified := stripped
+	content, ev, typ := stripZeroWidthAndControl(content)
+	evasionModified := ev
+	typographicModified := typ
 
 	if mixed, mc := normalizeMixedScriptCyrillic(content); mc {
 		content = mixed
-		modified = true
+		evasionModified = true
 	}
 
 	for range 3 {
@@ -340,13 +367,20 @@ func normalizeBounded(content string) (string, bool) {
 		// 1. Tolerant percent unescape
 		if decoded, ok := tolerantPercentUnescape(content); ok && decoded != content && len(decoded) <= MaxInspectionSize {
 			content = decoded
-			modified = true
+			evasionModified = true
 			layerChanged = true
-			if s, st := stripZeroWidthAndControl(content); st {
+			if s, ev, typ := stripZeroWidthAndControl(content); ev || typ {
 				content = s
+				if ev {
+					evasionModified = true
+				}
+				if typ {
+					typographicModified = true
+				}
 			}
 			if s, mc := normalizeMixedScriptCyrillic(content); mc {
 				content = s
+				evasionModified = true
 			}
 		}
 
@@ -354,26 +388,40 @@ func normalizeBounded(content string) (string, bool) {
 		trimmed := strings.TrimSpace(content)
 		if decoded, ok := tryDecodeBase64(trimmed); ok && decoded != content {
 			content = decoded
-			modified = true
+			evasionModified = true
 			layerChanged = true
-			if s, st := stripZeroWidthAndControl(content); st {
+			if s, ev, typ := stripZeroWidthAndControl(content); ev || typ {
 				content = s
+				if ev {
+					evasionModified = true
+				}
+				if typ {
+					typographicModified = true
+				}
 			}
 			if s, mc := normalizeMixedScriptCyrillic(content); mc {
 				content = s
+				evasionModified = true
 			}
 		}
 
 		// 3. Embedded Base64 unescape
 		if embedded, ok := replaceEmbeddedBase64(content); ok && embedded != content {
 			content = embedded
-			modified = true
+			evasionModified = true
 			layerChanged = true
-			if s, st := stripZeroWidthAndControl(content); st {
+			if s, ev, typ := stripZeroWidthAndControl(content); ev || typ {
 				content = s
+				if ev {
+					evasionModified = true
+				}
+				if typ {
+					typographicModified = true
+				}
 			}
 			if s, mc := normalizeMixedScriptCyrillic(content); mc {
 				content = s
+				evasionModified = true
 			}
 		}
 
@@ -381,7 +429,23 @@ func normalizeBounded(content string) (string, bool) {
 			break
 		}
 	}
-	return content, modified
+	return NormalizationReport{
+		Normalized:          content,
+		EvasionModified:     evasionModified,
+		TypographicModified: typographicModified,
+	}
+}
+
+// normalizeBounded applies bounded multi-pass normalization to uncover
+// obfuscated, percent-escaped, zero-width, full-width, homoglyph, and Base64-encoded payloads.
+// It returns the normalized string and a boolean indicating whether any security-relevant
+// evasion transformation was performed (e.g. zero-width removal, BiDi/tag stripping,
+// Cyrillic/math/full-width alphanumeric homoglyph normalization, percent decoding, or Base64 decoding).
+// Harmless typographic changes (such as full-width Chinese/CJK punctuation or ideographic spaces)
+// do NOT trigger evasionModified.
+func normalizeBounded(content string) (string, bool) {
+	rep := normalizeBoundedWithReport(content)
+	return rep.Normalized, rep.EvasionModified
 }
 
 func isValidPrintableText(s string) bool {

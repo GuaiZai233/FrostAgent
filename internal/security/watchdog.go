@@ -319,7 +319,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	rawContent := content
-	normalized, _ := normalizeBounded(content)
+	normalized, evasionModified := normalizeBounded(content)
 
 	rawHash := ContentHash(rawContent)
 	normHash := ContentHash(normalized)
@@ -384,7 +384,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	var rawClassification ClassificationResult
-	if classifierErr || rawContent == normalized {
+	if classifierErr || !evasionModified {
 		rawClassification = normClassification
 	} else {
 		rawInput := normInput
@@ -413,7 +413,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	isEvasion := false
-	if !classifierErr {
+	if !classifierErr && evasionModified {
 		isEvasion = (!rawMatches && normMatches) || (hasPriorBlock && normHash == lastBlockedHash && rawHash != normHash)
 	}
 

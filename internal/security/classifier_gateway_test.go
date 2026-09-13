@@ -419,8 +419,9 @@ func TestLLMClassifierDelimiterInjectionResistant(t *testing.T) {
 	}
 }
 
-// TestWatchdogClassifierCallCountOptimization verifies that unchanged input (raw == normalized)
-// evaluates through the security LLM exactly once, whereas transformed input (raw != normalized)
+// TestWatchdogClassifierCallCountOptimization verifies that unchanged input and input
+// with only harmless typographic normalization (e.g. full-width Chinese punctuation)
+// evaluates through the security LLM exactly once, whereas security-evasion transformed input
 // evaluates twice to detect evasion.
 func TestWatchdogClassifierCallCountOptimization(t *testing.T) {
 	access := NewAccessStore(t.TempDir() + "/access.json")
@@ -431,7 +432,7 @@ func TestWatchdogClassifierCallCountOptimization(t *testing.T) {
 	principal := testPrincipal(t, "test-platform", "call-count-actor")
 
 	// 1. Unchanged input: exactly 1 call to LLM classifier
-	unchangedMsg := "Hello world this is a normal message without escapes" 
+	unchangedMsg := "Hello world this is a normal message without escapes"
 	dec1 := wd.Evaluate(principal, StageIngress, SourceUserDirect, unchangedMsg, AuditEvent{})
 	if dec1.Action != WatchdogPass {
 		t.Fatalf("expected WatchdogPass, got %s", dec1.Action)
@@ -440,15 +441,37 @@ func TestWatchdogClassifierCallCountOptimization(t *testing.T) {
 		t.Fatalf("expected exactly 1 call for unchanged input, got %d", mock.CallCount())
 	}
 
-	// 2. Transformed input (e.g. contains zero-width spaces or percent escapes): exactly 2 calls
-	transformedMsg := "Hello\u200b world %61ttack" 
-	dec2 := wd.Evaluate(principal, StageIngress, SourceUserDirect, transformedMsg, AuditEvent{})
+	// 2. Benign Chinese message with full-width punctuation: typographic change only -> exactly 1 call
+	chineseMsg := "\u4f60\u597d\uff0c\u4e16\u754c\uff01\u4eca\u5929\u5929\u6c14\u5982\u4f55\uff1f\u8bf7\u56de\u7b54\uff1a\u8c22\u8c22 \u5927\u5bb6\uff08\u62ec\u53f7\uff09\uff5e"
+	dec2 := wd.Evaluate(principal, StageIngress, SourceUserDirect, chineseMsg, AuditEvent{})
 	if dec2.Action != WatchdogPass {
 		t.Fatalf("expected WatchdogPass, got %s", dec2.Action)
 	}
-	// Total calls should now be 1 + 2 = 3
-	if mock.CallCount() != 3 {
-		t.Fatalf("expected 3 total calls (1 unchanged + 2 transformed), got %d", mock.CallCount())
+	// Total calls should now be 1 + 1 = 2
+	if mock.CallCount() != 2 {
+		t.Fatalf("expected 2 total calls (1 unchanged + 1 typographic Chinese), got %d", mock.CallCount())
+	}
+
+	// 3. Transformed input with security evasion (zero-width spaces + percent escape): exactly 2 calls
+	transformedMsg := "Hello\u200b world %61ttack"
+	dec3 := wd.Evaluate(principal, StageIngress, SourceUserDirect, transformedMsg, AuditEvent{})
+	if dec3.Action != WatchdogPass {
+		t.Fatalf("expected WatchdogPass, got %s", dec3.Action)
+	}
+	// Total calls should now be 2 + 2 = 4
+	if mock.CallCount() != 4 {
+		t.Fatalf("expected 4 total calls (2 previous + 2 evasion), got %d", mock.CallCount())
+	}
+
+	// 4. Transformed input with full-width alphanumeric homoglyphs: evasion -> exactly 2 calls
+	fullwidthAlphaMsg := "\u4f60\u597d\uff0c\uff49\uff47\uff4e\uff4f\uff52\uff45"
+	dec4 := wd.Evaluate(principal, StageIngress, SourceUserDirect, fullwidthAlphaMsg, AuditEvent{})
+	if dec4.Action != WatchdogPass {
+		t.Fatalf("expected WatchdogPass, got %s", dec4.Action)
+	}
+	// Total calls should now be 4 + 2 = 6
+	if mock.CallCount() != 6 {
+		t.Fatalf("expected 6 total calls (4 previous + 2 fullwidth alpha evasion), got %d", mock.CallCount())
 	}
 }
 
@@ -543,7 +566,7 @@ func TestTransformedInputRawClassificationErrorFailsClosed(t *testing.T) {
 			// 5 repeated submissions:
 			// Each submission does call 1 (benign) and call 2 (error).
 			// Must unconditionally return WatchdogBlock with fail-closed reason.
-			for i := 0; i < 5; i++ {
+			for i := range 5 {
 				dec := wd.Evaluate(principal, StageIngress, SourceUserDirect, transformedPayload, AuditEvent{})
 				if dec.Action != WatchdogBlock {
 					t.Fatalf("iter %d: expected WatchdogBlock when call 2 fails, got %s", i, dec.Action)
