@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
@@ -1592,5 +1593,155 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
+	}
+}
+
+func TestAstrBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	failEngine := newTestEngine(mockLLM)
+	failEngine.Security = security.NewController(t.TempDir())
+
+	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
+	failEngine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{}, fmt.Errorf("upstream gateway error with auth token %s: context deadline exceeded", secretToken)
+		},
+	})
+
+	failSrv, _, failWSURL := startWSTestServer(failEngine)
+	defer failSrv.Close()
+
+	// Subscribe to logs to capture emitted entries
+	subID, logCh := logs.Subscribe(nil)
+	defer logs.Unsubscribe(subID)
+
+	failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer failConn.Close()
+
+	const testUserID = "usr_sec_fail_dedup"
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_sec_fail_dedup_01",
+		UserID:      testUserID,
+		SenderName:  "FailUser",
+		Content:     "触发 AstrBot 分类器异常测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := failConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if act.Content != security.RejectFailureMsg {
+		t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
+	}
+
+	// Drain captured logs
+	var capturedLogs []logs.LogEntry
+	drainTimer := time.NewTimer(200 * time.Millisecond)
+	defer drainTimer.Stop()
+drainLoop:
+	for {
+		select {
+		case entry := <-logCh:
+			capturedLogs = append(capturedLogs, entry)
+		case <-drainTimer.C:
+			break drainLoop
+		}
+	}
+
+	var rootCauseErrors []logs.LogEntry
+	var adapterWarns []logs.LogEntry
+	var allErrors []logs.LogEntry
+
+	for _, entry := range capturedLogs {
+		if entry.Level == logs.ERROR {
+			allErrors = append(allErrors, entry)
+			if strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+				rootCauseErrors = append(rootCauseErrors, entry)
+			}
+		}
+		if entry.Level == logs.WARN && strings.Contains(entry.Content, "AstrBot 请求因安全审查服务异常被拒绝:") {
+			adapterWarns = append(adapterWarns, entry)
+		}
+	}
+
+	if len(rootCauseErrors) != 1 {
+		t.Fatalf("期望底层 Watchdog 恰好产生 1 条根因 ERROR 日志，实际=%d (所有 ERROR 数量=%d)", len(rootCauseErrors), len(allErrors))
+	}
+	if len(adapterWarns) != 1 {
+		t.Fatalf("期望 AstrBot 适配层恰好产生 1 条拒绝 WARN 日志，实际=%d", len(adapterWarns))
+	}
+
+	rootLog := rootCauseErrors[0].Content
+	adapterLog := adapterWarns[0].Content
+
+	// 验证根因日志包含详细字段但脱敏敏感信息
+	if !strings.Contains(rootLog, "error_type=") {
+		t.Errorf("根因 ERROR 日志必须包含 error_type, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "reason=") {
+		t.Errorf("根因 ERROR 日志必须包含 reason, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "eval_id=eval_ingress_") {
+		t.Errorf("根因 ERROR 日志必须包含 eval_id, 实际=%s", rootLog)
+	}
+	if strings.Contains(rootLog, secretToken) {
+		t.Errorf("根因 ERROR 日志绝不能泄漏原始密钥 Token %q: %s", secretToken, rootLog)
+	}
+	if !strings.Contains(rootLog, "[REDACTED]") {
+		t.Errorf("根因 ERROR 日志中的密钥应当被替换为 [REDACTED], 实际=%s", rootLog)
+	}
+
+	// 提取 eval_id
+	parts := strings.Split(rootLog, "eval_id=")
+	if len(parts) < 2 {
+		t.Fatalf("无法从根因日志提取 eval_id: %s", rootLog)
+	}
+	rootEvalID := strings.Fields(parts[1])[0]
+
+	// 验证适配器日志包含用户上下文和相同 eval_id，但不复制底层 error_type 和 reason
+	expectedAdapterPrefix := fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", testUserID, rootEvalID)
+	if !strings.Contains(adapterLog, expectedAdapterPrefix) {
+		t.Errorf("期望适配层日志包含 %q, 实际=%s", expectedAdapterPrefix, adapterLog)
+	}
+	if strings.Contains(adapterLog, "error_type=") {
+		t.Errorf("适配层日志严禁重复打印 error_type: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, "reason=") {
+		t.Errorf("适配层日志严禁重复打印 reason: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, secretToken) {
+		t.Errorf("适配层日志严禁包含敏感内容: %s", adapterLog)
+	}
+
+	// 验证基础设施故障绝对零惩罚 (Zero Punishment)
+	p, err := security.NewPrincipal("astrbot", testUserID)
+	if err != nil {
+		t.Fatalf("创建 principal 失败: %v", err)
+	}
+	locked, record, err := failEngine.Security.Access.IsLocked(p)
+	if err != nil {
+		t.Fatalf("获取 access record 失败: %v", err)
+	}
+	if locked {
+		t.Errorf("基础设施异常绝不能导致用户被封禁锁定")
+	}
+	if len(record.StrikeTimes) != 0 {
+		t.Errorf("基础设施异常绝不能产生惩罚 strike, 实际=%d", len(record.StrikeTimes))
 	}
 }

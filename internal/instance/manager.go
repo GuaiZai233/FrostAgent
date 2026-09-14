@@ -95,6 +95,15 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
 	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs)}
+	if global != nil {
+		rawTimeout := strings.TrimSpace(global.Get("SECURITY_GATEWAY_TIMEOUT"))
+		if rawTimeout == "" {
+			rawTimeout = strings.TrimSpace(global.Get("SECURITY_CLASSIFIER_TIMEOUT"))
+		}
+		if rawTimeout != "" {
+			m.security.SetClassifierTimeout(security.ValidateClassifierTimeout(rawTimeout, security.DefaultClassifierTimeout))
+		}
+	}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
 		if err = json.Unmarshal(data, &m.registry); err != nil {

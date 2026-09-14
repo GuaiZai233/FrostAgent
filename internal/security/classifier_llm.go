@@ -43,6 +43,8 @@ func EscapeXML(s string) string {
 	return s
 }
 
+const DefaultClassifierTimeout = 15 * time.Second
+
 type LLMClassifier struct {
 	provider core.LLMProvider
 	model    string
@@ -51,7 +53,7 @@ type LLMClassifier struct {
 
 func NewLLMClassifier(provider core.LLMProvider, model string, timeout time.Duration) *LLMClassifier {
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = DefaultClassifierTimeout
 	}
 	if model == "" {
 		model = "default"
@@ -61,6 +63,14 @@ func NewLLMClassifier(provider core.LLMProvider, model string, timeout time.Dura
 		model:    model,
 		timeout:  timeout,
 	}
+}
+
+// Timeout returns the configured evaluation timeout for the LLM security gateway.
+func (l *LLMClassifier) Timeout() time.Duration {
+	if l == nil || l.timeout <= 0 {
+		return DefaultClassifierTimeout
+	}
+	return l.timeout
 }
 
 type llmResponsePayload struct {
@@ -125,7 +135,12 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 
 	var payload llmResponsePayload
 	if err := json.Unmarshal([]byte(jsonText), &payload); err != nil {
-		return ClassificationResult{}, fmt.Errorf("parse llm classification json: %w (raw: %s)", err, rawText)
+		safeRaw := redactSecrets(rawText)
+		runes := []rune(safeRaw)
+		if len(runes) > 128 {
+			safeRaw = string(runes[:128]) + "..."
+		}
+		return ClassificationResult{}, fmt.Errorf("parse llm classification json: %w (raw: %s)", err, safeRaw)
 	}
 
 	if payload.Category == nil {

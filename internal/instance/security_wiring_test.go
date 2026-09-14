@@ -2,6 +2,7 @@
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/security"
 	"context"
 	"errors"
@@ -579,6 +580,104 @@ func TestProductionRuntimeTransformedInputCall2ErrorFailsClosed(t *testing.T) {
 	}
 	if locked || len(record.StrikeTimes) != 0 {
 		t.Fatalf("expected 0 strikes and not locked, got locked=%v strikes=%d", locked, len(record.StrikeTimes))
+	}
+}
+
+func TestProductionRuntimeSecurityGatewayTimeoutConfigAndOverride(t *testing.T) {
+	// 1. Verify restart keys include timeout configuration variables
+	if !instanceconfig.InstanceRestartKeys["SECURITY_GATEWAY_TIMEOUT"] {
+		t.Fatal("SECURITY_GATEWAY_TIMEOUT must be in InstanceRestartKeys")
+	}
+	if !instanceconfig.InstanceRestartKeys["SECURITY_CLASSIFIER_TIMEOUT"] {
+		t.Fatal("SECURITY_CLASSIFIER_TIMEOUT must be in InstanceRestartKeys")
+	}
+
+	// 2. Default timeout without any config
+	m := testManager(t)
+	infoDefault := create(t, m, "sec-timeout-default")
+	if err := m.Enable(infoDefault.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	secCtrl := m.SecurityController()
+	clsDefault := secCtrl.Watchdog.ClassifierForInstance(infoDefault.ID)
+	llmDefault, ok := clsDefault.(*security.LLMClassifier)
+	if !ok {
+		t.Fatalf("expected *security.LLMClassifier, got %T", clsDefault)
+	}
+	if llmDefault.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected default timeout %v, got %v", security.DefaultClassifierTimeout, llmDefault.Timeout())
+	}
+
+	// 3. Instance config override via SECURITY_GATEWAY_TIMEOUT
+	infoOverride := create(t, m, "sec-timeout-override")
+	instItem := m.instances[infoOverride.ID]
+	if err := instItem.config.Update("SECURITY_GATEWAY_TIMEOUT", "35s", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(infoOverride.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsOverride := secCtrl.Watchdog.ClassifierForInstance(infoOverride.ID)
+	llmOverride, ok := clsOverride.(*security.LLMClassifier)
+	if !ok {
+		t.Fatalf("expected *security.LLMClassifier, got %T", clsOverride)
+	}
+	if llmOverride.Timeout() != 35*time.Second {
+		t.Fatalf("expected overridden timeout 35s, got %v", llmOverride.Timeout())
+	}
+
+	// 4. Instance config override via SECURITY_CLASSIFIER_TIMEOUT alias
+	infoAlias := create(t, m, "sec-timeout-alias")
+	instAlias := m.instances[infoAlias.ID]
+	if err := instAlias.config.Update("SECURITY_CLASSIFIER_TIMEOUT", "45s", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(infoAlias.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsAlias := secCtrl.Watchdog.ClassifierForInstance(infoAlias.ID)
+	llmAlias, ok := clsAlias.(*security.LLMClassifier)
+	if !ok {
+		t.Fatalf("expected *security.LLMClassifier, got %T", clsAlias)
+	}
+	if llmAlias.Timeout() != 45*time.Second {
+		t.Fatalf("expected alias timeout 45s, got %v", llmAlias.Timeout())
+	}
+
+	// 5. Invalid instance config string falls back safely to default without panic
+	infoInvalid := create(t, m, "sec-timeout-invalid")
+	instInvalid := m.instances[infoInvalid.ID]
+	if err := instInvalid.config.Update("SECURITY_GATEWAY_TIMEOUT", "not-a-valid-duration", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(infoInvalid.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsInvalid := secCtrl.Watchdog.ClassifierForInstance(infoInvalid.ID)
+	llmInvalid, ok := clsInvalid.(*security.LLMClassifier)
+	if !ok {
+		t.Fatalf("expected *security.LLMClassifier, got %T", clsInvalid)
+	}
+	if llmInvalid.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected invalid config fallback to %v, got %v", security.DefaultClassifierTimeout, llmInvalid.Timeout())
+	}
+
+	// 6. Non-positive instance config duration falls back safely to default
+	infoNonPositive := create(t, m, "sec-timeout-nonpositive")
+	instNonPositive := m.instances[infoNonPositive.ID]
+	if err := instNonPositive.config.Update("SECURITY_GATEWAY_TIMEOUT", "-10s", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(infoNonPositive.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsNonPos := secCtrl.Watchdog.ClassifierForInstance(infoNonPositive.ID)
+	llmNonPos, ok := clsNonPos.(*security.LLMClassifier)
+	if !ok {
+		t.Fatalf("expected *security.LLMClassifier, got %T", clsNonPos)
+	}
+	if llmNonPos.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected non-positive config fallback to %v, got %v", security.DefaultClassifierTimeout, llmNonPos.Timeout())
 	}
 }
 

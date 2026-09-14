@@ -190,6 +190,7 @@ type Watchdog struct {
 	instanceClassifiers map[string]Classifier
 	strikeWindow        time.Duration
 	lockAfter           int
+	classifierTimeout   time.Duration
 }
 
 func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
@@ -200,6 +201,7 @@ func NewWatchdog(access *AccessStore, audit *AuditStore) *Watchdog {
 		instanceClassifiers: make(map[string]Classifier),
 		strikeWindow:        15 * time.Minute,
 		lockAfter:           3,
+		classifierTimeout:   DefaultClassifierTimeout,
 	}
 }
 
@@ -209,6 +211,31 @@ func NewWatchdogWithProvider(access *AccessStore, audit *AuditStore, provider co
 		wd.SetLLMProvider(provider, model)
 	}
 	return wd
+}
+
+func (w *Watchdog) ClassifierTimeout() time.Duration {
+	if w == nil {
+		return DefaultClassifierTimeout
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.classifierTimeout <= 0 {
+		return DefaultClassifierTimeout
+	}
+	return w.classifierTimeout
+}
+
+func (w *Watchdog) SetClassifierTimeout(d time.Duration) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if d <= 0 {
+		w.classifierTimeout = DefaultClassifierTimeout
+		return
+	}
+	w.classifierTimeout = d
 }
 
 func (w *Watchdog) SetClassifier(classifier Classifier) {
@@ -221,6 +248,10 @@ func (w *Watchdog) SetClassifier(classifier Classifier) {
 }
 
 func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
+	w.SetLLMProviderWithTimeout(provider, model, w.ClassifierTimeout())
+}
+
+func (w *Watchdog) SetLLMProviderWithTimeout(provider core.LLMProvider, model string, timeout time.Duration) {
 	if w == nil {
 		return
 	}
@@ -233,10 +264,20 @@ func (w *Watchdog) SetLLMProvider(provider core.LLMProvider, model string) {
 	if model == "" {
 		model = "security-gateway"
 	}
-	w.classifier = NewLLMClassifier(provider, model, 5*time.Second)
+	if timeout <= 0 {
+		timeout = w.classifierTimeout
+	}
+	if timeout <= 0 {
+		timeout = DefaultClassifierTimeout
+	}
+	w.classifier = NewLLMClassifier(provider, model, timeout)
 }
 
 func (w *Watchdog) SetInstanceProvider(instanceID string, provider core.LLMProvider, model string) {
+	w.SetInstanceProviderWithTimeout(instanceID, provider, model, w.ClassifierTimeout())
+}
+
+func (w *Watchdog) SetInstanceProviderWithTimeout(instanceID string, provider core.LLMProvider, model string, timeout time.Duration) {
 	if w == nil || instanceID == "" {
 		return
 	}
@@ -252,7 +293,13 @@ func (w *Watchdog) SetInstanceProvider(instanceID string, provider core.LLMProvi
 	if model == "" {
 		model = "security-gateway"
 	}
-	w.instanceClassifiers[instanceID] = NewLLMClassifier(provider, model, 5*time.Second)
+	if timeout <= 0 {
+		timeout = w.classifierTimeout
+	}
+	if timeout <= 0 {
+		timeout = DefaultClassifierTimeout
+	}
+	w.instanceClassifiers[instanceID] = NewLLMClassifier(provider, model, timeout)
 }
 
 func (w *Watchdog) SetInstanceClassifier(instanceID string, classifier Classifier) {
@@ -695,4 +742,28 @@ func SafeErrorSummary(err error) string {
 		return string(runes[:maxLen]) + "..."
 	}
 	return s
+}
+
+// ValidateClassifierTimeout validates a raw duration string and returns fallback if invalid or non-positive.
+func ValidateClassifierTimeout(raw string, fallback time.Duration) time.Duration {
+	if fallback <= 0 {
+		fallback = DefaultClassifierTimeout
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	val, err := time.ParseDuration(raw)
+	if err != nil || val <= 0 {
+		return fallback
+	}
+	return val
+}
+
+// NormalizeClassifierTimeout ensures the timeout is a positive duration, falling back to DefaultClassifierTimeout.
+func NormalizeClassifierTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return DefaultClassifierTimeout
+	}
+	return d
 }

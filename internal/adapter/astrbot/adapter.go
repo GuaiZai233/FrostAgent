@@ -257,15 +257,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
 				if security.Blocks(decision.Action) {
 					if decision.IsFailure {
-						errType := decision.ErrorType
-						if errType == "" {
-							errType = "internal"
+						if a.engine != nil && a.engine.Scope != nil {
+							a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+						} else {
+							logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
 						}
-						reason := decision.SafeSummary
-						if reason == "" {
-							reason = decision.Reason
-						}
-						logs.Error(logs.SYSTEM, fmt.Sprintf("AstrBot 安全审查服务异常 (Fail-Closed): user=%s error_type=%s reason=%s eval_id=%s", event.UserID, errType, reason, decision.EvaluationID))
 					} else {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
 					}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
 var (
@@ -32,6 +33,19 @@ func NewController(dataDir string) *Controller {
 	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit)}
 }
 
+func (c *Controller) ClassifierTimeout() time.Duration {
+	if c != nil && c.Watchdog != nil {
+		return c.Watchdog.ClassifierTimeout()
+	}
+	return DefaultClassifierTimeout
+}
+
+func (c *Controller) SetClassifierTimeout(d time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetClassifierTimeout(d)
+	}
+}
+
 func (c *Controller) SetClassifier(classifier Classifier) {
 	if c != nil && c.Watchdog != nil {
 		c.Watchdog.SetClassifier(classifier)
@@ -44,9 +58,21 @@ func (c *Controller) SetLLMProvider(provider core.LLMProvider, model string) {
 	}
 }
 
+func (c *Controller) SetLLMProviderWithTimeout(provider core.LLMProvider, model string, timeout time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetLLMProviderWithTimeout(provider, model, timeout)
+	}
+}
+
 func (c *Controller) SetInstanceProvider(instanceID string, provider core.LLMProvider, model string) {
 	if c != nil && c.Watchdog != nil {
 		c.Watchdog.SetInstanceProvider(instanceID, provider, model)
+	}
+}
+
+func (c *Controller) SetInstanceProviderWithTimeout(instanceID string, provider core.LLMProvider, model string, timeout time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetInstanceProviderWithTimeout(instanceID, provider, model, timeout)
 	}
 }
 
@@ -65,12 +91,20 @@ func (c *Controller) RemoveInstanceProvider(instanceID string) {
 // ForRuntime creates a scoped runtime Controller sharing global AccessStore and AuditStore,
 // with a dedicated Watchdog using the given provider without mutating the parent Controller.
 func (c *Controller) ForRuntime(provider core.LLMProvider, model string) *Controller {
+	return c.ForRuntimeWithTimeout(provider, model, c.ClassifierTimeout())
+}
+
+// ForRuntimeWithTimeout creates a scoped runtime Controller with an explicit timeout.
+func (c *Controller) ForRuntimeWithTimeout(provider core.LLMProvider, model string, timeout time.Duration) *Controller {
 	if c == nil {
 		return nil
 	}
 	wd := NewWatchdog(c.Access, c.Audit)
+	if timeout > 0 {
+		wd.SetClassifierTimeout(timeout)
+	}
 	if provider != nil {
-		wd.SetLLMProvider(provider, model)
+		wd.SetLLMProviderWithTimeout(provider, model, timeout)
 	}
 	return &Controller{
 		Access:   c.Access,
@@ -82,15 +116,23 @@ func (c *Controller) ForRuntime(provider core.LLMProvider, model string) *Contro
 // ForInstance registers the instance provider on the shared controller and returns a scoped
 // runtime Controller sharing global AccessStore and AuditStore.
 func (c *Controller) ForInstance(instanceID string, provider core.LLMProvider, model string) *Controller {
+	return c.ForInstanceWithTimeout(instanceID, provider, model, c.ClassifierTimeout())
+}
+
+// ForInstanceWithTimeout registers the instance provider with an explicit timeout and returns a scoped runtime Controller.
+func (c *Controller) ForInstanceWithTimeout(instanceID string, provider core.LLMProvider, model string, timeout time.Duration) *Controller {
 	if c == nil {
 		return nil
 	}
 	if instanceID != "" {
-		c.SetInstanceProvider(instanceID, provider, model)
+		c.SetInstanceProviderWithTimeout(instanceID, provider, model, timeout)
 	}
 	wd := NewWatchdog(c.Access, c.Audit)
+	if timeout > 0 {
+		wd.SetClassifierTimeout(timeout)
+	}
 	if provider != nil {
-		wd.SetLLMProvider(provider, model)
+		wd.SetLLMProviderWithTimeout(provider, model, timeout)
 	}
 	return &Controller{
 		Access:   c.Access,
@@ -162,6 +204,7 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 		meta.ID = GenerateEvaluationID(StageIngress)
 	}
 	if c.Access == nil || c.Watchdog == nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=access store or watchdog is nil eval_id=%s", meta.ID))
 		return WatchdogDecision{
 			Action:       WatchdogBlock,
 			Reason:       "security control unavailable",
