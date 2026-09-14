@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/security"
 	"context"
 	"errors"
+	"os"
 	"fmt"
 	"strings"
 	"sync"
@@ -682,3 +683,103 @@ func TestProductionRuntimeSecurityGatewayTimeoutConfigAndOverride(t *testing.T) 
 }
 
 
+
+func TestSecurityGatewayTimeoutPrecedenceAndGlobalOverride(t *testing.T) {
+	m := testManager(t)
+	secCtrl := m.SecurityController()
+
+	// 1. Process environment only (instance and global empty) -> process env wins
+	t.Setenv("SECURITY_GATEWAY_TIMEOUT", "60s")
+	infoEnv := create(t, m, "sec-to-env")
+	if err := m.Enable(infoEnv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsEnv := secCtrl.Watchdog.ClassifierForInstance(infoEnv.ID).(*security.LLMClassifier)
+	if clsEnv.Timeout() != 60*time.Second {
+		t.Fatalf("expected process env timeout 60s, got %v", clsEnv.Timeout())
+	}
+
+	// 2. Global config overrides process environment
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "50s", false); err != nil {
+		t.Fatal(err)
+	}
+	infoGlobal := create(t, m, "sec-to-global")
+	if err := m.Enable(infoGlobal.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsGlobal := secCtrl.Watchdog.ClassifierForInstance(infoGlobal.ID).(*security.LLMClassifier)
+	if clsGlobal.Timeout() != 50*time.Second {
+		t.Fatalf("expected global config timeout 50s, got %v", clsGlobal.Timeout())
+	}
+
+	// 3. Instance override beats global config and process environment
+	infoInst := create(t, m, "sec-to-inst")
+	instItem := m.instances[infoInst.ID]
+	if err := instItem.config.Update("SECURITY_GATEWAY_TIMEOUT", "35s", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(infoInst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsInst := secCtrl.Watchdog.ClassifierForInstance(infoInst.ID).(*security.LLMClassifier)
+	if clsInst.Timeout() != 35*time.Second {
+		t.Fatalf("expected instance override timeout 35s, got %v", clsInst.Timeout())
+	}
+
+	// 4. Invalid global configuration falls back safely to default (15s)
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "not-a-duration", false); err != nil {
+		t.Fatal(err)
+	}
+	infoInvalidGlobal := create(t, m, "sec-to-invalid-global")
+	if err := m.Enable(infoInvalidGlobal.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsInvalidGlobal := secCtrl.Watchdog.ClassifierForInstance(infoInvalidGlobal.ID).(*security.LLMClassifier)
+	if clsInvalidGlobal.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected invalid global fallback to %v, got %v", security.DefaultClassifierTimeout, clsInvalidGlobal.Timeout())
+	}
+
+	// 5. Non-positive global configuration falls back safely to default (15s)
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "-20s", false); err != nil {
+		t.Fatal(err)
+	}
+	infoNonPosGlobal := create(t, m, "sec-to-nonpos-global")
+	if err := m.Enable(infoNonPosGlobal.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsNonPosGlobal := secCtrl.Watchdog.ClassifierForInstance(infoNonPosGlobal.ID).(*security.LLMClassifier)
+	if clsNonPosGlobal.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected non-positive global fallback to %v, got %v", security.DefaultClassifierTimeout, clsNonPosGlobal.Timeout())
+	}
+
+	// 6. Global alias SECURITY_CLASSIFIER_TIMEOUT works when SECURITY_GATEWAY_TIMEOUT is cleared
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "", true); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SECURITY_GATEWAY_TIMEOUT", "")
+	_ = os.Unsetenv("SECURITY_GATEWAY_TIMEOUT")
+	if err := m.global.Update("SECURITY_CLASSIFIER_TIMEOUT", "42s", false); err != nil {
+		t.Fatal(err)
+	}
+	infoAliasGlobal := create(t, m, "sec-to-alias-global")
+	if err := m.Enable(infoAliasGlobal.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsAliasGlobal := secCtrl.Watchdog.ClassifierForInstance(infoAliasGlobal.ID).(*security.LLMClassifier)
+	if clsAliasGlobal.Timeout() != 42*time.Second {
+		t.Fatalf("expected global alias timeout 42s, got %v", clsAliasGlobal.Timeout())
+	}
+
+	// 7. SECURITY_GATEWAY_TIMEOUT takes precedence over SECURITY_CLASSIFIER_TIMEOUT
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "55s", false); err != nil {
+		t.Fatal(err)
+	}
+	infoBothGlobal := create(t, m, "sec-to-both-global")
+	if err := m.Enable(infoBothGlobal.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	clsBothGlobal := secCtrl.Watchdog.ClassifierForInstance(infoBothGlobal.ID).(*security.LLMClassifier)
+	if clsBothGlobal.Timeout() != 55*time.Second {
+		t.Fatalf("expected primary timeout 55s, got %v", clsBothGlobal.Timeout())
+	}
+}

@@ -330,14 +330,8 @@ func resolveSecurityGatewayTimeout(scope *runtimescope.Scope, fallback time.Dura
 	for _, key := range keys {
 		raw := ""
 		if scope != nil {
-			if scope.Config != nil {
-				raw = strings.TrimSpace(scope.Config.Get(key))
-			}
-			if raw == "" && scope.Global != nil {
-				raw = strings.TrimSpace(scope.Global.Get(key))
-			}
-		}
-		if raw == "" {
+			raw = strings.TrimSpace(scope.Getenv(key))
+		} else {
 			raw = strings.TrimSpace(os.Getenv(key))
 		}
 		if raw != "" {

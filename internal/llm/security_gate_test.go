@@ -55,6 +55,9 @@ func TestEngineRejectsLockedActorBeforeProviderExecution(t *testing.T) {
 }
 
 func TestEngineModelOutputClassifierFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
 	controller := security.NewController(t.TempDir())
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -81,6 +84,37 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 	want := "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
 	if result.Content != want {
 		t.Fatalf("expected classifier failure message %q, got %q", want, result.Content)
+	}
+
+	snapshot := logs.Snapshot()
+	var watchdogErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			watchdogErrors = append(watchdogErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截:") {
+			engineWarns = append(engineWarns, entry)
+		}
+	}
+	if len(watchdogErrors) != 1 {
+		t.Fatalf("expected exactly 1 Watchdog ERROR log, got %d, snapshot=%+v", len(watchdogErrors), snapshot)
+	}
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	watchdogEvalID := extractEvalID(watchdogErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if watchdogEvalID == "" || watchdogEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Watchdog and Engine, got watchdog=%q, engine=%q", watchdogEvalID, engineEvalID)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
+		}
 	}
 }
 
@@ -130,6 +164,9 @@ func (d *dummyTool) Execute(args string) (string, error) {
 }
 
 func TestEngineToolArgumentClassifierFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
 	controller := security.NewController(t.TempDir())
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -182,9 +219,46 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 	if result.Content != want {
 		t.Fatalf("expected tool argument failure message %q, got %q", want, result.Content)
 	}
+
+	snapshot := logs.Snapshot()
+	var watchdogErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			watchdogErrors = append(watchdogErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "工具入参因安全审查服务异常被阻止:") {
+			engineWarns = append(engineWarns, entry)
+		}
+	}
+	if len(watchdogErrors) != 1 {
+		t.Fatalf("expected exactly 1 Watchdog ERROR log, got %d, snapshot=%+v", len(watchdogErrors), snapshot)
+	}
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	watchdogEvalID := extractEvalID(watchdogErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if watchdogEvalID == "" || watchdogEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Watchdog and Engine, got watchdog=%q, engine=%q", watchdogEvalID, engineEvalID)
+	}
+	if !strings.Contains(engineWarns[0].Content, "tool=dummy_tool") {
+		t.Fatalf("expected tool context in engine WARN log: %q", engineWarns[0].Content)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
+		}
+	}
 }
 
 func TestEngineToolResultClassifierFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
 	controller := security.NewController(t.TempDir())
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -235,6 +309,40 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 	want := "got tool response: FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
 	if result.Content != want {
 		t.Fatalf("expected tool result failure message %q, got %q", want, result.Content)
+	}
+
+	snapshot := logs.Snapshot()
+	var watchdogErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			watchdogErrors = append(watchdogErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "工具结果因安全审查服务异常被隔离:") {
+			engineWarns = append(engineWarns, entry)
+		}
+	}
+	if len(watchdogErrors) != 1 {
+		t.Fatalf("expected exactly 1 Watchdog ERROR log, got %d, snapshot=%+v", len(watchdogErrors), snapshot)
+	}
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	watchdogEvalID := extractEvalID(watchdogErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if watchdogEvalID == "" || watchdogEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Watchdog and Engine, got watchdog=%q, engine=%q", watchdogEvalID, engineEvalID)
+	}
+	if !strings.Contains(engineWarns[0].Content, "tool=dummy_tool") {
+		t.Fatalf("expected tool context in engine WARN log: %q", engineWarns[0].Content)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
+		}
 	}
 }
 
@@ -287,7 +395,7 @@ func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
 	var foundLog bool
 	var evalID string
 	for _, entry := range snapshot {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "模型输出安全审查服务异常 (Fail-Closed)") {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截") {
 			foundLog = true
 			parts := strings.Split(entry.Content, "eval_id=")
 			if len(parts) > 1 {
@@ -296,7 +404,7 @@ func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
 		}
 	}
 	if !foundLog {
-		t.Fatalf("expected Error log for model output security service exception, snapshot=%+v", snapshot)
+		t.Fatalf("expected Warn log for model output security service exception, snapshot=%+v", snapshot)
 	}
 	if evalID == "" || !strings.HasPrefix(evalID, "eval_model_output_") {
 		t.Fatalf("expected valid eval_model_output_* correlation ID, got %q", evalID)
@@ -427,3 +535,15 @@ func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
 	}
 }
 
+
+func extractEvalID(content string) string {
+	idx := strings.Index(content, "eval_id=")
+	if idx == -1 {
+		return ""
+	}
+	val := content[idx+len("eval_id="):]
+	if end := strings.IndexAny(val, " \t\r\n"); end != -1 {
+		val = val[:end]
+	}
+	return strings.TrimSpace(val)
+}

@@ -31,6 +31,12 @@ var ControlPlaneRestartKeys = map[string]bool{
 	"ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true,
 	"SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
+	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
+}
+// SharedKeys can be configured at both global (control plane) and instance scopes.
+var SharedKeys = map[string]bool{
+	"SECURITY_GATEWAY_TIMEOUT":    true,
+	"SECURITY_CLASSIFIER_TIMEOUT": true,
 }
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -97,6 +103,9 @@ func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return
 func allowed(k string, global bool) bool {
 	if !keyPattern.MatchString(k) {
 		return false
+	}
+	if SharedKeys[k] {
+		return true
 	}
 	if global {
 		return GlobalKeys[k]

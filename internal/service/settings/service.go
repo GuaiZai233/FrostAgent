@@ -69,6 +69,8 @@ var knownEnvVars = map[string]envEntry{
 	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true, false},
 	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true, false},
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
+	"SECURITY_GATEWAY_TIMEOUT":    {"安全审查网关独立超时时间", false, true, false},
+	"SECURITY_CLASSIFIER_TIMEOUT": {"安全审查分类器独立超时时间", false, true, false},
 }
 
 // SandboxManager propagates atomic Control Plane sandbox configuration updates.
@@ -134,6 +136,9 @@ func (s *Service) store(k string) *instanceconfig.Store {
 	if instanceconfig.GlobalKeys[k] && s.global != nil {
 		return s.global
 	}
+	if instanceconfig.SharedKeys[k] && s.config == nil && s.global != nil {
+		return s.global
+	}
 	return s.config
 }
 
@@ -193,7 +198,15 @@ func (s *Service) ListEnvVars(
 			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" || key == "ASTRBOT_WS_PATH" {
 				continue
 			}
-			val = s.store(key).Get(key)
+			targetStore := s.store(key)
+			if targetStore != nil {
+				val = targetStore.Get(key)
+			}
+			if instanceconfig.SharedKeys[key] && strings.TrimSpace(val) == "" && s.global != nil {
+				val = s.global.Get(key)
+			}
+		} else if s.global != nil {
+			val = s.global.Get(key)
 		}
 		vars = append(vars, &v1.EnvVar{
 			Key:      key,
@@ -241,17 +254,20 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 
-	if s.config != nil {
-		err := s.store(key).Update(key, value, false)
-		res := &v1.UpdateEnvVarResponse{Success: err == nil}
-		if err != nil {
-			res.Error = err.Error()
-		} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-			s.sandboxManager.RefreshEnabled(func() bool {
-				return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
-			})
+	if s.config != nil || s.global != nil {
+		targetStore := s.store(key)
+		if targetStore != nil {
+			err := targetStore.Update(key, value, false)
+			res := &v1.UpdateEnvVarResponse{Success: err == nil}
+			if err != nil {
+				res.Error = err.Error()
+			} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+				s.sandboxManager.RefreshEnabled(func() bool {
+					return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
+				})
+			}
+			return connect.NewResponse(res), nil
 		}
-		return connect.NewResponse(res), nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,17 +314,20 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 
-	if s.config != nil {
-		err := s.store(key).Update(key, "", true)
-		res := &v1.DeleteEnvVarResponse{Success: err == nil}
-		if err != nil {
-			res.Error = err.Error()
-		} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-			s.sandboxManager.RefreshEnabled(func() bool {
-				return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
-			})
+	if s.config != nil || s.global != nil {
+		targetStore := s.store(key)
+		if targetStore != nil {
+			err := targetStore.Update(key, "", true)
+			res := &v1.DeleteEnvVarResponse{Success: err == nil}
+			if err != nil {
+				res.Error = err.Error()
+			} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
+				s.sandboxManager.RefreshEnabled(func() bool {
+					return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
+				})
+			}
+			return connect.NewResponse(res), nil
 		}
-		return connect.NewResponse(res), nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
