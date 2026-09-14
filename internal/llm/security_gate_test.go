@@ -392,22 +392,215 @@ func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
 	}
 
 	snapshot := logs.Snapshot()
-	var foundLog bool
-	var evalID string
+	var storageErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
 	for _, entry := range snapshot {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截") {
-			foundLog = true
-			parts := strings.Split(entry.Content, "eval_id=")
-			if len(parts) > 1 {
-				evalID = strings.TrimSpace(parts[1])
-			}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			storageErrors = append(storageErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截:") {
+			engineWarns = append(engineWarns, entry)
 		}
 	}
-	if !foundLog {
-		t.Fatalf("expected Warn log for model output security service exception, snapshot=%+v", snapshot)
+	if len(storageErrors) != 1 {
+		t.Fatalf("expected exactly 1 Storage ERROR log, got %d, snapshot=%+v", len(storageErrors), snapshot)
 	}
-	if evalID == "" || !strings.HasPrefix(evalID, "eval_model_output_") {
-		t.Fatalf("expected valid eval_model_output_* correlation ID, got %q", evalID)
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	storageEvalID := extractEvalID(storageErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if storageEvalID == "" || storageEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Storage ERROR and Engine WARN, got storage=%q, engine=%q", storageEvalID, engineEvalID)
+	}
+	if !strings.Contains(storageErrors[0].Content, "principal=test-platform:actor-access-failure") {
+		t.Fatalf("expected principal in storage error log: %q", storageErrors[0].Content)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
+		}
+	}
+}
+
+func TestEngineToolArgumentAccessStoreFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+		},
+	})
+
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			// Corrupt the access store file before the tool argument checkpoint
+			if err := os.WriteFile(controller.Access.Path(), []byte("{corrupt json"), 0600); err != nil {
+				return nil, err
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:       "call_arg_access",
+						Type:     "function",
+						Function: core.ToolCallFunction{Name: "dummy_tool", Arguments: `{"q":"test"}`},
+					}},
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		Security:      controller,
+		Provider:      provider,
+	}
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-toolarg-access",
+	})
+
+	snapshot := logs.Snapshot()
+	var storageErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			storageErrors = append(storageErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "工具入参因安全审查服务异常被阻止:") {
+			engineWarns = append(engineWarns, entry)
+		}
+	}
+	if len(storageErrors) != 1 {
+		t.Fatalf("expected exactly 1 Storage ERROR log, got %d, snapshot=%+v", len(storageErrors), snapshot)
+	}
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	storageEvalID := extractEvalID(storageErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if storageEvalID == "" || storageEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Storage ERROR and Engine WARN, got storage=%q, engine=%q", storageEvalID, engineEvalID)
+	}
+	if !strings.Contains(engineWarns[0].Content, "tool=dummy_tool") {
+		t.Fatalf("expected tool context in engine WARN log: %q", engineWarns[0].Content)
+	}
+	if !strings.Contains(storageErrors[0].Content, "principal=test-platform:actor-toolarg-access") {
+		t.Fatalf("expected principal in storage error log: %q", storageErrors[0].Content)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
+		}
+	}
+}
+
+type corruptTool struct {
+	corruptFn func() error
+}
+
+func (c *corruptTool) Name() string { return "corrupt_tool" }
+func (c *corruptTool) Description() string {
+	return "tool that corrupts access store during execution"
+}
+func (c *corruptTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (c *corruptTool) Execute(args string) (string, error) {
+	if c.corruptFn != nil {
+		if err := c.corruptFn(); err != nil {
+			return "", err
+		}
+	}
+	return "normal result", nil
+}
+
+func TestEngineToolResultAccessStoreFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+		},
+	})
+
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{{
+						ID:       "call_res_access",
+						Type:     "function",
+						Function: core.ToolCallFunction{Name: "corrupt_tool", Arguments: `{"q":"test"}`},
+					}},
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry: map[string]ToolExecutor{
+			"corrupt_tool": &corruptTool{
+				corruptFn: func() error {
+					return os.WriteFile(controller.Access.Path(), []byte("{broken json for result"), 0600)
+				},
+			},
+		},
+		Security: controller,
+		Provider: provider,
+	}
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-toolres-access",
+	})
+
+	snapshot := logs.Snapshot()
+	var storageErrors []logs.LogEntry
+	var engineWarns []logs.LogEntry
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			storageErrors = append(storageErrors, entry)
+		}
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "工具结果因安全审查服务异常被隔离:") {
+			engineWarns = append(engineWarns, entry)
+		}
+	}
+	if len(storageErrors) != 1 {
+		t.Fatalf("expected exactly 1 Storage ERROR log, got %d, snapshot=%+v", len(storageErrors), snapshot)
+	}
+	if len(engineWarns) != 1 {
+		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
+	}
+	storageEvalID := extractEvalID(storageErrors[0].Content)
+	engineEvalID := extractEvalID(engineWarns[0].Content)
+	if storageEvalID == "" || storageEvalID != engineEvalID {
+		t.Fatalf("expected shared eval_id between Storage ERROR and Engine WARN, got storage=%q, engine=%q", storageEvalID, engineEvalID)
+	}
+	if !strings.Contains(engineWarns[0].Content, "tool=corrupt_tool") {
+		t.Fatalf("expected tool context in engine WARN log: %q", engineWarns[0].Content)
+	}
+	if !strings.Contains(storageErrors[0].Content, "principal=test-platform:actor-toolres-access") {
+		t.Fatalf("expected principal in storage error log: %q", storageErrors[0].Content)
+	}
+	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
+		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
+	}
+	for _, entry := range snapshot {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
+		}
 	}
 }
 
@@ -485,6 +678,9 @@ func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
 
 	for _, tc := range stages {
 		t.Run(string(tc.stage), func(t *testing.T) {
+			logs.Init(100)
+			logs.Clear()
+
 			controller := security.NewController(t.TempDir())
 			engine := &Engine{Security: controller}
 			runCtx := RunContext{ActorPlatform: "test-platform", ActorUserID: "actor-stages"}
@@ -507,7 +703,30 @@ func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
 				t.Errorf("[%s] expected reason containing 'access control unavailable', got %q", tc.stage, decision.Reason)
 			}
 
+			// Verify storage failure emits exactly one detailed ERROR log
+			snapshot := logs.Snapshot()
+			var storageErrors []logs.LogEntry
+			for _, entry := range snapshot {
+				if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+					storageErrors = append(storageErrors, entry)
+				}
+			}
+			if len(storageErrors) != 1 {
+				t.Fatalf("[%s] expected exactly 1 storage ERROR log, got %d, snapshot=%+v", tc.stage, len(storageErrors), snapshot)
+			}
+			storageEvalID := extractEvalID(storageErrors[0].Content)
+			if storageEvalID != decision.EvaluationID {
+				t.Fatalf("[%s] expected storage ERROR eval_id %q to match decision.EvaluationID %q", tc.stage, storageEvalID, decision.EvaluationID)
+			}
+			if !strings.Contains(storageErrors[0].Content, "principal=test-platform:actor-stages") {
+				t.Fatalf("[%s] expected principal in storage ERROR log: %q", tc.stage, storageErrors[0].Content)
+			}
+			if !strings.Contains(storageErrors[0].Content, "error_type=") || !strings.Contains(storageErrors[0].Content, "reason=") {
+				t.Fatalf("[%s] expected error_type and reason in storage ERROR log: %q", tc.stage, storageErrors[0].Content)
+			}
+
 			// 2. Policy lock: principal is locked
+			logs.Clear()
 			p, err := runPrincipal(runCtx)
 			if err != nil {
 				t.Fatal(err)
@@ -531,17 +750,24 @@ func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
 			if decisionLocked.Reason != "access denied / locked" {
 				t.Errorf("[%s] expected reason 'access denied / locked', got %q", tc.stage, decisionLocked.Reason)
 			}
+
+			// Verify policy lock emits 0 ERROR logs
+			snapshotLocked := logs.Snapshot()
+			for _, entry := range snapshotLocked {
+				if entry.Level == logs.ERROR {
+					t.Fatalf("[%s] expected 0 ERROR logs on policy lock, got: %+v", tc.stage, entry)
+				}
+			}
 		})
 	}
 }
 
 
 func extractEvalID(content string) string {
-	idx := strings.Index(content, "eval_id=")
-	if idx == -1 {
+	_, val, ok := strings.Cut(content, "eval_id=")
+	if !ok {
 		return ""
 	}
-	val := content[idx+len("eval_id="):]
 	if end := strings.IndexAny(val, " \t\r\n"); end != -1 {
 		val = val[:end]
 	}

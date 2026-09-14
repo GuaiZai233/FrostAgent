@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/security"
 )
 
@@ -39,34 +40,48 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 				EvaluationID: evalID,
 			}
 		}
+		errType := security.ErrorType(accessErr)
+		safeSummary := security.SafeErrorSummary(accessErr)
+		p, pErr := runPrincipal(run)
+		if pErr == nil {
+			e.Log().Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), errType, safeSummary, evalID))
+		} else {
+			e.Log().Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): error_type=%s reason=%s eval_id=%s", errType, safeSummary, evalID))
+		}
 		return true, security.WatchdogDecision{
 			Action:       security.WatchdogBlock,
-			Reason:       fmt.Sprintf("access control unavailable: %s", security.SafeErrorSummary(accessErr)),
+			Reason:       fmt.Sprintf("access control unavailable: %s", safeSummary),
 			IsFailure:    true,
 			EvaluationID: evalID,
-			ErrorType:    security.ErrorType(accessErr),
-			SafeSummary:  security.SafeErrorSummary(accessErr),
+			ErrorType:    errType,
+			SafeSummary:  safeSummary,
 		}
 	}
 	if e.Security.Watchdog == nil {
+		evalID := security.GenerateEvaluationID(stage)
+		e.Log().Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=watchdog is nil eval_id=%s", evalID))
 		return true, security.WatchdogDecision{
 			Action:       security.WatchdogBlock,
 			Reason:       "watchdog unconfigured",
 			IsFailure:    true,
-			EvaluationID: security.GenerateEvaluationID(stage),
+			EvaluationID: evalID,
 			ErrorType:    "unconfigured",
 			SafeSummary:  "watchdog is nil",
 		}
 	}
 	p, err := runPrincipal(run)
 	if err != nil {
+		evalID := security.GenerateEvaluationID(stage)
+		errType := security.ErrorType(err)
+		safeSummary := security.SafeErrorSummary(err)
+		e.Log().Error(logs.SYSTEM, fmt.Sprintf("安全控制状态异常 (Fail-Closed): error_type=%s reason=%s eval_id=%s", errType, safeSummary, evalID))
 		return true, security.WatchdogDecision{
 			Action:       security.WatchdogBlock,
 			Reason:       "invalid principal",
 			IsFailure:    true,
-			EvaluationID: security.GenerateEvaluationID(stage),
-			ErrorType:    security.ErrorType(err),
-			SafeSummary:  security.SafeErrorSummary(err),
+			EvaluationID: evalID,
+			ErrorType:    errType,
+			SafeSummary:  safeSummary,
 		}
 	}
 	instance := e.InstanceID
