@@ -34,14 +34,43 @@ func (m *mockAdapter) Send(ctx context.Context, msg core.OutgoingMessage) error 
 	return nil
 }
 
+const defaultTestToken = "secret_test_token_abc"
+
+func authedGetenv(key string) string {
+	if key == "FROSTAGENT_ACTIONSCAT_TOKEN" || key == "FROSTAGENT_API_KEY" {
+		return defaultTestToken
+	}
+	return ""
+}
+
+func newAuthedRequest(method, url, body string) *http.Request {
+	req := httptest.NewRequest(method, url, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+defaultTestToken)
+	return req
+}
+
 func TestService_Auth(t *testing.T) {
 	dispatcher := core.NewDefaultDispatcher()
 	adapter := &mockAdapter{id: "mock_platform"}
 	dispatcher.RegisterAdapter(adapter)
 
+	// 1. FAIL-CLOSED INVARIANT: When no server token is configured, requests MUST return HTTP 503
+	t.Run("server unconfigured fail-closed 503", func(t *testing.T) {
+		unconfiguredSvc := messages.New(dispatcher, "inst_mock_1", func(s string) string { return "" })
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(`{"platform":"mock_platform","target_id":"t1","content":"hi"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer any_token")
+		w := httptest.NewRecorder()
+		unconfiguredSvc.ServeHTTP(w, req)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 Service Unavailable when server has no token configured, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
 	validToken := "secret_test_token_abc"
 	getenv := func(key string) string {
-		if key == "FROSTAGENT_API_KEY" {
+		if key == "FROSTAGENT_ACTIONSCAT_TOKEN" {
 			return validToken
 		}
 		return ""
@@ -67,31 +96,31 @@ func TestService_Auth(t *testing.T) {
 		return w.Result()
 	}
 
-	// 1. Missing auth
+	// 2. Missing auth -> 401
 	resp := makeReq("", "", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for missing auth, got %d", resp.StatusCode)
 	}
 
-	// 2. Invalid Bearer token
+	// 3. Invalid Bearer token -> 401
 	resp = makeReq("Bearer invalid_token", "", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for invalid Bearer token, got %d", resp.StatusCode)
 	}
 
-	// 3. Valid Bearer token
+	// 4. Valid Bearer token -> 200
 	resp = makeReq("Bearer "+validToken, "", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for valid Bearer token, got %d", resp.StatusCode)
 	}
 
-	// 4. Valid X-FrostAgent-Key
+	// 5. Valid X-FrostAgent-Key -> 200
 	resp = makeReq("", validToken, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for valid X-FrostAgent-Key, got %d", resp.StatusCode)
 	}
 
-	// 5. Valid X-Auth-Token
+	// 6. Valid X-Auth-Token -> 200
 	resp = makeReq("", "", validToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for valid X-Auth-Token, got %d", resp.StatusCode)
@@ -103,11 +132,11 @@ func TestService_InstanceBindingDefense(t *testing.T) {
 	adapter := &mockAdapter{id: "mock_platform"}
 	dispatcher.RegisterAdapter(adapter)
 
-	svc := messages.New(dispatcher, "bound_instance_id_123", func(s string) string { return "" })
+	svc := messages.New(dispatcher, "bound_instance_id_123", authedGetenv)
 
 	// Mismatched instance ID should be rejected with 400 Bad Request
 	bodyMismatched := `{"platform":"mock_platform","target_id":"target_test_1","content":"hello","instance_id":"attacker_instance_999"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(bodyMismatched))
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyMismatched)
 	w := httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -116,7 +145,7 @@ func TestService_InstanceBindingDefense(t *testing.T) {
 
 	// Matching instance ID should succeed
 	bodyMatching := `{"platform":"mock_platform","target_id":"target_test_1","content":"hello","instance_id":"bound_instance_id_123"}`
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(bodyMatching))
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyMatching)
 	w = httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -125,7 +154,7 @@ func TestService_InstanceBindingDefense(t *testing.T) {
 
 	// Empty instance ID should succeed
 	bodyEmpty := `{"platform":"mock_platform","target_id":"target_test_1","content":"hello"}`
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(bodyEmpty))
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyEmpty)
 	w = httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -138,11 +167,11 @@ func TestService_MessageNormalizationAndDispatch(t *testing.T) {
 	adapter := &mockAdapter{id: "mock_platform"}
 	dispatcher.RegisterAdapter(adapter)
 
-	svc := messages.New(dispatcher, "", func(s string) string { return "" })
+	svc := messages.New(dispatcher, "", authedGetenv)
 
 	t.Run("direct content and target", func(t *testing.T) {
 		body := `{"platform":"mock_platform","target_id":"target_test_2","content":"normalized text"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(body))
+		req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
 		w := httptest.NewRecorder()
 		svc.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -162,7 +191,7 @@ func TestService_MessageNormalizationAndDispatch(t *testing.T) {
 
 	t.Run("session string parsing fallback", func(t *testing.T) {
 		body := `{"session":"mock_platform:private:user_test_3","content":"session parsed text"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(body))
+		req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
 		w := httptest.NewRecorder()
 		svc.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -186,7 +215,7 @@ func TestService_MessageNormalizationAndDispatch(t *testing.T) {
 				{"content":"second segment","attachments":[{"type":"image","url":"http://example.com/test.png"}]}
 			]
 		}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(body))
+		req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
 		w := httptest.NewRecorder()
 		svc.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -201,6 +230,39 @@ func TestService_MessageNormalizationAndDispatch(t *testing.T) {
 			t.Fatalf("expected count 2, got %d", resp.Count)
 		}
 	})
+
+	t.Run("actionscat sdk format interoperability", func(t *testing.T) {
+		// ActionsCat actionscat.Reply sends:
+		// {"session": "mock_platform:group:grp_888", "messages": [{"type": "plain", "text": "hello from actions"}]}
+		body := `{
+			"session": "mock_platform:group:grp_888",
+			"messages": [
+				{"type": "plain", "text": "hello from actions"}
+			]
+		}`
+		req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
+		w := httptest.NewRecorder()
+		svc.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for ActionsCat SDK payload, got %d: %s", w.Code, w.Body.String())
+		}
+
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		last := adapter.messages[len(adapter.messages)-1]
+		if last.Platform != "mock_platform" {
+			t.Fatalf("expected Platform 'mock_platform', got %q", last.Platform)
+		}
+		if last.TargetID != "grp_888" {
+			t.Fatalf("expected TargetID 'grp_888', got %q", last.TargetID)
+		}
+		if last.MessageType != "group" {
+			t.Fatalf("expected MessageType 'group', got %q", last.MessageType)
+		}
+		if last.Content != "hello from actions" {
+			t.Fatalf("expected Content 'hello from actions', got %q", last.Content)
+		}
+	})
 }
 
 func TestService_PlatformFallback(t *testing.T) {
@@ -208,11 +270,11 @@ func TestService_PlatformFallback(t *testing.T) {
 	onebotAdapter := &mockAdapter{id: "onebot"}
 	dispatcher.RegisterAdapter(onebotAdapter)
 
-	svc := messages.New(dispatcher, "", func(s string) string { return "" })
+	svc := messages.New(dispatcher, "", authedGetenv)
 
 	// Dispatch to "qq" should fall back to "onebot" adapter
 	body := `{"platform":"qq","target_id":"group_test_qq","content":"qq to onebot"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(body))
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
 	w := httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -231,10 +293,10 @@ func TestService_DispatchFailure(t *testing.T) {
 	failingAdapter := &mockAdapter{id: "mock_failing", err: errors.New("network failure")}
 	dispatcher.RegisterAdapter(failingAdapter)
 
-	svc := messages.New(dispatcher, "", func(s string) string { return "" })
+	svc := messages.New(dispatcher, "", authedGetenv)
 
 	body := `{"platform":"mock_failing","target_id":"target_test_fail","content":"fail text"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", bytes.NewBufferString(body))
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body)
 	w := httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	if w.Code != http.StatusBadGateway {
