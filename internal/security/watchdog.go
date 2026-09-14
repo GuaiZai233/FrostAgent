@@ -28,7 +28,7 @@ type WatchdogDecision struct {
 	IsFailure      bool                  `json:"is_failure,omitempty"`
 }
 
-func generateEvaluationID(stage WatchdogStage) string {
+func GenerateEvaluationID(stage WatchdogStage) string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	if stage != "" {
@@ -315,7 +315,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 	evaluationID := meta.ID
 	if evaluationID == "" {
-		evaluationID = generateEvaluationID(stage)
+		evaluationID = GenerateEvaluationID(stage)
 		meta.ID = evaluationID
 	}
 	if len(content) > MaxInspectionSize {

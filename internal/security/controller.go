@@ -157,7 +157,7 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 		return WatchdogDecision{Action: WatchdogPass}
 	}
 	if meta.ID == "" {
-		meta.ID = generateEvaluationID(StageIngress)
+		meta.ID = GenerateEvaluationID(StageIngress)
 	}
 	if c.Access == nil || c.Watchdog == nil {
 		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable", IsFailure: true, EvaluationID: meta.ID}

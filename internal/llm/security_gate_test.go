@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/security"
 )
 
@@ -242,3 +245,185 @@ type mockMultiStepProvider struct {
 func (m *mockMultiStepProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	return m.chatFunc(ctx, req)
 }
+
+func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	controller := security.NewController(t.TempDir())
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			// Corrupt the access store file before the model output checkpoint
+			if err := os.WriteFile(controller.Access.Path(), []byte("{broken json content"), 0600); err != nil {
+				return nil, err
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是正常的模型输出",
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{},
+		Security:      controller,
+		Provider:      provider,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "你好"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-access-failure",
+	})
+
+	want := "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
+	if result.Content != want {
+		t.Fatalf("expected service failure message %q, got %q", want, result.Content)
+	}
+
+	snapshot := logs.Snapshot()
+	var foundLog bool
+	var evalID string
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "模型输出安全审查服务异常 (Fail-Closed)") {
+			foundLog = true
+			parts := strings.Split(entry.Content, "eval_id=")
+			if len(parts) > 1 {
+				evalID = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if !foundLog {
+		t.Fatalf("expected Error log for model output security service exception, snapshot=%+v", snapshot)
+	}
+	if evalID == "" || !strings.HasPrefix(evalID, "eval_model_output_") {
+		t.Fatalf("expected valid eval_model_output_* correlation ID, got %q", evalID)
+	}
+}
+
+func TestEngineModelOutputAccessStoreLocked(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	controller := security.NewController(t.TempDir())
+	principal, err := security.NewPrincipal("test-platform", "actor-locked-during-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			if err := controller.Access.Lock(principal, "policy violation ban"); err != nil {
+				return nil, err
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是正常的模型输出",
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{},
+		Security:      controller,
+		Provider:      provider,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "你好"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-locked-during-chat",
+	})
+
+	want := "FrostAgent安全控制：模型输出已拦截。"
+	if result.Content != want {
+		t.Fatalf("expected policy block message %q, got %q", want, result.Content)
+	}
+
+	snapshot := logs.Snapshot()
+	var foundLog bool
+	var evalID string
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出被安全控制拦截") {
+			foundLog = true
+			parts := strings.Split(entry.Content, "eval_id=")
+			if len(parts) > 1 {
+				evalID = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if !foundLog {
+		t.Fatalf("expected Warn log for model output policy block, snapshot=%+v", snapshot)
+	}
+	if evalID == "" || !strings.HasPrefix(evalID, "eval_model_output_") {
+		t.Fatalf("expected valid eval_model_output_* correlation ID, got %q", evalID)
+	}
+}
+
+func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
+	stages := []struct {
+		stage      security.WatchdogStage
+		source     security.WatchdogSource
+		wantPrefix string
+	}{
+		{security.StageModelOutput, security.SourceModelOutput, "eval_model_output_"},
+		{security.StageToolArgument, security.SourceToolArgument, "eval_tool_argument_"},
+		{security.StageToolResult, security.SourceToolResult, "eval_tool_result_"},
+	}
+
+	for _, tc := range stages {
+		t.Run(string(tc.stage), func(t *testing.T) {
+			controller := security.NewController(t.TempDir())
+			engine := &Engine{Security: controller}
+			runCtx := RunContext{ActorPlatform: "test-platform", ActorUserID: "actor-stages"}
+
+			// 1. Storage failure: corrupt access store
+			if err := os.WriteFile(controller.Access.Path(), []byte("{malformed json"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			blocked, decision := engine.securityEvaluate(runCtx, tc.stage, tc.source, "payload", "tool_x")
+			if !blocked {
+				t.Errorf("[%s] expected blocked=true on storage failure", tc.stage)
+			}
+			if !decision.IsFailure {
+				t.Errorf("[%s] expected IsFailure=true on access storage failure", tc.stage)
+			}
+			if !strings.HasPrefix(decision.EvaluationID, tc.wantPrefix) {
+				t.Errorf("[%s] expected evaluation ID prefix %q, got %q", tc.stage, tc.wantPrefix, decision.EvaluationID)
+			}
+			if !strings.Contains(decision.Reason, "access control unavailable") {
+				t.Errorf("[%s] expected reason containing 'access control unavailable', got %q", tc.stage, decision.Reason)
+			}
+
+			// 2. Policy lock: principal is locked
+			p, err := runPrincipal(runCtx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Re-create valid access store with lock
+			controllerLocked := security.NewController(t.TempDir())
+			if err := controllerLocked.Access.Lock(p, "test lockout"); err != nil {
+				t.Fatal(err)
+			}
+			engineLocked := &Engine{Security: controllerLocked}
+			blockedLocked, decisionLocked := engineLocked.securityEvaluate(runCtx, tc.stage, tc.source, "payload", "tool_x")
+			if !blockedLocked {
+				t.Errorf("[%s] expected blocked=true on locked principal", tc.stage)
+			}
+			if decisionLocked.IsFailure {
+				t.Errorf("[%s] expected IsFailure=false on locked principal (policy block)", tc.stage)
+			}
+			if !strings.HasPrefix(decisionLocked.EvaluationID, tc.wantPrefix) {
+				t.Errorf("[%s] expected evaluation ID prefix %q, got %q", tc.stage, tc.wantPrefix, decisionLocked.EvaluationID)
+			}
+			if decisionLocked.Reason != "access denied / locked" {
+				t.Errorf("[%s] expected reason 'access denied / locked', got %q", tc.stage, decisionLocked.Reason)
+			}
+		})
+	}
+}
+

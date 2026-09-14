@@ -174,18 +174,20 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
+		c.log().Error(logs.HTTP, fmt.Sprintf("HTTP request failed: %v", err), req.TraceID)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)))
+		c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)), req.TraceID)
 		return nil, &HTTPError{Status: resp.Status, Body: string(body)}
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.log().Error(logs.HTTP, fmt.Sprintf("failed to read response body: %v", err), req.TraceID)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -203,6 +205,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	}
 
 	if openAIResp.Error != nil {
+		c.log().Error(logs.LLM_RESPONSE, fmt.Sprintf("API returned error: %s", openAIResp.Error.Message), req.TraceID)
 		return nil, fmt.Errorf("API returned error: %s", openAIResp.Error.Message)
 	}
 
@@ -220,7 +223,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			if tool.Name != staySilentFallbackToolName {
 				continue
 			}
-			c.log().Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent")
+			c.log().Warn(logs.LLM_RESPONSE, "LLM response contained no choices; falling back to stay_silent", req.TraceID)
 			return &core.ChatResponse{
 				Message: core.ChatMessage{
 					Role: core.RoleAssistant,
@@ -236,6 +239,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 				Usage: usage,
 			}, nil
 		}
+		c.log().Error(logs.LLM_RESPONSE, "LLM response contained no choices", req.TraceID)
 		return nil, fmt.Errorf("no choices in response")
 	}
 

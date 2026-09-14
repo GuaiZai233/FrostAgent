@@ -446,3 +446,76 @@ func TestClient_Chat_PropagatesTraceIDToLogEntries(t *testing.T) {
 	}
 }
 
+func TestClient_Chat_PropagatesTraceIDOnNon200Response(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"rate limit exceeded"}}`, http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	expectedTraceID := "eval-test-non200-trace-12345"
+	client := NewClient(server.URL, "test-api-key")
+	_, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "trace-model",
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: "ping"},
+		},
+		TraceID: expectedTraceID,
+	})
+	if err == nil {
+		t.Fatalf("expected HTTP error, got nil")
+	}
+
+	snapshot := logs.Snapshot()
+	var foundHTTPErrorTrace bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.HTTP && entry.Level == logs.ERROR && entry.TraceID == expectedTraceID {
+			foundHTTPErrorTrace = true
+			if !strings.Contains(entry.Content, "429") {
+				t.Errorf("expected 429 status in error log, got: %s", entry.Content)
+			}
+		}
+	}
+	if !foundHTTPErrorTrace {
+		t.Errorf("expected HTTP error log entry to carry TraceID=%q", expectedTraceID)
+	}
+}
+
+func TestClient_Chat_PropagatesTraceIDOnTransportError(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close() // Close immediately to trigger transport error
+
+	expectedTraceID := "eval-test-transport-trace-67890"
+	client := NewClient(server.URL, "test-api-key")
+	_, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "trace-model",
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: "ping"},
+		},
+		TraceID: expectedTraceID,
+	})
+	if err == nil {
+		t.Fatalf("expected transport error, got nil")
+	}
+
+	snapshot := logs.Snapshot()
+	var foundTransportErrorTrace bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.HTTP && entry.Level == logs.ERROR && entry.TraceID == expectedTraceID {
+			foundTransportErrorTrace = true
+			if !strings.Contains(entry.Content, "HTTP request failed") {
+				t.Errorf("expected 'HTTP request failed' in log, got: %s", entry.Content)
+			}
+		}
+	}
+	if !foundTransportErrorTrace {
+		t.Errorf("expected HTTP transport error log entry to carry TraceID=%q", expectedTraceID)
+	}
+}
+
+

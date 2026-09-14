@@ -1,6 +1,11 @@
 package llm
 
-import "FrostAgent/internal/security"
+import (
+	"errors"
+	"fmt"
+
+	"FrostAgent/internal/security"
+)
 
 func (e *Engine) securityAccess(run RunContext) error {
 	if e.Security == nil {
@@ -25,15 +30,38 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 	if e.Security == nil {
 		return false, security.WatchdogDecision{}
 	}
-	if e.securityAccess(run) != nil {
-		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "access denied / locked"}
+	if accessErr := e.securityAccess(run); accessErr != nil {
+		evalID := security.GenerateEvaluationID(stage)
+		if errors.Is(accessErr, security.ErrLocked) {
+			return true, security.WatchdogDecision{
+				Action:       security.WatchdogBlock,
+				Reason:       "access denied / locked",
+				EvaluationID: evalID,
+			}
+		}
+		return true, security.WatchdogDecision{
+			Action:       security.WatchdogBlock,
+			Reason:       fmt.Sprintf("access control unavailable: %v", accessErr),
+			IsFailure:    true,
+			EvaluationID: evalID,
+		}
 	}
 	if e.Security.Watchdog == nil {
-		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "watchdog unconfigured", IsFailure: true}
+		return true, security.WatchdogDecision{
+			Action:       security.WatchdogBlock,
+			Reason:       "watchdog unconfigured",
+			IsFailure:    true,
+			EvaluationID: security.GenerateEvaluationID(stage),
+		}
 	}
 	p, err := runPrincipal(run)
 	if err != nil {
-		return true, security.WatchdogDecision{Action: security.WatchdogBlock, Reason: "invalid principal", IsFailure: true}
+		return true, security.WatchdogDecision{
+			Action:       security.WatchdogBlock,
+			Reason:       "invalid principal",
+			IsFailure:    true,
+			EvaluationID: security.GenerateEvaluationID(stage),
+		}
 	}
 	instance := e.InstanceID
 	if instance == "" {
