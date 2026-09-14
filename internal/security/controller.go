@@ -2,8 +2,10 @@ package security
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 )
 
@@ -164,7 +166,8 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 	}
 	locked, record, err := c.Access.IsLocked(p)
 	if err != nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "access-control state unavailable", IsFailure: true, EvaluationID: meta.ID}
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制状态异常 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), err, meta.ID))
+		return WatchdogDecision{Action: WatchdogBlock, Reason: fmt.Sprintf("access-control state unavailable: %v", err), IsFailure: true, EvaluationID: meta.ID}
 	}
 	if locked {
 		meta.Principal = p

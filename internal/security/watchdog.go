@@ -2,10 +2,12 @@ package security
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -318,6 +320,14 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		evaluationID = GenerateEvaluationID(stage)
 		meta.ID = evaluationID
 	}
+	if w == nil {
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       "watchdog unconfigured",
+			IsFailure:    true,
+			EvaluationID: evaluationID,
+		}
+	}
 	if len(content) > MaxInspectionSize {
 		meta.At = time.Now().UTC()
 		meta.Principal = p
@@ -347,21 +357,41 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	var lastBlockedHash string
 	hasPriorBlock := false
 	if w.access != nil {
-		lastBlockedHash = w.access.LastBlockedHash(p, time.Now().UTC().Add(-w.strikeWindow))
+		var accessErr error
+		lastBlockedHash, accessErr = w.access.LastBlockedHash(p, time.Now().UTC().Add(-w.strikeWindow))
+		if accessErr != nil {
+			logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), accessErr, evaluationID))
+			meta.At = time.Now().UTC()
+			meta.Principal = p
+			meta.Stage = stage
+			meta.Source = source
+			meta.Action = WatchdogBlock
+			meta.Reason = fmt.Sprintf("access control unavailable: %v", accessErr)
+			meta.Hash = normHash
+			meta.Preview = safePreview(content)
+			if w.audit != nil {
+				_ = w.audit.Append(meta)
+			}
+			return WatchdogDecision{
+				Action:       WatchdogBlock,
+				Reason:       meta.Reason,
+				Event:        meta,
+				EvaluationID: evaluationID,
+				IsFailure:    true,
+			}
+		}
 		hasPriorBlock = lastBlockedHash != ""
 	}
 
 	var classifier Classifier
-	if w != nil {
-		w.mu.RLock()
-		if meta.Instance != "" && w.instanceClassifiers != nil {
-			classifier = w.instanceClassifiers[meta.Instance]
-		}
-		if classifier == nil {
-			classifier = w.classifier
-		}
-		w.mu.RUnlock()
+	w.mu.RLock()
+	if meta.Instance != "" && w.instanceClassifiers != nil {
+		classifier = w.instanceClassifiers[meta.Instance]
 	}
+	if classifier == nil {
+		classifier = w.classifier
+	}
+	w.mu.RUnlock()
 
 	normInput := ClassificationInput{
 		EvaluationID:    evaluationID,
@@ -442,6 +472,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 
 	action := WatchdogPass
 	reason := ""
+	var storeErr error
 
 	isRisky := normMatches || rawMatches || classifierErr
 	classification := normClassification
@@ -468,14 +499,25 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 				if classification.Intent != IntentMalicious || classification.Confidence < 0.70 {
 					action = WatchdogBlock
 				} else {
-					strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
-					if err == nil && locked {
-						action = WatchdogLock
-						reason = "repeated active attempts to evade watchdog blocks"
-					} else if err == nil && strikes > 0 {
-						action = WatchdogStrike
-					} else {
+					if w.access == nil {
 						action = WatchdogBlock
+						reason = "access control unavailable"
+						storeErr = errors.New("access store unconfigured")
+					} else {
+						strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
+						if err != nil {
+							logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储持久化失败 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), err, evaluationID))
+							action = WatchdogBlock
+							reason = fmt.Sprintf("access control persistence failure: %v", err)
+							storeErr = err
+						} else if locked {
+							action = WatchdogLock
+							reason = "repeated active attempts to evade watchdog blocks"
+						} else if strikes > 0 {
+							action = WatchdogStrike
+						} else {
+							action = WatchdogBlock
+						}
 					}
 				}
 			default:
@@ -504,13 +546,15 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		_ = w.audit.Append(meta)
 	}
 
+	isFailure := classifierErr || storeErr != nil
+
 	return WatchdogDecision{
 		Action:         action,
 		Reason:         reason,
 		Classification: &classification,
 		Event:          meta,
 		EvaluationID:   evaluationID,
-		IsFailure:      classifierErr,
+		IsFailure:      isFailure,
 	}
 }
 

@@ -1,10 +1,13 @@
 ﻿package security
 
 import (
+	"FrostAgent/internal/logs"
 	"context"
-	"fmt"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -855,5 +858,212 @@ func TestWatchdogNoProviderFailsClosedStrictly(t *testing.T) {
 	}
 	if len(record.StrikeTimes) != 0 {
 		t.Fatalf("expected 0 strikes accrued on unconfigured provider, got %d", len(record.StrikeTimes))
+	}
+}
+
+type callbackClassifier struct {
+	fn func(ctx context.Context, input ClassificationInput) (ClassificationResult, error)
+}
+
+func (c *callbackClassifier) Classify(ctx context.Context, input ClassificationInput) (ClassificationResult, error) {
+	if c.fn != nil {
+		return c.fn(ctx, input)
+	}
+	return ClassificationResult{
+		RiskLevel:  RiskLevelNone,
+		Confidence: 1.0,
+	}, nil
+}
+
+// TestWatchdogAccessStorePersistenceFailureFailsClosed verifies that when the AccessStore
+// fails to persist a strike/lock update (e.g. storage corrupted, disk full, atomic replacement fails),
+// Watchdog strictly fails closed with WatchdogBlock and IsFailure: true, without punishing the actor
+// (zero strikes, no lock), preserving the EvaluationID, and logging an Error-class failure.
+func TestWatchdogAccessStorePersistenceFailureFailsClosed(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	accessPath := filepath.Join(t.TempDir(), "access.json")
+	access := NewAccessStore(accessPath)
+	ctrl := &Controller{Access: access, Watchdog: NewWatchdog(access, nil)}
+	principal := testPrincipal(t, "test-platform", "store-persist-failure-actor")
+
+	// Pre-populate the access store so initial access checks cleanly pass
+	if err := access.save(accessFile{Version: 1, Records: map[string]AccessRecord{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Classifier corrupts the access store file after initial access/history checks,
+	// but before RecordBlockedSubmission executes.
+	ctrl.SetClassifier(&callbackClassifier{
+		fn: func(ctx context.Context, input ClassificationInput) (ClassificationResult, error) {
+			if err := os.WriteFile(accessPath, []byte("{broken json content"), 0600); err != nil {
+				return ClassificationResult{}, err
+			}
+			return ClassificationResult{
+				Category:   RiskCategoryMaliciousExecution,
+				RiskLevel:  RiskLevelHigh,
+				Intent:     IntentMalicious,
+				Confidence: 0.99,
+				Reason:     "harmful payload detected",
+			}, nil
+		},
+	})
+
+	decision := ctrl.GateIngress(principal, "rm -rf / dangerous exploit", AuditEvent{})
+
+	if decision.Action != WatchdogBlock {
+		t.Fatalf("expected WatchdogBlock on access store persistence failure, got %s", decision.Action)
+	}
+	if !decision.IsFailure {
+		t.Fatal("expected IsFailure: true on access store persistence failure")
+	}
+	if decision.EvaluationID == "" || !strings.HasPrefix(decision.EvaluationID, "eval_ingress_") {
+		t.Fatalf("expected preserved eval_ingress_* EvaluationID, got %q", decision.EvaluationID)
+	}
+	if !strings.Contains(decision.Reason, "access control persistence failure") {
+		t.Fatalf("expected reason containing 'access control persistence failure', got %q", decision.Reason)
+	}
+
+	// Verify user-facing rejection message is service unavailable rather than content policy rejection
+	rejectMsg := ctrl.RejectMessage(principal, decision)
+	if rejectMsg != RejectFailureMsg {
+		t.Fatalf("expected RejectFailureMsg, got %q", rejectMsg)
+	}
+
+	// Verify Error-level log was written with evaluation ID
+	snapshot := logs.Snapshot()
+	var foundErrorLog bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR &&
+			strings.Contains(entry.Content, "安全控制存储持久化失败") &&
+			strings.Contains(entry.Content, decision.EvaluationID) {
+			foundErrorLog = true
+			break
+		}
+	}
+	if !foundErrorLog {
+		t.Fatalf("expected ERROR log for persistence failure containing eval_id=%s, snapshot=%+v", decision.EvaluationID, snapshot)
+	}
+
+	// Verify zero punishment: actor was NOT locked and has zero strikes
+	// Restore valid JSON to access store to inspect persisted state
+	if err := os.WriteFile(accessPath, []byte(`{"version": 1, "records": {}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	locked, record, err := access.IsLocked(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("principal must not be locked after access store persistence failure")
+	}
+	if len(record.StrikeTimes) != 0 {
+		t.Fatalf("expected 0 strikes accrued on persistence failure, got %d", len(record.StrikeTimes))
+	}
+}
+
+// TestWatchdogLastBlockedHashStorageFailureFailsClosed verifies that when LastBlockedHash
+// encounters an unreadable/corrupted access store, it propagates the storage error rather than
+// silently returning an empty history, causing Watchdog to fail closed with IsFailure: true.
+func TestWatchdogLastBlockedHashStorageFailureFailsClosed(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	accessPath := filepath.Join(t.TempDir(), "access.json")
+	access := NewAccessStore(accessPath)
+	wd := NewWatchdog(access, nil)
+	ctrl := &Controller{Access: access, Watchdog: wd}
+	principal := testPrincipal(t, "test-platform", "hash-failure-actor")
+
+	// Corrupt access store before evaluation
+	if err := os.WriteFile(accessPath, []byte("{broken json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, "any content", AuditEvent{})
+
+	if decision.Action != WatchdogBlock {
+		t.Fatalf("expected WatchdogBlock on LastBlockedHash failure, got %s", decision.Action)
+	}
+	if !decision.IsFailure {
+		t.Fatal("expected IsFailure: true on LastBlockedHash storage failure")
+	}
+	if decision.EvaluationID == "" || !strings.HasPrefix(decision.EvaluationID, "eval_ingress_") {
+		t.Fatalf("expected preserved eval_ingress_* EvaluationID, got %q", decision.EvaluationID)
+	}
+	if !strings.Contains(decision.Reason, "access control unavailable") {
+		t.Fatalf("expected reason containing 'access control unavailable', got %q", decision.Reason)
+	}
+
+	// Verify user-facing rejection message
+	rejectMsg := ctrl.RejectMessage(principal, decision)
+	if rejectMsg != RejectFailureMsg {
+		t.Fatalf("expected RejectFailureMsg, got %q", rejectMsg)
+	}
+
+	// Verify Error-level log was written
+	snapshot := logs.Snapshot()
+	var foundErrorLog bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR &&
+			strings.Contains(entry.Content, "安全控制存储状态异常") &&
+			strings.Contains(entry.Content, decision.EvaluationID) {
+			foundErrorLog = true
+			break
+		}
+	}
+	if !foundErrorLog {
+		t.Fatalf("expected ERROR log for storage state failure containing eval_id=%s, snapshot=%+v", decision.EvaluationID, snapshot)
+	}
+}
+
+// TestAccessStoreLastBlockedHashErrorPropagation unit tests that LastBlockedHash
+// surfaces file corruption errors, returns empty string without error on missing store,
+// and returns the expected hash when records exist.
+func TestAccessStoreLastBlockedHashErrorPropagation(t *testing.T) {
+	accessPath := filepath.Join(t.TempDir(), "access.json")
+	access := NewAccessStore(accessPath)
+	principal := testPrincipal(t, "test-platform", "hash-prop-actor")
+
+	// 1. Missing store file: clean empty start, no error
+	h, err := access.LastBlockedHash(principal, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("expected nil error on missing store, got %v", err)
+	}
+	if h != "" {
+		t.Fatalf("expected empty hash on missing store, got %q", h)
+	}
+
+	// 2. Corrupted store file: returns error
+	if err := os.WriteFile(accessPath, []byte("not valid json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = access.LastBlockedHash(principal, time.Now().Add(-time.Hour))
+	if err == nil {
+		t.Fatal("expected error on corrupted store file, got nil")
+	}
+
+	// 3. Valid store file with blocked record: returns hash and nil error
+	now := time.Now().UTC()
+	storeFile := accessFile{
+		Version: 1,
+		Records: map[string]AccessRecord{
+			principal.Key(): {
+				Principal:       principal,
+				LastBlockedHash: "test-hash-12345",
+				LastBlockedAt:   now,
+			},
+		},
+	}
+	if err := access.save(storeFile); err != nil {
+		t.Fatal(err)
+	}
+	h, err = access.LastBlockedHash(principal, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("expected nil error on valid store, got %v", err)
+	}
+	if h != "test-hash-12345" {
+		t.Fatalf("expected hash 'test-hash-12345', got %q", h)
 	}
 }
