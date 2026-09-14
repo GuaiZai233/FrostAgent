@@ -285,7 +285,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
 				if security.Blocks(decision.Action) {
 					if decision.IsFailure {
-						logs.Error(logs.SYSTEM, fmt.Sprintf("OneBot 安全审查服务异常 (Fail-Closed): user=%d reason=%s eval_id=%s", event.UserID, decision.Reason, decision.EvaluationID))
+						errType := decision.ErrorType
+						if errType == "" {
+							errType = "internal"
+						}
+						reason := decision.SafeSummary
+						if reason == "" {
+							reason = decision.Reason
+						}
+						logs.Error(logs.SYSTEM, fmt.Sprintf("OneBot 安全审查服务异常 (Fail-Closed): user=%d error_type=%s reason=%s eval_id=%s", event.UserID, errType, reason, decision.EvaluationID))
 					} else {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
 					}

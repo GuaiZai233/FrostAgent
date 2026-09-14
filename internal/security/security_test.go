@@ -1067,3 +1067,110 @@ func TestAccessStoreLastBlockedHashErrorPropagation(t *testing.T) {
 		t.Fatalf("expected hash 'test-hash-12345', got %q", h)
 	}
 }
+
+func TestErrorTypeAndSafeErrorSummary(t *testing.T) {
+	// 1. ErrorType nil
+	if got := ErrorType(nil); got != "none" {
+		t.Fatalf("expected ErrorType(nil) == 'none', got %q", got)
+	}
+
+	// 2. ErrorType simple error
+	simpleErr := errors.New("something went wrong")
+	if got := ErrorType(simpleErr); got != "*errors.errorString" {
+		t.Fatalf("expected '*errors.errorString', got %q", got)
+	}
+
+	// 3. ErrorType wrapped error
+	innerErr := os.ErrNotExist
+	wrappedErr := fmt.Errorf("wrap1: %w", innerErr)
+	if got := ErrorType(wrappedErr); !strings.Contains(got, "*fmt.wrapError") || !strings.Contains(got, "errorString") {
+		t.Fatalf("expected wrapError with root cause in brackets, got %q", got)
+	}
+
+	// 4. SafeErrorSummary nil
+	if got := SafeErrorSummary(nil); got != "" {
+		t.Fatalf("expected SafeErrorSummary(nil) == '', got %q", got)
+	}
+
+	// 5. SafeErrorSummary secret redaction
+	secretErr := errors.New("upstream failed with Authorization: Bearer sk-ant-secret1234567890 and key=sk-proj-abcdefgh12345678 and https://admin:supersecret@example.com/api")
+	redacted := SafeErrorSummary(secretErr)
+	if strings.Contains(redacted, "sk-ant-secret") || strings.Contains(redacted, "supersecret") || strings.Contains(redacted, "sk-proj-") {
+		t.Fatalf("sensitive tokens leaked in safe summary: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] in sanitized summary, got %q", redacted)
+	}
+
+	// 6. SafeErrorSummary control character & newline normalization
+	ctrlErr := errors.New("error\r\nwith\n\tnewlines\x00and\x1b[31mescapes")
+	normalized := SafeErrorSummary(ctrlErr)
+	if strings.Contains(normalized, "\r") || strings.Contains(normalized, "\n") || strings.Contains(normalized, "\x00") || strings.Contains(normalized, "\x1b") {
+		t.Fatalf("control characters not normalized: %q", normalized)
+	}
+
+	// 7. SafeErrorSummary bound truncation at 256 runes
+	longStr := strings.Repeat("长", 300)
+	longErr := errors.New(longStr)
+	truncated := SafeErrorSummary(longErr)
+	runes := []rune(truncated)
+	// 256 runes + "..." = 259 runes
+	if len(runes) > 259 || !strings.HasSuffix(truncated, "...") {
+		t.Fatalf("expected truncation with '...' suffix, length=%d", len(runes))
+	}
+}
+
+func TestFailClosedSecurityServiceUnavailableInvariant(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	accessPath := filepath.Join(t.TempDir(), "access.json")
+	access := NewAccessStore(accessPath)
+	principal := testPrincipal(t, "test-platform", "user-invariant-actor")
+
+	// 1. Controller GateIngress with storage failure (unreadable store)
+	if err := os.WriteFile(accessPath, []byte("broken json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := &Controller{Access: access, Watchdog: NewWatchdog(access, nil)}
+	decision := ctrl.GateIngress(principal, "any content", AuditEvent{})
+
+	if decision.Action != WatchdogBlock {
+		t.Fatalf("expected WatchdogBlock, got %s", decision.Action)
+	}
+	if !decision.IsFailure {
+		t.Fatal("expected IsFailure: true")
+	}
+	if decision.EvaluationID == "" || !strings.HasPrefix(decision.EvaluationID, "eval_ingress_") {
+		t.Fatalf("expected eval_ingress_* EvaluationID, got %q", decision.EvaluationID)
+	}
+	if decision.ErrorType == "" || decision.SafeSummary == "" {
+		t.Fatalf("expected non-empty ErrorType and SafeSummary, got ErrorType=%q, SafeSummary=%q", decision.ErrorType, decision.SafeSummary)
+	}
+
+	// Verify user-facing rejection message is generic RejectFailureMsg
+	userMsg := ctrl.RejectMessage(principal, decision)
+	if userMsg != RejectFailureMsg {
+		t.Fatalf("expected user-facing RejectFailureMsg, got %q", userMsg)
+	}
+	// Verify user message does not leak internal error details, types, or paths
+	if strings.Contains(userMsg, decision.ErrorType) || strings.Contains(userMsg, decision.SafeSummary) || strings.Contains(userMsg, accessPath) {
+		t.Fatalf("user message leaked internal error information: %q", userMsg)
+	}
+
+	// Verify logs contain error_type, reason, and eval_id
+	snapshot := logs.Snapshot()
+	var foundLog bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR &&
+			strings.Contains(entry.Content, "error_type=") &&
+			strings.Contains(entry.Content, "reason=") &&
+			strings.Contains(entry.Content, "eval_id="+decision.EvaluationID) {
+			foundLog = true
+			break
+		}
+	}
+	if !foundLog {
+		t.Fatalf("expected structured system error log containing error_type, reason, and eval_id, snapshot=%+v", snapshot)
+	}
+}

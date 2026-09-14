@@ -162,12 +162,26 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 		meta.ID = GenerateEvaluationID(StageIngress)
 	}
 	if c.Access == nil || c.Watchdog == nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable", IsFailure: true, EvaluationID: meta.ID}
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       "security control unavailable",
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    "unconfigured",
+			SafeSummary:  "access store or watchdog is nil",
+		}
 	}
 	locked, record, err := c.Access.IsLocked(p)
 	if err != nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制状态异常 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), err, meta.ID))
-		return WatchdogDecision{Action: WatchdogBlock, Reason: fmt.Sprintf("access-control state unavailable: %v", err), IsFailure: true, EvaluationID: meta.ID}
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制状态异常 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), ErrorType(err), SafeErrorSummary(err), meta.ID))
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       fmt.Sprintf("access-control state unavailable: %s", SafeErrorSummary(err)),
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    ErrorType(err),
+			SafeSummary:  SafeErrorSummary(err),
+		}
 	}
 	if locked {
 		meta.Principal = p

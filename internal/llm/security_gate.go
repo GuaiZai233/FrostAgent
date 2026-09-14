@@ -41,9 +41,11 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 		}
 		return true, security.WatchdogDecision{
 			Action:       security.WatchdogBlock,
-			Reason:       fmt.Sprintf("access control unavailable: %v", accessErr),
+			Reason:       fmt.Sprintf("access control unavailable: %s", security.SafeErrorSummary(accessErr)),
 			IsFailure:    true,
 			EvaluationID: evalID,
+			ErrorType:    security.ErrorType(accessErr),
+			SafeSummary:  security.SafeErrorSummary(accessErr),
 		}
 	}
 	if e.Security.Watchdog == nil {
@@ -52,6 +54,8 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 			Reason:       "watchdog unconfigured",
 			IsFailure:    true,
 			EvaluationID: security.GenerateEvaluationID(stage),
+			ErrorType:    "unconfigured",
+			SafeSummary:  "watchdog is nil",
 		}
 	}
 	p, err := runPrincipal(run)
@@ -61,6 +65,8 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 			Reason:       "invalid principal",
 			IsFailure:    true,
 			EvaluationID: security.GenerateEvaluationID(stage),
+			ErrorType:    security.ErrorType(err),
+			SafeSummary:  security.SafeErrorSummary(err),
 		}
 	}
 	instance := e.InstanceID

@@ -28,6 +28,8 @@ type WatchdogDecision struct {
 	Event          AuditEvent            `json:"-"`
 	EvaluationID   string                `json:"evaluation_id,omitempty"`
 	IsFailure      bool                  `json:"is_failure,omitempty"`
+	ErrorType      string                `json:"error_type,omitempty"`
+	SafeSummary    string                `json:"safe_summary,omitempty"`
 }
 
 func GenerateEvaluationID(stage WatchdogStage) string {
@@ -326,6 +328,8 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 			Reason:       "watchdog unconfigured",
 			IsFailure:    true,
 			EvaluationID: evaluationID,
+			ErrorType:    "unconfigured",
+			SafeSummary:  "watchdog is nil",
 		}
 	}
 	if len(content) > MaxInspectionSize {
@@ -360,13 +364,13 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		var accessErr error
 		lastBlockedHash, accessErr = w.access.LastBlockedHash(p, time.Now().UTC().Add(-w.strikeWindow))
 		if accessErr != nil {
-			logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), accessErr, evaluationID))
+			logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), ErrorType(accessErr), SafeErrorSummary(accessErr), evaluationID))
 			meta.At = time.Now().UTC()
 			meta.Principal = p
 			meta.Stage = stage
 			meta.Source = source
 			meta.Action = WatchdogBlock
-			meta.Reason = fmt.Sprintf("access control unavailable: %v", accessErr)
+			meta.Reason = fmt.Sprintf("access control unavailable: %s", SafeErrorSummary(accessErr))
 			meta.Hash = normHash
 			meta.Preview = safePreview(content)
 			if w.audit != nil {
@@ -378,6 +382,8 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 				Event:        meta,
 				EvaluationID: evaluationID,
 				IsFailure:    true,
+				ErrorType:    ErrorType(accessErr),
+				SafeSummary:  SafeErrorSummary(accessErr),
 			}
 		}
 		hasPriorBlock = lastBlockedHash != ""
@@ -407,10 +413,14 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	classifierErr := false
+	var failureType string
+	var failureSummary string
 	var normClassification ClassificationResult
 	if classifier == nil {
 		// No LLM security provider configured: strict Option A fail-closed block without strikes or locks
 		classifierErr = true
+		failureType = "unconfigured"
+		failureSummary = "classifier is nil"
 		normClassification = ClassificationResult{
 			Category:   RiskCategoryPromptInjection,
 			RiskLevel:  RiskLevelHigh,
@@ -419,20 +429,26 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 			Origin:     source,
 			Reason:     "llm security provider not configured; fail-closed block",
 		}
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全审查网关未配置 (Fail-Closed): error_type=unconfigured reason=classifier is nil eval_id=%s", evaluationID))
 	} else {
 		var err error
 		normClassification, err = classifier.Classify(ctx, normInput)
 		if err != nil {
 			// Fail-closed on classifier failure: guaranteed block without striking/locking user
 			classifierErr = true
+			safeSummary := SafeErrorSummary(err)
+			errType := ErrorType(err)
+			failureType = errType
+			failureSummary = safeSummary
 			normClassification = ClassificationResult{
 				Category:   RiskCategoryPromptInjection,
 				RiskLevel:  RiskLevelHigh,
 				Intent:     IntentAmbiguous,
 				Confidence: 0.90,
 				Origin:     source,
-				Reason:     "classifier evaluation error; fail-closed block",
+				Reason:     fmt.Sprintf("classifier evaluation error: %s; fail-closed block", safeSummary),
 			}
+			logs.Error(logs.SYSTEM, fmt.Sprintf("安全审查分类器异常 (Fail-Closed): error_type=%s reason=%s eval_id=%s", errType, safeSummary, evaluationID))
 		}
 	}
 
@@ -446,15 +462,20 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		rawClassification, errRaw = classifier.Classify(ctx, rawInput)
 		if errRaw != nil {
 			classifierErr = true
+			safeSummary := SafeErrorSummary(errRaw)
+			errType := ErrorType(errRaw)
+			failureType = errType
+			failureSummary = safeSummary
 			rawClassification = ClassificationResult{
 				Category:   RiskCategoryPromptInjection,
 				RiskLevel:  RiskLevelHigh,
 				Intent:     IntentAmbiguous,
 				Confidence: 0.90,
 				Origin:     source,
-				Reason:     "classifier evaluation error; fail-closed block",
+				Reason:     fmt.Sprintf("classifier evaluation error: %s; fail-closed block", safeSummary),
 			}
 			normClassification = rawClassification
+			logs.Error(logs.SYSTEM, fmt.Sprintf("安全审查原始文本分类器异常 (Fail-Closed): error_type=%s reason=%s eval_id=%s", errType, safeSummary, evaluationID))
 		}
 	}
 
@@ -503,12 +524,17 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 						action = WatchdogBlock
 						reason = "access control unavailable"
 						storeErr = errors.New("access store unconfigured")
+						failureType = "unconfigured"
+						failureSummary = "access store is nil"
+						logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s error_type=unconfigured reason=access store is nil eval_id=%s", p.Key(), evaluationID))
 					} else {
 						strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
 						if err != nil {
-							logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储持久化失败 (Fail-Closed): principal=%s reason=%v eval_id=%s", p.Key(), err, evaluationID))
+							failureType = ErrorType(err)
+							failureSummary = SafeErrorSummary(err)
+							logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储持久化失败 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), failureType, failureSummary, evaluationID))
 							action = WatchdogBlock
-							reason = fmt.Sprintf("access control persistence failure: %v", err)
+							reason = fmt.Sprintf("access control persistence failure: %s", failureSummary)
 							storeErr = err
 						} else if locked {
 							action = WatchdogLock
@@ -547,6 +573,14 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	}
 
 	isFailure := classifierErr || storeErr != nil
+	if isFailure {
+		if failureType == "" {
+			failureType = "internal"
+		}
+		if failureSummary == "" {
+			failureSummary = SafeErrorSummary(errors.New(reason))
+		}
+	}
 
 	return WatchdogDecision{
 		Action:         action,
@@ -555,6 +589,8 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		Event:          meta,
 		EvaluationID:   evaluationID,
 		IsFailure:      isFailure,
+		ErrorType:      failureType,
+		SafeSummary:    failureSummary,
 	}
 }
 
@@ -611,4 +647,52 @@ func safePreview(content string) string {
 		content = content[:160]
 	}
 	return content
+}
+
+// RedactSecrets replaces sensitive credentials, tokens, and authorization headers with "[REDACTED]".
+func RedactSecrets(s string) string {
+	return redactSecrets(s)
+}
+
+// ErrorType returns a detailed string representation of the error's concrete Go type
+// and any unwrapped root causes (e.g. "*fmt.wrapError[*os.PathError]" or "*json.SyntaxError").
+func ErrorType(err error) string {
+	if err == nil {
+		return "none"
+	}
+	root := err
+	for {
+		u := errors.Unwrap(root)
+		if u == nil {
+			break
+		}
+		root = u
+	}
+	if root != err {
+		return fmt.Sprintf("%T[%T]", err, root)
+	}
+	return fmt.Sprintf("%T", err)
+}
+
+// SafeErrorSummary redacts credentials, normalizes control/newline characters,
+// and truncates the error message to a safe length (default 256 runes),
+// preventing sensitive credential leakage and log-injection attacks.
+func SafeErrorSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := redactSecrets(err.Error())
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 256
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		return string(runes[:maxLen]) + "..."
+	}
+	return s
 }
