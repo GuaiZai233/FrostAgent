@@ -47,6 +47,7 @@ type ActionMessage struct {
 type Action struct {
 	Type           string            `json:"type"`                      // 默认为 "action"
 	Action         string            `json:"action"`                    // "send_message"
+	Platform       string            `json:"platform,omitempty"`        // 平台标识 (如 "astrbot", "qq", "telegram", "wechat")
 	SessionID      string            `json:"session_id,omitempty"`      // 目标会话 ID
 	TargetID       string            `json:"target_id,omitempty"`       // 目标群 ID 或用户 ID
 	MessageType    string            `json:"message_type,omitempty"`    // "group" 或 "private"

@@ -312,6 +312,8 @@ class FrostAgentWSClient:
         group_id = str(action.get("group_id") or "")
         user_id = str(action.get("user_id") or "")
         platform = str(action.get("platform") or "")
+        if not platform:
+            platform = "astrbot"
         message_type = str(action.get("message_type") or "")
         target_id = str(action.get("target_id") or group_id or user_id)
 

@@ -144,6 +144,22 @@ func (c *GroupCompactor) BufferSize() int {
 	return c.bufferSize
 }
 
+// Provider returns the compactor's underlying LLMProvider.
+func (c *GroupCompactor) Provider() core.LLMProvider {
+	if c == nil {
+		return nil
+	}
+	return c.provider
+}
+
+// Model returns the compactor's configured model name.
+func (c *GroupCompactor) Model() string {
+	if c == nil {
+		return ""
+	}
+	return c.model
+}
+
 func (c *GroupCompactor) MaxBufferSize() int {
 	if c == nil {
 		return 0

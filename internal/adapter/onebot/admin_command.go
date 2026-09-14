@@ -16,62 +16,49 @@ import (
 )
 
 // extractOneBotAdminCommand parses a OneBot event to see if it is an administrator command candidate.
-// It strictly requires a real @ targeting the bot (matching event.SelfID).
+// It strictly requires a real @ targeting the bot (matching event.SelfID) in the current message only.
 func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *runtimescope.Scope) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
 	selfIDStr := strconv.FormatInt(event.SelfID, 10)
-	raws := EventRawMessages(event)
-	if len(raws) == 0 {
+	if selfIDStr == "0" || selfIDStr == "" {
+		return cmd, false, nil
+	}
+	segments := ParseMessageSegments(event.Message)
+	if len(segments) == 0 {
 		return cmd, false, nil
 	}
 
 	hasRealAt := false
 	var remainingSegments []content.MessageSegment
 
-	for _, raw := range raws {
-		segments := ParseMessageSegments(raw)
-		for _, seg := range segments {
-			if seg.Type == "at" {
-				qqVal := seg.Data["qq"]
-				var atQQ string
-				switch v := qqVal.(type) {
-				case string:
-					atQQ = v
-				case float64:
-					atQQ = strconv.FormatFloat(v, 'f', -1, 64)
-				case json.Number:
-					atQQ = v.String()
-				case int:
-					atQQ = strconv.Itoa(v)
-				case int64:
-					atQQ = strconv.FormatInt(v, 10)
-				}
-				if selfIDStr != "0" && selfIDStr != "" && atQQ == selfIDStr {
-					hasRealAt = true
-					continue // Strip the bot's @ component
-				}
+	for _, seg := range segments {
+		if seg.Type == "at" {
+			qqVal := seg.Data["qq"]
+			var atQQ string
+			switch v := qqVal.(type) {
+			case string:
+				atQQ = v
+			case float64:
+				atQQ = strconv.FormatFloat(v, 'f', -1, 64)
+			case json.Number:
+				atQQ = v.String()
+			case int:
+				atQQ = strconv.Itoa(v)
+			case int64:
+				atQQ = strconv.FormatInt(v, 10)
 			}
-			remainingSegments = append(remainingSegments, seg)
+			if atQQ == selfIDStr {
+				hasRealAt = true
+				continue // Strip the bot's @ component
+			}
 		}
-	}
-
-	var text string
-	if hasRealAt {
-		text = extractUserText(remainingSegments, nil, scope)
-	} else if selfIDStr != "0" && selfIDStr != "" {
-		// Fallback for text representation: [@<selfID>] ...
-		fullText := extractUserText(remainingSegments, nil, scope)
-		prefixTag := fmt.Sprintf("[@%s]", selfIDStr)
-		trimmedFull := strings.TrimSpace(fullText)
-		if strings.HasPrefix(trimmedFull, prefixTag) {
-			hasRealAt = true
-			text = strings.TrimSpace(trimmedFull[len(prefixTag):])
-		}
+		remainingSegments = append(remainingSegments, seg)
 	}
 
 	if !hasRealAt {
 		return cmd, false, nil
 	}
 
+	text := extractUserText(remainingSegments, nil, scope)
 	text = strings.TrimSpace(text)
 	return admincmd.ParseCandidate(text, prefix)
 }

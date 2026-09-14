@@ -2,12 +2,14 @@ package onebot
 
 import (
 	"FrostAgent/internal/admincmd"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -94,7 +96,7 @@ func TestExtractOneBotAdminCommand(t *testing.T) {
 		t.Fatalf("expected non-candidate without real @, got isCand=true")
 	}
 
-	// 4. Text representation fallback [@<selfID>]
+	// 4. Text representation [@<selfID>] is NOT accepted (must be real at segment)
 	textFallbackMsg, _ := json.Marshal([]map[string]any{
 		{"type": "text", "data": map[string]any{"text": "[@10001] /compact"}},
 	})
@@ -105,12 +107,35 @@ func TestExtractOneBotAdminCommand(t *testing.T) {
 		MessageType: "group",
 		Message:     textFallbackMsg,
 	}
-	cmd, isCand, err = extractOneBotAdminCommand(eventTextFallback, "/", scope)
-	if !isCand || err != nil || cmd.Type != admincmd.CmdCompact {
-		t.Fatalf("expected CmdCompact candidate for text fallback, got isCand=%v err=%v type=%v", isCand, err, cmd.Type)
+	_, isCand, err = extractOneBotAdminCommand(eventTextFallback, "/", scope)
+	if isCand {
+		t.Fatalf("expected pure text mention to be rejected as non-candidate, got isCand=true")
 	}
 
-	// 5. Word prefix
+	// 5. Historical @ in event.Messages should NOT authorize command in event.Message
+	histAtMsg, _ := json.Marshal([]any{
+		[]map[string]any{
+			{"type": "at", "data": map[string]any{"qq": "10001"}},
+			{"type": "text", "data": map[string]any{"text": " hi"}},
+		},
+	})
+	currNoAtMsg, _ := json.Marshal([]map[string]any{
+		{"type": "text", "data": map[string]any{"text": "/reset"}},
+	})
+	eventHistAt := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     currNoAtMsg,
+		Messages:    histAtMsg,
+	}
+	_, isCand, err = extractOneBotAdminCommand(eventHistAt, "/", scope)
+	if isCand {
+		t.Fatalf("expected historical @ in event.Messages to not trigger command, got isCand=true")
+	}
+
+	// 6. Word prefix
 	wordScope := newAdminTestScope(t, map[string]string{
 		admincmd.AdminCommandPrefixEnv: "execute",
 	})
@@ -383,5 +408,130 @@ func TestQueuedTurnEpochInvalidation(t *testing.T) {
 	}
 	if turn2Valid {
 		t.Errorf("expected turn2 to be invalidated after session reset, but IsValid returned true")
+	}
+}
+
+type mockLLMCallbackProvider struct {
+	onChat func()
+}
+
+func (m *mockLLMCallbackProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	if m.onChat != nil {
+		m.onChat()
+	}
+	return &core.ChatResponse{
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: "stale reply",
+		},
+	}, nil
+}
+
+func TestOneBotProcessEvent_EpochInvalidationDuringProcessing(t *testing.T) {
+	wsConn, actionCh, cleanup := setupTestWS(t)
+	defer cleanup()
+
+	sm := llm.NewSessionManager()
+	sess := sm.GetOrCreate("group:50001")
+
+	resetDone := false
+	provider := &mockLLMCallbackProvider{
+		onChat: func() {
+			_ = sess.ResetSession(nil)
+			resetDone = true
+		},
+	}
+
+	engine := &llm.Engine{
+		MaxIterations:  3,
+		SessionManager: sm,
+		ModelName:      "mock-model",
+		Provider:       provider,
+	}
+
+	turn := sess.ReserveTurn()
+	msgBytes, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " hello"}},
+	})
+	event := model.OneBotEvent{
+		PostType:    "message",
+		MessageType: "group",
+		SelfID:      10001,
+		GroupID:     50001,
+		UserID:      501,
+		Message:     msgBytes,
+	}
+
+	processEvent(wsConn, event, engine, turn, nil)
+
+	if !resetDone {
+		t.Fatalf("expected onChat to be called")
+	}
+
+	select {
+	case act := <-actionCh:
+		if act.Action == "send_group_msg" {
+			t.Errorf("expected NO send_group_msg action when epoch was invalidated, got: %+v", act)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// No action sent - ok
+	}
+
+	if len(sess.Snapshot()) != 0 {
+		t.Errorf("expected session history to remain empty after reset, got %d messages", len(sess.Snapshot()))
+	}
+}
+
+func TestOneBotProcessEvent_EpochInvalidationBeforeReply(t *testing.T) {
+	wsConn, actionCh, cleanup := setupTestWS(t)
+	defer cleanup()
+
+	sm := llm.NewSessionManager()
+	sess := sm.GetOrCreate("group:50002")
+
+	providerCalled := false
+	provider := &mockLLMCallbackProvider{
+		onChat: func() {
+			providerCalled = true
+		},
+	}
+
+	engine := &llm.Engine{
+		MaxIterations:  3,
+		SessionManager: sm,
+		ModelName:      "mock-model",
+		Provider:       provider,
+	}
+
+	turn := sess.ReserveTurn()
+
+	// Invalidate epoch before processEvent executes quote lookup / preprocessing
+	_ = sess.ResetSession(nil)
+
+	msgBytes, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " hello"}},
+	})
+	event := model.OneBotEvent{
+		PostType:    "message",
+		MessageType: "group",
+		SelfID:      10001,
+		GroupID:     50002,
+		UserID:      502,
+		Message:     msgBytes,
+	}
+
+	processEvent(wsConn, event, engine, turn, nil)
+
+	if providerCalled {
+		t.Fatalf("provider should not have been called when turn was invalidated before processing")
+	}
+
+	select {
+	case act := <-actionCh:
+		t.Errorf("expected NO action when turn was invalidated before processing, got: %+v", act)
+	case <-time.After(100 * time.Millisecond):
+		// No action sent - ok
 	}
 }

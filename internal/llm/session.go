@@ -234,6 +234,8 @@ type SessionContext struct {
 
 	activeCancel      context.CancelFunc
 	epoch             uint64
+	historySeq        []uint64
+	nextMsgSeq        uint64
 	privateCompacting bool
 
 	groupCompactSummary    string
@@ -310,6 +312,9 @@ func (s *SessionContext) Epoch() uint64 {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
 	return s.epoch
 }
 
@@ -330,6 +335,9 @@ func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, u
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	s.activeCancel = cancel
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
 	currentEpoch := s.epoch
 
 	var once sync.Once
@@ -363,9 +371,9 @@ func (s *SessionContext) CancelActiveRun() {
 // 2. Increments the epoch to invalidate in-flight or queued FIFO turns.
 // 3. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
 // 4. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
-func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) {
+func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
 	if s == nil {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	if s.activeCancel != nil {
@@ -374,6 +382,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) {
 	}
 	s.epoch++
 	s.History = nil
+	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -389,8 +398,9 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) {
 	s.mu.Unlock()
 
 	if groupSummaryStore != nil && conversationID != "" {
-		_ = groupSummaryStore.Delete(conversationID)
+		return groupSummaryStore.Delete(conversationID)
 	}
+	return nil
 }
 
 // PrivateCompactSnapshot captures messages to be summarized in private chat.
@@ -398,6 +408,7 @@ type PrivateCompactSnapshot struct {
 	Messages []ChatMessage
 	Count    int
 	Epoch    uint64
+	LastSeq  uint64
 }
 
 var (
@@ -420,14 +431,27 @@ func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error
 		return PrivateCompactSnapshot{}, ErrNothingToCompact
 	}
 
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+
 	s.privateCompacting = true
 	snapshotMsgs := make([]ChatMessage, len(s.History))
 	copy(snapshotMsgs, s.History)
+	var lastSeq uint64
+	if len(s.historySeq) > 0 {
+		lastSeq = s.historySeq[len(s.historySeq)-1]
+	}
 
 	return PrivateCompactSnapshot{
 		Messages: snapshotMsgs,
 		Count:    len(s.History),
 		Epoch:    s.epoch,
+		LastSeq:  lastSeq,
 	}, nil
 }
 
@@ -449,18 +473,38 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 		return false
 	}
 
-	var remaining []ChatMessage
-	if len(s.History) > snapshot.Count {
-		remaining = append([]ChatMessage(nil), s.History[snapshot.Count:]...)
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
 	}
 
-	newHistory := []ChatMessage{
-		{Role: "user", Content: "[先前对话总结] " + summary},
-		{Role: "assistant", Content: "了解，我已记住上述先前的对话背景。"},
+	var remaining []ChatMessage
+	var remainingSeq []uint64
+	for i, seq := range s.historySeq {
+		if seq > snapshot.LastSeq {
+			remaining = append(remaining, s.History[i])
+			remainingSeq = append(remainingSeq, seq)
+		}
 	}
+
+	newHistory := make([]ChatMessage, 0, 2+len(remaining))
+	newHistory = append(newHistory,
+		ChatMessage{Role: "user", Content: "[先前对话总结] " + summary},
+		ChatMessage{Role: "assistant", Content: "了解，我已记住上述先前的对话背景。"},
+	)
 	newHistory = append(newHistory, remaining...)
 
+	newSeq := make([]uint64, len(newHistory))
+	for i := range newSeq {
+		s.nextMsgSeq++
+		newSeq[i] = s.nextMsgSeq
+	}
+
 	s.History = newHistory
+	s.historySeq = newSeq
 	s.UpdatedAt = time.Now()
 	return true
 }
@@ -556,6 +600,11 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	}
 
 	s.History = newMessages
+	s.historySeq = make([]uint64, len(newMessages))
+	for i := range s.historySeq {
+		s.nextMsgSeq++
+		s.historySeq[i] = s.nextMsgSeq
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -570,6 +619,18 @@ func (s *SessionContext) TrimHistory(max int) {
 	trimmed := make([]ChatMessage, max)
 	copy(trimmed, s.History[len(s.History)-max:])
 	s.History = trimmed
+
+	if len(s.historySeq) >= len(s.History) {
+		trimmedSeq := make([]uint64, max)
+		copy(trimmedSeq, s.historySeq[len(s.historySeq)-max:])
+		s.historySeq = trimmedSeq
+	} else {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -1046,6 +1107,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
+		epoch:               1,
 		groupCompactSummary: summary,
 	}
 	sm.sessions[canonicalID] = session
@@ -1110,6 +1172,15 @@ func (s *SessionContext) AddMessage(msg core.ChatMessage) {
 			}
 		}
 	}
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+	s.nextMsgSeq++
+	s.historySeq = append(s.historySeq, s.nextMsgSeq)
 	s.History = append(s.History, llmMsg)
 	s.UpdatedAt = time.Now()
 }
@@ -1128,6 +1199,7 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -1172,9 +1244,9 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 // ResetSession resets the specified session across canonical keys and aliases,
 // cancelling active generation, clearing history/buffers/summaries, and removing
 // persisted group summary from disk.
-func (sm *SessionManager) ResetSession(sessionID string) {
+func (sm *SessionManager) ResetSession(sessionID string) error {
 	if sm == nil {
-		return
+		return nil
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	canonicalID := memory.CanonicalSessionKey(sessionID)
@@ -1201,10 +1273,11 @@ func (sm *SessionManager) ResetSession(sessionID string) {
 	sm.mu.RUnlock()
 
 	if ok && session != nil {
-		session.ResetSession(store)
+		return session.ResetSession(store)
 	} else if store != nil {
-		_ = store.Delete(canonicalID)
+		return store.Delete(canonicalID)
 	}
+	return nil
 }
 
 // ── core.SessionStore interface implementation ──

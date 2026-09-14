@@ -2,11 +2,13 @@ package astrbot
 
 import (
 	"FrostAgent/internal/admincmd"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -327,5 +329,128 @@ func TestAstrBotQueuedTurnEpochInvalidation(t *testing.T) {
 	}
 	if turn2Valid {
 		t.Errorf("expected turn2 to be invalidated after session reset, but IsValid returned true")
+	}
+}
+
+func TestSendAstrBotAdminReply_PlatformPopulated(t *testing.T) {
+	conn, actionCh, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+
+	// 1. Explicit platform
+	eventTG := Event{
+		MessageID:   "msg_tg_01",
+		Platform:    "telegram",
+		MessageType: "group",
+		GroupID:     "tg_group_1",
+		UserID:      "tg_user_1",
+	}
+	if err := sendAstrBotAdminReply(eventTG, conn, "测试回复", false); err != nil {
+		t.Fatalf("sendAstrBotAdminReply failed: %v", err)
+	}
+
+	select {
+	case act := <-actionCh:
+		if act.Platform != "telegram" {
+			t.Errorf("expected act.Platform == 'telegram', got %q", act.Platform)
+		}
+		if act.GroupID != "tg_group_1" {
+			t.Errorf("expected act.GroupID == 'tg_group_1', got %q", act.GroupID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for action")
+	}
+
+	// 2. Default platform fallback
+	eventDefault := Event{
+		MessageID:   "msg_def_01",
+		Platform:    "",
+		MessageType: "private",
+		UserID:      "user_1",
+	}
+	if err := sendAstrBotAdminReply(eventDefault, conn, "测试私聊回复", false); err != nil {
+		t.Fatalf("sendAstrBotAdminReply failed: %v", err)
+	}
+
+	select {
+	case act := <-actionCh:
+		if act.Platform != "astrbot" {
+			t.Errorf("expected act.Platform == 'astrbot', got %q", act.Platform)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for action")
+	}
+}
+
+type mockLLMCallbackProvider struct {
+	onChat func()
+}
+
+func (m *mockLLMCallbackProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	if m.onChat != nil {
+		m.onChat()
+	}
+	return &core.ChatResponse{
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: "stale reply",
+		},
+	}, nil
+}
+
+func TestAstrBotProcessEvent_EpochInvalidationDuringProcessing(t *testing.T) {
+	conn, actionCh, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+
+	sm := llm.NewSessionManager()
+	sess := sm.GetOrCreate("group:50001")
+
+	// Provider that triggers session reset in the middle of generation
+	resetDone := false
+	provider := &mockLLMCallbackProvider{
+		onChat: func() {
+			_ = sess.ResetSession(nil)
+			resetDone = true
+		},
+	}
+
+	engine := &llm.Engine{
+		MaxIterations:  3,
+		SessionManager: sm,
+		ModelName:      "mock-model",
+		Provider:       provider,
+	}
+
+	turn := sess.ReserveTurn()
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_epoch_01",
+		SessionID:   "group:50001",
+		Platform:    "qq",
+		MessageType: "group",
+		GroupID:     "50001",
+		UserID:      "user_501",
+		Content:     "hello",
+		IsWake:      true,
+	}
+
+	processEvent(conn, event, engine, turn, nil)
+
+	if !resetDone {
+		t.Fatalf("expected onChat to be called")
+	}
+
+	// Verify no message action sent, and history was not written back
+	select {
+	case act := <-actionCh:
+		if act.Action == "send_message" {
+			t.Errorf("expected NO send_message action when epoch was invalidated, got: %+v", act)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// No action sent - ok
+	}
+
+	if len(sess.Snapshot()) != 0 {
+		t.Errorf("expected session history to remain empty after reset, got %d messages", len(sess.Snapshot()))
 	}
 }

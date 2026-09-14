@@ -170,8 +170,18 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **真实 @ 机器人强门禁 (Real-At Targeting Bot Verification)**：
   - 无论在群聊还是私聊场景下，触发指令均严格强制要求当前消息显式包含针对 Bot 自身的**真实 @ 提及**；
   - 严禁裸指令词触发、文本唤醒词误触、自定义别名/代称识别、引用回复偷渡以及历史消息 @ 冒充；
-  - **OneBot 端适配**：严格扫描消息段数组（`[]content.MessageSegment`），仅当匹配到 `seg.Type == "at"` 且目标 QQ 与当前登录账号一致（`seg.Data["qq"] == event.SelfID`）时判定有效，并在判定成功后从消息链中精准剥离该 Bot @ 元素以提取纯指令文本；
+  - **OneBot 端适配**：严格扫描当前单条入站消息段数组（`event.Message`），仅当匹配到协议原生段 `seg.Type == "at"` 且目标 QQ 与当前登录账号一致（`seg.Data["qq"] == event.SelfID`）时判定有效，完全忽略历史回放 `event.Messages`，严禁纯文本 `[@<botID>]` 或正则假 At 规避，并在判定成功后从消息链中精准剥离该 Bot @ 元素以提取纯指令文本；
   - **AstrBot 端适配**：严格依赖协议层 `event.IsAt == true` 强元数据标识，并由 `StripLeadingMention` 剔除文本首部的提及前缀。
+- **代数一致性与并发执行守卫 (Epoch Invalidation & Concurrency Guards)**：
+  - **初始代数不变式**：会话默认初始 Epoch 设定为 1（`Epoch()`, `BeginRun()`, `GetOrCreate()`），确保首轮对话即处于严格的代数防线保护下；
+  - **预留时刻锚定**：适配器在预留会话轮次时刻（`turn.Epoch()`）即刻锚定 `startEpoch`，并在阻塞式引用消息查找（`lookupReplyContext` / `get_msg`）与多模态视觉预处理完成后持续核验，防止长耗时预处理掩盖并覆盖重置操作；
+  - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
+  - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
+  - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。
+- **私聊压缩历史序列单调性 (Sequence-Based Private Compaction Invariant)**：
+  - 会话上下文使用全局严格单调递增的序列号（`nextMsgSeq uint64`、`historySeq []uint64`）追踪每一条历史消息；
+  - 私聊压缩快照记录捕获上限 `snapshot.LastSeq`；提交时基于该序列阈值保留所有在此期间追加的新消息，免疫并发历史裁剪（`TrimHistory`/`TrimSession`）导致的切片错位与静默丢消息缺陷；
+  - 重构压缩历史后重新分配连续递增序列号，保持单调性不变与切片长度严格对齐。
 - **自适应前缀解析规范 (Adaptive Prefix Parsing)**：
   - 默认前缀为 `/`，由实例环境变量 `ADMIN_COMMAND_PREFIX` 控制；
   - **符号型前缀**（以标点符号结尾，如 `/`、`!`、`#`）：允许与指令名直接紧凑相连（如 `@bot /reset`）或留有任意空格（如 `@bot / reset`）；
@@ -187,27 +197,31 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **五大核心运维指令语义与调度保障 (Core Command Semantics)**：
   - **`reset` 会话重置与 In-Flight 及时打断**：
     - 原子重置当前会话（支持群聊与私聊），清空持久历史记录、内存滚动摘要、未压缩消息缓冲及映射、待处理记忆提取项；
-    - 物理删除 `groupsummary.Store` 磁盘上的持久化群摘要文件；
+    - 故障感知的持久摘要删除：调用 `groupsummary.Store.Delete` 物理删除磁盘文件，细化捕获底层文件系统 I/O 错误并向管理员透明反馈，杜绝掩盖删除失败假称成功；
     - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
     - 递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交检测到 Epoch 变动时主动放弃写入持久历史与发送回复；
     - 回复文本：「当前会话已重置。」；
   - **`ban <userID>` 全局封禁**：
     - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；
     - 防御性拦截：严禁封禁管理员调用者自身，严禁封禁 `ADMIN_QQ_IDS` 列表中的任何管理员；
-    - 跨平台规范化：将目标 ID 映射为标准 QQ Principal（`Principal{Platform: "qq", ID: userID}`）；
+    - 跨平台规范化：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定；
     - 回复文本：「已成功封禁用户 <userID>。」；
   - **`unban <userID>` 全局解封**：
-    - 通过 `security.Controller.Unlock` 解除目标用户的全局锁定状态；
+    - 同样基于规范化平台 Principal，通过 `security.Controller.Unlock` 解除目标用户的全局锁定状态；
     - 回复文本：「已成功解封用户 <userID>。」；
   - **`compact` 强制即时上下文压缩**：
     - 突破常规自动化压缩的缓冲区消息条数阈值（`bufferSize`）与时间冷却限制（`minInterval`），立即对当前会话启动总结压缩；
+    - **独立工作负载路由解耦**：私聊压缩解耦于普通对话模型路由，统一调度至 `WorkloadGroupCompact` 专属提供商与模型，即使当前会话被规则禁用日常对话，管理员仍可独立调度会话压缩；
     - 群聊会话调用 `GroupCompactor.ForceCompact`，私聊会话启动专属单轮压缩工作流并在后台完成原子提交；
     - 具备防重入状态防护：无可压缩内容或已有压缩任务正在执行时返回友好提示；
-    - 双阶段异步回执：触发时立即发送「已开始...压缩总结...」起始回执（AstrBot 携带 `IsIntermediate: true` 标识），后台异步执行完毕后追发最终成功/失败通知；
+    - **双阶段异步回执时序门禁**：设立 `startSent` 门禁通道，强制确保「已开始...压缩总结...」起始回执（AstrBot 携带 `IsIntermediate: true` 标识）由底层传输成功发散后，才释放后台异步执行完毕后的最终完成/失败通知，保证因果时序严格一致；
   - **`reflect` 即时记忆反思**：
     - 针对当前会话所有者（`group:<id>` 或 `private:<id>`）调度 `ReflectionManager.Start` 进行深度记忆反思提炼；
     - 内部维护互斥运行锁，已有任务进行中时阻止重复触发；
-    - 同样采用起始回执与完成回执的双阶段异步反馈机制。
+    - 同样采用起始回执与完成回执的双阶段异步反馈时序门禁机制。
+- **AstrBot 出站平台元数据与主动 UMO 路由 (AstrBot Outbound Platform & Proactive UMO Routing)**：
+  - 出站 `Action` 结构体显式声明 `Platform` 字段并由适配器全量填入；
+  - 当后台任务或长耗时执行超过插件等待超时（120s）回退至主动推送（`_dispatch_proactive_action`）时，系统精确依据 `Platform` 与会话类型构造 UMO（`{platform}:GroupMessage:{id}` 或 `{platform}:FriendMessage:{id}`），彻底杜绝跨平台消息投递丢失。
 - **Web 端指令设置与多实例隔离 (`#/settings/commands`)**：
   - 前端控制台在「系统设置」第三张卡片独立提供「指令设置」入口（卡片严格排列次序：1. Bot 服务端设置，2. 网页端外观设置，3. 指令设置）；
   - **路由守卫拦截**：当用户未选择任何激活实例进入 `#/settings/commands` 时，友好提示「请选择实例」，杜绝空指针异常；

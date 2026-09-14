@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const privateCompactPrompt = `你是当前私聊上下文压缩器，而不是聊天历史记录器。
@@ -77,16 +78,28 @@ func (e *Executor) executeReset(ctx context.Context, cmdCtx CommandContext) erro
 	if e == nil || e.Engine == nil || e.Engine.SessionManager == nil {
 		return errors.New("会话管理器不可用")
 	}
-	e.Engine.SessionManager.ResetSession(cmdCtx.SessionID)
+	var errs []error
+	if err := e.Engine.SessionManager.ResetSession(cmdCtx.SessionID); err != nil {
+		errs = append(errs, err)
+	}
 	if e.Engine.GroupSummaryStore != nil {
 		canonicalID := memory.CanonicalSessionKey(cmdCtx.SessionID)
 		if canonicalID != "" {
-			_ = e.Engine.GroupSummaryStore.Delete(canonicalID)
+			if err := e.Engine.GroupSummaryStore.Delete(canonicalID); err != nil {
+				errs = append(errs, err)
+			}
 		}
-		_ = e.Engine.GroupSummaryStore.Delete(cmdCtx.SessionID)
+		if err := e.Engine.GroupSummaryStore.Delete(cmdCtx.SessionID); err != nil {
+			errs = append(errs, err)
+		}
 		for _, alias := range memory.SessionKeyAliases(cmdCtx.SessionID) {
-			_ = e.Engine.GroupSummaryStore.Delete(alias)
+			if err := e.Engine.GroupSummaryStore.Delete(alias); err != nil {
+				errs = append(errs, err)
+			}
 		}
+	}
+	if len(errs) > 0 {
+		return cmdCtx.Reply(ctx, fmt.Sprintf("当前会话已重置，但持久化总结清理失败：%v", errors.Join(errs...)), false)
 	}
 	return cmdCtx.Reply(ctx, "当前会话已重置。", false)
 }
@@ -109,7 +122,11 @@ func (e *Executor) executeBan(ctx context.Context, cmdCtx CommandContext, cmd Pa
 	if e.Engine == nil || e.Engine.Security == nil {
 		return errors.New("安全控制器不可用")
 	}
-	principal, err := security.NewPrincipal("qq", targetID)
+	platform := cmdCtx.RouteScope.Platform
+	if platform == "" {
+		platform = "qq"
+	}
+	principal, err := security.NewPrincipal(platform, targetID)
 	if err != nil {
 		return fmt.Errorf("无效的用户ID: %w", err)
 	}
@@ -130,7 +147,11 @@ func (e *Executor) executeUnban(ctx context.Context, cmdCtx CommandContext, cmd 
 	if e.Engine == nil || e.Engine.Security == nil {
 		return errors.New("安全控制器不可用")
 	}
-	principal, err := security.NewPrincipal("qq", targetID)
+	platform := cmdCtx.RouteScope.Platform
+	if platform == "" {
+		platform = "qq"
+	}
+	principal, err := security.NewPrincipal(platform, targetID)
 	if err != nil {
 		return fmt.Errorf("无效的用户ID: %w", err)
 	}
@@ -144,17 +165,22 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 	if e == nil || e.Engine == nil || e.Engine.SessionManager == nil {
 		return errors.New("会话管理器不可用")
 	}
+	if e.Engine.ModelRouter != nil && e.Engine.ModelRouter.Snapshot().IsDisabled(modelrouter.WorkloadGroupCompact, cmdCtx.RouteScope) {
+		return cmdCtx.Reply(ctx, "上下文压缩功能已被禁用。", false)
+	}
 	session := e.Engine.SessionManager.GetOrCreate(cmdCtx.SessionID)
 
 	if cmdCtx.IsGroup {
 		if e.Engine.GroupCompactor == nil {
 			return errors.New("群聊压缩器未启用")
 		}
+		startSent := make(chan struct{})
 		err := e.Engine.GroupCompactor.ForceCompact(
 			session,
 			cmdCtx.Owner,
 			cmdCtx.RouteScope,
 			func(compErr error) {
+				<-startSent
 				bgCtx := context.Background()
 				if compErr == nil {
 					_ = cmdCtx.Reply(bgCtx, "群聊上下文压缩总结完成。", false)
@@ -164,15 +190,20 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 			},
 		)
 		if errors.Is(err, llm.ErrAlreadyCompacting) {
+			close(startSent)
 			return cmdCtx.Reply(ctx, "压缩正在进行中，请勿重复触发。", false)
 		}
 		if errors.Is(err, llm.ErrNothingToCompact) {
+			close(startSent)
 			return cmdCtx.Reply(ctx, "当前会话没有需要压缩的内容。", false)
 		}
 		if err != nil {
+			close(startSent)
 			return cmdCtx.Reply(ctx, fmt.Sprintf("触发群聊上下文压缩失败：%v", err), false)
 		}
-		return cmdCtx.Reply(ctx, "已开始群聊上下文压缩总结...", true)
+		replyErr := cmdCtx.Reply(ctx, "已开始群聊上下文压缩总结...", true)
+		close(startSent)
+		return replyErr
 	}
 
 	snapshot, err := session.SnapshotPrivateCompact()
@@ -186,24 +217,41 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		return cmdCtx.Reply(ctx, fmt.Sprintf("触发私聊上下文压缩失败：%v", err), false)
 	}
 
-	if err := cmdCtx.Reply(ctx, "已开始私聊上下文压缩总结...", true); err != nil {
-		// Intermediate reply send failure does not prevent background compaction
-	}
-
-	if !e.Engine.Go(func() { e.runPrivateCompact(session, snapshot, cmdCtx) }) {
+	startSent := make(chan struct{})
+	if !e.Engine.Go(func() {
+		<-startSent
+		e.runPrivateCompact(session, snapshot, cmdCtx)
+	}) {
+		close(startSent)
 		session.CancelPrivateCompact()
 		return cmdCtx.Reply(ctx, "实例未就绪，无法执行私聊压缩。", false)
 	}
-	return nil
+	replyErr := cmdCtx.Reply(ctx, "已开始私聊上下文压缩总结...", true)
+	close(startSent)
+	return replyErr
 }
 
 func (e *Executor) runPrivateCompact(session *llm.SessionContext, snapshot llm.PrivateCompactSnapshot, cmdCtx CommandContext) {
 	bgCtx := e.Engine.Context()
+	provider := e.Engine.Provider
 	model := e.Engine.ModelName
+	if e.Engine.GroupCompactor != nil && e.Engine.GroupCompactor.Provider() != nil {
+		provider = e.Engine.GroupCompactor.Provider()
+		if m := e.Engine.GroupCompactor.Model(); m != "" {
+			model = m
+		}
+	} else if e.Engine.ModelRouter != nil {
+		provider = e.Engine.ModelRouter.Provider(modelrouter.WorkloadGroupCompact, false, 120*time.Second)
+	}
 	if e.Engine.ModelRouter != nil {
-		if target, err := e.Engine.ModelRouter.Snapshot().Resolve(modelrouter.WorkloadDialogue, cmdCtx.RouteScope); err == nil {
+		if target, err := e.Engine.ModelRouter.Snapshot().Resolve(modelrouter.WorkloadGroupCompact, cmdCtx.RouteScope); err == nil {
 			model = target.UpstreamModel
 		}
+	}
+	if provider == nil {
+		session.CancelPrivateCompact()
+		_ = cmdCtx.Reply(context.Background(), "私聊上下文压缩总结失败：未配置可用的压缩模型 Provider", false)
+		return
 	}
 	var b strings.Builder
 	for _, msg := range snapshot.Messages {
@@ -223,7 +271,7 @@ func (e *Executor) runPrivateCompact(session *llm.SessionContext, snapshot llm.P
 			GroupID:  cmdCtx.RouteScope.GroupID,
 		},
 	}
-	response, err := e.Engine.Provider.Chat(bgCtx, request)
+	response, err := provider.Chat(bgCtx, request)
 	if err != nil {
 		session.CancelPrivateCompact()
 		_ = cmdCtx.Reply(context.Background(), fmt.Sprintf("私聊上下文压缩总结失败：%v", err), false)
@@ -248,9 +296,11 @@ func (e *Executor) executeReflect(ctx context.Context, cmdCtx CommandContext) er
 		return errors.New("记忆反思未启用或不可用")
 	}
 
+	startSent := make(chan struct{})
 	status, started, err := e.Engine.MemoryReflections.Start(
 		cmdCtx.Owner,
 		func(reflectErr error) {
+			<-startSent
 			bgCtx := context.Background()
 			if reflectErr == nil {
 				_ = cmdCtx.Reply(bgCtx, "记忆反思任务已完成。", false)
@@ -260,10 +310,14 @@ func (e *Executor) executeReflect(ctx context.Context, cmdCtx CommandContext) er
 		},
 	)
 	if !started && status.Running {
+		close(startSent)
 		return cmdCtx.Reply(ctx, "记忆反思任务正在执行中，请勿重复触发。", false)
 	}
 	if err != nil {
+		close(startSent)
 		return cmdCtx.Reply(ctx, fmt.Sprintf("触发记忆反思失败：%v", err), false)
 	}
-	return cmdCtx.Reply(ctx, "已开始记忆反思任务...", true)
+	replyErr := cmdCtx.Reply(ctx, "已开始记忆反思任务...", true)
+	close(startSent)
+	return replyErr
 }

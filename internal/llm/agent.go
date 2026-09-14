@@ -258,8 +258,13 @@ func (e *Engine) RunMessagesWithContext(
 					sess.SetLastPromptTrace(sysContent, modelName)
 				}
 				var cancelRun func()
-				ctx, _, cancelRun = sess.BeginRun(ctx)
+				var currentEpoch uint64
+				ctx, currentEpoch, cancelRun = sess.BeginRun(ctx)
 				defer cancelRun()
+				if runContext.Epoch == 0 {
+					runContext.Epoch = currentEpoch
+				}
+				ctx = withRunContext(ctx, runContext)
 			}
 		}
 	}
@@ -472,6 +477,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		if err := ctx.Err(); err != nil {
 			return AgentRunResult{Silent: true, Error: err}
+		}
+		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+				if sess, isSess := sessCore.(*SessionContext); isSess {
+					if sess.Epoch() != runCtx.Epoch {
+						return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated")}
+					}
+				}
+			}
 		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
@@ -735,6 +749,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+			}
+			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+					if sess, isSess := sessCore.(*SessionContext); isSess {
+						if sess.Epoch() != runCtx.Epoch {
+							return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated"), Usage: totalUsage}
+						}
+					}
+				}
+			}
 			if e.securityBlocks(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name) {
 				messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
 				continue
@@ -793,10 +819,26 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
-				if err := runContext.SendHook(toolResult); err != nil {
-					toolResult = fmt.Sprintf("消息发送失败：%v", err)
+				if ctx.Err() != nil {
+					toolResult = "消息发送取消：会话已取消"
 				} else {
-					toolResult = "消息已发送"
+					epochInvalid := false
+					if runContext.SessionID != "" && runContext.Epoch > 0 && e.SessionManager != nil {
+						if sessCore, ok := e.SessionManager.Get(runContext.SessionID); ok {
+							if sess, isSess := sessCore.(*SessionContext); isSess {
+								if sess.Epoch() != runContext.Epoch {
+									epochInvalid = true
+								}
+							}
+						}
+					}
+					if epochInvalid {
+						toolResult = "消息发送取消：会话已重置"
+					} else if err := runContext.SendHook(toolResult); err != nil {
+						toolResult = fmt.Sprintf("消息发送失败：%v", err)
+					} else {
+						toolResult = "消息已发送"
+					}
 				}
 			}
 

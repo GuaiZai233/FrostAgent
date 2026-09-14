@@ -32,9 +32,14 @@ func sendAstrBotAdminReply(event Event, conn *wsConn, text string, isIntermediat
 	if event.MessageType == "group" {
 		targetID = event.GroupID
 	}
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
+		Platform:       platform,
 		SessionID:      sessionKey(event),
 		TargetID:       targetID,
 		MessageType:    event.MessageType,
