@@ -142,6 +142,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
+	mux.HandleFunc("/api/v1/messages/send", m.handleDefaultSendMessage)
 	m.general = mux
 	// Retained data directories reserve their endpoint IDs too.
 	paths, err := filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
@@ -1152,6 +1153,49 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Request) {
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if targetInstanceID == "" {
+		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
+	}
+
+	m.mu.RLock()
+	var selectedManaged *managed
+	if targetInstanceID != "" {
+		selectedManaged = m.instances[targetInstanceID]
+	} else {
+		for _, info := range m.registry.Instances {
+			if info.Enabled && m.instances[info.ID] != nil && m.instances[info.ID].runtime != nil {
+				selectedManaged = m.instances[info.ID]
+				break
+			}
+		}
+		if selectedManaged == nil {
+			for _, info := range m.registry.Instances {
+				if m.instances[info.ID] != nil && m.instances[info.ID].runtime != nil {
+					selectedManaged = m.instances[info.ID]
+					break
+				}
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	if selectedManaged == nil || selectedManaged.runtime == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle message send"})
+		return
+	}
+
+	selectedManaged.runtime.Handler.ServeHTTP(w, r)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
