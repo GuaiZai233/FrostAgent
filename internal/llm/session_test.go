@@ -709,3 +709,271 @@ func TestExtractionLifecycle_ResetBeforeTryBeginCommitAbortsAtomically(t *testin
 	}
 }
 
+func TestExtractionLifecycle_ConcurrentResetsWaitUntilWritingBarrierCompletes(t *testing.T) {
+	tempDir := t.TempDir()
+	brainPath := filepath.Join(tempDir, "brain.json")
+	store := memory.NewStore(brainPath)
+
+	sess := &SessionContext{ConversationID: "private:test_concurrent_resets"}
+	ctx, _, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier == nil {
+		t.Fatalf("expected non-nil extraction barrier in context")
+	}
+
+	// Transition barrier to barrierWriting state
+	if !barrier.TryBeginCommit() {
+		t.Fatalf("expected TryBeginCommit to succeed")
+	}
+
+	reset1Done := make(chan struct{})
+	reset2Done := make(chan struct{})
+
+	// Launch Reset #1 concurrently
+	go func() {
+		_ = sess.ResetSession(nil)
+		close(reset1Done)
+	}()
+
+	// Launch Reset #2 concurrently
+	go func() {
+		_ = sess.ResetSession(nil)
+		close(reset2Done)
+	}()
+
+	// Neither Reset #1 nor Reset #2 should return while the barrier is in writing state
+	time.Sleep(80 * time.Millisecond)
+	select {
+	case <-reset1Done:
+		t.Fatalf("Reset #1 returned prematurely while extraction barrier was still writing")
+	case <-reset2Done:
+		t.Fatalf("Reset #2 returned prematurely while extraction barrier was still writing")
+	default:
+	}
+
+	// Now complete the writing commit
+	barrier.EndCommit()
+
+	// Both concurrent resets must unblock and complete successfully
+	select {
+	case <-reset1Done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Reset #1 timed out waiting for barrier to complete")
+	}
+
+	select {
+	case <-reset2Done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Reset #2 timed out waiting for barrier to complete")
+	}
+
+	// Post-condition: barrier must be terminated and cannot begin new commit
+	if barrier.TryBeginCommit() {
+		t.Fatalf("expected TryBeginCommit to fail on aborted barrier")
+	}
+
+	// Verify that attempting to save via this extraction context is rejected
+	staleEntry := memory.MemoryEntry{
+		Owner:   "test_concurrent_resets",
+		Content: "stale memory that should never persist",
+	}
+	err := store.SaveEntriesConditionallyContext(ctx, []memory.MemoryEntry{staleEntry}, nil)
+	if err == nil {
+		t.Fatalf("expected store write to be rejected by aborted barrier, got nil")
+	}
+
+	entries, err := store.ListByOwner("test_concurrent_resets")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries in store, got %d: %+v", len(entries), entries)
+	}
+}
+
+func TestExtractionLifecycle_MultiRouteBatchPersistsAllGroupsWithoutReset(t *testing.T) {
+	tempDir := t.TempDir()
+	brainPath := filepath.Join(tempDir, "brain.json")
+	store := memory.NewStore(brainPath)
+
+	var chatCount atomic.Int32
+	provider := &mockBlockingExtractProvider{
+		onChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			idx := chatCount.Add(1)
+			var content string
+			if idx == 1 {
+				content = `[{"content": "onebot extracted memory", "tags": ["onebot"], "visibility": "private"}]`
+			} else {
+				content = `[{"content": "aiocqhttp extracted memory", "tags": ["aiocqhttp"], "visibility": "private"}]`
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: content,
+				},
+			}, nil
+		},
+	}
+
+	writer := memory.NewWriter(store)
+	writer.SetLLM(provider, "mock-model")
+
+	sm := NewSessionManager()
+	engine := &Engine{
+		Scope:          runtimescope.New(nil, nil, nil),
+		SessionManager: sm,
+		MemoryWriter:   writer,
+		Provider:       provider,
+	}
+
+	sess := sm.GetOrCreate("private:test_multi_user_01")
+	batch, ready := sess.EnqueuePendingTurn([]memory.PendingExtractionItem{
+		{
+			Owner:     "test_multi_user_01",
+			OwnerType: memory.OwnerUser,
+			Route:     core.RouteContext{Platform: "onebot", GroupID: "group_a"},
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "onebot message"},
+		},
+		{
+			Owner:     "test_multi_user_01",
+			OwnerType: memory.OwnerUser,
+			Route:     core.RouteContext{Platform: "aiocqhttp", GroupID: "group_b"},
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "aiocqhttp message"},
+		},
+	}, 1, 1)
+	if !ready {
+		t.Fatalf("expected batch to be ready")
+	}
+
+	// Execute extraction of multi-route batch
+	engine.extractPendingBatch(batch)
+
+	// Both route groups must have been evaluated by LLM
+	if got := chatCount.Load(); got != 2 {
+		t.Fatalf("expected LLM Chat to be called 2 times for 2 route groups, got %d", got)
+	}
+
+	// Both memories must have been persisted to store
+	entries, err := store.ListByOwner("test_multi_user_01")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries in store, got %d: %+v", len(entries), entries)
+	}
+
+	foundOnebot := false
+	foundAiocqhttp := false
+	for _, e := range entries {
+		if e.Content == "onebot extracted memory" {
+			foundOnebot = true
+		}
+		if e.Content == "aiocqhttp extracted memory" {
+			foundAiocqhttp = true
+		}
+	}
+	if !foundOnebot || !foundAiocqhttp {
+		t.Fatalf("expected both onebot and aiocqhttp memories, got: %+v", entries)
+	}
+}
+
+func TestExtractionLifecycle_MultiRouteBatchAbortsRemainingGroupsOnReset(t *testing.T) {
+	tempDir := t.TempDir()
+	brainPath := filepath.Join(tempDir, "brain.json")
+	store := memory.NewStore(brainPath)
+
+	var chatCount atomic.Int32
+	group1Done := make(chan struct{})
+	resetDone := make(chan struct{})
+
+	sm := NewSessionManager()
+	sess := sm.GetOrCreate("private:test_multi_abort_user")
+
+	provider := &mockBlockingExtractProvider{
+		onChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			idx := chatCount.Add(1)
+			if idx == 1 {
+				// Group 1 succeeds normally
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `[{"content": "group 1 memory", "tags": ["g1"], "visibility": "private"}]`,
+					},
+				}, nil
+			}
+			// Group 2 waits until reset has been triggered and completed
+			select {
+			case <-resetDone:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: `[{"content": "group 2 memory", "tags": ["g2"], "visibility": "private"}]`,
+				},
+			}, nil
+		},
+	}
+
+	writer := memory.NewWriter(store)
+	writer.SetLLM(provider, "mock-model")
+
+	engine := &Engine{
+		Scope:          runtimescope.New(nil, nil, nil),
+		SessionManager: sm,
+		MemoryWriter:   writer,
+		Provider:       provider,
+	}
+
+	batch, ready := sess.EnqueuePendingTurn([]memory.PendingExtractionItem{
+		{
+			Owner:     "test_multi_abort_user",
+			OwnerType: memory.OwnerUser,
+			Route:     core.RouteContext{Platform: "onebot", GroupID: "group_1"},
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "g1 msg"},
+		},
+		{
+			Owner:     "test_multi_abort_user",
+			OwnerType: memory.OwnerUser,
+			Route:     core.RouteContext{Platform: "aiocqhttp", GroupID: "group_2"},
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "g2 msg"},
+		},
+	}, 1, 1)
+	if !ready {
+		t.Fatalf("expected batch to be ready")
+	}
+
+	// Trigger reset after Group 1 has committed to disk
+	go func() {
+		for {
+			entries, _ := store.ListByOwner("test_multi_abort_user")
+			if len(entries) > 0 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		close(group1Done)
+		_ = sess.ResetSession(nil)
+		close(resetDone)
+	}()
+
+	engine.extractPendingBatch(batch)
+
+	<-resetDone
+
+	// Verify that Group 2 was aborted and never persisted to store
+	entries, err := store.ListByOwner("test_multi_abort_user")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+
+	for _, e := range entries {
+		if e.Content == "group 2 memory" {
+			t.Fatalf("Group 2 memory must not be persisted after session reset")
+		}
+	}
+}
+

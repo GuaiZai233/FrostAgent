@@ -231,6 +231,7 @@ type SessionContext struct {
 	mu             sync.Mutex // 保护单个会话的并发访问
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
+	resetMu        sync.Mutex // 串行化会话重置与在途屏障等待
 
 	activeCancel       context.CancelFunc
 	epoch              uint64
@@ -379,21 +380,23 @@ const (
 )
 
 type sessionExtractionBarrier struct {
-	sess      *SessionContext
-	epoch     uint64
-	ctx       context.Context
-	mu        sync.Mutex
-	state     barrierState
-	done      chan struct{}
-	closeOnce sync.Once
+	sess       *SessionContext
+	epoch      uint64
+	ctx        context.Context
+	mu         sync.Mutex
+	state      barrierState
+	aborted    bool
+	done       chan struct{}
+	doneClosed bool
 }
 
 var _ core.ExtractionCommitBarrier = (*sessionExtractionBarrier)(nil)
 
 func (b *sessionExtractionBarrier) closeDoneLocked() {
-	b.closeOnce.Do(func() {
+	if !b.doneClosed && b.done != nil {
+		b.doneClosed = true
 		close(b.done)
-	})
+	}
 }
 
 func (b *sessionExtractionBarrier) IsValid() bool {
@@ -403,6 +406,9 @@ func (b *sessionExtractionBarrier) IsValid() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.aborted {
+		return false
+	}
 	if b.state != barrierPending && b.state != barrierWriting {
 		return false
 	}
@@ -425,12 +431,7 @@ func (b *sessionExtractionBarrier) TryBeginCommit() bool {
 	if b.state != barrierPending {
 		return false
 	}
-	if b.ctx != nil && b.ctx.Err() != nil {
-		b.state = barrierAborted
-		b.closeDoneLocked()
-		return false
-	}
-	if b.sess != nil && b.sess.Epoch() != b.epoch {
+	if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
 		b.state = barrierAborted
 		b.closeDoneLocked()
 		return false
@@ -448,11 +449,32 @@ func (b *sessionExtractionBarrier) EndCommit() {
 
 	switch b.state {
 	case barrierWriting:
-		b.state = barrierDone
+		b.closeDoneLocked()
+		if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
+			b.state = barrierAborted
+		} else {
+			b.state = barrierPending
+			b.done = make(chan struct{})
+			b.doneClosed = false
+		}
 	case barrierPending:
-		b.state = barrierAborted
+		b.state = barrierDone
+		b.closeDoneLocked()
 	}
-	b.closeDoneLocked()
+}
+
+func (b *sessionExtractionBarrier) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierPending, barrierWriting:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
 }
 
 func (b *sessionExtractionBarrier) AbortAndWait() {
@@ -460,14 +482,25 @@ func (b *sessionExtractionBarrier) AbortAndWait() {
 		return
 	}
 	b.mu.Lock()
+	b.aborted = true
 	if b.state == barrierWriting {
+		ch := b.done
 		b.mu.Unlock()
-		<-b.done
+		<-ch
 		return
 	}
 	b.state = barrierAborted
 	b.closeDoneLocked()
 	b.mu.Unlock()
+}
+
+func (b *sessionExtractionBarrier) IsTerminated() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state == barrierDone || b.state == barrierAborted
 }
 
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
@@ -508,7 +541,7 @@ func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Con
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
-			barrier.EndCommit()
+			barrier.Close()
 			cancel()
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -525,21 +558,35 @@ func (s *SessionContext) CancelExtractions() {
 	if s == nil {
 		return
 	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
 	s.mu.Lock()
 	for id, cancel := range s.extractionCancels {
 		cancel()
 		delete(s.extractionCancels, id)
 	}
-	barriers := make([]*sessionExtractionBarrier, 0, len(s.extractionBarriers))
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
 	for id, b := range s.extractionBarriers {
-		barriers = append(barriers, b)
-		delete(s.extractionBarriers, id)
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
 	}
 	s.mu.Unlock()
 
-	for _, b := range barriers {
-		b.AbortAndWait()
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
 	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
 }
 
 // ResetSession completely resets this session's state:
@@ -552,6 +599,9 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	if s == nil {
 		return nil
 	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
 	s.mu.Lock()
 	if s.activeCancel != nil {
 		s.activeCancel()
@@ -563,10 +613,13 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	}
 	s.epoch++
 
-	barriersToWait := make([]*sessionExtractionBarrier, 0, len(s.extractionBarriers))
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
 	for id, b := range s.extractionBarriers {
-		barriersToWait = append(barriersToWait, b)
-		delete(s.extractionBarriers, id)
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
 	}
 
 	s.History = nil
@@ -585,9 +638,17 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	conversationID := s.ConversationID
 	s.mu.Unlock()
 
-	for _, b := range barriersToWait {
-		b.AbortAndWait()
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
 	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
 
 	if groupSummaryStore != nil && conversationID != "" {
 		return groupSummaryStore.Delete(conversationID)
