@@ -3,6 +3,7 @@ package memory
 import (
 	"FrostAgent/internal/core"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -10,6 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	// ErrConditionFailed is returned by SaveConditionally when validator returns false.
+	ErrConditionFailed = errors.New("save condition check failed")
 )
 
 // Store implements a file-based unified memory store.
@@ -55,30 +61,61 @@ func (s *Store) save(brain *BrainData) error {
 	return os.WriteFile(s.path, data, 0644)
 }
 
-// Save writes a single memory entry to the store.
-func (s *Store) Save(entry MemoryEntry) error {
+// SaveEntriesConditionally evaluates validator while holding the store write lock,
+// then appends all entries and writes to disk atomically.
+// If validator returns false, the write is aborted and ErrConditionFailed is returned,
+// ensuring an atomic linearizable boundary between validation and persistence.
+func (s *Store) SaveEntriesConditionally(entries []MemoryEntry, validator func() bool) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
 
 	brain, err := s.load()
 	if err != nil {
 		return err
 	}
 
-	entry.UpdatedAt = time.Now()
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = entry.UpdatedAt
+	now := time.Now()
+	for i := range entries {
+		entries[i].UpdatedAt = now
+		if entries[i].CreatedAt.IsZero() {
+			entries[i].CreatedAt = now
+		}
+		if entries[i].Visibility == "" {
+			entries[i].Visibility = VisibilityPrivate
+		}
+		if entries[i].OwnerType == "" {
+			entries[i].OwnerType = OwnerUser
+		}
+		entries[i].Owner = CanonicalOwner(entries[i].Owner)
+		brain.Entries = append(brain.Entries, entries[i])
 	}
-	if entry.Visibility == "" {
-		entry.Visibility = VisibilityPrivate
-	}
-	if entry.OwnerType == "" {
-		entry.OwnerType = OwnerUser
-	}
-	entry.Owner = CanonicalOwner(entry.Owner)
-
-	brain.Entries = append(brain.Entries, entry)
 	return s.save(brain)
+}
+
+// SaveConditionally evaluates validator while holding the store write lock.
+// If validator returns false, the write is aborted and ErrConditionFailed is returned,
+// ensuring an atomic linearizable boundary between validation and persistence.
+func (s *Store) SaveConditionally(entry MemoryEntry, validator func() bool) error {
+	return s.SaveEntriesConditionally([]MemoryEntry{entry}, validator)
+}
+
+// Save writes a single memory entry to the store.
+func (s *Store) Save(entry MemoryEntry) error {
+	return s.SaveConditionally(entry, nil)
+}
+
+// LockWriteForTest acquires the store's write lock and returns an unlock function.
+// For deterministic race condition testing only.
+func (s *Store) LockWriteForTest() func() {
+	s.mu.Lock()
+	return s.mu.Unlock
 }
 
 // Search performs a global keyword search across all memories.

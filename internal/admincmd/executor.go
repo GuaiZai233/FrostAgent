@@ -58,6 +58,24 @@ func (e *Executor) scope() *runtimescope.Scope {
 
 // Execute executes a parsed administrator command.
 func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd ParsedCommand) error {
+	if e != nil && e.Engine != nil && e.Engine.Security != nil && cmdCtx.CallerUserID != "" {
+		platform := cmdCtx.RouteScope.Platform
+		if platform == "" {
+			platform = "qq"
+		}
+		principal, err := security.NewPrincipal(platform, cmdCtx.CallerUserID)
+		if err != nil {
+			return fmt.Errorf("无效的调用者ID: %w", err)
+		}
+		if err := e.Engine.Security.CheckAccess(principal); err != nil {
+			if errors.Is(err, security.ErrLocked) {
+				_ = cmdCtx.Reply(ctx, security.RejectGatewayMsg, false)
+				return security.ErrLocked
+			}
+			return fmt.Errorf("安全访问检查失败: %w", err)
+		}
+	}
+
 	switch cmd.Type {
 	case CmdReset:
 		return e.executeReset(ctx, cmdCtx)

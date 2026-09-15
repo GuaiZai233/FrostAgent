@@ -10,6 +10,7 @@ import (
 	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -210,6 +211,98 @@ func TestHandleAdminCommand_AstrBot_AdminFlow(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for syntax error reply")
+	}
+}
+
+func TestHandleAdminCommand_AstrBot_LockedAdminRejected(t *testing.T) {
+	conn, actionCh, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:          scope,
+		Security:       secCtrl,
+		SessionManager: llm.NewSessionManager(),
+		ModelName:      "mock-model",
+		Provider:       &mockLLMProvider{},
+	}
+	conn.Scope = scope
+
+	// Lock admin principal in security controller
+	adminPrincipal, err := security.NewPrincipal("astrbot", "20001")
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if err := secCtrl.Lock(adminPrincipal, "locked admin account"); err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+
+	// 1. Admin sends @bot /reset
+	event := Event{
+		MessageID:   "msg_locked_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "@bot /reset",
+	}
+
+	handled := handleAdminCommand(conn, event, engine)
+	if !handled {
+		t.Fatalf("expected handleAdminCommand to return true for locked admin")
+	}
+
+	select {
+	case act := <-actionCh:
+		if act.Type != "action" || act.Action != "send_message" {
+			t.Errorf("expected send_message action, got: %+v", act)
+		}
+		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+			t.Errorf("expected RejectGatewayMsg, got: %q", act.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for locked admin rejection reply")
+	}
+
+	// 2. Locked admin sends @bot /unban 20001 attempting self-unlock
+	eventUnban := Event{
+		MessageID:   "msg_locked_02",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "@bot /unban 20001",
+	}
+
+	handled = handleAdminCommand(conn, eventUnban, engine)
+	if !handled {
+		t.Fatalf("expected handleAdminCommand to return true for locked admin unban attempt")
+	}
+
+	select {
+	case act := <-actionCh:
+		if act.Type != "action" || act.Action != "send_message" {
+			t.Errorf("expected send_message action, got: %+v", act)
+		}
+		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+			t.Errorf("expected RejectGatewayMsg on unban attempt, got: %q", act.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for locked admin rejection reply on unban")
+	}
+
+	// Verify admin is still locked
+	if err := secCtrl.CheckAccess(adminPrincipal); !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("expected admin to remain locked, got err=%v", err)
 	}
 }
 

@@ -210,6 +210,11 @@ func (w *Writer) parseAndSave(
 		return err
 	}
 
+	if w == nil || w.store == nil {
+		return nil
+	}
+
+	var toSave []MemoryEntry
 	for _, e := range entries {
 		if ctx != nil && ctx.Err() != nil {
 			return ctx.Err()
@@ -235,15 +240,32 @@ func (w *Writer) parseAndSave(
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
-		if err := w.store.Save(entry); err != nil {
-			w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
-			continue
-		}
+		toSave = append(toSave, entry)
 	}
 
-	if len(entries) > 0 {
-		w.Log().Info(logs.SYSTEM, fmt.Sprintf("从对话中提取了 %d 条记忆 (owner: %s)", len(entries), owner))
+	if len(toSave) == 0 {
+		return nil
 	}
+
+	commitValidator := func() bool {
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
+		if validator != nil && !validator() {
+			return false
+		}
+		return true
+	}
+
+	if err := w.store.SaveEntriesConditionally(toSave, commitValidator); err != nil {
+		if errors.Is(err, ErrConditionFailed) || (ctx != nil && ctx.Err() != nil) {
+			return errors.New("extraction cancelled or invalidated")
+		}
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
+		return err
+	}
+
+	w.Log().Info(logs.SYSTEM, fmt.Sprintf("从对话中提取了 %d 条记忆 (owner: %s)", len(toSave), owner))
 	return nil
 }
 

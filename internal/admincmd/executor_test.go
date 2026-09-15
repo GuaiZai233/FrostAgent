@@ -627,3 +627,69 @@ func TestExecutor_ReceiptOrderingGate(t *testing.T) {
 		t.Errorf("second receipt MUST be completion receipt, got: %q", receiptOrder[1])
 	}
 }
+
+func TestExecutor_LockedAdminRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newTestScope(t, map[string]string{
+		AdminQQIDsEnv: "admin-1",
+	})
+
+	engine := &llm.Engine{
+		Scope:          scope,
+		Security:       secCtrl,
+		SessionManager: llm.NewSessionManager(),
+		ModelName:      "mock-model",
+	}
+
+	exec := NewExecutor(engine)
+
+	// Lock the admin caller
+	adminPrincipal, err := security.NewPrincipal("qq", "admin-1")
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if err := secCtrl.Lock(adminPrincipal, "admin locked"); err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+
+	var replies []string
+	replyFunc := func(ctx context.Context, text string, isIntermediate bool) error {
+		replies = append(replies, text)
+		return nil
+	}
+
+	cmdCtx := CommandContext{
+		SessionID:    "test:group:1001",
+		Owner:        "group:1001",
+		IsGroup:      true,
+		CallerUserID: "admin-1",
+		RouteScope:   modelrouter.Scope{Platform: "qq"},
+		Reply:        replyFunc,
+	}
+
+	// 1. Locked admin tries /reset
+	err = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdReset})
+	if !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("expected ErrLocked, got: %v", err)
+	}
+	if len(replies) == 0 || replies[0] != security.RejectGatewayMsg {
+		t.Errorf("expected RejectGatewayMsg, got: %v", replies)
+	}
+
+	// 2. Locked admin tries /unban admin-1
+	replies = nil
+	err = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdUnban, Args: []string{"admin-1"}})
+	if !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("expected ErrLocked on unban attempt, got: %v", err)
+	}
+	if len(replies) == 0 || replies[0] != security.RejectGatewayMsg {
+		t.Errorf("expected RejectGatewayMsg on unban, got: %v", replies)
+	}
+
+	// Verify admin is still locked
+	if err := secCtrl.CheckAccess(adminPrincipal); !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("expected admin to remain locked, got err=%v", err)
+	}
+}

@@ -165,7 +165,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 - **入站早期拦截与管线旁路 (Early Ingress Interception & Pipeline Bypass)**：
   - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于内容安全审查（`GateIngress`）、工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
-  - **前置安全旁路与非管理员静默丢弃**：指令候选识别与管理员身份鉴权优先于安全看门狗（Watchdog Ingress Gate）执行。对于非管理员发送的指令候选消息，即使其参数包含敏感或高危特征词，也在此阶段直接静默丢弃，绝不触发安全审查拦截、绝不发出 `RejectInspectorMsg` 等安全拒绝回复，亦不产生安全审计违规计数（Strike）或账户锁定，充分保障运维指令系统的隐蔽性与防探测要求；非指令候选的常规聊天消息则继续正常流经安全审查；
+  - **前置安全旁路、非管理员静默丢弃与管理员 Access-Only 强门禁**：
+    - 指令候选识别与管理员身份鉴权优先于安全看门狗（Watchdog Ingress Gate）执行；
+    - 对于非管理员发送的指令候选消息，即使其参数包含敏感或高危特征词，也在此阶段直接静默丢弃，绝不触发安全审查拦截、绝不发出 `RejectInspectorMsg` 等安全拒绝回复，亦不产生安全审计违规计数（Strike）或账户锁定，充分保障运维指令系统的隐蔽性与防探测要求；非指令候选的常规聊天消息则继续正常流经安全审查；
+    - **已鉴权管理员 Fail-Closed 访问控制门禁**：对于通过 `ADMIN_QQ_IDS` 鉴权的管理员，在进入指令执行器（`Executor`）前强制执行 fail-closed 的 access-only 安全检查（`Security.CheckAccess(principal)`）。该检查仅验证管理员主体是否处于全局锁定状态，**绝不将运维指令参数送入内容看门狗（Watchdog）**，既杜绝了指令参数语法被误判为违规内容的误报风险，又彻底堵死了已封禁管理员利用管理指令（如 `/reset`、`/ban` 或自我解封 `/unban <selfID>`）绕过安全隔离的漏洞；
+    - 若安全访问检查判定主体已锁定（`ErrLocked`），直接返回 `RejectGatewayMsg` 拒绝执行；若安全控制器发生内部故障，同样严格 fail-closed 拦截；同时在 `Executor.Execute` 调度入口处设置同等深度防御门禁；
   - 即使当前会话被模型路由规则全局禁用、对话模型未配置或处于故障降级状态，管理员运维指令依然具备最高优先级的执行通路与完全可用性；
   - 指令交互完全旁路对话管线：不向会话持久历史提交消息（`Session.AddMessage`）、不进入群聊未压缩环形缓冲（`groupCompactBuffer`）、不触发记忆提取，杜绝运维指令污染日常对话语境或模型长期记忆。
 - **真实 @ 机器人强门禁 (Real-At Targeting Bot Verification)**：
@@ -180,7 +184,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - `SessionContext` 维护活跃提取上下文注册表（`extractionCancels map[uint64]context.CancelFunc`）与自增提取 ID，并通过 `BeginExtraction` 为后台异步记忆抽取任务绑定可取消的派生上下文；
     - 待提取任务批次（`PendingExtractionBatch`）显式附带所属会话指针及其派生时刻的会话 Epoch 代数；
     - 会话重置时（`ResetSession`）原子递增 Epoch，并主动调用 `CancelExtractions` 快速取消所有在途提取上下文，打断正在进行中的大模型推理 HTTP 连接；
-    - 构建前中后三道严密代数防线：在大模型提取调用前、大模型响应解析后、以及单条提取记忆落盘（`w.store.Save`）前，严格核验上下文未取消且会话代数严格一致。已重置会话的过时在途衍生记忆坚决丢弃，绝不污染长期记忆库 `brain.json`，同时完整保留 `brain.json` 中已持久化的既有记忆；
+    - 构建前中后三道严密代数防线与原子提交屏障：在大模型提取调用前、大模型响应解析后核验代数一致性与上下文有效性；最终提取记忆持久化时，通过 `Store.SaveEntriesConditionally` / `Store.SaveConditionally` 在持有写锁（`Store.mu.Lock()`）的关键区内原子重验代数一致性与上下文取消状态，验证通过与向 `brain.json` 磁盘落盘提交在同一互斥事务中完成。彻底消除检查通过与落盘之间的 TOCTOU 竞态窗口，杜绝会话重置后过时记忆污染长期记忆库，同时完整保留 `brain.json` 中已持久化的既有记忆；
   - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
   - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
   - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。

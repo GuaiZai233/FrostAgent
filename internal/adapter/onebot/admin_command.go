@@ -8,8 +8,10 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -94,6 +96,19 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		return true // Non-admin: silently dropped without hints
 	}
 
+	if engine.Security != nil {
+		principal, err := security.NewPrincipal("onebot", callerID)
+		if err != nil {
+			return true // Fail-closed: invalid principal
+		}
+		if err := engine.Security.CheckAccess(principal); err != nil {
+			if errors.Is(err, security.ErrLocked) {
+				sendOneBotReply(event, conn, security.RejectGatewayMsg)
+			}
+			return true // Fail-closed: locked or security error
+		}
+	}
+
 	if parseErr != nil {
 		sendOneBotReply(event, conn, fmt.Sprintf("%v\n\n%s", parseErr, admincmd.FormatUsage(prefix)))
 		return true
@@ -123,7 +138,9 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 			},
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
-			sendOneBotReply(event, conn, fmt.Sprintf("执行指令失败：%v", err))
+			if !errors.Is(err, security.ErrLocked) {
+				sendOneBotReply(event, conn, fmt.Sprintf("执行指令失败：%v", err))
+			}
 		}
 	}) {
 		sendOneBotReply(event, conn, "实例未就绪，无法执行指令。")

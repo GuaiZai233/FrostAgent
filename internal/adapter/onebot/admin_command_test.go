@@ -11,6 +11,7 @@ import (
 	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -288,6 +289,102 @@ func TestHandleAdminCommand_AdminFlow(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for syntax error reply")
+	}
+}
+
+func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
+	wsConn, actionCh, cleanup := setupTestWS(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:          scope,
+		Security:       secCtrl,
+		SessionManager: llm.NewSessionManager(),
+		ModelName:      "mock-model",
+		Provider:       &mockLLMProvider{},
+	}
+	wsConn.Scope = scope
+
+	// Lock the admin principal in security controller
+	adminPrincipal, err := security.NewPrincipal("onebot", "20001")
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if err := secCtrl.Lock(adminPrincipal, "admin account locked"); err != nil {
+		t.Fatalf("secCtrl.Lock failed: %v", err)
+	}
+
+	// 1. Admin sends @bot /reset
+	msgBytes, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /reset"}},
+	})
+	event := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     msgBytes,
+	}
+
+	handled := handleAdminCommand(wsConn, event, engine)
+	if !handled {
+		t.Fatalf("expected handleAdminCommand to return true for locked admin")
+	}
+
+	// Must reply with RejectGatewayMsg
+	select {
+	case act := <-actionCh:
+		if act.Action != "send_group_msg" {
+			t.Errorf("expected send_group_msg action, got %s", act.Action)
+		}
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+			t.Errorf("expected reply containing RejectGatewayMsg, got %q", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for locked admin rejection reply")
+	}
+
+	// 2. Locked admin sends @bot /unban 20001 attempting self-unlock
+	msgBytesUnban, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /unban 20001"}},
+	})
+	eventUnban := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     msgBytesUnban,
+	}
+
+	handled = handleAdminCommand(wsConn, eventUnban, engine)
+	if !handled {
+		t.Fatalf("expected handleAdminCommand to return true for locked admin unban attempt")
+	}
+
+	select {
+	case act := <-actionCh:
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+			t.Errorf("expected reply containing RejectGatewayMsg on unban attempt, got %q", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for locked admin rejection reply on unban")
+	}
+
+	// Verify admin is still locked
+	if err := secCtrl.CheckAccess(adminPrincipal); !errors.Is(err, security.ErrLocked) {
+		t.Fatalf("expected admin to remain locked, got err=%v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/security"
 	"context"
 	"errors"
 	"fmt"
@@ -79,6 +80,23 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 		return true // Non-admin: silently dropped without hints
 	}
 
+	if engine.Security != nil {
+		platform := event.Platform
+		if platform == "" {
+			platform = "astrbot"
+		}
+		principal, err := security.NewPrincipal(platform, callerID)
+		if err != nil {
+			return true // Fail-closed: invalid principal
+		}
+		if err := engine.Security.CheckAccess(principal); err != nil {
+			if errors.Is(err, security.ErrLocked) {
+				_ = sendAstrBotAdminReply(event, conn, security.RejectGatewayMsg, false)
+			}
+			return true // Fail-closed: locked or security error
+		}
+	}
+
 	if parseErr != nil {
 		_ = sendAstrBotAdminReply(event, conn, fmt.Sprintf("%v\n\n%s", parseErr, admincmd.FormatUsage(prefix)), false)
 		return true
@@ -111,7 +129,9 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 			},
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
-			_ = sendAstrBotAdminReply(event, conn, fmt.Sprintf("执行指令失败：%v", err), false)
+			if !errors.Is(err, security.ErrLocked) {
+				_ = sendAstrBotAdminReply(event, conn, fmt.Sprintf("执行指令失败：%v", err), false)
+			}
 		}
 	}) {
 		_ = sendAstrBotAdminReply(event, conn, "实例未就绪，无法执行指令。", false)

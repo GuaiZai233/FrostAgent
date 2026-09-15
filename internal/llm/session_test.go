@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -390,3 +391,111 @@ func TestExtractionLifecycle_SessionResetInvalidation(t *testing.T) {
 		t.Errorf("expected pre-existing memory preserved, got: %s", entries[0].Content)
 	}
 }
+
+func TestExtractionLifecycle_DeterministicSessionResetRace(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+
+	preExisting := memory.MemoryEntry{
+		ID:        "mem_pre_race_01",
+		Owner:     "test_user_race",
+		OwnerType: memory.OwnerUser,
+		Content:   "pre-existing valid memory",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := store.Save(preExisting); err != nil {
+		t.Fatalf("failed to save pre-existing memory: %v", err)
+	}
+
+	provider := &mockBlockingExtractProvider{
+		onChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: `[{"content": "stale race memory", "tags": ["race"], "visibility": "private"}]`,
+				},
+			}, nil
+		},
+	}
+
+	writer := memory.NewWriter(store)
+	writer.SetLLM(provider, "mock-model")
+
+	sess := &SessionContext{ConversationID: "private:test_user_race"}
+	ctx, epoch, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	validatorCheckPassedCh := make(chan struct{})
+	var checkCount atomic.Int32
+
+	// Atomic validator that signals when the pre-save check passes in parseAndSave
+	validator := func() bool {
+		valid := ctx.Err() == nil && sess.Epoch() == epoch
+		if valid {
+			// Call 1: before LLM
+			// Call 2: after LLM
+			// Call 3: in parseAndSave entry loop before SaveConditionally
+			if checkCount.Add(1) == 3 {
+				select {
+				case <-validatorCheckPassedCh:
+				default:
+					close(validatorCheckPassedCh)
+				}
+			}
+		}
+		return valid
+	}
+
+	// 1. Lock the store to block SaveConditionally before it can commit
+	unlockStore := store.LockWriteForTest()
+
+	var extractWG sync.WaitGroup
+	extractWG.Add(1)
+	go func() {
+		defer extractWG.Done()
+		_ = writer.ExtractByOwnerWithRouteContext(
+			ctx,
+			"test_user_race",
+			memory.OwnerUser,
+			core.RouteContext{},
+			[]core.ChatMessage{{Role: core.RoleUser, Content: "test"}},
+			validator,
+		)
+	}()
+
+	// 2. Wait deterministically for validator to pass the pre-save check in parseAndSave
+	select {
+	case <-validatorCheckPassedCh:
+	case <-time.After(2 * time.Second):
+		unlockStore()
+		t.Fatalf("timed out waiting for validator check to pass")
+	}
+
+	// At this point:
+	// - validator() has passed in parseAndSave
+	// - SaveConditionally is currently blocked waiting on store.mu write lock
+	// 3. Trigger ResetSession while SaveConditionally is waiting for store.mu
+	if err := sess.ResetSession(nil); err != nil {
+		unlockStore()
+		t.Fatalf("ResetSession failed: %v", err)
+	}
+
+	// 4. Release store lock. SaveConditionally enters critical section, re-evaluates validator inside lock
+	unlockStore()
+	extractWG.Wait()
+
+	// 5. Verify that stale race memory was NOT written to store
+	entries, err := store.ListByOwner("test_user_race")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 memory entry, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Content != "pre-existing valid memory" {
+		t.Fatalf("expected pre-existing valid memory, got: %q", entries[0].Content)
+	}
+}
+
