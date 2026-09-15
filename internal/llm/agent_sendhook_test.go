@@ -214,3 +214,166 @@ func TestEngine_SendHookNotTriggeredForNonMessagePayload(t *testing.T) {
 		t.Fatal("SendHook should not be called for non-message payloads")
 	}
 }
+
+type callbackTool struct {
+	name   string
+	onExec func() (string, error)
+}
+
+func (t *callbackTool) Name() string                   { return t.name }
+func (t *callbackTool) Description() string             { return "callback tool" }
+func (t *callbackTool) Parameters() map[string]any      { return nil }
+func (t *callbackTool) Execute(_ string) (string, error) { return t.onExec() }
+
+func TestEngine_MultiToolAbortedOnSessionReset(t *testing.T) {
+	sm := NewSessionManager()
+	sess := sm.GetOrCreate("test-session")
+	initialEpoch := sess.Epoch()
+
+	var tool1Calls int
+	var tool2Calls int
+
+	tool1 := &callbackTool{
+		name: "tool_reset",
+		onExec: func() (string, error) {
+			tool1Calls++
+			// Reset session while batch is executing
+			_ = sess.ResetSession(nil)
+			return `{"result":"reset done"}`, nil
+		},
+	}
+
+	tool2 := &callbackTool{
+		name: "tool_subsequent",
+		onExec: func() (string, error) {
+			tool2Calls++
+			return `{"result":"subsequent done"}`, nil
+		},
+	}
+
+	provider := &sequentialProvider{
+		responses: []core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: "assistant",
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "tool_reset",
+								Arguments: `{}`,
+							},
+						},
+						{
+							ID:   "call_2",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "tool_subsequent",
+								Arguments: `{}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations:  5,
+		Provider:       provider,
+		SessionManager: sm,
+		ToolRegistry: map[string]ToolExecutor{
+			"tool_reset":      tool1,
+			"tool_subsequent": tool2,
+		},
+	}
+
+	ctx := WithRunContext(context.Background(), RunContext{
+		SessionID: "test-session",
+		Owner:     "test-owner",
+		Epoch:     initialEpoch,
+	})
+
+	result := engine.runLoopWithResult(ctx, []ChatMessage{
+		{Role: "user", Content: "execute tools"},
+	})
+
+	if tool1Calls != 1 {
+		t.Errorf("expected tool_reset to be called once, got %d", tool1Calls)
+	}
+	if tool2Calls != 0 {
+		t.Errorf("expected tool_subsequent NOT to be called after session reset, got %d", tool2Calls)
+	}
+	if !result.Silent {
+		t.Errorf("expected result to be silent after session reset abortion")
+	}
+}
+
+func TestEngine_SendHookAbortedOnSessionReset(t *testing.T) {
+	sm := NewSessionManager()
+	sess := sm.GetOrCreate("test-session")
+	initialEpoch := sess.Epoch()
+
+	stickerPayload := `{"messages":[{"type":"image","path":"/data/sticker/abc.png","is_sticker":true}]}`
+
+	tool := &callbackTool{
+		name: "send_sticker",
+		onExec: func() (string, error) {
+			// Session is reset during tool execution
+			_ = sess.ResetSession(nil)
+			return stickerPayload, nil
+		},
+	}
+
+	provider := &sequentialProvider{
+		responses: []core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: "assistant",
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "send_sticker",
+								Arguments: `{}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var hookCalled bool
+	engine := &Engine{
+		MaxIterations:  5,
+		Provider:       provider,
+		SessionManager: sm,
+		ToolRegistry: map[string]ToolExecutor{
+			"send_sticker": tool,
+		},
+	}
+
+	ctx := WithRunContext(context.Background(), RunContext{
+		SessionID: "test-session",
+		Owner:     "test-owner",
+		Epoch:     initialEpoch,
+		SendHook: func(payload string) error {
+			hookCalled = true
+			return nil
+		},
+	})
+
+	result := engine.runLoopWithResult(ctx, []ChatMessage{
+		{Role: "user", Content: "send sticker"},
+	})
+
+	if hookCalled {
+		t.Errorf("SendHook should NOT be called when session epoch is invalidated")
+	}
+	if !result.Silent {
+		t.Errorf("expected result to be silent when session epoch is invalidated")
+	}
+}

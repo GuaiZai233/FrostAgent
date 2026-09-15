@@ -6,6 +6,8 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/runtimescope"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"sort"
@@ -154,9 +156,10 @@ type GroupCompactSnapshot struct {
 // separate from the history mutex because a full LLM turn calls methods that
 // briefly lock session state themselves.
 type SessionTurn struct {
-	wait <-chan struct{}
-	done chan struct{}
-	once sync.Once
+	wait  <-chan struct{}
+	done  chan struct{}
+	once  sync.Once
+	epoch uint64
 }
 
 func (t *SessionTurn) Wait() {
@@ -169,6 +172,21 @@ func (t *SessionTurn) Done() {
 	if t != nil {
 		t.once.Do(func() { close(t.done) })
 	}
+}
+
+func (t *SessionTurn) Epoch() uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.epoch
+}
+
+// IsValid reports whether this turn matches the session's current generation epoch.
+func (t *SessionTurn) IsValid(s *SessionContext) bool {
+	if t == nil || s == nil {
+		return true
+	}
+	return t.epoch == s.Epoch()
 }
 
 // DeliveryFailure records a transient failure when an assistant response could not be delivered to the platform.
@@ -213,6 +231,16 @@ type SessionContext struct {
 	mu             sync.Mutex // 保护单个会话的并发访问
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
+	resetMu        sync.Mutex // 串行化会话重置与在途屏障等待
+
+	activeCancel       context.CancelFunc
+	epoch              uint64
+	nextExtractionID   uint64
+	extractionCancels  map[uint64]context.CancelFunc
+	extractionBarriers map[uint64]*sessionExtractionBarrier
+	historySeq         []uint64
+	nextMsgSeq         uint64
+	privateCompacting  bool
 
 	groupCompactSummary    string
 	groupCompactBuffer     []groupCompactItem
@@ -276,9 +304,482 @@ func (s *SessionContext) ReserveTurn() *SessionTurn {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{})}
+	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{}), epoch: s.Epoch()}
 	s.turnTail = turn.done
 	return turn
+}
+
+// Epoch returns the current generation epoch of the session.
+func (s *SessionContext) Epoch() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	return s.epoch
+}
+
+// BeginRun attaches a cancellable context to this session's currently active execution.
+// If another run was active, it is cancelled first.
+// The returned cleanup function must be called when the run ends.
+func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.activeCancel = cancel
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	currentEpoch := s.epoch
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			cancel()
+			s.activeCancel = nil
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelActiveRun immediately aborts any in-flight execution context for this session.
+func (s *SessionContext) CancelActiveRun() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+}
+
+type barrierState int
+
+const (
+	barrierPending barrierState = iota
+	barrierWriting
+	barrierDone
+	barrierAborted
+)
+
+type sessionExtractionBarrier struct {
+	sess       *SessionContext
+	epoch      uint64
+	ctx        context.Context
+	mu         sync.Mutex
+	state      barrierState
+	aborted    bool
+	done       chan struct{}
+	doneClosed bool
+}
+
+var _ core.ExtractionCommitBarrier = (*sessionExtractionBarrier)(nil)
+
+func (b *sessionExtractionBarrier) closeDoneLocked() {
+	if !b.doneClosed && b.done != nil {
+		b.doneClosed = true
+		close(b.done)
+	}
+}
+
+func (b *sessionExtractionBarrier) IsValid() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.aborted {
+		return false
+	}
+	if b.state != barrierPending && b.state != barrierWriting {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		return false
+	}
+	if b.sess != nil && b.sess.Epoch() != b.epoch {
+		return false
+	}
+	return true
+}
+
+func (b *sessionExtractionBarrier) TryBeginCommit() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending {
+		return false
+	}
+	if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	b.state = barrierWriting
+	return true
+}
+
+func (b *sessionExtractionBarrier) EndCommit() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierWriting:
+		b.closeDoneLocked()
+		if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
+			b.state = barrierAborted
+		} else {
+			b.state = barrierPending
+			b.done = make(chan struct{})
+			b.doneClosed = false
+		}
+	case barrierPending:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *sessionExtractionBarrier) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierPending, barrierWriting:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *sessionExtractionBarrier) AbortAndWait() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.aborted = true
+	if b.state == barrierWriting {
+		ch := b.done
+		b.mu.Unlock()
+		<-ch
+		return
+	}
+	b.state = barrierAborted
+	b.closeDoneLocked()
+	b.mu.Unlock()
+}
+
+func (b *sessionExtractionBarrier) IsTerminated() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state == barrierDone || b.state == barrierAborted
+}
+
+// BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
+// The returned cleanup function must be called when extraction completes.
+func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	currentEpoch := s.epoch
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.nextExtractionID++
+	id := s.nextExtractionID
+	if s.extractionCancels == nil {
+		s.extractionCancels = make(map[uint64]context.CancelFunc)
+	}
+	s.extractionCancels[id] = cancel
+
+	barrier := &sessionExtractionBarrier{
+		sess:  s,
+		epoch: currentEpoch,
+		ctx:   ctx,
+		done:  make(chan struct{}),
+	}
+	if s.extractionBarriers == nil {
+		s.extractionBarriers = make(map[uint64]*sessionExtractionBarrier)
+	}
+	s.extractionBarriers[id] = barrier
+
+	ctx = core.WithExtractionBarrier(ctx, barrier)
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			barrier.Close()
+			cancel()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.extractionCancels, id)
+			delete(s.extractionBarriers, id)
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelExtractions cancels all currently registered in-flight extraction contexts.
+func (s *SessionContext) CancelExtractions() {
+	if s == nil {
+		return
+	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
+	s.mu.Lock()
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
+	}
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
+	for id, b := range s.extractionBarriers {
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
+	}
+	s.mu.Unlock()
+
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
+	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// ResetSession completely resets this session's state:
+// 1. Cancels active in-flight execution context immediately.
+// 2. Cancels in-flight automatic memory extraction contexts immediately.
+// 3. Increments the epoch to invalidate in-flight or queued FIFO turns and extractions.
+// 4. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
+// 5. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
+func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
+	if s == nil {
+		return nil
+	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
+	s.mu.Lock()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
+	}
+	s.epoch++
+
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
+	for id, b := range s.extractionBarriers {
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
+	}
+
+	s.History = nil
+	s.historySeq = nil
+	s.groupCompactSummary = ""
+	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
+	s.groupCompactGeneration++
+	s.pendingTurns = nil
+	s.extractionThreshold = 0
+	s.deliveryFailure = nil
+	s.lastSystemPrompt = ""
+	s.lastModelName = ""
+	s.privateCompacting = false
+	s.UpdatedAt = time.Now()
+	conversationID := s.ConversationID
+	s.mu.Unlock()
+
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
+	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
+
+	if groupSummaryStore != nil && conversationID != "" {
+		return groupSummaryStore.Delete(conversationID)
+	}
+	return nil
+}
+
+// PrivateCompactSnapshot captures messages to be summarized in private chat.
+type PrivateCompactSnapshot struct {
+	Messages []ChatMessage
+	Count    int
+	Epoch    uint64
+	LastSeq  uint64
+}
+
+var (
+	ErrAlreadyCompacting = errors.New("压缩正在进行中，请勿重复触发。")
+	ErrNothingToCompact  = errors.New("当前没有需要压缩的消息。")
+)
+
+// SnapshotPrivateCompact captures current history for private chat compaction.
+func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error) {
+	if s == nil {
+		return PrivateCompactSnapshot{}, errors.New("会话不可用")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.privateCompacting {
+		return PrivateCompactSnapshot{}, ErrAlreadyCompacting
+	}
+	if len(s.History) == 0 {
+		return PrivateCompactSnapshot{}, ErrNothingToCompact
+	}
+
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+
+	s.privateCompacting = true
+	snapshotMsgs := make([]ChatMessage, len(s.History))
+	copy(snapshotMsgs, s.History)
+	var lastSeq uint64
+	if len(s.historySeq) > 0 {
+		lastSeq = s.historySeq[len(s.historySeq)-1]
+	}
+
+	return PrivateCompactSnapshot{
+		Messages: snapshotMsgs,
+		Count:    len(s.History),
+		Epoch:    s.epoch,
+		LastSeq:  lastSeq,
+	}, nil
+}
+
+// CommitPrivateCompact commits a private chat summary, replacing the summarized messages
+// while preserving messages that arrived during the compaction LLM call.
+func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, summary string) bool {
+	if s == nil {
+		return false
+	}
+	summary = strings.TrimSpace(summary)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { s.privateCompacting = false }()
+
+	if s.epoch != snapshot.Epoch {
+		return false
+	}
+	if summary == "" {
+		return false
+	}
+
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+
+	var remaining []ChatMessage
+	var remainingSeq []uint64
+	for i, seq := range s.historySeq {
+		if seq > snapshot.LastSeq {
+			remaining = append(remaining, s.History[i])
+			remainingSeq = append(remainingSeq, seq)
+		}
+	}
+
+	newHistory := make([]ChatMessage, 0, 2+len(remaining))
+	newHistory = append(newHistory,
+		ChatMessage{Role: "user", Content: "[先前对话总结] " + summary},
+		ChatMessage{Role: "assistant", Content: "了解，我已记住上述先前的对话背景。"},
+	)
+	newHistory = append(newHistory, remaining...)
+
+	newSeq := make([]uint64, len(newHistory))
+	for i := range newSeq {
+		s.nextMsgSeq++
+		newSeq[i] = s.nextMsgSeq
+	}
+
+	s.History = newHistory
+	s.historySeq = newSeq
+	s.UpdatedAt = time.Now()
+	return true
+}
+
+// CancelPrivateCompact releases the private compaction lock if compaction fails.
+func (s *SessionContext) CancelPrivateCompact() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.privateCompacting = false
+}
+
+// IsPrivateCompacting reports whether private chat compaction is currently in flight.
+func (s *SessionContext) IsPrivateCompacting() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.privateCompacting
 }
 
 // Lock 锁定会话
@@ -352,6 +853,11 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	}
 
 	s.History = newMessages
+	s.historySeq = make([]uint64, len(newMessages))
+	for i := range s.historySeq {
+		s.nextMsgSeq++
+		s.historySeq[i] = s.nextMsgSeq
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -366,6 +872,18 @@ func (s *SessionContext) TrimHistory(max int) {
 	trimmed := make([]ChatMessage, max)
 	copy(trimmed, s.History[len(s.History)-max:])
 	s.History = trimmed
+
+	if len(s.historySeq) >= len(s.History) {
+		trimmedSeq := make([]uint64, max)
+		copy(trimmedSeq, s.historySeq[len(s.historySeq)-max:])
+		s.historySeq = trimmedSeq
+	} else {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -687,6 +1205,13 @@ func (s *SessionContext) GroupCompactBufferCount() int {
 	return len(s.groupCompactBuffer)
 }
 
+// PendingExtractionBatch wraps an asynchronous memory extraction batch with its originating session and generation epoch.
+type PendingExtractionBatch struct {
+	Session *SessionContext
+	Epoch   uint64
+	Items   []memory.PendingExtractionItem
+}
+
 // EnqueuePendingTurn appends one completed user/assistant turn. Once the
 // per-session random threshold is reached, it atomically returns and clears the
 // pending batch for asynchronous extraction.
@@ -694,9 +1219,9 @@ func (s *SessionContext) EnqueuePendingTurn(
 	items []memory.PendingExtractionItem,
 	minTurns int,
 	maxTurns int,
-) ([]memory.PendingExtractionItem, bool) {
+) (PendingExtractionBatch, bool) {
 	if len(items) == 0 {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 	if minTurns <= 0 {
 		minTurns = 3
@@ -718,7 +1243,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	s.pendingTurns = append(s.pendingTurns, turn)
 	s.UpdatedAt = time.Now()
 	if len(s.pendingTurns) < s.extractionThreshold {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 
 	count := 0
@@ -731,7 +1256,14 @@ func (s *SessionContext) EnqueuePendingTurn(
 	}
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
-	return batch, true
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	return PendingExtractionBatch{
+		Session: s,
+		Epoch:   s.epoch,
+		Items:   batch,
+	}, true
 }
 
 func (s *SessionContext) PendingTurnCount() int {
@@ -842,6 +1374,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
+		epoch:               1,
 		groupCompactSummary: summary,
 	}
 	sm.sessions[canonicalID] = session
@@ -906,6 +1439,15 @@ func (s *SessionContext) AddMessage(msg core.ChatMessage) {
 			}
 		}
 	}
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+	s.nextMsgSeq++
+	s.historySeq = append(s.historySeq, s.nextMsgSeq)
 	s.History = append(s.History, llmMsg)
 	s.UpdatedAt = time.Now()
 }
@@ -924,6 +1466,7 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -963,6 +1506,45 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 	}
 	session.ResetGroupCompact()
 	return true
+}
+
+// ResetSession resets the specified session across canonical keys and aliases,
+// cancelling active generation, clearing history/buffers/summaries, and removing
+// persisted group summary from disk.
+func (sm *SessionManager) ResetSession(sessionID string) error {
+	if sm == nil {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	aliases := memory.SessionKeyAliases(sessionID)
+
+	sm.mu.RLock()
+	session, ok := sm.sessions[canonicalID]
+	if !ok {
+		session, ok = sm.sessions[sessionID]
+	}
+	if !ok {
+		for _, alias := range aliases {
+			if s, found := sm.sessions[alias]; found {
+				session = s
+				ok = true
+				break
+			}
+		}
+	}
+	store := sm.groupSummaryStore
+	sm.mu.RUnlock()
+
+	if ok && session != nil {
+		return session.ResetSession(store)
+	} else if store != nil {
+		return store.Delete(canonicalID)
+	}
+	return nil
 }
 
 // ── core.SessionStore interface implementation ──

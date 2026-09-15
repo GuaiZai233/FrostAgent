@@ -34,6 +34,7 @@ type RunContext struct {
 	Billing             *BillingRunState
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot
+	Epoch               uint64
 }
 
 type runContextKey struct{}
