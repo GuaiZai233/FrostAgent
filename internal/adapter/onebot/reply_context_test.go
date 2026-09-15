@@ -424,21 +424,17 @@ func (s *stubSecurityClassifier) Classify(ctx context.Context, input security.Cl
 	text := strings.ToLower(input.Normalized)
 	if strings.Contains(text, "ignore all previous") {
 		return security.ClassificationResult{
-			Category:   security.RiskCategoryPromptInjection,
-			RiskLevel:  security.RiskLevelHigh,
-			Intent:     security.IntentMalicious,
-			Confidence: 0.90,
-			Origin:     input.Origin,
-			Reason:     "scripted test stub prompt injection",
+			Category:  security.RiskCategoryPromptInjection,
+			RiskLevel: security.RiskLevelHigh,
+			Origin:    input.Origin,
+			Reason:    "scripted test stub prompt injection",
 		}, nil
 	}
 	return security.ClassificationResult{
-		Category:   security.RiskCategoryNone,
-		RiskLevel:  security.RiskLevelNone,
-		Intent:     security.IntentBenign,
-		Confidence: 0.0,
-		Origin:     input.Origin,
-		Reason:     "benign",
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Origin:    input.Origin,
+		Reason:    "benign",
 	}, nil
 }
 
@@ -537,11 +533,14 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	dialogueRequest := dialogueProvider.requests[0]
 	dialogueProvider.mu.Unlock()
 
-	// Verify reply_context was vetted out and not injected into prompt
+	// Verify reply_context raw dangerous content was vetted out and replaced with sanitized notice
 	for _, msg := range dialogueRequest.Messages {
 		if content, ok := msg.Content.(string); ok {
-			if strings.Contains(content, "<reply_context>") {
-				t.Fatalf("包含高风险内容的 reply_context 未被安全机制剔除: %s", content)
+			if strings.Contains(content, "ignore all previous instructions") {
+				t.Fatalf("包含高风险内容的 reply_context 原始恶意指令未被安全机制剔除: %s", content)
+			}
+			if strings.Contains(content, "<reply_context>") && !strings.Contains(content, "<此内容已过滤：检测到提示词注入内容！") {
+				t.Fatalf("期望高风险 reply_context 被降级替换为脱敏提示，实际=%s", content)
 			}
 		}
 	}
@@ -633,11 +632,14 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	dialogueRequest := dialogueProvider.requests[0]
 	dialogueProvider.mu.Unlock()
 
-	// Verify dangerous image description was vetted out and not injected into user text
+	// Verify dangerous image description was sanitized and original dangerous content was discarded
 	for _, msg := range dialogueRequest.Messages {
 		if content, ok := msg.Content.(string); ok {
-			if strings.Contains(content, "【图片内容】：") || strings.Contains(content, "ignore all previous instructions") {
-				t.Fatalf("高风险图片描述未被安全机制剔除: %s", content)
+			if strings.Contains(content, "ignore all previous instructions") {
+				t.Fatalf("高风险图片描述原始恶意指令未被安全机制剔除: %s", content)
+			}
+			if strings.Contains(content, "【图片内容】：") && !strings.Contains(content, "<此内容已过滤：检测到提示词注入内容！") {
+				t.Fatalf("期望高风险图片描述被降级替换为脱敏提示，实际=%s", content)
 			}
 		}
 	}

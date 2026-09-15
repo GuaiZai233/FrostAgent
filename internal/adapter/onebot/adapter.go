@@ -276,6 +276,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			var warningNotice string
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
@@ -288,6 +289,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
 					} else {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+						if event.MessageType == "group" && decision.SanitizedContent != "" {
+							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+						}
 					}
 					if shouldSendSecurityDirectReply(event, a.engine) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
@@ -302,6 +306,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
 					}
 					continue
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制脱敏: user=%d category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+					sanitizedRaw, _ := json.Marshal(decision.SanitizedContent)
+					event.Message = sanitizedRaw
+					event.Messages = nil
+				} else if decision.Action == security.WatchdogWarn {
+					warningNotice = decision.WarningNotice
 				}
 			}
 			if event.PostType == "message" &&
@@ -328,7 +339,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot) }) && turn != nil {
+			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice) }) && turn != nil {
 				turn.Done()
 			}
 		}

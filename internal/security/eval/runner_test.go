@@ -1,4 +1,4 @@
-package eval
+﻿package eval
 
 import (
 	"FrostAgent/internal/core"
@@ -23,33 +23,27 @@ func (s *scriptedPlumbingStub) Classify(ctx context.Context, input security.Clas
 	text := strings.ToLower(input.Normalized)
 	if strings.Contains(text, "firewall bypass") {
 		return security.ClassificationResult{
-			Category:   security.RiskCategoryPromptInjection,
-			RiskLevel:  security.RiskLevelLow,
-			Intent:     security.IntentAmbiguous,
-			Confidence: 0.50,
-			Origin:     input.Origin,
-			Reason:     "ambiguous security research query",
+			Category:  security.RiskCategoryPromptInjection,
+			RiskLevel: security.RiskLevelMedium,
+			Origin:    input.Origin,
+			Reason:    "ambiguous security research query",
 		}, nil
 	}
 	if strings.Contains(text, "ignore all previous") ||
 		strings.Contains(text, "bypass the watchdog") ||
 		strings.Contains(text, "bypass watchdog") {
 		return security.ClassificationResult{
-			Category:   security.RiskCategoryPromptInjection,
-			RiskLevel:  security.RiskLevelHigh,
-			Intent:     security.IntentMalicious,
-			Confidence: 0.95,
-			Origin:     input.Origin,
-			Reason:     "scripted prompt injection violation",
+			Category:  security.RiskCategoryPromptInjection,
+			RiskLevel: security.RiskLevelCritical,
+			Origin:    input.Origin,
+			Reason:    "scripted prompt injection violation",
 		}, nil
 	}
 	return security.ClassificationResult{
-		Category:   security.RiskCategoryNone,
-		RiskLevel:  security.RiskLevelNone,
-		Intent:     security.IntentBenign,
-		Confidence: 0.0,
-		Origin:     input.Origin,
-		Reason:     "benign",
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Origin:    input.Origin,
+		Reason:    "benign",
 	}, nil
 }
 
@@ -90,8 +84,6 @@ func (m *mockGatewayProvider) Chat(ctx context.Context, req core.ChatRequest) (*
 
 	category := "none"
 	riskLevel := "none"
-	intent := "benign"
-	confidence := 0.95
 	reason := "benign content"
 
 	if strings.Contains(contentLower, "ignore all previous") ||
@@ -104,33 +96,26 @@ func (m *mockGatewayProvider) Chat(ctx context.Context, req core.ChatRequest) (*
 		strings.Contains(contentLower, "これまでの指示をすべて無視") ||
 		strings.Contains(contentLower, "ignora todas las instrucciones") {
 		category = "prompt_injection"
-		riskLevel = "high"
-		intent = "malicious"
+		riskLevel = "critical"
 		reason = "prompt injection detected by llm gateway"
 	} else if strings.Contains(contentLower, "rm -rf / --no-preserve-root") ||
 		strings.Contains(contentLower, "curl -s https://malicious") {
 		category = "malicious_execution"
-		riskLevel = "high"
-		intent = "malicious"
+		riskLevel = "critical"
 		reason = "destructive execution detected by llm gateway"
 	} else if strings.Contains(contentLower, "steal all api keys") {
 		category = "data_exfiltration"
-		riskLevel = "high"
-		intent = "malicious"
+		riskLevel = "critical"
 		reason = "credential theft attempt detected by llm gateway"
 	} else if strings.Contains(contentLower, "firewall bypass") {
 		category = "prompt_injection"
-		riskLevel = "low"
-		intent = "ambiguous"
-		confidence = 0.50
+		riskLevel = "medium"
 		reason = "educational inquiry on firewall bypass"
 	}
 
-	respJSON, _ := json.Marshal(map[string]interface{}{
+	respJSON, _ := json.Marshal(map[string]any{
 		"category":   category,
 		"risk_level": riskLevel,
-		"intent":     intent,
-		"confidence": confidence,
 		"reason":     reason,
 	})
 

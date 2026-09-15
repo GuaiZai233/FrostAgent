@@ -81,11 +81,9 @@ func (m *mockClassifier) Classify(ctx context.Context, input security.Classifica
 		return m.fn(ctx, input)
 	}
 	return security.ClassificationResult{
-		Category:   security.RiskCategoryNone,
-		RiskLevel:  security.RiskLevelNone,
-		Intent:     security.IntentBenign,
-		Confidence: 1.0,
-		Reason:     "mock clean",
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Reason:    "mock clean",
 	}, nil
 }
 
@@ -1278,19 +1276,15 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if strings.Contains(input.Content, "ignore all previous instructions") {
 				return security.ClassificationResult{
-					Category:   security.RiskCategoryPromptInjection,
-					RiskLevel:  security.RiskLevelCritical,
-					Intent:     security.IntentMalicious,
-					Confidence: 0.95,
-					Reason:     "prompt injection detected",
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "prompt injection detected",
 				}, nil
 			}
 			return security.ClassificationResult{
-				Category:   security.RiskCategoryNone,
-				RiskLevel:  security.RiskLevelNone,
-				Intent:     security.IntentBenign,
-				Confidence: 1.0,
-				Reason:     "clean",
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "clean",
 			}, nil
 		},
 	}

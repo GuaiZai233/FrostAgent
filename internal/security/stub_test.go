@@ -34,20 +34,16 @@ func (s *ScriptedStub) Classify(ctx context.Context, input ClassificationInput) 
 		strings.Contains(text, "nc -e") ||
 		strings.Contains(text, "system prompt") {
 		return ClassificationResult{
-			Category:   RiskCategoryPromptInjection,
-			RiskLevel:  RiskLevelHigh,
-			Intent:     IntentMalicious,
-			Confidence: 0.90,
-			Origin:     input.Origin,
-			Reason:     "scripted stub policy violation",
+			Category:  RiskCategoryPromptInjection,
+			RiskLevel: RiskLevelCritical,
+			Origin:    input.Origin,
+			Reason:    "scripted stub policy violation",
 		}, nil
 	}
 	return ClassificationResult{
-		Category:   RiskCategoryNone,
-		RiskLevel:  RiskLevelNone,
-		Intent:     IntentBenign,
-		Confidence: 0.0,
-		Origin:     input.Origin,
-		Reason:     "benign",
+		Category:  RiskCategoryNone,
+		RiskLevel: RiskLevelNone,
+		Origin:    input.Origin,
+		Reason:    "benign",
 	}, nil
 }

@@ -54,7 +54,7 @@ func (s *spySecurityLLMProvider) Chat(ctx context.Context, req core.ChatRequest)
 	s.calls = append(s.calls, req)
 	resp := s.response
 	if resp == "" {
-		resp = `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.95, "reason": "semantic prompt injection detected"}`
+		resp = `{"category": "prompt_injection", "risk_level": "critical", "reason": "semantic prompt injection detected"}`
 	}
 	return &core.ChatResponse{
 		Message: core.ChatMessage{
@@ -118,7 +118,7 @@ func TestProductionPathInvokesLLMSecurityGateway(t *testing.T) {
 	info := create(t, m, "sec-invocation-test")
 
 	spy := &spySecurityLLMProvider{
-		response: `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.98, "reason": "multilingual semantic injection in Italian"}`,
+		response: `{"category": "prompt_injection", "risk_level": "critical", "reason": "multilingual semantic injection in Italian"}`,
 	}
 
 	// Wire spy into the security controller for this instance
@@ -179,10 +179,10 @@ func TestTwoInstancesUseDistinctLLMProvidersWithoutBleed(t *testing.T) {
 	}
 
 	spyA := &spySecurityLLMProvider{
-		response: `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.95, "reason": "attack detected on instance A"}`,
+		response: `{"category": "prompt_injection", "risk_level": "critical", "reason": "attack detected on instance A"}`,
 	}
 	spyB := &spySecurityLLMProvider{
-		response: `{"category": "exfiltration", "risk_level": "high", "intent": "malicious", "confidence": 0.96, "reason": "exfiltration detected on instance B"}`,
+		response: `{"category": "data_exfiltration", "risk_level": "critical", "reason": "exfiltration detected on instance B"}`,
 	}
 
 	secCtrl := m.SecurityController()
@@ -326,10 +326,10 @@ func TestConcurrentRuntimeRebuildAndEvaluationRace(t *testing.T) {
 	}
 
 	spyA := &spySecurityLLMProvider{
-		response: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99}`,
+		response: `{"category": "none", "risk_level": "none", "reason": "clean"}`,
 	}
 	spyB := &spySecurityLLMProvider{
-		response: `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.95, "reason": "concurrent injection"}`,
+		response: `{"category": "prompt_injection", "risk_level": "critical", "reason": "concurrent injection"}`,
 	}
 
 	secCtrl := m.SecurityController()
@@ -465,7 +465,7 @@ func TestProductionRuntimeFailClosedOnLLMError(t *testing.T) {
 			// 5 repeated submissions under classifier failure:
 			// Must unconditionally return WatchdogBlock with fail-closed reason,
 			// with zero strikes accrued and never locked.
-			for i := 0; i < 5; i++ {
+			for i := range 5 {
 				dec := engine.Security.GateIngress(principal, "Some message triggering evaluation", security.AuditEvent{
 					Instance: info.ID,
 					Session:  fmt.Sprintf("sess-%d", i),
@@ -539,7 +539,7 @@ func TestProductionRuntimeTransformedInputCall2ErrorFailsClosed(t *testing.T) {
 				return &core.ChatResponse{
 					Message: core.ChatMessage{
 						Role:    core.RoleAssistant,
-						Content: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99}`,
+						Content: `{"category": "none", "risk_level": "none", "reason": "clean"}`,
 					},
 				}, nil
 			}
@@ -558,7 +558,7 @@ func TestProductionRuntimeTransformedInputCall2ErrorFailsClosed(t *testing.T) {
 	}
 
 	transformedPayload := "Hello​ safe looking text"
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		dec := engine.Security.GateIngress(principal, transformedPayload, security.AuditEvent{
 			Instance: info.ID,
 			Session:  fmt.Sprintf("sess-%d", i),

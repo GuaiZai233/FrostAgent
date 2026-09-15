@@ -478,6 +478,17 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		modelTools := e.EffectiveTools()
 
 		coreMsgs := convertToCoreMessages(messages)
+		if hasRunCtx && runCtx.SecurityNotice != "" {
+			noticeMsg := core.ChatMessage{
+				Role:    core.RoleSystem,
+				Content: runCtx.SecurityNotice,
+			}
+			if len(coreMsgs) > 0 && coreMsgs[0].Role == core.RoleSystem {
+				coreMsgs = append([]core.ChatMessage{coreMsgs[0], noticeMsg}, coreMsgs[1:]...)
+			} else {
+				coreMsgs = append([]core.ChatMessage{noticeMsg}, coreMsgs...)
+			}
+		}
 
 		// 检查上下文总 Token 是否超出模型硬上限 (包含 tools 定义开销)
 		contextTokens, err := billing.EstimateMessagesTokens(coreMsgs, modelTools)
@@ -701,10 +712,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
-			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked {
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					contentStr = decision.SanitizedContent
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
 				} else {
 					contentStr = "FrostAgent安全控制：模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
@@ -739,7 +753,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
-			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked {
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。", ToolCallID: tc.ID})
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参因安全审查服务异常被阻止: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
@@ -795,10 +809,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, toolResult, tc.Function.Name); blocked {
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, toolResult, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					toolResult = "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					toolResult = decision.SanitizedContent
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制过滤脱敏: tool=%s category=%s eval_id=%s", tc.Function.Name, decision.Classification.Category, decision.EvaluationID))
 				} else {
 					toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))

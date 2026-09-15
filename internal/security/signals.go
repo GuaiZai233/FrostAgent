@@ -1,25 +1,24 @@
-package security
+﻿package security
 
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 )
 
 type RiskCategory string
 
 const (
-	RiskCategoryNone               RiskCategory = "none"
-	RiskCategoryPromptInjection    RiskCategory = "prompt_injection"
-	RiskCategoryMaliciousExecution RiskCategory = "malicious_execution"
-	RiskCategoryExfiltration       RiskCategory = "data_exfiltration"
-	RiskCategoryPlatformPolicy     RiskCategory = "platform_policy"
-	RiskCategoryTencentCompliance  RiskCategory = "tencent_compliance"
-	RiskCategoryPolitical          RiskCategory = "political_sensitive"
-	RiskCategoryViolence           RiskCategory = "violence_terrorism"
-	RiskCategoryVulgarity          RiskCategory = "pornography_vulgarity"
-	RiskCategoryFraud              RiskCategory = "fraud_gambling"
+	RiskCategoryNone                   RiskCategory = "none"
+	RiskCategoryPromptInjection        RiskCategory = "prompt_injection"
+	RiskCategoryMaliciousExecution     RiskCategory = "malicious_execution"
+	RiskCategoryDataExfiltration       RiskCategory = "data_exfiltration"
+	RiskCategoryPolitics               RiskCategory = "politics"
+	RiskCategoryPornography            RiskCategory = "pornography"
+	RiskCategoryViolenceTerrorism      RiskCategory = "violence_terrorism"
+	RiskCategoryContraband             RiskCategory = "contraband"
+	RiskCategoryFraudGambling          RiskCategory = "fraud_gambling"
+	RiskCategoryHarassmentManipulation RiskCategory = "harassment_manipulation"
 )
 
 func (c RiskCategory) IsValid() bool {
@@ -27,13 +26,13 @@ func (c RiskCategory) IsValid() bool {
 	case RiskCategoryNone,
 		RiskCategoryPromptInjection,
 		RiskCategoryMaliciousExecution,
-		RiskCategoryExfiltration,
-		RiskCategoryPlatformPolicy,
-		RiskCategoryTencentCompliance,
-		RiskCategoryPolitical,
-		RiskCategoryViolence,
-		RiskCategoryVulgarity,
-		RiskCategoryFraud:
+		RiskCategoryDataExfiltration,
+		RiskCategoryPolitics,
+		RiskCategoryPornography,
+		RiskCategoryViolenceTerrorism,
+		RiskCategoryContraband,
+		RiskCategoryFraudGambling,
+		RiskCategoryHarassmentManipulation:
 		return true
 	default:
 		return false
@@ -51,19 +50,22 @@ func NormalizeRiskCategory(s string) (RiskCategory, bool) {
 	case "malicious_execution", "maliciousexecution", "execution", "command_execution":
 		return RiskCategoryMaliciousExecution, true
 	case "data_exfiltration", "dataexfiltration", "exfiltration", "leak":
-		return RiskCategoryExfiltration, true
-	case "platform_policy", "platformpolicy":
-		return RiskCategoryPlatformPolicy, true
-	case "tencent_compliance", "tencentcompliance":
-		return RiskCategoryTencentCompliance, true
-	case "political_sensitive", "political":
-		return RiskCategoryPolitical, true
-	case "violence_terrorism", "violence":
-		return RiskCategoryViolence, true
-	case "pornography_vulgarity", "vulgarity", "pornography":
-		return RiskCategoryVulgarity, true
+		return RiskCategoryDataExfiltration, true
+	case "politics", "political", "political_sensitive":
+		return RiskCategoryPolitics, true
+	case "pornography", "pornography_vulgarity", "vulgarity", "erotic":
+		return RiskCategoryPornography, true
+	case "violence_terrorism", "violence", "terrorism":
+		return RiskCategoryViolenceTerrorism, true
+	case "contraband", "illegal_contraband", "contraband_goods":
+		return RiskCategoryContraband, true
 	case "fraud_gambling", "fraud", "gambling":
-		return RiskCategoryFraud, true
+		return RiskCategoryFraudGambling, true
+	case "harassment_manipulation", "harassment", "manipulation", "abuse":
+		return RiskCategoryHarassmentManipulation, true
+	case "platform_policy", "platformpolicy", "tencent_compliance", "tencentcompliance":
+		// Compatibility mapping for legacy category values: map to most specific or default to prompt_injection / contraband
+		return RiskCategoryHarassmentManipulation, true
 	default:
 		return RiskCategory(s), false
 	}
@@ -73,7 +75,6 @@ type RiskLevel string
 
 const (
 	RiskLevelNone     RiskLevel = "none"
-	RiskLevelLow      RiskLevel = "low"
 	RiskLevelMedium   RiskLevel = "medium"
 	RiskLevelHigh     RiskLevel = "high"
 	RiskLevelCritical RiskLevel = "critical"
@@ -81,7 +82,7 @@ const (
 
 func (l RiskLevel) IsValid() bool {
 	switch l {
-	case RiskLevelNone, RiskLevelLow, RiskLevelMedium, RiskLevelHigh, RiskLevelCritical:
+	case RiskLevelNone, RiskLevelMedium, RiskLevelHigh, RiskLevelCritical:
 		return true
 	default:
 		return false
@@ -95,7 +96,8 @@ func NormalizeRiskLevel(s string) (RiskLevel, bool) {
 	case "none":
 		return RiskLevelNone, true
 	case "low":
-		return RiskLevelLow, true
+		// Legacy low is normalized to medium
+		return RiskLevelMedium, true
 	case "medium", "med":
 		return RiskLevelMedium, true
 	case "high":
@@ -104,38 +106,6 @@ func NormalizeRiskLevel(s string) (RiskLevel, bool) {
 		return RiskLevelCritical, true
 	default:
 		return RiskLevel(s), false
-	}
-}
-
-type ActorIntent string
-
-const (
-	IntentBenign    ActorIntent = "benign"
-	IntentAmbiguous ActorIntent = "ambiguous"
-	IntentMalicious ActorIntent = "malicious"
-)
-
-func (i ActorIntent) IsValid() bool {
-	switch i {
-	case IntentBenign, IntentAmbiguous, IntentMalicious:
-		return true
-	default:
-		return false
-	}
-}
-
-// NormalizeActorIntent canonicalizes actor intent strings.
-func NormalizeActorIntent(s string) (ActorIntent, bool) {
-	s = strings.ToLower(strings.TrimSpace(s))
-	switch s {
-	case "benign":
-		return IntentBenign, true
-	case "ambiguous":
-		return IntentAmbiguous, true
-	case "malicious":
-		return IntentMalicious, true
-	default:
-		return ActorIntent(s), false
 	}
 }
 
@@ -156,13 +126,11 @@ type ClassificationInput struct {
 
 // ClassificationResult represents the structured assessment returned by a Classifier.
 type ClassificationResult struct {
-	Category   RiskCategory   `json:"category"`
-	RiskLevel  RiskLevel      `json:"risk_level"`
-	Intent     ActorIntent    `json:"intent"`
-	Confidence float64        `json:"confidence"`
-	Origin     WatchdogSource `json:"origin"`
-	Reason     string         `json:"reason"`
-	Details    []string       `json:"details,omitempty"`
+	Category  RiskCategory   `json:"category"`
+	RiskLevel RiskLevel      `json:"risk_level"`
+	Origin    WatchdogSource `json:"origin"`
+	Reason    string         `json:"reason"`
+	Details   []string       `json:"details,omitempty"`
 }
 
 func (r ClassificationResult) Validate() error {
@@ -172,19 +140,10 @@ func (r ClassificationResult) Validate() error {
 	if !r.RiskLevel.IsValid() {
 		return fmt.Errorf("invalid risk level: %q", r.RiskLevel)
 	}
-	if !r.Intent.IsValid() {
-		return fmt.Errorf("invalid actor intent: %q", r.Intent)
-	}
-	if math.IsNaN(r.Confidence) || math.IsInf(r.Confidence, 0) || r.Confidence < 0.0 || r.Confidence > 1.0 {
-		return fmt.Errorf("confidence out of range [0.0, 1.0]: %v", r.Confidence)
-	}
-	// Invariant consistency checks
+	// Invariant consistency checks: category == none <=> risk_level == none
 	if r.Category == RiskCategoryNone {
 		if r.RiskLevel != RiskLevelNone {
 			return fmt.Errorf("category none requires risk_level none, got %q", r.RiskLevel)
-		}
-		if r.Intent == IntentMalicious {
-			return fmt.Errorf("category none cannot have malicious intent")
 		}
 	} else {
 		if r.RiskLevel == RiskLevelNone {
@@ -195,25 +154,11 @@ func (r ClassificationResult) Validate() error {
 }
 
 func (r ClassificationResult) IsRisky() bool {
-	if r.Category == RiskCategoryNone || r.RiskLevel == RiskLevelNone {
-		return false
-	}
-	switch r.RiskLevel {
-	case RiskLevelCritical:
-		return r.Confidence >= 0.3
-	case RiskLevelHigh:
-		return r.Confidence >= 0.5
-	case RiskLevelMedium:
-		return r.Confidence >= 0.6
-	case RiskLevelLow:
-		return r.Confidence >= 0.8
-	default:
-		return false
-	}
+	return r.Category != RiskCategoryNone && r.RiskLevel != RiskLevelNone
 }
 
 func (r ClassificationResult) IsSevere() bool {
-	return r.RiskLevel == RiskLevelCritical || (r.RiskLevel == RiskLevelHigh && r.Confidence >= 0.85)
+	return r.RiskLevel == RiskLevelCritical
 }
 
 // Classifier provides structured content risk assessment.

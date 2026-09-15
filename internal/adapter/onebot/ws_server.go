@@ -141,13 +141,17 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 }
 
 // processEvent holds its reserved session turn until routing and reply finish.
-func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
 	}
 	if event.PostType != "message" {
 		return
+	}
+	var notice string
+	if len(warningNotice) > 0 {
+		notice = warningNotice[0]
 	}
 
 	if event.MessageType == "group" {
@@ -173,7 +177,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			return
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -188,12 +192,16 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		replyContext := conn.lookupReplyContext(event)
 		conn.observeResolvedReply(event, replyContext)
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
+	var notice string
+	if len(warningNotice) > 0 {
+		notice = warningNotice[0]
+	}
 	routeScope := oneBotRouteScope(event)
 	if routeSnapshot == nil && engine != nil && engine.ModelRouter != nil {
 		routeSnapshot = engine.ModelRouter.Snapshot()
@@ -251,9 +259,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							Instance: engine.InstanceID,
 							Session:  historyKey(event),
 						})
-						if security.Blocks(decision.Action) {
-							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述包含高风险内容，已被安全机制隔离剔除: %s", event.UserID, decision.Reason))
+						if decision.IsFailure {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述因安全审查服务异常被隔离剔除: %s", event.UserID, decision.SafeSummary))
 							imageDesc = ""
+						} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述包含风险内容，已被脱敏替换: category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+							imageDesc = decision.SanitizedContent
+						} else if decision.Action == security.WatchdogWarn && notice == "" {
+							notice = decision.WarningNotice
 						}
 					}
 				}
@@ -273,9 +286,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						Instance: engine.InstanceID,
 						Session:  historyKey(event),
 					})
-					if security.Blocks(decision.Action) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+					if decision.IsFailure {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
 						imageDesc = ""
+					} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含风险内容，已被脱敏替换: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
+						imageDesc = decision.SanitizedContent
+					} else if decision.Action == security.WatchdogWarn && notice == "" {
+						notice = decision.WarningNotice
 					}
 				}
 			}
@@ -315,9 +333,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						Instance: engine.InstanceID,
 						Session:  historyKey(event),
 					})
-					if security.Blocks(decision.Action) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
+					if decision.IsFailure {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 因安全审查服务异常被隔离剔除: %s", groupName, decision.SafeSummary))
 						groupName = ""
+					} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 包含风险内容，已被脱敏替换: category=%s eval_id=%s", groupName, decision.Classification.Category, decision.EvaluationID))
+						groupName = decision.SanitizedContent
 					}
 				}
 			}
@@ -358,8 +379,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						Instance: engine.InstanceID,
 						Session:  historyKey(event),
 					})
-					if security.Blocks(decision.Action) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者昵称 [%s] 包含高风险内容，已被安全机制隔离剔除", nickname))
+					if decision.IsFailure || decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者昵称 [%s] 包含风险内容或审查异常，已被安全机制隔离剔除", nickname))
 						delete(sender, "nickname")
 					}
 				}
@@ -368,8 +389,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						Instance: engine.InstanceID,
 						Session:  historyKey(event),
 					})
-					if security.Blocks(decision.Action) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者群名片 [%s] 包含高风险内容，已被安全机制隔离剔除", card))
+					if decision.IsFailure || decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者群名片 [%s] 包含风险内容或审查异常，已被安全机制隔离剔除", card))
 						delete(sender, "card")
 					}
 				}
@@ -425,9 +446,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Instance: engine.InstanceID,
 					Session:  historyKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要因安全审查服务异常被隔离剔除: %s", event.GroupID, decision.SafeSummary))
 					vettedSummary = ""
+				} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要包含风险内容，已被脱敏替换: category=%s eval_id=%s", event.GroupID, decision.Classification.Category, decision.EvaluationID))
+					vettedSummary = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -447,9 +473,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Instance: engine.InstanceID,
 					Session:  historyKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息因安全审查服务异常被隔离剔除: %s", event.GroupID, decision.SafeSummary))
 					vettedRecent = ""
+				} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息包含风险内容，已被脱敏替换: category=%s eval_id=%s", event.GroupID, decision.Classification.Category, decision.EvaluationID))
+					vettedRecent = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -470,9 +501,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Instance: engine.InstanceID,
 					Session:  historyKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
 					vettedReply = ""
+				} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 包含风险内容，已被脱敏替换: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
+					vettedReply = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -645,9 +681,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
 			},
-			Billing:       billingState,
-			RouteScope:    routeScope,
-			RouteSnapshot: routeSnapshot,
+			Billing:        billingState,
+			RouteScope:     routeScope,
+			RouteSnapshot:  routeSnapshot,
+			SecurityNotice: notice,
 		})
 		replyText = runResult.Content
 
@@ -848,13 +885,8 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 	}
 }
 
-func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
-	if engine == nil || event.GroupID <= 0 {
-		return
-	}
-	segments := ParseMessageSegments(event.Message)
-	visibleText := extractUserText(segments, event.Message, engine.Scope)
-	if strings.TrimSpace(visibleText) == "" {
+func captureGroupCompactText(event model.OneBotEvent, text string, engine *llm.Engine) {
+	if engine == nil || event.GroupID <= 0 || strings.TrimSpace(text) == "" {
 		return
 	}
 	session := engine.SessionManager.GetOrCreate(historyKey(event))
@@ -871,7 +903,7 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 			Role:      "user",
 			Sender:    senderDisplayName(event),
 			SenderID:  strconv.FormatInt(event.UserID, 10),
-			Content:   strings.TrimSpace(visibleText),
+			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
 			Time:      time.Now().Format("15:04:05"),
 		},
@@ -881,6 +913,15 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 		owner, _ := memory.OwnerForGroup(event.GroupID)
 		engine.GroupCompactor.TriggerWithScope(session, owner, oneBotRouteScope(event))
 	}
+}
+
+func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
+	if engine == nil || event.GroupID <= 0 {
+		return
+	}
+	segments := ParseMessageSegments(event.Message)
+	visibleText := extractUserText(segments, event.Message, engine.Scope)
+	captureGroupCompactText(event, visibleText, engine)
 }
 
 func formatGroupSpeakerMessage(event model.OneBotEvent, text string) string {

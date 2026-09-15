@@ -1,4 +1,4 @@
-package security
+﻿package security
 
 import (
 	"FrostAgent/internal/core"
@@ -261,7 +261,7 @@ func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content
 }
 
 func Blocks(action WatchdogAction) bool {
-	return action == WatchdogBlock || action == WatchdogStrike || action == WatchdogLock
+	return action == WatchdogBlock || action == WatchdogLock
 }
 
 // IsLocked checks whether the principal is currently locked in the access store.

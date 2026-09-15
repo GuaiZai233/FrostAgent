@@ -74,11 +74,9 @@ func (m *mockClassifier) Classify(ctx context.Context, input security.Classifica
 		return m.fn(ctx, input)
 	}
 	return security.ClassificationResult{
-		Category:   security.RiskCategoryNone,
-		RiskLevel:  security.RiskLevelNone,
-		Intent:     security.IntentBenign,
-		Confidence: 0.95,
-		Reason:     "benign",
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Reason:    "benign",
 	}, nil
 }
 
@@ -3842,19 +3840,15 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if strings.Contains(strings.ToLower(input.Normalized), "ignore all previous") {
 				return security.ClassificationResult{
-					Category:   security.RiskCategoryPromptInjection,
-					RiskLevel:  security.RiskLevelHigh,
-					Intent:     security.IntentMalicious,
-					Confidence: 0.95,
-					Reason:     "prompt injection detected",
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "prompt injection detected",
 				}, nil
 			}
 			return security.ClassificationResult{
-				Category:   security.RiskCategoryNone,
-				RiskLevel:  security.RiskLevelNone,
-				Intent:     security.IntentBenign,
-				Confidence: 0.95,
-				Reason:     "benign",
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
 			}, nil
 		},
 	}
@@ -4233,11 +4227,9 @@ func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
 			}
 			mu.Unlock()
 			return security.ClassificationResult{
-				Category:   security.RiskCategoryNone,
-				RiskLevel:  security.RiskLevelNone,
-				Intent:     security.IntentBenign,
-				Confidence: 0.99,
-				Reason:     "clean benign content",
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "clean benign content",
 			}, nil
 		},
 	}

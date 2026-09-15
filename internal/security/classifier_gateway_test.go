@@ -4,7 +4,6 @@ import (
 	"FrostAgent/internal/core"
 	"context"
 	"errors"
-	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -143,39 +142,24 @@ func TestLLMStructuredOutputValidation(t *testing.T) {
 			expectedErr: "missing required field: category",
 		},
 		{
-			name:        "MissingIntentAndConfidence",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high"}`,
-			expectedErr: "missing required field: intent",
-		},
-		{
-			name:        "MissingConfidence",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious"}`,
-			expectedErr: "missing required field: confidence",
-		},
-		{
 			name:        "MissingCategory",
-			jsonOutput:  `{"risk_level": "high", "intent": "malicious", "confidence": 0.9}`,
+			jsonOutput:  `{"risk_level": "high"}`,
 			expectedErr: "missing required field: category",
 		},
 		{
 			name:        "MissingRiskLevel",
-			jsonOutput:  `{"category": "prompt_injection", "intent": "malicious", "confidence": 0.9}`,
+			jsonOutput:  `{"category": "prompt_injection"}`,
 			expectedErr: "missing required field: risk_level",
 		},
 		{
 			name:        "EmptyStringCategory",
-			jsonOutput:  `{"category": "", "risk_level": "none", "intent": "benign", "confidence": 0.0}`,
+			jsonOutput:  `{"category": "", "risk_level": "none"}`,
 			expectedErr: "empty required field: category",
 		},
 		{
 			name:        "EmptyStringRiskLevel",
-			jsonOutput:  `{"category": "none", "risk_level": "", "intent": "benign", "confidence": 0.0}`,
+			jsonOutput:  `{"category": "none", "risk_level": ""}`,
 			expectedErr: "empty required field: risk_level",
-		},
-		{
-			name:        "EmptyStringIntent",
-			jsonOutput:  `{"category": "none", "risk_level": "none", "intent": "", "confidence": 0.0}`,
-			expectedErr: "empty required field: intent",
 		},
 		{
 			name:        "MalformedJSON",
@@ -184,42 +168,27 @@ func TestLLMStructuredOutputValidation(t *testing.T) {
 		},
 		{
 			name:        "UnknownCategory",
-			jsonOutput:  `{"category": "unrecognized_attack", "risk_level": "high", "intent": "malicious", "confidence": 0.9}`,
+			jsonOutput:  `{"category": "unrecognized_attack", "risk_level": "high"}`,
 			expectedErr: "unknown category",
 		},
 		{
 			name:        "UnknownRiskLevel",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "apocalyptic", "intent": "malicious", "confidence": 0.9}`,
+			jsonOutput:  `{"category": "prompt_injection", "risk_level": "apocalyptic"}`,
 			expectedErr: "unknown risk_level",
 		},
 		{
-			name:        "UnknownIntent",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high", "intent": "evil", "confidence": 0.9}`,
-			expectedErr: "unknown intent",
-		},
-		{
-			name:        "ConfidenceNegative",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": -0.5}`,
-			expectedErr: "confidence out of range",
-		},
-		{
-			name:        "ConfidenceGreaterThanOne",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 1.5}`,
-			expectedErr: "confidence out of range",
-		},
-		{
 			name:        "CategoryNoneWithHighRisk",
-			jsonOutput:  `{"category": "none", "risk_level": "high", "intent": "benign", "confidence": 0.9}`,
+			jsonOutput:  `{"category": "none", "risk_level": "high"}`,
 			expectedErr: "category none requires risk_level none",
 		},
 		{
-			name:        "CategoryNoneWithMaliciousIntent",
-			jsonOutput:  `{"category": "none", "risk_level": "none", "intent": "malicious", "confidence": 0.9}`,
-			expectedErr: "category none cannot have malicious intent",
+			name:        "CategoryNoneWithCriticalRisk",
+			jsonOutput:  `{"category": "none", "risk_level": "critical"}`,
+			expectedErr: "category none requires risk_level none",
 		},
 		{
 			name:        "NonNoneCategoryWithRiskLevelNone",
-			jsonOutput:  `{"category": "prompt_injection", "risk_level": "none", "intent": "ambiguous", "confidence": 0.9}`,
+			jsonOutput:  `{"category": "prompt_injection", "risk_level": "none"}`,
 			expectedErr: "non-none category \"prompt_injection\" cannot have risk_level none",
 		},
 	}
@@ -270,34 +239,51 @@ func TestLLMStructuredOutputValidation(t *testing.T) {
 }
 
 // TestClassificationResultValidateInvariants directly unit tests the validation logic
-// including NaN and Infinity confidence checks.
+// and the invariant: Category == none <=> RiskLevel == none.
 func TestClassificationResultValidateInvariants(t *testing.T) {
 	valid := ClassificationResult{
-		Category:   RiskCategoryPromptInjection,
-		RiskLevel:  RiskLevelHigh,
-		Intent:     IntentMalicious,
-		Confidence: 0.95,
+		Category:  RiskCategoryPromptInjection,
+		RiskLevel: RiskLevelHigh,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("expected valid result to pass: %v", err)
 	}
 
-	nanResult := valid
-	nanResult.Confidence = math.NaN()
-	if err := nanResult.Validate(); err == nil {
-		t.Fatal("expected NaN confidence to fail validation")
+	validNone := ClassificationResult{
+		Category:  RiskCategoryNone,
+		RiskLevel: RiskLevelNone,
+	}
+	if err := validNone.Validate(); err != nil {
+		t.Fatalf("expected valid none result to pass: %v", err)
 	}
 
-	infResult := valid
-	infResult.Confidence = math.Inf(1)
-	if err := infResult.Validate(); err == nil {
-		t.Fatal("expected Inf confidence to fail validation")
+	invalidCat := valid
+	invalidCat.Category = "unknown_category"
+	if err := invalidCat.Validate(); err == nil {
+		t.Fatal("expected invalid category to fail validation")
 	}
 
-	negInfResult := valid
-	negInfResult.Confidence = math.Inf(-1)
-	if err := negInfResult.Validate(); err == nil {
-		t.Fatal("expected -Inf confidence to fail validation")
+	invalidRisk := valid
+	invalidRisk.RiskLevel = "unknown_level"
+	if err := invalidRisk.Validate(); err == nil {
+		t.Fatal("expected invalid risk level to fail validation")
+	}
+
+	// Invariant: Category == none <=> RiskLevel == none
+	mismatchNoneRisk := ClassificationResult{
+		Category:  RiskCategoryPromptInjection,
+		RiskLevel: RiskLevelNone,
+	}
+	if err := mismatchNoneRisk.Validate(); err == nil {
+		t.Fatal("expected non-none category with none risk_level to fail validation")
+	}
+
+	mismatchNoneCat := ClassificationResult{
+		Category:  RiskCategoryNone,
+		RiskLevel: RiskLevelHigh,
+	}
+	if err := mismatchNoneCat.Validate(); err == nil {
+		t.Fatal("expected none category with non-none risk_level to fail validation")
 	}
 }
 
@@ -306,7 +292,7 @@ func TestClassificationResultValidateInvariants(t *testing.T) {
 // and decision properly rendered.
 func TestLLMClassifierInvokesProviderAndParsesResponse(t *testing.T) {
 	mock := &mockLLMProvider{
-		response: `{"category": "prompt_injection", "risk_level": "high", "intent": "malicious", "confidence": 0.95, "reason": "semantic injection detected"}`,
+		response: `{"category": "prompt_injection", "risk_level": "critical", "reason": "semantic injection detected"}`,
 	}
 	access := NewAccessStore(t.TempDir() + "/access.json")
 	wd := NewWatchdogWithProvider(access, nil, mock, "model-router-security-gateway")
@@ -336,26 +322,26 @@ func TestLLMClassifierInvokesProviderAndParsesResponse(t *testing.T) {
 	}
 }
 
-// TestIntentBenignCannotAccrueStrikesOrLock verifies that when a classifier returns
-// HIGH risk content with IntentBenign and high confidence, the content is blocked
-// but the user NEVER accumulates strikes or gets locked, even after repeated submissions.
-func TestIntentBenignCannotAccrueStrikesOrLock(t *testing.T) {
+// TestCriticalContentCannotAccrueStrikesOrLock verifies that when a classifier returns
+// CRITICAL risk content, the content is blocked but the user NEVER accumulates strikes or gets locked,
+// because classification is decoupled from punishment.
+func TestCriticalContentCannotAccrueStrikesOrLock(t *testing.T) {
 	mock := &mockLLMProvider{
-		response: `{"category": "malicious_execution", "risk_level": "high", "intent": "benign", "confidence": 0.95, "reason": "educational discussion of dangerous commands"}`,
+		response: `{"category": "malicious_execution", "risk_level": "critical", "reason": "destructive commands"}`,
 	}
 	access := NewAccessStore(t.TempDir() + "/access.json")
 	wd := NewWatchdogWithProvider(access, nil, mock, "security-gateway")
 
 	principal := testPrincipal(t, "test-platform", "benign-actor-1")
 
-	// Submit repeated high-risk, benign-intent content 5 times
+	// Submit repeated critical content 5 times
 	for i := range 5 {
 		decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, "explain why rm -rf / is dangerous", AuditEvent{})
 		if decision.Action != WatchdogBlock {
 			t.Fatalf("iteration %d: expected WatchdogBlock, got %s", i, decision.Action)
 		}
 		if wd.IsLocked(principal) {
-			t.Fatalf("iteration %d: actor with benign intent must not be locked", i)
+			t.Fatalf("iteration %d: actor must not be locked", i)
 		}
 	}
 
@@ -364,10 +350,10 @@ func TestIntentBenignCannotAccrueStrikesOrLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if locked {
-		t.Fatal("actor with benign intent must not be locked in access store")
+		t.Fatal("actor must not be locked in access store")
 	}
 	if len(record.StrikeTimes) != 0 {
-		t.Fatalf("actor with benign intent must have 0 strikes, got %d", len(record.StrikeTimes))
+		t.Fatalf("actor must have 0 strikes, got %d", len(record.StrikeTimes))
 	}
 }
 
@@ -375,7 +361,7 @@ func TestIntentBenignCannotAccrueStrikesOrLock(t *testing.T) {
 // XML closing/opening tags (e.g. </content>) is XML-escaped and cannot break out of the <content> framing.
 func TestLLMClassifierDelimiterInjectionResistant(t *testing.T) {
 	mock := &mockLLMProvider{
-		response: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99, "reason": "safe"}`,
+		response: `{"category": "none", "risk_level": "none", "reason": "safe"}`,
 	}
 	cls := NewLLMClassifier(mock, "test-model", time.Second)
 
@@ -426,7 +412,7 @@ func TestLLMClassifierDelimiterInjectionResistant(t *testing.T) {
 func TestWatchdogClassifierCallCountOptimization(t *testing.T) {
 	access := NewAccessStore(t.TempDir() + "/access.json")
 	mock := &mockLLMProvider{
-		response: `{"category": "none", "risk_level": "none", "intent": "benign", "confidence": 0.99}`,
+		response: `{"category": "none", "risk_level": "none"}`,
 	}
 	wd := NewWatchdogWithProvider(access, nil, mock, "test-model")
 	principal := testPrincipal(t, "test-platform", "call-count-actor")

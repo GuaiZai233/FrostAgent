@@ -22,8 +22,8 @@ func (m *mockGateClassifier) Classify(ctx context.Context, input security.Classi
 		return m.fn(ctx, input)
 	}
 	return security.ClassificationResult{
-		RiskLevel:  security.RiskLevelNone,
-		Confidence: 1.0,
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
 	}, nil
 }
 
@@ -123,11 +123,9 @@ func TestEngineModelOutputPolicyBlock(t *testing.T) {
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			return security.ClassificationResult{
-				Category:   security.RiskCategoryMaliciousExecution,
-				RiskLevel:  security.RiskLevelHigh,
-				Intent:     security.IntentMalicious,
-				Confidence: 0.99,
-				Reason:     "harmful payload detected",
+				Category:  security.RiskCategoryMaliciousExecution,
+				RiskLevel: security.RiskLevelCritical,
+				Reason:    "harmful payload detected",
 			}, nil
 		},
 	})
@@ -154,6 +152,40 @@ func TestEngineModelOutputPolicyBlock(t *testing.T) {
 	}
 }
 
+func TestEngineModelOutputPolicyFilter(t *testing.T) {
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryMaliciousExecution,
+				RiskLevel: security.RiskLevelHigh,
+				Reason:    "harmful payload detected",
+			}, nil
+		},
+	})
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{},
+		Security:      controller,
+		Provider: &staticProvider{
+			response: &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "危险脚本内容",
+				},
+			},
+		},
+	}
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "生成脚本"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-002",
+	})
+	want := security.SanitizedMessageForCategory(security.RiskCategoryMaliciousExecution)
+	if result.Content != want {
+		t.Fatalf("expected sanitized message %q, got %q", want, result.Content)
+	}
+}
+
 type dummyTool struct{}
 
 func (d *dummyTool) Name() string               { return "dummy_tool" }
@@ -173,7 +205,7 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 			if input.Stage == security.StageToolArgument {
 				return security.ClassificationResult{}, errors.New("classifier offline")
 			}
-			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 		},
 	})
 
@@ -265,7 +297,7 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 			if input.Stage == security.StageToolResult {
 				return security.ClassificationResult{}, errors.New("classifier timeout on result")
 			}
-			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 		},
 	})
 
@@ -433,7 +465,7 @@ func TestEngineToolArgumentAccessStoreFailure(t *testing.T) {
 	controller := security.NewController(t.TempDir())
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 		},
 	})
 
@@ -530,7 +562,7 @@ func TestEngineToolResultAccessStoreFailure(t *testing.T) {
 	controller := security.NewController(t.TempDir())
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{RiskLevel: security.RiskLevelNone, Confidence: 1.0}, nil
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 		},
 	})
 
@@ -772,4 +804,124 @@ func extractEvalID(content string) string {
 		val = val[:end]
 	}
 	return strings.TrimSpace(val)
+}
+
+func TestEngineMediumRiskTemporarySecurityNoticeInjection(t *testing.T) {
+	var capturedMessages []core.ChatMessage
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			capturedMessages = req.Messages
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "回复用户内容",
+				},
+			}, nil
+		},
+	}
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{},
+		Provider:      provider,
+	}
+
+	runMessages := []ChatMessage{
+		{Role: "system", Content: "primary system prompt"},
+		{Role: "user", Content: "用户问题"},
+	}
+
+	res := engine.RunMessagesWithContext(runMessages, RunContext{
+		ActorPlatform:  "test-platform",
+		ActorUserID:    "actor-med",
+		SecurityNotice: security.MediumRiskWarningNotice,
+	})
+
+	if res.Error != nil {
+		t.Fatalf("unexpected error: %v", res.Error)
+	}
+
+	// 1. Verify that core.ChatRequest received the temporary security notice
+	foundInChatReq := false
+	for _, m := range capturedMessages {
+		if m.Role == core.RoleSystem && strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			foundInChatReq = true
+			break
+		}
+	}
+	if !foundInChatReq {
+		t.Fatalf("expected security notice to be injected into LLM ChatRequest, got: %+v", capturedMessages)
+	}
+
+	// 2. Verify that runMessages (history slice) was NOT polluted with the notice
+	for _, m := range runMessages {
+		if strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			t.Fatalf("session history must not be polluted with security notice: %+v", runMessages)
+		}
+	}
+}
+
+func TestEngineToolResultPolicyFilter(t *testing.T) {
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if input.Stage == security.StageToolResult {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryDataExfiltration,
+					RiskLevel: security.RiskLevelHigh,
+					Reason:    "sensitive leak in tool output",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+			}, nil
+		},
+	})
+
+	callCount := 0
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{{
+							ID:       "call_tool_filt",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: "dummy_tool", Arguments: `{}`},
+						}},
+					},
+				}, nil
+			}
+			for _, m := range req.Messages {
+				if m.Role == core.RoleTool {
+					return &core.ChatResponse{
+						Message: core.ChatMessage{
+							Role:    core.RoleAssistant,
+							Content: fmt.Sprintf("tool said: %v", m.Content),
+						},
+					}, nil
+				}
+			}
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "done"}}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 2,
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		Security:      controller,
+		Provider:      provider,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run"}}, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-tool-filt",
+	})
+
+	wantPrefix := "tool said: [FrostAgent 安全审查系统] <此内容已过滤：检测到敏感数据窃取内容！"
+	if !strings.HasPrefix(result.Content, wantPrefix) {
+		t.Fatalf("expected filtered tool result starting with %q, got %q", wantPrefix, result.Content)
+	}
 }
