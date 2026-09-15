@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -370,21 +369,41 @@ func (s *SessionContext) CancelActiveRun() {
 	}
 }
 
+type barrierState int
+
+const (
+	barrierPending barrierState = iota
+	barrierWriting
+	barrierDone
+	barrierAborted
+)
+
 type sessionExtractionBarrier struct {
 	sess      *SessionContext
 	epoch     uint64
 	ctx       context.Context
-	aborted   atomic.Bool
-	writing   atomic.Bool
+	mu        sync.Mutex
+	state     barrierState
 	done      chan struct{}
 	closeOnce sync.Once
+}
+
+var _ core.ExtractionCommitBarrier = (*sessionExtractionBarrier)(nil)
+
+func (b *sessionExtractionBarrier) closeDoneLocked() {
+	b.closeOnce.Do(func() {
+		close(b.done)
+	})
 }
 
 func (b *sessionExtractionBarrier) IsValid() bool {
 	if b == nil {
 		return true
 	}
-	if b.aborted.Load() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending && b.state != barrierWriting {
 		return false
 	}
 	if b.ctx != nil && b.ctx.Err() != nil {
@@ -396,19 +415,59 @@ func (b *sessionExtractionBarrier) IsValid() bool {
 	return true
 }
 
-func (b *sessionExtractionBarrier) MarkWriting() {
-	if b != nil {
-		b.writing.Store(true)
+func (b *sessionExtractionBarrier) TryBeginCommit() bool {
+	if b == nil {
+		return true
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	if b.sess != nil && b.sess.Epoch() != b.epoch {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	b.state = barrierWriting
+	return true
 }
 
-func (b *sessionExtractionBarrier) MarkDone() {
-	if b != nil {
-		b.writing.Store(false)
-		b.closeOnce.Do(func() {
-			close(b.done)
-		})
+func (b *sessionExtractionBarrier) EndCommit() {
+	if b == nil {
+		return
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierWriting:
+		b.state = barrierDone
+	case barrierPending:
+		b.state = barrierAborted
+	}
+	b.closeDoneLocked()
+}
+
+func (b *sessionExtractionBarrier) AbortAndWait() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.state == barrierWriting {
+		b.mu.Unlock()
+		<-b.done
+		return
+	}
+	b.state = barrierAborted
+	b.closeDoneLocked()
+	b.mu.Unlock()
 }
 
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
@@ -449,7 +508,7 @@ func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Con
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
-			barrier.MarkDone()
+			barrier.EndCommit()
 			cancel()
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -467,15 +526,19 @@ func (s *SessionContext) CancelExtractions() {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for id, cancel := range s.extractionCancels {
 		cancel()
 		delete(s.extractionCancels, id)
 	}
+	barriers := make([]*sessionExtractionBarrier, 0, len(s.extractionBarriers))
 	for id, b := range s.extractionBarriers {
-		b.aborted.Store(true)
-		b.MarkDone()
+		barriers = append(barriers, b)
 		delete(s.extractionBarriers, id)
+	}
+	s.mu.Unlock()
+
+	for _, b := range barriers {
+		b.AbortAndWait()
 	}
 }
 
@@ -502,7 +565,6 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 
 	barriersToWait := make([]*sessionExtractionBarrier, 0, len(s.extractionBarriers))
 	for id, b := range s.extractionBarriers {
-		b.aborted.Store(true)
 		barriersToWait = append(barriersToWait, b)
 		delete(s.extractionBarriers, id)
 	}
@@ -524,12 +586,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.mu.Unlock()
 
 	for _, b := range barriersToWait {
-		if b.writing.Load() {
-			select {
-			case <-b.done:
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
+		b.AbortAndWait()
 	}
 
 	if groupSummaryStore != nil && conversationID != "" {

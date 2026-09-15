@@ -587,3 +587,125 @@ func TestExtractionLifecycle_ResetDuringCommitValidatorRejectsStaleExtraction(t 
 	}
 }
 
+func TestExtractionLifecycle_AtomicTryBeginCommitStateTransitions(t *testing.T) {
+	sess := &SessionContext{ConversationID: "private:test_user_atomic_barrier"}
+	ctx, _, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier == nil {
+		t.Fatalf("expected non-nil extraction barrier in context")
+	}
+
+	if !barrier.IsValid() {
+		t.Fatalf("expected barrier to be valid initially")
+	}
+
+	// First TryBeginCommit transitions barrierPending -> barrierWriting
+	if !barrier.TryBeginCommit() {
+		t.Fatalf("expected first TryBeginCommit to succeed")
+	}
+
+	// Second TryBeginCommit must fail because state is already barrierWriting
+	if barrier.TryBeginCommit() {
+		t.Fatalf("expected second TryBeginCommit to fail while writing")
+	}
+
+	endCalled := make(chan struct{})
+	resetDone := make(chan struct{})
+
+	go func() {
+		// ResetSession must block deterministically until EndCommit completes
+		_ = sess.ResetSession(nil)
+		close(resetDone)
+	}()
+
+	// Ensure ResetSession has reached AbortAndWait and is waiting
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-resetDone:
+		t.Fatalf("ResetSession must not return while extraction barrier is in writing state")
+	default:
+	}
+
+	// Signal EndCommit
+	barrier.EndCommit()
+	close(endCalled)
+
+	select {
+	case <-resetDone:
+		// ResetSession returned after EndCommit
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ResetSession timed out waiting for EndCommit completion")
+	}
+
+	// Subsequent TryBeginCommit must fail
+	if barrier.TryBeginCommit() {
+		t.Fatalf("expected TryBeginCommit to fail after barrier is completed/aborted")
+	}
+}
+
+func TestExtractionLifecycle_ResetBlocksDeterministicallyWithoutTimeoutDuringWriting(t *testing.T) {
+	sess := &SessionContext{ConversationID: "private:test_user_slow_disk_write"}
+	ctx, _, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier == nil {
+		t.Fatalf("expected non-nil extraction barrier in context")
+	}
+
+	if !barrier.TryBeginCommit() {
+		t.Fatalf("expected TryBeginCommit to succeed")
+	}
+
+	resetReturned := make(chan struct{})
+	go func() {
+		_ = sess.ResetSession(nil)
+		close(resetReturned)
+	}()
+
+	// Wait 600ms, which exceeds the former 500ms hardcoded timeout.
+	// ResetSession MUST STILL be blocking because EndCommit has not been called!
+	select {
+	case <-resetReturned:
+		t.Fatalf("ResetSession prematurely returned before EndCommit (timeout regression)")
+	case <-time.After(600 * time.Millisecond):
+		// Expected: ResetSession is still waiting deterministically
+	}
+
+	// Now complete the persistence
+	barrier.EndCommit()
+
+	select {
+	case <-resetReturned:
+		// Succeeded: unblocked as soon as EndCommit finished
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ResetSession failed to unblock after EndCommit was called")
+	}
+}
+
+func TestExtractionLifecycle_ResetBeforeTryBeginCommitAbortsAtomically(t *testing.T) {
+	sess := &SessionContext{ConversationID: "private:test_user_reset_before_commit"}
+	ctx, _, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier == nil {
+		t.Fatalf("expected non-nil extraction barrier in context")
+	}
+
+	// Trigger ResetSession while barrier is still in barrierPending
+	if err := sess.ResetSession(nil); err != nil {
+		t.Fatalf("ResetSession failed: %v", err)
+	}
+
+	// Barrier must now be aborted, TryBeginCommit must return false atomically
+	if barrier.TryBeginCommit() {
+		t.Fatalf("expected TryBeginCommit to fail after ResetSession")
+	}
+	if barrier.IsValid() {
+		t.Fatalf("expected IsValid to return false after ResetSession")
+	}
+}
+

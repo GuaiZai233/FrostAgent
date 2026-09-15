@@ -63,10 +63,11 @@ type SessionStore interface {
 type ExtractionCommitBarrier interface {
 	// IsValid returns true if the extraction commit is still permitted to persist.
 	IsValid() bool
-	// MarkWriting signals that disk persistence is in progress.
-	MarkWriting()
-	// MarkDone signals that disk persistence has finished.
-	MarkDone()
+	// TryBeginCommit atomically verifies the barrier is valid and transitions to the writing state.
+	// Returns true if writing may proceed, or false if the extraction has been invalidated or aborted.
+	TryBeginCommit() bool
+	// EndCommit signals that disk persistence has completed.
+	EndCommit()
 }
 
 type extractionBarrierKey struct{}

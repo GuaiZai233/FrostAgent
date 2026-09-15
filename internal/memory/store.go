@@ -84,28 +84,19 @@ func (s *Store) SaveEntriesConditionallyContext(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	barrier := core.ExtractionBarrierFromContext(ctx)
-	checkValid := func() bool {
-		if ctx != nil && ctx.Err() != nil {
-			return false
-		}
-		if barrier != nil && !barrier.IsValid() {
-			return false
-		}
-		if validator != nil && !validator() {
-			return false
-		}
-		if ctx != nil && ctx.Err() != nil {
-			return false
-		}
-		if barrier != nil && !barrier.IsValid() {
-			return false
-		}
-		return true
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
 	}
 
-	if !checkValid() {
-		return ErrConditionFailed
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil {
+		if !barrier.TryBeginCommit() {
+			return ErrConditionFailed
+		}
+		defer barrier.EndCommit()
 	}
 
 	brain, err := s.load()
@@ -127,15 +118,6 @@ func (s *Store) SaveEntriesConditionallyContext(
 		}
 		entries[i].Owner = CanonicalOwner(entries[i].Owner)
 		brain.Entries = append(brain.Entries, entries[i])
-	}
-
-	if !checkValid() {
-		return ErrConditionFailed
-	}
-
-	if barrier != nil {
-		barrier.MarkWriting()
-		defer barrier.MarkDone()
 	}
 
 	return s.save(brain)
