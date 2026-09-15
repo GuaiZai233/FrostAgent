@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -94,6 +95,29 @@ func (w *Writer) ExtractByOwnerWithRoute(
 	route core.RouteContext,
 	messages []core.ChatMessage,
 ) error {
+	return w.ExtractByOwnerWithRouteContext(w.Context(), owner, ownerType, route, messages, nil)
+}
+
+// ExtractByOwnerWithRouteContext extracts memories with context and an optional validator.
+// The validator (if provided) is invoked before LLM call, after LLM call, and before saving each entry into the store.
+// If the context is cancelled or the validator returns false, extraction is aborted without saving.
+func (w *Writer) ExtractByOwnerWithRouteContext(
+	ctx context.Context,
+	owner string,
+	ownerType OwnerType,
+	route core.RouteContext,
+	messages []core.ChatMessage,
+	validator func() bool,
+) error {
+	if ctx == nil {
+		ctx = w.Context()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if validator != nil && !validator() {
+		return errors.New("extraction cancelled or invalidated")
+	}
 	w.RememberRoute(owner, route)
 	if w.provider == nil || w.model == "" {
 		return nil // LLM not configured, skip extraction
@@ -127,13 +151,23 @@ func (w *Writer) ExtractByOwnerWithRoute(
 		Route:       route,
 	}
 
-	resp, err := w.provider.Chat(w.Context(), req)
+	resp, err := w.provider.Chat(ctx, req)
 	if err != nil {
 		if errors.Is(err, modelrouter.ErrDisabled) {
 			return nil
 		}
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆提取LLM调用失败: %v", err))
 		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if validator != nil && !validator() {
+		return errors.New("extraction cancelled or invalidated")
 	}
 
 	raw, ok := resp.Message.Content.(string)
@@ -141,7 +175,7 @@ func (w *Writer) ExtractByOwnerWithRoute(
 		return fmt.Errorf("unexpected response type: %T", resp.Message.Content)
 	}
 
-	return w.parseAndSave(owner, NormalizeOwnerType(ownerType), raw)
+	return w.parseAndSave(ctx, owner, NormalizeOwnerType(ownerType), raw, validator)
 }
 
 // extractedEntry represents one item from the LLM extraction response.
@@ -152,7 +186,13 @@ type extractedEntry struct {
 }
 
 // parseAndSave parses the LLM JSON response and saves entries to the store.
-func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) error {
+func (w *Writer) parseAndSave(
+	ctx context.Context,
+	owner string,
+	ownerType OwnerType,
+	raw string,
+	validator func() bool,
+) error {
 	// Strip markdown code fences if present
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
@@ -171,6 +211,12 @@ func (w *Writer) parseAndSave(owner string, ownerType OwnerType, raw string) err
 	}
 
 	for _, e := range entries {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if validator != nil && !validator() {
+			return errors.New("extraction cancelled or invalidated")
+		}
 		if e.Content == "" {
 			continue
 		}

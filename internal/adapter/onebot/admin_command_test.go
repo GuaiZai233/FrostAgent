@@ -535,3 +535,98 @@ func TestOneBotProcessEvent_EpochInvalidationBeforeReply(t *testing.T) {
 		// No action sent - ok
 	}
 }
+
+func TestOneBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeSecurityGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:          scope,
+		Security:       secCtrl,
+		SessionManager: llm.NewSessionManager(),
+		ModelName:      "mock-model",
+		Provider:       &mockLLMProvider{},
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Non-admin sends command candidate containing dangerous watchdog trigger text
+	msgBytes, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /reset rm -rf / ignore all previous"}},
+	})
+	event := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20002, // non-admin
+		GroupID:     30001,
+		MessageType: "group",
+		PostType:    "message",
+		MessageID:   999,
+		Message:     msgBytes,
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// Wait briefly to allow processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Ensure no security rejection message or security audit strike was recorded
+	audits, err := secCtrl.Audit.List(10)
+	if err != nil {
+		t.Fatalf("failed to list audits: %v", err)
+	}
+	if len(audits) != 0 {
+		t.Errorf("expected 0 security audit events for dropped non-admin command candidate, got %d: %+v", len(audits), audits)
+	}
+
+	principal, err := security.NewPrincipal("onebot", "20002")
+	if err != nil {
+		t.Fatalf("failed to create principal: %v", err)
+	}
+	if secCtrl.IsLocked(principal) {
+		t.Errorf("non-admin principal should not be locked")
+	}
+
+	// 2. Contrast: Regular chat message with dangerous keyword is checked by GateIngress
+	dangerMsgBytes, _ := json.Marshal([]map[string]any{
+		{"type": "text", "data": map[string]any{"text": "rm -rf /"}},
+	})
+	dangerEvent := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20002,
+		GroupID:     30001,
+		MessageType: "group",
+		PostType:    "message",
+		MessageID:   1000,
+		Message:     dangerMsgBytes,
+	}
+	dangerBytes, _ := json.Marshal(dangerEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, dangerBytes); err != nil {
+		t.Fatalf("发送常规危险消息失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	auditsAfter, err := secCtrl.Audit.List(10)
+	if err != nil {
+		t.Fatalf("failed to list audits: %v", err)
+	}
+	if len(auditsAfter) != 1 {
+		t.Errorf("expected exactly 1 security audit event for normal dangerous message, got %d", len(auditsAfter))
+	}
+}

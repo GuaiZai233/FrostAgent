@@ -2,8 +2,14 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/memory"
+	"FrostAgent/internal/runtimescope"
+	"context"
 	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestSessionManagerSingleCanonicalEntry(t *testing.T) {
@@ -242,5 +248,145 @@ func TestCommitPrivateCompact_SessionResetRejection(t *testing.T) {
 
 	if len(s.Snapshot()) != 0 {
 		t.Errorf("expected empty history after reset and rejected compact, got %d messages", len(s.Snapshot()))
+	}
+}
+
+type mockBlockingExtractProvider struct {
+	onChat func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error)
+}
+
+func (m *mockBlockingExtractProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	if m.onChat != nil {
+		return m.onChat(ctx, req)
+	}
+	return &core.ChatResponse{
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: "[]",
+		},
+	}, nil
+}
+
+func TestExtractionLifecycle_ContextCancellationDirect(t *testing.T) {
+	sess := &SessionContext{}
+	ctx, epoch, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	if epoch != 1 {
+		t.Fatalf("expected initial epoch 1, got %d", epoch)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("expected context not cancelled initially")
+	}
+
+	if err := sess.ResetSession(nil); err != nil {
+		t.Fatalf("ResetSession failed: %v", err)
+	}
+
+	if ctx.Err() == nil {
+		t.Fatalf("expected extraction context to be cancelled after ResetSession")
+	}
+	if sess.Epoch() <= epoch {
+		t.Fatalf("expected epoch to advance after reset, got current=%d initial=%d", sess.Epoch(), epoch)
+	}
+}
+
+func TestExtractionLifecycle_SessionResetInvalidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+
+	preExisting := memory.MemoryEntry{
+		ID:        "mem_pre_existing_01",
+		Owner:     "test_user_01",
+		OwnerType: memory.OwnerUser,
+		Content:   "pre-existing persistent memory",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := store.Save(preExisting); err != nil {
+		t.Fatalf("failed to save pre-existing memory: %v", err)
+	}
+
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	provider := &mockBlockingExtractProvider{
+		onChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			select {
+			case <-startedCh:
+			default:
+				close(startedCh)
+			}
+			select {
+			case <-releaseCh:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: `[{"content": "stale extracted memory", "tags": ["test"], "visibility": "private"}]`,
+				},
+			}, nil
+		},
+	}
+
+	writer := memory.NewWriter(store)
+	writer.SetLLM(provider, "mock-model")
+
+	sm := NewSessionManager()
+	engine := &Engine{
+		Scope:          runtimescope.New(nil, nil, nil),
+		SessionManager: sm,
+		MemoryWriter:   writer,
+		Provider:       provider,
+	}
+
+	sess := sm.GetOrCreate("private:test_user_01")
+	batch, ready := sess.EnqueuePendingTurn([]memory.PendingExtractionItem{
+		{
+			Owner:     "test_user_01",
+			OwnerType: memory.OwnerUser,
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "stale conversation"},
+		},
+	}, 1, 1)
+	if !ready {
+		t.Fatalf("expected batch to be ready")
+	}
+
+	var extractWG sync.WaitGroup
+	extractWG.Add(1)
+	go func() {
+		defer extractWG.Done()
+		engine.extractPendingBatch(batch)
+	}()
+
+	// Wait for extraction to reach LLM Chat
+	select {
+	case <-startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for extraction to begin")
+	}
+
+	// Trigger session reset while extraction LLM call is in-flight
+	if err := sess.ResetSession(nil); err != nil {
+		t.Fatalf("ResetSession failed: %v", err)
+	}
+
+	close(releaseCh)
+	extractWG.Wait()
+
+	// Verify brain.json entries: pre-existing memory must stay, stale extracted memory must NOT exist
+	entries, err := store.ListByOwner("test_user_01")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 entry in store, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Content != "pre-existing persistent memory" {
+		t.Errorf("expected pre-existing memory preserved, got: %s", entries[0].Content)
 	}
 }

@@ -291,7 +291,21 @@ func (e *Engine) EnqueueExtractionTurn(
 	e.Go(func() { e.extractPendingBatch(batch) })
 }
 
-func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
+func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
+	if batch.Session == nil || len(batch.Items) == 0 {
+		return
+	}
+	ctx, _, cleanup := batch.Session.BeginExtraction(e.Context())
+	defer cleanup()
+
+	validator := func() bool {
+		return ctx.Err() == nil && batch.Session.Epoch() == batch.Epoch
+	}
+
+	if !validator() {
+		return
+	}
+
 	type ownerBatch struct {
 		owner     string
 		ownerType memory.OwnerType
@@ -300,7 +314,7 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 	}
 	groups := make(map[string]*ownerBatch)
 	order := make([]string, 0)
-	for _, item := range batch {
+	for _, item := range batch.Items {
 		if item.Owner == "" {
 			continue
 		}
@@ -318,8 +332,14 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 		group.messages = append(group.messages, item.Message)
 	}
 	for _, key := range order {
+		if !validator() {
+			return
+		}
 		group := groups[key]
-		if err := e.MemoryWriter.ExtractByOwnerWithRoute(group.owner, group.ownerType, group.route, group.messages); err != nil {
+		if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
+			if errors.Is(err, context.Canceled) || !validator() {
+				return
+			}
 			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
 		}
 	}

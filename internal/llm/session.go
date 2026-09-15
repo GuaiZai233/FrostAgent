@@ -234,6 +234,8 @@ type SessionContext struct {
 
 	activeCancel      context.CancelFunc
 	epoch             uint64
+	nextExtractionID  uint64
+	extractionCancels map[uint64]context.CancelFunc
 	historySeq        []uint64
 	nextMsgSeq        uint64
 	privateCompacting bool
@@ -366,11 +368,60 @@ func (s *SessionContext) CancelActiveRun() {
 	}
 }
 
+// BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
+// The returned cleanup function must be called when extraction completes.
+func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	currentEpoch := s.epoch
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.nextExtractionID++
+	id := s.nextExtractionID
+	if s.extractionCancels == nil {
+		s.extractionCancels = make(map[uint64]context.CancelFunc)
+	}
+	s.extractionCancels[id] = cancel
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			cancel()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.extractionCancels, id)
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelExtractions cancels all currently registered in-flight extraction contexts.
+func (s *SessionContext) CancelExtractions() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
+	}
+}
+
 // ResetSession completely resets this session's state:
 // 1. Cancels active in-flight execution context immediately.
-// 2. Increments the epoch to invalidate in-flight or queued FIFO turns.
-// 3. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
-// 4. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
+// 2. Cancels in-flight automatic memory extraction contexts immediately.
+// 3. Increments the epoch to invalidate in-flight or queued FIFO turns and extractions.
+// 4. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
+// 5. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
 func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
 	if s == nil {
 		return nil
@@ -379,6 +430,10 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil
+	}
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
 	}
 	s.epoch++
 	s.History = nil
@@ -952,6 +1007,13 @@ func (s *SessionContext) GroupCompactBufferCount() int {
 	return len(s.groupCompactBuffer)
 }
 
+// PendingExtractionBatch wraps an asynchronous memory extraction batch with its originating session and generation epoch.
+type PendingExtractionBatch struct {
+	Session *SessionContext
+	Epoch   uint64
+	Items   []memory.PendingExtractionItem
+}
+
 // EnqueuePendingTurn appends one completed user/assistant turn. Once the
 // per-session random threshold is reached, it atomically returns and clears the
 // pending batch for asynchronous extraction.
@@ -959,9 +1021,9 @@ func (s *SessionContext) EnqueuePendingTurn(
 	items []memory.PendingExtractionItem,
 	minTurns int,
 	maxTurns int,
-) ([]memory.PendingExtractionItem, bool) {
+) (PendingExtractionBatch, bool) {
 	if len(items) == 0 {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 	if minTurns <= 0 {
 		minTurns = 3
@@ -983,7 +1045,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	s.pendingTurns = append(s.pendingTurns, turn)
 	s.UpdatedAt = time.Now()
 	if len(s.pendingTurns) < s.extractionThreshold {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 
 	count := 0
@@ -996,7 +1058,14 @@ func (s *SessionContext) EnqueuePendingTurn(
 	}
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
-	return batch, true
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	return PendingExtractionBatch{
+		Session: s,
+		Epoch:   s.epoch,
+		Items:   batch,
+	}, true
 }
 
 func (s *SessionContext) PendingTurnCount() int {

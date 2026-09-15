@@ -68,10 +68,12 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 		engine.Log().Debug(logs.WEBSOCKET, fmt.Sprintf("AstrBot: 非管理员 [%s] 触发指令候选，静默丢弃", callerID))
 		if conn != nil {
 			_ = conn.WriteJSON(Action{
-				Type:      "action",
-				Action:    "noop",
-				SessionID: event.SessionID,
-				Echo:      "reply_" + event.MessageID,
+				Type:        "action",
+				Action:      "noop",
+				SubType:     "admin_silent_drop",
+				SuppressLLM: true,
+				SessionID:   event.SessionID,
+				Echo:        "reply_" + event.MessageID,
 			})
 		}
 		return true // Non-admin: silently dropped without hints

@@ -164,7 +164,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：
 
 - **入站早期拦截与管线旁路 (Early Ingress Interception & Pipeline Bypass)**：
-  - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
+  - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于内容安全审查（`GateIngress`）、工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
+  - **前置安全旁路与非管理员静默丢弃**：指令候选识别与管理员身份鉴权优先于安全看门狗（Watchdog Ingress Gate）执行。对于非管理员发送的指令候选消息，即使其参数包含敏感或高危特征词，也在此阶段直接静默丢弃，绝不触发安全审查拦截、绝不发出 `RejectInspectorMsg` 等安全拒绝回复，亦不产生安全审计违规计数（Strike）或账户锁定，充分保障运维指令系统的隐蔽性与防探测要求；非指令候选的常规聊天消息则继续正常流经安全审查；
   - 即使当前会话被模型路由规则全局禁用、对话模型未配置或处于故障降级状态，管理员运维指令依然具备最高优先级的执行通路与完全可用性；
   - 指令交互完全旁路对话管线：不向会话持久历史提交消息（`Session.AddMessage`）、不进入群聊未压缩环形缓冲（`groupCompactBuffer`）、不触发记忆提取，杜绝运维指令污染日常对话语境或模型长期记忆。
 - **真实 @ 机器人强门禁 (Real-At Targeting Bot Verification)**：
@@ -175,6 +176,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **代数一致性与并发执行守卫 (Epoch Invalidation & Concurrency Guards)**：
   - **初始代数不变式**：会话默认初始 Epoch 设定为 1（`Epoch()`, `BeginRun()`, `GetOrCreate()`），确保首轮对话即处于严格的代数防线保护下；
   - **预留时刻锚定**：适配器在预留会话轮次时刻（`turn.Epoch()`）即刻锚定 `startEpoch`，并在阻塞式引用消息查找（`lookupReplyContext` / `get_msg`）与多模态视觉预处理完成后持续核验，防止长耗时预处理掩盖并覆盖重置操作；
+  - **在途记忆提取代数守卫与上下文取消 (In-Flight Memory Extraction Epoch & Cancellation Guard)**：
+    - `SessionContext` 维护活跃提取上下文注册表（`extractionCancels map[uint64]context.CancelFunc`）与自增提取 ID，并通过 `BeginExtraction` 为后台异步记忆抽取任务绑定可取消的派生上下文；
+    - 待提取任务批次（`PendingExtractionBatch`）显式附带所属会话指针及其派生时刻的会话 Epoch 代数；
+    - 会话重置时（`ResetSession`）原子递增 Epoch，并主动调用 `CancelExtractions` 快速取消所有在途提取上下文，打断正在进行中的大模型推理 HTTP 连接；
+    - 构建前中后三道严密代数防线：在大模型提取调用前、大模型响应解析后、以及单条提取记忆落盘（`w.store.Save`）前，严格核验上下文未取消且会话代数严格一致。已重置会话的过时在途衍生记忆坚决丢弃，绝不污染长期记忆库 `brain.json`，同时完整保留 `brain.json` 中已持久化的既有记忆；
   - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
   - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
   - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。
@@ -192,14 +198,14 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 调用者身份唯一源自协议层提供的真实发送者元数据（`event.UserID`），严禁信任大模型输出、用户昵称、聊天正文自称，亦不向群主、群管理员或 AstrBot 宿主管理员提供任何隐式提权；
   - **非管理员静默丢弃（防探测）**：对于满足「真实 @ 机器人 + 匹配指令前缀」但发送者非管理员的消息，系统坚决不向聊天端返回任何提示、拒绝信息或报错回复，彻底杜绝普通群友或恶意攻击者探测 Bot 指令系统的存在性：
     - OneBot 适配器直接返回并中断处理，不发送任何响应动作；
-    - AstrBot 适配器向协议端下发 `Action{Type: "action", Action: "noop", Echo: "reply_" + event.MessageID}` 动作，既优雅关闭了上游平台的等待状态，又不在用户界面产生任何文本输出；
+    - AstrBot 适配器向协议端下发携带 `SubType: "admin_silent_drop"` 与 `SuppressLLM: true` 的 `Action{Type: "action", Action: "noop", Echo: "reply_" + event.MessageID}` 动作。AstrBot 插件捕获该特征动作后，显式调用 `event.should_call_llm(True)` 主动压制 AstrBot 宿主默认的大模型调用流程，杜绝产生额外 LLM Token 开销、聊天回复污染或上下文泄漏；而常规群聊压缩等无提示处理（标准 noop）则保持正常的事件广播链路；
   - **管理员语法错误提示**：当已鉴权的管理员输入未知指令或参数语法错误时，系统返回紧凑的参数错误说明与当前前缀下的完整指令用法速查卡。
 - **五大核心运维指令语义与调度保障 (Core Command Semantics)**：
   - **`reset` 会话重置与 In-Flight 及时打断**：
     - 原子重置当前会话（支持群聊与私聊），清空持久历史记录、内存滚动摘要、未压缩消息缓冲及映射、待处理记忆提取项；
     - 故障感知的持久摘要删除：调用 `groupsummary.Store.Delete` 物理删除磁盘文件，细化捕获底层文件系统 I/O 错误并向管理员透明反馈，杜绝掩盖删除失败假称成功；
     - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
-    - 递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交检测到 Epoch 变动时主动放弃写入持久历史与发送回复；
+    - 取消所有在途记忆提取（`CancelExtractions`）并递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交与在途记忆抽取在检测到 Epoch 变动时主动放弃落盘写入与发送回复；
     - 回复文本：「当前会话已重置。」；
   - **`ban <userID>` 全局封禁**：
     - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；

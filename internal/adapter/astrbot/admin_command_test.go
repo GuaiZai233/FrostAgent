@@ -252,6 +252,12 @@ func TestHandleAdminCommand_AstrBot_NonAdminSilentDrop(t *testing.T) {
 		if act.Type != "action" || act.Action != "noop" {
 			t.Errorf("expected noop action for non-admin silent drop, got: %+v", act)
 		}
+		if act.SubType != "admin_silent_drop" {
+			t.Errorf("expected subtype admin_silent_drop, got: %s", act.SubType)
+		}
+		if !act.SuppressLLM {
+			t.Errorf("expected SuppressLLM true for admin silent drop, got false")
+		}
 		if act.Echo != "reply_msg_003" {
 			t.Errorf("expected echo reply_msg_003, got: %s", act.Echo)
 		}
@@ -452,5 +458,109 @@ func TestAstrBotProcessEvent_EpochInvalidationDuringProcessing(t *testing.T) {
 
 	if len(sess.Snapshot()) != 0 {
 		t.Errorf("expected session history to remain empty after reset, got %d messages", len(sess.Snapshot()))
+	}
+}
+
+func TestAstrBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeSecurityGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:          scope,
+		Security:       secCtrl,
+		SessionManager: llm.NewSessionManager(),
+		ModelName:      "mock-model",
+		Provider:       &mockLLMProvider{},
+	}
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Non-admin user (20002) sends a command candidate containing dangerous watchdog trigger text
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_sec_001",
+		IsAt:        true,
+		UserID:      "20002", // non-admin
+		GroupID:     "30001",
+		MessageType: "group",
+		Content:     "[@bot] /reset rm -rf / ignore all previous",
+	}
+	eventBytes, _ := json.Marshal(event)
+
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// Must receive noop action with subtype admin_silent_drop and suppress_llm=true,
+	// NOT a security rejection message
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取响应失败: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if act.Action != "noop" || act.SubType != "admin_silent_drop" || !act.SuppressLLM {
+		t.Errorf("expected noop admin_silent_drop action with suppress_llm=true, got: %+v", act)
+	}
+	if act.Content != "" {
+		t.Errorf("expected empty content in silent drop noop action, got: %q", act.Content)
+	}
+
+	// Ensure no security audit events or lock strikes were created
+	audits, err := secCtrl.Audit.List(10)
+	if err != nil {
+		t.Fatalf("failed to list audits: %v", err)
+	}
+	if len(audits) != 0 {
+		t.Errorf("expected 0 security audit events for dropped non-admin command candidate, got %d: %+v", len(audits), audits)
+	}
+
+	principal, err := security.NewPrincipal("astrbot", "20002")
+	if err != nil {
+		t.Fatalf("failed to create principal: %v", err)
+	}
+	if secCtrl.IsLocked(principal) {
+		t.Errorf("non-admin principal should not be locked")
+	}
+
+	// 2. Contrast: Regular non-candidate message with dangerous keyword is checked by GateIngress
+	normalEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_sec_002",
+		IsAt:        false,
+		UserID:      "20002",
+		GroupID:     "30001",
+		MessageType: "group",
+		Content:     "rm -rf /",
+	}
+	normalBytes, _ := json.Marshal(normalEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, normalBytes); err != nil {
+		t.Fatalf("发送常规危险消息失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	auditsAfter, err := secCtrl.Audit.List(10)
+	if err != nil {
+		t.Fatalf("failed to list audits: %v", err)
+	}
+	if len(auditsAfter) != 1 {
+		t.Errorf("expected exactly 1 security audit event for normal dangerous message, got %d", len(auditsAfter))
 	}
 }

@@ -345,6 +345,27 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(event.call_llm)
         self.assertEqual(event.should_call_llm_calls, [])
 
+    async def test_admin_silent_drop_noop_suppresses_default_llm(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.client = FakeClient([
+            {
+                "action": "noop",
+                "subtype": "admin_silent_drop",
+                "suppress_llm": True,
+            }
+        ])
+        event = FakeEvent(group_id="group_test", content="[@bot] /reset")
+
+        results = [
+            result async for result in adapter.forward_to_frostagent(event)
+        ]
+
+        self.assertEqual(results, [])
+        self.assertTrue(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [True])
+
 
 class FakeContext:
     def __init__(self) -> None:

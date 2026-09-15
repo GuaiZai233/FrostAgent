@@ -276,6 +276,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			if event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
+				if handleAdminCommand(wsConn, event, a.engine) {
+					continue
+				}
+			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
@@ -297,13 +304,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						}
 						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
 					}
-					continue
-				}
-			}
-			if event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
-				if handleAdminCommand(wsConn, event, a.engine) {
 					continue
 				}
 			}
