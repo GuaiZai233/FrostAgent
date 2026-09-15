@@ -762,6 +762,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				continue
+			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
+				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
@@ -821,6 +823,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				toolSucceeded = false
+			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
+				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
 			toolResultLog := formatToolResultLog(tc.Function.Name, toolResult)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
@@ -1099,4 +1103,18 @@ func formatToolResultLog(name string, result string) string {
 		return fmt.Sprintf("【工具执行结果】execute_command: [REDACTED output: raw_len=%d]", len(result))
 	}
 	return fmt.Sprintf("【工具执行结果】%s", result)
+}
+
+func mergeSecurityNotice(runCtx *RunContext, notice string) {
+	if runCtx == nil || strings.TrimSpace(notice) == "" {
+		return
+	}
+	notice = strings.TrimSpace(notice)
+	if runCtx.SecurityNotice == "" {
+		runCtx.SecurityNotice = notice
+		return
+	}
+	if !strings.Contains(runCtx.SecurityNotice, notice) {
+		runCtx.SecurityNotice = runCtx.SecurityNotice + "\n\n" + notice
+	}
 }

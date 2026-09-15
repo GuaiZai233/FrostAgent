@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"context"
@@ -245,6 +246,17 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				continue
 			}
 			var warningNotice string
+			var scope *runtimescope.Scope
+			if a.engine != nil {
+				scope = a.engine.Scope
+			}
+			if event.MessageType == "group" || event.MessageType == "private" {
+				pristineShouldReply := shouldReply(event, scope)
+				if event.Metadata == nil {
+					event.Metadata = make(map[string]any)
+				}
+				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+			}
 			if a.engine != nil && a.engine.Security != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				platform := event.Platform
@@ -277,6 +289,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
 					event.Content = decision.SanitizedContent
+					if len(event.Messages) > 0 {
+						event.Messages = []string{decision.SanitizedContent}
+					}
 				} else if decision.Action == security.WatchdogWarn {
 					warningNotice = decision.WarningNotice
 				}

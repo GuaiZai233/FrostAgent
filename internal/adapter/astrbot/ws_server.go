@@ -341,6 +341,13 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 }
 
 func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.Metadata != nil {
+		if val, ok := event.Metadata["_frostagent_should_reply"]; ok {
+			if b, ok := val.(bool); ok {
+				return b
+			}
+		}
+	}
 	scope := runtimescope.First(scopes)
 	if event.MessageType == "private" {
 		return true

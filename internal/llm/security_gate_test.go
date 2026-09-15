@@ -794,7 +794,6 @@ func TestEngineSecurityEvaluateAccessStoreFailureStages(t *testing.T) {
 	}
 }
 
-
 func extractEvalID(content string) string {
 	_, val, ok := strings.Cut(content, "eval_id=")
 	if !ok {
@@ -923,5 +922,173 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 	wantPrefix := "tool said: [FrostAgent 安全审查系统] <此内容已过滤：检测到敏感数据窃取内容！"
 	if !strings.HasPrefix(result.Content, wantPrefix) {
 		t.Fatalf("expected filtered tool result starting with %q, got %q", wantPrefix, result.Content)
+	}
+}
+
+func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if input.Stage == security.StageToolArgument {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelMedium,
+					Reason:    "borderline instruction in tool arg",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+			}, nil
+		},
+	})
+
+	var iter2ReqMessages []core.ChatMessage
+	callCount := 0
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{{
+							ID:       "call_arg_med",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: "dummy_tool", Arguments: `{"q":"borderline"}`},
+						}},
+					},
+				}, nil
+			}
+			iter2ReqMessages = req.Messages
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "final reply"}}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 2,
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		Security:      controller,
+		Provider:      provider,
+	}
+
+	runMessages := []ChatMessage{
+		{Role: "system", Content: "base system prompt"},
+		{Role: "user", Content: "please run dummy tool"},
+	}
+
+	res := engine.RunMessagesWithContext(runMessages, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-tool-arg-warn",
+	})
+
+	if res.Error != nil {
+		t.Fatalf("unexpected error: %v", res.Error)
+	}
+	if res.Content != "final reply" {
+		t.Fatalf("expected final reply, got %q", res.Content)
+	}
+
+	// 1. Assert that iter2 received the injected MediumRiskWarningNotice in system messages
+	foundNoticeInReq := false
+	for _, m := range iter2ReqMessages {
+		if m.Role == core.RoleSystem && strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			foundNoticeInReq = true
+			break
+		}
+	}
+	if !foundNoticeInReq {
+		t.Fatalf("expected MediumRiskWarningNotice injected into iter2 ChatRequest, got messages: %+v", iter2ReqMessages)
+	}
+
+	// 2. Assert that session history (runMessages) was not polluted
+	for _, m := range runMessages {
+		if strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			t.Fatalf("session history polluted with security notice: %+v", runMessages)
+		}
+	}
+}
+
+func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
+	controller := security.NewController(t.TempDir())
+	controller.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if input.Stage == security.StageToolResult {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryHarassmentManipulation,
+					RiskLevel: security.RiskLevelMedium,
+					Reason:    "borderline external content in tool result",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+			}, nil
+		},
+	})
+
+	var iter2ReqMessages []core.ChatMessage
+	callCount := 0
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{{
+							ID:       "call_res_med",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: "dummy_tool", Arguments: `{}`},
+						}},
+					},
+				}, nil
+			}
+			iter2ReqMessages = req.Messages
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "final reply after result"}}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 2,
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		Security:      controller,
+		Provider:      provider,
+	}
+
+	runMessages := []ChatMessage{
+		{Role: "system", Content: "base system prompt"},
+		{Role: "user", Content: "please run dummy tool"},
+	}
+
+	res := engine.RunMessagesWithContext(runMessages, RunContext{
+		ActorPlatform: "test-platform",
+		ActorUserID:   "actor-tool-res-warn",
+	})
+
+	if res.Error != nil {
+		t.Fatalf("unexpected error: %v", res.Error)
+	}
+	if res.Content != "final reply after result" {
+		t.Fatalf("expected final reply, got %q", res.Content)
+	}
+
+	// 1. Assert that iter2 received the injected MediumRiskWarningNotice in system messages
+	foundNoticeInReq := false
+	for _, m := range iter2ReqMessages {
+		if m.Role == core.RoleSystem && strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			foundNoticeInReq = true
+			break
+		}
+	}
+	if !foundNoticeInReq {
+		t.Fatalf("expected MediumRiskWarningNotice injected into iter2 ChatRequest, got messages: %+v", iter2ReqMessages)
+	}
+
+	// 2. Assert that session history (runMessages) was not polluted
+	for _, m := range runMessages {
+		if strings.Contains(fmt.Sprint(m.Content), "[FrostAgent 安全审查系统]") {
+			t.Fatalf("session history polluted with security notice: %+v", runMessages)
+		}
 	}
 }

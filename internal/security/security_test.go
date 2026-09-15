@@ -1,4 +1,4 @@
-﻿package security
+package security
 
 import (
 	"FrostAgent/internal/core"
@@ -814,7 +814,7 @@ func TestSecurityRejectionMessages(t *testing.T) {
 // across repeated attempts.
 func TestWatchdogNoProviderFailsClosedStrictly(t *testing.T) {
 	access := NewAccessStore(t.TempDir() + "/access.json")
-	audit := NewAuditStore(t.TempDir() + "/audit.jsonl", 100)
+	audit := NewAuditStore(t.TempDir()+"/audit.jsonl", 100)
 	wd := NewWatchdog(access, audit) // No classifier, no LLM provider
 
 	if wd.Classifier() != nil {
@@ -1389,5 +1389,151 @@ func TestClassifierFailureRawModelOutputSanitization(t *testing.T) {
 	summary := SafeErrorSummary(err)
 	if strings.Contains(summary, "sk-ant-api03") || strings.Contains(summary, "sk-proj-") {
 		t.Fatalf("SafeErrorSummary leaked secret token: %q", summary)
+	}
+}
+
+func TestDualClassificationMergeStrongestRiskLevel(t *testing.T) {
+	// Tests that when both normalized and raw classifications are evaluated on an evasion-modified input,
+	// the decision merges by the strongest risk level, independent of call order/form.
+	tests := []struct {
+		name           string
+		normResult     ClassificationResult
+		rawResult      ClassificationResult
+		expectedAction WatchdogAction
+		expectedCat    RiskCategory
+	}{
+		{
+			name: "call 1 medium, call 2 critical -> BLOCK",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryPromptInjection,
+				RiskLevel: RiskLevelCritical,
+			},
+			expectedAction: WatchdogBlock,
+			expectedCat:    RiskCategoryPromptInjection,
+		},
+		{
+			name: "call 1 critical, call 2 medium -> BLOCK",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryPromptInjection,
+				RiskLevel: RiskLevelCritical,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			expectedAction: WatchdogBlock,
+			expectedCat:    RiskCategoryPromptInjection,
+		},
+		{
+			name: "call 1 high, call 2 critical -> BLOCK",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryHarassmentManipulation,
+				RiskLevel: RiskLevelHigh,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryMaliciousExecution,
+				RiskLevel: RiskLevelCritical,
+			},
+			expectedAction: WatchdogBlock,
+			expectedCat:    RiskCategoryMaliciousExecution,
+		},
+		{
+			name: "call 1 critical, call 2 high -> BLOCK",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryMaliciousExecution,
+				RiskLevel: RiskLevelCritical,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryHarassmentManipulation,
+				RiskLevel: RiskLevelHigh,
+			},
+			expectedAction: WatchdogBlock,
+			expectedCat:    RiskCategoryMaliciousExecution,
+		},
+		{
+			name: "call 1 medium, call 2 high -> FILTER",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryHarassmentManipulation,
+				RiskLevel: RiskLevelHigh,
+			},
+			expectedAction: WatchdogFilter,
+			expectedCat:    RiskCategoryHarassmentManipulation,
+		},
+		{
+			name: "call 1 high, call 2 medium -> FILTER",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryHarassmentManipulation,
+				RiskLevel: RiskLevelHigh,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			expectedAction: WatchdogFilter,
+			expectedCat:    RiskCategoryHarassmentManipulation,
+		},
+		{
+			name: "call 1 none, call 2 medium -> WARN",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryNone,
+				RiskLevel: RiskLevelNone,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			expectedAction: WatchdogWarn,
+			expectedCat:    RiskCategoryPolitics,
+		},
+		{
+			name: "call 1 medium, call 2 none -> WARN",
+			normResult: ClassificationResult{
+				Category:  RiskCategoryPolitics,
+				RiskLevel: RiskLevelMedium,
+			},
+			rawResult: ClassificationResult{
+				Category:  RiskCategoryNone,
+				RiskLevel: RiskLevelNone,
+			},
+			expectedAction: WatchdogWarn,
+			expectedCat:    RiskCategoryPolitics,
+		},
+	}
+
+	principal := testPrincipal(t, "test-platform", "dual-merge-actor")
+	// An input that triggers evasionModified (percent-encoded) so both raw and normalized are evaluated
+	input := "%61%62%63"
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCls := &callbackClassifier{
+				fn: func(ctx context.Context, in ClassificationInput) (ClassificationResult, error) {
+					if in.Normalized != in.Content {
+						// First call (normalized input)
+						return tc.normResult, nil
+					}
+					// Second call (raw input)
+					return tc.rawResult, nil
+				},
+			}
+			wd := NewWatchdog(nil, nil)
+			wd.SetClassifier(mockCls)
+
+			dec := wd.Evaluate(principal, StageIngress, SourceUserDirect, input, AuditEvent{})
+			if dec.Action != tc.expectedAction {
+				t.Fatalf("expected action %s, got %s", tc.expectedAction, dec.Action)
+			}
+			if dec.Classification.Category != tc.expectedCat {
+				t.Fatalf("expected category %s, got %s", tc.expectedCat, dec.Classification.Category)
+			}
+		})
 	}
 }

@@ -1,4 +1,4 @@
-﻿package security
+package security
 
 import (
 	"FrostAgent/internal/core"
@@ -570,8 +570,10 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	var warningNotice string
 	var storeErr error
 
+	// Merge successful raw/normalized results by the strongest risk level,
+	// independent of call order/form, and use the corresponding classification/category for the resulting action.
 	classification := normClassification
-	if !normMatches && rawMatches {
+	if RiskLevelSeverity(rawClassification.RiskLevel) > RiskLevelSeverity(normClassification.RiskLevel) {
 		classification = rawClassification
 	}
 

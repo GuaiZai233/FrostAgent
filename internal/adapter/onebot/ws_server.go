@@ -141,7 +141,7 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 }
 
 // processEvent holds its reserved session turn until routing and reply finish.
-func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
+func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, args ...any) {
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
@@ -150,8 +150,18 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		return
 	}
 	var notice string
-	if len(warningNotice) > 0 {
-		notice = warningNotice[0]
+	var routing EventRouting
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			notice = v
+		case EventRouting:
+			routing = v
+		case *EventRouting:
+			if v != nil {
+				routing = *v
+			}
+		}
 	}
 
 	if event.MessageType == "group" {
@@ -170,7 +180,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 			return
 		}
-		wakeSignals := DetectGroupWakeSignals(event, engine.Scope)
+		var wakeSignals GroupWakeSignals
+		if routing.Derived {
+			wakeSignals = routing.WakeSignals
+		} else {
+			wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
+		}
 		replyContext := conn.lookupReplyContext(event)
 		conn.observeResolvedReply(event, replyContext)
 		if !wakeSignals.Any() && !replyContext.MentionsBot {

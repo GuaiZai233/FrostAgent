@@ -1,4 +1,4 @@
-﻿package security
+package security
 
 import (
 	"context"
@@ -86,6 +86,23 @@ func (l RiskLevel) IsValid() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// RiskLevelSeverity returns a numeric rank for comparing risk levels:
+// critical (3) > high (2) > medium (1) > none (0). Unknown levels return -1.
+func RiskLevelSeverity(l RiskLevel) int {
+	switch l {
+	case RiskLevelCritical:
+		return 3
+	case RiskLevelHigh:
+		return 2
+	case RiskLevelMedium:
+		return 1
+	case RiskLevelNone:
+		return 0
+	default:
+		return -1
 	}
 }
 

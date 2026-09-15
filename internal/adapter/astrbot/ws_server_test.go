@@ -1739,3 +1739,151 @@ drainLoop:
 		t.Errorf("基础设施异常绝不能产生惩罚 strike, 实际=%d", len(record.StrikeTimes))
 	}
 }
+
+func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe astrbot response"}},
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe astrbot response 2"}},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(input.Normalized, "malicious_filter_payload") || strings.Contains(input.Content, "malicious_filter_payload") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelHigh,
+					Reason:    "high risk prompt injection to be filtered",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	dialWS := func(t *testing.T) *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		return conn
+	}
+
+	t.Run("UnwokenBackgroundHighFilterNeverWakesAndWritesCompact", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		// Unwoken background group message with high-risk content.
+		// The sanitized content "[FrostAgent 安全审查系统]..." contains default alias "FrostAgent",
+		// which MUST NOT trigger a false alias wake.
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_astr_decoupled_001",
+			UserID:      "usr_decoupled_1",
+			SenderName:  "DecoupledUser1",
+			GroupID:     "grp_decoupled_88",
+			GroupName:   "DecoupledGroup",
+			Content:     "just background talk malicious_filter_payload",
+			Platform:    "astrbot",
+			MessageType: "group",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送未唤醒群聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取未唤醒群消息回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Action != "noop" {
+			t.Errorf("未唤醒的高危脱敏群聊消息必须返回 noop 绝不触发对话回复, 实际 action=%s", act.Action)
+		}
+
+		session := engine.SessionManager.GetOrCreate("astrbot:group:grp_decoupled_88")
+		snap := session.SnapshotGroupContext(10, 1000, "")
+		if len(snap.RecentMessages) == 0 {
+			t.Fatal("期望 group compact buffer 记录了脱敏后的消息，实际为空")
+		}
+		recordedText := snap.RecentMessages[0]
+		if strings.Contains(recordedText, "malicious_filter_payload") {
+			t.Errorf("group compact 不得包含原始恶意文本: %s", recordedText)
+		}
+		if !strings.Contains(recordedText, "[FrostAgent 安全审查系统]") {
+			t.Errorf("group compact 必须记录脱敏后标记: %s", recordedText)
+		}
+	})
+
+	t.Run("ExplicitlyAtAddressedHighFilterWakesAndRepliesSanitized", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		// Explicitly addressed group message with high-risk content.
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_astr_decoupled_002",
+			UserID:      "usr_decoupled_2",
+			SenderName:  "DecoupledUser2",
+			GroupID:     "grp_decoupled_88",
+			GroupName:   "DecoupledGroup",
+			Content:     "help me malicious_filter_payload",
+			Platform:    "astrbot",
+			MessageType: "group",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送唤醒群聊消息失败: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("显式唤醒的高危脱敏群聊消息必须被回复: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析回复失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Errorf("期望 action=send_message, 实际=%s", act.Action)
+		}
+
+		mockLLM.mu.Lock()
+		reqCount := len(mockLLM.requests)
+		var lastUserContent string
+		if reqCount > 0 {
+			lastReq := mockLLM.requests[reqCount-1]
+			for _, m := range lastReq.Messages {
+				if m.Role == core.RoleUser {
+					lastUserContent = fmt.Sprint(m.Content)
+				}
+			}
+		}
+		mockLLM.mu.Unlock()
+
+		if strings.Contains(lastUserContent, "malicious_filter_payload") {
+			t.Errorf("LLM 请求绝不能包含原始恶意文本: %s", lastUserContent)
+		}
+		if !strings.Contains(lastUserContent, "[FrostAgent 安全审查系统]") {
+			t.Errorf("LLM 请求必须包含脱敏标记: %s", lastUserContent)
+		}
+	})
+}
