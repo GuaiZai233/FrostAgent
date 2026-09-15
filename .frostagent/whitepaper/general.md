@@ -184,7 +184,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - `SessionContext` 维护活跃提取上下文注册表（`extractionCancels map[uint64]context.CancelFunc`）与自增提取 ID，并通过 `BeginExtraction` 为后台异步记忆抽取任务绑定可取消的派生上下文；
     - 待提取任务批次（`PendingExtractionBatch`）显式附带所属会话指针及其派生时刻的会话 Epoch 代数；
     - 会话重置时（`ResetSession`）原子递增 Epoch，并主动调用 `CancelExtractions` 快速取消所有在途提取上下文，打断正在进行中的大模型推理 HTTP 连接；
-    - 构建前中后三道严密代数防线与原子提交屏障：在大模型提取调用前、大模型响应解析后核验代数一致性与上下文有效性；最终提取记忆持久化时，通过 `Store.SaveEntriesConditionally` / `Store.SaveConditionally` 在持有写锁（`Store.mu.Lock()`）的关键区内原子重验代数一致性与上下文取消状态，验证通过与向 `brain.json` 磁盘落盘提交在同一互斥事务中完成。彻底消除检查通过与落盘之间的 TOCTOU 竞态窗口，杜绝会话重置后过时记忆污染长期记忆库，同时完整保留 `brain.json` 中已持久化的既有记忆；
+    - 构建前中后三道严密代数防线与主动提交代数屏障 (Active-Commit Generation Barrier)：在大模型提取调用前、大模型响应解析后核验代数一致性与上下文有效性；通过 `core.ExtractionCommitBarrier`（绑定会话当前 Epoch、上下文及活跃写入状态）注入提取流程；在记忆持久化提交时，`Store.SaveEntriesConditionallyContext` 在持有写锁（`Store.mu.Lock()`）内对屏障与校验器实施双重校验（加载 `brain.json` 前及落盘保存前分别验证），并在校验器调用前后均执行屏障有效性复验；若会话在校验器执行窗口被重置，屏障原子标记终止（`aborted.Store(true)`）并立即使持久化拒绝并返回 `ErrConditionFailed`；若持久化已进入实际文件写入阶段，`ResetSession` 将等待活跃写入完成（`writing.Load() == true`）再行返回，杜绝会话重置返回后旧代记忆越过屏障向磁盘提交的竞态窗口，同时完整保留 `brain.json` 中已持久化的既有记忆；
   - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
   - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
   - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。

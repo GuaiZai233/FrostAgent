@@ -499,3 +499,91 @@ func TestExtractionLifecycle_DeterministicSessionResetRace(t *testing.T) {
 	}
 }
 
+func TestExtractionLifecycle_ResetDuringCommitValidatorRejectsStaleExtraction(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+
+	initialEntry := memory.MemoryEntry{
+		ID:        "mem_init",
+		Owner:     "test_user_commit_race",
+		OwnerType: memory.OwnerUser,
+		Content:   "pre-existing valid memory",
+	}
+	if err := store.Save(initialEntry); err != nil {
+		t.Fatalf("failed to save initial memory: %v", err)
+	}
+
+	provider := &mockBlockingExtractProvider{
+		onChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: `[{"content": "stale race memory from old generation", "tags": ["race"], "visibility": "private"}]`,
+				},
+			}, nil
+		},
+	}
+
+	writer := memory.NewWriter(store)
+	writer.SetLLM(provider, "mock-model")
+
+	sess := &SessionContext{ConversationID: "private:test_user_commit_race"}
+	ctx, epoch, cleanup := sess.BeginExtraction(context.Background())
+	defer cleanup()
+
+	var checkCount atomic.Int32
+	resetTriggered := make(chan struct{})
+	resetDone := make(chan struct{})
+
+	// Goroutine that executes ResetSession when signaled by the 4th validator check
+	go func() {
+		<-resetTriggered
+		_ = sess.ResetSession(nil)
+		close(resetDone)
+	}()
+
+	// Validator hook: on the 4th call (inside Store persistence critical section),
+	// trigger ResetSession and wait until ResetSession has fully returned.
+	// Then return true (simulating that the validator had observed the epoch as valid
+	// before ResetSession returned, or that validator returned true).
+	validator := func() bool {
+		cnt := checkCount.Add(1)
+		if cnt == 4 {
+			// Signal the concurrent thread to reset the session
+			close(resetTriggered)
+			// Wait until ResetSession has completely returned to the caller
+			<-resetDone
+			// Simulates validator having evaluated old epoch before reset completed
+			return true
+		}
+		return ctx.Err() == nil && sess.Epoch() == epoch
+	}
+
+	err := writer.ExtractByOwnerWithRouteContext(
+		ctx,
+		"test_user_commit_race",
+		memory.OwnerUser,
+		core.RouteContext{},
+		[]core.ChatMessage{{Role: core.RoleUser, Content: "test"}},
+		validator,
+	)
+
+	// Verify that extraction was rejected
+	if err == nil {
+		t.Fatalf("expected error from aborted extraction, got nil")
+	}
+
+	// Verify that stale memory was NEVER persisted to store
+	entries, err := store.ListByOwner("test_user_commit_race")
+	if err != nil {
+		t.Fatalf("failed to list memories: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 memory entry, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Content != "pre-existing valid memory" {
+		t.Fatalf("expected initial memory, got: %q", entries[0].Content)
+	}
+}
+

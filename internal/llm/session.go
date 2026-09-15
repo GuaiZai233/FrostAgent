@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -232,13 +233,14 @@ type SessionContext struct {
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
 
-	activeCancel      context.CancelFunc
-	epoch             uint64
-	nextExtractionID  uint64
-	extractionCancels map[uint64]context.CancelFunc
-	historySeq        []uint64
-	nextMsgSeq        uint64
-	privateCompacting bool
+	activeCancel       context.CancelFunc
+	epoch              uint64
+	nextExtractionID   uint64
+	extractionCancels  map[uint64]context.CancelFunc
+	extractionBarriers map[uint64]*sessionExtractionBarrier
+	historySeq         []uint64
+	nextMsgSeq         uint64
+	privateCompacting  bool
 
 	groupCompactSummary    string
 	groupCompactBuffer     []groupCompactItem
@@ -368,6 +370,47 @@ func (s *SessionContext) CancelActiveRun() {
 	}
 }
 
+type sessionExtractionBarrier struct {
+	sess      *SessionContext
+	epoch     uint64
+	ctx       context.Context
+	aborted   atomic.Bool
+	writing   atomic.Bool
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func (b *sessionExtractionBarrier) IsValid() bool {
+	if b == nil {
+		return true
+	}
+	if b.aborted.Load() {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		return false
+	}
+	if b.sess != nil && b.sess.Epoch() != b.epoch {
+		return false
+	}
+	return true
+}
+
+func (b *sessionExtractionBarrier) MarkWriting() {
+	if b != nil {
+		b.writing.Store(true)
+	}
+}
+
+func (b *sessionExtractionBarrier) MarkDone() {
+	if b != nil {
+		b.writing.Store(false)
+		b.closeOnce.Do(func() {
+			close(b.done)
+		})
+	}
+}
+
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
 // The returned cleanup function must be called when extraction completes.
 func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Context, uint64, func()) {
@@ -390,13 +433,28 @@ func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Con
 	}
 	s.extractionCancels[id] = cancel
 
+	barrier := &sessionExtractionBarrier{
+		sess:  s,
+		epoch: currentEpoch,
+		ctx:   ctx,
+		done:  make(chan struct{}),
+	}
+	if s.extractionBarriers == nil {
+		s.extractionBarriers = make(map[uint64]*sessionExtractionBarrier)
+	}
+	s.extractionBarriers[id] = barrier
+
+	ctx = core.WithExtractionBarrier(ctx, barrier)
+
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
+			barrier.MarkDone()
 			cancel()
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			delete(s.extractionCancels, id)
+			delete(s.extractionBarriers, id)
 		})
 	}
 
@@ -413,6 +471,11 @@ func (s *SessionContext) CancelExtractions() {
 	for id, cancel := range s.extractionCancels {
 		cancel()
 		delete(s.extractionCancels, id)
+	}
+	for id, b := range s.extractionBarriers {
+		b.aborted.Store(true)
+		b.MarkDone()
+		delete(s.extractionBarriers, id)
 	}
 }
 
@@ -436,6 +499,14 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 		delete(s.extractionCancels, id)
 	}
 	s.epoch++
+
+	barriersToWait := make([]*sessionExtractionBarrier, 0, len(s.extractionBarriers))
+	for id, b := range s.extractionBarriers {
+		b.aborted.Store(true)
+		barriersToWait = append(barriersToWait, b)
+		delete(s.extractionBarriers, id)
+	}
+
 	s.History = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
@@ -451,6 +522,15 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.UpdatedAt = time.Now()
 	conversationID := s.ConversationID
 	s.mu.Unlock()
+
+	for _, b := range barriersToWait {
+		if b.writing.Load() {
+			select {
+			case <-b.done:
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
 
 	if groupSummaryStore != nil && conversationID != "" {
 		return groupSummaryStore.Delete(conversationID)

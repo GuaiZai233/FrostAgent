@@ -115,6 +115,10 @@ func (w *Writer) ExtractByOwnerWithRouteContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
 	if validator != nil && !validator() {
 		return errors.New("extraction cancelled or invalidated")
 	}
@@ -166,6 +170,9 @@ func (w *Writer) ExtractByOwnerWithRouteContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
 	if validator != nil && !validator() {
 		return errors.New("extraction cancelled or invalidated")
 	}
@@ -214,10 +221,18 @@ func (w *Writer) parseAndSave(
 		return nil
 	}
 
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+
 	var toSave []MemoryEntry
 	for _, e := range entries {
 		if ctx != nil && ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if barrier != nil && !barrier.IsValid() {
+			return errors.New("extraction cancelled or invalidated")
 		}
 		if validator != nil && !validator() {
 			return errors.New("extraction cancelled or invalidated")
@@ -251,13 +266,22 @@ func (w *Writer) parseAndSave(
 		if ctx != nil && ctx.Err() != nil {
 			return false
 		}
+		if barrier != nil && !barrier.IsValid() {
+			return false
+		}
 		if validator != nil && !validator() {
+			return false
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
+		if barrier != nil && !barrier.IsValid() {
 			return false
 		}
 		return true
 	}
 
-	if err := w.store.SaveEntriesConditionally(toSave, commitValidator); err != nil {
+	if err := w.store.SaveEntriesConditionallyContext(ctx, toSave, commitValidator); err != nil {
 		if errors.Is(err, ErrConditionFailed) || (ctx != nil && ctx.Err() != nil) {
 			return errors.New("extraction cancelled or invalidated")
 		}

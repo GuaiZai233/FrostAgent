@@ -58,3 +58,29 @@ type SessionStore interface {
 	Create(sessionID string) Session
 	Delete(sessionID string)
 }
+
+// ExtractionCommitBarrier coordinates memory extraction persistence commits with session lifecycle.
+type ExtractionCommitBarrier interface {
+	// IsValid returns true if the extraction commit is still permitted to persist.
+	IsValid() bool
+	// MarkWriting signals that disk persistence is in progress.
+	MarkWriting()
+	// MarkDone signals that disk persistence has finished.
+	MarkDone()
+}
+
+type extractionBarrierKey struct{}
+
+// WithExtractionBarrier attaches an ExtractionCommitBarrier to the context.
+func WithExtractionBarrier(ctx context.Context, barrier ExtractionCommitBarrier) context.Context {
+	return context.WithValue(ctx, extractionBarrierKey{}, barrier)
+}
+
+// ExtractionBarrierFromContext retrieves the ExtractionCommitBarrier from the context.
+func ExtractionBarrierFromContext(ctx context.Context) ExtractionCommitBarrier {
+	if ctx == nil {
+		return nil
+	}
+	b, _ := ctx.Value(extractionBarrierKey{}).(ExtractionCommitBarrier)
+	return b
+}

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/core"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,13 +67,44 @@ func (s *Store) save(brain *BrainData) error {
 // If validator returns false, the write is aborted and ErrConditionFailed is returned,
 // ensuring an atomic linearizable boundary between validation and persistence.
 func (s *Store) SaveEntriesConditionally(entries []MemoryEntry, validator func() bool) error {
+	return s.SaveEntriesConditionallyContext(context.Background(), entries, validator)
+}
+
+// SaveEntriesConditionallyContext evaluates validator and context/barrier guards while holding the
+// store write lock, then appends all entries and writes to disk atomically.
+// If validator or barrier returns false, the write is aborted and ErrConditionFailed is returned.
+func (s *Store) SaveEntriesConditionallyContext(
+	ctx context.Context,
+	entries []MemoryEntry,
+	validator func() bool,
+) error {
 	if len(entries) == 0 {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if validator != nil && !validator() {
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	checkValid := func() bool {
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
+		if barrier != nil && !barrier.IsValid() {
+			return false
+		}
+		if validator != nil && !validator() {
+			return false
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
+		if barrier != nil && !barrier.IsValid() {
+			return false
+		}
+		return true
+	}
+
+	if !checkValid() {
 		return ErrConditionFailed
 	}
 
@@ -96,6 +128,16 @@ func (s *Store) SaveEntriesConditionally(entries []MemoryEntry, validator func()
 		entries[i].Owner = CanonicalOwner(entries[i].Owner)
 		brain.Entries = append(brain.Entries, entries[i])
 	}
+
+	if !checkValid() {
+		return ErrConditionFailed
+	}
+
+	if barrier != nil {
+		barrier.MarkWriting()
+		defer barrier.MarkDone()
+	}
+
 	return s.save(brain)
 }
 
