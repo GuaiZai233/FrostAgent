@@ -725,3 +725,4 @@ export const ModelRouterService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_frostagent_v1_model_router, 0);
+

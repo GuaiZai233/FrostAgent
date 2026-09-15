@@ -34,6 +34,7 @@ type RunContext struct {
 	Billing             *BillingRunState
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot
+	SecurityNotice      string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
 }
 
 type runContextKey struct{}

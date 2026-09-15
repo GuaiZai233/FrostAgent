@@ -14,6 +14,7 @@ type ChatRequest struct {
 	MaxTokens   int
 	Temperature float64
 	Route       RouteContext
+	TraceID     string
 }
 
 // RouteContext carries non-wire routing metadata. Providers must never encode

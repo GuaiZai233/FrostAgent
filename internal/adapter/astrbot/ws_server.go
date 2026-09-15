@@ -148,12 +148,8 @@ func senderDisplayName(event Event) string {
 	return "unknown"
 }
 
-func captureGroupCompactMessage(event Event, engine *llm.Engine) {
-	if engine == nil || event.GroupID == "" {
-		return
-	}
-	visibleText := astrBotVisibleText(event)
-	if visibleText == "" {
+func captureGroupCompactText(event Event, text string, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
 		return
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
@@ -166,7 +162,7 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 			Role:      "user",
 			Sender:    senderDisplayName(event),
 			SenderID:  event.UserID,
-			Content:   visibleText,
+			Content:   strings.TrimSpace(text),
 			MessageID: event.MessageID,
 			Time:      time.Now().Format("15:04:05"),
 		},
@@ -180,6 +176,14 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 		owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
 		engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
 	}
+}
+
+func captureGroupCompactMessage(event Event, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" {
+		return
+	}
+	visibleText := astrBotVisibleText(event)
+	captureGroupCompactText(event, visibleText, engine)
 }
 
 func astrBotVisibleText(event Event) string {
@@ -337,6 +341,13 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 }
 
 func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.Metadata != nil {
+		if val, ok := event.Metadata["_frostagent_should_reply"]; ok {
+			if b, ok := val.(bool); ok {
+				return b
+			}
+		}
+	}
 	scope := runtimescope.First(scopes)
 	if event.MessageType == "private" {
 		return true
@@ -409,7 +420,7 @@ func isMentionOnlyInteraction(event Event) bool {
 	)
 }
 
-func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
@@ -463,18 +474,22 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		logImages,
 	)
 
-	replyWithSnapshot(event, engine, conn, routeSnapshot)
+	replyWithSnapshot(event, engine, conn, routeSnapshot, warningNotice...)
 }
 
-func reply(event Event, engine *llm.Engine, conn *wsConn) {
+func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...string) {
 	var snapshot *modelrouter.Snapshot
 	if engine != nil && engine.ModelRouter != nil {
 		snapshot = engine.ModelRouter.Snapshot()
 	}
-	replyWithSnapshot(event, engine, conn, snapshot)
+	replyWithSnapshot(event, engine, conn, snapshot, warningNotice...)
 }
 
-func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
+	var notice string
+	if len(warningNotice) > 0 {
+		notice = warningNotice[0]
+	}
 	platform := event.Platform
 	if platform == "" {
 		platform = "astrbot"
@@ -543,9 +558,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 							Instance: engine.InstanceID,
 							Session:  sessionKey(event),
 						})
-						if security.Blocks(decision.Action) {
-							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+						if decision.IsFailure {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
 							imageDesc = ""
+						} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含敏感内容，已被安全机制降级脱敏: %s", decision.Reason))
+							imageDesc = decision.SanitizedContent
+						} else if decision.Action == security.WatchdogWarn && notice == "" {
+							notice = decision.WarningNotice
 						}
 					}
 				}
@@ -587,9 +607,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					Instance: engine.InstanceID,
 					Session:  sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含高风险内容，已被安全机制隔离剔除", senderName))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
 					senderName = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含敏感内容，已被安全机制降级脱敏", senderName))
+					senderName = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 			if groupName != "" {
@@ -597,9 +622,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					Instance: engine.InstanceID,
 					Session:  sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
 					groupName = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含敏感内容，已被安全机制降级脱敏", groupName))
+					groupName = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -654,9 +684,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					Instance: engine.InstanceID,
 					Session:  sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
 					vettedSummary = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含敏感内容，已被安全机制降级脱敏", event.GroupID))
+					vettedSummary = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -676,9 +711,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					Instance: engine.InstanceID,
 					Session:  sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
 					vettedRecent = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含敏感内容，已被安全机制降级脱敏", event.GroupID))
+					vettedRecent = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -798,13 +838,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:     sessionKey(event),
-			Owner:         owner,
-			OwnerType:     ownerType,
-			ActorUserID:   event.UserID,
-			ActorPlatform: platform,
-			InstanceID:    engine.InstanceID,
-			SendHook:      sendHook,
+			SessionID:      sessionKey(event),
+			Owner:          owner,
+			OwnerType:      ownerType,
+			ActorUserID:    event.UserID,
+			ActorPlatform:  platform,
+			InstanceID:     engine.InstanceID,
+			SendHook:       sendHook,
+			SecurityNotice: notice,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},

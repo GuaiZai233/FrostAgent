@@ -4,11 +4,13 @@ import (
 	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +70,21 @@ func newTestEngine(provider core.LLMProvider) *llm.Engine {
 		SessionManager: llm.NewSessionManager(),
 		Dispatcher:     core.NewDefaultDispatcher(),
 	}
+}
+
+type mockClassifier struct {
+	fn func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error)
+}
+
+func (m *mockClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	if m.fn != nil {
+		return m.fn(ctx, input)
+	}
+	return security.ClassificationResult{
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Reason:    "mock clean",
+	}, nil
 }
 
 func startWSTestServer(engine *llm.Engine) (*httptest.Server, *Adapter, string) {
@@ -1255,6 +1272,23 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(input.Content, "ignore all previous instructions") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "prompt injection detected",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "clean",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
 	srv, _, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -1464,7 +1498,392 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		}
 	})
 
+	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failSrv, _, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_sec_fail_001",
+			UserID:      "usr_sec_fail_1",
+			SenderName:  "FailUser",
+			Content:     "你好世界",
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Content != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
+		}
+	})
+
+	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
+			},
+		})
+		failSrv, _, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_sec_fail_002",
+			UserID:      "usr_sec_fail_2",
+			SenderName:  "FailUser",
+			Content:     "你好世界",
+			Platform:    "astrbot",
+			MessageType: "private",
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Content != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
+		}
+	})
+
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
 	}
+}
+
+func TestAstrBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	failEngine := newTestEngine(mockLLM)
+	failEngine.Security = security.NewController(t.TempDir())
+
+	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
+	failEngine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{}, fmt.Errorf("upstream gateway error with auth token %s: context deadline exceeded", secretToken)
+		},
+	})
+
+	failSrv, _, failWSURL := startWSTestServer(failEngine)
+	defer failSrv.Close()
+
+	// Subscribe to logs to capture emitted entries
+	subID, logCh := logs.Subscribe(nil)
+	defer logs.Unsubscribe(subID)
+
+	failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer failConn.Close()
+
+	const testUserID = "usr_sec_fail_dedup"
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_sec_fail_dedup_01",
+		UserID:      testUserID,
+		SenderName:  "FailUser",
+		Content:     "触发 AstrBot 分类器异常测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := failConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if act.Content != security.RejectFailureMsg {
+		t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
+	}
+
+	// Drain captured logs
+	var capturedLogs []logs.LogEntry
+	drainTimer := time.NewTimer(200 * time.Millisecond)
+	defer drainTimer.Stop()
+drainLoop:
+	for {
+		select {
+		case entry := <-logCh:
+			capturedLogs = append(capturedLogs, entry)
+		case <-drainTimer.C:
+			break drainLoop
+		}
+	}
+
+	var rootCauseErrors []logs.LogEntry
+	var adapterWarns []logs.LogEntry
+	var allErrors []logs.LogEntry
+
+	for _, entry := range capturedLogs {
+		if entry.Level == logs.ERROR {
+			allErrors = append(allErrors, entry)
+			if strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+				rootCauseErrors = append(rootCauseErrors, entry)
+			}
+		}
+		if entry.Level == logs.WARN && strings.Contains(entry.Content, "AstrBot 请求因安全审查服务异常被拒绝:") {
+			adapterWarns = append(adapterWarns, entry)
+		}
+	}
+
+	if len(rootCauseErrors) != 1 {
+		t.Fatalf("期望底层 Watchdog 恰好产生 1 条根因 ERROR 日志，实际=%d (所有 ERROR 数量=%d)", len(rootCauseErrors), len(allErrors))
+	}
+	if len(adapterWarns) != 1 {
+		t.Fatalf("期望 AstrBot 适配层恰好产生 1 条拒绝 WARN 日志，实际=%d", len(adapterWarns))
+	}
+
+	rootLog := rootCauseErrors[0].Content
+	adapterLog := adapterWarns[0].Content
+
+	// 验证根因日志包含详细字段但脱敏敏感信息
+	if !strings.Contains(rootLog, "error_type=") {
+		t.Errorf("根因 ERROR 日志必须包含 error_type, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "reason=") {
+		t.Errorf("根因 ERROR 日志必须包含 reason, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "eval_id=eval_ingress_") {
+		t.Errorf("根因 ERROR 日志必须包含 eval_id, 实际=%s", rootLog)
+	}
+	if strings.Contains(rootLog, secretToken) {
+		t.Errorf("根因 ERROR 日志绝不能泄漏原始密钥 Token %q: %s", secretToken, rootLog)
+	}
+	if !strings.Contains(rootLog, "[REDACTED]") {
+		t.Errorf("根因 ERROR 日志中的密钥应当被替换为 [REDACTED], 实际=%s", rootLog)
+	}
+
+	// 提取 eval_id
+	parts := strings.Split(rootLog, "eval_id=")
+	if len(parts) < 2 {
+		t.Fatalf("无法从根因日志提取 eval_id: %s", rootLog)
+	}
+	rootEvalID := strings.Fields(parts[1])[0]
+
+	// 验证适配器日志包含用户上下文和相同 eval_id，但不复制底层 error_type 和 reason
+	expectedAdapterPrefix := fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", testUserID, rootEvalID)
+	if !strings.Contains(adapterLog, expectedAdapterPrefix) {
+		t.Errorf("期望适配层日志包含 %q, 实际=%s", expectedAdapterPrefix, adapterLog)
+	}
+	if strings.Contains(adapterLog, "error_type=") {
+		t.Errorf("适配层日志严禁重复打印 error_type: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, "reason=") {
+		t.Errorf("适配层日志严禁重复打印 reason: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, secretToken) {
+		t.Errorf("适配层日志严禁包含敏感内容: %s", adapterLog)
+	}
+
+	// 验证基础设施故障绝对零惩罚 (Zero Punishment)
+	p, err := security.NewPrincipal("astrbot", testUserID)
+	if err != nil {
+		t.Fatalf("创建 principal 失败: %v", err)
+	}
+	locked, record, err := failEngine.Security.Access.IsLocked(p)
+	if err != nil {
+		t.Fatalf("获取 access record 失败: %v", err)
+	}
+	if locked {
+		t.Errorf("基础设施异常绝不能导致用户被封禁锁定")
+	}
+	if len(record.StrikeTimes) != 0 {
+		t.Errorf("基础设施异常绝不能产生惩罚 strike, 实际=%d", len(record.StrikeTimes))
+	}
+}
+
+func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe astrbot response"}},
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe astrbot response 2"}},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(input.Normalized, "malicious_filter_payload") || strings.Contains(input.Content, "malicious_filter_payload") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelHigh,
+					Reason:    "high risk prompt injection to be filtered",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	dialWS := func(t *testing.T) *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		return conn
+	}
+
+	t.Run("UnwokenBackgroundHighFilterNeverWakesAndWritesCompact", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		// Unwoken background group message with high-risk content.
+		// The sanitized content "[FrostAgent 安全审查系统]..." contains default alias "FrostAgent",
+		// which MUST NOT trigger a false alias wake.
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_astr_decoupled_001",
+			UserID:      "usr_decoupled_1",
+			SenderName:  "DecoupledUser1",
+			GroupID:     "grp_decoupled_88",
+			GroupName:   "DecoupledGroup",
+			Content:     "just background talk malicious_filter_payload",
+			Platform:    "astrbot",
+			MessageType: "group",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送未唤醒群聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取未唤醒群消息回复失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Action != "noop" {
+			t.Errorf("未唤醒的高危脱敏群聊消息必须返回 noop 绝不触发对话回复, 实际 action=%s", act.Action)
+		}
+
+		session := engine.SessionManager.GetOrCreate("astrbot:group:grp_decoupled_88")
+		snap := session.SnapshotGroupContext(10, 1000, "")
+		if len(snap.RecentMessages) == 0 {
+			t.Fatal("期望 group compact buffer 记录了脱敏后的消息，实际为空")
+		}
+		recordedText := snap.RecentMessages[0]
+		if strings.Contains(recordedText, "malicious_filter_payload") {
+			t.Errorf("group compact 不得包含原始恶意文本: %s", recordedText)
+		}
+		if !strings.Contains(recordedText, "[FrostAgent 安全审查系统]") {
+			t.Errorf("group compact 必须记录脱敏后标记: %s", recordedText)
+		}
+	})
+
+	t.Run("ExplicitlyAtAddressedHighFilterWakesAndRepliesSanitized", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		// Explicitly addressed group message with high-risk content.
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageID:   "msg_astr_decoupled_002",
+			UserID:      "usr_decoupled_2",
+			SenderName:  "DecoupledUser2",
+			GroupID:     "grp_decoupled_88",
+			GroupName:   "DecoupledGroup",
+			Content:     "help me malicious_filter_payload",
+			Platform:    "astrbot",
+			MessageType: "group",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送唤醒群聊消息失败: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("显式唤醒的高危脱敏群聊消息必须被回复: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析回复失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Errorf("期望 action=send_message, 实际=%s", act.Action)
+		}
+
+		mockLLM.mu.Lock()
+		reqCount := len(mockLLM.requests)
+		var lastUserContent string
+		if reqCount > 0 {
+			lastReq := mockLLM.requests[reqCount-1]
+			for _, m := range lastReq.Messages {
+				if m.Role == core.RoleUser {
+					lastUserContent = fmt.Sprint(m.Content)
+				}
+			}
+		}
+		mockLLM.mu.Unlock()
+
+		if strings.Contains(lastUserContent, "malicious_filter_payload") {
+			t.Errorf("LLM 请求绝不能包含原始恶意文本: %s", lastUserContent)
+		}
+		if !strings.Contains(lastUserContent, "[FrostAgent 安全审查系统]") {
+			t.Errorf("LLM 请求必须包含脱敏标记: %s", lastUserContent)
+		}
+	})
 }

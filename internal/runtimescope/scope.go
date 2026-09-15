@@ -43,6 +43,19 @@ func (s *Scope) Getenv(k string) string {
 		}
 		return s.Global.Get(k)
 	}
+	if instanceconfig.SharedKeys[k] {
+		if s.Config != nil {
+			if v := s.Config.Get(k); strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		if s.Global != nil {
+			if v := s.Global.Get(k); strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		return os.Getenv(k)
+	}
 	if s.Config == nil {
 		return ""
 	}
@@ -115,10 +128,30 @@ func (s *Scope) LookupEnv(k string) (string, bool) {
 	if s == nil {
 		return os.LookupEnv(k)
 	}
-	v, ok := s.Config.Snapshot()[k]
 	if instanceconfig.GlobalKeys[k] {
-		v, ok = s.Global.Snapshot()[k]
+		if s.Global == nil {
+			return "", false
+		}
+		v, ok := s.Global.Snapshot()[k]
+		return v, ok
 	}
+	if instanceconfig.SharedKeys[k] {
+		if s.Config != nil {
+			if v, ok := s.Config.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		}
+		if s.Global != nil {
+			if v, ok := s.Global.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		}
+		return os.LookupEnv(k)
+	}
+	if s.Config == nil {
+		return "", false
+	}
+	v, ok := s.Config.Snapshot()[k]
 	return v, ok
 }
 func (s *Scope) CheckOrigin(r *http.Request) bool {

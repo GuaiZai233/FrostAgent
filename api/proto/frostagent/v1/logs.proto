@@ -30,6 +30,7 @@ message LogEntry {
   bool has_detail = 6;
   string request_body = 7;
   string response_body = 8;
+  string trace_id = 9;
 }
 
 message ListLogsRequest {

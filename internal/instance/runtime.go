@@ -85,6 +85,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		memoryConfig.ReflectTimeout,
 	)
 	reflectionProvider := routerManager.Provider(modelrouter.WorkloadReflection, false, memoryConfig.ReflectTimeout)
+	securityTimeout := resolveSecurityGatewayTimeout(scope, security.DefaultClassifierTimeout)
+	securityProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, securityTimeout)
+	if securityController != nil {
+		if enabled {
+			securityController.SetInstanceProviderWithTimeout(instanceID, securityProvider, "model-router-security-gateway", securityTimeout)
+		} else {
+			securityController.RemoveInstanceProvider(instanceID)
+		}
+	}
 
 	// Initialize memory system
 	store := memory.NewStore(filepath.Join(dir, "brain.json"))
@@ -312,6 +321,36 @@ func (r *Runtime) Stop() {
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()
 }
+
+func resolveSecurityGatewayTimeout(scope *runtimescope.Scope, fallback time.Duration) time.Duration {
+	if fallback <= 0 {
+		fallback = security.DefaultClassifierTimeout
+	}
+	keys := []string{"SECURITY_GATEWAY_TIMEOUT", "SECURITY_CLASSIFIER_TIMEOUT"}
+	for _, key := range keys {
+		raw := ""
+		if scope != nil {
+			raw = strings.TrimSpace(scope.Getenv(key))
+		} else {
+			raw = strings.TrimSpace(os.Getenv(key))
+		}
+		if raw != "" {
+			val, err := time.ParseDuration(raw)
+			if err != nil || val <= 0 {
+				if scope != nil {
+					scope.Log().Warn(
+						logs.SYSTEM,
+						fmt.Sprintf("%s=%q 不是有效的正数时长，使用默认值 %s", key, raw, fallback),
+					)
+				}
+				return fallback
+			}
+			return val
+		}
+	}
+	return fallback
+}
+
 func durationFromEnv(scope *runtimescope.Scope, name string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(scope.Getenv(name))
 	if raw == "" {

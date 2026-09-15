@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"context"
@@ -244,6 +245,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
+			var warningNotice string
+			var scope *runtimescope.Scope
+			if a.engine != nil {
+				scope = a.engine.Scope
+			}
+			if event.MessageType == "group" || event.MessageType == "private" {
+				pristineShouldReply := shouldReply(event, scope)
+				if event.Metadata == nil {
+					event.Metadata = make(map[string]any)
+				}
+				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+			}
 			if a.engine != nil && a.engine.Security != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				platform := event.Platform
@@ -254,14 +267,33 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
+				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
 				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
+					if decision.IsFailure {
+						if a.engine != nil && a.engine.Scope != nil {
+							a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+						} else {
+							logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+						}
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+						if event.MessageType == "group" && decision.SanitizedContent != "" {
+							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+						}
+					}
 					if shouldReply(event, a.engine.Scope) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						_ = sendDirectReply(event, c, msg)
 					}
 					continue
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+					event.Content = decision.SanitizedContent
+					if len(event.Messages) > 0 {
+						event.Messages = []string{decision.SanitizedContent}
+					}
+				} else if decision.Action == security.WatchdogWarn {
+					warningNotice = decision.WarningNotice
 				}
 			}
 
@@ -285,7 +317,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(sessionKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot) }) && turn != nil {
+			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice) }) && turn != nil {
 				turn.Done()
 			}
 		}

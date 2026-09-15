@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
@@ -276,16 +277,36 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			var warningNotice string
+			var routing EventRouting
+			if event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				var scope *runtimescope.Scope
+				if a.engine != nil {
+					scope = a.engine.Scope
+				}
+				routing = EventRouting{
+					Derived:     true,
+					WakeSignals: DetectGroupWakeSignals(event, scope),
+				}
+			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
 				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
-					if shouldSendSecurityDirectReply(event, a.engine) {
+					if decision.IsFailure {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+						if event.MessageType == "group" && decision.SanitizedContent != "" {
+							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+						}
+					}
+					if shouldSendSecurityDirectReply(event, a.engine, routing) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						action := "send_private_msg"
 						type1 := "user_id"
@@ -298,6 +319,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
 					}
 					continue
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制脱敏: user=%d category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+					event.Message = SanitizeOneBotMessage(event.Message, decision.SanitizedContent)
+					if len(event.Messages) > 0 && string(event.Messages) != "null" {
+						var raws []json.RawMessage
+						if err := json.Unmarshal(event.Messages, &raws); err == nil && len(raws) > 0 {
+							var sanitizedRaws []json.RawMessage
+							for _, raw := range raws {
+								sanitizedRaws = append(sanitizedRaws, SanitizeOneBotMessage(raw, decision.SanitizedContent))
+							}
+							b, _ := json.Marshal(sanitizedRaws)
+							event.Messages = b
+						} else {
+							event.Messages = nil
+						}
+					}
+				} else if decision.Action == security.WatchdogWarn {
+					warningNotice = decision.WarningNotice
 				}
 			}
 			if event.PostType == "message" &&
@@ -324,7 +363,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot) }) && turn != nil {
+			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing) }) && turn != nil {
 				turn.Done()
 			}
 		}
@@ -397,7 +436,7 @@ func (a *Adapter) CloseConnections() {
 	}
 }
 
-func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) bool {
+func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
 	if event.MessageType == "private" {
 		return true
 	}
@@ -407,8 +446,11 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) 
 	if engine != nil && engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
 		return true
 	}
-	if engine != nil && DetectGroupWakeSignals(event, engine.Scope).Any() {
-		return true
+	var wakeSignals GroupWakeSignals
+	if len(routings) > 0 && routings[0].Derived {
+		wakeSignals = routings[0].WakeSignals
+	} else if engine != nil {
+		wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
 	}
-	return false
+	return wakeSignals.Any()
 }
