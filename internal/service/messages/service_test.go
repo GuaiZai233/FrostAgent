@@ -560,3 +560,122 @@ func TestService_UnsupportedSegmentTypes(t *testing.T) {
 		t.Fatalf("expected unknown message type error, got: %s", w.Body.String())
 	}
 }
+
+func TestService_ActionsCatWirePayloadIdempotentNormalization(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// ActionsCat PR #3 pre-normalizes: sends BOTH compatibility fields (type, url)
+	// AND canonical attachments array with the same image.
+	// FrostAgent normalization must be idempotent and NOT duplicate the attachment!
+	wirePayload := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"messages": [
+			{
+				"type": "image",
+				"url": "https://example.com/fox.png",
+				"attachments": [
+					{"type": "image", "url": "https://example.com/fox.png"}
+				]
+			}
+		]
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", wirePayload)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last := adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected exactly 1 attachment (no duplication), got %d: %+v", len(last.Attachments), last.Attachments)
+	}
+	if last.Attachments[0].URL != "https://example.com/fox.png" {
+		t.Fatalf("unexpected attachment URL: %s", last.Attachments[0].URL)
+	}
+}
+
+func TestService_ActionsCatWirePayloadStickerIdempotent(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	wirePayload := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"messages": [
+			{
+				"type": "image",
+				"url": "https://example.com/fox_sticker.png",
+				"is_sticker": true,
+				"attachments": [
+					{"type": "image", "url": "https://example.com/fox_sticker.png"}
+				]
+			}
+		]
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", wirePayload)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last := adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected exactly 1 attachment, got %d", len(last.Attachments))
+	}
+	if last.Attachments[0].SubType != 1 {
+		t.Fatalf("expected SubType=1 for sticker, got %d", last.Attachments[0].SubType)
+	}
+}
+
+func TestService_RejectPathOnlyAndFile(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// 1. File message type rejected with 400
+	bodyFile := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"type": "file",
+		"url": "https://example.com/report.pdf"
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyFile)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for file type, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "file attachments are currently unsupported") {
+		t.Fatalf("expected file unsupported error, got: %s", w.Body.String())
+	}
+
+	// 2. Path-only (no URL) rejected with 400
+	bodyPathOnly := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"type": "image",
+		"path": "/sandbox/local/image.png"
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyPathOnly)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for path-only media, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "requires a valid 'url'") {
+		t.Fatalf("expected requires valid url error, got: %s", w.Body.String())
+	}
+}

@@ -3,8 +3,16 @@ package onebot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/tools"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestAdapterID(t *testing.T) {
@@ -93,5 +101,151 @@ func TestStickerSourcesFromSegmentsOnlyReturnsStickerImages(t *testing.T) {
 		if sources[i] != want[i] {
 			t.Fatalf("sticker sources[%d] = %q, want %q", i, sources[i], want[i])
 		}
+	}
+}
+
+func TestAdapterSend_OutboundContract(t *testing.T) {
+	mux := http.NewServeMux()
+	engine := newTestEngine(&mockLLMProvider{})
+	adapter := NewAdapter(engine)
+	mux.HandleFunc("/ws/onebot", adapter.Handler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/onebot"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	// Wait briefly for connection registration
+	for range 20 {
+		adapter.mu.RLock()
+		n := len(adapter.conns)
+		adapter.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx := context.Background()
+
+	// 1. Image with SubType: 1 -> produces segment with sub_type: 1 and subType: 1
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "group",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/fox_sticker.png", SubType: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send sticker failed: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if action.Action != "send_group_msg" {
+		t.Fatalf("expected send_group_msg, got %s", action.Action)
+	}
+	params, ok := action.Params.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any params, got %T", action.Params)
+	}
+	msgBytes, _ := json.Marshal(params["message"])
+	var segs []tools.OneBotSegment
+	if err := json.Unmarshal(msgBytes, &segs); err != nil {
+		t.Fatalf("unmarshal segs: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Type != "image" {
+		t.Fatalf("expected 1 image segment, got %+v", segs)
+	}
+	if segs[0].Data["sub_type"] != float64(1) && segs[0].Data["sub_type"] != 1 {
+		t.Fatalf("expected sub_type=1, got %v", segs[0].Data["sub_type"])
+	}
+	if segs[0].Data["subType"] != float64(1) && segs[0].Data["subType"] != 1 {
+		t.Fatalf("expected subType=1, got %v", segs[0].Data["subType"])
+	}
+
+	// 2. Audio with URL -> record segment
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeAudio, URL: "https://example.com/voice.silk"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send audio failed: %v", err)
+	}
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	params = action.Params.(map[string]any)
+	msgBytes, _ = json.Marshal(params["message"])
+	if err := json.Unmarshal(msgBytes, &segs); err != nil {
+		t.Fatalf("unmarshal segs: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Type != "record" {
+		t.Fatalf("expected 1 record segment, got %+v", segs)
+	}
+
+	// 3. Video with URL -> video segment
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeVideo, URL: "https://example.com/video.mp4"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send video failed: %v", err)
+	}
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	params = action.Params.(map[string]any)
+	msgBytes, _ = json.Marshal(params["message"])
+	if err := json.Unmarshal(msgBytes, &segs); err != nil {
+		t.Fatalf("unmarshal segs: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Type != "video" {
+		t.Fatalf("expected 1 video segment, got %+v", segs)
+	}
+
+	// 4. Unsupported attachment (file) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeFile, URL: "https://example.com/doc.pdf"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported attachment type 'file', got nil")
+	}
+
+	// 5. Empty URL -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: ""},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty attachment url, got nil")
+	}
+
+	// 6. Empty message (no text, no attachments) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "12345",
+		MessageType: "private",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty message, got nil")
 	}
 }

@@ -136,29 +136,41 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	for _, att := range msg.Attachments {
 		switch att.Type {
 		case core.AttachmentTypeImage:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "image",
-					Data: map[string]any{"file": att.URL},
-				})
+			if att.URL == "" {
+				return fmt.Errorf("onebot: image attachment requires url (local path without url is unsupported)")
 			}
+			data := map[string]any{"file": att.URL}
+			if att.SubType == 1 {
+				data["sub_type"] = 1
+				data["subType"] = 1
+			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "image",
+				Data: data,
+			})
 		case core.AttachmentTypeAudio:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "record",
-					Data: map[string]any{"file": att.URL},
-				})
+			if att.URL == "" {
+				return fmt.Errorf("onebot: audio attachment requires url (local path without url is unsupported)")
 			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "record",
+				Data: map[string]any{"file": att.URL},
+			})
 		case core.AttachmentTypeVideo:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "video",
-					Data: map[string]any{"file": att.URL},
-				})
+			if att.URL == "" {
+				return fmt.Errorf("onebot: video attachment requires url (local path without url is unsupported)")
 			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "video",
+				Data: map[string]any{"file": att.URL},
+			})
 		default:
-			a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("OneBot: 未知或不支持的附件类型 %q，已忽略", att.Type))
+			return fmt.Errorf("onebot: unsupported attachment type %q", att.Type)
 		}
+	}
+
+	if len(segments) == 0 {
+		return fmt.Errorf("onebot: cannot send empty message (no content and no valid attachments)")
 	}
 
 	// 将 TargetID 转为 int64 以符合 OneBot 规范（若非数字则保留原始字符串）
@@ -184,7 +196,9 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -223,27 +237,33 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		done, ok := a.engine.Enter()
-		if !ok {
-			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
-			return
+		if a.engine != nil {
+			done, ok := a.engine.Enter()
+			if !ok {
+				http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+				return
+			}
+			defer done()
 		}
-		defer done()
 		localUpgrader := upgrader
-		if a.engine.Scope != nil {
+		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}
 
 		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
+			}
 			return
 		}
 		wsConn := newWSConnection(conn)
 		wsConn.stealer = a.stealer
-		wsConn.Scope = a.engine.Scope
+		if a.engine != nil {
+			wsConn.Scope = a.engine.Scope
+		}
 		a.registerConn(wsConn)
-		if a.engine.Context().Err() != nil {
+		if a.engine != nil && a.engine.Context().Err() != nil {
 			wsConn.Close()
 		}
 		defer func() {
@@ -254,12 +274,16 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn.Close()
 		}()
 
-		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+		if a.engine != nil {
+			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+		}
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
+				}
 				break
 			}
 
@@ -269,7 +293,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+				}
 				continue
 			}
 

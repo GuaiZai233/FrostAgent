@@ -252,11 +252,22 @@ func parseAttachmentType(t string) (core.AttachmentType, bool) {
 		return core.AttachmentTypeAudio, true
 	case "video":
 		return core.AttachmentTypeVideo, true
-	case "file":
-		return core.AttachmentTypeFile, true
 	default:
 		return "", false
 	}
+}
+
+func validateAttachment(att core.Attachment) error {
+	if att.URL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+	if att.Type == core.AttachmentTypeFile {
+		return errors.New("attachment type 'file' is unsupported: file attachments are currently unsupported for outbound delivery")
+	}
+	if att.Type != core.AttachmentTypeImage && att.Type != core.AttachmentTypeAudio && att.Type != core.AttachmentTypeVideo {
+		return fmt.Errorf("unsupported attachment type %q", att.Type)
+	}
+	return nil
 }
 
 func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMessage, error) {
@@ -286,11 +297,23 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 			switch req.Type {
 			case "mention_user", "quote":
 				return nil, fmt.Errorf("unsupported message type %q: mention_user and quote are currently unsupported", req.Type)
+			case "file":
+				return nil, fmt.Errorf("unsupported message type %q: file attachments are currently unsupported for outbound delivery", req.Type)
 			case "plain", "text":
 				// text content already populated
 			default:
 				if attType, ok := parseAttachmentType(req.Type); ok {
-					if len(attachments) == 0 {
+					alreadyExists := false
+					for _, att := range attachments {
+						if att.Type == attType && ((req.URL != "" && att.URL == req.URL) || (req.Path != "" && (att.Name == req.Path || att.URL == req.Path))) {
+							alreadyExists = true
+							break
+						}
+					}
+					if !alreadyExists && len(attachments) == 0 {
+						if req.URL == "" {
+							return nil, fmt.Errorf("attachment %q requires a valid 'url': local 'path' without url is unsupported", req.Type)
+						}
 						subType := 0
 						if req.IsSticker && attType == core.AttachmentTypeImage {
 							subType = 1
@@ -313,6 +336,12 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 				if attachments[j].Type == core.AttachmentTypeImage {
 					attachments[j].SubType = 1
 				}
+			}
+		}
+
+		for j, att := range attachments {
+			if err := validateAttachment(att); err != nil {
+				return nil, fmt.Errorf("attachment[%d]: %w", j, err)
 			}
 		}
 
@@ -382,11 +411,23 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 			switch msg.Type {
 			case "mention_user", "quote":
 				return nil, fmt.Errorf("message[%d]: unsupported message type %q: mention_user and quote are currently unsupported", i, msg.Type)
+			case "file":
+				return nil, fmt.Errorf("message[%d]: unsupported message type %q: file attachments are currently unsupported for outbound delivery", i, msg.Type)
 			case "plain", "text":
 				// text content already populated
 			default:
 				if attType, ok := parseAttachmentType(msg.Type); ok {
-					if msg.URL != "" || msg.Path != "" || len(attachments) == 0 {
+					alreadyExists := false
+					for _, att := range attachments {
+						if att.Type == attType && ((msg.URL != "" && att.URL == msg.URL) || (msg.Path != "" && (att.Name == msg.Path || att.URL == msg.Path))) {
+							alreadyExists = true
+							break
+						}
+					}
+					if !alreadyExists && len(attachments) == 0 {
+						if msg.URL == "" {
+							return nil, fmt.Errorf("message[%d]: attachment %q requires a valid 'url': local 'path' without url is unsupported", i, msg.Type)
+						}
 						subType := 0
 						if msg.IsSticker && attType == core.AttachmentTypeImage {
 							subType = 1
@@ -409,6 +450,12 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 				if attachments[j].Type == core.AttachmentTypeImage {
 					attachments[j].SubType = 1
 				}
+			}
+		}
+
+		for j, att := range attachments {
+			if err := validateAttachment(att); err != nil {
+				return nil, fmt.Errorf("message[%d].attachment[%d]: %w", i, j, err)
 			}
 		}
 

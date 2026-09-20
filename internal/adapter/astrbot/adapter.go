@@ -138,6 +138,33 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		userID = msg.TargetID
 	}
 
+	var actionMessages []ActionMessage
+	if msg.Content != "" {
+		actionMessages = append(actionMessages, ActionMessage{
+			Type: "plain",
+			Text: msg.Content,
+		})
+	}
+	for _, att := range msg.Attachments {
+		switch att.Type {
+		case core.AttachmentTypeImage:
+			if att.URL == "" {
+				return fmt.Errorf("astrbot: image attachment requires url (local path without url is unsupported)")
+			}
+			actionMessages = append(actionMessages, ActionMessage{
+				Type:      "image",
+				URL:       att.URL,
+				IsSticker: att.SubType == 1,
+				SubType:   att.SubType,
+			})
+		default:
+			return fmt.Errorf("astrbot: attachment type %q is unsupported for outbound delivery", att.Type)
+		}
+	}
+	if len(actionMessages) == 0 {
+		return fmt.Errorf("astrbot: cannot send empty message (no content and no valid attachments)")
+	}
+
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
@@ -146,6 +173,7 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		GroupID:        groupID,
 		UserID:         userID,
 		Content:        msg.Content,
+		Messages:       actionMessages,
 		Attachments:    msg.Attachments,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("astrbot_send_%s", msg.TargetID),
@@ -159,7 +187,9 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -199,26 +229,32 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler。
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		done, ok := a.engine.Enter()
-		if !ok {
-			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
-			return
+		if a.engine != nil {
+			done, ok := a.engine.Enter()
+			if !ok {
+				http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+				return
+			}
+			defer done()
 		}
-		defer done()
 		localUpgrader := upgrader
-		if a.engine.Scope != nil {
+		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}
 
 		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			}
 			return
 		}
 		c := newWSConn(conn)
-		c.Scope = a.engine.Scope
+		if a.engine != nil {
+			c.Scope = a.engine.Scope
+		}
 		a.registerConn(c)
-		if a.engine.Context().Err() != nil {
+		if a.engine != nil && a.engine.Context().Err() != nil {
 			c.Close()
 		}
 		defer func() {
@@ -226,18 +262,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			c.Close()
 		}()
 
-		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+		if a.engine != nil {
+			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+		}
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
+				}
 				break
 			}
 
 			var event Event
 			if err := json.Unmarshal(message, &event); err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
+				}
 				continue
 			}
 
