@@ -88,6 +88,7 @@ type wsConnection struct {
 	conn                *websocket.Conn
 	generation          string
 	stealer             *sticker.Stealer
+	mock                bool
 	writeMu             sync.Mutex
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
@@ -603,7 +604,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						},
 						maxBufferSize,
 					)
-					if engine.GroupCompactor != nil {
+					if engine.GroupCompactor != nil && !conn.mock {
 						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 					}
 				}
@@ -611,7 +612,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 			if runResult.MemoryWritten {
 				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-			} else if strings.TrimSpace(userText) != "" {
+			} else if strings.TrimSpace(userText) != "" && !conn.mock {
 				pendingUserText := userText
 				if event.MessageType == "group" {
 					pendingUserText = formatGroupSpeakerMessage(event, userText)
@@ -648,6 +649,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
+			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
 

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1466,5 +1467,73 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
+	}
+}
+
+func TestAstrBotMockConnection_DoesNotEnqueueExtraction(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是 AstrBot 模拟会话回复",
+				},
+				Usage: &core.Usage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 连接时附带 ?mock=true
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_001",
+		UserID:      "usr_mock_1",
+		SenderName:  "MockUser",
+		Content:     "模拟私聊测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送模拟私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取模拟回复失败: %v", err)
+	}
+
+	var action Action
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("期望 action=send_message, 实际=%s", action.Action)
+	}
+	if action.Content != "这是 AstrBot 模拟会话回复" {
+		t.Fatalf("期望回复内容相符，实际=%s", action.Content)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	sess := engine.SessionManager.GetOrCreate("astrbot:private:usr_mock_1")
+	if sess.PendingTurnCount() != 0 {
+		t.Fatalf("Mock 会话严禁将对话加入记忆提取队列，实际 PendingTurnCount=%d", sess.PendingTurnCount())
 	}
 }

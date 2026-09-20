@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
@@ -17,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -4082,5 +4084,79 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	// 验证整个过程中 LLM 从未被调用（前置 Ingress 拦截）
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
+	}
+}
+
+func TestWS_MockConnection_DoesNotEnqueueExtraction(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是模拟会话回复",
+				},
+				Usage: &core.Usage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 连接时附带 ?mock=true
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := model.OneBotEvent{
+		SelfID:      10000,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      20000,
+		MessageID:   30000,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"模拟私聊测试"}}]`),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送模拟私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取模拟回复失败: %v", err)
+	}
+
+	var action model.OneBotAction
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if action.Action != "send_private_msg" {
+		t.Fatalf("期望 action=send_private_msg, 实际=%s", action.Action)
+	}
+
+	// 自动回复 ACK
+	if action.Echo != "" {
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    action.Echo,
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, ackBytes); err != nil {
+			t.Fatalf("发送 ACK 失败: %v", err)
+		}
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	sess := engine.SessionManager.GetOrCreate("private:20000")
+	if sess.PendingTurnCount() != 0 {
+		t.Fatalf("Mock 会话严禁将对话加入记忆提取队列，实际 PendingTurnCount=%d", sess.PendingTurnCount())
 	}
 }

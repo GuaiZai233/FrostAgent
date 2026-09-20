@@ -217,6 +217,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		}
 		c := newWSConn(conn)
 		c.Scope = a.engine.Scope
+		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
+			c.mock = true
+		}
 		a.registerConn(c)
 		if a.engine.Context().Err() != nil {
 			c.Close()
@@ -274,11 +277,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.MessageType == "group" {
+			if event.MessageType == "group" && !c.mock {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			a.observeStickers(event)
+			if !c.mock {
+				a.observeStickers(event)
+			}
 
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&

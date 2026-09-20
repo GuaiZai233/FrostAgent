@@ -34,6 +34,7 @@ type RunContext struct {
 	Billing             *BillingRunState
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot
+	Mock                bool // Mock / ephemeral session: do not write to persistent memory or group summary
 }
 
 type runContextKey struct{}

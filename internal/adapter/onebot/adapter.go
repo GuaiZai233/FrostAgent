@@ -242,6 +242,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		wsConn := newWSConnection(conn)
 		wsConn.stealer = a.stealer
 		wsConn.Scope = a.engine.Scope
+		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
+			wsConn.mock = true
+		}
 		a.registerConn(wsConn)
 		if a.engine.Context().Err() != nil {
 			wsConn.Close()
@@ -314,11 +317,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.PostType == "message" && event.MessageType == "group" {
+			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			wsConn.observeStickers(event)
+			if !wsConn.mock {
+				wsConn.observeStickers(event)
+			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {

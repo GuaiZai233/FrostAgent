@@ -75,6 +75,7 @@ type wsConn struct {
 	*runtimescope.Scope
 	conn    *websocket.Conn
 	writeMu sync.Mutex
+	mock    bool
 }
 
 func newWSConn(conn *websocket.Conn) *wsConn {
@@ -790,7 +791,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
-				if event.MessageType == "group" {
+				if event.MessageType == "group" && !conn.mock {
 					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
 				}
 			}
@@ -811,6 +812,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
+			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
 
@@ -878,7 +880,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if runResult.MemoryWritten {
 		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
+	} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
 		pendingUserText := userText
 		if event.MessageType == "group" {
 			pendingUserText = formatGroupSpeakerMessage(event, userText)
@@ -899,7 +901,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		})
 	}
 
-	if event.MessageType == "group" {
+	if event.MessageType == "group" && !conn.mock {
 		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
 	}
 }

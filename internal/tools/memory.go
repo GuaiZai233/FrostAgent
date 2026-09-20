@@ -56,6 +56,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 
 			switch params.Action {
 			case "write":
+				if runContext.Mock {
+					return "记忆已记录（模拟会话：断电即丢，不持久化保存）", nil
+				}
 				if params.Content == "" {
 					return "写入记忆需要提供 content 参数", nil
 				}

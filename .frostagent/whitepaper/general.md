@@ -316,6 +316,26 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。以 `DraftServerConfig` 状态为单一事实源（Single Source of Truth），采用状态机词法扫描器（Quote-aware Scanner）在保护 URL 内双斜杠（如 `https://...`）的前提下精准剥除 JSONC 注释与尾随逗号；命令行参数采用原生数组结构（独立 argv 动态输入行），确保含空格、引号与空参数在 Form ↔ `string[]` ↔ JSON 之间 100% 无损可逆，并保证在 JSON 编辑中删减字段时完全重置对应配置为干净初始状态；支持一键识别 Claude Desktop 格式（`mcpServers`）、单服务包裹对象与标准 MCP 配置，提供格式化、一键复制与粘贴校验。
   - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。
 
+### 在线直接对话与协议模拟器 (Direct Chat & Adapter Protocol Simulator)
+
+为了在无需依赖 NapCat、AstrBot 宿主等外部上游客户端的环境下对实例模型大脑与人设对话进行快速联调与回归测试，FrostAgent 提供了纯前端运行的 WebSocket 协议模拟器与在线直接对话子系统：
+
+- **定位与系统边界 (Role & Boundary)**：
+  - **完全绕过上游客户端实现**：控制台前端直接作为标准 WebSocket 客户端，分别连入后端的 `/instances/{id}/ws/onebot` 或 `/instances/{id}/ws/astrbot` 端点；
+  - **协议帧双向仿真**：前端直接对齐 OneBot v11 与 AstrBot 的协议格式，构造入站事件包（`Event`）发送至后端，并监听出站动作包（`Action`）还原对话气泡；
+  - **自动 ACK 确认闭环**：在 OneBot v11 协议中，系统出站消息遵循 `SendActionAndWait` 机制，前端监听并在收到携带 `echo` 的动作帧时立即回传成功确认帧（`{ "status": "ok", "retcode": 0, "echo": action.echo }`），有效避免后端超时或丢弃后续历史记录。
+- **断电全丢与零记忆污染保证 (Ephemeral Sessions & Zero Memory Pollution)**：
+  - **连接级 Mock 标记**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段将底层连接标记为 `mock = true`；
+  - **运行时上下文穿透 (`RunContext.Mock`)**：在消息进入 `reply()` 处理管道时，连接的 `mock` 属性被完整注入至 `llm.RunContext.Mock`，贯穿大模型推理与工具调用生命周期；
+  - **大模型记忆写入拦截**：大模型调用 `memory` 工具（`action == "write"`）时被底层拦截，跳过 `MemoryWriter.WriteByOwner` 持久化，返回提示 `记忆已记录（模拟会话：断电即丢，不持久化保存）`；
+  - **后台任务隔离与跳过**：当连接处于 Mock 模式时，系统显式跳过 `engine.EnqueueExtractionTurn`（不触发长期记忆提取）、跳过 `GroupCompactor.TriggerWithScope` / `captureGroupCompactMessage`（不触发群聊滚动总结落盘）、以及跳过 `stealer.Observe`（不偷取表情包）。会话完全驻留于临时内存中，服务重启或连接断开后完全丢弃，不污染生产存储。
+- **Web 控制台在线对话界面 (Web Dashboard Direct Chat)**：
+  - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；
+  - **多协议与多场景自由切换**：支持在 OneBot v11 与 AstrBot 两大适配器间无缝切换，并支持私聊（Private）与群聊（Group）场景模拟；
+  - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
+  - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
+  - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
+
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)
 
 FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持核心安全不变量（Security Invariant）：**FrostAgent 绝不在宿主机上直接执行任何由大模型生成的任意命令**。
