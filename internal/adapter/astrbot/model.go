@@ -46,7 +46,10 @@ type ActionMessage struct {
 // Action 表示 FrostAgent 发送给 AstrBot 插件的出站动作。
 type Action struct {
 	Type           string            `json:"type"`                      // 默认为 "action"
-	Action         string            `json:"action"`                    // "send_message"
+	Action         string            `json:"action"`                    // "send_message", "noop"
+	SubType        string            `json:"subtype,omitempty"`         // 动作子类型，如 "admin_silent_drop"
+	SuppressLLM    bool              `json:"suppress_llm,omitempty"`    // 是否抑制下游默认 LLM
+	Platform       string            `json:"platform,omitempty"`        // 平台标识 (如 "astrbot", "qq", "telegram", "wechat")
 	SessionID      string            `json:"session_id,omitempty"`      // 目标会话 ID
 	TargetID       string            `json:"target_id,omitempty"`       // 目标群 ID 或用户 ID
 	MessageType    string            `json:"message_type,omitempty"`    // "group" 或 "private"

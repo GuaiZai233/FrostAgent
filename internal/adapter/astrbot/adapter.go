@@ -244,6 +244,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
+
+			if event.MessageType == "group" || event.MessageType == "private" {
+				if handleAdminCommand(c, event, a.engine) {
+					continue
+				}
+			}
+
 			if a.engine != nil && a.engine.Security != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				platform := event.Platform

@@ -39,6 +39,29 @@ class _MessageChain:
         self.chain = chain
 
 
+class Plain:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class At:
+    def __init__(self, qq: str):
+        self.qq = qq
+
+
+class Image:
+    def __init__(self, url: str):
+        self.url = url
+
+    async def convert_to_base64(self) -> str:
+        return base64.b64encode(self.url.encode("utf-8")).decode("ascii")
+
+
+class Reply:
+    def __init__(self, id: str = "", **kwargs):
+        self.id = id
+
+
 def _register(*_args: object, **_kwargs: object):
     return lambda cls: cls
 
@@ -47,6 +70,7 @@ astrbot_module = types.ModuleType("astrbot")
 api_module = types.ModuleType("astrbot.api")
 event_module = types.ModuleType("astrbot.api.event")
 star_module = types.ModuleType("astrbot.api.star")
+components_module = types.ModuleType("astrbot.api.message_components")
 api_module.logger = _Logger()
 event_module.AstrMessageEvent = object
 event_module.MessageChain = _MessageChain
@@ -54,19 +78,27 @@ event_module.filter = _Filter()
 star_module.Context = object
 star_module.Star = _Star
 star_module.register = _register
+components_module.At = At
+components_module.Image = Image
+components_module.Plain = Plain
+components_module.Reply = Reply
 astrbot_module.api = api_module
 api_module.event = event_module
 api_module.star = star_module
+api_module.message_components = components_module
 sys.modules["astrbot"] = astrbot_module
 sys.modules["astrbot.api"] = api_module
 sys.modules["astrbot.api.event"] = event_module
 sys.modules["astrbot.api.star"] = star_module
+sys.modules["astrbot.api.message_components"] = components_module
 sys.modules["websockets"] = types.ModuleType("websockets")
 
 adapter_module = importlib.import_module(
     "adapters.astrbot_plugin_frostagent.main"
 )
 FrostAgentAdapter = adapter_module.FrostAgentAdapter
+FrostAgentWSClient = adapter_module.FrostAgentWSClient
+Settings = adapter_module.Settings
 load_settings = adapter_module.load_settings
 
 
@@ -119,19 +151,6 @@ class SettingsTest(unittest.TestCase):
         self.assertIsNone(adapter._configuration_error)
         self.assertIs(adapter._init_task, created_task)
         create_task.assert_called_once()
-
-
-class At:
-    def __init__(self, qq: str):
-        self.qq = qq
-
-
-class Image:
-    def __init__(self, url: str):
-        self.url = url
-
-    async def convert_to_base64(self) -> str:
-        return base64.b64encode(self.url.encode("utf-8")).decode("ascii")
 
 
 class FakeEvent:
@@ -325,6 +344,99 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, [])
         self.assertFalse(event.call_llm)
         self.assertEqual(event.should_call_llm_calls, [])
+
+    async def test_admin_silent_drop_noop_suppresses_default_llm(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True)
+        adapter.client = FakeClient([
+            {
+                "action": "noop",
+                "subtype": "admin_silent_drop",
+                "suppress_llm": True,
+            }
+        ])
+        event = FakeEvent(group_id="group_test", content="[@bot] /reset")
+
+        results = [
+            result async for result in adapter.forward_to_frostagent(event)
+        ]
+
+        self.assertEqual(results, [])
+        self.assertTrue(event.call_llm)
+        self.assertEqual(event.should_call_llm_calls, [True])
+
+
+class FakeContext:
+    def __init__(self) -> None:
+        self.sent_messages: list[tuple[str, Any]] = []
+
+    async def send_message(self, umo: str, chain: Any) -> None:
+        self.sent_messages.append((umo, chain))
+
+
+class ProactiveActionDispatchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_proactive_dispatch_platform_and_umo(self) -> None:
+        fake_context = FakeContext()
+        settings = Settings(
+            ws_url="ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+            http_base_url="http://127.0.0.1:8080",
+            forward_all_group_messages=True,
+            heartbeat_interval=30,
+            reconnect_interval=5,
+        )
+        client = FrostAgentWSClient(settings, context=fake_context)
+
+        # 1. Group action with explicit platform -> {platform}:GroupMessage:{group_id}
+        await client._dispatch_proactive_action({
+            "action": "send_message",
+            "platform": "telegram",
+            "message_type": "group",
+            "group_id": "tg_123",
+            "content": "tg group reply",
+        })
+        self.assertEqual(len(fake_context.sent_messages), 1)
+        umo, chain = fake_context.sent_messages[0]
+        self.assertEqual(umo, "telegram:GroupMessage:tg_123")
+        self.assertEqual(len(chain.chain), 1)
+        self.assertEqual(chain.chain[0].text, "tg group reply")
+
+        # 2. Private action with explicit platform -> {platform}:FriendMessage:{user_id}
+        await client._dispatch_proactive_action({
+            "action": "send_message",
+            "platform": "discord",
+            "message_type": "private",
+            "user_id": "disc_456",
+            "content": "discord private reply",
+        })
+        self.assertEqual(len(fake_context.sent_messages), 2)
+        umo, chain = fake_context.sent_messages[1]
+        self.assertEqual(umo, "discord:FriendMessage:disc_456")
+        self.assertEqual(chain.chain[0].text, "discord private reply")
+
+        # 3. Group action with fallback platform -> astrbot:GroupMessage:{group_id}
+        await client._dispatch_proactive_action({
+            "action": "send_message",
+            "platform": "",
+            "message_type": "group",
+            "group_id": "grp_789",
+            "content": "fallback group reply",
+        })
+        self.assertEqual(len(fake_context.sent_messages), 3)
+        umo, chain = fake_context.sent_messages[2]
+        self.assertEqual(umo, "astrbot:GroupMessage:grp_789")
+
+        # 4. Private action with fallback platform -> astrbot:FriendMessage:{user_id}
+        await client._dispatch_proactive_action({
+            "action": "send_message",
+            "platform": "",
+            "message_type": "private",
+            "user_id": "user_101",
+            "content": "fallback private reply",
+        })
+        self.assertEqual(len(fake_context.sent_messages), 4)
+        umo, chain = fake_context.sent_messages[3]
+        self.assertEqual(umo, "astrbot:FriendMessage:user_101")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,8 @@ func NewReflectionManager(reflector *Reflector) *ReflectionManager {
 
 // Start launches reflection and returns immediately. An empty owner means all
 // owners; otherwise only that owner's memories are processed.
-func (m *ReflectionManager) Start(owner string) (ReflectionStatus, bool, error) {
+// Optional onComplete callbacks are invoked upon task completion with the result error.
+func (m *ReflectionManager) Start(owner string, onComplete ...func(err error)) (ReflectionStatus, bool, error) {
 	if m == nil || m.reflector == nil || !m.reflector.Available() {
 		return ReflectionStatus{}, false, fmt.Errorf("memory reflection is not configured")
 	}
@@ -53,7 +54,7 @@ func (m *ReflectionManager) Start(owner string) (ReflectionStatus, bool, error) 
 	status := m.status
 	m.mu.Unlock()
 
-	if !m.Go(func() { m.run(owner) }) {
+	if !m.Go(func() { m.run(owner, onComplete...) }) {
 		m.mu.Lock()
 		m.status.Running = false
 		m.mu.Unlock()
@@ -72,7 +73,7 @@ func (m *ReflectionManager) Status() ReflectionStatus {
 	return m.status
 }
 
-func (m *ReflectionManager) run(owner string) {
+func (m *ReflectionManager) run(owner string, onComplete ...func(err error)) {
 	ctx := m.Context()
 	var err error
 	if owner == "" {
@@ -90,6 +91,12 @@ func (m *ReflectionManager) run(owner string) {
 		m.status.LastError = ""
 	}
 	m.mu.Unlock()
+
+	for _, cb := range onComplete {
+		if cb != nil {
+			cb(err)
+		}
+	}
 
 	if err != nil {
 		m.Log().Error(logs.SYSTEM, fmt.Sprintf("后台记忆反思失败: %v", err))
