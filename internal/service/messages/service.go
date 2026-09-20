@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -258,16 +259,59 @@ func parseAttachmentType(t string) (core.AttachmentType, bool) {
 }
 
 func validateAttachment(att core.Attachment) error {
-	if att.URL == "" {
-		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
-	}
 	if att.Type == core.AttachmentTypeFile {
 		return errors.New("attachment type 'file' is unsupported: file attachments are currently unsupported for outbound delivery")
 	}
 	if att.Type != core.AttachmentTypeImage && att.Type != core.AttachmentTypeAudio && att.Type != core.AttachmentTypeVideo {
 		return fmt.Errorf("unsupported attachment type %q", att.Type)
 	}
-	return nil
+	return validateAttachmentURL(att.URL)
+}
+
+func validateAttachmentURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+
+	lower := strings.ToLower(rawURL)
+	// Reject file: scheme (e.g. file:///etc/passwd, file://localhost/..., file:c:/...)
+	if strings.HasPrefix(lower, "file:") || strings.HasPrefix(lower, "file/") {
+		return fmt.Errorf("insecure attachment url %q: file:// scheme is forbidden", rawURL)
+	}
+
+	// Reject Windows drive paths (e.g. C:\... or C:/...)
+	if len(rawURL) >= 2 && rawURL[1] == ':' && ((rawURL[0] >= 'a' && rawURL[0] <= 'z') || (rawURL[0] >= 'A' && rawURL[0] <= 'Z')) {
+		return fmt.Errorf("insecure attachment url %q: local drive path is forbidden", rawURL)
+	}
+
+	// Reject UNC paths (\\...) or protocol-relative network paths (//...)
+	if strings.HasPrefix(rawURL, `\\`) || strings.HasPrefix(rawURL, "//") {
+		return fmt.Errorf("insecure attachment url %q: UNC or network path without scheme is forbidden", rawURL)
+	}
+
+	// Reject bare unix absolute/relative local paths
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, ".") {
+		return fmt.Errorf("insecure attachment url %q: local path without scheme is forbidden", rawURL)
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid attachment url %q: %w", rawURL, err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("insecure attachment url %q: missing host", rawURL)
+		}
+		return nil
+	case "base64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported attachment url scheme %q: only http, https, and base64 are allowed", scheme)
+	}
 }
 
 func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMessage, error) {

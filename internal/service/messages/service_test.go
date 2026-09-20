@@ -679,3 +679,175 @@ func TestService_RejectPathOnlyAndFile(t *testing.T) {
 		t.Fatalf("expected requires valid url error, got: %s", w.Body.String())
 	}
 }
+
+func TestService_SchemeAllowlist_RejectInsecureURLs(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	insecureURLs := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "file scheme unix passwd in messages array",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "file:///etc/passwd"}]
+			}`,
+		},
+		{
+			name: "file scheme windows drive in messages array",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "file:///C:/Windows/win.ini"}]
+			}`,
+		},
+		{
+			name: "file scheme in canonical attachments array",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"attachments": [{"type": "image", "url": "file:///etc/shadow"}]
+			}`,
+		},
+		{
+			name: "file scheme in top level compatibility fields",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"type": "image",
+				"url": "file:///etc/hosts"
+			}`,
+		},
+		{
+			name: "bare windows drive path with backslashes",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "C:\\Windows\\System32\\drivers\\etc\\hosts"}]
+			}`,
+		},
+		{
+			name: "bare windows drive path with forward slashes",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "C:/Windows/win.ini"}]
+			}`,
+		},
+		{
+			name: "bare unix absolute path in url",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "/etc/passwd"}]
+			}`,
+		},
+		{
+			name: "bare relative path in url",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "./relative/image.png"}]
+			}`,
+		},
+		{
+			name: "UNC path with backslashes",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "\\\\attacker-smb\\share\\fox.png"}]
+			}`,
+		},
+		{
+			name: "protocol-relative network path",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "//attacker.com/leak.png"}]
+			}`,
+		},
+		{
+			name: "unsupported scheme ftp",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "ftp://attacker.com/fox.png"}]
+			}`,
+		},
+		{
+			name: "unsupported scheme javascript",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "javascript:alert(1)"}]
+			}`,
+		},
+		{
+			name: "http scheme missing host",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "http:///no-host"}]
+			}`,
+		},
+	}
+
+	for _, tc := range insecureURLs {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", tc.payload)
+			w := httptest.NewRecorder()
+			svc.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 Bad Request for %s, got %d: %s", tc.name, w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// Verify allowed schemes: https, http, base64 succeed
+	validPayloads := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "valid https url",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "https://example.com/fox.png"}]
+			}`,
+		},
+		{
+			name: "valid http url",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "http://example.com/fox.png"}]
+			}`,
+		},
+		{
+			name: "valid base64 scheme",
+			payload: `{
+				"platform": "mock_platform",
+				"target_id": "grp_888",
+				"messages": [{"type": "image", "url": "base64://iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]
+			}`,
+		},
+	}
+
+	for _, tc := range validPayloads {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", tc.payload)
+			w := httptest.NewRecorder()
+			svc.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200 OK for %s, got %d: %s", tc.name, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+

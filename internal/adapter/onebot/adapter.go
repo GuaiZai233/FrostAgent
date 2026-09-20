@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,11 +135,11 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		})
 	}
 	for _, att := range msg.Attachments {
+		if err := validateOutboundMediaURL(att.URL); err != nil {
+			return fmt.Errorf("onebot: %w", err)
+		}
 		switch att.Type {
 		case core.AttachmentTypeImage:
-			if att.URL == "" {
-				return fmt.Errorf("onebot: image attachment requires url (local path without url is unsupported)")
-			}
 			data := map[string]any{"file": att.URL}
 			if att.SubType == 1 {
 				data["sub_type"] = 1
@@ -149,17 +150,11 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 				Data: data,
 			})
 		case core.AttachmentTypeAudio:
-			if att.URL == "" {
-				return fmt.Errorf("onebot: audio attachment requires url (local path without url is unsupported)")
-			}
 			segments = append(segments, tools.OneBotSegment{
 				Type: "record",
 				Data: map[string]any{"file": att.URL},
 			})
 		case core.AttachmentTypeVideo:
-			if att.URL == "" {
-				return fmt.Errorf("onebot: video attachment requires url (local path without url is unsupported)")
-			}
 			segments = append(segments, tools.OneBotSegment{
 				Type: "video",
 				Data: map[string]any{"file": att.URL},
@@ -438,3 +433,43 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) 
 	}
 	return false
 }
+
+func validateOutboundMediaURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+
+	lower := strings.ToLower(rawURL)
+	if strings.HasPrefix(lower, "file:") || strings.HasPrefix(lower, "file/") {
+		return fmt.Errorf("insecure media url %q: file:// scheme is forbidden", rawURL)
+	}
+	if len(rawURL) >= 2 && rawURL[1] == ':' && ((rawURL[0] >= 'a' && rawURL[0] <= 'z') || (rawURL[0] >= 'A' && rawURL[0] <= 'Z')) {
+		return fmt.Errorf("insecure media url %q: local drive path is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, `\\`) || strings.HasPrefix(rawURL, "//") {
+		return fmt.Errorf("insecure media url %q: UNC or network path without scheme is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, ".") {
+		return fmt.Errorf("insecure media url %q: local path without scheme is forbidden", rawURL)
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid media url %q: %w", rawURL, err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("insecure media url %q: missing host", rawURL)
+		}
+		return nil
+	case "base64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
+	}
+}
+

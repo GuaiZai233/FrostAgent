@@ -356,4 +356,30 @@ func TestAdapterSend_OutboundContract(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty message, got nil")
 	}
+
+	// 8. Insecure URLs (file://, local path, UNC, ftp) -> returns error
+	insecureMediaURLs := []string{
+		"file:///etc/passwd",
+		"file:///C:/Windows/win.ini",
+		"C:\\Windows\\System32\\drivers\\etc\\hosts",
+		"C:/Windows/win.ini",
+		"/etc/passwd",
+		"./local.png",
+		"\\\\attacker\\share\\fox.png",
+		"//attacker.com/fox.png",
+		"ftp://attacker.com/fox.png",
+		"http:///no-host",
+	}
+	for _, rawURL := range insecureMediaURLs {
+		err = adapter.Send(ctx, core.OutgoingMessage{
+			TargetID:    "usr_456",
+			MessageType: "private",
+			Attachments: []core.Attachment{
+				{Type: core.AttachmentTypeImage, URL: rawURL},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected error for insecure media URL %q, got nil", rawURL)
+		}
+	}
 }
