@@ -405,7 +405,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **自动 ACK 确认闭环**：在 OneBot v11 协议中，系统出站消息遵循 `SendActionAndWait` 机制，前端监听并在收到携带 `echo` 的动作帧时立即回传成功确认帧（`{ "status": "ok", "retcode": 0, "echo": action.echo }`），有效避免后端超时或丢弃后续历史记录。
 - **断电全丢与零持久化污染保证 (Zero Durable Mutation & Complete Session Isolation)**：
   - **连接级 Mock 标记与代际隔离 (Namespace Isolation)**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段为连接生成独立代际标识（`generation`）并标记 `mock = true`。所有入站事件生成的 Session ID 自动前缀隔离命名空间 `mock:<generation>:<baseKey>`，彻底杜绝模拟会话与生产真实用户/群聊会话混合；
-  - **断开连接自动生命周期清理与在途并发同步 (Disconnect Lifecycle Cleanup & In-Flight Barrier)**：每个连接维护独立的 `inFlight sync.WaitGroup`、可取消的上下文 `ctx` 与线程安全的 `mockSessions sync.Map`。在连接关闭或断开时，系统首先取消该连接的在途上下文并等待所有执行中的消息处理协程安全退出（`inFlight.Wait()`），随后通过 `defer` 屏障遍历注销并从 `engine.SessionManager` 中彻底删除所有关联的临时会话，杜绝在途协程复活已删除会话（No Session Resurrection）；同时对所有生成的 Mock 会话调用 `SandboxBackend.Release()` 释放沙箱容器及文件系统资源，真正实现会话与沙箱级的“断电全丢”；
+  - **断开连接自动生命周期清理与在途并发同步 (Disconnect Lifecycle Cleanup & In-Flight Barrier)**：每个连接维护独立的 `inFlight sync.WaitGroup`、继承自 `Scope.Context()` 的可取消上下文 `ctx` 与线程安全的 `mockSessions sync.Map`。在连接关闭或断开时，系统首先调用 `cancel()` 取消连接上下文（无论是否为 Mock 连接，均能使在途 `SendActionAndWait` 立即感知取消而退出，杜绝 10 秒超时挂起；对 Mock 连接亦可中断在途 LLM 推理），并等待所有执行中的消息处理协程安全退出（`inFlight.Wait()`），随后通过 `defer` 屏障遍历注销并从 `engine.SessionManager` 中彻底删除所有关联的临时会话，杜绝在途协程复活已删除会话（No Session Resurrection）；同时对所有生成的 Mock 会话调用 `SandboxBackend.Release()` 释放沙箱容器及文件系统资源，真正实现会话与沙箱级的“断电全丢”；
   - **运行时上下文穿透 (`RunContext.Mock`)**：在消息进入 `reply()` 处理管道时，连接的 `mock` 属性被完整注入至 `llm.RunContext.Mock`，贯穿大模型推理与工具调用生命周期；
   - **只读记忆召回与元数据零修改 (Read-Only Recall & Mutation Guarding)**：允许大模型在模拟会话中检索长期记忆库以保持逼真的人设问答上下文，但严格拦截元数据写入。系统在 `RecordRecall` 阶段校验 `!runContext.Mock`，禁止更新 `access_count` 与 `updated_at`；同时在 `memory.reflect` 反思重构工具中显式拦截（返回 `模拟会话模式下禁用记忆反思重构`）；大模型调用 `memory.write` 时拦截持久化写入并返回模拟提示；
   - **安全审查 Dry-Run 模式 (Security Dry-Run Mode)**：在 `mock=true` 模式下，安全控制器调用 `GateIngressDryRun`、`EvaluateDryRun` 及 `EvaluateContextDryRun`，在 `mock` 独立平台上评估输入风险并按需阻断；同时在 `internal/llm/security_gate.go::securityBlocks()` 统一收口处根据 `run.Mock` 路由至 `Watchdog.EvaluateDryRun`，统一覆盖模型输出、工具参数与工具执行结果的安全校验；严禁向 `security_access.json` 累加违规次数（Strikes）、严禁锁定生产 Principal、严禁向 `security_audit.jsonl` 追加持久化审计事件，防止调试测试导致真实账号受罚或污染生产审计日志；
@@ -443,7 +443,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
   - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
-  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；
+  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；当沙箱在运行时被禁用时，`Release()` 仍会对已缓存的实例执行尽力而为（Best-effort）的会话清理释放，防止容器与文件系统资源泄漏；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
   - `execute_command` 工具常驻注册于 `ToolRegistry`；当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，工具在被模型调用时明确返回友好提示（“沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。”），避免弱模型因缺失工具而产生幻觉虚构执行结果；
