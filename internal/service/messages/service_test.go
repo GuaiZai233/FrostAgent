@@ -303,3 +303,128 @@ func TestService_DispatchFailure(t *testing.T) {
 		t.Fatalf("expected 502 Bad Gateway, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestService_MessageTypeValidation(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// 1. Invalid message_type at top level must return 400 Bad Request
+	bodyInvalidTop := `{"platform":"mock_platform","message_type":"groupp","target_id":"123","content":"hi"}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyInvalidTop)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for misspelled message_type, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Invalid message_type in messages array must return 400 Bad Request
+	bodyInvalidArr := `{"platform":"mock_platform","target_id":"123","messages":[{"message_type":"user","content":"hi"}]}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyInvalidArr)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid message_type in messages array, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Invalid message_type in session string must return 400 Bad Request
+	bodyInvalidSess := `{"session":"mock_platform:other:123","content":"hi"}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyInvalidSess)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid message_type in session string, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. Valid private message_type must succeed
+	bodyPrivate := `{"platform":"mock_platform","message_type":"private","target_id":"user_456","content":"secret"}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyPrivate)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for valid private message_type, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last := adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if last.MessageType != "private" {
+		t.Fatalf("expected MessageType 'private', got %q", last.MessageType)
+	}
+
+	// 5. Valid group message_type must succeed
+	bodyGroup := `{"platform":"mock_platform","message_type":"group","target_id":"grp_789","content":"hello group"}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyGroup)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for valid group message_type, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last = adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if last.MessageType != "group" {
+		t.Fatalf("expected MessageType 'group', got %q", last.MessageType)
+	}
+}
+
+func TestService_ImageUrlCompatibility(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// 1. AstrBot image_url segment inside messages array
+	bodyArr := `{
+		"session": "mock_platform:group:grp_888",
+		"messages": [
+			{"type": "image_url", "url": "https://example.com/cat.png"}
+		]
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyArr)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for image_url payload, got %d: %s", w.Code, w.Body.String())
+	}
+
+	adapter.mu.Lock()
+	last := adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(last.Attachments))
+	}
+	if last.Attachments[0].Type != core.AttachmentTypeImage {
+		t.Fatalf("expected AttachmentTypeImage, got %q", last.Attachments[0].Type)
+	}
+	if last.Attachments[0].URL != "https://example.com/cat.png" {
+		t.Fatalf("expected URL 'https://example.com/cat.png', got %q", last.Attachments[0].URL)
+	}
+
+	// 2. Top-level image_url payload
+	bodyTop := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"type": "image_url",
+		"url": "https://example.com/dog.png"
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyTop)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for top-level image_url payload, got %d: %s", w.Code, w.Body.String())
+	}
+
+	adapter.mu.Lock()
+	last = adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(last.Attachments))
+	}
+	if last.Attachments[0].Type != core.AttachmentTypeImage {
+		t.Fatalf("expected AttachmentTypeImage, got %q", last.Attachments[0].Type)
+	}
+	if last.Attachments[0].URL != "https://example.com/dog.png" {
+		t.Fatalf("expected URL 'https://example.com/dog.png', got %q", last.Attachments[0].URL)
+	}
+}

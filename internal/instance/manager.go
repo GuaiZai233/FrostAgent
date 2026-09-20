@@ -12,12 +12,14 @@ import (
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -1068,14 +1070,16 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	id := parts[0]
+	m.serveInstance(w, r, parts[0], "/"+parts[1])
+}
+
+func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path string) {
 	i, err := m.lookup(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	id = i.id
-	path := "/" + parts[1]
 	ws := strings.HasPrefix(path, "/ws/")
 	stream := strings.HasSuffix(path, "/StreamLogs")
 	readOnly := r.Method == "GET"
@@ -1117,7 +1121,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if (ws || stream) && rt.Scope.Context().Err() != nil {
+	if (ws || stream || path == "/api/v1/messages/send") && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}
@@ -1164,21 +1168,57 @@ func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Reques
 		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
 	}
 
-	m.mu.RLock()
-	var selectedManaged *managed
+	if targetInstanceID == "" && r.Body != nil && r.Method == http.MethodPost {
+		bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to read request body: " + err.Error()})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var peek struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := json.Unmarshal(bodyBytes, &peek); err == nil {
+			targetInstanceID = strings.TrimSpace(peek.InstanceID)
+		}
+	}
+
 	if targetInstanceID != "" {
-		selectedManaged = m.instances[targetInstanceID]
-	} else {
-		for _, info := range m.registry.Instances {
-			if info.Enabled && m.instances[info.ID] != nil && m.instances[info.ID].runtime != nil {
-				selectedManaged = m.instances[info.ID]
+		if _, err := m.lookup(targetInstanceID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("instance %q not found", targetInstanceID),
+			})
+			return
+		}
+		m.serveInstance(w, r, targetInstanceID, "/api/v1/messages/send")
+		return
+	}
+
+	m.mu.RLock()
+	var selectedID string
+	for _, info := range m.registry.Instances {
+		if info.Enabled && m.instances[info.ID] != nil {
+			m.instances[info.ID].mu.RLock()
+			hasRuntime := m.instances[info.ID].runtime != nil
+			m.instances[info.ID].mu.RUnlock()
+			if hasRuntime {
+				selectedID = info.ID
 				break
 			}
 		}
-		if selectedManaged == nil {
-			for _, info := range m.registry.Instances {
-				if m.instances[info.ID] != nil && m.instances[info.ID].runtime != nil {
-					selectedManaged = m.instances[info.ID]
+	}
+	if selectedID == "" {
+		for _, info := range m.registry.Instances {
+			if m.instances[info.ID] != nil {
+				m.instances[info.ID].mu.RLock()
+				hasRuntime := m.instances[info.ID].runtime != nil
+				m.instances[info.ID].mu.RUnlock()
+				if hasRuntime {
+					selectedID = info.ID
 					break
 				}
 			}
@@ -1186,14 +1226,14 @@ func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Reques
 	}
 	m.mu.RUnlock()
 
-	if selectedManaged == nil || selectedManaged.runtime == nil {
+	if selectedID == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle message send"})
 		return
 	}
 
-	selectedManaged.runtime.Handler.ServeHTTP(w, r)
+	m.serveInstance(w, r, selectedID, "/api/v1/messages/send")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

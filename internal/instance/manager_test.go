@@ -1648,6 +1648,70 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 	}
 }
 
+func TestDefaultSendMessage_RoutingAndLifecycle(t *testing.T) {
+	t.Setenv("FROSTAGENT_API_KEY", "test-auth-token-xyz")
+	m := testManager(t)
+	inst1 := create(t, m, "msg-inst-1")
+	if err := m.Enable(inst1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	inst2 := create(t, m, "msg-inst-2")
+	if err := m.Enable(inst2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	sendReq := func(queryID, headerID, bodyJSON string) *httptest.ResponseRecorder {
+		url := "/api/v1/messages/send"
+		if queryID != "" {
+			url += "?instance_id=" + queryID
+		}
+		req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(bodyJSON))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+		if headerID != "" {
+			req.Header.Set("X-Instance-ID", headerID)
+		}
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. Route via body instance_id to inst2
+	bodyInst2 := fmt.Sprintf(`{"instance_id":%q,"platform":"onebot","target_id":"12345","content":"hi"}`, inst2.ID)
+	w := sendReq("", "", bodyInst2)
+	// Because no ws connection is attached to inst2's onebot adapter, dispatch fails with 502 Bad Gateway
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway from adapter dispatch, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "onebot") {
+		t.Fatalf("expected onebot adapter error in body, got: %s", w.Body.String())
+	}
+
+	// 2. Non-existent instance in body -> 404 Not Found
+	w = sendReq("", "", `{"instance_id":"00000000","platform":"onebot","target_id":"12345","content":"hi"}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent instance, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Lifecycle gate test: when instance op lock is held, requests to that instance must be rejected with 409 Busy
+	item2 := m.instances[inst2.ID]
+	item2.op.Lock()
+	w = sendReq(inst2.ID, "", `{"platform":"onebot","target_id":"12345","content":"hi"}`)
+	item2.op.Unlock()
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict when instance is busy, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. When instance is disabled, it should not accept messages
+	if err := m.Enable(inst2.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	w = sendReq(inst2.ID, "", `{"platform":"onebot","target_id":"12345","content":"hi"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for disabled instance, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {
 	m := testManager(t)
 	inst := create(t, m, "race-dialogue")

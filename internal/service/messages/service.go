@@ -50,8 +50,12 @@ type SendMessageRequest struct {
 	Metadata    map[string]any         `json:"metadata,omitempty"`
 
 	// Element compatibility fields at top-level
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type          string `json:"type,omitempty"`
+	Text          string `json:"text,omitempty"`
+	URL           string `json:"url,omitempty"`
+	Path          string `json:"path,omitempty"`
+	MentionUserID string `json:"mention_user_id,omitempty"`
+	MessageID     string `json:"message_id,omitempty"`
 }
 
 // SendMessageResponse represents the JSON response returned upon successful message dispatch.
@@ -76,7 +80,12 @@ func New(dispatcher core.MessageDispatcher, instanceID string, getenv func(strin
 	return &Service{
 		dispatcher: dispatcher,
 		instanceID: instanceID,
-		getenv:     getenv,
+		getenv: func(k string) string {
+			if v := getenv(k); v != "" {
+				return v
+			}
+			return os.Getenv(k)
+		},
 	}
 }
 
@@ -235,6 +244,10 @@ func parseSession(session string) (platform, msgType, targetID string) {
 	return "", "", ""
 }
 
+func isValidMessageType(t string) bool {
+	return t == "group" || t == "private"
+}
+
 func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMessage, error) {
 	// Parse session format if present: "platform:message_type:target_id"
 	sessPlatform, sessMsgType, sessTargetID := parseSession(req.Session)
@@ -258,9 +271,16 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		}
 
 		attachments := req.Attachments
-		if (req.Type == "image" || req.Type == "file" || req.Type == "video" || req.Type == "audio") && len(attachments) == 0 {
+		if (req.Type == "image" || req.Type == "image_url" || req.Type == "file" || req.Type == "video" || req.Type == "audio") && len(attachments) == 0 {
 			attType := core.AttachmentType(req.Type)
-			attachments = append(attachments, core.Attachment{Type: attType})
+			if req.Type == "image_url" {
+				attType = core.AttachmentType("image")
+			}
+			attachments = append(attachments, core.Attachment{
+				Type: attType,
+				URL:  req.URL,
+				Name: req.Path,
+			})
 		}
 
 		if strings.TrimSpace(content) == "" && len(attachments) == 0 {
@@ -279,6 +299,9 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		}
 		if msgType == "" {
 			msgType = "group"
+		}
+		if !isValidMessageType(msgType) {
+			return nil, fmt.Errorf("invalid message_type %q: must be 'group' or 'private'", msgType)
 		}
 
 		return []core.OutgoingMessage{
@@ -307,6 +330,9 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		if msgType == "" {
 			msgType = "group"
 		}
+		if !isValidMessageType(msgType) {
+			return nil, fmt.Errorf("message[%d]: invalid message_type %q: must be 'group' or 'private'", i, msgType)
+		}
 
 		targetID := strings.TrimSpace(msg.TargetID)
 		if targetID == "" {
@@ -319,10 +345,14 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		}
 
 		attachments := msg.Attachments
-		if msg.Type == "image" || msg.Type == "file" || msg.Type == "video" || msg.Type == "audio" {
-			if msg.URL != "" || msg.Path != "" {
+		if msg.Type == "image" || msg.Type == "image_url" || msg.Type == "file" || msg.Type == "video" || msg.Type == "audio" {
+			if msg.URL != "" || msg.Path != "" || len(attachments) == 0 {
+				attType := core.AttachmentType(msg.Type)
+				if msg.Type == "image_url" {
+					attType = core.AttachmentType("image")
+				}
 				attachments = append(attachments, core.Attachment{
-					Type: core.AttachmentType(msg.Type),
+					Type: attType,
 					URL:  msg.URL,
 					Name: msg.Path,
 				})
