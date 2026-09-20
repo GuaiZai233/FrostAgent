@@ -88,6 +88,12 @@ type wsConnection struct {
 	conn                *websocket.Conn
 	generation          string
 	stealer             *sticker.Stealer
+	mock                bool
+	mockSessions        sync.Map
+	inFlight            sync.WaitGroup
+	closed              atomic.Bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
 	writeMu             sync.Mutex
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
@@ -102,11 +108,23 @@ type wsConnection struct {
 	nextGroupEcho       uint64
 }
 
-func newWSConnection(conn *websocket.Conn) *wsConnection {
+func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
 	gen := fmt.Sprintf("onebot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
+	parentCtx := context.Background()
+	var scope *runtimescope.Scope
+	if len(scopes) > 0 && scopes[0] != nil {
+		scope = scopes[0]
+		if scope.Context() != nil {
+			parentCtx = scope.Context()
+		}
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	return &wsConnection{
+		Scope:              scope,
 		conn:               conn,
 		generation:         gen,
+		ctx:                ctx,
+		cancel:             cancel,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
@@ -115,16 +133,38 @@ func newWSConnection(conn *websocket.Conn) *wsConnection {
 	}
 }
 
+func (c *wsConnection) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	return c.closed.Load()
+}
+
+func (c *wsConnection) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
 func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
-		return fmt.Errorf("websocket connection is nil")
+	if c.conn == nil || c.isClosed() {
+		return fmt.Errorf("websocket connection is closed")
 	}
 	return c.conn.WriteMessage(messageType, data)
 }
 
 func (c *wsConnection) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		if c.cancel != nil {
+			c.cancel()
+		}
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -142,9 +182,32 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 
 // processEvent holds its reserved session turn until routing and reply finish.
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
+	var startEpoch uint64
 	if turn != nil {
+		startEpoch = turn.Epoch()
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						return
+					}
+				}
+			}
+		}
+	} else if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
+	}
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
 	}
 	if event.PostType != "message" {
 		return
@@ -172,8 +235,15 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if !wakeSignals.Any() && !replyContext.MentionsBot {
 			return
 		}
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+					return
+				}
+			}
+		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -187,16 +257,34 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		)
 		replyContext := conn.lookupReplyContext(event)
 		conn.observeResolvedReply(event, replyContext)
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+					return
+				}
+			}
+		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	routeScope := oneBotRouteScope(event)
 	if routeSnapshot == nil && engine != nil && engine.ModelRouter != nil {
 		routeSnapshot = engine.ModelRouter.Snapshot()
+	}
+	securityPlatform := "onebot"
+	if conn.mock {
+		securityPlatform = "mock"
+	}
+	evalCtx := engine.Security.EvaluateContext
+	if conn.mock {
+		evalCtx = engine.Security.EvaluateContextDryRun
 	}
 	routeCtx := runtimescope.WithContext(engine.Context(), engine.Scope)
 	if engine != nil && engine.ModelRouter != nil {
@@ -216,8 +304,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
 
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
+		}
+	}
+
 	// Fast-fail once before downloading or processing either current or quoted images.
-	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled {
+	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
 		bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 		bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
 		bCancel()
@@ -245,11 +341,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
 				if engine != nil && engine.Security != nil {
-					principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+					principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 					if pErr == nil {
-						decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 							Instance: engine.InstanceID,
-							Session:  historyKey(event),
+							Session: conn.historyKey(event),
 						})
 						if security.Blocks(decision.Action) {
 							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述包含高风险内容，已被安全机制隔离剔除: %s", event.UserID, decision.Reason))
@@ -267,11 +363,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		imageDesc := content.ProcessImage(routeCtx, replyContext.Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 		if imageDesc != "" {
 			if engine != nil && engine.Security != nil {
-				principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 				if pErr == nil {
-					decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+					decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session:  historyKey(event),
+						Session: conn.historyKey(event),
 					})
 					if security.Blocks(decision.Action) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
@@ -282,6 +378,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		if imageDesc != "" {
 			replyContext.addImageDescription(imageDesc, engine.Scope)
+		}
+	}
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
 		}
 	}
 
@@ -309,11 +413,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		contextMap["group_id"] = event.GroupID
 		if groupName := conn.groupName(event.GroupID); groupName != "" {
 			if engine != nil && engine.Security != nil {
-				principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 				if pErr == nil {
-					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+					decision := evalCtx(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session:  historyKey(event),
+						Session: conn.historyKey(event),
 					})
 					if security.Blocks(decision.Action) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
@@ -351,12 +455,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if sender := senderContext(event); len(sender) > 0 {
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
 				if nickname, ok := sender["nickname"].(string); ok && nickname != "" {
-					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
+					decision := evalCtx(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session:  historyKey(event),
+						Session: conn.historyKey(event),
 					})
 					if security.Blocks(decision.Action) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者昵称 [%s] 包含高风险内容，已被安全机制隔离剔除", nickname))
@@ -364,9 +468,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 				}
 				if card, ok := sender["card"].(string); ok && card != "" {
-					decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, card, security.AuditEvent{
+					decision := evalCtx(principal, security.SourcePlatformMeta, card, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session:  historyKey(event),
+						Session: conn.historyKey(event),
 					})
 					if security.Blocks(decision.Action) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者群名片 [%s] 包含高风险内容，已被安全机制隔离剔除", card))
@@ -384,7 +488,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
-		session = engine.SessionManager.GetOrCreate(historyKey(event))
+		if conn != nil && conn.mock && conn.isClosed() {
+			return
+		}
+		session = engine.SessionManager.GetOrCreate(conn.historyKey(event))
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -419,11 +529,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  historyKey(event),
+					Session: conn.historyKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
@@ -441,11 +551,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if recentContext := llm.FormatRecentGroupMessagesContext(groupSnapshot.RecentStructuredMessages); recentContext != "" {
 		vettedRecent := recentContext
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  historyKey(event),
+					Session: conn.historyKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
@@ -464,11 +574,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if replyContext.Prompt != "" {
 		vettedReply := replyContext.Prompt
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceUserQuote, replyContext.Prompt, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceUserQuote, replyContext.Prompt, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  historyKey(event),
+					Session: conn.historyKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
@@ -496,7 +606,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if engine != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
 			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
 				Platform:      "qq",
@@ -527,7 +637,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
 				return fmt.Errorf("解析 send_message 结果失败: %w", err)
 			}
-			if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+			if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
 				engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("SendHook: 引用消息校验未通过: %v", err))
 				return err
 			}
@@ -549,7 +659,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				},
 				Echo: echo,
 			}
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
 			ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
 			if err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 消息发送未送达: action=%s retcode=%d err=%v", action, ackResp.RetCode, err))
 				reason := strings.TrimSpace(ackResp.Wording)
@@ -564,7 +680,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				return fmt.Errorf("%s", reason)
 			}
-			conn.rememberActionMessageSession(ackResp, historyKey(event))
+			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 			}
@@ -573,6 +689,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		commitAssistantHistory = func(replyText string) {
 			if session == nil {
+				return
+			}
+			if session.Epoch() != startEpoch {
 				return
 			}
 			if strings.TrimSpace(replyText) == "" {
@@ -603,7 +722,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						},
 						maxBufferSize,
 					)
-					if engine.GroupCompactor != nil {
+					if engine.GroupCompactor != nil && !conn.mock {
 						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 					}
 				}
@@ -611,9 +730,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 			if runResult.MemoryWritten {
 				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-			} else if strings.TrimSpace(userText) != "" {
+			} else if strings.TrimSpace(userText) != "" && !conn.mock {
 				pendingUserText := userText
-				if event.MessageType == "group" {
+				if event.MessageType == "group" && !conn.mock {
 					pendingUserText = formatGroupSpeakerMessage(event, userText)
 				}
 				engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
@@ -633,12 +752,18 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
+		var runCtx context.Context
+		if conn != nil && conn.mock {
+			runCtx = conn.Context()
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:        historyKey(event),
+			Context:          runCtx,
+			Epoch:            startEpoch,
+			SessionID:        conn.historyKey(event),
 			Owner:            owner,
 			OwnerType:        ownerType,
 			ActorUserID:      strconv.FormatInt(event.UserID, 10),
-			ActorPlatform:    "onebot",
+			ActorPlatform:    securityPlatform,
 			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
 			ObservationScope: conn.generation,
@@ -648,8 +773,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
+			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 
 		// 计费回执处理与历史保护
 		if billingState != nil && billingState.BillingActive {
@@ -673,7 +802,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// memory extraction.
 		if runResult.Silent {
 			engine.TrimSession(session)
-			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", historyKey(event)))
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", conn.historyKey(event)))
 			return
 		}
 
@@ -687,7 +816,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.TrimSession(session)
 			}
 			if receiptText == "" {
-				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", historyKey(event)))
+				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", conn.historyKey(event)))
 				return
 			}
 		}
@@ -698,8 +827,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	// 5. Inspect the final model output before preparing the platform message.
 	if engine != nil && engine.Security != nil && engine.Security.Watchdog != nil {
-		if principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10)); principalErr == nil {
-			decision := engine.Security.Watchdog.Evaluate(principal, security.StageModelOutput, security.SourceModelOutput, replyText, security.AuditEvent{Instance: engine.InstanceID, Session: historyKey(event)})
+		if principal, principalErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10)); principalErr == nil {
+			var decision security.WatchdogDecision
+			if conn.mock {
+				decision = engine.Security.Watchdog.EvaluateDryRun(principal, security.StageModelOutput, security.SourceModelOutput, replyText, security.AuditEvent{Instance: engine.InstanceID, Session: conn.historyKey(event)})
+			} else {
+				decision = engine.Security.Watchdog.Evaluate(principal, security.StageModelOutput, security.SourceModelOutput, replyText, security.AuditEvent{Instance: engine.InstanceID, Session: conn.historyKey(event)})
+			}
 			if security.Blocks(decision.Action) {
 				logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 模型输出被安全控制拦截: user=%d reason=%s", event.UserID, decision.Reason))
 				replyText = "FrostAgent安全控制：模型输出已拦截。"
@@ -717,7 +851,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-		if err := validateQuoteMessages(conn, toolOutput.Messages, historyKey(event)); err != nil {
+		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
 			return
@@ -792,9 +926,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		Echo: echo,
 	}
 
+	if session != nil && session.Epoch() != startEpoch {
+		return
+	}
 	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
+	if session != nil && session.Epoch() != startEpoch {
+		return
+	}
 	if err == nil {
-		conn.rememberActionMessageSession(ackResp, historyKey(event))
+		conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 		commitAssistantHistory(replyText)
 	} else {
@@ -953,6 +1093,16 @@ func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []l
 	}
 
 	return messages
+}
+
+func (c *wsConnection) historyKey(event model.OneBotEvent) string {
+	baseKey := historyKey(event)
+	if c != nil && c.mock {
+		key := fmt.Sprintf("mock:%s:%s", c.generation, baseKey)
+		c.mockSessions.Store(key, struct{}{})
+		return key
+	}
+	return baseKey
 }
 
 func historyKey(event model.OneBotEvent) string {

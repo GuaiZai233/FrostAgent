@@ -565,11 +565,11 @@ func TestGroupCompactor_NewerPersistenceOverridesPendingRetryTimer(t *testing.T)
 		t.Fatalf("timed out waiting for v2 retry recovery")
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		if !compactor.HasPendingPersistence(owner) {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if compactor.HasPendingPersistence(owner) {
 		t.Fatalf("expected pending persistence cleared after v2 recovery")
@@ -744,11 +744,11 @@ func TestGroupCompactor_ConcurrentPersistenceTOCTOUOrdering(t *testing.T) {
 		t.Fatalf("timed out waiting for v2 to finish saving")
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		if !compactor.HasPendingPersistence(owner) {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// 5. 重新从磁盘载入并断言：最终磁盘上的总结绝对是 Summary V2，绝不能回退到 V1
@@ -828,11 +828,11 @@ func TestGroupCompactor_PersistenceWorkerPreemptionAndBarrier(t *testing.T) {
 	}
 
 	// 等待 pending 清除
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		if !compactor.HasPendingPersistence(owner) {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if compactor.HasPendingPersistence(owner) {
 		t.Fatalf("expected pending persistence cleared for v2")

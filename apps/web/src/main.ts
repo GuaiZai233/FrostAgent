@@ -17,10 +17,12 @@ import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
 import { mountMCPPage } from './pages/mcp';
+import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
+import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
@@ -36,6 +38,7 @@ const navItems = [
   { path: '/prompt', label: 'Prompt 检查', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
+  { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
   { path: '/settings', label: '系统设置', iconName: 'settings' },
   { path: '/security', label: '安全控制', iconName: 'lock' },
@@ -259,6 +262,11 @@ function initAppShell(): void {
     '网页端外观设置',
     mountFrontendSettingsPage,
   );
+  router.register(
+    '/settings/commands',
+    '指令设置',
+    mountCommandSettingsPage,
+  );
   router.register('/model-router', '模型路由器', mountModelRouterPage);
   // Security is a control-plane page and must remain available without an instance.
   router.register('/security', '安全控制', mountSecurityPage);
@@ -272,7 +280,9 @@ function initAppShell(): void {
     '/prompt',
     '/stickers',
     '/mcp',
+    '/chat',
     '/settings/backend',
+    '/settings/commands',
     '/model-router',
   ];
   const mounts = [
@@ -283,7 +293,9 @@ function initAppShell(): void {
     mountPromptPage,
     mountStickersPage,
     mountMCPPage,
+    mountChatPage,
     mountBackendSettingsPage,
+    mountCommandSettingsPage,
     mountModelRouterPage,
   ];
   guardedPaths.forEach((path, index) =>

@@ -81,3 +81,45 @@ func TestMemoryToolSearchIncrementsAccessCount(t *testing.T) {
 		t.Errorf("expected returned memory AccessCount = 2 on second search, got %v", results2)
 	}
 }
+
+func TestMemoryToolMockWriteDoesNotPersist(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	reader := memory.NewReader(store, 5)
+	gateway := memory.NewGateway()
+	writer := memory.NewWriter(store)
+
+	engine := &llm.Engine{
+		MemoryReader:  reader,
+		MemoryWriter:  writer,
+		MemoryGateway: gateway,
+	}
+
+	tool := NewMemoryTool(engine)
+
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{
+		Owner:     "mock_test_user",
+		OwnerType: memory.OwnerUser,
+		Mock:      true,
+	})
+
+	writeArgs := `{"action":"write","content":"Secret ephemeral message","tags":["ephemeral"]}`
+	writeRes, err := tool.ExecuteContext(ctx, writeArgs)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	expectedMsg := "记忆已记录（模拟会话：断电即丢，不持久化保存）"
+	if writeRes != expectedMsg {
+		t.Fatalf("expected response %q, got %q", expectedMsg, writeRes)
+	}
+
+	// Verify nothing was written to store
+	stored, err := store.ListByOwner("mock_test_user")
+	if err != nil {
+		t.Fatalf("ListByOwner failed: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("expected 0 stored memories for mock session, got %d", len(stored))
+	}
+}

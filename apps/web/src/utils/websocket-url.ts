@@ -13,6 +13,7 @@ export function instanceWebSocketURL(
   instanceID: string,
   adapter: 'onebot' | 'astrbot',
   pageOrigin: string,
+  query?: string,
 ): string {
   const configured = listenAddress.trim() || '127.0.0.1:1234';
   const explicitScheme = /^wss?:\/\//i.test(configured);
@@ -26,5 +27,28 @@ export function instanceWebSocketURL(
   if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
   const scheme = explicitScheme ? parsed.protocol : 'ws:';
   const authority = `${host}${parsed.port ? `:${parsed.port}` : ''}`;
-  return `${scheme}//${authority}/instances/${instanceID}/ws/${adapter}`;
+  const base = `${scheme}//${authority}/instances/${instanceID}/ws/${adapter}`;
+  if (query) {
+    const q = query.startsWith('?') ? query : `?${query}`;
+    return `${base}${q}`;
+  }
+  return base;
+}
+
+export function dashboardWebSocketURL(
+  pageOrigin: string,
+  instanceID: string,
+  adapter: 'onebot' | 'astrbot',
+  query?: string,
+): string {
+  const url = new URL(pageOrigin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = `/instances/${instanceID}/ws/${adapter}`;
+  url.hash = '';
+  if (query) {
+    url.search = query.startsWith('?') ? query : `?${query}`;
+  } else {
+    url.search = '';
+  }
+  return url.toString();
 }

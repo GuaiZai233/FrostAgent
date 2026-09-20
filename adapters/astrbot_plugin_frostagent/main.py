@@ -315,6 +315,8 @@ class FrostAgentWSClient:
         group_id = str(action.get("group_id") or "")
         user_id = str(action.get("user_id") or "")
         platform = str(action.get("platform") or "")
+        if not platform:
+            platform = "astrbot"
         message_type = str(action.get("message_type") or "")
         target_id = str(action.get("target_id") or group_id or user_id)
 
@@ -410,8 +412,13 @@ class FrostAgentAdapter(Star):
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
 
-                # 如果收到 noop 动作，说明后端已将该群聊消息捕获进 compact 但无需回复，结束等待
+                # 如果收到 noop 动作：
+                # 若为管理员指令静默丢弃 (admin_silent_drop / suppress_llm)，需抑制 AstrBot 默认 LLM 处理，
+                # 防止下游产生回复、产生 Token 消耗及污染会话历史；
+                # 若为普通群聊压缩缓冲的 noop，则保持原有事件传播语义。
                 if action.get("action") == "noop":
+                    if action.get("subtype") == "admin_silent_drop" or action.get("suppress_llm"):
+                        event.should_call_llm(True)
                     break
 
                 try:

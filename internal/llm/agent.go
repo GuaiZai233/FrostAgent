@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"context"
 	"crypto/sha256"
@@ -105,6 +106,9 @@ type Engine struct {
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
 
+	// Sandbox integration (optional, nil = sandbox disabled)
+	SandboxBackend sandbox.Backend
+
 	// Security is shared by every runtime owned by the Control Plane.
 	Security   *security.Controller
 	InstanceID string
@@ -187,6 +191,13 @@ func (e *Engine) RunMessagesWithContext(
 		})
 	}
 	ctx := e.Context()
+	if runContext.Context != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Context, cancel)
+		defer stop()
+	}
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
 			runContext.RouteSnapshot = e.ModelRouter.Snapshot()
@@ -223,8 +234,10 @@ func (e *Engine) RunMessagesWithContext(
 				if len(filtered) > 0 {
 					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
-					if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+					if !runContext.Mock {
+						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+						}
 					}
 				}
 			}
@@ -257,6 +270,14 @@ func (e *Engine) RunMessagesWithContext(
 					}
 					sess.SetLastPromptTrace(sysContent, modelName)
 				}
+				var cancelRun func()
+				var currentEpoch uint64
+				ctx, currentEpoch, cancelRun = sess.BeginRun(ctx)
+				defer cancelRun()
+				if runContext.Epoch == 0 {
+					runContext.Epoch = currentEpoch
+				}
+				ctx = withRunContext(ctx, runContext)
 			}
 		}
 	}
@@ -283,7 +304,21 @@ func (e *Engine) EnqueueExtractionTurn(
 	e.Go(func() { e.extractPendingBatch(batch) })
 }
 
-func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
+func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
+	if batch.Session == nil || len(batch.Items) == 0 {
+		return
+	}
+	ctx, _, cleanup := batch.Session.BeginExtraction(e.Context())
+	defer cleanup()
+
+	validator := func() bool {
+		return ctx.Err() == nil && batch.Session.Epoch() == batch.Epoch
+	}
+
+	if !validator() {
+		return
+	}
+
 	type ownerBatch struct {
 		owner     string
 		ownerType memory.OwnerType
@@ -292,7 +327,7 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 	}
 	groups := make(map[string]*ownerBatch)
 	order := make([]string, 0)
-	for _, item := range batch {
+	for _, item := range batch.Items {
 		if item.Owner == "" {
 			continue
 		}
@@ -310,8 +345,14 @@ func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
 		group.messages = append(group.messages, item.Message)
 	}
 	for _, key := range order {
+		if !validator() {
+			return
+		}
 		group := groups[key]
-		if err := e.MemoryWriter.ExtractByOwnerWithRoute(group.owner, group.ownerType, group.route, group.messages); err != nil {
+		if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
+			if errors.Is(err, context.Canceled) || !validator() {
+				return
+			}
 			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
 		}
 	}
@@ -439,7 +480,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	var totalUsage core.Usage
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
-	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	billingActive := hasRunCtx && !runCtx.Mock && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
 	modelName := e.ModelName
 	if e.ModelRouter != nil {
 		var snapshot *modelrouter.Snapshot
@@ -469,6 +510,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		if err := ctx.Err(); err != nil {
 			return AgentRunResult{Silent: true, Error: err}
+		}
+		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+				if sess, isSess := sessCore.(*SessionContext); isSess {
+					if sess.Epoch() != runCtx.Epoch {
+						return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated")}
+					}
+				}
+			}
 		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
@@ -732,6 +782,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		for _, tc := range responseMsg.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+			}
+			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+					if sess, isSess := sessCore.(*SessionContext); isSess {
+						if sess.Epoch() != runCtx.Epoch {
+							return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated"), Usage: totalUsage}
+						}
+					}
+				}
+			}
 			if e.securityBlocks(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name) {
 				messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
 				continue
@@ -790,10 +852,26 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
-				if err := runContext.SendHook(toolResult); err != nil {
-					toolResult = fmt.Sprintf("消息发送失败：%v", err)
+				if ctx.Err() != nil {
+					toolResult = "消息发送取消：会话已取消"
 				} else {
-					toolResult = "消息已发送"
+					epochInvalid := false
+					if runContext.SessionID != "" && runContext.Epoch > 0 && e.SessionManager != nil {
+						if sessCore, ok := e.SessionManager.Get(runContext.SessionID); ok {
+							if sess, isSess := sessCore.(*SessionContext); isSess {
+								if sess.Epoch() != runContext.Epoch {
+									epochInvalid = true
+								}
+							}
+						}
+					}
+					if epochInvalid {
+						toolResult = "消息发送取消：会话已重置"
+					} else if err := runContext.SendHook(toolResult); err != nil {
+						toolResult = fmt.Sprintf("消息发送失败：%v", err)
+					} else {
+						toolResult = "消息已发送"
+					}
 				}
 			}
 
