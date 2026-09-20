@@ -36,6 +36,7 @@ type RunContext struct {
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot
 	Mock                bool // Mock / ephemeral session: do not write to persistent memory or group summary
+	Epoch               uint64
 }
 
 type runContextKey struct{}

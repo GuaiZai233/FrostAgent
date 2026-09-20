@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
@@ -239,7 +240,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
 			return
 		}
-		wsConn := newWSConnection(conn)
+		wsConn := newWSConnection(conn, a.engine.Scope)
 		wsConn.stealer = a.stealer
 		wsConn.Scope = a.engine.Scope
 		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
@@ -268,7 +269,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if a.engine.SandboxBackend != nil {
 					wsConn.mockSessions.Range(func(key, _ any) bool {
 						if sessionID, ok := key.(string); ok {
-							_ = a.engine.SandboxBackend.Release(context.Background(), sessionID)
+							if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+								a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+							}
 						}
 						return true
 					})
@@ -297,6 +300,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.MetaEventType == "heartbeat" {
 				continue
+			}
+			if event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
+				if handleAdminCommand(wsConn, event, a.engine) {
+					continue
+				}
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -330,10 +340,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					}
 					continue
 				}
-			}
-			if event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
 			}
 
 			var routeSnapshot *modelrouter.Snapshot

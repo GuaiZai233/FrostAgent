@@ -108,10 +108,19 @@ type wsConnection struct {
 	nextGroupEcho       uint64
 }
 
-func newWSConnection(conn *websocket.Conn) *wsConnection {
+func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
 	gen := fmt.Sprintf("onebot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
-	ctx, cancel := context.WithCancel(context.Background())
+	parentCtx := context.Background()
+	var scope *runtimescope.Scope
+	if len(scopes) > 0 && scopes[0] != nil {
+		scope = scopes[0]
+		if scope.Context() != nil {
+			parentCtx = scope.Context()
+		}
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	return &wsConnection{
+		Scope:              scope,
 		conn:               conn,
 		generation:         gen,
 		ctx:                ctx,
@@ -152,7 +161,7 @@ func (c *wsConnection) Close() error {
 		return nil
 	}
 	if c.closed.CompareAndSwap(false, true) {
-		if c.mock && c.cancel != nil {
+		if c.cancel != nil {
 			c.cancel()
 		}
 	}
@@ -176,9 +185,26 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
+	var startEpoch uint64
 	if turn != nil {
+		startEpoch = turn.Epoch()
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						return
+					}
+				}
+			}
+		}
+	} else if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
 	}
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
@@ -209,8 +235,15 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if !wakeSignals.Any() && !replyContext.MentionsBot {
 			return
 		}
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+					return
+				}
+			}
+		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -224,13 +257,20 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		)
 		replyContext := conn.lookupReplyContext(event)
 		conn.observeResolvedReply(event, replyContext)
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+					return
+				}
+			}
+		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -262,6 +302,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	visionEnabled := engine != nil && engine.VisionProvider != nil
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	}
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
+		}
 	}
 
 	// Fast-fail once before downloading or processing either current or quoted images.
@@ -330,6 +378,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		if imageDesc != "" {
 			replyContext.addImageDescription(imageDesc, engine.Scope)
+		}
+	}
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
 		}
 	}
 
@@ -436,6 +492,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			return
 		}
 		session = engine.SessionManager.GetOrCreate(conn.historyKey(event))
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -600,7 +659,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				},
 				Echo: echo,
 			}
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
 			ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
 			if err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 消息发送未送达: action=%s retcode=%d err=%v", action, ackResp.RetCode, err))
 				reason := strings.TrimSpace(ackResp.Wording)
@@ -624,6 +689,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		commitAssistantHistory = func(replyText string) {
 			if session == nil {
+				return
+			}
+			if session.Epoch() != startEpoch {
 				return
 			}
 			if strings.TrimSpace(replyText) == "" {
@@ -684,8 +752,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
+		var runCtx context.Context
+		if conn != nil && conn.mock {
+			runCtx = conn.Context()
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			Context:          conn.Context(),
+			Context:          runCtx,
+			Epoch:            startEpoch,
 			SessionID:        conn.historyKey(event),
 			Owner:            owner,
 			OwnerType:        ownerType,
@@ -703,6 +776,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 
 		// 计费回执处理与历史保护
 		if billingState != nil && billingState.BillingActive {
@@ -850,7 +926,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		Echo: echo,
 	}
 
+	if session != nil && session.Epoch() != startEpoch {
+		return
+	}
 	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
+	if session != nil && session.Epoch() != startEpoch {
+		return
+	}
 	if err == nil {
 		conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆

@@ -87,10 +87,24 @@ type wsConn struct {
 	mockSessions sync.Map
 }
 
-func newWSConn(conn *websocket.Conn) *wsConn {
+func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
 	gen := fmt.Sprintf("astrbot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
-	ctx, cancel := context.WithCancel(context.Background())
-	return &wsConn{conn: conn, generation: gen, ctx: ctx, cancel: cancel}
+	parentCtx := context.Background()
+	var scope *runtimescope.Scope
+	if len(scopes) > 0 && scopes[0] != nil {
+		scope = scopes[0]
+		if scope.Context() != nil {
+			parentCtx = scope.Context()
+		}
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	return &wsConn{
+		Scope:      scope,
+		conn:       conn,
+		generation: gen,
+		ctx:        ctx,
+		cancel:     cancel,
+	}
 }
 
 func (c *wsConn) isClosed() bool {
@@ -145,7 +159,7 @@ func (c *wsConn) Close() error {
 		return nil
 	}
 	if c.closed.CompareAndSwap(false, true) {
-		if c.mock && c.cancel != nil {
+		if c.cancel != nil {
 			c.cancel()
 		}
 	}
@@ -457,9 +471,39 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
+	var startEpoch uint64
 	if turn != nil {
+		startEpoch = turn.Epoch()
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						if conn != nil {
+							platform := event.Platform
+							if platform == "" {
+								platform = "astrbot"
+							}
+							_ = conn.WriteJSON(Action{
+								Type:      "action",
+								Action:    "noop",
+								Platform:  platform,
+								SessionID: conn.sessionKey(event),
+								Echo:      "reply_" + event.MessageID,
+							})
+						}
+						return
+					}
+				}
+			}
+		}
+	} else if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
 	}
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
@@ -491,6 +535,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		_ = conn.WriteJSON(Action{
 			Type:      "action",
 			Action:    "noop",
+			Platform:  platform,
 			SessionID: event.SessionID,
 			Echo:      "reply_" + event.MessageID,
 		})
@@ -513,7 +558,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		logImages,
 	)
 
-	replyWithSnapshot(event, engine, conn, routeSnapshot)
+	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch)
 }
 
 func reply(event Event, engine *llm.Engine, conn *wsConn) {
@@ -521,10 +566,18 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	if engine != nil && engine.ModelRouter != nil {
 		snapshot = engine.ModelRouter.Snapshot()
 	}
-	replyWithSnapshot(event, engine, conn, snapshot)
+	var startEpoch uint64
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
+	}
+	replyWithSnapshot(event, engine, conn, snapshot, startEpoch)
 }
 
-func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -546,6 +599,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	userText := astrBotVisibleText(event)
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
+		}
+	}
 
 	// 处理图片等多模态内容描述
 	var imageSegments []content.MessageSegment
@@ -617,6 +678,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
+		}
+	}
+
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
@@ -624,6 +693,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return
 		}
 		session = engine.SessionManager.GetOrCreate(conn.sessionKey(event))
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -836,7 +908,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			action := Action{
 				Type:           "action",
 				Action:         "send_message",
-				SessionID: conn.sessionKey(event),
+				Platform:       platform,
+				SessionID:      conn.sessionKey(event),
 				TargetID:       targetID,
 				MessageType:    event.MessageType,
 				GroupID:        event.GroupID,
@@ -848,9 +921,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
 				ReplyMessageID: event.MessageID,
 			}
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
 			if err := conn.WriteJSON(action); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
 				return err
+			}
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
@@ -867,6 +946,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Context:       runCtx,
+			Epoch:         startEpoch,
 			SessionID:     conn.sessionKey(event),
 			Owner:         owner,
 			OwnerType:     ownerType,
@@ -883,6 +963,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 
 		if billingState != nil && billingState.BillingActive {
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {
@@ -917,11 +1000,17 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
 	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
+	if session != nil && session.Epoch() != startEpoch {
+		return
+	}
 	var sendErr error
 	if strings.TrimSpace(sentReplyText) == "" {
 		sendErr = sendTerminalNoop(event, conn)
 	} else {
 		sendErr = sendDirectReply(event, conn, sentReplyText)
+	}
+	if session != nil && session.Epoch() != startEpoch {
+		return
 	}
 	if sendErr != nil {
 		if session != nil {
@@ -938,6 +1027,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if engine == nil || session == nil {
+		return
+	}
+	if session.Epoch() != startEpoch {
 		return
 	}
 
@@ -1008,9 +1100,14 @@ func sendTerminalNoop(event Event, conn *wsConn) error {
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	return conn.WriteJSON(Action{
 		Type:      "action",
 		Action:    "noop",
+		Platform:  platform,
 		SessionID: conn.sessionKey(event),
 		Echo:      "reply_" + event.MessageID,
 	})
@@ -1030,10 +1127,15 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 	if event.MessageType == "group" {
 		targetID = event.GroupID
 	}
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
-		SessionID: conn.sessionKey(event),
+		Platform:       platform,
+		SessionID:      conn.sessionKey(event),
 		TargetID:       targetID,
 		MessageType:    event.MessageType,
 		GroupID:        event.GroupID,

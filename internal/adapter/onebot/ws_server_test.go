@@ -4444,3 +4444,74 @@ func TestWS_MockConnectionInFlightTeardownAndSandboxRelease(t *testing.T) {
 		t.Fatalf("释放的 session 列表中未找到 mock session, 实际=%v", released)
 	}
 }
+
+func TestWS_NonMockSendActionAndWaitCancelledOnCloseConnections(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+	adapter := NewAdapter(engine)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/frostagent", adapter.Handler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/frostagent"
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer clientConn.Close()
+
+	// 等待连接在 adapter 中注册
+	var serverConn *wsConnection
+	for i := 0; i < 50; i++ {
+		adapter.mu.RLock()
+		for c := range adapter.conns {
+			serverConn = c
+			break
+		}
+		adapter.mu.RUnlock()
+		if serverConn != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if serverConn == nil {
+		t.Fatal("未能在 adapter 中找到活跃连接")
+	}
+
+	// 确认是非 mock 连接
+	if serverConn.mock {
+		t.Fatal("期望为非 mock 连接")
+	}
+
+	errChan := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := serverConn.SendActionAndWait(model.OneBotAction{
+			Action: "send_msg",
+			Params: map[string]any{"message": "hello"},
+		}, 10*time.Second)
+		errChan <- err
+	}()
+
+	// 等待 clientConn 收到 action 消息，确保 SendActionAndWait 已经发出并正在等待 ACK
+	_, _, err = clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 action 消息失败: %v", err)
+	}
+
+	// 调用 CloseConnections()
+	adapter.CloseConnections()
+
+	select {
+	case err := <-errChan:
+		elapsed := time.Since(start)
+		if elapsed >= 5*time.Second {
+			t.Fatalf("SendActionAndWait 等待时间过长 (%v)，未立即取消", elapsed)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("期望 context.Canceled 错误，实际收到: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CloseConnections 后 SendActionAndWait 超时未返回")
+	}
+}
