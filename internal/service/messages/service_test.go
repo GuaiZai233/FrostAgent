@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -426,5 +427,136 @@ func TestService_ImageUrlCompatibility(t *testing.T) {
 	}
 	if last.Attachments[0].URL != "https://example.com/dog.png" {
 		t.Fatalf("expected URL 'https://example.com/dog.png', got %q", last.Attachments[0].URL)
+	}
+}
+
+func TestService_RecordAndStickerCompatibility(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// 1. "record" segment inside messages array -> maps to core.AttachmentTypeAudio
+	bodyRecordArr := `{
+		"session": "mock_platform:group:grp_888",
+		"messages": [
+			{"type": "record", "url": "https://example.com/voice.silk"}
+		]
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyRecordArr)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for record payload, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last := adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(last.Attachments))
+	}
+	if last.Attachments[0].Type != core.AttachmentTypeAudio {
+		t.Fatalf("expected AttachmentTypeAudio for 'record', got %q", last.Attachments[0].Type)
+	}
+
+	// 2. Top-level "record" payload
+	bodyRecordTop := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"type": "record",
+		"url": "https://example.com/top_voice.silk"
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyRecordTop)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for top-level record payload, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last = adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if len(last.Attachments) != 1 || last.Attachments[0].Type != core.AttachmentTypeAudio {
+		t.Fatalf("expected 1 audio attachment, got %+v", last.Attachments)
+	}
+
+	// 3. Sticker segment with is_sticker: true -> SubType=1
+	bodySticker := `{
+		"session": "mock_platform:group:grp_888",
+		"messages": [
+			{"type": "image", "url": "https://example.com/fox_sticker.png", "is_sticker": true}
+		]
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodySticker)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for sticker payload, got %d: %s", w.Code, w.Body.String())
+	}
+	adapter.mu.Lock()
+	last = adapter.messages[len(adapter.messages)-1]
+	adapter.mu.Unlock()
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(last.Attachments))
+	}
+	if last.Attachments[0].Type != core.AttachmentTypeImage {
+		t.Fatalf("expected AttachmentTypeImage, got %q", last.Attachments[0].Type)
+	}
+	if last.Attachments[0].SubType != 1 {
+		t.Fatalf("expected SubType=1 for sticker, got %d", last.Attachments[0].SubType)
+	}
+}
+
+func TestService_UnsupportedSegmentTypes(t *testing.T) {
+	dispatcher := core.NewDefaultDispatcher()
+	adapter := &mockAdapter{id: "mock_platform"}
+	dispatcher.RegisterAdapter(adapter)
+	svc := messages.New(dispatcher, "", authedGetenv)
+
+	// 1. mention_user in messages array
+	bodyMention := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"messages": [{"type": "mention_user", "mention_user_id": "123456"}]
+	}`
+	req := newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyMention)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for mention_user, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "mention_user and quote are currently unsupported") {
+		t.Fatalf("expected explicit unsupported error in body, got: %s", w.Body.String())
+	}
+
+	// 2. quote in messages array
+	bodyQuote := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"messages": [{"type": "quote", "message_id": "msg_999"}]
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyQuote)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for quote, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "mention_user and quote are currently unsupported") {
+		t.Fatalf("expected explicit unsupported error in body, got: %s", w.Body.String())
+	}
+
+	// 3. Unknown type
+	bodyUnknown := `{
+		"platform": "mock_platform",
+		"target_id": "grp_888",
+		"messages": [{"type": "unknown_xyz", "text": "foo"}]
+	}`
+	req = newAuthedRequest(http.MethodPost, "/api/v1/messages/send", bodyUnknown)
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown type, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "unknown message type") {
+		t.Fatalf("expected unknown message type error, got: %s", w.Body.String())
 	}
 }

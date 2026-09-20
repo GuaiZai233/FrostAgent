@@ -1082,7 +1082,8 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	id = i.id
 	ws := strings.HasPrefix(path, "/ws/")
 	stream := strings.HasSuffix(path, "/StreamLogs")
-	readOnly := r.Method == "GET"
+	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
+	readOnly := r.Method == "GET" || isSendMessage
 	method := path[strings.LastIndex(path, "/")+1:]
 	for _, prefix := range []string{"Get", "List", "Search", "Export", "Test"} {
 		if strings.HasPrefix(method, prefix) {
@@ -1121,7 +1122,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if (ws || stream || path == "/api/v1/messages/send") && rt.Scope.Context().Err() != nil {
+	if (ws || stream || isSendMessage) && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}

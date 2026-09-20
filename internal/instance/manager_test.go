@@ -1775,6 +1775,59 @@ func TestDefaultSendMessage_ConcurrentDisableNoDeadlock(t *testing.T) {
 	wg.Wait()
 }
 
+func TestDefaultSendMessage_ConcurrentSendSharedLifecycleLock(t *testing.T) {
+	m := testManager(t)
+	inst := create(t, m, "msg-concurrent-send")
+	if err := m.instances[inst.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify concurrent send requests on the same instance can all enter handler without 409
+	const concurrency = 10
+	var wg sync.WaitGroup
+	codes := make([]int, concurrency)
+	for i := range concurrency {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send?instance_id="+inst.ID, strings.NewReader(`{"platform":"onebot","target_id":"12345","content":"concurrent"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			codes[idx] = w.Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code == http.StatusConflict {
+			t.Fatalf("goroutine %d received unexpected 409 Conflict: concurrent sends must acquire shared RLock", i)
+		}
+		// Expect 502 Bad Gateway because onebot adapter has no ws connection, confirming it entered the handler
+		if code != http.StatusBadGateway {
+			t.Fatalf("goroutine %d expected 502 (entered handler), got %d", i, code)
+		}
+	}
+
+	// Verify that while lifecycle writer lock i.op.Lock() is held, send is rejected with 409 Conflict
+	item := m.instances[inst.ID]
+	item.op.Lock()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send?instance_id="+inst.ID, strings.NewReader(`{"platform":"onebot","target_id":"12345","content":"blocked"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	item.op.Unlock()
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict when i.op.Lock is held, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {
 	m := testManager(t)
 	inst := create(t, m, "race-dialogue")

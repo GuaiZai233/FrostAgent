@@ -56,6 +56,7 @@ type SendMessageRequest struct {
 	Path          string `json:"path,omitempty"`
 	MentionUserID string `json:"mention_user_id,omitempty"`
 	MessageID     string `json:"message_id,omitempty"`
+	IsSticker     bool   `json:"is_sticker,omitempty"`
 }
 
 // SendMessageResponse represents the JSON response returned upon successful message dispatch.
@@ -243,6 +244,21 @@ func isValidMessageType(t string) bool {
 	return t == "group" || t == "private"
 }
 
+func parseAttachmentType(t string) (core.AttachmentType, bool) {
+	switch t {
+	case "image", "image_url":
+		return core.AttachmentTypeImage, true
+	case "record", "audio":
+		return core.AttachmentTypeAudio, true
+	case "video":
+		return core.AttachmentTypeVideo, true
+	case "file":
+		return core.AttachmentTypeFile, true
+	default:
+		return "", false
+	}
+}
+
 func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMessage, error) {
 	// Parse session format if present: "platform:message_type:target_id"
 	sessPlatform, sessMsgType, sessTargetID := parseSession(req.Session)
@@ -266,16 +282,38 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		}
 
 		attachments := req.Attachments
-		if (req.Type == "image" || req.Type == "image_url" || req.Type == "file" || req.Type == "video" || req.Type == "audio") && len(attachments) == 0 {
-			attType := core.AttachmentType(req.Type)
-			if req.Type == "image_url" {
-				attType = core.AttachmentType("image")
+		if req.Type != "" {
+			switch req.Type {
+			case "mention_user", "quote":
+				return nil, fmt.Errorf("unsupported message type %q: mention_user and quote are currently unsupported", req.Type)
+			case "plain", "text":
+				// text content already populated
+			default:
+				if attType, ok := parseAttachmentType(req.Type); ok {
+					if len(attachments) == 0 {
+						subType := 0
+						if req.IsSticker && attType == core.AttachmentTypeImage {
+							subType = 1
+						}
+						attachments = append(attachments, core.Attachment{
+							Type:    attType,
+							SubType: subType,
+							URL:     req.URL,
+							Name:    req.Path,
+						})
+					}
+				} else {
+					return nil, fmt.Errorf("unknown message type %q", req.Type)
+				}
 			}
-			attachments = append(attachments, core.Attachment{
-				Type: attType,
-				URL:  req.URL,
-				Name: req.Path,
-			})
+		}
+
+		if req.IsSticker {
+			for j := range attachments {
+				if attachments[j].Type == core.AttachmentTypeImage {
+					attachments[j].SubType = 1
+				}
+			}
 		}
 
 		if strings.TrimSpace(content) == "" && len(attachments) == 0 {
@@ -340,17 +378,37 @@ func (s *Service) normalizeMessages(req *SendMessageRequest) ([]core.OutgoingMes
 		}
 
 		attachments := msg.Attachments
-		if msg.Type == "image" || msg.Type == "image_url" || msg.Type == "file" || msg.Type == "video" || msg.Type == "audio" {
-			if msg.URL != "" || msg.Path != "" || len(attachments) == 0 {
-				attType := core.AttachmentType(msg.Type)
-				if msg.Type == "image_url" {
-					attType = core.AttachmentType("image")
+		if msg.Type != "" {
+			switch msg.Type {
+			case "mention_user", "quote":
+				return nil, fmt.Errorf("message[%d]: unsupported message type %q: mention_user and quote are currently unsupported", i, msg.Type)
+			case "plain", "text":
+				// text content already populated
+			default:
+				if attType, ok := parseAttachmentType(msg.Type); ok {
+					if msg.URL != "" || msg.Path != "" || len(attachments) == 0 {
+						subType := 0
+						if msg.IsSticker && attType == core.AttachmentTypeImage {
+							subType = 1
+						}
+						attachments = append(attachments, core.Attachment{
+							Type:    attType,
+							SubType: subType,
+							URL:     msg.URL,
+							Name:    msg.Path,
+						})
+					}
+				} else {
+					return nil, fmt.Errorf("message[%d]: unknown message type %q", i, msg.Type)
 				}
-				attachments = append(attachments, core.Attachment{
-					Type: attType,
-					URL:  msg.URL,
-					Name: msg.Path,
-				})
+			}
+		}
+
+		if msg.IsSticker {
+			for j := range attachments {
+				if attachments[j].Type == core.AttachmentTypeImage {
+					attachments[j].SubType = 1
+				}
 			}
 		}
 
