@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"context"
 	"crypto/sha256"
@@ -105,6 +106,9 @@ type Engine struct {
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
 
+	// Sandbox integration (optional, nil = sandbox disabled)
+	SandboxBackend sandbox.Backend
+
 	// Security is shared by every runtime owned by the Control Plane.
 	Security   *security.Controller
 	InstanceID string
@@ -187,6 +191,13 @@ func (e *Engine) RunMessagesWithContext(
 		})
 	}
 	ctx := e.Context()
+	if runContext.Context != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Context, cancel)
+		defer stop()
+	}
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
 			runContext.RouteSnapshot = e.ModelRouter.Snapshot()
@@ -223,8 +234,10 @@ func (e *Engine) RunMessagesWithContext(
 				if len(filtered) > 0 {
 					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
-					if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+					if !runContext.Mock {
+						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+						}
 					}
 				}
 			}
@@ -467,7 +480,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	var totalUsage core.Usage
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
-	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	billingActive := hasRunCtx && !runCtx.Mock && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
 	modelName := e.ModelName
 	if e.ModelRouter != nil {
 		var snapshot *modelrouter.Snapshot

@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"context"
@@ -215,8 +216,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
 			return
 		}
-		c := newWSConn(conn)
+		c := newWSConn(conn, a.engine.Scope)
 		c.Scope = a.engine.Scope
+		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
+			c.mock = true
+		}
 		a.registerConn(c)
 		if a.engine.Context().Err() != nil {
 			c.Close()
@@ -224,6 +228,27 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		defer func() {
 			a.unregisterConn(c)
 			c.Close()
+			c.inFlight.Wait()
+			if c.mock && a.engine != nil {
+				if a.engine.SessionManager != nil {
+					c.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							a.engine.SessionManager.Delete(sessionID)
+						}
+						return true
+					})
+				}
+				if a.engine.SandboxBackend != nil {
+					c.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+								a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+							}
+						}
+						return true
+					})
+				}
+			}
 		}()
 
 		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
@@ -246,7 +271,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" || event.MessageType == "private" {
-				if handleAdminCommand(c, event, a.engine) {
+				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
 			}
@@ -257,11 +282,19 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if platform == "" {
 					platform = "astrbot"
 				}
+				if c.mock {
+					platform = "mock"
+				}
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
+				var decision security.WatchdogDecision
+				if c.mock {
+					decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+				} else {
+					decision = a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+				}
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
 					if shouldReply(event, a.engine.Scope) {
@@ -281,19 +314,31 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.MessageType == "group" {
+			if event.MessageType == "group" && !c.mock {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			a.observeStickers(event)
+			if !c.mock {
+				a.observeStickers(event)
+			}
 
+			if c.mock && c.isClosed() {
+				continue
+			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(sessionKey(event)).ReserveTurn()
+				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot) }) && turn != nil {
-				turn.Done()
+			c.inFlight.Add(1)
+			if !a.engine.Go(func() {
+				defer c.inFlight.Done()
+				processEvent(c, event, a.engine, turn, routeSnapshot)
+			}) {
+				c.inFlight.Done()
+				if turn != nil {
+					turn.Done()
+				}
 			}
 		}
 	}

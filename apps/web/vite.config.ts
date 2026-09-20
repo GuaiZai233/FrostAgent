@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
@@ -13,8 +13,8 @@ export default defineConfig({
   server: {
     port: 4200,
     proxy: {
- '/instances/': { target:'http://127.0.0.1:8080', changeOrigin:true },
- '/api/': { target:'http://127.0.0.1:8080', changeOrigin:true },
+      '/instances/': { target: 'http://127.0.0.1:8080', changeOrigin: false, ws: true },
+      '/api/': { target: 'http://127.0.0.1:8080', changeOrigin: true },
       '/frostagent.v1.': {
         target: 'http://127.0.0.1:8080',
         changeOrigin: true,
@@ -23,7 +23,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@frostagent/proto': path.resolve(__dirname, '../../libs/frostagent-proto/src'),
+      '@frostagent/proto': fileURLToPath(new URL('../../libs/frostagent-proto/src', import.meta.url)),
     },
   },
 });

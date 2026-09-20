@@ -81,6 +81,9 @@ func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
 }
 
 func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
+	if conn != nil && conn.mock {
+		return false
+	}
 	if engine == nil {
 		return false
 	}
@@ -121,7 +124,7 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		owner, _ = memory.OwnerForPrivate(callerID)
 	}
 
-	sessionID := historyKey(event)
+	sessionID := conn.historyKey(event)
 	routeScope := oneBotRouteScope(event)
 
 	if !engine.Go(func() {

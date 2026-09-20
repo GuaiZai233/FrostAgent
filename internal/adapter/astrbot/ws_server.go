@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -71,20 +72,59 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
+var nextConnGeneration uint64
+
 type wsConn struct {
 	*runtimescope.Scope
-	conn    *websocket.Conn
-	writeMu sync.Mutex
+	conn         *websocket.Conn
+	generation   string
+	inFlight     sync.WaitGroup
+	closed       atomic.Bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	writeMu      sync.Mutex
+	mock         bool
+	mockSessions sync.Map
 }
 
-func newWSConn(conn *websocket.Conn) *wsConn {
-	return &wsConn{conn: conn}
+func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
+	gen := fmt.Sprintf("astrbot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
+	parentCtx := context.Background()
+	var scope *runtimescope.Scope
+	if len(scopes) > 0 && scopes[0] != nil {
+		scope = scopes[0]
+		if scope.Context() != nil {
+			parentCtx = scope.Context()
+		}
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	return &wsConn{
+		Scope:      scope,
+		conn:       conn,
+		generation: gen,
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+}
+
+func (c *wsConn) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	return c.closed.Load()
+}
+
+func (c *wsConn) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 	return c.conn.WriteMessage(messageType, data)
@@ -93,7 +133,7 @@ func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 func (c *wsConn) WriteJSON(v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 
@@ -115,10 +155,28 @@ func (c *wsConn) WriteJSON(v any) error {
 }
 
 func (c *wsConn) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		if c.cancel != nil {
+			c.cancel()
+		}
+	}
 	if c.conn == nil {
 		return nil
 	}
 	return c.conn.Close()
+}
+
+func (c *wsConn) sessionKey(event Event) string {
+	baseKey := sessionKey(event)
+	if c != nil && c.mock {
+		key := fmt.Sprintf("mock:%s:%s", c.generation, baseKey)
+		c.mockSessions.Store(key, struct{}{})
+		return key
+	}
+	return baseKey
 }
 
 func sessionKey(event Event) string {
@@ -410,13 +468,16 @@ func isMentionOnlyInteraction(event Event) bool {
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	var startEpoch uint64
 	if turn != nil {
 		startEpoch = turn.Epoch()
 		turn.Wait()
 		defer turn.Done()
 		if engine != nil && engine.SessionManager != nil {
-			if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+			if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
 				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
 					if !turn.IsValid(sess) {
 						if conn != nil {
@@ -428,7 +489,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 								Type:      "action",
 								Action:    "noop",
 								Platform:  platform,
-								SessionID: event.SessionID,
+								SessionID: conn.sessionKey(event),
 								Echo:      "reply_" + event.MessageID,
 							})
 						}
@@ -438,11 +499,14 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 			}
 		}
 	} else if engine != nil && engine.SessionManager != nil {
-		if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
 				startEpoch = sess.Epoch()
 			}
 		}
+	}
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
 	}
 
 	if event.Type != "event" && event.Type != "" {
@@ -504,7 +568,7 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 	}
 	var startEpoch uint64
 	if engine != nil && engine.SessionManager != nil {
-		if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
 				startEpoch = sess.Epoch()
 			}
@@ -514,9 +578,20 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	platform := event.Platform
 	if platform == "" {
 		platform = "astrbot"
+	}
+	securityPlatform := platform
+	if conn.mock {
+		securityPlatform = "mock"
+	}
+	evalCtx := engine.Security.EvaluateContext
+	if conn.mock {
+		evalCtx = engine.Security.EvaluateContextDryRun
 	}
 	routeScope := astrBotRouteScope(event)
 	routeCtx := runtimescope.WithContext(engine.Context(), engine.Scope)
@@ -526,7 +601,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	userText := astrBotVisibleText(event)
 
 	if engine != nil && engine.SessionManager != nil {
-		if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
 				return
 			}
@@ -560,7 +635,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		} else {
 			// 计费检查 (视觉处理前检查)
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
-			if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
 				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
 				bCancel()
@@ -584,11 +659,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
 				if engine != nil && engine.Security != nil {
-					principal, pErr := security.NewPrincipal(platform, event.UserID)
+					principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 					if pErr == nil {
-						decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 							Instance: engine.InstanceID,
-							Session:  sessionKey(event),
+							Session: conn.sessionKey(event),
 						})
 						if security.Blocks(decision.Action) {
 							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
@@ -604,7 +679,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if engine != nil && engine.SessionManager != nil {
-		if sessCore, ok := engine.SessionManager.Get(sessionKey(event)); ok {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
 				return
 			}
@@ -614,7 +689,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
-		session = engine.SessionManager.GetOrCreate(sessionKey(event))
+		if conn != nil && conn.mock && conn.isClosed() {
+			return
+		}
+		session = engine.SessionManager.GetOrCreate(conn.sessionKey(event))
 		if session != nil && session.Epoch() != startEpoch {
 			return
 		}
@@ -638,12 +716,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	senderName := senderDisplayName(event)
 	groupName := event.GroupName
 	if engine != nil && engine.Security != nil {
-		principal, pErr := security.NewPrincipal(platform, event.UserID)
+		principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 		if pErr == nil {
 			if senderName != "" {
-				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
+				decision := evalCtx(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session: conn.sessionKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含高风险内容，已被安全机制隔离剔除", senderName))
@@ -651,9 +729,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			if groupName != "" {
-				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+				decision := evalCtx(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session: conn.sessionKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
@@ -706,11 +784,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session: conn.sessionKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
@@ -728,11 +806,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if recentContext := llm.FormatRecentGroupMessagesContext(groupSnapshot.RecentStructuredMessages); recentContext != "" {
 		vettedRecent := recentContext
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session: conn.sessionKey(event),
 				})
 				if security.Blocks(decision.Action) {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
@@ -755,7 +833,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
@@ -831,7 +909,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Type:           "action",
 				Action:         "send_message",
 				Platform:       platform,
-				SessionID:      sessionKey(event),
+				SessionID:      conn.sessionKey(event),
 				TargetID:       targetID,
 				MessageType:    event.MessageType,
 				GroupID:        event.GroupID,
@@ -855,20 +933,25 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
-				if event.MessageType == "group" {
+				if event.MessageType == "group" && !conn.mock {
 					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
 				}
 			}
 			return nil
 		}
 
+		var runCtx context.Context
+		if conn != nil && conn.mock {
+			runCtx = conn.Context()
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
+			Context:       runCtx,
 			Epoch:         startEpoch,
-			SessionID:     sessionKey(event),
+			SessionID:     conn.sessionKey(event),
 			Owner:         owner,
 			OwnerType:     ownerType,
 			ActorUserID:   event.UserID,
-			ActorPlatform: platform,
+			ActorPlatform: securityPlatform,
 			InstanceID:    engine.InstanceID,
 			SendHook:      sendHook,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
@@ -877,6 +960,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
+			Mock:          conn.mock,
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -900,7 +984,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 		if runResult.Silent {
 			engine.TrimSession(session)
-			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", sessionKey(event)))
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
 			return
 		}
 
@@ -956,7 +1040,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if runResult.MemoryWritten {
 		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
+	} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
 		pendingUserText := userText
 		if event.MessageType == "group" {
 			pendingUserText = formatGroupSpeakerMessage(event, userText)
@@ -977,7 +1061,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		})
 	}
 
-	if event.MessageType == "group" {
+	if event.MessageType == "group" && !conn.mock {
 		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
 	}
 }
@@ -1024,7 +1108,7 @@ func sendTerminalNoop(event Event, conn *wsConn) error {
 		Type:      "action",
 		Action:    "noop",
 		Platform:  platform,
-		SessionID: sessionKey(event),
+		SessionID: conn.sessionKey(event),
 		Echo:      "reply_" + event.MessageID,
 	})
 }
@@ -1051,7 +1135,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Type:           "action",
 		Action:         "send_message",
 		Platform:       platform,
-		SessionID:      sessionKey(event),
+		SessionID:      conn.sessionKey(event),
 		TargetID:       targetID,
 		MessageType:    event.MessageType,
 		GroupID:        event.GroupID,
