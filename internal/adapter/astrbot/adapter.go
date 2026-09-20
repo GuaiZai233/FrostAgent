@@ -271,7 +271,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" || event.MessageType == "private" {
-				if handleAdminCommand(c, event, a.engine) {
+				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
 			}

@@ -2,7 +2,9 @@ package astrbot
 
 import (
 	"FrostAgent/internal/adapter/parity"
+	"FrostAgent/internal/admincmd"
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/sandbox"
@@ -1674,3 +1676,163 @@ func TestAstrBotMockConnectionInFlightTeardownAndSandboxRelease(t *testing.T) {
 		t.Fatalf("释放的 session 列表中未找到 mock session, 实际=%v", released)
 	}
 }
+
+func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "usr_admin_1",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	var llmReceivedMessages []string
+	var mu sync.Mutex
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == core.RoleUser {
+					llmReceivedMessages = append(llmReceivedMessages, fmt.Sprint(m.Content))
+				}
+			}
+			mu.Unlock()
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到对话",
+				},
+			}, nil
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.Scope = scope
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	engine.GroupSummaryStore = summaryStore
+	engine.Security = security.NewController(tmpDir)
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 1. 发起带 ?mock=true 的直接对话连接
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 2. 发送 /ban 888888 命令 (即使发送者为管理员 usr_admin_1)
+	banEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_ban",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/ban 888888",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	banBytes, _ := json.Marshal(banEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, banBytes); err != nil {
+		t.Fatalf("发送 ban 消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 ban 消息回复失败: %v", err)
+	}
+	var act Action
+	_ = json.Unmarshal(respBytes, &act)
+
+	// 验证 888888 未被封禁 (未执行 admin ban)
+	targetPrincipal, _ := security.NewPrincipal("astrbot", "888888")
+	if engine.Security.IsLocked(targetPrincipal) {
+		t.Fatalf("Mock 模式下严禁执行真实 /ban 指令锁定用户")
+	}
+
+	// 3. 发送 /unban 888888
+	unbanEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_unban",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/unban 888888",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	unbanBytes, _ := json.Marshal(unbanEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, unbanBytes); err != nil {
+		t.Fatalf("发送 unban 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 unban 消息回复失败: %v", err)
+	}
+
+	// 4. 发送 /reflect
+	reflectEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_reflect",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/reflect",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	reflectBytes, _ := json.Marshal(reflectEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, reflectBytes); err != nil {
+		t.Fatalf("发送 reflect 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 reflect 消息回复失败: %v", err)
+	}
+
+	// 5. 群聊发送 /compact
+	compactEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_compact",
+		GroupID:     "grp_mock_999",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/compact",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	compactBytes, _ := json.Marshal(compactEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, compactBytes); err != nil {
+		t.Fatalf("发送 compact 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 compact 消息回复失败: %v", err)
+	}
+
+	// 验证群聊总结库中无任何持久化记录
+	if rec, found, _ := summaryStore.Get("group:grp_mock_999"); found {
+		t.Fatalf("Mock 模式下严禁将总结持久化到生产 group summary: %s", rec.Summary)
+	}
+
+	// 验证所有指令均被作为普通对话消息送入了 LLM 模型处理
+	mu.Lock()
+	msgs := append([]string(nil), llmReceivedMessages...)
+	mu.Unlock()
+	if len(msgs) < 4 {
+		t.Fatalf("期望 4 条指令均作为普通文本传递给 LLM，实际收到=%d 条: %v", len(msgs), msgs)
+	}
+}
+

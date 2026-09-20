@@ -304,7 +304,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
-				if handleAdminCommand(wsConn, event, a.engine) {
+				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
 					continue
 				}
 			}

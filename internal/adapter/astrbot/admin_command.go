@@ -55,6 +55,9 @@ func sendAstrBotAdminReply(event Event, conn *wsConn, text string, isIntermediat
 }
 
 func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
+	if conn != nil && conn.mock {
+		return false
+	}
 	if engine == nil {
 		return false
 	}

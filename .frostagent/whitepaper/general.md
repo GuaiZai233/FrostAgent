@@ -410,6 +410,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **只读记忆召回与元数据零修改 (Read-Only Recall & Mutation Guarding)**：允许大模型在模拟会话中检索长期记忆库以保持逼真的人设问答上下文，但严格拦截元数据写入。系统在 `RecordRecall` 阶段校验 `!runContext.Mock`，禁止更新 `access_count` 与 `updated_at`；同时在 `memory.reflect` 反思重构工具中显式拦截（返回 `模拟会话模式下禁用记忆反思重构`）；大模型调用 `memory.write` 时拦截持久化写入并返回模拟提示；
   - **安全审查 Dry-Run 模式 (Security Dry-Run Mode)**：在 `mock=true` 模式下，安全控制器调用 `GateIngressDryRun`、`EvaluateDryRun` 及 `EvaluateContextDryRun`，在 `mock` 独立平台上评估输入风险并按需阻断；同时在 `internal/llm/security_gate.go::securityBlocks()` 统一收口处根据 `run.Mock` 路由至 `Watchdog.EvaluateDryRun`，统一覆盖模型输出、工具参数与工具执行结果的安全校验；严禁向 `security_access.json` 累加违规次数（Strikes）、严禁锁定生产 Principal、严禁向 `security_audit.jsonl` 追加持久化审计事件，防止调试测试导致真实账号受罚或污染生产审计日志；
   - **计费系统完全豁免 (Billing Exemption)**：Mock 连接全程绕过 `ReserveLLM` 预扣款与 `CommitLLM` 实际结算阶段，且不计入多模态 Vision 计费，确保在线调试测试绝不扣减用户的账户余额或新手礼包额度；
+  - **管理员命令旁路保护 (Admin Command Bypass)**：在 `mock=true` 模式下，系统在适配器入口及处理层全面拦截管理员指令管道（如 `/ban`、`/unban`、`/reflect`、`/compact`、`/reset` 等）。即使模拟发送者 UID 命中 `ADMIN_QQ_IDS`，此类输入也会被强制作为普通自然语言对话直接传递给大模型，严禁执行任何封禁锁库、安全审计落盘、强制触发记忆反思或写入群聊总结等运维副作用，确保零持久化修改不变量在跨模块交互中始终坚挺；
   - **后台任务隔离与跳过**：当连接处于 Mock 模式时，系统显式跳过 `engine.EnqueueExtractionTurn`（不触发长期记忆提取）、跳过 `GroupCompactor.TriggerWithScope` / `captureGroupCompactMessage`（不触发群聊滚动总结落盘）、以及跳过 `stealer.Observe`（不偷取表情包）。会话完全驻留于临时内存中，服务重启或连接断开后完全丢弃，不污染生产存储。
 - **Web 控制台在线对话界面 (Web Dashboard Direct Chat)**：
   - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；

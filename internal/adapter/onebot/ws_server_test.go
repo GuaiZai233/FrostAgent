@@ -2,8 +2,10 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/parity"
+	"FrostAgent/internal/admincmd"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
@@ -4513,5 +4515,186 @@ func TestWS_NonMockSendActionAndWaitCancelledOnCloseConnections(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("CloseConnections 后 SendActionAndWait 超时未返回")
+	}
+}
+
+func TestWS_MockConnectionAdminCommandsBypassed(t *testing.T) {
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "556677",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	var llmReceivedMessages []string
+	var mu sync.Mutex
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == core.RoleUser {
+					llmReceivedMessages = append(llmReceivedMessages, fmt.Sprint(m.Content))
+				}
+			}
+			mu.Unlock()
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到对话",
+				},
+			}, nil
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.Scope = scope
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	engine.GroupSummaryStore = summaryStore
+	engine.Security = security.NewController(tmpDir)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 1. 发起带 ?mock=true 的直接对话连接
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 2. 发送 /ban 888888 命令 (即使发送者为管理员 556677)
+	banEvent := model.OneBotEvent{
+		SelfID:      10000,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      556677,
+		MessageID:   12301,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"/ban 888888"}}]`),
+	}
+	banBytes, _ := json.Marshal(banEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, banBytes); err != nil {
+		t.Fatalf("发送 ban 消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 ban 消息回复失败: %v", err)
+	}
+	var act model.OneBotAction
+	_ = json.Unmarshal(respBytes, &act)
+	if act.Echo != "" {
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    act.Echo,
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, ackBytes)
+	}
+
+	// 验证 888888 未被封禁 (未执行 admin ban)
+	targetPrincipal, _ := security.NewPrincipal("onebot", "888888")
+	if engine.Security.IsLocked(targetPrincipal) {
+		t.Fatalf("Mock 模式下严禁执行真实 /ban 指令锁定用户")
+	}
+
+	// 3. 发送 /unban 888888
+	unbanEvent := model.OneBotEvent{
+		SelfID:      10000,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      556677,
+		MessageID:   12302,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"/unban 888888"}}]`),
+	}
+	unbanBytes, _ := json.Marshal(unbanEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, unbanBytes); err != nil {
+		t.Fatalf("发送 unban 消息失败: %v", err)
+	}
+	_, respBytes, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 unban 消息回复失败: %v", err)
+	}
+	_ = json.Unmarshal(respBytes, &act)
+	if act.Echo != "" {
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    act.Echo,
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, ackBytes)
+	}
+
+	// 4. 发送 /reflect
+	reflectEvent := model.OneBotEvent{
+		SelfID:      10000,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      556677,
+		MessageID:   12303,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"/reflect"}}]`),
+	}
+	reflectBytes, _ := json.Marshal(reflectEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, reflectBytes); err != nil {
+		t.Fatalf("发送 reflect 消息失败: %v", err)
+	}
+	_, respBytes, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 reflect 消息回复失败: %v", err)
+	}
+	_ = json.Unmarshal(respBytes, &act)
+	if act.Echo != "" {
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    act.Echo,
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, ackBytes)
+	}
+
+	// 5. 群聊发送 @bot /compact
+	compactMsg, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10000"}},
+		{"type": "text", "data": map[string]any{"text": " /compact"}},
+	})
+	compactEvent := model.OneBotEvent{
+		SelfID:      10000,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     999888,
+		UserID:      556677,
+		MessageID:   12304,
+		Message:     compactMsg,
+	}
+	compactBytes, _ := json.Marshal(compactEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, compactBytes); err != nil {
+		t.Fatalf("发送 compact 消息失败: %v", err)
+	}
+	_, respBytes, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 compact 消息回复失败: %v", err)
+	}
+	_ = json.Unmarshal(respBytes, &act)
+	if act.Echo != "" {
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    act.Echo,
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, ackBytes)
+	}
+
+	// 验证群聊总结库中无任何持久化记录
+	if rec, found, _ := summaryStore.Get("group:999888"); found {
+		t.Fatalf("Mock 模式下严禁将总结持久化到生产 group summary: %s", rec.Summary)
+	}
+
+	// 验证所有指令均被作为普通对话消息送入了 LLM 模型处理
+	mu.Lock()
+	msgs := append([]string(nil), llmReceivedMessages...)
+	mu.Unlock()
+	if len(msgs) < 4 {
+		t.Fatalf("期望 4 条指令均作为普通文本传递给 LLM，实际收到=%d 条: %v", len(msgs), msgs)
 	}
 }

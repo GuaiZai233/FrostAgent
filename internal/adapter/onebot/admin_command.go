@@ -81,6 +81,9 @@ func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
 }
 
 func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
+	if conn != nil && conn.mock {
+		return false
+	}
 	if engine == nil {
 		return false
 	}
