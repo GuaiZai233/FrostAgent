@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"context"
 	"crypto/sha256"
@@ -105,6 +106,9 @@ type Engine struct {
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
 
+	// Sandbox integration (optional, nil = sandbox disabled)
+	SandboxBackend sandbox.Backend
+
 	// Security is shared by every runtime owned by the Control Plane.
 	Security   *security.Controller
 	InstanceID string
@@ -187,6 +191,13 @@ func (e *Engine) RunMessagesWithContext(
 		})
 	}
 	ctx := e.Context()
+	if runContext.Context != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Context, cancel)
+		defer stop()
+	}
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
 			runContext.RouteSnapshot = e.ModelRouter.Snapshot()

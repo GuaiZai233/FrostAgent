@@ -90,6 +90,10 @@ type wsConnection struct {
 	stealer             *sticker.Stealer
 	mock                bool
 	mockSessions        sync.Map
+	inFlight            sync.WaitGroup
+	closed              atomic.Bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
 	writeMu             sync.Mutex
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
@@ -106,9 +110,12 @@ type wsConnection struct {
 
 func newWSConnection(conn *websocket.Conn) *wsConnection {
 	gen := fmt.Sprintf("onebot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
+	ctx, cancel := context.WithCancel(context.Background())
 	return &wsConnection{
 		conn:               conn,
 		generation:         gen,
+		ctx:                ctx,
+		cancel:             cancel,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
@@ -117,16 +124,38 @@ func newWSConnection(conn *websocket.Conn) *wsConnection {
 	}
 }
 
+func (c *wsConnection) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	return c.closed.Load()
+}
+
+func (c *wsConnection) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
 func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
-		return fmt.Errorf("websocket connection is nil")
+	if c.conn == nil || c.isClosed() {
+		return fmt.Errorf("websocket connection is closed")
 	}
 	return c.conn.WriteMessage(messageType, data)
 }
 
 func (c *wsConnection) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		if c.mock && c.cancel != nil {
+			c.cancel()
+		}
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -144,9 +173,15 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 
 // processEvent holds its reserved session turn until routing and reply finish.
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
+	}
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
 	}
 	if event.PostType != "message" {
 		return
@@ -196,6 +231,9 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 
 // reply records terminal silence without sending or batching memory.
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	routeScope := oneBotRouteScope(event)
 	if routeSnapshot == nil && engine != nil && engine.ModelRouter != nil {
 		routeSnapshot = engine.ModelRouter.Snapshot()
@@ -394,6 +432,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
+		if conn != nil && conn.mock && conn.isClosed() {
+			return
+		}
 		session = engine.SessionManager.GetOrCreate(conn.historyKey(event))
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
@@ -644,7 +685,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID: conn.historyKey(event),
+			Context:          conn.Context(),
+			SessionID:        conn.historyKey(event),
 			Owner:            owner,
 			OwnerType:        ownerType,
 			ActorUserID:      strconv.FormatInt(event.UserID, 10),

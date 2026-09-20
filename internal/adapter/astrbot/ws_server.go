@@ -78,6 +78,10 @@ type wsConn struct {
 	*runtimescope.Scope
 	conn         *websocket.Conn
 	generation   string
+	inFlight     sync.WaitGroup
+	closed       atomic.Bool
+	ctx          context.Context
+	cancel       context.CancelFunc
 	writeMu      sync.Mutex
 	mock         bool
 	mockSessions sync.Map
@@ -85,13 +89,28 @@ type wsConn struct {
 
 func newWSConn(conn *websocket.Conn) *wsConn {
 	gen := fmt.Sprintf("astrbot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
-	return &wsConn{conn: conn, generation: gen}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &wsConn{conn: conn, generation: gen, ctx: ctx, cancel: cancel}
+}
+
+func (c *wsConn) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	return c.closed.Load()
+}
+
+func (c *wsConn) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 	return c.conn.WriteMessage(messageType, data)
@@ -100,7 +119,7 @@ func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 func (c *wsConn) WriteJSON(v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 
@@ -122,6 +141,14 @@ func (c *wsConn) WriteJSON(v any) error {
 }
 
 func (c *wsConn) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		if c.mock && c.cancel != nil {
+			c.cancel()
+		}
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -427,9 +454,15 @@ func isMentionOnlyInteraction(event Event) bool {
 }
 
 func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	if turn != nil {
 		turn.Wait()
 		defer turn.Done()
+	}
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
 	}
 
 	if event.Type != "event" && event.Type != "" {
@@ -492,6 +525,9 @@ func reply(event Event, engine *llm.Engine, conn *wsConn) {
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
 	platform := event.Platform
 	if platform == "" {
 		platform = "astrbot"
@@ -584,6 +620,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
+		if conn != nil && conn.mock && conn.isClosed() {
+			return
+		}
 		session = engine.SessionManager.GetOrCreate(conn.sessionKey(event))
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
@@ -822,8 +861,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return nil
 		}
 
+		var runCtx context.Context
+		if conn != nil && conn.mock {
+			runCtx = conn.Context()
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID: conn.sessionKey(event),
+			Context:       runCtx,
+			SessionID:     conn.sessionKey(event),
 			Owner:         owner,
 			OwnerType:     ownerType,
 			ActorUserID:   event.UserID,

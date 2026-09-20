@@ -226,15 +226,26 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		}
 		defer func() {
 			a.unregisterConn(c)
-			if c.mock && a.engine != nil && a.engine.SessionManager != nil {
-				c.mockSessions.Range(func(key, _ any) bool {
-					if sessionID, ok := key.(string); ok {
-						a.engine.SessionManager.Delete(sessionID)
-					}
-					return true
-				})
-			}
 			c.Close()
+			c.inFlight.Wait()
+			if c.mock && a.engine != nil {
+				if a.engine.SessionManager != nil {
+					c.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							a.engine.SessionManager.Delete(sessionID)
+						}
+						return true
+					})
+				}
+				if a.engine.SandboxBackend != nil {
+					c.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							_ = a.engine.SandboxBackend.Release(context.Background(), sessionID)
+						}
+						return true
+					})
+				}
+			}
 		}()
 
 		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
@@ -301,13 +312,23 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				a.observeStickers(event)
 			}
 
+			if c.mock && c.isClosed() {
+				continue
+			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot) }) && turn != nil {
-				turn.Done()
+			c.inFlight.Add(1)
+			if !a.engine.Go(func() {
+				defer c.inFlight.Done()
+				processEvent(c, event, a.engine, turn, routeSnapshot)
+			}) {
+				c.inFlight.Done()
+				if turn != nil {
+					turn.Done()
+				}
 			}
 		}
 	}

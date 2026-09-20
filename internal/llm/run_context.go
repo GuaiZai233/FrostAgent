@@ -22,6 +22,7 @@ type BillingRunState struct {
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
+	Context             context.Context // Optional request-local cancellation context (falls back to Engine.Context)
 	SessionID           string
 	Owner               string
 	OwnerType           memory.OwnerType

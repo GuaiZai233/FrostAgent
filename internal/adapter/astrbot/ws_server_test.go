@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"context"
@@ -22,11 +23,12 @@ import (
 )
 
 type mockLLMProvider struct {
-	mu        sync.Mutex
-	reqCount  int
-	requests  []core.ChatRequest
-	responses []*core.ChatResponse
-	errs      []error
+	mu         sync.Mutex
+	reqCount   int
+	requests   []core.ChatRequest
+	customChat func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error)
+	responses  []*core.ChatResponse
+	errs       []error
 }
 
 func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -34,6 +36,9 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 	defer m.mu.Unlock()
 
 	m.requests = append(m.requests, req)
+	if m.customChat != nil {
+		return m.customChat(ctx, req)
+	}
 	idx := m.reqCount
 	m.reqCount++
 
@@ -1548,5 +1553,124 @@ func TestAstrBotMockConnection_DoesNotEnqueueExtraction(t *testing.T) {
 
 	if finalCount := engine.SessionManager.Count(); finalCount != 0 {
 		t.Fatalf("mock 连接关闭后应完全清理 mock session，实际剩余 session 数量=%d", finalCount)
+	}
+}
+
+type mockSandboxBackend struct {
+	mu       sync.Mutex
+	released []string
+}
+
+func (m *mockSandboxBackend) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
+	return sandbox.ExecResult{}, nil
+}
+
+func (m *mockSandboxBackend) Release(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.released = append(m.released, sessionID)
+	return nil
+}
+
+func (m *mockSandboxBackend) Health(ctx context.Context) error {
+	return nil
+}
+
+func TestAstrBotMockConnectionInFlightTeardownAndSandboxRelease(t *testing.T) {
+	inFlightStarted := make(chan struct{})
+	continueChat := make(chan struct{})
+
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			select {
+			case <-inFlightStarted:
+			default:
+				close(inFlightStarted)
+			}
+			select {
+			case <-continueChat:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "模拟回复完成",
+				},
+			}, nil
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	mockSandbox := &mockSandboxBackend{}
+	engine.SandboxBackend = mockSandbox
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 1. 发起带 ?mock=true 的 WebSocket 连接
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_inflight",
+		UserID:      "usr_mock_999",
+		SenderName:  "MockUser",
+		Content:     "in-flight 测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// 等待后台处理进入 LLM 调用 (in-flight)
+	select {
+	case <-inFlightStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时未进入 in-flight LLM 执行")
+	}
+
+	// 确认此时已存在 mock session
+	if count := engine.SessionManager.Count(); count == 0 {
+		t.Fatal("处理进行中应已存在 mock session")
+	}
+
+	// 2. 在消息仍在执行过程中，突然断开连接
+	conn.Close()
+
+	// 让 LLM 继续完成 (或由 context 取消)
+	close(continueChat)
+
+	// 等待连接关闭流程彻底完成
+	time.Sleep(100 * time.Millisecond)
+
+	// 3. 验证 session 没有被在途协程复活 (No Session Resurrection)
+	if count := engine.SessionManager.Count(); count != 0 {
+		t.Fatalf("连接断开后 mock session 不应被在途请求复活，实际剩余=%d", count)
+	}
+
+	// 4. 验证 SandboxBackend.Release 被成功调用并释放了 mock session
+	mockSandbox.mu.Lock()
+	released := append([]string(nil), mockSandbox.released...)
+	mockSandbox.mu.Unlock()
+
+	if len(released) == 0 {
+		t.Fatal("断开连接时应调用 SandboxBackend.Release 释放 mock sandbox session")
+	}
+	foundMock := false
+	for _, s := range released {
+		if strings.HasPrefix(s, "mock:") && strings.Contains(s, "private:usr_mock_999") {
+			foundMock = true
+			break
+		}
+	}
+	if !foundMock {
+		t.Fatalf("释放的 session 列表中未找到 mock session, 实际=%v", released)
 	}
 }

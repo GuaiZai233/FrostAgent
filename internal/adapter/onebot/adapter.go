@@ -251,18 +251,29 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		}
 		defer func() {
 			a.unregisterConn(wsConn)
+			wsConn.Close()
+			wsConn.inFlight.Wait()
 			if wsConn.stealer != nil {
 				wsConn.stealer.ClearObservedScope(wsConn.generation)
 			}
-			if wsConn.mock && a.engine != nil && a.engine.SessionManager != nil {
-				wsConn.mockSessions.Range(func(key, _ any) bool {
-					if sessionID, ok := key.(string); ok {
-						a.engine.SessionManager.Delete(sessionID)
-					}
-					return true
-				})
+			if wsConn.mock && a.engine != nil {
+				if a.engine.SessionManager != nil {
+					wsConn.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							a.engine.SessionManager.Delete(sessionID)
+						}
+						return true
+					})
+				}
+				if a.engine.SandboxBackend != nil {
+					wsConn.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							_ = a.engine.SandboxBackend.Release(context.Background(), sessionID)
+						}
+						return true
+					})
+				}
 			}
-			wsConn.Close()
 		}()
 
 		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
@@ -341,13 +352,23 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if !wsConn.mock {
 				wsConn.observeStickers(event)
 			}
+			if wsConn.isClosed() {
+				continue
+			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot) }) && turn != nil {
-				turn.Done()
+			wsConn.inFlight.Add(1)
+			if !a.engine.Go(func() {
+				defer wsConn.inFlight.Done()
+				processEvent(wsConn, event, a.engine, turn, routeSnapshot)
+			}) {
+				wsConn.inFlight.Done()
+				if turn != nil {
+					turn.Done()
+				}
 			}
 		}
 	}

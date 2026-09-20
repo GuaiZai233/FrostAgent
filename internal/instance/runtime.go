@@ -153,15 +153,16 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
+	var dynamicSandbox *sandbox.DynamicBackend
 	if sandboxManager != nil {
-		dynamicBackend := sandbox.NewDynamicBackend(func() sandbox.Config {
+		dynamicSandbox = sandbox.NewDynamicBackend(func() sandbox.Config {
 			cfg := sandboxManager.Get()
 			cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + instanceID
 			return cfg
 		}, func(cfg sandbox.Config) sandbox.Backend {
 			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger))
 		})
-		commandTool := tools.ExecuteCommandTool(dynamicBackend)
+		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool
 	}
 
@@ -224,6 +225,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		SandboxBackend: dynamicSandbox,
 		Security:       securityController,
 		InstanceID:     instanceID,
 		// Billing components
