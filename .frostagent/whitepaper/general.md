@@ -418,7 +418,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **AstrBot 平台对齐 (Platform Parity)**：在 AstrBot 适配器模式下支持自定义下层平台类型（默认 `aiocqhttp`），确保事件帧与生产 QQ 身份规范化（Memory、Security 与 ModelRouter）完全对齐；
   - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
-  - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
+  - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
 
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dashboardWebSocketURL, instanceWebSocketURL } from './websocket-url.ts';
+import viteConfig from '../../vite.config.ts';
 
 test('dashboardWebSocketURL creates same-origin ws URL for http origin (e.g. dev server :4200)', () => {
   const url = dashboardWebSocketURL(
@@ -87,5 +88,20 @@ test('instanceWebSocketURL preserves external listen address formatting for over
   assert.equal(
     astrbotURL,
     'ws://dashboard.local:1234/instances/inst_test_1/ws/astrbot',
+  );
+});
+
+test('vite dev server proxy for /instances/ preserves host (changeOrigin: false) and enables ws', () => {
+  const instancesProxy = (viteConfig.server?.proxy as Record<string, { changeOrigin?: boolean; ws?: boolean; target?: string }>)?.['/instances/'];
+  assert.ok(instancesProxy, '/instances/ proxy rule must be defined');
+  assert.equal(
+    instancesProxy.changeOrigin,
+    false,
+    '/instances/ dev proxy must not rewrite Host header (changeOrigin must be false) so same-origin CheckOrigin succeeds',
+  );
+  assert.equal(
+    instancesProxy.ws,
+    true,
+    '/instances/ dev proxy must have ws: true enabled',
   );
 });

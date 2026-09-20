@@ -1836,3 +1836,66 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	}
 }
 
+func TestAstrBot_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		host    string
+		allowed bool
+	}{
+		{
+			name:    "Dev proxy preserving Host (changeOrigin: false)",
+			origin:  "http://localhost:4200",
+			host:    "localhost:4200",
+			allowed: true,
+		},
+		{
+			name:    "Dev proxy rewriting Host (changeOrigin: true) rejected",
+			origin:  "http://localhost:4200",
+			host:    "127.0.0.1:8080",
+			allowed: false,
+		},
+		{
+			name:    "Production dashboard same-origin http",
+			origin:  "http://localhost:8080",
+			host:    "localhost:8080",
+			allowed: true,
+		},
+		{
+			name:    "Production dashboard same-origin https",
+			origin:  "https://dashboard.example",
+			host:    "dashboard.example",
+			allowed: true,
+		},
+		{
+			name:    "Non-browser client without Origin",
+			origin:  "",
+			host:    "127.0.0.1:1234",
+			allowed: true,
+		},
+		{
+			name:    "Cross-origin untrusted attack rejected",
+			origin:  "http://evil.example.com",
+			host:    "localhost:8080",
+			allowed: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", "/instances/test/ws/astrbot", nil)
+			if err != nil {
+				t.Fatalf("创建测试请求失败: %v", err)
+			}
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			got := checkWebSocketOrigin(req)
+			if got != tc.allowed {
+				t.Errorf("checkWebSocketOrigin(origin=%q, host=%q) = %v; want %v", tc.origin, tc.host, got, tc.allowed)
+			}
+		})
+	}
+}
+
