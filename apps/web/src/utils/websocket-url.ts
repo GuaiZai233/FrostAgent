@@ -34,3 +34,21 @@ export function instanceWebSocketURL(
   }
   return base;
 }
+
+export function dashboardWebSocketURL(
+  pageOrigin: string,
+  instanceID: string,
+  adapter: 'onebot' | 'astrbot',
+  query?: string,
+): string {
+  const url = new URL(pageOrigin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = `/instances/${instanceID}/ws/${adapter}`;
+  url.hash = '';
+  if (query) {
+    url.search = query.startsWith('?') ? query : `?${query}`;
+  } else {
+    url.search = '';
+  }
+  return url.toString();
+}

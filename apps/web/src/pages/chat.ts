@@ -3,7 +3,7 @@ import { instanceState } from '../instance-state';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
-import { instanceWebSocketURL } from '../utils/websocket-url';
+import { dashboardWebSocketURL } from '../utils/websocket-url';
 
 interface ChatMessage {
   id: string;
@@ -61,7 +61,6 @@ export function mountChatPage(container: HTMLElement): () => void {
   let msgSeq = 0;
 
   // Connection & overview state
-  let wsListenAddr = '';
   let botName = 'FrostAgent';
   let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
 
@@ -344,11 +343,10 @@ export function mountChatPage(container: HTMLElement): () => void {
   function computeWSURL(): string {
     const inst = instanceState.selected;
     if (!inst) return '';
-    return instanceWebSocketURL(
-      wsListenAddr,
+    return dashboardWebSocketURL(
+      window.location.origin,
       inst.id,
       adapter,
-      window.location.origin,
       'mock=true',
     );
   }
@@ -754,12 +752,11 @@ export function mountChatPage(container: HTMLElement): () => void {
     }
   });
 
-  // Load initial bot overview to obtain wsListenAddr and botName
+  // Load initial bot overview to obtain botName
   async function initOverview() {
     try {
       const overview = await api.getOverview();
       if (isUnmounted) return;
-      wsListenAddr = overview.wsListenAddr || '';
       botName = overview.botName || 'FrostAgent';
       updateEndpointDisplay();
       connect();
