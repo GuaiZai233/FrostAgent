@@ -226,6 +226,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		}
 		defer func() {
 			a.unregisterConn(c)
+			if c.mock && a.engine != nil && a.engine.SessionManager != nil {
+				c.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						a.engine.SessionManager.Delete(sessionID)
+					}
+					return true
+				})
+			}
 			c.Close()
 		}()
 
@@ -253,11 +261,19 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if platform == "" {
 					platform = "astrbot"
 				}
+				if c.mock {
+					platform = "mock"
+				}
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
+				var decision security.WatchdogDecision
+				if c.mock {
+					decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+				} else {
+					decision = a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+				}
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
 					if shouldReply(event, a.engine.Scope) {
@@ -288,7 +304,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(sessionKey(event)).ReserveTurn()
+				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
 			}
 			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot) }) && turn != nil {
 				turn.Done()

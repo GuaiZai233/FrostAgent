@@ -254,6 +254,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if wsConn.stealer != nil {
 				wsConn.stealer.ClearObservedScope(wsConn.generation)
 			}
+			if wsConn.mock && a.engine != nil && a.engine.SessionManager != nil {
+				wsConn.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						a.engine.SessionManager.Delete(sessionID)
+					}
+					return true
+				})
+			}
 			wsConn.Close()
 		}()
 
@@ -281,11 +289,20 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				secPlatform := "onebot"
+				if wsConn.mock {
+					secPlatform = "mock"
+				}
+				principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				var decision security.WatchdogDecision
+				if wsConn.mock {
+					decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				} else {
+					decision = a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				}
 				if security.Blocks(decision.Action) {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
 					if shouldSendSecurityDirectReply(event, a.engine) {
@@ -305,7 +322,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
+				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
 			}
 
 			var routeSnapshot *modelrouter.Snapshot
@@ -327,7 +344,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
+				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
 			}
 			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot) }) && turn != nil {
 				turn.Done()

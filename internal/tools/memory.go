@@ -96,13 +96,15 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				if len(filtered) == 0 {
 					return "未找到相关记忆", nil
 				}
-				if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
-				}
-				now := time.Now()
-				for i := range filtered {
-					filtered[i].AccessCount++
-					filtered[i].UpdatedAt = now
+				if !runContext.Mock {
+					if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
+					}
+					now := time.Now()
+					for i := range filtered {
+						filtered[i].AccessCount++
+						filtered[i].UpdatedAt = now
+					}
 				}
 				result, _ := json.Marshal(filtered)
 				return string(result), nil
@@ -124,6 +126,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return string(result), nil
 
 			case "reflect":
+				if runContext.Mock {
+					return "模拟会话模式下禁用记忆反思重构", nil
+				}
 				if engine.MemoryReflections == nil {
 					return "记忆反思功能未启用", nil
 				}

@@ -324,14 +324,18 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **完全绕过上游客户端实现**：控制台前端直接作为标准 WebSocket 客户端，分别连入后端的 `/instances/{id}/ws/onebot` 或 `/instances/{id}/ws/astrbot` 端点；
   - **协议帧双向仿真**：前端直接对齐 OneBot v11 与 AstrBot 的协议格式，构造入站事件包（`Event`）发送至后端，并监听出站动作包（`Action`）还原对话气泡；
   - **自动 ACK 确认闭环**：在 OneBot v11 协议中，系统出站消息遵循 `SendActionAndWait` 机制，前端监听并在收到携带 `echo` 的动作帧时立即回传成功确认帧（`{ "status": "ok", "retcode": 0, "echo": action.echo }`），有效避免后端超时或丢弃后续历史记录。
-- **断电全丢与零记忆污染保证 (Ephemeral Sessions & Zero Memory Pollution)**：
-  - **连接级 Mock 标记**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段将底层连接标记为 `mock = true`；
+- **断电全丢与零持久化污染保证 (Zero Durable Mutation & Complete Session Isolation)**：
+  - **连接级 Mock 标记与代际隔离 (Namespace Isolation)**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段为连接生成独立代际标识（`generation`）并标记 `mock = true`。所有入站事件生成的 Session ID 自动前缀隔离命名空间 `mock:<generation>:<baseKey>`，彻底杜绝模拟会话与生产真实用户/群聊会话混合；
+  - **断开连接自动生命周期清理 (Disconnect Lifecycle Cleanup)**：连接维护线程安全的 `mockSessions sync.Map`。在连接关闭或断开时，通过 `defer` 钩子自动遍历注销并从 `engine.SessionManager` 中彻底删除所有关联的临时会话，实现会话级“断电全丢”；
   - **运行时上下文穿透 (`RunContext.Mock`)**：在消息进入 `reply()` 处理管道时，连接的 `mock` 属性被完整注入至 `llm.RunContext.Mock`，贯穿大模型推理与工具调用生命周期；
-  - **大模型记忆写入拦截**：大模型调用 `memory` 工具（`action == "write"`）时被底层拦截，跳过 `MemoryWriter.WriteByOwner` 持久化，返回提示 `记忆已记录（模拟会话：断电即丢，不持久化保存）`；
+  - **只读记忆召回与元数据零修改 (Read-Only Recall & Mutation Guarding)**：允许大模型在模拟会话中检索长期记忆库以保持逼真的人设问答上下文，但严格拦截元数据写入。系统在 `RecordRecall` 阶段校验 `!runContext.Mock`，禁止更新 `access_count` 与 `updated_at`；同时在 `memory.reflect` 反思重构工具中显式拦截（返回 `模拟会话模式下禁用记忆反思重构`）；大模型调用 `memory.write` 时拦截持久化写入并返回模拟提示；
+  - **安全审查 Dry-Run 模式 (Security Dry-Run Mode)**：在 `mock=true` 模式下，安全控制器调用 `GateIngressDryRun`、`EvaluateDryRun` 及 `EvaluateContextDryRun`，在 `mock` 独立平台上评估输入风险并按需阻断，但严禁向 `security_access.json` 累加违规次数（Strikes）、严禁锁定生产 Principal、严禁写入 `security_audit.jsonl`，防止调试测试导致真实账号受罚；
+  - **计费系统完全豁免 (Billing Exemption)**：Mock 连接全程绕过 `ReserveLLM` 预扣款与 `CommitLLM` 实际结算阶段，且不计入多模态 Vision 计费，确保在线调试测试绝不扣减用户的账户余额或新手礼包额度；
   - **后台任务隔离与跳过**：当连接处于 Mock 模式时，系统显式跳过 `engine.EnqueueExtractionTurn`（不触发长期记忆提取）、跳过 `GroupCompactor.TriggerWithScope` / `captureGroupCompactMessage`（不触发群聊滚动总结落盘）、以及跳过 `stealer.Observe`（不偷取表情包）。会话完全驻留于临时内存中，服务重启或连接断开后完全丢弃，不污染生产存储。
 - **Web 控制台在线对话界面 (Web Dashboard Direct Chat)**：
   - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；
   - **多协议与多场景自由切换**：支持在 OneBot v11 与 AstrBot 两大适配器间无缝切换，并支持私聊（Private）与群聊（Group）场景模拟；
+  - **AstrBot 平台对齐 (Platform Parity)**：在 AstrBot 适配器模式下支持自定义下层平台类型（默认 `aiocqhttp`），确保事件帧与生产 QQ 身份规范化（Memory、Security 与 ModelRouter）完全对齐；
   - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。

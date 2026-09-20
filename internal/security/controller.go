@@ -96,6 +96,30 @@ func (c *Controller) GateIngress(p Principal, content string, meta AuditEvent) W
 	return c.Watchdog.Evaluate(p, StageIngress, SourceUserDirect, content, meta)
 }
 
+// GateIngressDryRun evaluates ingress content without mutating AccessStore strikes/locks or AuditStore.
+func (c *Controller) GateIngressDryRun(p Principal, content string, meta AuditEvent) WatchdogDecision {
+	if c == nil {
+		return WatchdogDecision{Action: WatchdogPass}
+	}
+	if c.Access == nil || c.Watchdog == nil {
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
+	}
+	locked, record, err := c.Access.IsLocked(p)
+	if err != nil {
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "access-control state unavailable"}
+	}
+	if locked {
+		meta.Principal = p
+		meta.Stage = StageIngress
+		meta.Source = SourceUserDirect
+		meta.Action = WatchdogBlock
+		meta.Reason = record.Reason
+		meta.Hash = ContentHash(content)
+		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta}
+	}
+	return c.Watchdog.EvaluateDryRun(p, StageIngress, SourceUserDirect, content, meta)
+}
+
 // Evaluate passes content to the underlying Watchdog with explicit stage and provenance source.
 func (c *Controller) Evaluate(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	if c == nil || c.Watchdog == nil {
@@ -104,11 +128,24 @@ func (c *Controller) Evaluate(p Principal, stage WatchdogStage, source WatchdogS
 	return c.Watchdog.Evaluate(p, stage, source, content, meta)
 }
 
+// EvaluateDryRun evaluates content with the underlying Watchdog without mutating AccessStore or AuditStore.
+func (c *Controller) EvaluateDryRun(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	if c == nil || c.Watchdog == nil {
+		return WatchdogDecision{Action: WatchdogPass}
+	}
+	return c.Watchdog.EvaluateDryRun(p, stage, source, content, meta)
+}
+
 // EvaluateContext evaluates indirect context (such as quoted reply context or group running summary)
 // at StageIngress with the given non-direct provenance source. If high-risk content is detected,
 // it is blocked and audited without striking or locking the requesting principal.
 func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	return c.Evaluate(p, StageIngress, source, content, meta)
+}
+
+// EvaluateContextDryRun evaluates indirect context in dry-run mode.
+func (c *Controller) EvaluateContextDryRun(p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateDryRun(p, StageIngress, source, content, meta)
 }
 
 func Blocks(action WatchdogAction) bool {

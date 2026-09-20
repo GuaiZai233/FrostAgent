@@ -1532,8 +1532,21 @@ func TestAstrBotMockConnection_DoesNotEnqueueExtraction(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	sess := engine.SessionManager.GetOrCreate("astrbot:private:usr_mock_1")
-	if sess.PendingTurnCount() != 0 {
-		t.Fatalf("Mock 会话严禁将对话加入记忆提取队列，实际 PendingTurnCount=%d", sess.PendingTurnCount())
+	// 生产 Session 命名空间不应被触碰
+	if _, ok := engine.SessionManager.Get("astrbot:private:usr_mock_1"); ok {
+		t.Fatalf("Mock 会话严禁污染生产 session namespace, 生产 session 不应存在")
+	}
+
+	// 活跃 mock 连接期间存在隔离的 mock session
+	if count := engine.SessionManager.Count(); count == 0 {
+		t.Fatalf("活跃 mock 连接期间应存在隔离的 mock session")
+	}
+
+	// 连接关闭后，mock session 自动删除
+	conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	if finalCount := engine.SessionManager.Count(); finalCount != 0 {
+		t.Fatalf("mock 连接关闭后应完全清理 mock session，实际剩余 session 数量=%d", finalCount)
 	}
 }

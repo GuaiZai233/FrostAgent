@@ -237,6 +237,40 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 	return WatchdogDecision{Action: action, Reason: reason, Event: meta}
 }
 
+// EvaluateDryRun evaluates content without updating AccessStore strikes/locks or writing to AuditStore.
+func (w *Watchdog) EvaluateDryRun(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	if len(content) > MaxInspectionSize {
+		meta.At = time.Now().UTC()
+		meta.Principal = p
+		meta.Stage = stage
+		meta.Source = source
+		meta.Action = WatchdogBlock
+		meta.Reason = "input exceeds maximum inspection limit"
+		meta.Hash = ContentHash(content)
+		meta.Preview = safePreview(content)
+		return WatchdogDecision{Action: WatchdogBlock, Reason: meta.Reason, Event: meta}
+	}
+	rawContent := content
+	content, _ = normalizeBounded(content)
+	normMatches := dangerousContent(content)
+
+	action := WatchdogPass
+	reason := ""
+	if normMatches {
+		action = WatchdogBlock
+		reason = "content matched deterministic high-risk rule"
+	}
+	meta.At = time.Now().UTC()
+	meta.Principal = p
+	meta.Stage = stage
+	meta.Source = source
+	meta.Action = action
+	meta.Reason = reason
+	meta.Hash = ContentHash(content)
+	meta.Preview = safePreview(rawContent)
+	return WatchdogDecision{Action: action, Reason: reason, Event: meta}
+}
+
 func (w *Watchdog) IsLocked(p Principal) bool {
 	if w == nil || w.access == nil {
 		return false

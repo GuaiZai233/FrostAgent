@@ -14,6 +14,46 @@ interface ChatMessage {
   intermediate?: boolean;
 }
 
+interface OneBotSegment {
+  type: string;
+  data?: {
+    text?: string;
+    file?: string;
+    url?: string;
+    qq?: string | number;
+    id?: string | number;
+    [key: string]: unknown;
+  };
+}
+
+interface OneBotActionFrame {
+  action?: string;
+  params?: {
+    message?: string | OneBotSegment[];
+    [key: string]: unknown;
+  };
+  echo?: string;
+  [key: string]: unknown;
+}
+
+interface AstrBotMessageItem {
+  type: string;
+  text?: string;
+  mention_user_id?: string;
+  url?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
+interface AstrBotActionFrame {
+  action?: string;
+  content?: string;
+  messages?: AstrBotMessageItem[];
+  is_intermediate?: boolean;
+  echo?: string;
+  [key: string]: unknown;
+}
+
 export function mountChatPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
   let isUnmounted = false;
@@ -27,6 +67,7 @@ export function mountChatPage(container: HTMLElement): () => void {
 
   // Config state
   let adapter: 'onebot' | 'astrbot' = 'onebot';
+  let astrbotPlatform = 'aiocqhttp';
   let chatType: 'private' | 'group' = 'private';
   let userId = '10001';
   let nickname = '调试员';
@@ -116,7 +157,22 @@ export function mountChatPage(container: HTMLElement): () => void {
           </div>
         </div>
 
-        <!-- Row 2: Group configs (hidden in private mode) -->
+        <!-- Row 2: AstrBot platform config (hidden when OneBot is selected) -->
+        <div id="astrbot-config-row" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-border" style="display: none;">
+          <div class="form-group">
+            <label class="form-label text-xs" for="chat-astrbot-platform-select">AstrBot 平台标识 (Platform)</label>
+            <select id="chat-astrbot-platform-select" class="select text-xs">
+              <option value="aiocqhttp" selected>aiocqhttp (QQ / NapCat, 推荐)</option>
+              <option value="qq_official">qq_official (QQ 官方机器人)</option>
+              <option value="telegram">telegram</option>
+              <option value="discord">discord</option>
+              <option value="wechat">wechat</option>
+              <option value="astrbot">astrbot (通用默认)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 3: Group configs (hidden in private mode) -->
         <div id="group-config-row" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-border" style="display: none;">
           <div class="form-group">
             <label class="form-label text-xs" for="chat-group-id-input">群号 (Group ID)</label>
@@ -185,6 +241,8 @@ export function mountChatPage(container: HTMLElement): () => void {
   const btnClearChat = container.querySelector<HTMLButtonElement>('#btn-clear-chat')!;
 
   const adapterSelect = container.querySelector<HTMLSelectElement>('#chat-adapter-select')!;
+  const astrbotConfigRow = container.querySelector<HTMLElement>('#astrbot-config-row')!;
+  const astrbotPlatformSelect = container.querySelector<HTMLSelectElement>('#chat-astrbot-platform-select')!;
   const typeSelect = container.querySelector<HTMLSelectElement>('#chat-type-select')!;
   const uidInput = container.querySelector<HTMLInputElement>('#chat-uid-input')!;
   const nicknameInput = container.querySelector<HTMLInputElement>('#chat-nickname-input')!;
@@ -400,22 +458,26 @@ export function mountChatPage(container: HTMLElement): () => void {
   }
 
   function handleIncomingFrame(rawData: string) {
-    let payload: any;
+    let payload: unknown;
     try {
       payload = JSON.parse(rawData);
-    } catch (err) {
+    } catch {
       console.warn('DirectChat: Received non-JSON frame:', rawData);
       return;
     }
 
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
     if (adapter === 'onebot') {
-      handleOneBotFrame(payload);
+      handleOneBotFrame(payload as OneBotActionFrame);
     } else if (adapter === 'astrbot') {
-      handleAstrBotFrame(payload);
+      handleAstrBotFrame(payload as AstrBotActionFrame);
     }
   }
 
-  function handleOneBotFrame(action: any) {
+  function handleOneBotFrame(action: OneBotActionFrame) {
     // 1. Critical ACK handling: if action has echo, immediately respond with ACK
     // to satisfy backend SendActionAndWait
     if (action.echo && ws && ws.readyState === WebSocket.OPEN) {
@@ -445,11 +507,11 @@ export function mountChatPage(container: HTMLElement): () => void {
         replyText = rawMsg;
       } else if (Array.isArray(rawMsg)) {
         replyText = rawMsg
-          .map((seg: any) => {
-            if (seg.type === 'text') return seg.data?.text || '';
-            if (seg.type === 'image') return `[图片: ${seg.data?.file || seg.data?.url || 'image'}]`;
-            if (seg.type === 'at') return `@${seg.data?.qq || ''} `;
-            if (seg.type === 'reply') return `[回复:${seg.data?.id}] `;
+          .map((seg: OneBotSegment) => {
+            if (seg.type === 'text') return String(seg.data?.text || '');
+            if (seg.type === 'image') return `[图片: ${String(seg.data?.file || seg.data?.url || 'image')}]`;
+            if (seg.type === 'at') return `@${String(seg.data?.qq || '')} `;
+            if (seg.type === 'reply') return `[回复:${String(seg.data?.id || '')}] `;
             return `[${seg.type}]`;
           })
           .join('');
@@ -467,12 +529,12 @@ export function mountChatPage(container: HTMLElement): () => void {
     }
   }
 
-  function handleAstrBotFrame(action: any) {
+  function handleAstrBotFrame(action: AstrBotActionFrame) {
     if (action.action === 'send_message') {
       let replyText = action.content || '';
       if (!replyText && Array.isArray(action.messages)) {
         replyText = action.messages
-          .map((m: any) => {
+          .map((m: AstrBotMessageItem) => {
             if (m.type === 'plain') return m.text || '';
             if (m.type === 'mention_user') return `@${m.mention_user_id || ''} `;
             if (m.type === 'image') return `[图片: ${m.url || m.path || 'image'}]`;
@@ -587,6 +649,7 @@ export function mountChatPage(container: HTMLElement): () => void {
     const currentUid = String(userId || '10001');
     const currentGid = String(groupId || '100001');
     const senderName = nickname || '调试员';
+    const currentPlatform = astrbotPlatform || 'aiocqhttp';
 
     const eventPayload = {
       type: 'event',
@@ -594,9 +657,9 @@ export function mountChatPage(container: HTMLElement): () => void {
       message_id: `msg_${Date.now()}_${++msgSeq}`,
       session_id:
         chatType === 'group'
-          ? `astrbot:group:${currentGid}`
-          : `astrbot:private:${currentUid}`,
-      platform: 'astrbot',
+          ? `${currentPlatform}:group:${currentGid}`
+          : `${currentPlatform}:private:${currentUid}`,
+      platform: currentPlatform,
       message_type: chatType,
       user_id: currentUid,
       sender_name: senderName,
@@ -638,8 +701,15 @@ export function mountChatPage(container: HTMLElement): () => void {
 
   adapterSelect.addEventListener('change', () => {
     adapter = adapterSelect.value as 'onebot' | 'astrbot';
+    if (astrbotConfigRow) {
+      astrbotConfigRow.style.display = adapter === 'astrbot' ? 'grid' : 'none';
+    }
     updateEndpointDisplay();
     connect();
+  });
+
+  astrbotPlatformSelect?.addEventListener('change', () => {
+    astrbotPlatform = astrbotPlatformSelect.value;
   });
 
   typeSelect.addEventListener('change', () => {
