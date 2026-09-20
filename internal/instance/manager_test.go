@@ -1649,13 +1649,18 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 }
 
 func TestDefaultSendMessage_RoutingAndLifecycle(t *testing.T) {
-	t.Setenv("FROSTAGENT_API_KEY", "test-auth-token-xyz")
 	m := testManager(t)
 	inst1 := create(t, m, "msg-inst-1")
+	if err := m.instances[inst1.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Enable(inst1.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	inst2 := create(t, m, "msg-inst-2")
+	if err := m.instances[inst2.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Enable(inst2.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -1710,6 +1715,64 @@ func TestDefaultSendMessage_RoutingAndLifecycle(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 for disabled instance, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestDefaultSendMessage_ConcurrentDisableNoDeadlock(t *testing.T) {
+	m := testManager(t)
+	inst := create(t, m, "msg-deadlock-test")
+	if err := m.instances[inst.ID].config.Update("FROSTAGENT_API_KEY", "deadlock-test-token", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Goroutine 1: toggles enable/disable (triggers i.mu.Lock -> m.update/m.mu.Lock)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		state := false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				_ = m.Enable(inst.ID, state)
+				state = !state
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	// Goroutines 2..5: concurrently hit global send endpoint (triggers handleDefaultSendMessage)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", strings.NewReader(`{"platform":"onebot","target_id":"123","content":"ping"}`))
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("Authorization", "Bearer deadlock-test-token")
+					w := httptest.NewRecorder()
+					m.ServeHTTP(w, req)
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+
+	// Let the race run for 1 second under load
+	time.Sleep(1 * time.Second)
+	cancel()
+	wg.Wait()
 }
 
 func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {

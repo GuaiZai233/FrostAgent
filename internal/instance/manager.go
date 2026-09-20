@@ -1198,33 +1198,51 @@ func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Candidate selection:
+	// IMPORTANT: To avoid lock order inversion with lifecycle operations like stop()
+	// (which acquires i.mu.Lock then m.mu.Lock via m.update), NEVER acquire i.mu while holding m.mu.
 	m.mu.RLock()
-	var selectedID string
+	var enabledCandidates []string
+	var allCandidates []string
 	for _, info := range m.registry.Instances {
-		if info.Enabled && m.instances[info.ID] != nil {
-			m.instances[info.ID].mu.RLock()
-			hasRuntime := m.instances[info.ID].runtime != nil
-			m.instances[info.ID].mu.RUnlock()
-			if hasRuntime {
-				selectedID = info.ID
+		if m.instances[info.ID] != nil {
+			if info.Enabled {
+				enabledCandidates = append(enabledCandidates, info.ID)
+			}
+			allCandidates = append(allCandidates, info.ID)
+		}
+	}
+	m.mu.RUnlock()
+
+	var selectedID string
+	for _, id := range enabledCandidates {
+		i, err := m.lookup(id)
+		if err != nil {
+			continue
+		}
+		i.mu.RLock()
+		rt := i.runtime
+		i.mu.RUnlock()
+		if rt != nil && rt.Scope.Context().Err() == nil {
+			selectedID = id
+			break
+		}
+	}
+	if selectedID == "" {
+		for _, id := range allCandidates {
+			i, err := m.lookup(id)
+			if err != nil {
+				continue
+			}
+			i.mu.RLock()
+			rt := i.runtime
+			i.mu.RUnlock()
+			if rt != nil {
+				selectedID = id
 				break
 			}
 		}
 	}
-	if selectedID == "" {
-		for _, info := range m.registry.Instances {
-			if m.instances[info.ID] != nil {
-				m.instances[info.ID].mu.RLock()
-				hasRuntime := m.instances[info.ID].runtime != nil
-				m.instances[info.ID].mu.RUnlock()
-				if hasRuntime {
-					selectedID = info.ID
-					break
-				}
-			}
-		}
-	}
-	m.mu.RUnlock()
 
 	if selectedID == "" {
 		w.Header().Set("Content-Type", "application/json")

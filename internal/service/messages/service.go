@@ -80,12 +80,7 @@ func New(dispatcher core.MessageDispatcher, instanceID string, getenv func(strin
 	return &Service{
 		dispatcher: dispatcher,
 		instanceID: instanceID,
-		getenv: func(k string) string {
-			if v := getenv(k); v != "" {
-				return v
-			}
-			return os.Getenv(k)
-		},
+		getenv:     getenv,
 	}
 }
 
