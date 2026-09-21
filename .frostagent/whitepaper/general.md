@@ -258,7 +258,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
-  - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
+  - `execute_command` 的指令正文与返回结果（stdout、stderr）在工具调用与当前轮大模型交互日志中完整记录，不再进行脱敏打码，便于实时调试与可观测性追踪；同时日志 Store 引入总字节预算限制（默认 32 MiB）与字节淘汰机制，后续请求日志中对已由 TOOL 日志完整记录的历史大输出进行引用折叠，杜绝上下文回传导致的内存放大与 OOM 风险；终端控制台摘要保持简洁的调用状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
@@ -460,6 +460,10 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **可观测性无脱敏与日志内存预算防御 (Observability & Memory Budget Defense)**：
+  - `execute_command` 的指令正文与执行结果（stdout、stderr）在智能体工具执行日志（`logs.TOOL`）、大模型请求（`logs.LLM_REQUEST`）与响应（`logs.LLM_RESPONSE`）中完整保留真实内容，不再进行脱敏打码，保证管理员与开发者获得透明的实时排障能力；
+  - 为防止多轮 Agent 对话中历史工具执行结果在每次大模型请求上下文（`LLM_REQUEST`）中反复堆积导致二次内存放大与 OOM 隐患，协议层在记录后续请求日志时对已由 `TOOL` 日志持久化的历史长输出（> 256 字节）进行引用折叠，且上游真实线缆请求与当前轮次未决输出保持 100% 原始完整传输；
+  - 日志存储引擎（`logs.Store`）全面实施硬字节预算（默认 32 MiB）与时间序字节淘汰（Byte-based LRU Eviction），彻底杜绝无界定长缓冲引发的内存击穿风险。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
