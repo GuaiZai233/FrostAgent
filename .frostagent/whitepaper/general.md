@@ -258,7 +258,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
-  - `execute_command` 的指令正文与返回结果（stdout、stderr）在工具调用与大模型交互日志中完整记录，不再进行脱敏打码，便于实时调试与可观测性追踪；同时终端控制台摘要保持简洁的调用状态。
+  - `execute_command` 的指令正文与返回结果（stdout、stderr）在工具调用与当前轮大模型交互日志中完整记录，不再进行脱敏打码，便于实时调试与可观测性追踪；同时日志 Store 引入总字节预算限制（默认 32 MiB）与字节淘汰机制，后续请求日志中对已由 TOOL 日志完整记录的历史大输出进行引用折叠，杜绝上下文回传导致的内存放大与 OOM 风险；终端控制台摘要保持简洁的调用状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；

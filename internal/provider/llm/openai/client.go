@@ -149,7 +149,12 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	c.log().LLMRequest(string(jsonData))
+	logReq := compactHistoricalToolResultsForLogging(openAIReq)
+	if logData, err := json.Marshal(logReq); err == nil {
+		c.log().LLMRequest(string(logData))
+	} else {
+		c.log().LLMRequest(string(jsonData))
+	}
 
 	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
 	if err != nil {
@@ -254,4 +259,84 @@ func (c *Client) log() *logs.Store {
 		return c.Logger
 	}
 	return logs.General
+}
+
+const maxHistoricalToolOutputBytes = 256
+
+// compactHistoricalToolResultsForLogging creates a shallow-copied chatRequest for logging where
+// historical tool results (tools called in previous turns that are followed by subsequent
+// assistant messages) have large outputs (stdout/stderr) folded into a reference placeholder.
+// This prevents quadratic memory amplification across turns in logs.Store, while keeping
+// current-turn tool executions and tool call commands fully unredacted.
+func compactHistoricalToolResultsForLogging(req chatRequest) chatRequest {
+	lastAssistantIdx := -1
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	if lastAssistantIdx <= 0 {
+		return req
+	}
+
+	var needsCopy bool
+	for i := 0; i < lastAssistantIdx; i++ {
+		if req.Messages[i].Role == "tool" {
+			needsCopy = true
+			break
+		}
+	}
+	if !needsCopy {
+		return req
+	}
+
+	copied := req
+	copied.Messages = make([]chatMessage, len(req.Messages))
+	copy(copied.Messages, req.Messages)
+
+	for i := 0; i < lastAssistantIdx; i++ {
+		if copied.Messages[i].Role != "tool" {
+			continue
+		}
+		msg := copied.Messages[i]
+		str, ok := msg.Content.(string)
+		if !ok {
+			continue
+		}
+
+		var r struct {
+			ExitCode                  *int   `json:"exit_code"`
+			TimedOut                  bool   `json:"timed_out"`
+			Stdout                    string `json:"stdout"`
+			Stderr                    string `json:"stderr"`
+			StdoutTruncated           bool   `json:"stdout_truncated"`
+			StderrTruncated           bool   `json:"stderr_truncated"`
+			FrostAgentStdoutTruncated bool   `json:"frostagent_stdout_truncated,omitempty"`
+			FrostAgentStderrTruncated bool   `json:"frostagent_stderr_truncated,omitempty"`
+			DurationMs                int64  `json:"duration_ms"`
+		}
+		if err := json.Unmarshal([]byte(str), &r); err == nil && (r.Stdout != "" || r.Stderr != "" || r.ExitCode != nil) {
+			changed := false
+			if len(r.Stdout) > maxHistoricalToolOutputBytes {
+				r.Stdout = fmt.Sprintf("[historical stdout omitted: len=%d, see TOOL log]", len(r.Stdout))
+				changed = true
+			}
+			if len(r.Stderr) > maxHistoricalToolOutputBytes {
+				r.Stderr = fmt.Sprintf("[historical stderr omitted: len=%d, see TOOL log]", len(r.Stderr))
+				changed = true
+			}
+			if changed {
+				if b, err := json.Marshal(r); err == nil {
+					msg.Content = string(b)
+					copied.Messages[i] = msg
+				}
+			}
+		} else if len(str) > maxHistoricalToolOutputBytes {
+			msg.Content = fmt.Sprintf("[historical output omitted: len=%d, see TOOL log]", len(str))
+			copied.Messages[i] = msg
+		}
+	}
+
+	return copied
 }
