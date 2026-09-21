@@ -8,12 +8,42 @@ import (
 	"time"
 
 	"FrostAgent/internal/actionscat"
+	"FrostAgent/internal/admincmd"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/runtimescope"
 )
 
 const (
 	defaultRunWaitDuration = 25 * time.Second
 )
+
+// AgentActionDTO represents the action metadata returned to LLM agent tools.
+type AgentActionDTO struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Enabled         bool   `json:"enabled"`
+	Runnable        bool   `json:"runnable"`
+	ActiveVersionID string `json:"active_version_id,omitempty"`
+	ActiveBuildID   string `json:"active_build_id,omitempty"`
+	MaxConcurrency  int    `json:"max_concurrency"`
+}
+
+func toAgentActionDTO(a *actionscat.Action) AgentActionDTO {
+	if a == nil {
+		return AgentActionDTO{}
+	}
+	return AgentActionDTO{
+		ID:              a.ID,
+		Name:            a.Name,
+		Description:     a.Description,
+		Enabled:         a.Enabled,
+		Runnable:        a.IsRunnable(),
+		ActiveVersionID: a.ActiveVersionID,
+		ActiveBuildID:   a.ActiveBuildID,
+		MaxConcurrency:  a.MaxConcurrency,
+	}
+}
 
 // AgentRunDTO represents the redacted execution run payload returned to LLM agent tools.
 // Internal execution state, secrets, and planned environment variables (e.g. planned_env)
@@ -63,13 +93,18 @@ func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 	return Tool{
 		name: "actionscat_list_actions",
 		description: "列出 ActionsCat 自动化平台中已注册的 Actions。返回各 Action 的 ID、名称、描述、" +
-			"启用状态及激活版本，供 Agent 发现并决策调用对应任务。",
+			"启用状态及是否可运行（runnable）。注意：只有 runnable=true（已关联并激活构建 active_build_id）" +
+			"的 Action 才能被 actionscat_run_action 成功运行；未构建/未激活版本的 Action 仅为元数据，执行会失败。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"enabled_only": map[string]any{
 					"type":        "boolean",
 					"description": "是否仅返回已启用的 Action（默认 false，返回全部）",
+				},
+				"runnable_only": map[string]any{
+					"type":        "boolean",
+					"description": "是否仅返回已激活构建、可直接执行的 Action（要求 enabled=true 且具备 active_build_id，默认 false）",
 				},
 			},
 		},
@@ -79,7 +114,8 @@ func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 			}
 
 			var input struct {
-				EnabledOnly bool `json:"enabled_only"`
+				EnabledOnly  bool `json:"enabled_only"`
+				RunnableOnly bool `json:"runnable_only"`
 			}
 			if strings.TrimSpace(args) != "" {
 				_ = json.Unmarshal([]byte(args), &input)
@@ -90,17 +126,20 @@ func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 				return fmt.Sprintf("获取 ActionsCat actions 列表失败: %v", err), nil
 			}
 
-			var filtered []actionscat.Action
+			var filtered []AgentActionDTO
 			for _, a := range actions {
 				if input.EnabledOnly && !a.Enabled {
 					continue
 				}
-				filtered = append(filtered, a)
+				if input.RunnableOnly && !a.IsRunnable() {
+					continue
+				}
+				filtered = append(filtered, toAgentActionDTO(&a))
 			}
 
 			resp := struct {
-				Total   int                 `json:"total"`
-				Actions []actionscat.Action `json:"actions"`
+				Total   int              `json:"total"`
+				Actions []AgentActionDTO `json:"actions"`
 			}{
 				Total:   len(filtered),
 				Actions: filtered,
@@ -191,6 +230,10 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 			}
 
 			if err != nil {
+				errMsg := err.Error()
+				if strings.Contains(strings.ToLower(errMsg), "no active build") || strings.Contains(strings.ToLower(errMsg), "no_active_build") {
+					return fmt.Sprintf("触发 ActionsCat Action %s 失败: 该动作尚未激活构建版本 (active_build_id 为空)，无法运行。请先在 ActionsCat 中构建并激活版本后再执行。", input.ActionID), nil
+				}
 				return fmt.Sprintf("触发 ActionsCat Action %s 失败: %v", input.ActionID, err), nil
 			}
 
@@ -266,11 +309,12 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 }
 
 // ActionsCatCreateActionTool creates a Tool that registers a new Action in ActionsCat.
-func ActionsCatCreateActionTool(client *actionscat.Client) Tool {
+// This is a management-plane control operation and is strictly restricted to configured administrators (ADMIN_QQ_IDS).
+func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
 		name: "actionscat_create_action",
-		description: "在 ActionsCat 中创建新的自动化 Action 任务。可指定任务名称、描述及最大并发数。" +
-			"创建成功后返回 Action ID 及其配置详情。",
+		description: "在 ActionsCat 中注册 Action 动作元数据（仅限配置了 ADMIN_QQ_IDS 的管理员使用）。" +
+			"可指定动作名称、描述及最大并发数。注意：新建的 Action 为元数据壳，后续需在 ActionsCat 中构建并激活版本后方可由 actionscat_run_action 实际执行。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -290,8 +334,15 @@ func ActionsCatCreateActionTool(client *actionscat.Client) Tool {
 			"required": []string{"name"},
 		},
 		executeContext: func(ctx context.Context, args string) (string, error) {
-			if runContext, ok := llm.RunContextFromContext(ctx); ok && runContext.Mock {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 创建任务", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_create_action 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
 				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
@@ -318,7 +369,17 @@ func ActionsCatCreateActionTool(client *actionscat.Client) Tool {
 				return fmt.Sprintf("创建 ActionsCat Action 失败: %v", err), nil
 			}
 
-			data, err := json.MarshalIndent(action, "", "  ")
+			result := struct {
+				actionscat.Action
+				Runnable bool   `json:"runnable"`
+				Notice   string `json:"notice"`
+			}{
+				Action:   *action,
+				Runnable: action.IsRunnable(),
+				Notice:   "Action 元数据注册成功。当前尚未关联激活构建 (active_build_id 为空)，需在 ActionsCat 中构建并激活版本后方可运行。",
+			}
+
+			data, err := json.MarshalIndent(result, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("serialize created action response: %w", err)
 			}

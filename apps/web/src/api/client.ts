@@ -138,6 +138,9 @@ export interface ActionsCatAction {
   name: string;
   description: string;
   enabled: boolean;
+  active_version_id?: string;
+  active_build_id?: string;
+  max_concurrency?: number;
   schedule?: string;
   timeout_sec?: number;
   capabilities?: string[];

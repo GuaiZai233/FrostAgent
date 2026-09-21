@@ -177,7 +177,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[actionsCatRunTool.Name()] = actionsCatRunTool
 	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
 	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
-	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient)
+	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient, scope)
 	registry[actionsCatCreateTool.Name()] = actionsCatCreateTool
 
 	// Initialize sticker subsystem
@@ -227,8 +227,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
+	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", 10)
 	engine := &llm.Engine{Scope: scope,
-		MaxIterations:  5,
+		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,

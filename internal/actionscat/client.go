@@ -43,6 +43,11 @@ type Action struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+// IsRunnable reports whether the action is enabled and has both an active version and an active build.
+func (a *Action) IsRunnable() bool {
+	return a != nil && a.Enabled && a.ActiveVersionID != "" && a.ActiveBuildID != ""
+}
+
 // Run represents an execution run of an action in ActionsCat.
 type Run struct {
 	ID              string            `json:"id"`

@@ -402,8 +402,20 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
                     <div class="flex items-center gap-2 flex-wrap">
                       <span class="font-bold text-sm text-foreground">${escapeHtml(act.name || act.id)}</span>
                       <code class="text-xs text-muted-foreground px-1.5 py-0.5 rounded bg-secondary font-mono">${escapeHtml(act.id)}</code>
-                      <span class="badge ${act.enabled ? 'badge-success' : 'badge-outline'} text-xs">
-                        ${act.enabled ? '已启用' : '已禁用'}
+                      <span class="badge ${
+                        act.enabled
+                          ? act.active_build_id
+                            ? 'badge-success'
+                            : 'badge-warning'
+                          : 'badge-outline'
+                      } text-xs">
+                        ${
+                          act.enabled
+                            ? act.active_build_id
+                              ? '可运行'
+                              : '未构建/未激活'
+                            : '已禁用'
+                        }
                       </span>
                     </div>
                     <p class="text-xs text-muted-foreground leading-relaxed mt-0.5">
@@ -433,6 +445,24 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
                 </div>
 
                 <div class="flex items-center gap-3 flex-wrap text-xs text-muted-foreground pt-1 border-t border-border">
+                  ${
+                    act.active_version_id
+                      ? `
+                    <div class="flex items-center gap-1 font-mono">
+                      <span>版本: ${escapeHtml(act.active_version_id)}</span>
+                    </div>
+                  `
+                      : '<span class="text-amber-500 font-mono">未激活版本</span>'
+                  }
+                  ${
+                    act.active_build_id
+                      ? `
+                    <div class="flex items-center gap-1 font-mono">
+                      <span>构建: ${escapeHtml(act.active_build_id)}</span>
+                    </div>
+                  `
+                      : '<span class="text-amber-500 font-mono">未关联构建</span>'
+                  }
                   ${
                     act.schedule
                       ? `
@@ -703,12 +733,27 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
 
   // Dialog: Manual Trigger Run
   function openTriggerDialog(actionID: string, actionName: string): void {
+    const act = actions.find((a) => a.id === actionID);
+    const isUnbuilt = act && (!act.active_build_id || !act.active_version_id);
     openDialog({
       title: `手动执行动作: ${actionName}`,
       description: `动作 ID: ${actionID}`,
       maxWidth: '34rem',
       bodyHtml: `
         <div class="flex flex-col gap-4">
+          ${
+            isUnbuilt
+              ? `
+            <div class="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs flex items-start gap-2">
+              <span class="inline-flex mt-0.5">${icon('circle_alert', 'size-4')}</span>
+              <div class="leading-relaxed">
+                <strong class="font-semibold">提示：该动作尚未关联激活构建 (active_build_id 为空)</strong><br>
+                在 ActionsCat 中绑定并激活构建产物前，执行将因缺少可运行镜像/二进制而失败。
+              </div>
+            </div>
+          `
+              : ''
+          }
           <div class="form-group">
             <label class="form-label text-xs font-semibold">附加环境变量 (Extra Environment Variables)</label>
             <p class="text-xs text-muted-foreground mb-1.5">
@@ -943,10 +988,14 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
   function openCreateActionDialog(): void {
     openDialog({
       title: '新建 Action 自动化动作',
-      description: '在 ActionsCat 中注册一个新的自动化动作任务，供 Agent 或事件触发',
+      description: '在 ActionsCat 中注册动作元数据定义。新动作初始为元数据壳，需在 ActionsCat 中完成构建并激活版本后方可执行。',
       maxWidth: '30rem',
       bodyHtml: `
         <div class="flex flex-col gap-3">
+          <div class="p-2.5 rounded bg-muted/50 text-xs text-muted-foreground border border-border leading-relaxed flex items-start gap-2">
+            <span class="inline-flex text-muted-foreground mt-0.5">${icon('info', 'size-3.5')}</span>
+            <span>提示：此处注册的是动作元数据声明。创建后需在 ActionsCat 中绑定代码版本并完成镜像/二进制构建（生成 active_build_id）后方可实际运行。</span>
+          </div>
           <div class="form-group">
             <label class="form-label text-xs font-semibold">动作名称 <span class="text-destructive">*</span></label>
             <input
