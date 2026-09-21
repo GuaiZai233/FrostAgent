@@ -153,6 +153,17 @@ func TestClient_ActionsAndRuns(t *testing.T) {
 				_ = json.NewEncoder(w).Encode([]Action{mockAction})
 				return
 			}
+			if r.Method == http.MethodPost {
+				var req CreateActionReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockAction
+				created.ID = "act_created_01"
+				created.Name = req.Name
+				created.Description = req.Description
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
 		case "/api/v1/actions/act_test_1":
 			if r.Method == http.MethodGet {
 				_ = json.NewEncoder(w).Encode(mockAction)
@@ -272,6 +283,24 @@ func TestClient_ActionsAndRuns(t *testing.T) {
 	}
 	if logs.Stdout != "Execution successful" {
 		t.Fatalf("unexpected log stdout: %s", logs.Stdout)
+	}
+
+	// 9. Create Action
+	created, err := client.CreateAction(ctx, CreateActionReq{
+		Name:        "New Action",
+		Description: "Newly created action",
+	})
+	if err != nil {
+		t.Fatalf("CreateAction failed: %v", err)
+	}
+	if created.ID != "act_created_01" || created.Name != "New Action" {
+		t.Fatalf("unexpected created action: %+v", created)
+	}
+
+	// 10. Create Action with empty name should fail
+	_, err = client.CreateAction(ctx, CreateActionReq{Name: "   "})
+	if err == nil {
+		t.Fatal("expected error for empty action name, got nil")
 	}
 }
 

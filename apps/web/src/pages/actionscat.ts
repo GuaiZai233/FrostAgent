@@ -62,13 +62,21 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
         <p class="text-xs text-muted-foreground leading-relaxed mb-4">
           ActionsCat 深度集成于 FrostAgent 智能体核心工具链。当 Agent 进行对话推理时，可自动按需自主调用下列工具发现动作、执行任务并检查输出：
         </p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
               <span class="font-mono font-bold text-xs text-foreground">actionscat_list_actions</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询实例关联的所有可用 Actions 动作清单，包含名称、功能描述、权限要求及启用状态。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_action</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              动态注册新的自动化动作任务，支持指定名称、描述及最大并发数，供 Agent 自主编排任务。
             </p>
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
@@ -97,6 +105,10 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             <h2 class="text-base font-bold text-foreground">注册动作 (Actions)</h2>
             <span class="badge badge-secondary" id="actionscat-actions-count">0</span>
           </div>
+          <button class="btn btn-outline btn-sm" id="actionscat-create-action-btn" title="新建 Action 自动化动作">
+            ${icon('plus', 'size-3.5')}
+            <span>新建动作</span>
+          </button>
         </div>
         <div id="actionscat-actions-container">
           <div class="card p-8 text-center text-muted">
@@ -927,6 +939,94 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
     });
   }
 
+  // Dialog: Create Action
+  function openCreateActionDialog(): void {
+    openDialog({
+      title: '新建 Action 自动化动作',
+      description: '在 ActionsCat 中注册一个新的自动化动作任务，供 Agent 或事件触发',
+      maxWidth: '30rem',
+      bodyHtml: `
+        <div class="flex flex-col gap-3">
+          <div class="form-group">
+            <label class="form-label text-xs font-semibold">动作名称 <span class="text-destructive">*</span></label>
+            <input
+              type="text"
+              id="new-action-name"
+              class="input text-xs w-full"
+              placeholder="例如: 每日数据汇总 / 自动备份"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label text-xs font-semibold">动作描述</label>
+            <textarea
+              id="new-action-description"
+              class="input text-xs w-full"
+              rows="3"
+              placeholder="简要说明此动作的功能与触发场景..."
+            ></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label text-xs font-semibold">最大并发运行数</label>
+            <input
+              type="number"
+              id="new-action-concurrency"
+              class="input text-xs w-full"
+              value="1"
+              min="1"
+              max="100"
+            />
+            <p class="text-xs text-muted-foreground mt-1">控制同一时刻该 Action 允许运行的沙箱容器上限，默认 1</p>
+          </div>
+        </div>
+      `,
+      footerHtml: `
+        <button class="btn btn-outline" id="dialog-create-action-cancel">取消</button>
+        <button class="btn btn-primary" id="dialog-create-action-submit">
+          ${icon('plus', 'size-3.5')}
+          <span>创建动作</span>
+        </button>
+      `,
+      onMount: (dialogEl, close) => {
+        const nameInput = dialogEl.querySelector<HTMLInputElement>('#new-action-name')!;
+        const descInput = dialogEl.querySelector<HTMLTextAreaElement>('#new-action-description')!;
+        const concurrencyInput = dialogEl.querySelector<HTMLInputElement>('#new-action-concurrency')!;
+        const cancelBtn = dialogEl.querySelector<HTMLButtonElement>('#dialog-create-action-cancel')!;
+        const submitBtn = dialogEl.querySelector<HTMLButtonElement>('#dialog-create-action-submit')!;
+
+        nameInput.focus();
+        cancelBtn.addEventListener('click', () => close());
+
+        submitBtn.addEventListener('click', async () => {
+          const name = nameInput.value.trim();
+          if (!name) {
+            toast.warning('请输入动作名称');
+            nameInput.focus();
+            return;
+          }
+          const description = descInput.value.trim();
+          const maxConcurrency = parseInt(concurrencyInput.value, 10) || 1;
+
+          submitBtn.disabled = true;
+          try {
+            const created = await actionsCatAPI.createAction({
+              name,
+              description,
+              max_concurrency: maxConcurrency,
+            });
+            toast.success(`Action "${created.name || created.id}" 创建成功`);
+            close();
+            void loadActions();
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast.error(`创建动作失败: ${msg}`);
+            submitBtn.disabled = false;
+          }
+        });
+      },
+    });
+  }
+
   // Load All Data
   async function loadAll(): Promise<void> {
     await loadStatus();
@@ -936,6 +1036,9 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
   // Attach Top Bar Events
   container.querySelector('#actionscat-refresh-btn')?.addEventListener('click', () => {
     void loadAll();
+  });
+  container.querySelector('#actionscat-create-action-btn')?.addEventListener('click', () => {
+    openCreateActionDialog();
   });
   container.querySelector('#actionscat-refresh-runs-btn')?.addEventListener('click', () => {
     void loadRuns();

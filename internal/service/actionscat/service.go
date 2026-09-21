@@ -78,11 +78,15 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleStatus(w, r)
 
 	case path == "/actions" || path == "/actions/":
-		if r.Method != http.MethodGet {
-			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		if r.Method == http.MethodGet {
+			s.handleListActions(w, r)
 			return
 		}
-		s.handleListActions(w, r)
+		if r.Method == http.MethodPost {
+			s.handleCreateAction(w, r)
+			return
+		}
+		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 
 	case strings.HasPrefix(path, "/actions/"):
 		s.handleActionsSubpath(w, r, strings.TrimPrefix(path, "/actions/"))
@@ -118,6 +122,39 @@ func (s *Service) handleListActions(w http.ResponseWriter, r *http.Request) {
 		actions = []client.Action{}
 	}
 	s.writeJSON(w, http.StatusOK, actions)
+}
+
+func (s *Service) handleCreateAction(w http.ResponseWriter, r *http.Request) {
+	if !s.client.IsConfigured() {
+		s.writeError(w, http.StatusBadRequest, "ActionsCat 未配置 ACTIONSCAT_ENDPOINT")
+		return
+	}
+	if r.Body == nil {
+		s.writeError(w, http.StatusBadRequest, "empty request body")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req client.CreateActionReq
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+		return
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); err != io.EOF {
+		s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		s.writeError(w, http.StatusBadRequest, "action name cannot be empty")
+		return
+	}
+	action, err := s.client.CreateAction(r.Context(), req)
+	if err != nil {
+		s.handleClientError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, action)
 }
 
 func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, relPath string) {

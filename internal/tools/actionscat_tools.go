@@ -264,3 +264,65 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 		},
 	}
 }
+
+// ActionsCatCreateActionTool creates a Tool that registers a new Action in ActionsCat.
+func ActionsCatCreateActionTool(client *actionscat.Client) Tool {
+	return Tool{
+		name: "actionscat_create_action",
+		description: "在 ActionsCat 中创建新的自动化 Action 任务。可指定任务名称、描述及最大并发数。" +
+			"创建成功后返回 Action ID 及其配置详情。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Action 任务名称（必填，如 '天气预报抓取'、'每日数据备份'）",
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Action 任务功能说明或描述（可选）",
+				},
+				"max_concurrency": map[string]any{
+					"type":        "integer",
+					"description": "Action 允许的最大并发运行数（可选，默认为 1）",
+				},
+			},
+			"required": []string{"name"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			if runContext, ok := llm.RunContextFromContext(ctx); ok && runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 创建任务", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				Name           string `json:"name"`
+				Description    string `json:"description"`
+				MaxConcurrency int    `json:"max_concurrency"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.Name) == "" {
+				return "缺少必填参数 'name'", nil
+			}
+
+			action, err := client.CreateAction(ctx, actionscat.CreateActionReq{
+				Name:           input.Name,
+				Description:    input.Description,
+				MaxConcurrency: input.MaxConcurrency,
+			})
+			if err != nil {
+				return fmt.Sprintf("创建 ActionsCat Action 失败: %v", err), nil
+			}
+
+			data, err := json.MarshalIndent(action, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize created action response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}

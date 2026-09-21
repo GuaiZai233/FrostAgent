@@ -73,6 +73,13 @@ func (r *Run) IsTerminal() bool {
 	}
 }
 
+// CreateActionReq defines the parameters for creating a new action in ActionsCat.
+type CreateActionReq struct {
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	MaxConcurrency int    `json:"max_concurrency,omitempty"`
+}
+
 // ManualRunReq is the payload for triggering a manual run.
 type ManualRunReq struct {
 	ExtraEnv        map[string]string `json:"extra_env,omitempty"`
@@ -330,6 +337,22 @@ func (c *Client) ListActions(ctx context.Context) ([]Action, error) {
 		return nil, fmt.Errorf("actionscat: parse actions: %w", err)
 	}
 	return actions, nil
+}
+
+// CreateAction creates a new action in ActionsCat.
+func (c *Client) CreateAction(ctx context.Context, req CreateActionReq) (*Action, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, errors.New("actionscat: action name cannot be empty")
+	}
+	data, _, err := c.doRequest(ctx, http.MethodPost, "/api/v1/actions", req, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var action Action
+	if err := json.Unmarshal(data, &action); err != nil {
+		return nil, fmt.Errorf("actionscat: parse action: %w", err)
+	}
+	return &action, nil
 }
 
 // GetAction retrieves a single action by its ID.

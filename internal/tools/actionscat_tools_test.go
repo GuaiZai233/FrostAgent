@@ -44,6 +44,15 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	if !strings.Contains(out, "尚未配置") {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
+
+	createTool := ActionsCatCreateActionTool(client)
+	out, err = createTool.ExecuteContext(ctx, `{"name": "New Action"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured message, got: %s", out)
+	}
 }
 
 func TestActionsCatTools_Execution(t *testing.T) {
@@ -78,6 +87,18 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/actions":
+			if r.Method == http.MethodPost {
+				var req actionscat.CreateActionReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(actionscat.Action{
+					ID:          "act_created_123",
+					Name:        req.Name,
+					Description: req.Description,
+					Enabled:     true,
+				})
+				return
+			}
 			_ = json.NewEncoder(w).Encode([]actionscat.Action{mockAction1, mockAction2})
 		case "/api/v1/actions/act_test_1/runs":
 			if r.Method == http.MethodPost {
@@ -172,6 +193,21 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	if strings.Contains(getNoLogs, "Hello from ActionsCat tool test!") {
 		t.Fatalf("expected logs to be stripped, got: %s", getNoLogs)
 	}
+
+	// 5. Test CreateActionTool
+	createTool := ActionsCatCreateActionTool(client)
+	badCreateOut, _ := createTool.ExecuteContext(ctx, `{}`)
+	if !strings.Contains(badCreateOut, "缺少必填参数 'name'") {
+		t.Fatalf("expected missing name error, got: %s", badCreateOut)
+	}
+
+	createOut, err := createTool.ExecuteContext(ctx, `{"name": "Created Action", "description": "Desc"}`)
+	if err != nil {
+		t.Fatalf("CreateActionTool failed: %v", err)
+	}
+	if !strings.Contains(createOut, "act_created_123") || !strings.Contains(createOut, "Created Action") {
+		t.Fatalf("unexpected create action output: %s", createOut)
+	}
 }
 
 func TestActionsCatRunActionTool_MockSessionRefusal(t *testing.T) {
@@ -236,5 +272,64 @@ func TestActionsCatRunActionTool_MockSessionRefusal(t *testing.T) {
 	}
 	if calls := postCount.Load(); calls != 1 {
 		t.Fatalf("expected 1 call to backend TriggerRun in normal mode, got %d", calls)
+	}
+}
+
+func TestActionsCatCreateActionTool_MockSessionRefusal(t *testing.T) {
+	var postCount atomic.Int32
+	mockAction := actionscat.Action{
+		ID:      "act_mock_created",
+		Name:    "Mock Action",
+		Enabled: true,
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/actions" {
+			postCount.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(mockAction)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := actionscat.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "mock_token"
+		default:
+			return ""
+		}
+	})
+
+	createTool := ActionsCatCreateActionTool(client)
+
+	// 1. In mock session, creation MUST be refused without calling the backend.
+	mockCtx := llm.WithRunContext(context.Background(), llm.RunContext{Mock: true})
+	out, err := createTool.ExecuteContext(mockCtx, `{"name": "Mock Action"}`)
+	if err != nil {
+		t.Fatalf("unexpected error from mock tool execution: %v", err)
+	}
+	if !strings.Contains(out, "模拟会话模式下禁用 ActionsCat 创建任务") {
+		t.Fatalf("expected mock session refusal message, got: %s", out)
+	}
+	if calls := postCount.Load(); calls != 0 {
+		t.Fatalf("expected 0 calls to backend CreateAction in mock mode, got %d", calls)
+	}
+
+	// 2. In normal session, creation proceeds normally.
+	normalCtx := llm.WithRunContext(context.Background(), llm.RunContext{Mock: false})
+	normalOut, err := createTool.ExecuteContext(normalCtx, `{"name": "Mock Action"}`)
+	if err != nil {
+		t.Fatalf("unexpected error from normal tool execution: %v", err)
+	}
+	if !strings.Contains(normalOut, "act_mock_created") {
+		t.Fatalf("expected successful creation in normal mode, got: %s", normalOut)
+	}
+	if calls := postCount.Load(); calls != 1 {
+		t.Fatalf("expected 1 call to backend CreateAction in normal mode, got %d", calls)
 	}
 }

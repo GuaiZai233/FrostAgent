@@ -163,6 +163,12 @@ export interface ActionsCatRunLogs {
   stderr: string;
 }
 
+export interface CreateActionRequest {
+  name: string;
+  description?: string;
+  max_concurrency?: number;
+}
+
 export interface TriggerActionRunRequest {
   extra_env?: Record<string, string>;
   trigger_metadata?: Record<string, string>;
@@ -214,6 +220,13 @@ export const actionsCatAPI = {
   },
   listActions(): Promise<ActionsCatAction[]> {
     return actionsCatRequest<ActionsCatAction[]>('/actions');
+  },
+  createAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>('/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
   },
   getAction(actionID: string): Promise<ActionsCatAction> {
     return actionsCatRequest<ActionsCatAction>(
@@ -661,6 +674,9 @@ export function createInstanceAPI() {
     },
     listActionsCatActions(): Promise<ActionsCatAction[]> {
       return actionsCatAPI.listActions();
+    },
+    createActionsCatAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+      return actionsCatAPI.createAction(req);
     },
     getActionCatAction(actionID: string): Promise<ActionsCatAction> {
       return actionsCatAPI.getAction(actionID);

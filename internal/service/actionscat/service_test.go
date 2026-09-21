@@ -60,6 +60,17 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case "/api/v1/actions":
+			if r.Method == http.MethodPost {
+				var req actclient.CreateActionReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockAction
+				created.ID = "act_new_created"
+				created.Name = req.Name
+				created.Description = req.Description
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
 			_ = json.NewEncoder(w).Encode([]actclient.Action{mockAction})
 		case "/api/v1/actions/act_weather":
 			_ = json.NewEncoder(w).Encode(mockAction)
@@ -207,6 +218,25 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		_ = json.NewDecoder(rec.Body).Decode(&logs)
 		if logs.Stdout != "Weather: Sunny 24C" {
 			t.Fatalf("unexpected logs: %+v", logs)
+		}
+	}
+
+	// 8. POST /api/actionscat/actions
+	{
+		body, _ := json.Marshal(actclient.CreateActionReq{
+			Name:        "New Action",
+			Description: "Created via service",
+		})
+		req := newReq(http.MethodPost, "/api/actionscat/actions", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create action status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var act actclient.Action
+		_ = json.NewDecoder(rec.Body).Decode(&act)
+		if act.Name != "New Action" || act.ID != "act_new_created" {
+			t.Fatalf("unexpected created action: %+v", act)
 		}
 	}
 }
