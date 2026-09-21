@@ -675,3 +675,260 @@ func TestService_BuildServer500_GatewayTimeout(t *testing.T) {
 		t.Fatalf("expected unknown in error body, got: %s", rec.Body.String())
 	}
 }
+
+func TestService_SchedulesAndMatchersProxy(t *testing.T) {
+	mockSchedule := actclient.Schedule{
+		ID:        "sched_789",
+		ActionID:  "act_cron",
+		CronExpr:  "0 8 * * *",
+		Timezone:  "Asia/Shanghai",
+		NextRunAt: time.Now().UTC().Add(time.Hour),
+		Enabled:   true,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	mockMatcher := actclient.Matcher{
+		ID:          "m_789",
+		ActionID:    "act_cron",
+		Name:        "bilibili-link",
+		MatchType:   "regex",
+		Pattern:     `https://b23\.tv/(?P<bvid>\w+)`,
+		TargetField: "text",
+		CaptureEnvMap: map[string]string{
+			"bvid": "BVID",
+		},
+		Priority:         10,
+		ContinueMatching: false,
+		Enabled:          true,
+		CreatedAt:        time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
+	}
+
+	var receivedDeleteScheduleID string
+	var receivedDeleteMatcherID string
+
+	backendTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/actions/act_cron/schedules":
+			if r.Method == http.MethodPost {
+				var req actclient.CreateScheduleReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockSchedule
+				created.CronExpr = req.CronExpr
+				created.Timezone = req.Timezone
+				created.Enabled = req.Enabled
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode([]actclient.Schedule{mockSchedule})
+				return
+			}
+
+		case r.URL.Path == "/api/v1/schedules/sched_789" && r.Method == http.MethodDelete:
+			receivedDeleteScheduleID = "sched_789"
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+
+		case r.URL.Path == "/api/v1/actions/act_cron/matchers":
+			if r.Method == http.MethodPost {
+				var req actclient.CreateMatcherReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockMatcher
+				created.Name = req.Name
+				created.MatchType = req.MatchType
+				created.Pattern = req.Pattern
+				created.Enabled = req.Enabled
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode([]actclient.Matcher{mockMatcher})
+				return
+			}
+
+		case r.URL.Path == "/api/v1/matchers/m_789" && r.Method == http.MethodDelete:
+			receivedDeleteMatcherID = "m_789"
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backendTS.Close()
+
+	cl := actclient.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return backendTS.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_mgmt_token"
+		default:
+			return ""
+		}
+	})
+
+	svc := New(cl, "inst_test")
+
+	newReq := func(method, target string, body io.Reader) *http.Request {
+		r := httptest.NewRequest(method, target, body)
+		r.RemoteAddr = "127.0.0.1:1234"
+		return r
+	}
+
+	// 1. POST /api/actionscat/actions/act_cron/schedules
+	{
+		body, _ := json.Marshal(actclient.CreateScheduleReq{
+			CronExpr: "0 8 * * *",
+			Timezone: "Asia/Shanghai",
+			Enabled:  true,
+		})
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create schedule status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var sched actclient.Schedule
+		_ = json.NewDecoder(rec.Body).Decode(&sched)
+		if sched.ID != "sched_789" || sched.CronExpr != "0 8 * * *" {
+			t.Fatalf("unexpected schedule: %+v", sched)
+		}
+	}
+
+	// 2. GET /api/actionscat/actions/act_cron/schedules (and with /api/v1/ prefix)
+	{
+		req := newReq(http.MethodGet, "/api/v1/actionscat/actions/act_cron/schedules", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list schedules status code: %d", rec.Code)
+		}
+		var list []actclient.Schedule
+		_ = json.NewDecoder(rec.Body).Decode(&list)
+		if len(list) != 1 || list[0].ID != "sched_789" {
+			t.Fatalf("unexpected schedules list: %+v", list)
+		}
+	}
+
+	// 3. DELETE /api/actionscat/schedules/sched_789
+	{
+		req := newReq(http.MethodDelete, "/api/actionscat/schedules/sched_789", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete schedule status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		if receivedDeleteScheduleID != "sched_789" {
+			t.Fatalf("expected backend delete for sched_789, got %q", receivedDeleteScheduleID)
+		}
+	}
+
+	// 4. POST /api/actionscat/actions/act_cron/matchers
+	{
+		body, _ := json.Marshal(actclient.CreateMatcherReq{
+			Name:      "bilibili-link",
+			MatchType: "regex",
+			Pattern:   `https://b23\.tv/(?P<bvid>\w+)`,
+			Enabled:   true,
+		})
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create matcher status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var m actclient.Matcher
+		_ = json.NewDecoder(rec.Body).Decode(&m)
+		if m.ID != "m_789" || m.Name != "bilibili-link" {
+			t.Fatalf("unexpected matcher: %+v", m)
+		}
+	}
+
+	// 5. GET /api/actionscat/actions/act_cron/matchers
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_cron/matchers", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list matchers status code: %d", rec.Code)
+		}
+		var list []actclient.Matcher
+		_ = json.NewDecoder(rec.Body).Decode(&list)
+		if len(list) != 1 || list[0].ID != "m_789" {
+			t.Fatalf("unexpected matchers list: %+v", list)
+		}
+	}
+
+	// 6. DELETE /api/actionscat/matchers/m_789
+	{
+		req := newReq(http.MethodDelete, "/api/actionscat/matchers/m_789", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete matcher status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		if receivedDeleteMatcherID != "m_789" {
+			t.Fatalf("expected backend delete for m_789, got %q", receivedDeleteMatcherID)
+		}
+	}
+
+	// 7. Fail-closed on malformed JSON and trailing tokens
+	{
+		// Malformed JSON for schedule
+		req1 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader([]byte("{invalid-json")))
+		rec1 := httptest.NewRecorder()
+		svc.ServeHTTP(rec1, req1)
+		if rec1.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for malformed json in create schedule, got %d", rec1.Code)
+		}
+
+		// Trailing tokens for schedule
+		req2 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader([]byte(`{"cron_expr":"* * * * *"} 123`)))
+		rec2 := httptest.NewRecorder()
+		svc.ServeHTTP(rec2, req2)
+		if rec2.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for trailing tokens in create schedule, got %d", rec2.Code)
+		}
+
+		// Empty cron_expr
+		req3 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader([]byte(`{"cron_expr":""}`)))
+		rec3 := httptest.NewRecorder()
+		svc.ServeHTTP(rec3, req3)
+		if rec3.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for empty cron_expr, got %d", rec3.Code)
+		}
+
+		// Malformed JSON for matcher
+		req4 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte("{invalid-json")))
+		rec4 := httptest.NewRecorder()
+		svc.ServeHTTP(rec4, req4)
+		if rec4.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for malformed json in create matcher, got %d", rec4.Code)
+		}
+
+		// Trailing tokens for matcher
+		req5 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"test","pattern":"p"} "extra"`)))
+		rec5 := httptest.NewRecorder()
+		svc.ServeHTTP(rec5, req5)
+		if rec5.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for trailing tokens in create matcher, got %d", rec5.Code)
+		}
+
+		// Empty name / pattern for matcher
+		req6 := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"","pattern":"p"}`)))
+		rec6 := httptest.NewRecorder()
+		svc.ServeHTTP(rec6, req6)
+		if rec6.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for empty name in create matcher, got %d", rec6.Code)
+		}
+	}
+}

@@ -64,6 +64,12 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │                                           │ - actionscat_deploy_action (Admin) │  │
 │                                           │ - actionscat_run_action (Mock/Env) │  │
 │                                           │ - actionscat_get_run (Redacted)    │  │
+│                                           │ - actionscat_create_schedule(Admin)│  │
+│                                           │ - actionscat_list_schedules        │  │
+│                                           │ - actionscat_delete_schedule(Admin)│  │
+│                                           │ - actionscat_create_matcher (Admin)│  │
+│                                           │ - actionscat_list_matchers         │  │
+│                                           │ - actionscat_delete_matcher (Admin)│  │
 │                                           └─────────────────┬──────────────────┘  │
 │                                                             │ Client Call         │
 │                                                             ▼                     │
@@ -87,8 +93,18 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │  - /api/v1/actions/:id/builds/:bid   : 构建状态与制品哈希查询                      │
 │  - /api/v1/actions/:id/active-build  : 激活生效构建 (Status: succeeded 校验)       │
 │  - /api/v1/actions/:id/runs          : 任务触发与执行生命周期                       │
+│  - /api/v1/actions/:id/schedules     : Cron 定时调度规则注册与查询                 │
+│  - /api/v1/schedules/:id             : 定时调度注销 (DELETE)                       │
+│  - /api/v1/actions/:id/matchers      : 事件模式匹配规则注册与查询                  │
+│  - /api/v1/matchers/:id              : 事件模式规则注销 (DELETE)                   │
 │  - /api/v1/dispatch                  : 任意 JSON 业务事件分发                      │
 │                                                                                   │
+│  ┌───────────────────────────────┐     ┌───────────────────────────────────────┐  │
+│  │ Background Cron Scheduler     │     │ Event Pattern Matcher Engine          │  │
+│  │ (server.Scheduler.Start(ctx)) │     │ (exact / contains / regex)            │  │
+│  └───────────────┬───────────────┘     └───────────────────┬───────────────────┘  │
+│                  └───────────────────────┬─────────────────┘                      │
+│                                          ▼ 自动拉起执行 (无 LLM 热路径介入)        │
 │               ┌──────────────────────────────────────────────────┐                │
 │               │ Worker Sandbox (code-interpreter / Docker)       │                │
 │               │  - network: none / 受限能力                       │                │
@@ -135,6 +151,12 @@ func (c *Client) TriggerRunAndWait(ctx context.Context, actionID string, req Man
 func (c *Client) ListRuns(ctx context.Context, actionID string, limit, offset int) ([]Run, error)
 func (c *Client) GetRun(ctx context.Context, actionID, runID string) (*Run, error)
 func (c *Client) GetRunLogs(ctx context.Context, actionID, runID string) (*RunLogs, error)
+func (c *Client) ListSchedules(ctx context.Context, actionID string) ([]Schedule, error)
+func (c *Client) CreateSchedule(ctx context.Context, actionID string, req CreateScheduleReq) (*Schedule, error)
+func (c *Client) DeleteSchedule(ctx context.Context, scheduleID string) error
+func (c *Client) ListMatchers(ctx context.Context, actionID string) ([]Matcher, error)
+func (c *Client) CreateMatcher(ctx context.Context, actionID string, req CreateMatcherReq) (*Matcher, error)
+func (c *Client) DeleteMatcher(ctx context.Context, matcherID string) error
 func (c *Client) Dispatch(ctx context.Context, event any) error
 ```
 
@@ -153,14 +175,21 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 - **挂载路径**：
   - 实例作用域路由：`/instances/{id}/api/actionscat/*`
   - 全局默认别名路由：`/api/actionscat/*` 与 `/api/v1/actionscat/*`（由顶层 `managementMux` 转发）
+- **触发平面代理端点**：
+  - `GET /actions/:id/schedules`：查询指定 Action 的定时调度规则列表；
+  - `POST /actions/:id/schedules`：注册 Action 定时调度规则（严格校验 `cron_expr` 非空）；
+  - `DELETE /schedules/:id`：永久注销指定调度；
+  - `GET /actions/:id/matchers`：查询指定 Action 的事件模式匹配规则列表；
+  - `POST /actions/:id/matchers`：注册事件模式规则（严格校验 `name` 与 `pattern` 非空）；
+  - `DELETE /matchers/:id`：永久注销指定事件规则。
 - **鉴权集成**：复用 `mcpsvc.CheckControlPlaneAuthScoped`，基于请求来源 IP、Authorization Header 以及实例配置执行严格门禁。
 - **Fail-Closed 请求防护**：
-  - 采用 `http.MaxBytesReader` 限制请求体最大 10 MiB，抵御恶意大包；
-  - 严格 JSON 解码（`DisallowUnknownFields` 与 EOF 探测），拒绝截断或格式错误的恶意请求，防止无效请求触发后端 Action。
+  - 采用 `http.MaxBytesReader` 限制请求体最大 10 MiB（创建版本源码包）/ 1 MiB（调度与规则元数据），抵御恶意大包；
+  - 严格 JSON 解码（`dec.Decode(&trailing) == io.EOF` 严格防尾随多余 Token 校验），拒绝截断或格式错误的恶意请求，防止无效请求触发后端 Action。
 
 ### 3.3 智能体工具集（`internal/tools/actionscat_tools.go`）
 
-向大模型 Agent Loop 暴露 10 个标准化工具，涵盖完整部署生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行）：
+向大模型 Agent Loop 暴露 16 个标准化工具，涵盖完整生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行 -> 定时调度 -> 事件匹配）：
 
 #### 1. `actionscat_list_actions`
 - **功能**：列出已注册的 Action 列表；
@@ -223,6 +252,71 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 - **功能**：查询指定运行任务的状态、耗时、退出码及 stdout/stderr 日志；
 - **脱敏策略**：返回 `AgentRunDTO`，完全剔除 `PlannedEnv`。
 
+#### 11. `actionscat_create_schedule` (Admin)
+- **功能**：为指定 Action 注册基于 Cron 表达式的后台定时触发器；
+- **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
+- **参数**：
+  - `action_id: string`（必填，目标 Action ID）
+  - `cron_expr: string`（必填，标准 5 段式 Cron 表达式，如 `0 9 * * *` 或 `*/10 * * * *`）
+  - `timezone: string`（可选，IANA 时区标识，默认 `Asia/Shanghai`）
+  - `enabled: bool`（可选，默认 true）
+- **契约保证**：注册成功后由 ActionsCat 后台常驻调度器自主调度，脱离 LLM 在后台周期运行。
+
+#### 12. `actionscat_list_schedules`
+- **功能**：查询指定 Action 绑定的所有定时调度规则；
+- **参数**：`action_id: string`（必填）；
+- **输出**：返回调度列表，包含调度 ID、Cron 表达式、时区、下次计算执行时间（`next_run_at`）、上次执行时间及启用状态。
+
+#### 13. `actionscat_delete_schedule` (Admin)
+- **功能**：永久注销指定的定时调度规则；
+- **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
+- **参数**：`schedule_id: string`（必填，待注销的调度 ID）。
+
+#### 14. `actionscat_create_matcher` (Admin)
+- **功能**：为指定 Action 注册基于消息/事件模式匹配的触发规则；
+- **权限门禁**：管理员权限门禁，`Mock==true` 拦截；
+- **参数**：
+  - `action_id: string`（必填，目标 Action ID）
+  - `name: string`（必填，规则名称）
+  - `match_type: string`（必填，匹配方式：`contains` / `exact` / `regex`）
+  - `pattern: string`（必填，匹配表达式，regex 模式必须符合 Go/RE2 正则语法）
+  - `target_field: string`（可选，事件 JSON 字段路径，默认 `text`）
+  - `capture_env_map: map[string]string`（可选，正则命名捕获组映射为容器环境变量名）
+  - `priority: int`（可选，评估优先级，数值越高越先匹配，默认 0）
+  - `continue_matching: bool`（可选，匹配命中后是否允许后续规则继续匹配，默认 false）
+  - `enabled: bool`（可选，默认 true）
+- **安全检查**：前置校验 `capture_env_map` 中的环境变量名称，严禁使用 `ACTIONSCAT_` 前缀，防止覆盖运行时安全凭据。
+
+#### 15. `actionscat_list_matchers`
+- **功能**：查询指定 Action 绑定的所有事件模式规则；
+- **参数**：`action_id: string`（必填）；
+- **输出**：返回规则列表，包含规则 ID、名称、匹配类型、表达式、目标字段、捕获映射、优先级及启用状态。
+
+#### 16. `actionscat_delete_matcher` (Admin)
+- **功能**：永久注销指定的事件模式匹配规则；
+- **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
+- **参数**：`matcher_id: string`（必填，待注销的规则 ID）。
+
+---
+
+### 3.4 触发平面架构与自主运行机制 (Trigger Plane & Autonomous Execution)
+
+触发平面（Trigger Plane）是 ActionsCat 区别于纯交互式沙箱的核心系统能力。它包含 **定时调度器 (Schedule Trigger)** 与 **事件模式引擎 (Matcher Trigger)** 两个子系统：
+
+1. **后台常驻定时调度器 (Background Cron Scheduler)**：
+   - 调度器作为常驻后台 Goroutine（`server.Scheduler.Start(ctx)`）独立运行，使用一分钟粒度的 Tick 进行轮询；
+   - 支持标准 5 段式（分 时 日 月 周）Cron 表达式以及完整 IANA 时区（如 `Asia/Shanghai`, `UTC`, `America/New_York`），由服务端准确计算 `next_run_at`；
+   - **零 LLM 热路径开销**：定时触发直接在 ActionsCat 内部调度执行，任务完成时由沙箱内的 SDK `client.Reply(...)` 经由 `messages.Service` 触达指定群聊/用户。整个触发与执行链条无需大模型参与，彻底消除了定期巡检的 Token 消耗、并发占用与大模型不确定性。
+
+2. **事件模式匹配引擎 (Event Matcher Engine)**：
+   - ActionsCat 监听来自 IM 平台或外部系统的通用 JSON 事件（`/api/v1/dispatch`）；
+   - 规则匹配支持三种模式：
+     - `contains`：目标字段包含子串；
+     - `exact`：目标字段与规则全量字符一致；
+     - `regex`：标准正则匹配，支持命名捕获组 `(?P<group_name>...)`；
+   - **动态参数捕获与环境注入**：通过 `capture_env_map`，匹配引擎可从用户消息中提取关键参数（例如 `(?P<city>\S+)` -> `CITY=city`）并直接注入为任务运行的容器环境变量，使同一 Action 能够按不同输入弹性执行；
+   - **优先级与匹配短路**：支持按 `priority` 倒序评估，默认命中后阻断后续规则（`continue_matching == false`），支持多规则流水线。
+
 ---
 
 ## 四、安全与隔离边界
@@ -230,14 +324,16 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | 维度 | 安全威胁 | FrostAgent 防御机制与不变量 |
 | :--- | :--- | :--- |
 | **控制平面凭据** | 外部未授权调用 FrostAgent 代理，利用代理持有的 token 滥用 ActionsCat | 代理入口强制调用 `CheckControlPlaneAuthScoped`，非本地回环强制 Bearer 校验，支持本地强鉴权配置 |
-| **管理面权限滥用** | 普通用户诱导 Agent 频繁调用管理工具（创建 Action/版本、构建、激活或部署）污染控制面 | 5 个状态变更工具全量接入 `ADMIN_QQ_IDS` 门禁；非管理员执行时直接返回权限不足，产生 0 次后端网络请求 |
-| **模拟会话副作用** | `?mock=true` 调试会话调用执行或变更工具触发真实沙箱编译、写入与消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更与运行操作，严格维持“断电全丢”不变量 |
+| **管理面权限滥用** | 普通用户诱导 Agent 频繁调用管理工具（创建 Action/版本/调度/规则、构建、激活或部署）污染控制面 | 9 个状态变更工具（包含 Schedule/Matcher 创建与删除）全量接入 `ADMIN_QQ_IDS` 门禁；非管理员执行时直接返回权限不足，产生 0 次后端网络请求 |
+| **模拟会话副作用** | `?mock=true` 调试会话调用执行、变更或触发器工具触发真实沙箱编译、写入、定时触发或消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更、运行与触发器注册操作，严格维持“断电全丢”不变量 |
 | **构建未决结果风险** | 耗时编译超时、服务端 5xx、响应解析异常或传输中断，被客户端误判为“失败”引发重复并发构建 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断、服务端 5xx、响应损坏与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |
 | **构建状态与版本污染** | 激活未完成/失败的构建导致 Action 运行时崩溃；在失败版本上重试破坏不可变快照 | `activate_build` 与 `deploy_action` 严格断言 `build.Status == "succeeded"`；对失败构建输出截断日志并强制指引 Agent 通过 `create_version` 创建新版本 |
+| **触发器变量伪造与越权** | 通过事件模式匹配的 `capture_env_map` 注入 `ACTIONSCAT_*` 系统级凭据，覆盖容器运行时回调端点或授权 Token | 工具层在注册 Matcher 时执行前置黑名单校验，任何以 `ACTIONSCAT_` 为前缀的目标环境变量均被直接拒绝 |
+| **正则拒绝服务 (ReDoS)** | 注册灾难性回溯的畸形正则表达式导致匹配引擎 CPU 耗尽 | Go 语言标准库 `regexp` 基于 RE2 线性自动机实现，天生免疫回溯死循环；代理与工具层严格校验正则语法编译合法性 |
 | **源码载荷溢出** | Agent 提交超大代码文件或递归目录耗尽内存与传输带宽 | 工具层计算源码映射总字节并硬限制为 10 MiB（`maxTotalFilesBytes`）；HTTP 代理层强制配置 `http.MaxBytesReader` 限制 10 MiB |
 | **敏感状态泄露** | 沙箱运行中注入的持久状态（`planned_env`）进入大模型上下文导致数据泄露 | 单独定义 `AgentRunDTO`，严格白名单过滤输出字段，永远剔除 `PlannedEnv` |
 | **身份与权限伪造** | 大模型或用户通过 `extra_env` 传递 `ACTIONSCAT_ACTION_ID` 伪造沙箱身份 | 工具层严格校验参数，禁止任何以 `ACTIONSCAT_` 开头的环境变量键 |
-| **Malformed 请求** | 畸形 JSON 导致类型错位或以非预期空值意外触发任务 | HTTP 代理层使用 `http.MaxBytesReader`，JSON 解码错误直接 400 拦截 |
+| **Malformed 请求** | 畸形 JSON 导致类型错位或以非预期空值意外触发任务 | HTTP 代理层使用 `http.MaxBytesReader`，JSON 解码错误直接 400 拦截；严格校验防尾随多余 JSON Tokens |
 | **死循环与超时耗尽** | Action 长时间运行耗尽 Agent 单轮时间 | 设置最大同步轮询等待窗口（25s），超时平滑返回运行中状态与 run_id |
 
 ---
@@ -278,3 +374,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
    - 快捷向 `/api/v1/dispatch` 发送 JSON Payload，便于调试自动化事件触发流。
 6. **Action 元数据注册对话框**：
    - 允许管理员在控制台快捷创建 Action 名称、描述及最大并发数，文案明确提示其为元数据声明。
+7. **触发器与调度规则管理对话框 (Triggers & Schedules Dialog)**：
+   - 每个 Action 卡片提供「触发器」配置入口；
+   - **定时调度管理**：以表格方式清晰呈现当前 Cron 表达式、时区、下次计算执行时间（`next_run_at`）及启用状态；支持一键注销调度，并提供便捷的「新增定时调度」表单（校验 Cron 表达式、时区与启用开关）；
+   - **事件模式匹配管理**：实时拉取事件模式规则列表，展示匹配类型（contains / exact / regex）、Pattern 表达式、目标字段、命名捕获组映射与优先级；支持一键注销规则，并提供「新增事件匹配规则」表单（支持 regex / contains / exact 选择、正则语法校验及 `capture_env_map` 解析与受保护前缀防御）。

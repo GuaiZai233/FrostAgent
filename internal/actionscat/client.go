@@ -185,6 +185,54 @@ type SetActiveBuildReq struct {
 	BuildID   string `json:"build_id"`
 }
 
+// Schedule represents a deterministic cron schedule that triggers an Action.
+type Schedule struct {
+	ID        string     `json:"id"`
+	ActionID  string     `json:"action_id"`
+	CronExpr  string     `json:"cron_expr"`
+	Timezone  string     `json:"timezone"`
+	NextRunAt time.Time  `json:"next_run_at"`
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+	Enabled   bool       `json:"enabled"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// CreateScheduleReq represents the request to register a new schedule trigger.
+type CreateScheduleReq struct {
+	CronExpr string `json:"cron_expr"`
+	Timezone string `json:"timezone,omitempty"`
+	Enabled  bool   `json:"enabled"`
+}
+
+// Matcher represents a deterministic message pattern rule that triggers an Action.
+type Matcher struct {
+	ID               string            `json:"id"`
+	ActionID         string            `json:"action_id"`
+	Name             string            `json:"name"`
+	MatchType        string            `json:"match_type"`
+	Pattern          string            `json:"pattern"`
+	TargetField      string            `json:"target_field"`
+	CaptureEnvMap    map[string]string `json:"capture_env_map,omitempty"`
+	Priority         int               `json:"priority"`
+	ContinueMatching bool              `json:"continue_matching"`
+	Enabled          bool              `json:"enabled"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+// CreateMatcherReq represents the request to register a new event matcher trigger.
+type CreateMatcherReq struct {
+	Name             string            `json:"name"`
+	MatchType        string            `json:"match_type"`
+	Pattern          string            `json:"pattern"`
+	TargetField      string            `json:"target_field,omitempty"`
+	CaptureEnvMap    map[string]string `json:"capture_env_map,omitempty"`
+	Priority         int               `json:"priority,omitempty"`
+	ContinueMatching bool              `json:"continue_matching,omitempty"`
+	Enabled          bool              `json:"enabled"`
+}
+
 // ManualRunReq is the payload for triggering a manual run.
 type ManualRunReq struct {
 	ExtraEnv        map[string]string `json:"extra_env,omitempty"`
@@ -768,5 +816,102 @@ func (c *Client) ActivateBuild(ctx context.Context, actionID string, req SetActi
 	}
 	path := fmt.Sprintf("/api/v1/actions/%s/active-build", url.PathEscape(actionID))
 	_, _, err := c.doRequest(ctx, http.MethodPost, path, req, c.ManagementToken())
+	return err
+}
+
+// CreateSchedule registers a new schedule trigger for an action.
+func (c *Client) CreateSchedule(ctx context.Context, actionID string, req CreateScheduleReq) (*Schedule, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	if strings.TrimSpace(req.CronExpr) == "" {
+		return nil, errors.New("actionscat: cron_expr cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/schedules", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodPost, path, req, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var sched Schedule
+	if err := json.Unmarshal(data, &sched); err != nil {
+		return nil, fmt.Errorf("actionscat: parse schedule: %w", err)
+	}
+	return &sched, nil
+}
+
+// ListSchedules lists all schedule triggers for an action.
+func (c *Client) ListSchedules(ctx context.Context, actionID string) ([]Schedule, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/schedules", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var list []Schedule
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("actionscat: parse schedules: %w", err)
+	}
+	return list, nil
+}
+
+// DeleteSchedule deletes a schedule trigger by its ID.
+func (c *Client) DeleteSchedule(ctx context.Context, scheduleID string) error {
+	if scheduleID == "" {
+		return errors.New("actionscat: scheduleID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/schedules/%s", url.PathEscape(scheduleID))
+	_, _, err := c.doRequest(ctx, http.MethodDelete, path, nil, c.ManagementToken())
+	return err
+}
+
+// CreateMatcher registers a new matcher trigger for an action.
+func (c *Client) CreateMatcher(ctx context.Context, actionID string, req CreateMatcherReq) (*Matcher, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, errors.New("actionscat: name cannot be empty")
+	}
+	if strings.TrimSpace(req.Pattern) == "" {
+		return nil, errors.New("actionscat: pattern cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/matchers", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodPost, path, req, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var m Matcher
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("actionscat: parse matcher: %w", err)
+	}
+	return &m, nil
+}
+
+// ListMatchers lists all matcher triggers for an action.
+func (c *Client) ListMatchers(ctx context.Context, actionID string) ([]Matcher, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/matchers", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var list []Matcher
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("actionscat: parse matchers: %w", err)
+	}
+	return list, nil
+}
+
+// DeleteMatcher deletes a matcher trigger by its ID.
+func (c *Client) DeleteMatcher(ctx context.Context, matcherID string) error {
+	if matcherID == "" {
+		return errors.New("actionscat: matcherID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/matchers/%s", url.PathEscape(matcherID))
+	_, _, err := c.doRequest(ctx, http.MethodDelete, path, nil, c.ManagementToken())
 	return err
 }

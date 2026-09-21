@@ -1164,3 +1164,450 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 		},
 	}
 }
+
+// ActionsCatCreateScheduleTool creates a Tool that registers a cron schedule trigger for an Action.
+func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_create_schedule",
+		description: "在 ActionsCat 中为指定的 Action 创建定时触发器 (Schedule)（仅限管理员 ADMIN_QQ_IDS）。" +
+			"基于 5 段式标准 Cron 表达式（分 时 日 月 周）及 IANA 时区（默认 Asia/Shanghai）在后台定时触发任务执行，无需 LLM 常驻或唤醒。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"cron_expr": map[string]any{
+					"type":        "string",
+					"description": "5 段式标准 Cron 表达式（分 时 日 月 周，如 '0 8 * * *' 表示每天早上 8:00）",
+				},
+				"timezone": map[string]any{
+					"type":        "string",
+					"description": "IANA 时区名称（可选，默认为 'Asia/Shanghai'，支持 'UTC'、'America/New_York' 等）",
+				},
+				"enabled": map[string]any{
+					"type":        "boolean",
+					"description": "是否启用该定时触发器（可选，默认为 true）",
+				},
+			},
+			"required": []string{"action_id", "cron_expr"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 创建定时触发器", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_create_schedule 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID string `json:"action_id"`
+				CronExpr string `json:"cron_expr"`
+				Timezone string `json:"timezone"`
+				Enabled  *bool  `json:"enabled"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+			if strings.TrimSpace(input.CronExpr) == "" {
+				return "缺少必填参数 'cron_expr'", nil
+			}
+
+			tz := strings.TrimSpace(input.Timezone)
+			if tz == "" {
+				tz = "Asia/Shanghai"
+			}
+			enabled := true
+			if input.Enabled != nil {
+				enabled = *input.Enabled
+			}
+
+			sched, err := client.CreateSchedule(ctx, input.ActionID, actionscat.CreateScheduleReq{
+				CronExpr: strings.TrimSpace(input.CronExpr),
+				Timezone: tz,
+				Enabled:  enabled,
+			})
+			if err != nil {
+				return fmt.Sprintf("创建 ActionsCat 定时触发器失败: %v", err), nil
+			}
+
+			resp := struct {
+				actionscat.Schedule
+				Notice string `json:"notice"`
+			}{
+				Schedule: *sched,
+				Notice:   "定时触发器创建成功。ActionsCat 调度器将在后台按 Cron 表达式自动计算并在下次调度时间到达时触发执行。",
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize schedule response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatListSchedulesTool creates a Tool that lists schedules for an Action.
+func ActionsCatListSchedulesTool(client *actionscat.Client) Tool {
+	return Tool{
+		name: "actionscat_list_schedules",
+		description: "列出 ActionsCat 指定 Action 下的所有定时调度配置 (Schedules)。" +
+			"返回各 Schedule 的 ID、Cron 表达式、时区、下次预计执行时间 (next_run_at) 及启用状态。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+			},
+			"required": []string{"action_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID string `json:"action_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+
+			schedules, err := client.ListSchedules(ctx, input.ActionID)
+			if err != nil {
+				return fmt.Sprintf("查询定时触发器列表失败: %v", err), nil
+			}
+
+			resp := struct {
+				Total     int                   `json:"total"`
+				Schedules []actionscat.Schedule `json:"schedules"`
+			}{
+				Total:     len(schedules),
+				Schedules: schedules,
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize schedules response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatDeleteScheduleTool creates a Tool that deletes a schedule trigger.
+func ActionsCatDeleteScheduleTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_delete_schedule",
+		description: "删除 ActionsCat 中指定的定时触发器 (Schedule)（仅限管理员 ADMIN_QQ_IDS）。" +
+			"删除后立即停止该定时任务的后台调度。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"schedule_id": map[string]any{
+					"type":        "string",
+					"description": "要删除的 Schedule ID",
+				},
+			},
+			"required": []string{"schedule_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 删除定时触发器", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_delete_schedule 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ScheduleID string `json:"schedule_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ScheduleID) == "" {
+				return "缺少必填参数 'schedule_id'", nil
+			}
+
+			if err := client.DeleteSchedule(ctx, strings.TrimSpace(input.ScheduleID)); err != nil {
+				return fmt.Sprintf("删除定时触发器失败: %v", err), nil
+			}
+
+			return fmt.Sprintf("定时触发器 %s 已成功删除。", input.ScheduleID), nil
+		},
+	}
+}
+
+// ActionsCatCreateMatcherTool creates a Tool that registers an event matcher trigger for an Action.
+func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_create_matcher",
+		description: "在 ActionsCat 中为指定的 Action 创建事件匹配器 (Matcher)（仅限管理员 ADMIN_QQ_IDS）。" +
+			"当平台收到平台中立事件且目标字段匹配规则时（exact/contains/regex），可直接触发 Action 运行（冷启动零 LLM 消耗），" +
+			"并支持将正则命名捕获组自动映射为 Action 运行环境变量 (capture_env_map)。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "匹配器规则名称（如 'bilibili-link-trigger'）",
+				},
+				"match_type": map[string]any{
+					"type":        "string",
+					"enum":        []string{"exact", "contains", "regex"},
+					"description": "匹配类型：'exact'（精确全量匹配）、'contains'（子串包含）、'regex'（正则表达式匹配）",
+				},
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "匹配表达式（字符串或正则表达式，如 'https://b23\\.tv/(?P<bvid>\\w+)'）",
+				},
+				"target_field": map[string]any{
+					"type":        "string",
+					"description": "事件中作为匹配目标的目标字段（可选，默认为 'text'）",
+				},
+				"capture_env_map": map[string]any{
+					"type":                 "object",
+					"description":          "正则命名捕获组映射到运行环境变量的映射表（如 {\"bvid\": \"BVID\"}）",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+				"priority": map[string]any{
+					"type":        "integer",
+					"description": "优先级数值，数值越大越先匹配评估（可选，默认为 0）",
+				},
+				"continue_matching": map[string]any{
+					"type":        "boolean",
+					"description": "当前规则命中并触发后，是否允许后续规则继续匹配（可选，默认为 false 独占命中）",
+				},
+				"enabled": map[string]any{
+					"type":        "boolean",
+					"description": "是否启用该事件匹配器（可选，默认为 true）",
+				},
+			},
+			"required": []string{"action_id", "name", "match_type", "pattern"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 创建事件匹配器", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_create_matcher 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID         string            `json:"action_id"`
+				Name             string            `json:"name"`
+				MatchType        string            `json:"match_type"`
+				Pattern          string            `json:"pattern"`
+				TargetField      string            `json:"target_field"`
+				CaptureEnvMap    map[string]string `json:"capture_env_map"`
+				Priority         int               `json:"priority"`
+				ContinueMatching *bool             `json:"continue_matching"`
+				Enabled          *bool             `json:"enabled"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+			if strings.TrimSpace(input.Name) == "" {
+				return "缺少必填参数 'name'", nil
+			}
+			matchType := strings.TrimSpace(strings.ToLower(input.MatchType))
+			switch matchType {
+			case "exact", "contains", "regex":
+			default:
+				return fmt.Sprintf("无效的 match_type %q，仅支持 'exact', 'contains', 'regex'", input.MatchType), nil
+			}
+			if strings.TrimSpace(input.Pattern) == "" {
+				return "缺少必填参数 'pattern'", nil
+			}
+
+			for _, envKey := range input.CaptureEnvMap {
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(envKey)), "ACTIONSCAT_") {
+					return fmt.Sprintf("环境变量 %q 包含受保护的前缀 'ACTIONSCAT_'，不允许自定义覆盖", envKey), nil
+				}
+			}
+
+			targetField := strings.TrimSpace(input.TargetField)
+			if targetField == "" {
+				targetField = "text"
+			}
+			continueMatching := false
+			if input.ContinueMatching != nil {
+				continueMatching = *input.ContinueMatching
+			}
+			enabled := true
+			if input.Enabled != nil {
+				enabled = *input.Enabled
+			}
+
+			matcher, err := client.CreateMatcher(ctx, input.ActionID, actionscat.CreateMatcherReq{
+				Name:             strings.TrimSpace(input.Name),
+				MatchType:        matchType,
+				Pattern:          strings.TrimSpace(input.Pattern),
+				TargetField:      targetField,
+				CaptureEnvMap:    input.CaptureEnvMap,
+				Priority:         input.Priority,
+				ContinueMatching: continueMatching,
+				Enabled:          enabled,
+			})
+			if err != nil {
+				return fmt.Sprintf("创建 ActionsCat 事件匹配器失败: %v", err), nil
+			}
+
+			resp := struct {
+				actionscat.Matcher
+				Notice string `json:"notice"`
+			}{
+				Matcher: *matcher,
+				Notice:  "事件匹配器创建成功。当匹配规则命中事件时，系统将直接触发 Action 运行并将捕获变量注入容器环境。",
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize matcher response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatListMatchersTool creates a Tool that lists event matchers for an Action.
+func ActionsCatListMatchersTool(client *actionscat.Client) Tool {
+	return Tool{
+		name: "actionscat_list_matchers",
+		description: "列出 ActionsCat 指定 Action 下的所有事件匹配器 (Matchers)。" +
+			"返回各 Matcher 的 ID、名称、匹配类型、规则模式、捕获映射、优先级及启用状态。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+			},
+			"required": []string{"action_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID string `json:"action_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+
+			matchers, err := client.ListMatchers(ctx, input.ActionID)
+			if err != nil {
+				return fmt.Sprintf("查询事件匹配器列表失败: %v", err), nil
+			}
+
+			resp := struct {
+				Total    int                  `json:"total"`
+				Matchers []actionscat.Matcher `json:"matchers"`
+			}{
+				Total:    len(matchers),
+				Matchers: matchers,
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize matchers response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatDeleteMatcherTool creates a Tool that deletes an event matcher.
+func ActionsCatDeleteMatcherTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_delete_matcher",
+		description: "删除 ActionsCat 中指定的事件匹配器 (Matcher)（仅限管理员 ADMIN_QQ_IDS）。" +
+			"删除后该事件规则不再生效。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"matcher_id": map[string]any{
+					"type":        "string",
+					"description": "要删除的 Matcher ID",
+				},
+			},
+			"required": []string{"matcher_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 删除事件匹配器", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_delete_matcher 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				MatcherID string `json:"matcher_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.MatcherID) == "" {
+				return "缺少必填参数 'matcher_id'", nil
+			}
+
+			if err := client.DeleteMatcher(ctx, strings.TrimSpace(input.MatcherID)); err != nil {
+				return fmt.Sprintf("删除事件匹配器失败: %v", err), nil
+			}
+
+			return fmt.Sprintf("事件匹配器 %s 已成功删除。", input.MatcherID), nil
+		},
+	}
+}
+

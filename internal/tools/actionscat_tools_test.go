@@ -169,6 +169,80 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	if !strings.Contains(out, "尚未配置") {
 		t.Fatalf("expected unconfigured, got: %s", out)
 	}
+
+	// create_schedule
+	createSchedTool := ActionsCatCreateScheduleTool(client, scope)
+	out, _ = createSchedTool.ExecuteContext(noCtx, `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`)
+	if !strings.Contains(out, "无法获取调用者会话上下文") {
+		t.Fatalf("expected context missing, got: %s", out)
+	}
+	out, _ = createSchedTool.ExecuteContext(normalCtx, `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`)
+	if !strings.Contains(out, "权限不足") {
+		t.Fatalf("expected permission denied, got: %s", out)
+	}
+	out, _ = createSchedTool.ExecuteContext(adminCtx, `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
+
+	// list_schedules
+	listSchedTool := ActionsCatListSchedulesTool(client)
+	out, _ = listSchedTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
+
+	// delete_schedule
+	deleteSchedTool := ActionsCatDeleteScheduleTool(client, scope)
+	out, _ = deleteSchedTool.ExecuteContext(noCtx, `{"schedule_id": "sched_1"}`)
+	if !strings.Contains(out, "无法获取调用者会话上下文") {
+		t.Fatalf("expected context missing, got: %s", out)
+	}
+	out, _ = deleteSchedTool.ExecuteContext(normalCtx, `{"schedule_id": "sched_1"}`)
+	if !strings.Contains(out, "权限不足") {
+		t.Fatalf("expected permission denied, got: %s", out)
+	}
+	out, _ = deleteSchedTool.ExecuteContext(adminCtx, `{"schedule_id": "sched_1"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
+
+	// create_matcher
+	createMatcherTool := ActionsCatCreateMatcherTool(client, scope)
+	out, _ = createMatcherTool.ExecuteContext(noCtx, `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`)
+	if !strings.Contains(out, "无法获取调用者会话上下文") {
+		t.Fatalf("expected context missing, got: %s", out)
+	}
+	out, _ = createMatcherTool.ExecuteContext(normalCtx, `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`)
+	if !strings.Contains(out, "权限不足") {
+		t.Fatalf("expected permission denied, got: %s", out)
+	}
+	out, _ = createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
+
+	// list_matchers
+	listMatcherTool := ActionsCatListMatchersTool(client)
+	out, _ = listMatcherTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
+
+	// delete_matcher
+	deleteMatcherTool := ActionsCatDeleteMatcherTool(client, scope)
+	out, _ = deleteMatcherTool.ExecuteContext(noCtx, `{"matcher_id": "m_1"}`)
+	if !strings.Contains(out, "无法获取调用者会话上下文") {
+		t.Fatalf("expected context missing, got: %s", out)
+	}
+	out, _ = deleteMatcherTool.ExecuteContext(normalCtx, `{"matcher_id": "m_1"}`)
+	if !strings.Contains(out, "权限不足") {
+		t.Fatalf("expected permission denied, got: %s", out)
+	}
+	out, _ = deleteMatcherTool.ExecuteContext(adminCtx, `{"matcher_id": "m_1"}`)
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured, got: %s", out)
+	}
 }
 
 func TestActionsCatTools_Execution(t *testing.T) {
@@ -739,7 +813,21 @@ func TestActionsCatTools_FullMutationAuthorizationMatrix(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 				return
+			case strings.HasSuffix(r.URL.Path, "/schedules"):
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(actionscat.Schedule{ID: "sched_mock_1", ActionID: "act_1"})
+				return
+			case strings.HasSuffix(r.URL.Path, "/matchers"):
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(actionscat.Matcher{ID: "m_mock_1", ActionID: "act_1"})
+				return
 			}
+		}
+		if r.Method == http.MethodDelete {
+			mutationCount.Add(1)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
 		}
 		if r.Method == http.MethodGet {
 			if strings.Contains(r.URL.Path, "/builds/") {
@@ -817,6 +905,30 @@ func TestActionsCatTools_FullMutationAuthorizationMatrix(t *testing.T) {
 			tool:       ActionsCatDeployActionTool(client, scope),
 			args:       `{"action_id": "act_1", "files": {"main.go": "pkg"}}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 部署操作",
+		},
+		{
+			name:       "actionscat_create_schedule",
+			tool:       ActionsCatCreateScheduleTool(client, scope),
+			args:       `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`,
+			mockErrMsg: "模拟会话模式下禁用 ActionsCat 创建定时触发器",
+		},
+		{
+			name:       "actionscat_delete_schedule",
+			tool:       ActionsCatDeleteScheduleTool(client, scope),
+			args:       `{"schedule_id": "sched_1"}`,
+			mockErrMsg: "模拟会话模式下禁用 ActionsCat 删除定时触发器",
+		},
+		{
+			name:       "actionscat_create_matcher",
+			tool:       ActionsCatCreateMatcherTool(client, scope),
+			args:       `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`,
+			mockErrMsg: "模拟会话模式下禁用 ActionsCat 创建事件匹配器",
+		},
+		{
+			name:       "actionscat_delete_matcher",
+			tool:       ActionsCatDeleteMatcherTool(client, scope),
+			args:       `{"matcher_id": "m_1"}`,
+			mockErrMsg: "模拟会话模式下禁用 ActionsCat 删除事件匹配器",
 		},
 	}
 
@@ -1376,5 +1488,240 @@ func TestActionsCatTools_ListBuildsTool(t *testing.T) {
 	}
 	if !strings.Contains(out, "未查询到") || !strings.Contains(out, "ver_nonexistent") {
 		t.Fatalf("expected empty/not found message, got: %s", out)
+	}
+}
+
+func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
+	mockSchedule := actionscat.Schedule{
+		ID:        "sched_123",
+		ActionID:  "act_cron",
+		CronExpr:  "0 8 * * *",
+		Timezone:  "Asia/Shanghai",
+		NextRunAt: time.Now().UTC().Add(time.Hour),
+		Enabled:   true,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	mockMatcher := actionscat.Matcher{
+		ID:          "m_123",
+		ActionID:    "act_cron",
+		Name:        "bilibili-link",
+		MatchType:   "regex",
+		Pattern:     `https://b23\.tv/(?P<bvid>\w+)`,
+		TargetField: "text",
+		CaptureEnvMap: map[string]string{
+			"bvid": "BVID",
+		},
+		Priority:         10,
+		ContinueMatching: false,
+		Enabled:          true,
+		CreatedAt:        time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
+	}
+
+	var deletedSchedID string
+	var deletedMatcherID string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/actions/act_cron/schedules":
+			if r.Method == http.MethodPost {
+				var req actionscat.CreateScheduleReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockSchedule
+				created.CronExpr = req.CronExpr
+				created.Timezone = req.Timezone
+				created.Enabled = req.Enabled
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
+			if r.Method == http.MethodGet {
+				_ = json.NewEncoder(w).Encode([]actionscat.Schedule{mockSchedule})
+				return
+			}
+
+		case r.URL.Path == "/api/v1/schedules/sched_123" && r.Method == http.MethodDelete:
+			deletedSchedID = "sched_123"
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+
+		case r.URL.Path == "/api/v1/actions/act_cron/matchers":
+			if r.Method == http.MethodPost {
+				var req actionscat.CreateMatcherReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				created := mockMatcher
+				created.Name = req.Name
+				created.MatchType = req.MatchType
+				created.Pattern = req.Pattern
+				created.Enabled = req.Enabled
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(created)
+				return
+			}
+			if r.Method == http.MethodGet {
+				_ = json.NewEncoder(w).Encode([]actionscat.Matcher{mockMatcher})
+				return
+			}
+
+		case r.URL.Path == "/api/v1/matchers/m_123" && r.Method == http.MethodDelete:
+			deletedMatcherID = "m_123"
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	client := actionscat.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "valid_token"
+		default:
+			return ""
+		}
+	})
+
+	scope := newTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv: "10001",
+	})
+	adminCtx := llm.WithRunContext(context.Background(), llm.RunContext{
+		ActorUserID: "10001",
+		Mock:        false,
+	})
+	ctx := context.Background()
+
+	// 1. ActionsCatCreateScheduleTool
+	createSchedTool := ActionsCatCreateScheduleTool(client, scope)
+	// Missing action_id
+	badOut1, _ := createSchedTool.ExecuteContext(adminCtx, `{"cron_expr": "0 8 * * *"}`)
+	if !strings.Contains(badOut1, "缺少必填参数 'action_id'") {
+		t.Fatalf("expected missing action_id error, got: %s", badOut1)
+	}
+	// Missing cron_expr
+	badOut2, _ := createSchedTool.ExecuteContext(adminCtx, `{"action_id": "act_cron"}`)
+	if !strings.Contains(badOut2, "缺少必填参数 'cron_expr'") {
+		t.Fatalf("expected missing cron_expr error, got: %s", badOut2)
+	}
+	// Success
+	schedOut, err := createSchedTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "cron_expr": "0 8 * * *", "timezone": "Asia/Shanghai"}`)
+	if err != nil {
+		t.Fatalf("create schedule error: %v", err)
+	}
+	if !strings.Contains(schedOut, "sched_123") || !strings.Contains(schedOut, "定时触发器创建成功") {
+		t.Fatalf("unexpected create schedule output: %s", schedOut)
+	}
+
+	// 2. ActionsCatListSchedulesTool
+	listSchedTool := ActionsCatListSchedulesTool(client)
+	// Missing action_id
+	badListOut, _ := listSchedTool.ExecuteContext(ctx, `{}`)
+	if !strings.Contains(badListOut, "缺少必填参数 'action_id'") {
+		t.Fatalf("expected missing action_id error, got: %s", badListOut)
+	}
+	// Success
+	listOut, err := listSchedTool.ExecuteContext(ctx, `{"action_id": "act_cron"}`)
+	if err != nil {
+		t.Fatalf("list schedules error: %v", err)
+	}
+	if !strings.Contains(listOut, "sched_123") || !strings.Contains(listOut, `"total": 1`) {
+		t.Fatalf("unexpected list schedules output: %s", listOut)
+	}
+
+	// 3. ActionsCatDeleteScheduleTool
+	deleteSchedTool := ActionsCatDeleteScheduleTool(client, scope)
+	// Missing schedule_id
+	badDelOut, _ := deleteSchedTool.ExecuteContext(adminCtx, `{}`)
+	if !strings.Contains(badDelOut, "缺少必填参数 'schedule_id'") {
+		t.Fatalf("expected missing schedule_id error, got: %s", badDelOut)
+	}
+	// Success
+	delOut, err := deleteSchedTool.ExecuteContext(adminCtx, `{"schedule_id": "sched_123"}`)
+	if err != nil {
+		t.Fatalf("delete schedule error: %v", err)
+	}
+	if !strings.Contains(delOut, "sched_123 已成功删除") {
+		t.Fatalf("unexpected delete schedule output: %s", delOut)
+	}
+	if deletedSchedID != "sched_123" {
+		t.Fatalf("expected backend delete for sched_123, got: %s", deletedSchedID)
+	}
+
+	// 4. ActionsCatCreateMatcherTool
+	createMatcherTool := ActionsCatCreateMatcherTool(client, scope)
+	// Missing action_id
+	mBad1, _ := createMatcherTool.ExecuteContext(adminCtx, `{"name": "m", "match_type": "exact", "pattern": "p"}`)
+	if !strings.Contains(mBad1, "缺少必填参数 'action_id'") {
+		t.Fatalf("expected missing action_id error, got: %s", mBad1)
+	}
+	// Missing name
+	mBad2, _ := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "match_type": "exact", "pattern": "p"}`)
+	if !strings.Contains(mBad2, "缺少必填参数 'name'") {
+		t.Fatalf("expected missing name error, got: %s", mBad2)
+	}
+	// Invalid match_type
+	mBad3, _ := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m", "match_type": "invalid", "pattern": "p"}`)
+	if !strings.Contains(mBad3, "无效的 match_type") {
+		t.Fatalf("expected invalid match_type error, got: %s", mBad3)
+	}
+	// Missing pattern
+	mBad4, _ := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m", "match_type": "regex", "pattern": ""}`)
+	if !strings.Contains(mBad4, "缺少必填参数 'pattern'") {
+		t.Fatalf("expected missing pattern error, got: %s", mBad4)
+	}
+	// Protected ACTIONSCAT_ environment variable
+	mBad5, _ := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m", "match_type": "regex", "pattern": "p", "capture_env_map": {"x": "ACTIONSCAT_TOKEN"}}`)
+	if !strings.Contains(mBad5, "包含受保护的前缀 'ACTIONSCAT_'") {
+		t.Fatalf("expected protected env prefix error, got: %s", mBad5)
+	}
+	// Success
+	matcherOut, err := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "bilibili-link", "match_type": "regex", "pattern": "https://b23\\.tv/(?P<bvid>\\w+)"}`)
+	if err != nil {
+		t.Fatalf("create matcher error: %v", err)
+	}
+	if !strings.Contains(matcherOut, "m_123") || !strings.Contains(matcherOut, "事件匹配器创建成功") {
+		t.Fatalf("unexpected create matcher output: %s", matcherOut)
+	}
+
+	// 5. ActionsCatListMatchersTool
+	listMatcherTool := ActionsCatListMatchersTool(client)
+	// Missing action_id
+	badMList, _ := listMatcherTool.ExecuteContext(ctx, `{}`)
+	if !strings.Contains(badMList, "缺少必填参数 'action_id'") {
+		t.Fatalf("expected missing action_id error, got: %s", badMList)
+	}
+	// Success
+	mListOut, err := listMatcherTool.ExecuteContext(ctx, `{"action_id": "act_cron"}`)
+	if err != nil {
+		t.Fatalf("list matchers error: %v", err)
+	}
+	if !strings.Contains(mListOut, "m_123") || !strings.Contains(mListOut, `"total": 1`) {
+		t.Fatalf("unexpected list matchers output: %s", mListOut)
+	}
+
+	// 6. ActionsCatDeleteMatcherTool
+	deleteMatcherTool := ActionsCatDeleteMatcherTool(client, scope)
+	// Missing matcher_id
+	badMDel, _ := deleteMatcherTool.ExecuteContext(adminCtx, `{}`)
+	if !strings.Contains(badMDel, "缺少必填参数 'matcher_id'") {
+		t.Fatalf("expected missing matcher_id error, got: %s", badMDel)
+	}
+	// Success
+	mDelOut, err := deleteMatcherTool.ExecuteContext(adminCtx, `{"matcher_id": "m_123"}`)
+	if err != nil {
+		t.Fatalf("delete matcher error: %v", err)
+	}
+	if !strings.Contains(mDelOut, "m_123 已成功删除") {
+		t.Fatalf("unexpected delete matcher output: %s", mDelOut)
+	}
+	if deletedMatcherID != "m_123" {
+		t.Fatalf("expected backend delete for m_123, got: %s", deletedMatcherID)
 	}
 }

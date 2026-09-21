@@ -91,6 +91,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/actions/"):
 		s.handleActionsSubpath(w, r, strings.TrimPrefix(path, "/actions/"))
 
+	case strings.HasPrefix(path, "/schedules/"):
+		s.handleSchedulesTopLevel(w, r, strings.TrimPrefix(path, "/schedules/"))
+
+	case strings.HasPrefix(path, "/matchers/"):
+		s.handleMatchersTopLevel(w, r, strings.TrimPrefix(path, "/matchers/"))
+
 	case path == "/dispatch" || path == "/dispatch/":
 		if r.Method != http.MethodPost {
 			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -352,6 +358,104 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 			s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 
+		case "schedules":
+			if r.Method == http.MethodGet {
+				// GET /actions/:id/schedules
+				scheds, err := s.client.ListSchedules(r.Context(), actionID)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				if scheds == nil {
+					scheds = []client.Schedule{}
+				}
+				s.writeJSON(w, http.StatusOK, scheds)
+				return
+			}
+			if r.Method == http.MethodPost {
+				// POST /actions/:id/schedules
+				if r.Body == nil {
+					s.writeError(w, http.StatusBadRequest, "empty request body")
+					return
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+				var req client.CreateScheduleReq
+				dec := json.NewDecoder(r.Body)
+				if err := dec.Decode(&req); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+					return
+				}
+				var trailing json.RawMessage
+				if err := dec.Decode(&trailing); err != io.EOF {
+					s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+					return
+				}
+				if strings.TrimSpace(req.CronExpr) == "" {
+					s.writeError(w, http.StatusBadRequest, "cron_expr cannot be empty")
+					return
+				}
+				sched, err := s.client.CreateSchedule(r.Context(), actionID, req)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, sched)
+				return
+			}
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+
+		case "matchers":
+			if r.Method == http.MethodGet {
+				// GET /actions/:id/matchers
+				matchers, err := s.client.ListMatchers(r.Context(), actionID)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				if matchers == nil {
+					matchers = []client.Matcher{}
+				}
+				s.writeJSON(w, http.StatusOK, matchers)
+				return
+			}
+			if r.Method == http.MethodPost {
+				// POST /actions/:id/matchers
+				if r.Body == nil {
+					s.writeError(w, http.StatusBadRequest, "empty request body")
+					return
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+				var req client.CreateMatcherReq
+				dec := json.NewDecoder(r.Body)
+				if err := dec.Decode(&req); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+					return
+				}
+				var trailing json.RawMessage
+				if err := dec.Decode(&trailing); err != io.EOF {
+					s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+					return
+				}
+				if strings.TrimSpace(req.Name) == "" {
+					s.writeError(w, http.StatusBadRequest, "matcher name cannot be empty")
+					return
+				}
+				if strings.TrimSpace(req.Pattern) == "" {
+					s.writeError(w, http.StatusBadRequest, "matcher pattern cannot be empty")
+					return
+				}
+				matcher, err := s.client.CreateMatcher(r.Context(), actionID, req)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, matcher)
+				return
+			}
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+
 		default:
 			s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
 			return
@@ -454,6 +558,66 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 	default:
 		s.writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+func (s *Service) handleSchedulesTopLevel(w http.ResponseWriter, r *http.Request, relPath string) {
+	if !s.client.IsConfigured() {
+		s.writeError(w, http.StatusBadRequest, "ActionsCat 未配置 ACTIONSCAT_ENDPOINT")
+		return
+	}
+	relPath = strings.Trim(relPath, "/")
+	if relPath == "" {
+		s.writeError(w, http.StatusNotFound, "missing schedule ID")
+		return
+	}
+	parts := strings.Split(relPath, "/")
+	if len(parts) == 1 {
+		scheduleID := parts[0]
+		if unescaped, err := url.PathUnescape(scheduleID); err == nil {
+			scheduleID = unescaped
+		}
+		if r.Method == http.MethodDelete {
+			if err := s.client.DeleteSchedule(r.Context(), scheduleID); err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	s.writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Service) handleMatchersTopLevel(w http.ResponseWriter, r *http.Request, relPath string) {
+	if !s.client.IsConfigured() {
+		s.writeError(w, http.StatusBadRequest, "ActionsCat 未配置 ACTIONSCAT_ENDPOINT")
+		return
+	}
+	relPath = strings.Trim(relPath, "/")
+	if relPath == "" {
+		s.writeError(w, http.StatusNotFound, "missing matcher ID")
+		return
+	}
+	parts := strings.Split(relPath, "/")
+	if len(parts) == 1 {
+		matcherID := parts[0]
+		if unescaped, err := url.PathUnescape(matcherID); err == nil {
+			matcherID = unescaped
+		}
+		if r.Method == http.MethodDelete {
+			if err := s.client.DeleteMatcher(r.Context(), matcherID); err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	s.writeError(w, http.StatusNotFound, "not found")
 }
 
 func (s *Service) handleDispatch(w http.ResponseWriter, r *http.Request) {

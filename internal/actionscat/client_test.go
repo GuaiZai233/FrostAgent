@@ -789,3 +789,222 @@ func TestClient_BuildUnknownResult_TransportErrors(t *testing.T) {
 		t.Fatalf("empty fields 200 JSON must be wrapped as ErrBuildUnknownResult, got: %v", err)
 	}
 }
+
+func TestClient_SchedulesAndMatchers(t *testing.T) {
+	ctx := context.Background()
+
+	var receivedPath string
+	var receivedMethod string
+	var receivedBody []byte
+	var receivedAuth string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedMethod = r.Method
+		receivedAuth = r.Header.Get("Authorization")
+		receivedBody, _ = io.ReadAll(r.Body)
+
+		switch {
+		case r.URL.Path == "/api/v1/actions/act_test/schedules" && r.Method == http.MethodPost:
+			var req CreateScheduleReq
+			_ = json.Unmarshal(receivedBody, &req)
+			now := time.Now().UTC()
+			sched := Schedule{
+				ID:        "sched_123",
+				ActionID:  "act_test",
+				CronExpr:  req.CronExpr,
+				Timezone:  req.Timezone,
+				NextRunAt: now.Add(time.Hour),
+				Enabled:   req.Enabled,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(sched)
+
+		case r.URL.Path == "/api/v1/actions/act_test/schedules" && r.Method == http.MethodGet:
+			now := time.Now().UTC()
+			list := []Schedule{
+				{
+					ID:        "sched_123",
+					ActionID:  "act_test",
+					CronExpr:  "0 8 * * *",
+					Timezone:  "Asia/Shanghai",
+					NextRunAt: now.Add(time.Hour),
+					Enabled:   true,
+					CreatedAt: now,
+					UpdatedAt: now,
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(list)
+
+		case r.URL.Path == "/api/v1/schedules/sched_123" && r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+
+		case r.URL.Path == "/api/v1/actions/act_test/matchers" && r.Method == http.MethodPost:
+			var req CreateMatcherReq
+			_ = json.Unmarshal(receivedBody, &req)
+			now := time.Now().UTC()
+			target := req.TargetField
+			if target == "" {
+				target = "text"
+			}
+			matcher := Matcher{
+				ID:               "m_456",
+				ActionID:         "act_test",
+				Name:             req.Name,
+				MatchType:        req.MatchType,
+				Pattern:          req.Pattern,
+				TargetField:      target,
+				CaptureEnvMap:    req.CaptureEnvMap,
+				Priority:         req.Priority,
+				ContinueMatching: req.ContinueMatching,
+				Enabled:          req.Enabled,
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(matcher)
+
+		case r.URL.Path == "/api/v1/actions/act_test/matchers" && r.Method == http.MethodGet:
+			now := time.Now().UTC()
+			list := []Matcher{
+				{
+					ID:          "m_456",
+					ActionID:    "act_test",
+					Name:        "bilibili-link",
+					MatchType:   "regex",
+					Pattern:     `https://b23\.tv/(?P<bvid>\w+)`,
+					TargetField: "text",
+					CaptureEnvMap: map[string]string{
+						"bvid": "BVID",
+					},
+					Enabled:   true,
+					CreatedAt: now,
+					UpdatedAt: now,
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(list)
+
+		case r.URL.Path == "/api/v1/matchers/m_456" && r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	client := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "mgmt_token_xyz"
+		default:
+			return ""
+		}
+	})
+
+	// 1. CreateSchedule
+	sched, err := client.CreateSchedule(ctx, "act_test", CreateScheduleReq{
+		CronExpr: "0 8 * * *",
+		Timezone: "Asia/Shanghai",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule failed: %v", err)
+	}
+	if sched.ID != "sched_123" || sched.CronExpr != "0 8 * * *" || !sched.Enabled {
+		t.Fatalf("unexpected schedule: %+v", sched)
+	}
+	if receivedAuth != "Bearer mgmt_token_xyz" {
+		t.Fatalf("expected Bearer mgmt_token_xyz, got %q", receivedAuth)
+	}
+
+	// 2. ListSchedules
+	schedules, err := client.ListSchedules(ctx, "act_test")
+	if err != nil {
+		t.Fatalf("ListSchedules failed: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].ID != "sched_123" {
+		t.Fatalf("unexpected schedules: %+v", schedules)
+	}
+
+	// 3. DeleteSchedule
+	if err := client.DeleteSchedule(ctx, "sched_123"); err != nil {
+		t.Fatalf("DeleteSchedule failed: %v", err)
+	}
+	if receivedPath != "/api/v1/schedules/sched_123" || receivedMethod != http.MethodDelete {
+		t.Fatalf("unexpected delete schedule call: %s %s", receivedMethod, receivedPath)
+	}
+
+	// 4. CreateMatcher
+	matcher, err := client.CreateMatcher(ctx, "act_test", CreateMatcherReq{
+		Name:        "bilibili-link",
+		MatchType:   "regex",
+		Pattern:     `https://b23\.tv/(?P<bvid>\w+)`,
+		TargetField: "text",
+		CaptureEnvMap: map[string]string{
+			"bvid": "BVID",
+		},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMatcher failed: %v", err)
+	}
+	if matcher.ID != "m_456" || matcher.Name != "bilibili-link" || matcher.MatchType != "regex" {
+		t.Fatalf("unexpected matcher: %+v", matcher)
+	}
+
+	// 5. ListMatchers
+	matchers, err := client.ListMatchers(ctx, "act_test")
+	if err != nil {
+		t.Fatalf("ListMatchers failed: %v", err)
+	}
+	if len(matchers) != 1 || matchers[0].ID != "m_456" {
+		t.Fatalf("unexpected matchers: %+v", matchers)
+	}
+
+	// 6. DeleteMatcher
+	if err := client.DeleteMatcher(ctx, "m_456"); err != nil {
+		t.Fatalf("DeleteMatcher failed: %v", err)
+	}
+	if receivedPath != "/api/v1/matchers/m_456" || receivedMethod != http.MethodDelete {
+		t.Fatalf("unexpected delete matcher call: %s %s", receivedMethod, receivedPath)
+	}
+
+	// 7. Validation errors
+	if _, err := client.CreateSchedule(ctx, "", CreateScheduleReq{CronExpr: "* * * * *"}); err == nil {
+		t.Fatal("expected error on empty actionID for CreateSchedule")
+	}
+	if _, err := client.CreateSchedule(ctx, "act_test", CreateScheduleReq{CronExpr: ""}); err == nil {
+		t.Fatal("expected error on empty cron_expr for CreateSchedule")
+	}
+	if _, err := client.ListSchedules(ctx, ""); err == nil {
+		t.Fatal("expected error on empty actionID for ListSchedules")
+	}
+	if err := client.DeleteSchedule(ctx, ""); err == nil {
+		t.Fatal("expected error on empty scheduleID for DeleteSchedule")
+	}
+
+	if _, err := client.CreateMatcher(ctx, "", CreateMatcherReq{Name: "a", Pattern: "p"}); err == nil {
+		t.Fatal("expected error on empty actionID for CreateMatcher")
+	}
+	if _, err := client.CreateMatcher(ctx, "act_test", CreateMatcherReq{Name: "", Pattern: "p"}); err == nil {
+		t.Fatal("expected error on empty name for CreateMatcher")
+	}
+	if _, err := client.CreateMatcher(ctx, "act_test", CreateMatcherReq{Name: "a", Pattern: ""}); err == nil {
+		t.Fatal("expected error on empty pattern for CreateMatcher")
+	}
+	if _, err := client.ListMatchers(ctx, ""); err == nil {
+		t.Fatal("expected error on empty actionID for ListMatchers")
+	}
+	if err := client.DeleteMatcher(ctx, ""); err == nil {
+		t.Fatal("expected error on empty matcherID for DeleteMatcher")
+	}
+}

@@ -191,6 +191,18 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
 	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)
 	registry[actionsCatDeployActionTool.Name()] = actionsCatDeployActionTool
+	actionsCatCreateScheduleTool := tools.ActionsCatCreateScheduleTool(actionsCatClient, scope)
+	registry[actionsCatCreateScheduleTool.Name()] = actionsCatCreateScheduleTool
+	actionsCatListSchedulesTool := tools.ActionsCatListSchedulesTool(actionsCatClient)
+	registry[actionsCatListSchedulesTool.Name()] = actionsCatListSchedulesTool
+	actionsCatDeleteScheduleTool := tools.ActionsCatDeleteScheduleTool(actionsCatClient, scope)
+	registry[actionsCatDeleteScheduleTool.Name()] = actionsCatDeleteScheduleTool
+	actionsCatCreateMatcherTool := tools.ActionsCatCreateMatcherTool(actionsCatClient, scope)
+	registry[actionsCatCreateMatcherTool.Name()] = actionsCatCreateMatcherTool
+	actionsCatListMatchersTool := tools.ActionsCatListMatchersTool(actionsCatClient)
+	registry[actionsCatListMatchersTool.Name()] = actionsCatListMatchersTool
+	actionsCatDeleteMatcherTool := tools.ActionsCatDeleteMatcherTool(actionsCatClient, scope)
+	registry[actionsCatDeleteMatcherTool.Name()] = actionsCatDeleteMatcherTool
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,

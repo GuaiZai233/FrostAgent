@@ -263,6 +263,50 @@ export interface TriggerActionRunRequest {
   trigger_metadata?: Record<string, string>;
 }
 
+export interface ActionsCatSchedule {
+  id: string;
+  action_id: string;
+  cron_expr: string;
+  timezone: string;
+  next_run_at: string;
+  last_run_at?: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateScheduleRequest {
+  cron_expr: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+
+export interface ActionsCatMatcher {
+  id: string;
+  action_id: string;
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field: string;
+  capture_env_map?: Record<string, string>;
+  priority: number;
+  continue_matching: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMatcherRequest {
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field?: string;
+  capture_env_map?: Record<string, string>;
+  priority?: number;
+  continue_matching?: boolean;
+  enabled?: boolean;
+}
+
 async function actionsCatRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -413,6 +457,58 @@ export const actionsCatAPI = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
+      },
+    );
+  },
+  listSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+    return actionsCatRequest<ActionsCatSchedule[]>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+    );
+  },
+  createSchedule(
+    actionID: string,
+    req: CreateScheduleRequest,
+  ): Promise<ActionsCatSchedule> {
+    return actionsCatRequest<ActionsCatSchedule>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/schedules/${encodeURIComponent(scheduleID)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  },
+  listMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+    return actionsCatRequest<ActionsCatMatcher[]>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+    );
+  },
+  createMatcher(
+    actionID: string,
+    req: CreateMatcherRequest,
+  ): Promise<ActionsCatMatcher> {
+    return actionsCatRequest<ActionsCatMatcher>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteMatcher(matcherID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/matchers/${encodeURIComponent(matcherID)}`,
+      {
+        method: 'DELETE',
       },
     );
   },
@@ -858,6 +954,30 @@ export function createInstanceAPI() {
       payload: Record<string, unknown>,
     ): Promise<{ ok: boolean }> {
       return actionsCatAPI.dispatch(payload);
+    },
+    listActionsCatSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+      return actionsCatAPI.listSchedules(actionID);
+    },
+    createActionsCatSchedule(
+      actionID: string,
+      req: CreateScheduleRequest,
+    ): Promise<ActionsCatSchedule> {
+      return actionsCatAPI.createSchedule(actionID, req);
+    },
+    deleteActionsCatSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteSchedule(scheduleID);
+    },
+    listActionsCatMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+      return actionsCatAPI.listMatchers(actionID);
+    },
+    createActionsCatMatcher(
+      actionID: string,
+      req: CreateMatcherRequest,
+    ): Promise<ActionsCatMatcher> {
+      return actionsCatAPI.createMatcher(actionID, req);
+    },
+    deleteActionsCatMatcher(matcherID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteMatcher(matcherID);
     },
   };
 }

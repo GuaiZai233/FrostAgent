@@ -1,7 +1,9 @@
 import {
   actionsCatAPI,
   type ActionsCatAction,
+  type ActionsCatMatcher,
   type ActionsCatRun,
+  type ActionsCatSchedule,
   type ActionsCatStatus,
 } from '../api/client';
 import { escapeHtml, formatDateTime } from '../utils/formatters';
@@ -146,6 +148,58 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询 Action 的历史构建列表，支持过滤指定版本；用于构建超时或未决状态的幂等恢复与发现。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_schedule</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              注册 5 段式标准 Cron 定时触发调度与 IANA 时区（如 Asia/Shanghai），脱离 LLM 在后台自主周期执行。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_schedules</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              查询 Action 绑定的定时调度规则列表及下次计划执行时间 (next_run_at)。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_delete_schedule</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              注销指定 ID 的定时调度规则，立即停止后台周期调度执行。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_matcher</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              注册事件模式匹配规则 (exact / contains / regex)，支持提取命名捕获组注入容器环境变量。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_matchers</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              查询 Action 绑定的事件模式规则清单、匹配方式与优先级 (priority) 评估顺序。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_delete_matcher</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              注销指定 ID 的事件模式匹配规则。
             </p>
           </div>
         </div>
@@ -488,6 +542,15 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
                     </button>
                     <button
                       class="btn btn-outline btn-sm"
+                      data-action="manage-triggers"
+                      data-id="${escapeHtml(act.id)}"
+                      data-name="${escapeHtml(act.name || act.id)}"
+                    >
+                      ${icon('clock', 'size-3')}
+                      <span>触发器</span>
+                    </button>
+                    <button
+                      class="btn btn-outline btn-sm"
                       data-action="view-action-runs"
                       data-id="${escapeHtml(act.id)}"
                     >
@@ -567,6 +630,17 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
         const actName = target.dataset.name;
         if (actID) {
           openTriggerDialog(actID, actName || actID);
+        }
+      });
+    });
+
+    actionsContainer.querySelectorAll('[data-action="manage-triggers"]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const target = e.currentTarget as HTMLElement;
+        const actID = target.dataset.id;
+        const actName = target.dataset.name;
+        if (actID) {
+          openTriggersDialog(actID, actName || actID);
         }
       });
     });
@@ -900,6 +974,444 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             submitBtn.innerHTML = `${icon('play', 'size-3.5')} <span>立即触发</span>`;
           }
         });
+      },
+    });
+  }
+
+  // Dialog: Manage Triggers (Schedules + Matchers)
+  function openTriggersDialog(actionID: string, actionName: string): void {
+    openDialog({
+      title: `触发器与调度管理: ${actionName}`,
+      description: `动作 ID: ${actionID} · 管理后台自主定时任务 (Schedules) 与事件触发器 (Matchers)`,
+      maxWidth: '48rem',
+      bodyHtml: `
+        <div class="flex flex-col gap-6">
+          <!-- Section 1: Schedules -->
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-2 border-b border-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="text-primary inline-flex">${icon('clock', 'size-4')}</span>
+                <h3 class="text-sm font-bold text-foreground">定时调度规则 (Cron Schedules)</h3>
+                <span class="badge badge-secondary text-xs" id="dialog-schedules-count">0</span>
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              基于标准 5 段式 Cron 表达式与 IANA 时区（如 Asia/Shanghai），由后台常驻调度器自主拉起执行，无需 LLM 在热路径中介入。
+            </p>
+
+            <div id="dialog-schedules-list" class="flex flex-col gap-2 min-h-[3rem]">
+              <div class="p-3 text-center text-xs text-muted-foreground"><span class="spinner inline-block"></span> 正在拉取定时规则...</div>
+            </div>
+
+            <!-- Add Schedule Form -->
+            <div class="p-3 rounded-md border border-border bg-secondary/30 flex flex-col gap-2.5 mt-1">
+              <span class="text-xs font-semibold text-foreground">新增定时调度</span>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div class="form-group sm:col-span-1">
+                  <label class="form-label text-[11px]">Cron 表达式 <span class="text-destructive">*</span></label>
+                  <input type="text" id="sched-cron-input" class="input font-mono text-xs w-full" placeholder="0 9 * * * 或 */5 * * * *" />
+                </div>
+                <div class="form-group sm:col-span-1">
+                  <label class="form-label text-[11px]">IANA 时区</label>
+                  <input type="text" id="sched-tz-input" class="input font-mono text-xs w-full" value="Asia/Shanghai" placeholder="Asia/Shanghai" />
+                </div>
+                <div class="form-group sm:col-span-1 flex flex-col justify-end">
+                  <div class="flex items-center gap-2">
+                    <label class="text-xs flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" id="sched-enabled-input" checked />
+                      <span>启用</span>
+                    </label>
+                    <button class="btn btn-primary btn-sm ml-auto" id="sched-add-btn">
+                      ${icon('plus', 'size-3')}
+                      <span>添加</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 2: Matchers -->
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-2 border-b border-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="text-primary inline-flex">${icon('filter', 'size-4')}</span>
+                <h3 class="text-sm font-bold text-foreground">事件模式匹配 (Event Matchers)</h3>
+                <span class="badge badge-secondary text-xs" id="dialog-matchers-count">0</span>
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              监听 IM 消息或系统事件 Payload，支持 contains、exact 及 regex 匹配，并可将正则命名捕获组自动映射为沙箱容器环境变量。
+            </p>
+
+            <div id="dialog-matchers-list" class="flex flex-col gap-2 min-h-[3rem]">
+              <div class="p-3 text-center text-xs text-muted-foreground"><span class="spinner inline-block"></span> 正在拉取事件规则...</div>
+            </div>
+
+            <!-- Add Matcher Form -->
+            <div class="p-3 rounded-md border border-border bg-secondary/30 flex flex-col gap-2.5 mt-1">
+              <span class="text-xs font-semibold text-foreground">新增事件匹配规则</span>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div class="form-group">
+                  <label class="form-label text-[11px]">规则名称 <span class="text-destructive">*</span></label>
+                  <input type="text" id="matcher-name-input" class="input text-xs w-full" placeholder="例如: 城市天气查询" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label text-[11px]">匹配模式 (Pattern) <span class="text-destructive">*</span></label>
+                  <input type="text" id="matcher-pattern-input" class="input font-mono text-xs w-full" placeholder="^天气\\s+(?P<city>\\S+)$" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label text-[11px]">匹配类型</label>
+                  <select id="matcher-type-select" class="input text-xs w-full">
+                    <option value="regex">regex (正则匹配)</option>
+                    <option value="contains">contains (包含关键字)</option>
+                    <option value="exact">exact (完全对齐)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label text-[11px]">目标字段 (Target Field)</label>
+                  <input type="text" id="matcher-target-input" class="input font-mono text-xs w-full" value="text" placeholder="text" />
+                </div>
+                <div class="form-group sm:col-span-2">
+                  <label class="form-label text-[11px]">命名捕获组环境变量映射 (可选，逗号分隔，如 CITY=city,QUERY=word)</label>
+                  <input type="text" id="matcher-captures-input" class="input font-mono text-xs w-full" placeholder="CITY=city" />
+                  <p class="text-[11px] text-muted-foreground mt-0.5">捕获组名称不可使用 ACTIONSCAT_ 保留前缀</p>
+                </div>
+                <div class="form-group sm:col-span-2 flex items-center justify-between gap-3 flex-wrap">
+                  <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-1.5">
+                      <label class="text-[11px]">优先级:</label>
+                      <input type="number" id="matcher-priority-input" class="input text-xs w-16" value="0" min="0" max="1000" />
+                    </div>
+                    <label class="text-xs flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" id="matcher-continue-input" />
+                      <span>继续后续匹配</span>
+                    </label>
+                    <label class="text-xs flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" id="matcher-enabled-input" checked />
+                      <span>启用</span>
+                    </label>
+                  </div>
+                  <button class="btn btn-primary btn-sm ml-auto" id="matcher-add-btn">
+                    ${icon('plus', 'size-3')}
+                    <span>添加匹配规则</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `,
+      footerHtml: `
+        <button class="btn btn-outline" id="dialog-triggers-close">关闭</button>
+      `,
+      onMount: (dialogEl, close) => {
+        dialogEl.querySelector('#dialog-triggers-close')?.addEventListener('click', () => close());
+
+        const schedulesListEl = dialogEl.querySelector<HTMLElement>('#dialog-schedules-list')!;
+        const schedulesCountEl = dialogEl.querySelector<HTMLElement>('#dialog-schedules-count')!;
+        const matchersListEl = dialogEl.querySelector<HTMLElement>('#dialog-matchers-list')!;
+        const matchersCountEl = dialogEl.querySelector<HTMLElement>('#dialog-matchers-count')!;
+
+        const cronInput = dialogEl.querySelector<HTMLInputElement>('#sched-cron-input')!;
+        const tzInput = dialogEl.querySelector<HTMLInputElement>('#sched-tz-input')!;
+        const schedEnabledInput = dialogEl.querySelector<HTMLInputElement>('#sched-enabled-input')!;
+        const addSchedBtn = dialogEl.querySelector<HTMLButtonElement>('#sched-add-btn')!;
+
+        const matcherNameInput = dialogEl.querySelector<HTMLInputElement>('#matcher-name-input')!;
+        const matcherPatternInput = dialogEl.querySelector<HTMLInputElement>('#matcher-pattern-input')!;
+        const matcherTypeSelect = dialogEl.querySelector<HTMLSelectElement>('#matcher-type-select')!;
+        const matcherTargetInput = dialogEl.querySelector<HTMLInputElement>('#matcher-target-input')!;
+        const matcherCapturesInput = dialogEl.querySelector<HTMLInputElement>('#matcher-captures-input')!;
+        const matcherPriorityInput = dialogEl.querySelector<HTMLInputElement>('#matcher-priority-input')!;
+        const matcherContinueInput = dialogEl.querySelector<HTMLInputElement>('#matcher-continue-input')!;
+        const matcherEnabledInput = dialogEl.querySelector<HTMLInputElement>('#matcher-enabled-input')!;
+        const addMatcherBtn = dialogEl.querySelector<HTMLButtonElement>('#matcher-add-btn')!;
+
+        // 1. Load and render Schedules
+        async function loadSchedules(): Promise<void> {
+          try {
+            const list: ActionsCatSchedule[] = await actionsCatAPI.listSchedules(actionID);
+            schedulesCountEl.textContent = String(list.length);
+            if (list.length === 0) {
+              schedulesListEl.innerHTML = `
+                <div class="p-3 text-center text-xs text-muted-foreground border border-dashed border-border rounded bg-muted/20">
+                  暂未配置定时调度规则
+                </div>
+              `;
+              return;
+            }
+
+            schedulesListEl.innerHTML = `
+              <div class="card table-card overflow-hidden">
+                <div class="table-container">
+                  <table class="table text-xs">
+                    <thead>
+                      <tr>
+                        <th>Cron 表达式</th>
+                        <th>时区</th>
+                        <th>下次执行</th>
+                        <th>状态</th>
+                        <th style="width: 3rem; text-align: right;">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${list
+                        .map(
+                          (s) => `
+                        <tr>
+                          <td><code class="font-mono font-bold text-foreground">${escapeHtml(s.cron_expr)}</code></td>
+                          <td class="font-mono text-muted-foreground">${escapeHtml(s.timezone || 'UTC')}</td>
+                          <td class="font-mono text-xs">${escapeHtml(formatDateTime(s.next_run_at))}</td>
+                          <td>
+                            <span class="badge ${s.enabled ? 'badge-success' : 'badge-outline'} text-[10px]">
+                              ${s.enabled ? '生效中' : '已暂停'}
+                            </span>
+                          </td>
+                          <td style="text-align: right;">
+                            <button
+                              class="btn btn-ghost btn-icon-sm text-destructive"
+                              style="width: 1.5rem; height: 1.5rem;"
+                              data-delete-sched="${escapeHtml(s.id)}"
+                              title="注销调度"
+                            >
+                              ${icon('trash', 'size-3')}
+                            </button>
+                          </td>
+                        </tr>
+                      `,
+                        )
+                        .join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            `;
+
+            schedulesListEl.querySelectorAll('[data-delete-sched]').forEach((btn) => {
+              btn.addEventListener('click', async (e) => {
+                const target = e.currentTarget as HTMLElement;
+                const schedID = target.dataset.deleteSched;
+                if (!schedID) return;
+                target.setAttribute('disabled', 'true');
+                try {
+                  await actionsCatAPI.deleteSchedule(schedID);
+                  toast.success(`定时规则 ${schedID} 已删除`);
+                  void loadSchedules();
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  toast.error(`删除调度失败: ${msg}`);
+                  target.removeAttribute('disabled');
+                }
+              });
+            });
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            schedulesListEl.innerHTML = `<div class="p-3 text-xs text-destructive">获取定时规则失败: ${escapeHtml(msg)}</div>`;
+          }
+        }
+
+        // 2. Add Schedule
+        addSchedBtn.addEventListener('click', async () => {
+          const cronExpr = cronInput.value.trim();
+          if (!cronExpr) {
+            toast.warning('请输入 Cron 表达式');
+            cronInput.focus();
+            return;
+          }
+          const timezone = tzInput.value.trim() || 'Asia/Shanghai';
+          const enabled = schedEnabledInput.checked;
+
+          addSchedBtn.disabled = true;
+          try {
+            await actionsCatAPI.createSchedule(actionID, {
+              cron_expr: cronExpr,
+              timezone,
+              enabled,
+            });
+            toast.success('定时调度规则已成功创建');
+            cronInput.value = '';
+            void loadSchedules();
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast.error(`创建定时规则失败: ${msg}`);
+          } finally {
+            addSchedBtn.disabled = false;
+          }
+        });
+
+        // 3. Load and render Matchers
+        async function loadMatchers(): Promise<void> {
+          try {
+            const list: ActionsCatMatcher[] = await actionsCatAPI.listMatchers(actionID);
+            matchersCountEl.textContent = String(list.length);
+            if (list.length === 0) {
+              matchersListEl.innerHTML = `
+                <div class="p-3 text-center text-xs text-muted-foreground border border-dashed border-border rounded bg-muted/20">
+                  暂未配置事件模式匹配规则
+                </div>
+              `;
+              return;
+            }
+
+            matchersListEl.innerHTML = `
+              <div class="card table-card overflow-hidden">
+                <div class="table-container">
+                  <table class="table text-xs">
+                    <thead>
+                      <tr>
+                        <th>规则名称</th>
+                        <th>模式与类型</th>
+                        <th>目标字段</th>
+                        <th>优先级</th>
+                        <th>状态</th>
+                        <th style="width: 3rem; text-align: right;">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${list
+                        .map(
+                          (m) => `
+                        <tr>
+                          <td>
+                            <div class="font-semibold text-foreground">${escapeHtml(m.name)}</div>
+                            <div class="font-mono text-[10px] text-muted-foreground">${escapeHtml(m.id)}</div>
+                          </td>
+                          <td>
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                              <span class="badge badge-secondary text-[10px] font-mono">${escapeHtml(m.match_type)}</span>
+                              <code class="font-mono text-xs">${escapeHtml(m.pattern)}</code>
+                            </div>
+                            ${
+                              m.capture_env_map && Object.keys(m.capture_env_map).length > 0
+                                ? `
+                              <div class="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                                捕获: ${Object.entries(m.capture_env_map)
+                                  .map(([k, v]) => `${k}→${v}`)
+                                  .join(', ')}
+                              </div>
+                            `
+                                : ''
+                            }
+                          </td>
+                          <td><span class="font-mono text-xs">${escapeHtml(m.target_field || 'text')}</span></td>
+                          <td><span class="font-mono text-xs">${m.priority}</span></td>
+                          <td>
+                            <span class="badge ${m.enabled ? 'badge-success' : 'badge-outline'} text-[10px]">
+                              ${m.enabled ? '生效中' : '已暂停'}
+                            </span>
+                          </td>
+                          <td style="text-align: right;">
+                            <button
+                              class="btn btn-ghost btn-icon-sm text-destructive"
+                              style="width: 1.5rem; height: 1.5rem;"
+                              data-delete-matcher="${escapeHtml(m.id)}"
+                              title="注销匹配规则"
+                            >
+                              ${icon('trash', 'size-3')}
+                            </button>
+                          </td>
+                        </tr>
+                      `,
+                        )
+                        .join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            `;
+
+            matchersListEl.querySelectorAll('[data-delete-matcher]').forEach((btn) => {
+              btn.addEventListener('click', async (e) => {
+                const target = e.currentTarget as HTMLElement;
+                const matcherID = target.dataset.deleteMatcher;
+                if (!matcherID) return;
+                target.setAttribute('disabled', 'true');
+                try {
+                  await actionsCatAPI.deleteMatcher(matcherID);
+                  toast.success(`事件规则 ${matcherID} 已删除`);
+                  void loadMatchers();
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  toast.error(`删除事件规则失败: ${msg}`);
+                  target.removeAttribute('disabled');
+                }
+              });
+            });
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            matchersListEl.innerHTML = `<div class="p-3 text-xs text-destructive">获取事件规则失败: ${escapeHtml(msg)}</div>`;
+          }
+        }
+
+        // 4. Add Matcher
+        addMatcherBtn.addEventListener('click', async () => {
+          const name = matcherNameInput.value.trim();
+          if (!name) {
+            toast.warning('请输入规则名称');
+            matcherNameInput.focus();
+            return;
+          }
+          const pattern = matcherPatternInput.value.trim();
+          if (!pattern) {
+            toast.warning('请输入匹配表达式 (Pattern)');
+            matcherPatternInput.focus();
+            return;
+          }
+          const matchType = matcherTypeSelect.value;
+          const targetField = matcherTargetInput.value.trim() || 'text';
+          const priority = parseInt(matcherPriorityInput.value, 10) || 0;
+          const continueMatching = matcherContinueInput.checked;
+          const enabled = matcherEnabledInput.checked;
+
+          let captureEnvMap: Record<string, string> | undefined;
+          const rawCaptures = matcherCapturesInput.value.trim();
+          if (rawCaptures) {
+            captureEnvMap = {};
+            for (const item of rawCaptures.split(',')) {
+              const pair = item.trim();
+              if (!pair) continue;
+              const eqIdx = pair.indexOf('=');
+              if (eqIdx > 0) {
+                const k = pair.slice(0, eqIdx).trim();
+                const v = pair.slice(eqIdx + 1).trim();
+                if (k.toUpperCase().startsWith('ACTIONSCAT_')) {
+                  toast.error(`环境变量 ${k} 使用了保留前缀 ACTIONSCAT_`);
+                  return;
+                }
+                captureEnvMap[k] = v;
+              }
+            }
+          }
+
+          addMatcherBtn.disabled = true;
+          try {
+            await actionsCatAPI.createMatcher(actionID, {
+              name,
+              pattern,
+              match_type: matchType,
+              target_field: targetField,
+              capture_env_map: captureEnvMap && Object.keys(captureEnvMap).length > 0 ? captureEnvMap : undefined,
+              priority,
+              continue_matching: continueMatching,
+              enabled,
+            });
+            toast.success('事件匹配规则已成功创建');
+            matcherNameInput.value = '';
+            matcherPatternInput.value = '';
+            matcherCapturesInput.value = '';
+            void loadMatchers();
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast.error(`创建事件规则失败: ${msg}`);
+          } finally {
+            addMatcherBtn.disabled = false;
+          }
+        });
+
+        // Initial fetch
+        void loadSchedules();
+        void loadMatchers();
       },
     });
   }
