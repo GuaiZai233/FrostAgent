@@ -707,6 +707,8 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 
 	var receivedDeleteScheduleID string
 	var receivedDeleteMatcherID string
+	var lastCreatedScheduleReq actclient.CreateScheduleReq
+	var lastCreatedMatcherReq actclient.CreateMatcherReq
 
 	backendTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -714,6 +716,7 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 			if r.Method == http.MethodPost {
 				var req actclient.CreateScheduleReq
 				_ = json.NewDecoder(r.Body).Decode(&req)
+				lastCreatedScheduleReq = req
 				created := mockSchedule
 				created.CronExpr = req.CronExpr
 				created.Timezone = req.Timezone
@@ -738,10 +741,12 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 			if r.Method == http.MethodPost {
 				var req actclient.CreateMatcherReq
 				_ = json.NewDecoder(r.Body).Decode(&req)
+				lastCreatedMatcherReq = req
 				created := mockMatcher
 				created.Name = req.Name
 				created.MatchType = req.MatchType
 				created.Pattern = req.Pattern
+				created.CaptureEnvMap = req.CaptureEnvMap
 				created.Enabled = req.Enabled
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(created)
@@ -929,6 +934,140 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 		svc.ServeHTTP(rec6, req6)
 		if rec6.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 for empty name in create matcher, got %d", rec6.Code)
+		}
+	}
+
+	// 8. Schedules: optional enabled defaults to true, explicit false preserved
+	{
+		// Omitted enabled -> defaults to true
+		reqOmit := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader([]byte(`{"cron_expr":"0 10 * * *"}`)))
+		recOmit := httptest.NewRecorder()
+		svc.ServeHTTP(recOmit, reqOmit)
+		if recOmit.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for schedule with omitted enabled, got %d", recOmit.Code)
+		}
+		if !lastCreatedScheduleReq.Enabled {
+			t.Fatalf("expected schedule Enabled to default to true, got false")
+		}
+
+		// Explicit false -> preserved
+		reqFalse := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/schedules", bytes.NewReader([]byte(`{"cron_expr":"0 10 * * *","enabled":false}`)))
+		recFalse := httptest.NewRecorder()
+		svc.ServeHTTP(recFalse, reqFalse)
+		if recFalse.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for schedule with explicit false enabled, got %d", recFalse.Code)
+		}
+		if lastCreatedScheduleReq.Enabled {
+			t.Fatalf("expected schedule Enabled to be false, got true")
+		}
+	}
+
+	// 9. Matchers: optional enabled defaults to true, explicit false preserved, default match_type to exact
+	{
+		// Omitted enabled -> defaults to true
+		reqOmit := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_omit","pattern":"hello"}`)))
+		recOmit := httptest.NewRecorder()
+		svc.ServeHTTP(recOmit, reqOmit)
+		if recOmit.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for matcher with omitted enabled, got %d", recOmit.Code)
+		}
+		if !lastCreatedMatcherReq.Enabled {
+			t.Fatalf("expected matcher Enabled to default to true, got false")
+		}
+		if lastCreatedMatcherReq.MatchType != "exact" {
+			t.Fatalf("expected matcher MatchType to default to exact, got %q", lastCreatedMatcherReq.MatchType)
+		}
+
+		// Explicit false -> preserved
+		reqFalse := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_false","pattern":"hello","enabled":false}`)))
+		recFalse := httptest.NewRecorder()
+		svc.ServeHTTP(recFalse, reqFalse)
+		if recFalse.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for matcher with explicit false enabled, got %d", recFalse.Code)
+		}
+		if lastCreatedMatcherReq.Enabled {
+			t.Fatalf("expected matcher Enabled to be false, got true")
+		}
+	}
+
+	// 10. Matchers: match_type enum validation
+	{
+		reqInvalidType := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_bad","pattern":"hello","match_type":"bogus"}`)))
+		recInvalidType := httptest.NewRecorder()
+		svc.ServeHTTP(recInvalidType, reqInvalidType)
+		if recInvalidType.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid match_type, got %d", recInvalidType.Code)
+		}
+		if !strings.Contains(recInvalidType.Body.String(), "invalid match_type") {
+			t.Fatalf("expected invalid match_type message, got: %s", recInvalidType.Body.String())
+		}
+	}
+
+	// 11. Matchers: regex pattern pre-compilation validation vs plain string modes
+	{
+		// Invalid regex pattern when match_type is regex -> 400
+		reqBadRegex := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_bad_re","pattern":"(?P<city>[)","match_type":"regex"}`)))
+		recBadRegex := httptest.NewRecorder()
+		svc.ServeHTTP(recBadRegex, reqBadRegex)
+		if recBadRegex.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid regex pattern, got %d", recBadRegex.Code)
+		}
+		if !strings.Contains(recBadRegex.Body.String(), "invalid regex pattern") {
+			t.Fatalf("expected invalid regex pattern error, got: %s", recBadRegex.Body.String())
+		}
+
+		// Meta-characters allowed in exact mode
+		reqExact := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_exact","pattern":"(?P<city>[)","match_type":"exact"}`)))
+		recExact := httptest.NewRecorder()
+		svc.ServeHTTP(recExact, reqExact)
+		if recExact.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for meta-characters in exact match_type, got %d (body: %s)", recExact.Code, recExact.Body.String())
+		}
+		if lastCreatedMatcherReq.Pattern != "(?P<city>[)" {
+			t.Fatalf("expected exact pattern preserved, got: %q", lastCreatedMatcherReq.Pattern)
+		}
+
+		// Meta-characters allowed in contains mode
+		reqContains := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{"name":"m_contains","pattern":"(?P<city>[)","match_type":"contains"}`)))
+		recContains := httptest.NewRecorder()
+		svc.ServeHTTP(recContains, reqContains)
+		if recContains.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for meta-characters in contains match_type, got %d (body: %s)", recContains.Code, recContains.Body.String())
+		}
+	}
+
+	// 12. Matchers: capture_env_map ACTIONSCAT_ reserved prefix protection on target env var
+	{
+		// Reject when target env var uses ACTIONSCAT_ prefix
+		reqReserved := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{
+			"name":"m_reserved",
+			"pattern":"^city (?P<city>\\w+)$",
+			"match_type":"regex",
+			"capture_env_map":{"city":"ACTIONSCAT_ACTION_ID"}
+		}`)))
+		recReserved := httptest.NewRecorder()
+		svc.ServeHTTP(recReserved, reqReserved)
+		if recReserved.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for reserved ACTIONSCAT_ prefix in capture_env_map, got %d", recReserved.Code)
+		}
+		if !strings.Contains(recReserved.Body.String(), "uses reserved prefix ACTIONSCAT_") {
+			t.Fatalf("expected reserved prefix error, got: %s", recReserved.Body.String())
+		}
+
+		// Allow valid capture mapping
+		reqValid := newReq(http.MethodPost, "/api/actionscat/actions/act_cron/matchers", bytes.NewReader([]byte(`{
+			"name":"m_valid",
+			"pattern":"^city (?P<city>\\w+)$",
+			"match_type":"regex",
+			"capture_env_map":{"city":"CITY"}
+		}`)))
+		recValid := httptest.NewRecorder()
+		svc.ServeHTTP(recValid, reqValid)
+		if recValid.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for valid capture_env_map, got %d (body: %s)", recValid.Code, recValid.Body.String())
+		}
+		if lastCreatedMatcherReq.CaptureEnvMap["city"] != "CITY" {
+			t.Fatalf("expected capture_env_map city->CITY, got: %+v", lastCreatedMatcherReq.CaptureEnvMap)
 		}
 	}
 }

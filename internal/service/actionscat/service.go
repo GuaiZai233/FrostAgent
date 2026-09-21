@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,23 @@ func NewScoped(c *client.Client, instanceID string, getenv func(string) string) 
 		instanceID: instanceID,
 		getenv:     getenv,
 	}
+}
+
+type createScheduleInboundReq struct {
+	CronExpr string `json:"cron_expr"`
+	Timezone string `json:"timezone,omitempty"`
+	Enabled  *bool  `json:"enabled,omitempty"`
+}
+
+type createMatcherInboundReq struct {
+	Name             string            `json:"name"`
+	TargetField      string            `json:"target_field,omitempty"`
+	MatchType        string            `json:"match_type,omitempty"`
+	Pattern          string            `json:"pattern"`
+	CaptureEnvMap    map[string]string `json:"capture_env_map,omitempty"`
+	Priority         int               `json:"priority,omitempty"`
+	ContinueMatching *bool             `json:"continue_matching,omitempty"`
+	Enabled          *bool             `json:"enabled,omitempty"`
 }
 
 // Client returns the underlying ActionsCat client.
@@ -379,7 +397,7 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 					return
 				}
 				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
-				var req client.CreateScheduleReq
+				var req createScheduleInboundReq
 				dec := json.NewDecoder(r.Body)
 				if err := dec.Decode(&req); err != nil {
 					s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
@@ -394,7 +412,15 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 					s.writeError(w, http.StatusBadRequest, "cron_expr cannot be empty")
 					return
 				}
-				sched, err := s.client.CreateSchedule(r.Context(), actionID, req)
+				enabled := true
+				if req.Enabled != nil {
+					enabled = *req.Enabled
+				}
+				sched, err := s.client.CreateSchedule(r.Context(), actionID, client.CreateScheduleReq{
+					CronExpr: strings.TrimSpace(req.CronExpr),
+					Timezone: strings.TrimSpace(req.Timezone),
+					Enabled:  enabled,
+				})
 				if err != nil {
 					s.handleClientError(w, err)
 					return
@@ -426,7 +452,7 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 					return
 				}
 				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
-				var req client.CreateMatcherReq
+				var req createMatcherInboundReq
 				dec := json.NewDecoder(r.Body)
 				if err := dec.Decode(&req); err != nil {
 					s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
@@ -441,11 +467,55 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 					s.writeError(w, http.StatusBadRequest, "matcher name cannot be empty")
 					return
 				}
-				if strings.TrimSpace(req.Pattern) == "" {
+				pattern := strings.TrimSpace(req.Pattern)
+				if pattern == "" {
 					s.writeError(w, http.StatusBadRequest, "matcher pattern cannot be empty")
 					return
 				}
-				matcher, err := s.client.CreateMatcher(r.Context(), actionID, req)
+				matchType := strings.TrimSpace(strings.ToLower(req.MatchType))
+				if matchType == "" {
+					matchType = "exact"
+				}
+				switch matchType {
+				case "exact", "contains", "regex":
+				default:
+					s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid match_type %q: must be exact, contains, or regex", req.MatchType))
+					return
+				}
+				if matchType == "regex" {
+					if _, err := regexp.Compile(pattern); err != nil {
+						s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid regex pattern: %v", err))
+						return
+					}
+				}
+				for _, envVar := range req.CaptureEnvMap {
+					if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(envVar)), "ACTIONSCAT_") {
+						s.writeError(w, http.StatusBadRequest, fmt.Sprintf("capture env var %q uses reserved prefix ACTIONSCAT_", envVar))
+						return
+					}
+				}
+				targetField := strings.TrimSpace(req.TargetField)
+				if targetField == "" {
+					targetField = "text"
+				}
+				continueMatching := false
+				if req.ContinueMatching != nil {
+					continueMatching = *req.ContinueMatching
+				}
+				enabled := true
+				if req.Enabled != nil {
+					enabled = *req.Enabled
+				}
+				matcher, err := s.client.CreateMatcher(r.Context(), actionID, client.CreateMatcherReq{
+					Name:             strings.TrimSpace(req.Name),
+					TargetField:      targetField,
+					MatchType:        matchType,
+					Pattern:          pattern,
+					CaptureEnvMap:    req.CaptureEnvMap,
+					Priority:         req.Priority,
+					ContinueMatching: continueMatching,
+					Enabled:          enabled,
+				})
 				if err != nil {
 					s.handleClientError(w, err)
 					return

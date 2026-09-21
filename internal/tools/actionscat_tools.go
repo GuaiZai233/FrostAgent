@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -1454,8 +1455,14 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			default:
 				return fmt.Sprintf("无效的 match_type %q，仅支持 'exact', 'contains', 'regex'", input.MatchType), nil
 			}
-			if strings.TrimSpace(input.Pattern) == "" {
+			pattern := strings.TrimSpace(input.Pattern)
+			if pattern == "" {
 				return "缺少必填参数 'pattern'", nil
+			}
+			if matchType == "regex" {
+				if _, err := regexp.Compile(pattern); err != nil {
+					return fmt.Sprintf("匹配表达式 %q 不是合法的正则表达式: %v", pattern, err), nil
+				}
 			}
 
 			for _, envKey := range input.CaptureEnvMap {

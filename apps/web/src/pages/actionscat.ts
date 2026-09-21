@@ -1073,9 +1073,9 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
                   <input type="text" id="matcher-target-input" class="input font-mono text-xs w-full" value="text" placeholder="text" />
                 </div>
                 <div class="form-group sm:col-span-2">
-                  <label class="form-label text-[11px]">命名捕获组环境变量映射 (可选，逗号分隔，如 CITY=city,QUERY=word)</label>
-                  <input type="text" id="matcher-captures-input" class="input font-mono text-xs w-full" placeholder="CITY=city" />
-                  <p class="text-[11px] text-muted-foreground mt-0.5">捕获组名称不可使用 ACTIONSCAT_ 保留前缀</p>
+                  <label class="form-label text-[11px]">命名捕获组环境变量映射 (可选，逗号分隔，格式: 捕获组名=目标环境变量名，如 city=CITY)</label>
+                  <input type="text" id="matcher-captures-input" class="input font-mono text-xs w-full" placeholder="city=CITY" />
+                  <p class="text-[11px] text-muted-foreground mt-0.5">目标环境变量名不可使用 ACTIONSCAT_ 保留前缀</p>
                 </div>
                 <div class="form-group sm:col-span-2 flex items-center justify-between gap-3 flex-wrap">
                   <div class="flex items-center gap-4">
@@ -1373,13 +1373,14 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
               if (!pair) continue;
               const eqIdx = pair.indexOf('=');
               if (eqIdx > 0) {
-                const k = pair.slice(0, eqIdx).trim();
-                const v = pair.slice(eqIdx + 1).trim();
-                if (k.toUpperCase().startsWith('ACTIONSCAT_')) {
-                  toast.error(`环境变量 ${k} 使用了保留前缀 ACTIONSCAT_`);
+                const captureGroup = pair.slice(0, eqIdx).trim();
+                const envVar = pair.slice(eqIdx + 1).trim();
+                if (!captureGroup || !envVar) continue;
+                if (envVar.toUpperCase().startsWith('ACTIONSCAT_')) {
+                  toast.error(`目标环境变量 ${envVar} 使用了保留前缀 ACTIONSCAT_`);
                   return;
                 }
-                captureEnvMap[k] = v;
+                captureEnvMap[captureGroup] = envVar;
               }
             }
           }

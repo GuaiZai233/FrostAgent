@@ -1522,6 +1522,8 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 
 	var deletedSchedID string
 	var deletedMatcherID string
+	var lastSchedReq actionscat.CreateScheduleReq
+	var lastMatcherReq actionscat.CreateMatcherReq
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1529,6 +1531,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 			if r.Method == http.MethodPost {
 				var req actionscat.CreateScheduleReq
 				_ = json.NewDecoder(r.Body).Decode(&req)
+				lastSchedReq = req
 				created := mockSchedule
 				created.CronExpr = req.CronExpr
 				created.Timezone = req.Timezone
@@ -1552,6 +1555,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 			if r.Method == http.MethodPost {
 				var req actionscat.CreateMatcherReq
 				_ = json.NewDecoder(r.Body).Decode(&req)
+				lastMatcherReq = req
 				created := mockMatcher
 				created.Name = req.Name
 				created.MatchType = req.MatchType
@@ -1618,6 +1622,18 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	if !strings.Contains(schedOut, "sched_123") || !strings.Contains(schedOut, "定时触发器创建成功") {
 		t.Fatalf("unexpected create schedule output: %s", schedOut)
 	}
+	if !lastSchedReq.Enabled {
+		t.Fatalf("expected omitted enabled to default to true on schedule, got false")
+	}
+
+	// Explicit false enabled on schedule
+	_, err = createSchedTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "cron_expr": "0 8 * * *", "enabled": false}`)
+	if err != nil {
+		t.Fatalf("create schedule with enabled=false error: %v", err)
+	}
+	if lastSchedReq.Enabled {
+		t.Fatalf("expected explicit false enabled on schedule, got true")
+	}
 
 	// 2. ActionsCatListSchedulesTool
 	listSchedTool := ActionsCatListSchedulesTool(client)
@@ -1681,13 +1697,38 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	if !strings.Contains(mBad5, "包含受保护的前缀 'ACTIONSCAT_'") {
 		t.Fatalf("expected protected env prefix error, got: %s", mBad5)
 	}
-	// Success
+	// Invalid regex pattern
+	mBad6, _ := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m", "match_type": "regex", "pattern": "(?P<city>[)"}`)
+	if !strings.Contains(mBad6, "不是合法的正则表达式") {
+		t.Fatalf("expected invalid regex pattern error, got: %s", mBad6)
+	}
+	// Meta-characters allowed in exact mode
+	mExactOut, err := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m_exact", "match_type": "exact", "pattern": "(?P<city>[)"}`)
+	if err != nil || !strings.Contains(mExactOut, "事件匹配器创建成功") {
+		t.Fatalf("expected exact match with meta-characters to succeed, got: %s (err: %v)", mExactOut, err)
+	}
+	if lastMatcherReq.Pattern != "(?P<city>[)" {
+		t.Fatalf("expected exact pattern preserved, got: %q", lastMatcherReq.Pattern)
+	}
+	// Success with valid regex and omitted enabled -> defaults to true
 	matcherOut, err := createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "bilibili-link", "match_type": "regex", "pattern": "https://b23\\.tv/(?P<bvid>\\w+)"}`)
 	if err != nil {
 		t.Fatalf("create matcher error: %v", err)
 	}
 	if !strings.Contains(matcherOut, "m_123") || !strings.Contains(matcherOut, "事件匹配器创建成功") {
 		t.Fatalf("unexpected create matcher output: %s", matcherOut)
+	}
+	if !lastMatcherReq.Enabled {
+		t.Fatalf("expected omitted enabled to default to true on matcher, got false")
+	}
+
+	// Explicit false enabled on matcher
+	_, err = createMatcherTool.ExecuteContext(adminCtx, `{"action_id": "act_cron", "name": "m_off", "match_type": "regex", "pattern": "abc", "enabled": false}`)
+	if err != nil {
+		t.Fatalf("create matcher with enabled=false error: %v", err)
+	}
+	if lastMatcherReq.Enabled {
+		t.Fatalf("expected explicit false enabled on matcher, got true")
 	}
 
 	// 5. ActionsCatListMatchersTool

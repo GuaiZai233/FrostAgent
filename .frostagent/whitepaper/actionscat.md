@@ -281,11 +281,13 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - `match_type: string`（必填，匹配方式：`contains` / `exact` / `regex`）
   - `pattern: string`（必填，匹配表达式，regex 模式必须符合 Go/RE2 正则语法）
   - `target_field: string`（可选，事件 JSON 字段路径，默认 `text`）
-  - `capture_env_map: map[string]string`（可选，正则命名捕获组映射为容器环境变量名）
+  - `capture_env_map: map[string]string`（可选，正则命名捕获组映射为容器环境变量名，格式为 `capture_name: ENV_VAR_NAME`）
   - `priority: int`（可选，评估优先级，数值越高越先匹配，默认 0）
   - `continue_matching: bool`（可选，匹配命中后是否允许后续规则继续匹配，默认 false）
   - `enabled: bool`（可选，默认 true）
-- **安全检查**：前置校验 `capture_env_map` 中的环境变量名称，严禁使用 `ACTIONSCAT_` 前缀，防止覆盖运行时安全凭据。
+- **安全检查**：
+  - 前置校验 `match_type == "regex"` 时必须通过 Go 标准库 `regexp.Compile` 预编译语法校验，非法正则 Fail-Closed 并拒绝变更；
+  - 前置校验 `capture_env_map` 中映射的目标环境变量名称，严禁使用 `ACTIONSCAT_` 前缀，防止覆盖运行时安全凭据与身份标识。
 
 #### 15. `actionscat_list_matchers`
 - **功能**：查询指定 Action 绑定的所有事件模式规则；
@@ -314,7 +316,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
      - `contains`：目标字段包含子串；
      - `exact`：目标字段与规则全量字符一致；
      - `regex`：标准正则匹配，支持命名捕获组 `(?P<group_name>...)`；
-   - **动态参数捕获与环境注入**：通过 `capture_env_map`，匹配引擎可从用户消息中提取关键参数（例如 `(?P<city>\S+)` -> `CITY=city`）并直接注入为任务运行的容器环境变量，使同一 Action 能够按不同输入弹性执行；
+   - **动态参数捕获与环境注入**：通过 `capture_env_map`，匹配引擎可从用户消息中提取关键参数（例如 `(?P<city>\S+)` -> 映射为 `{"city": "CITY"}`）并直接注入为任务运行的容器环境变量，使同一 Action 能够按不同输入弹性执行；
    - **优先级与匹配短路**：支持按 `priority` 倒序评估，默认命中后阻断后续规则（`continue_matching == false`），支持多规则流水线。
 
 ---
@@ -328,8 +330,8 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | **模拟会话副作用** | `?mock=true` 调试会话调用执行、变更或触发器工具触发真实沙箱编译、写入、定时触发或消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更、运行与触发器注册操作，严格维持“断电全丢”不变量 |
 | **构建未决结果风险** | 耗时编译超时、服务端 5xx、响应解析异常或传输中断，被客户端误判为“失败”引发重复并发构建 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断、服务端 5xx、响应损坏与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |
 | **构建状态与版本污染** | 激活未完成/失败的构建导致 Action 运行时崩溃；在失败版本上重试破坏不可变快照 | `activate_build` 与 `deploy_action` 严格断言 `build.Status == "succeeded"`；对失败构建输出截断日志并强制指引 Agent 通过 `create_version` 创建新版本 |
-| **触发器变量伪造与越权** | 通过事件模式匹配的 `capture_env_map` 注入 `ACTIONSCAT_*` 系统级凭据，覆盖容器运行时回调端点或授权 Token | 工具层在注册 Matcher 时执行前置黑名单校验，任何以 `ACTIONSCAT_` 为前缀的目标环境变量均被直接拒绝 |
-| **正则拒绝服务 (ReDoS)** | 注册灾难性回溯的畸形正则表达式导致匹配引擎 CPU 耗尽 | Go 语言标准库 `regexp` 基于 RE2 线性自动机实现，天生免疫回溯死循环；代理与工具层严格校验正则语法编译合法性 |
+| **触发器变量伪造与越权** | 通过事件模式匹配的 `capture_env_map` 注入 `ACTIONSCAT_*` 系统级凭据，覆盖容器运行时回调端点或授权 Token | 工具层与 HTTP 代理层在注册 Matcher 时执行前置黑名单校验，任何以 `ACTIONSCAT_` 为前缀的目标环境变量均被直接拒绝（400 / Fail-Closed） |
+| **正则拒绝服务 (ReDoS) 与语法失效** | 注册灾难性回溯的畸形正则表达式导致匹配引擎 CPU 耗尽，或提交非法正则导致规则静默失效 | Go 语言标准库 `regexp` 基于 RE2 线性自动机实现，天生免疫回溯死循环；代理与工具层在创建 Matcher 时强制对 `match_type == "regex"` 执行 `regexp.Compile` 预编译校验并 Fail-Closed，防止非法规则静默失效 |
 | **源码载荷溢出** | Agent 提交超大代码文件或递归目录耗尽内存与传输带宽 | 工具层计算源码映射总字节并硬限制为 10 MiB（`maxTotalFilesBytes`）；HTTP 代理层强制配置 `http.MaxBytesReader` 限制 10 MiB |
 | **敏感状态泄露** | 沙箱运行中注入的持久状态（`planned_env`）进入大模型上下文导致数据泄露 | 单独定义 `AgentRunDTO`，严格白名单过滤输出字段，永远剔除 `PlannedEnv` |
 | **身份与权限伪造** | 大模型或用户通过 `extra_env` 传递 `ACTIONSCAT_ACTION_ID` 伪造沙箱身份 | 工具层严格校验参数，禁止任何以 `ACTIONSCAT_` 开头的环境变量键 |
