@@ -23,9 +23,9 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
    - 注册 Action、创建版本、触发构建、激活构建以及端到端部署均属于持久化管理面操作，Agent 工具端必须校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员可用；非管理员与无上下文请求严格 Fail-Closed，产生 0 次后端网络调用。
 3. **Mock 会话零持久化副作用 (Zero Durable Mutation Invariant)**：
    - 交互式模拟对话模式（`?mock=true`）下，任何具有外部持久化副作用的操作（`actionscat_run_action`、`actionscat_create_action`、`actionscat_create_version`、`actionscat_build_version`、`actionscat_activate_build`、`actionscat_deploy_action`）必须被前置阻断并返回说明，绝不向 ActionsCat 发起真实执行或写入，确保断电全丢不变量。
-4. **构建超时与未决结果处理 (Build Timeout & Indeterminate Result Defense)**：
+4. **构建未决结果与幂等恢复机制 (Build Indeterminate Result & Idempotent Recovery)**：
    - 区分普通 API 查询（`15s` 超时）与同步构建编译流程（`180s` 超时，`defaultBuildTimeout`）。底层 HTTP Client 显式禁用 transport 层自动重试与全局 client 级超时（`http.Client.Timeout = 0`），使用 context 传递 deadline。
-   - 当同步构建请求发生 context 超时或传输中断时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildUnknownResult`（“构建结果未知”），提示 Agent 使用 `actionscat_list_builds` 查询实际状态，防止状态机分歧与重复并发构建。
+   - 当同步构建请求发生 context 超时、传输中断、HTTP 5xx 服务端错误（因 ActionsCat Core 先落盘持久化 Build 记录后执行沙箱编译）或 2xx 响应不可解析时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildUnknownResult`（“构建结果未知”，对应 HTTP 504 Gateway Timeout），提示 Agent 使用 `actionscat_list_builds` 查询实际状态（包含初次为空时的短暂重试建议），防止状态机分歧与重复并发构建。
 5. **构建状态门禁与版本不可变性 (Build Status Gating & Version Immutability)**：
    - 激活构建（`actionscat_activate_build`）严格前置校验构建状态，仅允许激活 `succeeded` 状态的制品构建，阻断未完成或失败构建的激活。
    - 严格遵循 ActionsCat 架构的“版本不可变（Version Immutability）”约束。若编译失败，工具提取截断的编译日志（`stderr`/`stdout`）供 Agent 排查，并明确指导 Agent 通过 `actionscat_create_version` 创建新版本，禁止对失败版本发起重复覆盖修改。
@@ -145,7 +145,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 #### 双超时与未决结果判定机制
 - 标准查询默认超时 `15s`（`defaultTimeout`）；
 - 同步编译构建超时设定为独立的长超时 `180s`（`defaultBuildTimeout`）；底层 `http.Client.Timeout = 0`，由各请求的 context deadline 精确控制，并禁用 HTTP transport 层对构建请求的自动重试；
-- 同步构建期间遭遇的任何传输中断（连接被重置、io.ErrUnexpectedEOF、响应体截断、超时）均统一包装为 `ErrBuildUnknownResult`，阻断误判并防止客户端重复并发提交构建。
+- 同步构建期间遭遇的任何传输中断（连接被重置、io.ErrUnexpectedEOF、响应体截断、超时）、HTTP 5xx 服务端错误以及 2xx 响应不可解析均统一包装为 `ErrBuildUnknownResult`，阻断误判并防止客户端重复并发提交构建。
 
 ### 3.2 控制面 HTTP 代理服务（`internal/service/actionscat/service.go`）
 
@@ -232,7 +232,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | **控制平面凭据** | 外部未授权调用 FrostAgent 代理，利用代理持有的 token 滥用 ActionsCat | 代理入口强制调用 `CheckControlPlaneAuthScoped`，非本地回环强制 Bearer 校验，支持本地强鉴权配置 |
 | **管理面权限滥用** | 普通用户诱导 Agent 频繁调用管理工具（创建 Action/版本、构建、激活或部署）污染控制面 | 5 个状态变更工具全量接入 `ADMIN_QQ_IDS` 门禁；非管理员执行时直接返回权限不足，产生 0 次后端网络请求 |
 | **模拟会话副作用** | `?mock=true` 调试会话调用执行或变更工具触发真实沙箱编译、写入与消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更与运行操作，严格维持“断电全丢”不变量 |
-| **构建超时未决** | 耗时编译导致 HTTP 链接超时，被客户端误判为“失败”引发重复构建并发冲突 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |
+| **构建未决结果风险** | 耗时编译超时、服务端 5xx、响应解析异常或传输中断，被客户端误判为“失败”引发重复并发构建 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断、服务端 5xx、响应损坏与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |
 | **构建状态与版本污染** | 激活未完成/失败的构建导致 Action 运行时崩溃；在失败版本上重试破坏不可变快照 | `activate_build` 与 `deploy_action` 严格断言 `build.Status == "succeeded"`；对失败构建输出截断日志并强制指引 Agent 通过 `create_version` 创建新版本 |
 | **源码载荷溢出** | Agent 提交超大代码文件或递归目录耗尽内存与传输带宽 | 工具层计算源码映射总字节并硬限制为 10 MiB（`maxTotalFilesBytes`）；HTTP 代理层强制配置 `http.MaxBytesReader` 限制 10 MiB |
 | **敏感状态泄露** | 沙箱运行中注入的持久状态（`planned_env`）进入大模型上下文导致数据泄露 | 单独定义 `AgentRunDTO`，严格白名单过滤输出字段，永远剔除 `PlannedEnv` |

@@ -29,9 +29,10 @@ var (
 	ErrInvalidURL = errors.New("actionscat: invalid endpoint url")
 	// ErrNotFound indicates that the requested action or run was not found.
 	ErrNotFound = errors.New("actionscat: resource not found")
-	// ErrBuildUnknownResult is returned when a build request times out or encounters a transport error,
-	// indicating the build outcome is indeterminate (the backend may still be compiling or already completed).
-	ErrBuildUnknownResult = errors.New("actionscat: build request outcome is unknown (timeout or transport interruption; server may still be compiling)")
+	// ErrBuildUnknownResult is returned when a build request times out, encounters a transport error,
+	// returns an HTTP 5xx server error, or returns an unparseable response,
+	// indicating the build outcome is indeterminate (the backend may have already persisted the build record or is still compiling).
+	ErrBuildUnknownResult = errors.New("actionscat: build request outcome is unknown (server 5xx, timeout, transport interruption, or unparseable response; server may still be compiling or already created build)")
 	// ErrBuildTimeoutUnknownResult is maintained for backward compatibility.
 	ErrBuildTimeoutUnknownResult = ErrBuildUnknownResult
 )
@@ -671,7 +672,8 @@ func (c *Client) GetVersion(ctx context.Context, actionID, versionID string) (*A
 // BuildVersion requests compilation of a specific version into an artifact build.
 // Note: build is a synchronous, long-running operation in ActionsCat that can take up to 120s+;
 // this client uses a dedicated long timeout (defaultBuildTimeout = 180s) and does NOT retry on transport errors or timeout.
-// Any transport interruption (deadline exceeded, connection drop, severed body) returns ErrBuildUnknownResult.
+// Any transport interruption (deadline exceeded, connection drop, severed body), HTTP 5xx, or unparseable 2xx response
+// returns ErrBuildUnknownResult to prevent duplicate compilation.
 func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (*ArtifactBuild, error) {
 	if actionID == "" || versionID == "" {
 		return nil, errors.New("actionscat: actionID and versionID cannot be empty")
@@ -682,14 +684,22 @@ func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (
 		if errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrInvalidURL) {
 			return nil, err
 		}
-		if statusCode > 0 && !strings.Contains(err.Error(), "read response") {
+		// 4xx responses are definite rejections (validation error, conflict, not found, unauthorized)
+		// and indicate that ActionsCat definitely rejected the request before initiating the build process.
+		if statusCode >= 400 && statusCode < 500 {
 			return nil, err
 		}
+		// Any 5xx error, transport failure (statusCode == 0), deadline exceeded,
+		// or response read interruption means the server may have already persisted
+		// the build record in its store and initiated compilation.
 		return nil, fmt.Errorf("%w: %v", ErrBuildUnknownResult, err)
 	}
 	var bld ArtifactBuild
 	if err := json.Unmarshal(data, &bld); err != nil {
-		return nil, fmt.Errorf("actionscat: parse build: %w", err)
+		// Server returned 2xx, so build was created and finished, but response payload is corrupt.
+		// Must classify as ErrBuildUnknownResult so caller discovers existing build via ListBuilds
+		// rather than assuming failure and initiating a duplicate build.
+		return nil, fmt.Errorf("%w: parse build: %v", ErrBuildUnknownResult, err)
 	}
 	return &bld, nil
 }

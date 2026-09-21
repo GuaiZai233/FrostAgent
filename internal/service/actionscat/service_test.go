@@ -635,3 +635,43 @@ func TestService_BuildUnknownResult_GatewayTimeout(t *testing.T) {
 		t.Fatalf("expected unknown in error body, got: %s", rec.Body.String())
 	}
 }
+
+func TestService_BuildServer500_GatewayTimeout(t *testing.T) {
+	backendTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/builds") && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "backend compilation failed after build created",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer backendTS.Close()
+
+	cl := actclient.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return backendTS.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+
+	svc := New(cl, "inst_500_test")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+
+	rec := httptest.NewRecorder()
+	svc.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504 Gateway Timeout for backend 500 on build, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown") {
+		t.Fatalf("expected unknown in error body, got: %s", rec.Body.String())
+	}
+}

@@ -715,9 +715,9 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 			bld, err := client.BuildVersion(ctx, input.ActionID, input.VersionID)
 			if err != nil {
 				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
-					return fmt.Sprintf("构建请求超时或网络传输中断，构建结果未知 (后端可能仍在编译中)。\n"+
+					return fmt.Sprintf("构建请求异常 (服务端异常、超时、网络传输中断或响应不可解析)，构建结果未知 (后端可能已生成构建记录或仍在编译中)。\n"+
 						"【恢复指引】：严禁立即重复触发构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
-						"查询该版本是否已在后台生成构建以及其实时状态。若状态为 succeeded，可直接获取 build_id 进行激活；若 building 则稍后重试查询。",
+						"查询该版本是否已在后台生成构建以及其实时状态。若第一次查询暂时为空，请等待短暂间隔后再查询一次；在确认服务端没有生成该 version 的 Build 前不要立即重试构建。若状态为 succeeded，可直接获取 build_id 进行激活；若 building 则稍后重试查询。",
 						input.ActionID, input.VersionID), nil
 				}
 				return fmt.Sprintf("构建版本失败: %v", err), nil
@@ -865,7 +865,7 @@ func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
 
 		if len(filtered) == 0 {
 			if input.VersionID != "" {
-				return fmt.Sprintf("未查询到 Action %s 中版本 %s 的任何构建记录。", input.ActionID, input.VersionID), nil
+				return fmt.Sprintf("未查询到 Action %s 中版本 %s 的任何构建记录。若刚发生构建请求异常，可能记录尚未入库，建议等待短暂间隔后再查询一次；在确认未生成构建前请勿盲目重试构建。", input.ActionID, input.VersionID), nil
 			}
 			return fmt.Sprintf("未查询到 Action %s 的任何构建记录。", input.ActionID), nil
 		}
@@ -1099,9 +1099,9 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 			bld, err := client.BuildVersion(ctx, input.ActionID, ver.ID)
 			if err != nil {
 				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
-					return fmt.Sprintf("部署中断: 版本 %s 构建请求超时或网络传输中断，构建结果未知 (后端可能仍在编译中)。\n"+
+					return fmt.Sprintf("部署中断: 版本 %s 构建请求异常 (服务端异常、超时、网络传输中断或响应不可解析)，构建结果未知 (后端可能已生成构建记录或仍在编译中)。\n"+
 						"【恢复指引】：严禁立即重新部署或重复提交构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
-						"检查该版本是否已在后台生成构建。若构建成功 (succeeded)，可调用 actionscat_activate_build 完成激活；若失败则排查日志后新建版本。",
+						"检查该版本是否已在后台生成构建。若第一次查询暂时为空，请等待短暂间隔后再查询一次；在确认服务端未生成 Build 前严禁重复构建。若构建成功 (succeeded)，可调用 actionscat_activate_build 完成激活；若失败则排查日志后新建版本。",
 						ver.ID, input.ActionID, ver.ID), nil
 				}
 				return fmt.Sprintf("部署失败 (编译构建阶段): %v", err), nil

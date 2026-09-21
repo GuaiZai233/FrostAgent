@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -918,8 +919,8 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildVersionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(out, "构建请求超时或网络传输中断，构建结果未知") || !strings.Contains(out, "actionscat_list_builds") || !strings.Contains(out, "严禁立即重复触发构建") {
-		t.Fatalf("expected build timeout indeterminate guidance, got: %s", out)
+	if !strings.Contains(out, "构建结果未知") || !strings.Contains(out, "actionscat_list_builds") || !strings.Contains(out, "严禁立即重复触发构建") || !strings.Contains(out, "若第一次查询暂时为空") {
+		t.Fatalf("expected build timeout indeterminate guidance with retry wait note, got: %s", out)
 	}
 
 	// 2. DeployActionTool timeout
@@ -931,8 +932,110 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeployActionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(deployOut, "构建请求超时或网络传输中断，构建结果未知") || !strings.Contains(deployOut, "actionscat_list_builds") || !strings.Contains(deployOut, "严禁立即重新部署或重复提交构建") {
-		t.Fatalf("expected deploy timeout indeterminate guidance, got: %s", deployOut)
+	if !strings.Contains(deployOut, "构建结果未知") || !strings.Contains(deployOut, "actionscat_list_builds") || !strings.Contains(deployOut, "严禁立即重新部署或重复提交构建") || !strings.Contains(deployOut, "若第一次查询暂时为空") {
+		t.Fatalf("expected deploy timeout indeterminate guidance with retry wait note, got: %s", deployOut)
+	}
+}
+
+func TestActionsCatTools_BuildUnknownResult_Server500AndMalformedJSON(t *testing.T) {
+	var currentScenario string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sc := currentScenario
+		mu.Unlock()
+
+		if strings.HasSuffix(r.URL.Path, "/versions") {
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(actionscat.ActionVersion{ID: "ver_500_1", ActionID: "act_500"})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/builds") {
+			switch sc {
+			case "server_500":
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "backend sandbox compile failed after build record persisted",
+				})
+				return
+			case "malformed_json":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"bld_corrupt", "status":`))
+				return
+			default:
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(actionscat.ArtifactBuild{ID: "bld_ok", Status: "succeeded"})
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := actionscat.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "mock_token"
+		default:
+			return ""
+		}
+	})
+
+	scope := newTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv: "10001",
+	})
+	adminCtx := llm.WithRunContext(context.Background(), llm.RunContext{
+		ActorUserID: "10001",
+		Mock:        false,
+	})
+
+	buildTool := ActionsCatBuildVersionTool(client, scope)
+	deployTool := ActionsCatDeployActionTool(client, scope)
+
+	// Scenario 1: Server 500 error after side-effect -> MUST guide list_builds and NOT say "构建版本失败"
+	mu.Lock()
+	currentScenario = "server_500"
+	mu.Unlock()
+
+	out500, err := buildTool.ExecuteContext(adminCtx, `{"action_id": "act_500", "version_id": "ver_500_1"}`)
+	if err != nil {
+		t.Fatalf("unexpected tool execution error: %v", err)
+	}
+	if strings.Contains(out500, "构建版本失败") || strings.Contains(out500, "构建失败:") {
+		t.Fatalf("server 500 must NOT be classified as definite failure, got: %s", out500)
+	}
+	if !strings.Contains(out500, "构建结果未知") || !strings.Contains(out500, "actionscat_list_builds") || !strings.Contains(out500, "严禁立即重复触发构建") {
+		t.Fatalf("expected indeterminate unknown-result guidance on server 500, got: %s", out500)
+	}
+
+	deployOut500, err := deployTool.ExecuteContext(adminCtx, `{"action_id": "act_500", "files": {"main.go": "pkg"}}`)
+	if err != nil {
+		t.Fatalf("unexpected deploy tool execution error: %v", err)
+	}
+	if strings.Contains(deployOut500, "部署失败 (编译构建阶段)") {
+		t.Fatalf("server 500 must NOT be classified as definite build failure in deploy tool, got: %s", deployOut500)
+	}
+	if !strings.Contains(deployOut500, "构建结果未知") || !strings.Contains(deployOut500, "actionscat_list_builds") || !strings.Contains(deployOut500, "严禁立即重新部署或重复提交构建") {
+		t.Fatalf("expected indeterminate unknown-result guidance on deploy server 500, got: %s", deployOut500)
+	}
+
+	// Scenario 2: 200 OK but malformed JSON -> MUST guide list_builds and NOT say "构建版本失败"
+	mu.Lock()
+	currentScenario = "malformed_json"
+	mu.Unlock()
+
+	outMalformed, err := buildTool.ExecuteContext(adminCtx, `{"action_id": "act_500", "version_id": "ver_500_1"}`)
+	if err != nil {
+		t.Fatalf("unexpected tool execution error: %v", err)
+	}
+	if strings.Contains(outMalformed, "构建版本失败") || strings.Contains(outMalformed, "构建失败:") {
+		t.Fatalf("malformed 200 JSON must NOT be classified as definite failure, got: %s", outMalformed)
+	}
+	if !strings.Contains(outMalformed, "构建结果未知") || !strings.Contains(outMalformed, "actionscat_list_builds") {
+		t.Fatalf("expected indeterminate unknown-result guidance on malformed JSON, got: %s", outMalformed)
 	}
 }
 

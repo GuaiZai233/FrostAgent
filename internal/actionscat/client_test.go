@@ -695,4 +695,66 @@ func TestClient_BuildUnknownResult_TransportErrors(t *testing.T) {
 	if errors.Is(err, ErrBuildUnknownResult) {
 		t.Fatalf("definitive HTTP 409 error must NOT be wrapped as ErrBuildUnknownResult, got: %v", err)
 	}
+
+	// 5. Server 500 error (e.g. sandbox/export failed after build record created) -> MUST wrap as ErrBuildUnknownResult
+	cHttp500 := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://actionscat.example.internal"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+	cHttp500.httpClient = &http.Client{
+		Transport: &faultTransport{
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Status:     "500 Internal Server Error",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"error":"backend sandbox creation failed after build record saved"}`)),
+				}, nil
+			},
+		},
+	}
+	_, err = cHttp500.BuildVersion(ctx, "act_1", "ver_1")
+	if err == nil {
+		t.Fatal("expected error on 500 server error, got nil")
+	}
+	if !errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("HTTP 500 error must be wrapped as ErrBuildUnknownResult, got: %v", err)
+	}
+
+	// 6. HTTP 200 with malformed JSON body -> MUST wrap as ErrBuildUnknownResult
+	cMalformed := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://actionscat.example.internal"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+	cMalformed.httpClient = &http.Client{
+		Transport: &faultTransport{
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"id":"bld_1", "status":`)), // truncated JSON
+				}, nil
+			},
+		},
+	}
+	_, err = cMalformed.BuildVersion(ctx, "act_1", "ver_1")
+	if err == nil {
+		t.Fatal("expected error on malformed 200 JSON, got nil")
+	}
+	if !errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("malformed 200 JSON must be wrapped as ErrBuildUnknownResult, got: %v", err)
+	}
 }
