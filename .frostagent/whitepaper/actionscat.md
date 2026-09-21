@@ -180,8 +180,8 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 - **规约映射与防御**：
   - 文件总大小上限严格限制为 10 MiB；
   - 源码文件映射 (`files: map[string]string`, 必填)；
-  - 健全默认值：默认构建命令 `go build -o /sandbox/out/entrypoint .`、入口 `/sandbox/entrypoint`、沙箱网络 `none`、超时 30 秒；
-  - 完整规约支持：`build_spec` (language, toolchain, command, network), `runtime_spec` (entrypoint, network policy, timeout, memory, cpu), `state_injections`, `runtime_capabilities`。
+  - 健全默认值与契约防御：默认构建命令 `go build -o /sandbox/out/entrypoint .`、标准入口 `entrypoint`（锁定 canonical 入口，兼容 `/sandbox/entrypoint` 等路径别名，阻断自定义相对路径）、开发语言限定为 `go`、沙箱网络 `none`、超时 30 秒；
+  - 完整规约支持：`build_spec` (language: go, toolchain, command, network), `runtime_spec` (entrypoint: entrypoint, network policy: none/public/allowlist/isolated, timeout, memory, cpu), `state_injections`, `runtime_capabilities`。
 
 #### 4. `actionscat_build_version` (Admin)
 - **功能**：触发版本沙箱编译打包，生成制品构建（ArtifactBuild）；

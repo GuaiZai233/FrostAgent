@@ -425,21 +425,28 @@ func prepareCreateVersionReq(input createVersionInput) (actionscat.CreateVersion
 	if strings.TrimSpace(req.BuildSpec.Command) == "" {
 		req.BuildSpec.Command = "go build -o /sandbox/out/entrypoint ."
 	}
-	if strings.TrimSpace(req.BuildSpec.Language) == "" {
-		req.BuildSpec.Language = "go"
+	lang := strings.TrimSpace(strings.ToLower(req.BuildSpec.Language))
+	if lang == "" {
+		lang = "go"
 	}
+	if lang != "go" {
+		return actionscat.CreateVersionReq{}, fmt.Errorf("无效的开发语言 %q: 当前 ActionsCat 构建器仅支持 'go'", req.BuildSpec.Language)
+	}
+	req.BuildSpec.Language = "go"
 
 	if input.RuntimeSpec != nil {
 		req.RuntimeSpec = *input.RuntimeSpec
 	}
-	// Entrypoint sanitization: default to "entrypoint", and strip any leading "/sandbox/" or "/"
+	// Entrypoint sanitization: ActionsCat Builder exports artifacts under canonical filename "entrypoint".
+	// Accept default/empty and canonical aliases, and normalize all of them to "entrypoint".
+	// Reject custom paths fail-closed to avoid runtime file-not-found failures.
 	entrypoint := strings.TrimSpace(req.RuntimeSpec.Entrypoint)
-	if entrypoint == "" {
-		entrypoint = "entrypoint"
+	switch entrypoint {
+	case "", "entrypoint", "/entrypoint", "./entrypoint", "/sandbox/entrypoint", "/sandbox/out/entrypoint", "out/entrypoint":
+		req.RuntimeSpec.Entrypoint = "entrypoint"
+	default:
+		return actionscat.CreateVersionReq{}, fmt.Errorf("无效的 runtime entrypoint %q: 当前 ActionsCat 构建产物固定为根目录 canonical 'entrypoint'，仅支持 'entrypoint' 或其路径别名 (如 '/sandbox/entrypoint')", entrypoint)
 	}
-	entrypoint = strings.TrimPrefix(entrypoint, "/sandbox/")
-	entrypoint = strings.TrimPrefix(entrypoint, "/")
-	req.RuntimeSpec.Entrypoint = entrypoint
 
 	mode := strings.TrimSpace(strings.ToLower(req.RuntimeSpec.Network.Mode))
 	if mode == "" {
@@ -554,7 +561,7 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 					"type":        "object",
 					"description": "构建环境配置（语言、编译指令等）",
 					"properties": map[string]any{
-						"language":              map[string]any{"type": "string", "description": "开发语言，默认 go"},
+						"language":              map[string]any{"type": "string", "enum": []string{"go"}, "description": "开发语言，当前 ActionsCat 固定支持 'go'（默认 'go'）"},
 						"toolchain_requirement": map[string]any{"type": "string", "description": "工具链版本要求"},
 						"command":               map[string]any{"type": "string", "description": "构建命令，默认 'go build -o /sandbox/out/entrypoint .'"},
 						"network":               map[string]any{"type": "boolean", "description": "构建期间是否允许网络访问，默认 false"},
@@ -564,7 +571,7 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 					"type":        "object",
 					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
 					"properties": map[string]any{
-						"entrypoint":      map[string]any{"type": "string", "description": "相对 /sandbox 的可执行入口路径，默认 'entrypoint'（若指定绝对路径如 '/sandbox/entrypoint' 或 '/entrypoint' 将自动规范化为相对路径）"},
+						"entrypoint":      map[string]any{"type": "string", "enum": []string{"entrypoint"}, "description": "运行时可执行入口路径，当前 ActionsCat 制品固定为根目录 canonical 'entrypoint'（默认 'entrypoint'，支持别名如 '/sandbox/entrypoint'，不支持自定义路径）"},
 						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
 						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
 						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},
@@ -1001,7 +1008,7 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 					"type":        "object",
 					"description": "构建环境配置（语言、编译指令等）",
 					"properties": map[string]any{
-						"language":              map[string]any{"type": "string", "description": "开发语言，默认 go"},
+						"language":              map[string]any{"type": "string", "enum": []string{"go"}, "description": "开发语言，当前 ActionsCat 固定支持 'go'（默认 'go'）"},
 						"toolchain_requirement": map[string]any{"type": "string", "description": "工具链版本要求"},
 						"command":               map[string]any{"type": "string", "description": "构建命令，默认 'go build -o /sandbox/out/entrypoint .'"},
 						"network":               map[string]any{"type": "boolean", "description": "构建期间是否允许网络访问，默认 false"},
@@ -1011,7 +1018,7 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 					"type":        "object",
 					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
 					"properties": map[string]any{
-						"entrypoint":      map[string]any{"type": "string", "description": "相对 /sandbox 的可执行入口路径，默认 'entrypoint'（若指定绝对路径如 '/sandbox/entrypoint' 或 '/entrypoint' 将自动规范化为相对路径）"},
+						"entrypoint":      map[string]any{"type": "string", "enum": []string{"entrypoint"}, "description": "运行时可执行入口路径，当前 ActionsCat 制品固定为根目录 canonical 'entrypoint'（默认 'entrypoint'，支持别名如 '/sandbox/entrypoint'，不支持自定义路径）"},
 						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
 						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
 						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},

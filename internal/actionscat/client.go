@@ -701,6 +701,9 @@ func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (
 		// rather than assuming failure and initiating a duplicate build.
 		return nil, fmt.Errorf("%w: parse build: %v", ErrBuildUnknownResult, err)
 	}
+	if strings.TrimSpace(bld.ID) == "" || strings.TrimSpace(bld.Status) == "" {
+		return nil, fmt.Errorf("%w: parse build: response missing essential fields (id=%q, status=%q)", ErrBuildUnknownResult, bld.ID, bld.Status)
+	}
 	return &bld, nil
 }
 

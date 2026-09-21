@@ -1047,7 +1047,7 @@ func TestActionsCatTools_EntrypointAndNetworkValidation(t *testing.T) {
 		t.Fatalf("expected error for empty files, got: %v", err)
 	}
 
-	// 2. Entrypoint sanitization tests
+	// 2. Entrypoint sanitization & canonical aliases tests
 	tests := []struct {
 		name               string
 		rawEntrypoint      string
@@ -1056,10 +1056,10 @@ func TestActionsCatTools_EntrypointAndNetworkValidation(t *testing.T) {
 		{"default when empty", "", "entrypoint"},
 		{"plain relative", "entrypoint", "entrypoint"},
 		{"leading slash", "/entrypoint", "entrypoint"},
+		{"dot slash", "./entrypoint", "entrypoint"},
 		{"sandbox prefix", "/sandbox/entrypoint", "entrypoint"},
-		{"custom relative", "bin/runner", "bin/runner"},
-		{"custom leading slash", "/bin/runner", "bin/runner"},
-		{"custom sandbox prefix", "/sandbox/out/entrypoint", "out/entrypoint"},
+		{"sandbox out prefix", "/sandbox/out/entrypoint", "entrypoint"},
+		{"out prefix", "out/entrypoint", "entrypoint"},
 	}
 
 	for _, tc := range tests {
@@ -1077,6 +1077,70 @@ func TestActionsCatTools_EntrypointAndNetworkValidation(t *testing.T) {
 				t.Fatalf("entrypoint %q: expected %q, got %q", tc.rawEntrypoint, tc.expectedEntrypoint, req.RuntimeSpec.Entrypoint)
 			}
 		})
+	}
+
+	// 2.1 Custom non-canonical entrypoint paths MUST be rejected fail-closed
+	invalidEntrypoints := []string{
+		"bin/runner",
+		"/bin/runner",
+		"foo",
+		"out/custom",
+		"app/start",
+	}
+	for _, ep := range invalidEntrypoints {
+		_, err := prepareCreateVersionReq(createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			RuntimeSpec: &actionscat.RuntimeSpec{
+				Entrypoint: ep,
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected error for custom non-canonical entrypoint %q, got nil", ep)
+		}
+		if !strings.Contains(err.Error(), "无效的 runtime entrypoint") {
+			t.Fatalf("expected entrypoint rejection error, got: %v", err)
+		}
+	}
+
+	// 2.2 Language validation: ActionsCat builder currently only supports Go
+	validLangs := []struct {
+		raw      string
+		expected string
+	}{
+		{"", "go"},
+		{"go", "go"},
+		{"GO", "go"},
+		{" Go ", "go"},
+	}
+	for _, vl := range validLangs {
+		req, err := prepareCreateVersionReq(createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			BuildSpec: &actionscat.BuildSpec{
+				Language: vl.raw,
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected valid language %q, got error: %v", vl.raw, err)
+		}
+		if req.BuildSpec.Language != vl.expected {
+			t.Fatalf("expected language %q, got %q", vl.expected, req.BuildSpec.Language)
+		}
+	}
+
+	invalidLangs := []string{"python", "javascript", "rust", "c++"}
+	for _, il := range invalidLangs {
+		_, err := prepareCreateVersionReq(createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			BuildSpec: &actionscat.BuildSpec{
+				Language: il,
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected error for unsupported language %q, got nil", il)
+		}
+		if !strings.Contains(err.Error(), "无效的开发语言") {
+			t.Fatalf("expected language rejection error, got: %v", err)
+		}
 	}
 
 	// 3. Network mode validation
