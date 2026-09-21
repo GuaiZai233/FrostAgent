@@ -166,10 +166,96 @@ export interface ActionsCatRunLogs {
   stderr: string;
 }
 
+export interface ActionsCatVersion {
+  id: string;
+  action_id: string;
+  version_number: number;
+  source_digest: string;
+  source_path?: string;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+  created_at: string;
+}
+
+export interface ActionsCatBuild {
+  id: string;
+  action_id: string;
+  version_id: string;
+  build_number: number;
+  status: string;
+  builder_profile?: string;
+  toolchain_version?: string;
+  build_command?: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+  artifact_digest?: string;
+  artifact_size?: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatBuildLogs {
+  stdout: string;
+  stderr: string;
+}
+
 export interface CreateActionRequest {
   name: string;
   description?: string;
   max_concurrency?: number;
+}
+
+export interface CreateVersionRequest {
+  files: Record<string, string>;
+  encodings?: Record<string, string>;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+}
+
+export interface SetActiveBuildRequest {
+  version_id: string;
+  build_id: string;
 }
 
 export interface TriggerActionRunRequest {
@@ -266,6 +352,63 @@ export const actionsCatAPI = {
   getRunLogs(actionID: string, runID: string): Promise<ActionsCatRunLogs> {
     return actionsCatRequest<ActionsCatRunLogs>(
       `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}/logs`,
+    );
+  },
+  listVersions(actionID: string): Promise<ActionsCatVersion[]> {
+    return actionsCatRequest<ActionsCatVersion[]>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+    );
+  },
+  createVersion(
+    actionID: string,
+    req: CreateVersionRequest,
+  ): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  getVersion(actionID: string, versionID: string): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}`,
+    );
+  },
+  buildVersion(
+    actionID: string,
+    versionID: string,
+  ): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}/builds`,
+      {
+        method: 'POST',
+      },
+    );
+  },
+  getBuild(actionID: string, buildID: string): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}`,
+    );
+  },
+  getBuildLogs(actionID: string, buildID: string): Promise<ActionsCatBuildLogs> {
+    return actionsCatRequest<ActionsCatBuildLogs>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}/logs`,
+    );
+  },
+  activateBuild(
+    actionID: string,
+    req: SetActiveBuildRequest,
+  ): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/actions/${encodeURIComponent(actionID)}/active-build`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
     );
   },
   dispatch(payload: Record<string, unknown>): Promise<{ ok: boolean }> {

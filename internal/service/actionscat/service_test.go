@@ -88,6 +88,58 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 				Stdout: mockRun.Stdout,
 				Stderr: mockRun.Stderr,
 			})
+		case "/api/v1/actions/act_weather/versions":
+			if r.Method == http.MethodPost {
+				var req actclient.CreateVersionReq
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(actclient.ActionVersion{
+					ID:            "ver_weather_01",
+					ActionID:      "act_weather",
+					VersionNumber: 1,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]actclient.ActionVersion{
+				{ID: "ver_weather_01", ActionID: "act_weather", VersionNumber: 1},
+			})
+		case "/api/v1/actions/act_weather/versions/ver_weather_01":
+			_ = json.NewEncoder(w).Encode(actclient.ActionVersion{
+				ID:            "ver_weather_01",
+				ActionID:      "act_weather",
+				VersionNumber: 1,
+			})
+		case "/api/v1/actions/act_weather/versions/ver_weather_01/builds":
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(actclient.ArtifactBuild{
+					ID:        "bld_weather_01",
+					ActionID:  "act_weather",
+					VersionID: "ver_weather_01",
+					Status:    "succeeded",
+					Stdout:    "Build OK",
+				})
+				return
+			}
+		case "/api/v1/actions/act_weather/builds/bld_weather_01":
+			_ = json.NewEncoder(w).Encode(actclient.ArtifactBuild{
+				ID:        "bld_weather_01",
+				ActionID:  "act_weather",
+				VersionID: "ver_weather_01",
+				Status:    "succeeded",
+				Stdout:    "Build OK",
+			})
+		case "/api/v1/actions/act_weather/builds/bld_weather_01/logs":
+			_ = json.NewEncoder(w).Encode(actclient.BuildLogs{
+				Stdout: "Build OK",
+				Stderr: "",
+			})
+		case "/api/v1/actions/act_weather/active-build":
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+				return
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -237,6 +289,118 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		_ = json.NewDecoder(rec.Body).Decode(&act)
 		if act.Name != "New Action" || act.ID != "act_new_created" {
 			t.Fatalf("unexpected created action: %+v", act)
+		}
+	}
+
+	// 9. POST /api/actionscat/actions/act_weather/versions
+	{
+		body, _ := json.Marshal(actclient.CreateVersionReq{
+			Files: map[string]string{"main.go": "package main"},
+		})
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_weather/versions", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create version status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var ver actclient.ActionVersion
+		_ = json.NewDecoder(rec.Body).Decode(&ver)
+		if ver.ID != "ver_weather_01" {
+			t.Fatalf("unexpected version: %+v", ver)
+		}
+	}
+
+	// 10. GET /api/actionscat/actions/act_weather/versions
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/versions", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list versions status code: %d", rec.Code)
+		}
+		var vers []actclient.ActionVersion
+		_ = json.NewDecoder(rec.Body).Decode(&vers)
+		if len(vers) != 1 || vers[0].ID != "ver_weather_01" {
+			t.Fatalf("unexpected versions: %+v", vers)
+		}
+	}
+
+	// 11. GET /api/actionscat/actions/act_weather/versions/ver_weather_01
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/versions/ver_weather_01", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get version status code: %d", rec.Code)
+		}
+		var ver actclient.ActionVersion
+		_ = json.NewDecoder(rec.Body).Decode(&ver)
+		if ver.ID != "ver_weather_01" {
+			t.Fatalf("unexpected version: %+v", ver)
+		}
+	}
+
+	// 12. POST /api/actionscat/actions/act_weather/versions/ver_weather_01/builds
+	{
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_weather/versions/ver_weather_01/builds", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("build version status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var bld actclient.ArtifactBuild
+		_ = json.NewDecoder(rec.Body).Decode(&bld)
+		if bld.ID != "bld_weather_01" || bld.Status != "succeeded" {
+			t.Fatalf("unexpected build: %+v", bld)
+		}
+	}
+
+	// 13. GET /api/actionscat/actions/act_weather/builds/bld_weather_01
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/builds/bld_weather_01", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get build status code: %d", rec.Code)
+		}
+		var bld actclient.ArtifactBuild
+		_ = json.NewDecoder(rec.Body).Decode(&bld)
+		if bld.ID != "bld_weather_01" {
+			t.Fatalf("unexpected build: %+v", bld)
+		}
+	}
+
+	// 14. GET /api/actionscat/actions/act_weather/builds/bld_weather_01/logs
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/builds/bld_weather_01/logs", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get build logs status code: %d", rec.Code)
+		}
+		var logs actclient.BuildLogs
+		_ = json.NewDecoder(rec.Body).Decode(&logs)
+		if logs.Stdout != "Build OK" {
+			t.Fatalf("unexpected logs: %+v", logs)
+		}
+	}
+
+	// 15. POST /api/actionscat/actions/act_weather/active-build
+	{
+		body, _ := json.Marshal(actclient.SetActiveBuildReq{
+			VersionID: "ver_weather_01",
+			BuildID:   "bld_weather_01",
+		})
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_weather/active-build", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("set active build status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var res map[string]bool
+		_ = json.NewDecoder(rec.Body).Decode(&res)
+		if !res["ok"] {
+			t.Fatalf("expected ok: true, got: %+v", res)
 		}
 	}
 }

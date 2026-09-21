@@ -190,108 +190,249 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 
 	case 2:
 		actionID := parts[0]
-		if parts[1] != "runs" {
-			s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
-			return
-		}
-		if r.Method == http.MethodGet {
-			// GET /actions/:id/runs?limit=...&offset=...
-			limit := 50
-			offset := 0
-			if lStr := r.URL.Query().Get("limit"); lStr != "" {
-				if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
-					limit = l
-				}
-			}
-			if oStr := r.URL.Query().Get("offset"); oStr != "" {
-				if o, err := strconv.Atoi(oStr); err == nil && o >= 0 {
-					offset = o
-				}
-			}
-			runs, err := s.client.ListRuns(r.Context(), actionID, limit, offset)
-			if err != nil {
-				s.handleClientError(w, err)
-				return
-			}
-			if runs == nil {
-				runs = []client.Run{}
-			}
-			s.writeJSON(w, http.StatusOK, runs)
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			// POST /actions/:id/runs
-			var req client.ManualRunReq
-			if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
-				dec := json.NewDecoder(r.Body)
-				if err := dec.Decode(&req); err != nil {
-					if !errors.Is(err, io.EOF) {
-						s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
-						return
-					}
-				} else {
-					var trailing json.RawMessage
-					if err := dec.Decode(&trailing); err != io.EOF {
-						s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
-						return
+		switch parts[1] {
+		case "runs":
+			if r.Method == http.MethodGet {
+				// GET /actions/:id/runs?limit=...&offset=...
+				limit := 50
+				offset := 0
+				if lStr := r.URL.Query().Get("limit"); lStr != "" {
+					if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+						limit = l
 					}
 				}
-			}
-			for k := range req.ExtraEnv {
-				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "ACTIONSCAT_") {
-					s.writeError(w, http.StatusBadRequest, fmt.Sprintf("environment variable %q uses reserved prefix 'ACTIONSCAT_'", k))
+				if oStr := r.URL.Query().Get("offset"); oStr != "" {
+					if o, err := strconv.Atoi(oStr); err == nil && o >= 0 {
+						offset = o
+					}
+				}
+				runs, err := s.client.ListRuns(r.Context(), actionID, limit, offset)
+				if err != nil {
+					s.handleClientError(w, err)
 					return
 				}
+				if runs == nil {
+					runs = []client.Run{}
+				}
+				s.writeJSON(w, http.StatusOK, runs)
+				return
 			}
-			run, err := s.client.TriggerRun(r.Context(), actionID, req)
+
+			if r.Method == http.MethodPost {
+				// POST /actions/:id/runs
+				var req client.ManualRunReq
+				if r.Body != nil {
+					r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+					dec := json.NewDecoder(r.Body)
+					if err := dec.Decode(&req); err != nil {
+						if !errors.Is(err, io.EOF) {
+							s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+							return
+						}
+					} else {
+						var trailing json.RawMessage
+						if err := dec.Decode(&trailing); err != io.EOF {
+							s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+							return
+						}
+					}
+				}
+				for k := range req.ExtraEnv {
+					if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "ACTIONSCAT_") {
+						s.writeError(w, http.StatusBadRequest, fmt.Sprintf("environment variable %q uses reserved prefix 'ACTIONSCAT_'", k))
+						return
+					}
+				}
+				run, err := s.client.TriggerRun(r.Context(), actionID, req)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, run)
+				return
+			}
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+
+		case "versions":
+			if r.Method == http.MethodGet {
+				// GET /actions/:id/versions
+				vers, err := s.client.ListVersions(r.Context(), actionID)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				if vers == nil {
+					vers = []client.ActionVersion{}
+				}
+				s.writeJSON(w, http.StatusOK, vers)
+				return
+			}
+
+			if r.Method == http.MethodPost {
+				// POST /actions/:id/versions
+				if r.Body == nil {
+					s.writeError(w, http.StatusBadRequest, "empty request body")
+					return
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024) // 10 MiB for source bundles
+				var req client.CreateVersionReq
+				dec := json.NewDecoder(r.Body)
+				if err := dec.Decode(&req); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+					return
+				}
+				var trailing json.RawMessage
+				if err := dec.Decode(&trailing); err != io.EOF {
+					s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+					return
+				}
+				if len(req.Files) == 0 {
+					s.writeError(w, http.StatusBadRequest, "files map cannot be empty")
+					return
+				}
+				ver, err := s.client.CreateVersion(r.Context(), actionID, req)
+				if err != nil {
+					s.handleClientError(w, err)
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, ver)
+				return
+			}
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+
+		case "active-build":
+			if r.Method != http.MethodPost {
+				// POST /actions/:id/active-build
+				s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if r.Body == nil {
+				s.writeError(w, http.StatusBadRequest, "empty request body")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+			var req client.SetActiveBuildReq
+			dec := json.NewDecoder(r.Body)
+			if err := dec.Decode(&req); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+				return
+			}
+			var trailing json.RawMessage
+			if err := dec.Decode(&trailing); err != io.EOF {
+				s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+				return
+			}
+			if strings.TrimSpace(req.VersionID) == "" || strings.TrimSpace(req.BuildID) == "" {
+				s.writeError(w, http.StatusBadRequest, "version_id and build_id are required")
+				return
+			}
+			if err := s.client.ActivateBuild(r.Context(), actionID, req); err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+
+		default:
+			s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
+			return
+		}
+
+	case 3:
+		actionID := parts[0]
+		subResource := parts[1]
+		resourceID := parts[2]
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		switch subResource {
+		case "runs":
+			// GET /actions/:id/runs/:rid
+			run, err := s.client.GetRun(r.Context(), actionID, resourceID)
 			if err != nil {
 				s.handleClientError(w, err)
 				return
 			}
-			s.writeJSON(w, http.StatusCreated, run)
-			return
-		}
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-
-	case 3:
-		// GET /actions/:id/runs/:rid
-		actionID := parts[0]
-		if parts[1] != "runs" {
+			s.writeJSON(w, http.StatusOK, run)
+		case "versions":
+			// GET /actions/:id/versions/:vid
+			ver, err := s.client.GetVersion(r.Context(), actionID, resourceID)
+			if err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, ver)
+		case "builds":
+			// GET /actions/:id/builds/:bid
+			bld, err := s.client.GetBuild(r.Context(), actionID, resourceID)
+			if err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, bld)
+		default:
 			s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
-			return
 		}
-		runID := parts[2]
-		if r.Method != http.MethodGet {
-			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		run, err := s.client.GetRun(r.Context(), actionID, runID)
-		if err != nil {
-			s.handleClientError(w, err)
-			return
-		}
-		s.writeJSON(w, http.StatusOK, run)
 
 	case 4:
-		// GET /actions/:id/runs/:rid/logs
 		actionID := parts[0]
-		if parts[1] != "runs" || parts[3] != "logs" {
-			s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
+		subResource := parts[1]
+		resourceID := parts[2]
+		leaf := parts[3]
+
+		if subResource == "runs" && leaf == "logs" {
+			// GET /actions/:id/runs/:rid/logs
+			if r.Method != http.MethodGet {
+				s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			logs, err := s.client.GetRunLogs(r.Context(), actionID, resourceID)
+			if err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, logs)
 			return
 		}
-		runID := parts[2]
-		if r.Method != http.MethodGet {
-			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+
+		if subResource == "builds" && leaf == "logs" {
+			// GET /actions/:id/builds/:bid/logs
+			if r.Method != http.MethodGet {
+				s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			logs, err := s.client.GetBuildLogs(r.Context(), actionID, resourceID)
+			if err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, logs)
 			return
 		}
-		logs, err := s.client.GetRunLogs(r.Context(), actionID, runID)
-		if err != nil {
-			s.handleClientError(w, err)
+
+		if subResource == "versions" && leaf == "builds" {
+			// POST /actions/:id/versions/:vid/builds
+			if r.Method != http.MethodPost {
+				s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			bld, err := s.client.BuildVersion(r.Context(), actionID, resourceID)
+			if err != nil {
+				if errors.Is(err, client.ErrBuildTimeoutUnknownResult) {
+					s.writeError(w, http.StatusGatewayTimeout, err.Error())
+					return
+				}
+				s.handleClientError(w, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, bld)
 			return
 		}
-		s.writeJSON(w, http.StatusOK, logs)
+
+		s.writeError(w, http.StatusNotFound, "unknown actions sub-resource")
 
 	default:
 		s.writeError(w, http.StatusNotFound, "not found")

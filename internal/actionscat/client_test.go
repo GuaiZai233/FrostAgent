@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -344,5 +345,214 @@ func TestClient_Dispatch(t *testing.T) {
 	}
 	if receivedEvent["content"] != "test dispatch" {
 		t.Fatalf("unexpected received event: %+v", receivedEvent)
+	}
+}
+
+func TestClient_VersionsAndBuilds(t *testing.T) {
+	const expectedToken = "test_mgmt_token_versions"
+
+	mockVersion := ActionVersion{
+		ID:            "ver_001",
+		ActionID:      "act_test_1",
+		VersionNumber: 1,
+		SourceDigest:  "sha256:abcd1234",
+		BuildSpec: BuildSpec{
+			Language: "go",
+			Command:  "go build -o /out/entrypoint .",
+		},
+		RuntimeSpec: RuntimeSpec{
+			Entrypoint:     "entrypoint",
+			TimeoutSeconds: 60,
+			MemoryLimitMB:  128,
+			CPULimit:       1.0,
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+
+	exitCodeZero := 0
+	mockBuild := ArtifactBuild{
+		ID:               "bld_001",
+		ActionID:         "act_test_1",
+		VersionID:        "ver_001",
+		BuildNumber:      1,
+		Status:           "succeeded",
+		ToolchainVersion: "go1.25.6",
+		Stdout:           "Compilation finished successfully",
+		Stderr:           "",
+		ExitCode:         &exitCodeZero,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	var activatedVersionID, activatedBuildID string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer "+expectedToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		switch {
+		case r.URL.Path == "/api/v1/actions/act_test_1/versions" && r.Method == http.MethodPost:
+			var req CreateVersionReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(mockVersion)
+		case r.URL.Path == "/api/v1/actions/act_test_1/versions" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]ActionVersion{mockVersion})
+		case r.URL.Path == "/api/v1/actions/act_test_1/versions/ver_001" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(mockVersion)
+		case r.URL.Path == "/api/v1/actions/act_test_1/versions/ver_001/builds" && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(mockBuild)
+		case r.URL.Path == "/api/v1/actions/act_test_1/builds/bld_001" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(mockBuild)
+		case r.URL.Path == "/api/v1/actions/act_test_1/builds/bld_001/logs" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(BuildLogs{
+				Stdout: mockBuild.Stdout,
+				Stderr: mockBuild.Stderr,
+			})
+		case r.URL.Path == "/api/v1/actions/act_test_1/active-build" && r.Method == http.MethodPost:
+			var req SetActiveBuildReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			activatedVersionID = req.VersionID
+			activatedBuildID = req.BuildID
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	client := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return expectedToken
+		default:
+			return ""
+		}
+	})
+
+	ctx := context.Background()
+
+	// 1. CreateVersion
+	ver, err := client.CreateVersion(ctx, "act_test_1", CreateVersionReq{
+		Files: map[string]string{
+			"main.go": "package main\nfunc main() {}",
+		},
+		BuildSpec: BuildSpec{
+			Language: "go",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateVersion failed: %v", err)
+	}
+	if ver.ID != "ver_001" || ver.VersionNumber != 1 {
+		t.Fatalf("unexpected version: %+v", ver)
+	}
+
+	// 2. ListVersions
+	vers, err := client.ListVersions(ctx, "act_test_1")
+	if err != nil {
+		t.Fatalf("ListVersions failed: %v", err)
+	}
+	if len(vers) != 1 || vers[0].ID != "ver_001" {
+		t.Fatalf("unexpected versions: %+v", vers)
+	}
+
+	// 3. GetVersion
+	vObj, err := client.GetVersion(ctx, "act_test_1", "ver_001")
+	if err != nil {
+		t.Fatalf("GetVersion failed: %v", err)
+	}
+	if vObj.ID != "ver_001" {
+		t.Fatalf("unexpected version: %+v", vObj)
+	}
+
+	// 4. BuildVersion
+	bld, err := client.BuildVersion(ctx, "act_test_1", "ver_001")
+	if err != nil {
+		t.Fatalf("BuildVersion failed: %v", err)
+	}
+	if bld.ID != "bld_001" || bld.Status != "succeeded" {
+		t.Fatalf("unexpected build: %+v", bld)
+	}
+
+	// 5. GetBuild
+	bObj, err := client.GetBuild(ctx, "act_test_1", "bld_001")
+	if err != nil {
+		t.Fatalf("GetBuild failed: %v", err)
+	}
+	if bObj.ID != "bld_001" {
+		t.Fatalf("unexpected build: %+v", bObj)
+	}
+
+	// 6. GetBuildLogs
+	logs, err := client.GetBuildLogs(ctx, "act_test_1", "bld_001")
+	if err != nil {
+		t.Fatalf("GetBuildLogs failed: %v", err)
+	}
+	if logs.Stdout != "Compilation finished successfully" {
+		t.Fatalf("unexpected logs: %+v", logs)
+	}
+
+	// 7. ActivateBuild
+	err = client.ActivateBuild(ctx, "act_test_1", SetActiveBuildReq{
+		VersionID: "ver_001",
+		BuildID:   "bld_001",
+	})
+	if err != nil {
+		t.Fatalf("ActivateBuild failed: %v", err)
+	}
+	if activatedVersionID != "ver_001" || activatedBuildID != "bld_001" {
+		t.Fatalf("expected version ver_001 and build bld_001 activated, got %s / %s", activatedVersionID, activatedBuildID)
+	}
+}
+
+func TestClient_BuildTimeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/builds") {
+			// Simulate a slow build that takes longer than context deadline
+			time.Sleep(100 * time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(ArtifactBuild{
+				ID:     "bld_slow",
+				Status: "succeeded",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "token"
+		default:
+			return ""
+		}
+	})
+
+	// Pass a context with very short timeout to trigger transport deadline
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := client.BuildVersion(ctx, "act_test", "ver_slow")
+	if err == nil {
+		t.Fatal("expected build timeout error, got nil")
+	}
+	if !errors.Is(err, ErrBuildTimeoutUnknownResult) {
+		t.Fatalf("expected ErrBuildTimeoutUnknownResult, got: %v", err)
 	}
 }

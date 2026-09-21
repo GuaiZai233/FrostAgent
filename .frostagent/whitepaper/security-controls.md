@@ -24,8 +24,9 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
   - Base64 与零宽字符规避检测结合 UTF-8 与可打印字符验证，确保准确识别人工构造的规避载荷。
 - **安全审计凭据脱敏与最小化存储**：安全审计日志记录（`security_audit.jsonl`）的摘要预览（`safePreview`）在截断前必须经过严格的凭据脱敏处理（Redaction），过滤 Bearer Token、URL 查询凭据、API Key（如 `sk-...`、`glpat-...`、`xoxb-...`）、GitHub 经典 PAT 及各类 Token（`ghp_`、`gho_`、`ghu_`、`ghs_`、`ghr_`）、GitHub 细粒度 PAT（`github_pat_...`）以及密码字段，防止敏感鉴权凭据持久化到本地日志造成横向移动风险。
 - **统一工具边界与外部系统隔离**：Engine 公共工具循环在执行内置工具和 MCP 工具前审查参数，执行后隔离高风险工具结果，模型输出后进行出站审查，中间 SendHook 也经过严格管控。对于 ActionsCat 等外部自动化与持久化管理工具，进一步实施分层安全隔离（详细见 [actionscat.md](actionscat.md)）：
-  - **管理面持久写权限门禁**：对具备控制面持久化修改语义的工具（如 `actionscat_create_action`），工具层强制提取 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅 `ADMIN_QQ_IDS` 允许调用，防止聊天会话或 Prompt 注入绕过控制面身份验证；
-  - **模拟会话零持久化副作用 (Zero Durable Mutation)**：在 `mock=true` 调试会话中，所有涉及外部系统持久化写入与任务触发的工具（如 `actionscat_run_action`、`actionscat_create_action`）一律 Fail-Closed 拦截，确保 0 次外部持久调用；
+  - **管理面持久写权限门禁**：对具备控制面持久化修改语义的工具（包括 `actionscat_create_action`、`actionscat_create_version`、`actionscat_build_version`、`actionscat_activate_build` 及 `actionscat_deploy_action`），工具层强制提取 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅 `ADMIN_QQ_IDS` 允许调用，对无上下文或非管理员调用严格 Fail-Closed 并产生 0 次后端网络调用，防止聊天会话或 Prompt 注入绕过控制面身份验证；
+  - **模拟会话零持久化副作用 (Zero Durable Mutation)**：在 `mock=true` 调试会话中，所有涉及外部系统持久化写入、构建与任务触发的工具（如 `actionscat_run_action` 及上述 5 项管理变更工具）一律 Fail-Closed 拦截，确保 0 次外部持久调用；
+  - **构建超时未决与状态门禁**：同步编译构建采用独立长超时（180s），构建超时严格包装为 `ErrBuildTimeoutUnknownResult`，阻断误报状态；激活构建必须断言 `build.Status == "succeeded"`，并在编译失败时输出截断日志与不可变版本新建指引；
   - **敏感凭据脱敏隔离**：外部任务系统执行结果暴露给模型前，严格采用 DTO 白名单过滤，彻底剥离持久状态注入项（如 `planned_env`），防止凭据泄露至大模型上下文；
   - **受保护运行环境变量防御**：工具层对传入的动态环境变量进行保留前缀黑名单校验（拦截 `ACTIONSCAT_*`），杜绝模型输出伪造沙箱内的受信任执行身份。
 - **管理面板与控制面接口**：控制面根路径提供受 Bearer 认证保护的 `/api/security/locked` 与 `/api/security/unlock` REST 端点，与 MCP 控制面深度复用统一的 Scoped `instanceconfig.Store` 鉴权源，在无需将 Token 镜像到操作系统进程环境变量的配置存储模式下依然能够严格受控，配合 Web 控制台「安全控制」页提供全局锁定状态的可视化查看与人工解锁支持。

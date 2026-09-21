@@ -16,6 +16,7 @@ import (
 
 const (
 	defaultTimeout       = 15 * time.Second
+	defaultBuildTimeout  = 180 * time.Second
 	defaultMaxBodyBytes  = 10 * 1024 * 1024 // 10 MiB
 	maxWaitDuration      = 30 * time.Second
 	defaultPollInterval  = 600 * time.Millisecond
@@ -28,6 +29,9 @@ var (
 	ErrInvalidURL = errors.New("actionscat: invalid endpoint url")
 	// ErrNotFound indicates that the requested action or run was not found.
 	ErrNotFound = errors.New("actionscat: resource not found")
+	// ErrBuildTimeoutUnknownResult is returned when a build request times out in transport,
+	// indicating the build outcome is indeterminate (the backend may still be compiling).
+	ErrBuildTimeoutUnknownResult = errors.New("actionscat: build request timed out; build outcome is unknown (server may still be compiling)")
 )
 
 // Action represents an ActionsCat managed automation action.
@@ -85,6 +89,99 @@ type CreateActionReq struct {
 	MaxConcurrency int    `json:"max_concurrency,omitempty"`
 }
 
+// BuildSpec describes how to build source code into an artifact bundle.
+type BuildSpec struct {
+	Language             string `json:"language,omitempty"`              // e.g. "go"
+	ToolchainRequirement string `json:"toolchain_requirement,omitempty"` // e.g. ">= 1.25"
+	Command              string `json:"command,omitempty"`               // e.g. "go build -o /out/entrypoint ."
+	Network              bool   `json:"network,omitempty"`               // whether build requires public network access
+}
+
+// NetworkAllowRule specifies a host and port allowlist entry.
+type NetworkAllowRule struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+// NetworkPolicy describes network access permissions for a Run.
+type NetworkPolicy struct {
+	Mode  string             `json:"mode"`            // "none", "public", "allowlist", "isolated"
+	Allow []NetworkAllowRule `json:"allow,omitempty"` // populated when mode is "allowlist"
+}
+
+// RuntimeSpec describes execution constraints and entrypoint for a Run.
+type RuntimeSpec struct {
+	Entrypoint     string        `json:"entrypoint,omitempty"`      // path to entrypoint executable within artifact (e.g. "entrypoint")
+	Network        NetworkPolicy `json:"network,omitempty"`         // network access policy
+	TimeoutSeconds int           `json:"timeout_seconds,omitempty"` // default execution timeout
+	MemoryLimitMB  int           `json:"memory_limit_mb,omitempty"` // worker RAM limit
+	CPULimit       float64       `json:"cpu_limit,omitempty"`       // worker CPU cores limit
+}
+
+// StateInjection declares a persistent state file to read and inject as an env var before Run.
+type StateInjection struct {
+	StatePath string `json:"state_path"`           // relative path inside action's state namespace, e.g. "html.json"
+	EnvVar    string `json:"env_var"`              // target env var name, e.g. "PREVIOUS_HTML"
+	Optional  bool   `json:"optional,omitempty"`   // if true, empty string if missing; if false, fail run if missing
+}
+
+// ActionVersion represents an immutable version snapshot of an Action.
+type ActionVersion struct {
+	ID                  string           `json:"id"`
+	ActionID            string           `json:"action_id"`
+	VersionNumber       int              `json:"version_number"`
+	SourceDigest        string           `json:"source_digest"`
+	SourcePath          string           `json:"source_path"`
+	BuildSpec           BuildSpec        `json:"build_spec"`
+	RuntimeSpec         RuntimeSpec      `json:"runtime_spec"`
+	StateInjections     []StateInjection `json:"state_injections"`
+	RuntimeCapabilities []string         `json:"runtime_capabilities"`
+	CreatedAt           time.Time        `json:"created_at"`
+}
+
+// ArtifactBuild represents the output of building a specific ActionVersion.
+type ArtifactBuild struct {
+	ID               string     `json:"id"`
+	ActionID         string     `json:"action_id"`
+	VersionID        string     `json:"version_id"`
+	BuildNumber      int        `json:"build_number"`
+	Status           string     `json:"status"` // "succeeded", "failed", "timed_out", "building", "pending"
+	BuilderProfile   string     `json:"builder_profile"`
+	ToolchainVersion string     `json:"toolchain_version"`
+	BuildCommand     string     `json:"build_command"`
+	Stdout           string     `json:"stdout"`
+	Stderr           string     `json:"stderr"`
+	ExitCode         *int       `json:"exit_code,omitempty"`
+	ArtifactDigest   string     `json:"artifact_digest"`
+	ArtifactPath     string     `json:"artifact_path"`
+	ArtifactSize     int64      `json:"artifact_size"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+// BuildLogs represents stdout and stderr logs for an artifact build.
+type BuildLogs struct {
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+}
+
+// CreateVersionReq represents the payload for creating a new ActionVersion.
+type CreateVersionReq struct {
+	Files               map[string]string `json:"files"`
+	Encodings           map[string]string `json:"encodings,omitempty"`
+	BuildSpec           BuildSpec         `json:"build_spec"`
+	RuntimeSpec         RuntimeSpec       `json:"runtime_spec"`
+	StateInjections     []StateInjection  `json:"state_injections,omitempty"`
+	RuntimeCapabilities []string          `json:"runtime_capabilities,omitempty"`
+}
+
+// SetActiveBuildReq is the payload for activating a build.
+type SetActiveBuildReq struct {
+	VersionID string `json:"version_id"`
+	BuildID   string `json:"build_id"`
+}
+
 // ManualRunReq is the payload for triggering a manual run.
 type ManualRunReq struct {
 	ExtraEnv        map[string]string `json:"extra_env,omitempty"`
@@ -140,7 +237,9 @@ func New(getenv func(string) string, opts ...Option) *Client {
 	c := &Client{
 		getenv: getenv,
 		httpClient: &http.Client{
-			Timeout: defaultTimeout,
+			// Note: timeout is managed per-request via context deadlines
+			// (defaultTimeout for metadata, defaultBuildTimeout for synchronous compilation)
+			// so that long-running builds are not truncated by a client-level limit.
 		},
 	}
 	for _, opt := range opts {
@@ -191,6 +290,10 @@ func (c *Client) validateURL(raw string) (*url.URL, error) {
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path string, body any, token string) ([]byte, int, error) {
+	return c.doRequestWithTimeout(ctx, method, path, body, token, defaultTimeout)
+}
+
+func (c *Client) doRequestWithTimeout(ctx context.Context, method, path string, body any, token string, timeout time.Duration) ([]byte, int, error) {
 	endpoint := c.Endpoint()
 	if endpoint == "" {
 		return nil, 0, ErrNotConfigured
@@ -211,7 +314,19 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any, t
 		reqBody = bytes.NewReader(jsonBytes)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
+	reqCtx := ctx
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		if deadline, hasDeadline := ctx.Deadline(); !hasDeadline {
+			reqCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		} else if time.Until(deadline) > timeout {
+			reqCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, method, reqURL, reqBody)
 	if err != nil {
 		return nil, 0, fmt.Errorf("actionscat: create request: %w", err)
 	}
@@ -494,5 +609,128 @@ func (c *Client) GetRunLogs(ctx context.Context, actionID, runID string) (*RunLo
 // Dispatch sends an event payload to ActionsCat's event dispatch ingress.
 func (c *Client) Dispatch(ctx context.Context, event any) error {
 	_, _, err := c.doRequest(ctx, http.MethodPost, "/api/v1/dispatch", event, c.DispatchToken())
+	return err
+}
+
+// CreateVersion creates a new immutable version snapshot for an action.
+func (c *Client) CreateVersion(ctx context.Context, actionID string, req CreateVersionReq) (*ActionVersion, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	if len(req.Files) == 0 {
+		return nil, errors.New("actionscat: files cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/versions", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodPost, path, req, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var ver ActionVersion
+	if err := json.Unmarshal(data, &ver); err != nil {
+		return nil, fmt.Errorf("actionscat: parse version: %w", err)
+	}
+	return &ver, nil
+}
+
+// ListVersions retrieves all versions for an action.
+func (c *Client) ListVersions(ctx context.Context, actionID string) ([]ActionVersion, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/versions", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var vers []ActionVersion
+	if err := json.Unmarshal(data, &vers); err != nil {
+		return nil, fmt.Errorf("actionscat: parse versions: %w", err)
+	}
+	return vers, nil
+}
+
+// GetVersion retrieves a specific version for an action.
+func (c *Client) GetVersion(ctx context.Context, actionID, versionID string) (*ActionVersion, error) {
+	if actionID == "" || versionID == "" {
+		return nil, errors.New("actionscat: actionID and versionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/versions/%s", url.PathEscape(actionID), url.PathEscape(versionID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var ver ActionVersion
+	if err := json.Unmarshal(data, &ver); err != nil {
+		return nil, fmt.Errorf("actionscat: parse version: %w", err)
+	}
+	return &ver, nil
+}
+
+// BuildVersion requests compilation of a specific version into an artifact build.
+// Note: build is a synchronous, long-running operation in ActionsCat that can take up to 120s+;
+// this client uses a dedicated long timeout (defaultBuildTimeout = 180s) and does NOT retry on transport timeout.
+func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (*ArtifactBuild, error) {
+	if actionID == "" || versionID == "" {
+		return nil, errors.New("actionscat: actionID and versionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/versions/%s/builds", url.PathEscape(actionID), url.PathEscape(versionID))
+	data, _, err := c.doRequestWithTimeout(ctx, http.MethodPost, path, nil, c.ManagementToken(), defaultBuildTimeout)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+			return nil, fmt.Errorf("%w: %v", ErrBuildTimeoutUnknownResult, err)
+		}
+		return nil, err
+	}
+	var bld ArtifactBuild
+	if err := json.Unmarshal(data, &bld); err != nil {
+		return nil, fmt.Errorf("actionscat: parse build: %w", err)
+	}
+	return &bld, nil
+}
+
+// GetBuild retrieves a specific artifact build for an action.
+func (c *Client) GetBuild(ctx context.Context, actionID, buildID string) (*ArtifactBuild, error) {
+	if actionID == "" || buildID == "" {
+		return nil, errors.New("actionscat: actionID and buildID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/builds/%s", url.PathEscape(actionID), url.PathEscape(buildID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var bld ArtifactBuild
+	if err := json.Unmarshal(data, &bld); err != nil {
+		return nil, fmt.Errorf("actionscat: parse build: %w", err)
+	}
+	return &bld, nil
+}
+
+// GetBuildLogs retrieves stdout and stderr logs for a specific build.
+func (c *Client) GetBuildLogs(ctx context.Context, actionID, buildID string) (*BuildLogs, error) {
+	if actionID == "" || buildID == "" {
+		return nil, errors.New("actionscat: actionID and buildID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/builds/%s/logs", url.PathEscape(actionID), url.PathEscape(buildID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var logs BuildLogs
+	if err := json.Unmarshal(data, &logs); err != nil {
+		return nil, fmt.Errorf("actionscat: parse build logs: %w", err)
+	}
+	return &logs, nil
+}
+
+// ActivateBuild marks a succeeded build as the active version/build for an action.
+func (c *Client) ActivateBuild(ctx context.Context, actionID string, req SetActiveBuildReq) error {
+	if actionID == "" {
+		return errors.New("actionscat: actionID cannot be empty")
+	}
+	if req.VersionID == "" || req.BuildID == "" {
+		return errors.New("actionscat: version_id and build_id cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/active-build", url.PathEscape(actionID))
+	_, _, err := c.doRequest(ctx, http.MethodPost, path, req, c.ManagementToken())
 	return err
 }

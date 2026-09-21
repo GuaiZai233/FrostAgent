@@ -62,21 +62,58 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
         <p class="text-xs text-muted-foreground leading-relaxed mb-4">
           ActionsCat 深度集成于 FrostAgent 智能体核心工具链。当 Agent 进行对话推理时，可自动按需自主调用下列工具发现动作、执行任务并检查输出：
         </p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
               <span class="font-mono font-bold text-xs text-foreground">actionscat_list_actions</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              查询实例关联的所有可用 Actions 动作清单，包含名称、功能描述、权限要求及启用状态。
+              查询可用 Actions 清单，包含 ID、名称、功能描述、启用状态及 runnable（是否具备有效构建）状态。
             </p>
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
               <span class="font-mono font-bold text-xs text-foreground">actionscat_create_action</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              动态注册新的自动化动作任务，支持指定名称、描述及最大并发数，供 Agent 自主编排任务。
+              动态注册新的 Action 动作元数据壳，支持配置名称、描述及最大并发数。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_version</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              创建不可变代码版本，支持源码映射 (files)、构建/运行规约、状态注入及运行时能力声明。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_build_version</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              触发沙箱编译打包。严格检查构建状态；若失败返回错误日志，且由于版本不可变需新建版本。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_activate_build</span>
+              <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              将成功编译的构建 (succeeded) 激活为 Action 的生效运行版本，使其进入可运行 (runnable) 状态。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_deploy_action</span>
+              <span class="badge badge-primary text-[10px] py-0 px-1">All-in-One</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              一站式部署生命周期：创建版本 -> 触发编译 -> 校验状态 -> 激活成功构建，自动化就绪 runnable 动作。
             </p>
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
@@ -84,7 +121,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
               <span class="font-mono font-bold text-xs text-foreground">actionscat_run_action</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              根据动作 ID 触发沙箱执行，支持注入动态环境变量；可选同步等待执行结束并直接返回输出。
+              触发已激活构建的 Action 执行，支持注入环境变量；支持同步等待完成或异步返回 run_id。
             </p>
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
@@ -92,7 +129,15 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
               <span class="font-mono font-bold text-xs text-foreground">actionscat_get_run</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              查询特定运行记录的状态（pending/running/succeeded/failed）、耗时、退出码以及完整 stdout/stderr 日志。
+              查询执行记录状态、退出码、耗时及 stdout/stderr 日志，敏感环境变量已脱敏保护。
+            </p>
+          </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_get_build</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              查询构建任务状态、制品哈希及详细编译输出日志，用于超时排查或分析编译错误。
             </p>
           </div>
         </div>

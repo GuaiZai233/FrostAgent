@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -382,6 +383,636 @@ func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimesco
 			data, err := json.MarshalIndent(result, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("serialize created action response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+const maxTotalFilesBytes = 10 * 1024 * 1024 // 10 MiB
+
+type createVersionInput struct {
+	ActionID            string                      `json:"action_id"`
+	Files               map[string]string           `json:"files"`
+	Encodings           map[string]string           `json:"encodings,omitempty"`
+	BuildSpec           *actionscat.BuildSpec       `json:"build_spec,omitempty"`
+	RuntimeSpec         *actionscat.RuntimeSpec     `json:"runtime_spec,omitempty"`
+	StateInjections     []actionscat.StateInjection `json:"state_injections,omitempty"`
+	RuntimeCapabilities []string                    `json:"runtime_capabilities,omitempty"`
+}
+
+func prepareCreateVersionReq(input createVersionInput) (actionscat.CreateVersionReq, error) {
+	if len(input.Files) == 0 {
+		return actionscat.CreateVersionReq{}, fmt.Errorf("files 文件映射不能为空")
+	}
+	var totalBytes int
+	for f, content := range input.Files {
+		totalBytes += len(f) + len(content)
+	}
+	if totalBytes > maxTotalFilesBytes {
+		return actionscat.CreateVersionReq{}, fmt.Errorf("文件总大小超过 10 MiB 上限 (当前: %d 字节)", totalBytes)
+	}
+
+	req := actionscat.CreateVersionReq{
+		Files:               input.Files,
+		Encodings:           input.Encodings,
+		StateInjections:     input.StateInjections,
+		RuntimeCapabilities: input.RuntimeCapabilities,
+	}
+	if input.BuildSpec != nil {
+		req.BuildSpec = *input.BuildSpec
+	}
+	if strings.TrimSpace(req.BuildSpec.Command) == "" {
+		req.BuildSpec.Command = "go build -o /sandbox/out/entrypoint ."
+	}
+	if strings.TrimSpace(req.BuildSpec.Language) == "" {
+		req.BuildSpec.Language = "go"
+	}
+
+	if input.RuntimeSpec != nil {
+		req.RuntimeSpec = *input.RuntimeSpec
+	}
+	if strings.TrimSpace(req.RuntimeSpec.Entrypoint) == "" {
+		req.RuntimeSpec.Entrypoint = "/sandbox/entrypoint"
+	}
+	if strings.TrimSpace(req.RuntimeSpec.Network.Mode) == "" {
+		req.RuntimeSpec.Network.Mode = "none"
+	}
+	if req.RuntimeSpec.TimeoutSeconds <= 0 {
+		req.RuntimeSpec.TimeoutSeconds = 30
+	}
+	return req, nil
+}
+
+func truncateLog(log string, maxLen int) string {
+	if len(log) <= maxLen {
+		return log
+	}
+	return log[:maxLen] + fmt.Sprintf("\n... [日志过长已截断，总长度 %d 字节] ...", len(log))
+}
+
+// AgentBuildDTO represents the build metadata and logs returned to LLM agent tools.
+type AgentBuildDTO struct {
+	ID             string `json:"id"`
+	ActionID       string `json:"action_id"`
+	VersionID      string `json:"version_id"`
+	BuildNumber    int    `json:"build_number"`
+	Status         string `json:"status"`
+	BuilderProfile string `json:"builder_profile,omitempty"`
+	ExitCode       *int   `json:"exit_code,omitempty"`
+	ArtifactDigest string `json:"artifact_digest,omitempty"`
+	ArtifactSize   int64  `json:"artifact_size,omitempty"`
+	Stdout         string `json:"stdout,omitempty"`
+	Stderr         string `json:"stderr,omitempty"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	CompletedAt    string `json:"completed_at,omitempty"`
+	Notice         string `json:"notice,omitempty"`
+}
+
+func toAgentBuildDTO(bld *actionscat.ArtifactBuild, includeLogs bool) AgentBuildDTO {
+	if bld == nil {
+		return AgentBuildDTO{}
+	}
+	dto := AgentBuildDTO{
+		ID:             bld.ID,
+		ActionID:       bld.ActionID,
+		VersionID:      bld.VersionID,
+		BuildNumber:    bld.BuildNumber,
+		Status:         bld.Status,
+		BuilderProfile: bld.BuilderProfile,
+		ExitCode:       bld.ExitCode,
+		ArtifactDigest: bld.ArtifactDigest,
+		ArtifactSize:   bld.ArtifactSize,
+	}
+	if !bld.CreatedAt.IsZero() {
+		dto.CreatedAt = bld.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if bld.CompletedAt != nil && !bld.CompletedAt.IsZero() {
+		dto.CompletedAt = bld.CompletedAt.UTC().Format(time.RFC3339)
+	}
+	if includeLogs {
+		dto.Stdout = bld.Stdout
+		dto.Stderr = bld.Stderr
+	}
+	return dto
+}
+
+// ActionsCatCreateVersionTool creates a Tool that registers an immutable ActionVersion.
+func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_create_version",
+		description: "在 ActionsCat 中为指定的 Action 创建一个不可变代码版本 (ActionVersion)（仅限管理员 ADMIN_QQ_IDS）。" +
+			"支持传入源代码文件映射 (files)、构建规约 (build_spec)、运行规约 (runtime_spec)、状态注入 (state_injections) 和运行能力 (runtime_capabilities)。" +
+			"注意：版本一旦创建永久不可变；创建后需调用 actionscat_build_version 编译生成制品，随后激活方可运行。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"files": map[string]any{
+					"type":                 "object",
+					"description":          "源代码文件路径与内容的映射表（如 {\"main.go\": \"package main...\"}）",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+				"encodings": map[string]any{
+					"type":                 "object",
+					"description":          "可选的文件编码映射（如 base64、utf-8）",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+				"build_spec": map[string]any{
+					"type":        "object",
+					"description": "构建环境配置（语言、编译指令等）",
+					"properties": map[string]any{
+						"language":              map[string]any{"type": "string", "description": "开发语言，默认 go"},
+						"toolchain_requirement": map[string]any{"type": "string", "description": "工具链版本要求"},
+						"command":               map[string]any{"type": "string", "description": "构建命令，默认 'go build -o /sandbox/out/entrypoint .'"},
+						"network":               map[string]any{"type": "boolean", "description": "构建期间是否允许网络访问，默认 false"},
+					},
+				},
+				"runtime_spec": map[string]any{
+					"type":        "object",
+					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
+					"properties": map[string]any{
+						"entrypoint":      map[string]any{"type": "string", "description": "可执行入口路径，默认 '/sandbox/entrypoint'"},
+						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
+						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
+						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},
+						"network": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"mode": map[string]any{"type": "string", "description": "网络模式：'none'、'bridge'、'allowlist'，默认 'none'"},
+							},
+						},
+					},
+				},
+				"state_injections": map[string]any{
+					"type":        "array",
+					"description": "需要注入到运行容器状态文件的声明列表",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"state_path": map[string]any{"type": "string"},
+							"env_var":    map[string]any{"type": "string"},
+							"optional":   map[string]any{"type": "boolean"},
+						},
+						"required": []string{"state_path", "env_var"},
+					},
+				},
+				"runtime_capabilities": map[string]any{
+					"type":        "array",
+					"description": "声明请求的运行时权限能力列表（如 [\"state.write\", \"frostagent.sendmsg\"]）",
+					"items":       map[string]any{"type": "string"},
+				},
+			},
+			"required": []string{"action_id", "files"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 创建版本", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_create_version 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input createVersionInput
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+
+			req, err := prepareCreateVersionReq(input)
+			if err != nil {
+				return fmt.Sprintf("创建版本参数校验失败: %v", err), nil
+			}
+
+			ver, err := client.CreateVersion(ctx, input.ActionID, req)
+			if err != nil {
+				return fmt.Sprintf("创建 ActionsCat Action 版本失败: %v", err), nil
+			}
+
+			result := struct {
+				actionscat.ActionVersion
+				Notice string `json:"notice"`
+			}{
+				ActionVersion: *ver,
+				Notice:        "Action 版本创建成功（版本不可变）。下一步请使用 actionscat_build_version 触发编译构建。",
+			}
+
+			data, err := json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize created version response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatBuildVersionTool creates a Tool that compiles an ActionVersion in a builder sandbox.
+func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_build_version",
+		description: "在 ActionsCat 中为指定的 ActionVersion 触发沙箱编译构建（仅限管理员 ADMIN_QQ_IDS）。" +
+			"构建为同步过程，耗时较长。若构建成功 (status=succeeded)，后续需使用 actionscat_activate_build 激活。" +
+			"若构建失败，将返回详细的编译错误日志（stderr/stdout）。由于版本不可变，严禁在当前版本重复重试构建或尝试激活失败构建；" +
+			"必须修复代码后通过 actionscat_create_version 创建新版本重新编译。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"version_id": map[string]any{
+					"type":        "string",
+					"description": "要构建的 ActionVersion ID",
+				},
+			},
+			"required": []string{"action_id", "version_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 构建版本", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_build_version 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID  string `json:"action_id"`
+				VersionID string `json:"version_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.VersionID) == "" {
+				return "缺少必填参数 'action_id' 或 'version_id'", nil
+			}
+
+			bld, err := client.BuildVersion(ctx, input.ActionID, input.VersionID)
+			if err != nil {
+				if errors.Is(err, actionscat.ErrBuildTimeoutUnknownResult) {
+					return "构建请求超时，构建结果未知 (后端可能仍在编译中)，请稍后通过 actionscat_get_build 检查状态，严禁重复提交构建或直接激活。", nil
+				}
+				return fmt.Sprintf("构建版本失败: %v", err), nil
+			}
+
+			if bld.Status != "succeeded" {
+				var exitCodeStr string
+				if bld.ExitCode != nil {
+					exitCodeStr = fmt.Sprintf("%d", *bld.ExitCode)
+				} else {
+					exitCodeStr = "none"
+				}
+				stderr := truncateLog(bld.Stderr, 4000)
+				stdout := truncateLog(bld.Stdout, 4000)
+				return fmt.Sprintf("版本构建未成功 (status: %s, exit_code: %s)。版本具有不可变性，请勿在当前版本重复构建或尝试激活；请修复代码后通过 actionscat_create_version 创建新版本重新构建。\n\n=== 构建错误日志 (Stderr) ===\n%s\n\n=== 构建输出日志 (Stdout) ===\n%s",
+					bld.Status, exitCodeStr, stderr, stdout), nil
+			}
+
+			dto := toAgentBuildDTO(bld, true)
+			dto.Notice = "版本构建成功 (status: succeeded)！制品已打包生成。注意：当前 Action 尚未激活此构建，请调用 actionscat_activate_build 将该构建激活为有效运行版本。"
+
+			data, err := json.MarshalIndent(dto, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize build response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatGetBuildTool creates a Tool that inspects a build's status and logs.
+func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
+	return Tool{
+		name: "actionscat_get_build",
+		description: "获取 ActionsCat 某次编译构建 (Build) 的状态、制品哈希、退出码及详细编译日志 (stdout/stderr)。" +
+			"可用于检查超时未决的构建任务或分析编译错误原因。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"build_id": map[string]any{
+					"type":        "string",
+					"description": "构建任务的 Build ID",
+				},
+				"include_logs": map[string]any{
+					"type":        "boolean",
+					"description": "是否包含编译输出日志（默认 true）",
+				},
+			},
+			"required": []string{"action_id", "build_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID    string `json:"action_id"`
+				BuildID     string `json:"build_id"`
+				IncludeLogs *bool  `json:"include_logs"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.BuildID) == "" {
+				return "缺少必填参数 'action_id' 或 'build_id'", nil
+			}
+
+			includeLogs := true
+			if input.IncludeLogs != nil {
+				includeLogs = *input.IncludeLogs
+			}
+
+			bld, err := client.GetBuild(ctx, input.ActionID, input.BuildID)
+			if err != nil {
+				return fmt.Sprintf("查询 Build 状态失败: %v", err), nil
+			}
+
+			dto := toAgentBuildDTO(bld, includeLogs)
+			data, err := json.MarshalIndent(dto, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize build response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatActivateBuildTool creates a Tool that activates a build for an Action.
+func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_activate_build",
+		description: "将 ActionsCat 中指定的成功构建 (build_id) 激活为 Action 的当前运行版本（仅限管理员 ADMIN_QQ_IDS）。" +
+			"激活后 Action 变为可运行状态 (runnable=true)，方可由 actionscat_run_action 实际执行。" +
+			"注意：严格校验构建状态，只有 status 为 'succeeded' 的成功构建才允许被激活。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "要激活构建的目标 Action ID",
+				},
+				"version_id": map[string]any{
+					"type":        "string",
+					"description": "对应的 ActionVersion ID",
+				},
+				"build_id": map[string]any{
+					"type":        "string",
+					"description": "要激活的 ArtifactBuild ID（必须为 status=succeeded 的成功构建）",
+				},
+			},
+			"required": []string{"action_id", "version_id", "build_id"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 激活构建", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_activate_build 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input struct {
+				ActionID  string `json:"action_id"`
+				VersionID string `json:"version_id"`
+				BuildID   string `json:"build_id"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.VersionID) == "" || strings.TrimSpace(input.BuildID) == "" {
+				return "缺少必填参数 'action_id'、'version_id' 或 'build_id'", nil
+			}
+
+			// Verify build exists and succeeded before activating
+			bld, err := client.GetBuild(ctx, input.ActionID, input.BuildID)
+			if err == nil && bld != nil {
+				if bld.Status != "succeeded" {
+					return fmt.Sprintf("拒绝激活构建: 构建 %s 当前状态为 %q (非 succeeded)，仅允许激活编译成功的构建。若构建失败，请修复代码后通过 actionscat_create_version 创建新版本重新构建。", input.BuildID, bld.Status), nil
+				}
+				if bld.VersionID != "" && bld.VersionID != input.VersionID {
+					return fmt.Sprintf("拒绝激活构建: 构建 %s 关联的版本为 %s，与请求激活的版本 %s 不一致", input.BuildID, bld.VersionID, input.VersionID), nil
+				}
+			}
+
+			if err := client.ActivateBuild(ctx, input.ActionID, actionscat.SetActiveBuildReq{
+				VersionID: input.VersionID,
+				BuildID:   input.BuildID,
+			}); err != nil {
+				return fmt.Sprintf("激活构建失败: %v", err), nil
+			}
+
+			act, err := client.GetAction(ctx, input.ActionID)
+			if err != nil {
+				return fmt.Sprintf("构建已激活，但获取更新后的 Action 失败: %v", err), nil
+			}
+
+			resp := struct {
+				Action AgentActionDTO `json:"action"`
+				Notice string         `json:"notice"`
+			}{
+				Action: toAgentActionDTO(act),
+				Notice: "构建版本激活成功！Action 现已处于可运行状态 (runnable=true)，可以通过 actionscat_run_action 触发执行。",
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize activate build response: %w", err)
+			}
+			return string(data), nil
+		},
+	}
+}
+
+// ActionsCatDeployActionTool creates a high-level composite tool that handles the full lifecycle:
+// create_version -> build_version -> inspect status -> activate_build.
+func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
+	return Tool{
+		name: "actionscat_deploy_action",
+		description: "一站式完成 ActionsCat Action 的完整部署生命周期（仅限管理员 ADMIN_QQ_IDS）：" +
+			"创建新代码版本 (create_version) -> 触发编译构建 (build_version) -> 校验构建状态 -> 激活成功构建 (activate_build)。" +
+			"若编译失败，将返回详细错误日志并中止激活；若构建超时，将返回未知状态提示以防止重复构建。" +
+			"部署成功后 Action 自动进入可运行状态 (runnable=true)，可直接通过 actionscat_run_action 执行。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"files": map[string]any{
+					"type":                 "object",
+					"description":          "源代码文件路径与内容的映射表（如 {\"main.go\": \"package main...\"}）",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+				"encodings": map[string]any{
+					"type":                 "object",
+					"description":          "可选的文件编码映射（如 base64、utf-8）",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+				"build_spec": map[string]any{
+					"type":        "object",
+					"description": "构建环境配置（语言、编译指令等）",
+					"properties": map[string]any{
+						"language":              map[string]any{"type": "string", "description": "开发语言，默认 go"},
+						"toolchain_requirement": map[string]any{"type": "string", "description": "工具链版本要求"},
+						"command":               map[string]any{"type": "string", "description": "构建命令，默认 'go build -o /sandbox/out/entrypoint .'"},
+						"network":               map[string]any{"type": "boolean", "description": "构建期间是否允许网络访问，默认 false"},
+					},
+				},
+				"runtime_spec": map[string]any{
+					"type":        "object",
+					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
+					"properties": map[string]any{
+						"entrypoint":      map[string]any{"type": "string", "description": "可执行入口路径，默认 '/sandbox/entrypoint'"},
+						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
+						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
+						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},
+						"network": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"mode": map[string]any{"type": "string", "description": "网络模式：'none'、'bridge'、'allowlist'，默认 'none'"},
+							},
+						},
+					},
+				},
+				"state_injections": map[string]any{
+					"type":        "array",
+					"description": "需要注入到运行容器状态文件的声明列表",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"state_path": map[string]any{"type": "string"},
+							"env_var":    map[string]any{"type": "string"},
+							"optional":   map[string]any{"type": "boolean"},
+						},
+						"required": []string{"state_path", "env_var"},
+					},
+				},
+				"runtime_capabilities": map[string]any{
+					"type":        "array",
+					"description": "声明请求的运行时权限能力列表（如 [\"state.write\", \"frostagent.sendmsg\"]）",
+					"items":       map[string]any{"type": "string"},
+				},
+			},
+			"required": []string{"action_id", "files"},
+		},
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			runContext, ok := llm.RunContextFromContext(ctx)
+			if !ok {
+				return "无法获取调用者会话上下文，拒绝执行管理操作", nil
+			}
+			if runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 部署操作", nil
+			}
+			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+				return "权限不足: actionscat_deploy_action 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
+			}
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+			}
+
+			var input createVersionInput
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
+
+			req, err := prepareCreateVersionReq(input)
+			if err != nil {
+				return fmt.Sprintf("部署参数校验失败: %v", err), nil
+			}
+
+			// Step 1: Create Version
+			ver, err := client.CreateVersion(ctx, input.ActionID, req)
+			if err != nil {
+				return fmt.Sprintf("部署失败 (创建版本阶段): %v", err), nil
+			}
+
+			// Step 2: Build Version
+			bld, err := client.BuildVersion(ctx, input.ActionID, ver.ID)
+			if err != nil {
+				if errors.Is(err, actionscat.ErrBuildTimeoutUnknownResult) {
+					return fmt.Sprintf("部署中断: 版本 %s 构建超时，构建结果未知 (后端可能仍在编译中)。请稍后使用 actionscat_get_build 检查状态，严禁重复提交构建或直接激活。", ver.ID), nil
+				}
+				return fmt.Sprintf("部署失败 (编译构建阶段): %v", err), nil
+			}
+
+			// Step 3: Check Build Status
+			if bld.Status != "succeeded" {
+				var exitCodeStr string
+				if bld.ExitCode != nil {
+					exitCodeStr = fmt.Sprintf("%d", *bld.ExitCode)
+				} else {
+					exitCodeStr = "none"
+				}
+				stderr := truncateLog(bld.Stderr, 4000)
+				stdout := truncateLog(bld.Stdout, 4000)
+				return fmt.Sprintf("部署失败: 版本 %s 构建未成功 (状态: %s, 退出码: %s)。版本具有不可变性，请修复代码后重新部署。\n\n=== 构建错误日志 (Stderr) ===\n%s\n\n=== 构建输出日志 (Stdout) ===\n%s",
+					ver.ID, bld.Status, exitCodeStr, stderr, stdout), nil
+			}
+
+			// Step 4: Activate Build
+			if err := client.ActivateBuild(ctx, input.ActionID, actionscat.SetActiveBuildReq{
+				VersionID: ver.ID,
+				BuildID:   bld.ID,
+			}); err != nil {
+				return fmt.Sprintf("部署失败 (激活构建阶段): %v", err), nil
+			}
+
+			// Step 5: Return updated runnable action
+			act, err := client.GetAction(ctx, input.ActionID)
+			if err != nil {
+				return fmt.Sprintf("部署成功已激活，但获取最终 Action 状态失败: %v", err), nil
+			}
+
+			resp := struct {
+				Action    AgentActionDTO `json:"action"`
+				VersionID string         `json:"version_id"`
+				BuildID   string         `json:"build_id"`
+				Status    string         `json:"status"`
+				Notice    string         `json:"notice"`
+			}{
+				Action:    toAgentActionDTO(act),
+				VersionID: ver.ID,
+				BuildID:   bld.ID,
+				Status:    "deployed",
+				Notice:    "Action 部署并激活成功！当前已具备有效构建，处于可运行状态 (runnable=true)，可直接通过 actionscat_run_action 执行。",
+			}
+
+			data, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize deploy action response: %w", err)
 			}
 			return string(data), nil
 		},
