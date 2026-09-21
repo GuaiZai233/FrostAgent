@@ -23,7 +23,11 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
   - **组合式零宽与控制符多层规范化管道**：针对攻击者通过百分号编码或 Base64 嵌套零宽分隔符（如 `%E2%80%8B`、Unicode 双向嵌入与隔离控制符）实施的多层组合编码绕过，归一化流水线采用有界循环（最多 3 轮），在每一层百分号解码及 Base64 解码成功后立即重新应用不可见/零宽字符规范化消除（`stripZeroWidthAndControl`），彻底瓦解嵌套隐藏的零宽混淆指令，确保在进入下一层解码或正则规则匹配前完全还原规范化文本。
   - Base64 与零宽字符规避检测结合 UTF-8 与可打印字符验证，确保准确识别人工构造的规避载荷。
 - **安全审计凭据脱敏与最小化存储**：安全审计日志记录（`security_audit.jsonl`）的摘要预览（`safePreview`）在截断前必须经过严格的凭据脱敏处理（Redaction），过滤 Bearer Token、URL 查询凭据、API Key（如 `sk-...`、`glpat-...`、`xoxb-...`）、GitHub 经典 PAT 及各类 Token（`ghp_`、`gho_`、`ghu_`、`ghs_`、`ghr_`）、GitHub 细粒度 PAT（`github_pat_...`）以及密码字段，防止敏感鉴权凭据持久化到本地日志造成横向移动风险。
-- **统一工具边界**：Engine 公共工具循环在执行内置工具和 MCP 工具前审查参数，执行后隔离高风险工具结果，模型输出后进行出站审查，中间 SendHook 也经过严格管控。
+- **统一工具边界与外部系统隔离**：Engine 公共工具循环在执行内置工具和 MCP 工具前审查参数，执行后隔离高风险工具结果，模型输出后进行出站审查，中间 SendHook 也经过严格管控。对于 ActionsCat 等外部自动化与持久化管理工具，进一步实施分层安全隔离（详细见 [actionscat.md](actionscat.md)）：
+  - **管理面持久写权限门禁**：对具备控制面持久化修改语义的工具（如 `actionscat_create_action`），工具层强制提取 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅 `ADMIN_QQ_IDS` 允许调用，防止聊天会话或 Prompt 注入绕过控制面身份验证；
+  - **模拟会话零持久化副作用 (Zero Durable Mutation)**：在 `mock=true` 调试会话中，所有涉及外部系统持久化写入与任务触发的工具（如 `actionscat_run_action`、`actionscat_create_action`）一律 Fail-Closed 拦截，确保 0 次外部持久调用；
+  - **敏感凭据脱敏隔离**：外部任务系统执行结果暴露给模型前，严格采用 DTO 白名单过滤，彻底剥离持久状态注入项（如 `planned_env`），防止凭据泄露至大模型上下文；
+  - **受保护运行环境变量防御**：工具层对传入的动态环境变量进行保留前缀黑名单校验（拦截 `ACTIONSCAT_*`），杜绝模型输出伪造沙箱内的受信任执行身份。
 - **管理面板与控制面接口**：控制面根路径提供受 Bearer 认证保护的 `/api/security/locked` 与 `/api/security/unlock` REST 端点，与 MCP 控制面深度复用统一的 Scoped `instanceconfig.Store` 鉴权源，在无需将 Token 镜像到操作系统进程环境变量的配置存储模式下依然能够严格受控，配合 Web 控制台「安全控制」页提供全局锁定状态的可视化查看与人工解锁支持。
 - **内部测试与 Synthetic Principal**：通用 `eval` / synthetic principal 概念保留用于内部 Watchdog 单元测试及未来的自动化测试 Harness；系统不暴露或维护任何面向第三方的 HTTP Evaluation API（如 `/v1/messages`），后续真实平台测试将通过新的 Telegram Adapter 完成。
 
