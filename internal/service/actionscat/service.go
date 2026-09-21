@@ -77,6 +77,13 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleStatus(w, r)
 
+	case path == "/sandbox/readiness" || path == "/sandbox/readiness/":
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSandboxReadiness(w, r)
+
 	case path == "/actions" || path == "/actions/":
 		if r.Method == http.MethodGet {
 			s.handleListActions(w, r)
@@ -112,6 +119,11 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.client.Status(r.Context())
 	s.writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Service) handleSandboxReadiness(w http.ResponseWriter, r *http.Request) {
+	rep := s.client.CheckSandboxReadiness(r.Context())
+	s.writeJSON(w, http.StatusOK, rep)
 }
 
 func (s *Service) handleListActions(w http.ResponseWriter, r *http.Request) {

@@ -347,6 +347,10 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | `ACTIONSCAT_ENDPOINT` | ActionsCat 核心服务地址（如 `http://127.0.0.1:8080`） | 空（未配置） | 实例级 | 否 |
 | `ACTIONSCAT_MANAGEMENT_TOKEN` | ActionsCat 管理 API Bearer Token | 空 | 实例级 | 是（脱敏显示） |
 | `ACTIONSCAT_DISPATCH_TOKEN` | ActionsCat 事件分发 Token（可选，默认复用管理 Token） | 空 | 实例级 | 是（脱敏显示） |
+| `SANDBOX_BASE_URL` / `FA_SANDBOX_ENDPOINT` | 兼容 Sandbox Gateway 服务地址（如 `http://127.0.0.1:3874`） | `http://127.0.0.1:3874` | 全局/实例级 | 否 |
+| `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` | Sandbox Gateway X-Auth-Token 凭据 | 空 | 全局/实例级 | 是（脱敏显示） |
+| `SANDBOX_ENABLED` | 是否启用沙箱命令执行与隔离构建 | `false` | 全局/实例级 | 否 |
+| `SANDBOX_SESSION_NAMESPACE` | 沙箱会话命名空间隔离前缀 | `frostagent` | 全局/实例级 | 否 |
 | `AGENT_MAX_ITERATIONS` | 智能体单次处理允许的最大工具迭代轮数 | `10` | 实例级 | 否 |
 
 ---
@@ -358,7 +362,8 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 1. **服务连接与认证状态卡片**：
    - 实时检测 `configured`、`healthy` 与 `authenticated`；
    - 区分“健康检查未通过”、“管理凭据未认证”及“已连接并就绪”三种状态；
-   - 提供端点一键复制、重新检查及跳转设置面板快捷按钮。
+   - 提供端点一键复制、重新检查及跳转设置面板快捷按钮；
+   - **内置 Sandbox Gateway 就绪诊断横幅**：自动探测关联的沙箱网关，实时呈现网关健康度、凭据有效性、协议兼容性以及 `go-builder` / `action-runtime` profile 支持矩阵。
 2. **Action 列表与可运行性标识**：
    - 区分展示 `可运行`（绿色徽章）与 `未构建/未激活`（黄色徽章）；
    - 展示版本 ID、构建 ID、并发数、定时表达式及能力声明列表；
@@ -378,3 +383,97 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
    - 每个 Action 卡片提供「触发器」配置入口；
    - **定时调度管理**：以表格方式清晰呈现当前 Cron 表达式、时区、下次计算执行时间（`next_run_at`）及启用状态；支持一键注销调度，并提供便捷的「新增定时调度」表单（校验 Cron 表达式、时区与启用开关）；
    - **事件模式匹配管理**：实时拉取事件模式规则列表，展示匹配类型（contains / exact / regex）、Pattern 表达式、目标字段、命名捕获组映射与优先级；支持一键注销规则，并提供「新增事件匹配规则」表单（支持 regex / contains / exact 选择、正则语法校验及 `capture_env_map` 解析与受保护前缀防御）。
+
+---
+
+## 七、沙箱网关契约与兼容实现 (Sandbox Gateway Contract & Compatible Implementation)
+
+### 7.1 问题背景与核心挑战
+ActionsCat 的设计初衷是将 Agent 编写的业务逻辑在强隔离沙箱环境中安全编译并执行。然而，现有的公开版 `Foxerine/code-interpreter` 仅适用于单一 Python/交互式解释器场景：
+1. **API 契约缺失**：公开版网关未提供会话分配与生命周期管理接口（`POST /api/v1/sessions` 直接返回 HTTP 404）；
+2. **Profile 体系缺失**：缺乏专为 Go 编译优化的 `go-builder` 环境和运行隔离的 `action-runtime` 环境；
+3. **网络与回调隔离断裂**：不支持在 `network: none` 策略下保留宿主机/内部回调通信（`ACTIONSCAT_RUNTIME_ENDPOINT`），导致真实执行链条在第一步即彻底中断。
+
+为此，FrostAgent 正式制定并发布了 **ActionsCat Compatible Sandbox Gateway Specification v1.0**，并在代码库中内置了官方兼容实现（`internal/sandbox/gateway` 与 `cmd/sandbox-gateway`）。
+
+### 7.2 核心端点契约 (Gateway Contract Specification)
+
+兼容沙箱网关必须且仅需实现下列核心 HTTP 接口：
+
+| HTTP 方法与路径 | 授权要求 | 功能描述 | 请求与响应规范 |
+| :--- | :--- | :--- | :--- |
+| `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
+| `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"...","status":"ready"}` |
+| `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 工作区中执行隔离命令 | Query: `user_uuid`, `profile`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
+| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放并物理清理 session 工作区 | Query: `user_uuid`<br>响应：成功返回 HTTP 204 No Content，若会话不存在则返回 HTTP 404 |
+
+#### 关键路径与环境行为保证：
+- **虚拟沙箱路径映射**：命令请求中的 `/sandbox` 虚拟工作目录会被网关透明映射到该 session 分配的真实物理隔离目录（如 `<workdir>/<user_uuid>`）；
+- **Go 编译产物产出**：`go-builder` profile 执行 `go build -o /sandbox/out/entrypoint .` 时，编译产物自动归档在 session 工作区的 `out/` 目录下；
+- **网络黑洞代理 (Blackhole Proxy)**：当策略为 `network: none` 时，网关自动注入 `HTTP_PROXY=http://127.0.0.1:9`（阻止访问外部公网 IP），同时保留 `NO_PROXY=127.0.0.1,localhost,host.docker.internal`，确保沙箱进程能够安全回调 `ACTIONSCAT_RUNTIME_ENDPOINT`；
+- **Windows / Unix 跨平台适配**：可执行文件在 Windows 下自动识别 `.exe` 后缀，保证多环境测试的一致性。
+
+### 7.3 四态就绪诊断体系 (4-Way Readiness Diagnostics)
+
+为彻底解决“黑盒 404”与“配置错误难定位”问题，FrostAgent 引入了系统化的四态就绪诊断探测（`internal/sandbox/readiness.go`），将沙箱网关连接结果精确归类为：
+
+```
+                              ┌───────────────────────┐
+                              │ CheckReadiness Probe  │
+                              └──────────┬────────────┘
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    ▼                                         ▼
+            [TCP / HTTP Dial]                         [HTTP Status Code]
+                    │                                         │
+         Dial / Timeout Error?                        ┌───────┴───────┐
+         ├── YES ──▶ StatusEndpointUnreachable        │               │
+         └── NO                                    401 / 403?        404 on /sessions?
+                                                      ├── YES ──▶ StatusAuthFailure
+                                                      └── NO          ├── YES ──▶ StatusAPIContractMissing
+                                                                      └── NO
+                                                                          Profiles Supported?
+                                                                          ├── NO  ──▶ StatusProfileUnsupported
+                                                                          └── YES ──▶ StatusReady
+```
+
+1. **`endpoint_unreachable` (端点不可达)**：网络拒绝连接、端口未监听、DNS 解析失败或连接超时；
+2. **`auth_failure` (认证失败)**：网关返回 HTTP 401 Unauthorized 或 403 Forbidden，说明 `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` 不匹配；
+3. **`api_contract_missing` (协议契约缺失)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions` 返回 404 Not Found（明确指出网关为不兼容的旧版或交互式实现）；
+4. **`profile_unsupported` (Profile 不支持)**：网关拒绝了请求的构建或运行配置文件（例如缺少 `go-builder` 或 `action-runtime`）；
+5. **`ready` (完全就绪)**：网关服务连通、认证校验通过、会话契约完备且所有必须的 Profile 均已就绪。
+
+### 7.4 官方兼容网关二进制与部署
+
+FrostAgent 提供了开箱即用的官方兼容 Gateway 实现，位于 `cmd/sandbox-gateway`：
+
+```bash
+# 启动兼容 Sandbox Gateway
+go run ./cmd/sandbox-gateway \
+  -addr 127.0.0.1:3874 \
+  -token my-secret-sandbox-token \
+  -workdir ./data/sandbox_sessions
+```
+
+在 `.env` 中配置：
+```env
+SANDBOX_ENABLED=true
+FA_SANDBOX_ENDPOINT=http://127.0.0.1:3874
+FA_SANDBOX_AUTH_TOKEN=my-secret-sandbox-token
+```
+
+### 7.5 端到端闭环验证保证 (End-to-End Test Assurance)
+
+FrostAgent 包含严格的无 Mock 真实端到端测试（`internal/sandbox/gateway/e2e_test.go`），在每一次构建和持续集成中自动化验证如下完整生命周期：
+1. 启动兼容 Sandbox Gateway 实例；
+2. 依次触发并断言 4 种诊断失败场景（Unreachable, Auth Failure, Contract Missing, Profile Unsupported）及最后的 Ready 状态；
+3. 创建 Action 与 Version；
+4. 使用 `go-builder` profile 真实执行 `go build -o /sandbox/out/entrypoint .` 编译 Go 源码为二进制可执行文件；
+5. 激活生成的有效制品构建（Status: succeeded）；
+6. 使用 `action-runtime` profile 并在 `network: none` 策略下拉起 Action 运行；
+7. 实时校验三项核心安全不变量：
+   - **公网连接被阻断**（访问 `https://1.1.1.1` 立即失败并由 blackhole 拦截）；
+   - **上下文环境变量正确注入**；
+   - **回环回调成功触达** `ACTIONSCAT_RUNTIME_ENDPOINT`；
+8. 任务安全退出并释放清理工作区。
+

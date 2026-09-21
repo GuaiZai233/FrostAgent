@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"FrostAgent/internal/sandbox"
 )
 
 const (
@@ -252,11 +254,12 @@ type HealthStatus struct {
 
 // StatusResponse is the summarized connection status.
 type StatusResponse struct {
-	Configured    bool   `json:"configured"`
-	Endpoint      string `json:"endpoint"`
-	Healthy       bool   `json:"healthy"`
-	Authenticated bool   `json:"authenticated"`
-	Error         string `json:"error,omitempty"`
+	Configured    bool                     `json:"configured"`
+	Endpoint      string                   `json:"endpoint"`
+	Healthy       bool                     `json:"healthy"`
+	Authenticated bool                     `json:"authenticated"`
+	Error         string                   `json:"error,omitempty"`
+	Sandbox       *sandbox.ReadinessReport `json:"sandbox,omitempty"`
 }
 
 // HTTPClient defines the minimal interface for issuing HTTP requests.
@@ -435,66 +438,106 @@ func (c *Client) Health(ctx context.Context) (*HealthStatus, error) {
 	return &hs, nil
 }
 
+// SandboxEndpoint returns the configured Sandbox Gateway endpoint or empty string.
+func (c *Client) SandboxEndpoint() string {
+	ep := strings.TrimRight(strings.TrimSpace(c.getenv("SANDBOX_BASE_URL")), "/")
+	if ep == "" {
+		ep = strings.TrimRight(strings.TrimSpace(c.getenv("FA_SANDBOX_ENDPOINT")), "/")
+	}
+	if ep == "" {
+		ep = strings.TrimRight(strings.TrimSpace(c.getenv("SANDBOX_ENDPOINT")), "/")
+	}
+	return ep
+}
+
+// SandboxAuthToken returns the configured Sandbox Gateway auth token.
+func (c *Client) SandboxAuthToken() string {
+	tok := strings.TrimSpace(c.getenv("SANDBOX_AUTH_TOKEN"))
+	if tok == "" {
+		tok = strings.TrimSpace(c.getenv("FA_SANDBOX_AUTH_TOKEN"))
+	}
+	return tok
+}
+
+// CheckSandboxReadiness probes the configured Sandbox Gateway and returns a structured readiness report.
+func (c *Client) CheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessReport {
+	ep := c.SandboxEndpoint()
+	if ep == "" {
+		return &sandbox.ReadinessReport{
+			Status:   sandbox.StatusEndpointUnreachable,
+			Endpoint: "",
+			Detail:   "sandbox endpoint is not configured (SANDBOX_BASE_URL / FA_SANDBOX_ENDPOINT)",
+		}
+	}
+	tok := c.SandboxAuthToken()
+	return sandbox.CheckReadiness(ctx, ep, tok, sandbox.ProfileGoBuilder, sandbox.ProfileActionRuntime)
+}
+
 // Status returns a high-level overview of the ActionsCat connection status,
 // distinguishing between anonymous reachability (/healthz) and management API readiness.
 func (c *Client) Status(ctx context.Context) StatusResponse {
+	var resp StatusResponse
 	endpoint := c.Endpoint()
 	if endpoint == "" {
-		return StatusResponse{
+		resp = StatusResponse{
 			Configured:    false,
 			Endpoint:      "",
 			Healthy:       false,
 			Authenticated: false,
 			Error:         "未配置 ACTIONSCAT_ENDPOINT",
 		}
-	}
-	hs, err := c.Health(ctx)
-	if err != nil {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       false,
-			Authenticated: false,
-			Error:         err.Error(),
-		}
-	}
-	if hs.Status != "ok" {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       false,
-			Authenticated: false,
-			Error:         "健康检查状态异常",
+	} else {
+		hs, err := c.Health(ctx)
+		if err != nil {
+			resp = StatusResponse{
+				Configured:    true,
+				Endpoint:      endpoint,
+				Healthy:       false,
+				Authenticated: false,
+				Error:         err.Error(),
+			}
+		} else if hs.Status != "ok" {
+			resp = StatusResponse{
+				Configured:    true,
+				Endpoint:      endpoint,
+				Healthy:       false,
+				Authenticated: false,
+				Error:         "健康检查状态异常",
+			}
+		} else {
+			token := c.ManagementToken()
+			if token == "" {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: false,
+					Error:         "未配置 ACTIONSCAT_MANAGEMENT_TOKEN",
+				}
+			} else if _, _, err := c.doRequest(ctx, http.MethodGet, "/api/v1/actions?limit=1", nil, token); err != nil {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: false,
+					Error:         fmt.Sprintf("管理凭据认证失败: %v", err),
+				}
+			} else {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: true,
+				}
+			}
 		}
 	}
 
-	token := c.ManagementToken()
-	if token == "" {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       true,
-			Authenticated: false,
-			Error:         "未配置 ACTIONSCAT_MANAGEMENT_TOKEN",
-		}
+	if c.SandboxEndpoint() != "" {
+		resp.Sandbox = c.CheckSandboxReadiness(ctx)
 	}
 
-	if _, _, err := c.doRequest(ctx, http.MethodGet, "/api/v1/actions?limit=1", nil, token); err != nil {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       true,
-			Authenticated: false,
-			Error:         fmt.Sprintf("管理凭据认证失败: %v", err),
-		}
-	}
-
-	return StatusResponse{
-		Configured:    true,
-		Endpoint:      endpoint,
-		Healthy:       true,
-		Authenticated: true,
-	}
+	return resp
 }
 
 // ListActions retrieves all actions from ActionsCat.

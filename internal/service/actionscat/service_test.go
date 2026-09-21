@@ -932,3 +932,104 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 		}
 	}
 }
+
+func TestService_SandboxReadiness(t *testing.T) {
+	// 1. Unconfigured sandbox
+	clUnconfigured := actclient.New(func(k string) string { return "" })
+	svcUnconfigured := New(clUnconfigured, "inst_sb_1")
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/actionscat/sandbox/readiness", nil)
+	req1.RemoteAddr = "127.0.0.1:1234"
+	rec1 := httptest.NewRecorder()
+	svcUnconfigured.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec1.Code)
+	}
+	var rep1 struct {
+		Status   string `json:"status"`
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(rec1.Body).Decode(&rep1); err != nil {
+		t.Fatalf("decode readiness: %v", err)
+	}
+	if rep1.Status != "endpoint_unreachable" {
+		t.Fatalf("expected endpoint_unreachable, got: %s", rep1.Status)
+	}
+
+	// 2. Configured sandbox with mock gateway
+	gwTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			if r.Header.Get("X-Auth-Token") != "secret_gw_tok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":             "ok",
+				"supported_profiles": []string{"go-builder", "action-runtime", "minimal"},
+			})
+		case "/api/v1/sessions":
+			if r.Header.Get("X-Auth-Token") != "secret_gw_tok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gwTS.Close()
+
+	clConfigured := actclient.New(func(k string) string {
+		switch k {
+		case "FA_SANDBOX_ENDPOINT":
+			return gwTS.URL
+		case "FA_SANDBOX_AUTH_TOKEN":
+			return "secret_gw_tok"
+		default:
+			return ""
+		}
+	})
+	svcConfigured := New(clConfigured, "inst_sb_2")
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/actionscat/sandbox/readiness", nil)
+	req2.RemoteAddr = "127.0.0.1:1234"
+	rec2 := httptest.NewRecorder()
+	svcConfigured.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec2.Code)
+	}
+	var rep2 struct {
+		Status            string `json:"status"`
+		Healthy           bool   `json:"healthy"`
+		Authenticated     bool   `json:"authenticated"`
+		ContractSupported bool   `json:"contract_supported"`
+	}
+	if err := json.NewDecoder(rec2.Body).Decode(&rep2); err != nil {
+		t.Fatalf("decode readiness: %v", err)
+	}
+	if rep2.Status != "ready" || !rep2.Healthy || !rep2.Authenticated || !rep2.ContractSupported {
+		t.Fatalf("expected fully ready, got: %+v", rep2)
+	}
+
+	// 3. /api/actionscat/status includes Sandbox
+	reqStatus := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+	reqStatus.RemoteAddr = "127.0.0.1:1234"
+	recStatus := httptest.NewRecorder()
+	svcConfigured.ServeHTTP(recStatus, reqStatus)
+
+	if recStatus.Code != http.StatusOK {
+		t.Fatalf("expected 200 for status, got %d", recStatus.Code)
+	}
+	var st actclient.StatusResponse
+	if err := json.NewDecoder(recStatus.Body).Decode(&st); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if st.Sandbox == nil || st.Sandbox.Status != "ready" {
+		t.Fatalf("expected status to include Sandbox ready, got: %+v", st.Sandbox)
+	}
+}

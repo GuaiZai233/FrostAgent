@@ -147,6 +147,12 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+// Diagnose runs the full multi-phase sandbox readiness diagnostic suite,
+// distinguishing endpoint unreachable, auth failure, API contract missing, and profile unsupported.
+func (c *Client) Diagnose(ctx context.Context, profiles ...string) *sandbox.ReadinessReport {
+	return sandbox.CheckReadinessWithClient(ctx, c.httpClient, c.baseURL, c.authToken, profiles...)
+}
+
 // Release terminates and cleans up the worker instance for the session.
 func (c *Client) Release(ctx context.Context, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
