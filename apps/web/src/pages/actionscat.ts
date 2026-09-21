@@ -256,7 +256,43 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       return;
     }
 
-    // Configured & Healthy
+    if (status.authenticated === false) {
+      toolsBadgeEl.className = 'badge badge-warning inline-flex items-center gap-1.5';
+      toolsBadgeEl.innerHTML = `
+        <span class="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+        <span>未认证/Token无效</span>
+      `;
+      statusContainer.innerHTML = `
+        <div class="card p-5 border-amber-500/30 bg-amber-500/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <span class="text-amber-500 inline-flex mt-0.5">${icon('lock', 'size-5')}</span>
+            <div>
+              <h3 class="text-sm font-bold text-foreground">ActionsCat 管理凭据认证未通过</h3>
+              <p class="text-xs text-muted-foreground mt-1 leading-relaxed">
+                服务已连通，但管理 API 认证失败。请检查 <code>ACTIONSCAT_MANAGEMENT_TOKEN</code> 是否正确。<br>
+                ${escapeHtml(status.error || '401 Unauthorized')}
+              </p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <a href="#/settings/backend" class="btn btn-outline btn-sm whitespace-nowrap">
+              ${icon('settings', 'size-3.5')}
+              <span>配置 Token</span>
+            </a>
+            <button class="btn btn-outline btn-sm" id="actionscat-recheck-btn">
+              ${icon('refresh', 'size-3.5')}
+              <span>重新检查</span>
+            </button>
+          </div>
+        </div>
+      `;
+      statusContainer.querySelector('#actionscat-recheck-btn')?.addEventListener('click', () => {
+        void loadAll();
+      });
+      return;
+    }
+
+    // Configured & Healthy & Authenticated
     toolsBadgeEl.className = 'badge badge-success inline-flex items-center gap-1.5';
     toolsBadgeEl.innerHTML = `
       <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
@@ -720,11 +756,18 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             }
 
             // Parse metadata
-            let triggerMetadata: Record<string, unknown> | undefined;
+            let triggerMetadata: Record<string, string> | undefined;
             if (metaArea.value.trim()) {
               try {
-                triggerMetadata = JSON.parse(metaArea.value.trim());
-              } catch (jsonErr) {
+                const parsed = JSON.parse(metaArea.value.trim());
+                if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                  throw new Error('元数据必须是 JSON 对象');
+                }
+                triggerMetadata = {};
+                for (const [k, v] of Object.entries(parsed)) {
+                  triggerMetadata[k] = typeof v === 'string' ? v : JSON.stringify(v);
+                }
+              } catch {
                 toast.error('触发元数据 JSON 格式不合法');
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = `${icon('play', 'size-3.5')} <span>立即触发</span>`;

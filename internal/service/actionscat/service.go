@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -164,7 +165,26 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 			// POST /actions/:id/runs
 			var req client.ManualRunReq
 			if r.Body != nil {
-				_ = json.NewDecoder(r.Body).Decode(&req)
+				r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+				dec := json.NewDecoder(r.Body)
+				if err := dec.Decode(&req); err != nil {
+					if !errors.Is(err, io.EOF) {
+						s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+						return
+					}
+				} else {
+					var trailing json.RawMessage
+					if err := dec.Decode(&trailing); err != io.EOF {
+						s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+						return
+					}
+				}
+			}
+			for k := range req.ExtraEnv {
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "ACTIONSCAT_") {
+					s.writeError(w, http.StatusBadRequest, fmt.Sprintf("environment variable %q uses reserved prefix 'ACTIONSCAT_'", k))
+					return
+				}
 			}
 			run, err := s.client.TriggerRun(r.Context(), actionID, req)
 			if err != nil {
@@ -224,11 +244,34 @@ func (s *Service) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "ActionsCat 未配置 ACTIONSCAT_ENDPOINT")
 		return
 	}
+	if r.Body == nil {
+		s.writeError(w, http.StatusBadRequest, "empty request body")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var payload map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&payload); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
 		return
 	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); err != io.EOF {
+		s.writeError(w, http.StatusBadRequest, "unexpected trailing json tokens")
+		return
+	}
+
+	if envRaw, ok := payload["extra_env"]; ok {
+		if envMap, ok := envRaw.(map[string]any); ok {
+			for k := range envMap {
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "ACTIONSCAT_") {
+					s.writeError(w, http.StatusBadRequest, fmt.Sprintf("environment variable %q uses reserved prefix 'ACTIONSCAT_'", k))
+					return
+				}
+			}
+		}
+	}
+
 	if err := s.client.Dispatch(r.Context(), payload); err != nil {
 		s.handleClientError(w, err)
 		return

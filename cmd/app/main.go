@@ -75,6 +75,8 @@ func managementMux(manager http.Handler) *http.ServeMux {
 	}
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)
+	mux.Handle("/api/actionscat/", manager)
+	mux.Handle("/api/v1/actionscat/", manager)
 	mux.Handle("/api/v1/messages/send", manager)
 	mux.Handle("/frostagent.v1.LogService/", manager)
 	mux.Handle("/frostagent.v1.MCPService/", http.NotFoundHandler())

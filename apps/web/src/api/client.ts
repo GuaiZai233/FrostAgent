@@ -128,6 +128,7 @@ export const securityAPI = {
 export interface ActionsCatStatus {
   configured: boolean;
   healthy: boolean;
+  authenticated?: boolean;
   endpoint: string;
   error?: string;
 }
@@ -164,7 +165,7 @@ export interface ActionsCatRunLogs {
 
 export interface TriggerActionRunRequest {
   extra_env?: Record<string, string>;
-  trigger_metadata?: Record<string, unknown>;
+  trigger_metadata?: Record<string, string>;
 }
 
 async function actionsCatRequest<T>(

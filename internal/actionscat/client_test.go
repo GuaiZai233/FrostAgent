@@ -45,34 +45,75 @@ func TestClient_InvalidURL(t *testing.T) {
 
 func TestClient_HealthAndStatus(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		switch r.URL.Path {
+		case "/healthz":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-			return
+		case "/api/v1/actions":
+			auth := r.Header.Get("Authorization")
+			if auth == "Bearer valid_token" {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]Action{})
+			} else {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			}
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	}))
 	defer ts.Close()
 
-	client := New(func(k string) string {
+	ctx := context.Background()
+
+	// 1. Without management token: Healthy but unauthenticated
+	cNoAuth := New(func(k string) string {
 		if k == "ACTIONSCAT_ENDPOINT" {
 			return ts.URL
 		}
 		return ""
 	})
-
-	ctx := context.Background()
-	hs, err := client.Health(ctx)
+	hs, err := cNoAuth.Health(ctx)
 	if err != nil {
 		t.Fatalf("health check failed: %v", err)
 	}
 	if hs.Status != "ok" {
 		t.Fatalf("expected status ok, got %s", hs.Status)
 	}
+	stNoAuth := cNoAuth.Status(ctx)
+	if !stNoAuth.Configured || !stNoAuth.Healthy || stNoAuth.Authenticated {
+		t.Fatalf("expected configured and healthy but not authenticated, got %+v", stNoAuth)
+	}
 
-	status := client.Status(ctx)
-	if !status.Configured || !status.Healthy {
-		t.Fatalf("expected configured and healthy, got %+v", status)
+	// 2. With invalid management token
+	cBadAuth := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "wrong_token"
+		default:
+			return ""
+		}
+	})
+	stBadAuth := cBadAuth.Status(ctx)
+	if !stBadAuth.Healthy || stBadAuth.Authenticated {
+		t.Fatalf("expected healthy but not authenticated, got %+v", stBadAuth)
+	}
+
+	// 3. With valid management token
+	cValidAuth := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "valid_token"
+		default:
+			return ""
+		}
+	})
+	stValidAuth := cValidAuth.Status(ctx)
+	if !stValidAuth.Configured || !stValidAuth.Healthy || !stValidAuth.Authenticated {
+		t.Fatalf("expected configured, healthy, and authenticated, got %+v", stValidAuth)
 	}
 }
 

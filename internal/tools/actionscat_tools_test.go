@@ -63,10 +63,14 @@ func TestActionsCatTools_Execution(t *testing.T) {
 		ActionID:    "act_test_1",
 		Status:      "succeeded",
 		TriggerType: "manual",
-		Stdout:      "Hello from ActionsCat tool test!",
-		Stderr:      "",
-		DurationMs:  250,
-		CreatedAt:   time.Now().UTC(),
+		PlannedEnv: map[string]string{
+			"PRIVATE_STATE":            "do-not-leak",
+			"ACTIONSCAT_RUNTIME_TOKEN": "super-secret-token",
+		},
+		Stdout:     "Hello from ActionsCat tool test!",
+		Stderr:     "",
+		DurationMs: 250,
+		CreatedAt:  time.Now().UTC(),
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +130,12 @@ func TestActionsCatTools_Execution(t *testing.T) {
 		t.Fatalf("expected missing param warning, got: %s", badOut)
 	}
 
+	// Rejected protected ACTIONSCAT_ environment variables
+	badEnvOut, _ := runTool.ExecuteContext(ctx, `{"action_id": "act_test_1", "extra_env": {"ACTIONSCAT_TRIGGER_TYPE": "hacked"}}`)
+	if !strings.Contains(badEnvOut, "包含受保护的前缀 'ACTIONSCAT_'") {
+		t.Fatalf("expected protected prefix error, got: %s", badEnvOut)
+	}
+
 	// Valid run execution
 	runOut, err := runTool.ExecuteContext(ctx, `{"action_id": "act_test_1", "extra_env": {"FOO": "BAR"}}`)
 	if err != nil {
@@ -133,6 +143,10 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 	if !strings.Contains(runOut, "run_123") || !strings.Contains(runOut, "succeeded") {
 		t.Fatalf("unexpected run output: %s", runOut)
+	}
+	// Verify sensitive planned_env is redacted from agent response
+	if strings.Contains(runOut, "do-not-leak") || strings.Contains(runOut, "PRIVATE_STATE") || strings.Contains(runOut, "planned_env") {
+		t.Fatalf("expected planned_env secrets to be redacted from agent response, got: %s", runOut)
 	}
 
 	// 4. Test GetRunTool
@@ -143,6 +157,9 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 	if !strings.Contains(getOut, "Hello from ActionsCat tool test!") {
 		t.Fatalf("expected stdout in get run output, got: %s", getOut)
+	}
+	if strings.Contains(getOut, "do-not-leak") || strings.Contains(getOut, "PRIVATE_STATE") || strings.Contains(getOut, "planned_env") {
+		t.Fatalf("expected planned_env secrets to be redacted from get_run response, got: %s", getOut)
 	}
 
 	// Test GetRunTool without logs

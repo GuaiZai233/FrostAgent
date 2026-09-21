@@ -202,3 +202,67 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestService_ValidationAndHardening(t *testing.T) {
+	cl := actclient.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://127.0.0.1:9999"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "valid_token"
+		default:
+			return ""
+		}
+	})
+	svc := New(cl, "inst_test")
+
+	// 1. POST runs with malformed JSON
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte("{invalid-json")))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for malformed json, got %d", rec.Code)
+		}
+	}
+
+	// 2. POST runs with trailing tokens
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{}} {"extra": true}`)))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for trailing json, got %d", rec.Code)
+		}
+	}
+
+	// 3. POST runs with reserved ACTIONSCAT_ prefix
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_OVERRIDE":"val"}}`)))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for reserved prefix, got %d", rec.Code)
+		}
+	}
+
+	// 4. POST dispatch with reserved ACTIONSCAT_ prefix
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_ACTION_ID":"val"}}`)))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for reserved prefix in dispatch, got %d", rec.Code)
+		}
+	}
+
+	// 5. POST dispatch with malformed JSON
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"unclosed`)))
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for malformed json in dispatch, got %d", rec.Code)
+		}
+	}
+}

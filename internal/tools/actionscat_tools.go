@@ -14,6 +14,49 @@ const (
 	defaultRunWaitDuration = 25 * time.Second
 )
 
+// AgentRunDTO represents the redacted execution run payload returned to LLM agent tools.
+// Internal execution state, secrets, and planned environment variables (e.g. planned_env)
+// are intentionally omitted to prevent leaking sensitive credentials into the model context.
+type AgentRunDTO struct {
+	ID           string `json:"id"`
+	ActionID     string `json:"action_id"`
+	Status       string `json:"status"`
+	TriggerType  string `json:"trigger_type,omitempty"`
+	ExitCode     *int   `json:"exit_code,omitempty"`
+	DurationMs   int64  `json:"duration_ms"`
+	Stdout       string `json:"stdout,omitempty"`
+	Stderr       string `json:"stderr,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	CompletedAt  string `json:"completed_at,omitempty"`
+}
+
+func toAgentRunDTO(run *actionscat.Run, includeLogs bool) AgentRunDTO {
+	if run == nil {
+		return AgentRunDTO{}
+	}
+	dto := AgentRunDTO{
+		ID:           run.ID,
+		ActionID:     run.ActionID,
+		Status:       run.Status,
+		TriggerType:  run.TriggerType,
+		ExitCode:     run.ExitCode,
+		DurationMs:   run.DurationMs,
+		ErrorMessage: run.ErrorMessage,
+	}
+	if !run.CreatedAt.IsZero() {
+		dto.CreatedAt = run.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if run.CompletedAt != nil && !run.CompletedAt.IsZero() {
+		dto.CompletedAt = run.CompletedAt.UTC().Format(time.RFC3339)
+	}
+	if includeLogs {
+		dto.Stdout = run.Stdout
+		dto.Stderr = run.Stderr
+	}
+	return dto
+}
+
 // ActionsCatListActionsTool creates a Tool that lists registered ActionsCat actions.
 func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 	return Tool{
@@ -124,6 +167,12 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 				wait = *input.Wait
 			}
 
+			for k := range input.ExtraEnv {
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "ACTIONSCAT_") {
+					return fmt.Sprintf("环境变量 %q 包含受保护的前缀 'ACTIONSCAT_'，不允许自定义覆盖", k), nil
+				}
+			}
+
 			req := actionscat.ManualRunReq{
 				ExtraEnv:        input.ExtraEnv,
 				TriggerMetadata: input.TriggerMetadata,
@@ -141,7 +190,8 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 				return fmt.Sprintf("触发 ActionsCat Action %s 失败: %v", input.ActionID, err), nil
 			}
 
-			data, err := json.MarshalIndent(run, "", "  ")
+			dto := toAgentRunDTO(run, true)
+			data, err := json.MarshalIndent(dto, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("serialize run response: %w", err)
 			}
@@ -201,12 +251,8 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 				return fmt.Sprintf("查询 Run 状态失败: %v", err), nil
 			}
 
-			if !includeLogs {
-				run.Stdout = ""
-				run.Stderr = ""
-			}
-
-			data, err := json.MarshalIndent(run, "", "  ")
+			dto := toAgentRunDTO(run, includeLogs)
+			data, err := json.MarshalIndent(dto, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("serialize run response: %w", err)
 			}

@@ -92,10 +92,11 @@ type HealthStatus struct {
 
 // StatusResponse is the summarized connection status.
 type StatusResponse struct {
-	Configured bool   `json:"configured"`
-	Endpoint   string `json:"endpoint"`
-	Healthy    bool   `json:"healthy"`
-	Error      string `json:"error,omitempty"`
+	Configured    bool   `json:"configured"`
+	Endpoint      string `json:"endpoint"`
+	Healthy       bool   `json:"healthy"`
+	Authenticated bool   `json:"authenticated"`
+	Error         string `json:"error,omitempty"`
 }
 
 // HTTPClient defines the minimal interface for issuing HTTP requests.
@@ -256,30 +257,65 @@ func (c *Client) Health(ctx context.Context) (*HealthStatus, error) {
 	return &hs, nil
 }
 
-// Status returns a high-level overview of the ActionsCat connection status.
+// Status returns a high-level overview of the ActionsCat connection status,
+// distinguishing between anonymous reachability (/healthz) and management API readiness.
 func (c *Client) Status(ctx context.Context) StatusResponse {
 	endpoint := c.Endpoint()
 	if endpoint == "" {
 		return StatusResponse{
-			Configured: false,
-			Endpoint:   "",
-			Healthy:    false,
-			Error:      "未配置 ACTIONSCAT_ENDPOINT",
+			Configured:    false,
+			Endpoint:      "",
+			Healthy:       false,
+			Authenticated: false,
+			Error:         "未配置 ACTIONSCAT_ENDPOINT",
 		}
 	}
 	hs, err := c.Health(ctx)
 	if err != nil {
 		return StatusResponse{
-			Configured: true,
-			Endpoint:   endpoint,
-			Healthy:    false,
-			Error:      err.Error(),
+			Configured:    true,
+			Endpoint:      endpoint,
+			Healthy:       false,
+			Authenticated: false,
+			Error:         err.Error(),
 		}
 	}
+	if hs.Status != "ok" {
+		return StatusResponse{
+			Configured:    true,
+			Endpoint:      endpoint,
+			Healthy:       false,
+			Authenticated: false,
+			Error:         "健康检查状态异常",
+		}
+	}
+
+	token := c.ManagementToken()
+	if token == "" {
+		return StatusResponse{
+			Configured:    true,
+			Endpoint:      endpoint,
+			Healthy:       true,
+			Authenticated: false,
+			Error:         "未配置 ACTIONSCAT_MANAGEMENT_TOKEN",
+		}
+	}
+
+	if _, _, err := c.doRequest(ctx, http.MethodGet, "/api/v1/actions?limit=1", nil, token); err != nil {
+		return StatusResponse{
+			Configured:    true,
+			Endpoint:      endpoint,
+			Healthy:       true,
+			Authenticated: false,
+			Error:         fmt.Sprintf("管理凭据认证失败: %v", err),
+		}
+	}
+
 	return StatusResponse{
-		Configured: true,
-		Endpoint:   endpoint,
-		Healthy:    hs.Status == "ok",
+		Configured:    true,
+		Endpoint:      endpoint,
+		Healthy:       true,
+		Authenticated: true,
 	}
 }
 
