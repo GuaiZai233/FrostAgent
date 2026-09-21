@@ -460,6 +460,10 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **可观测性无脱敏与日志内存预算防御 (Observability & Memory Budget Defense)**：
+  - `execute_command` 的指令正文与执行结果（stdout、stderr）在智能体工具执行日志（`logs.TOOL`）、大模型请求（`logs.LLM_REQUEST`）与响应（`logs.LLM_RESPONSE`）中完整保留真实内容，不再进行脱敏打码，保证管理员与开发者获得透明的实时排障能力；
+  - 为防止多轮 Agent 对话中历史工具执行结果在每次大模型请求上下文（`LLM_REQUEST`）中反复堆积导致二次内存放大与 OOM 隐患，协议层在记录后续请求日志时对已由 `TOOL` 日志持久化的历史长输出（> 256 字节）进行引用折叠，且上游真实线缆请求与当前轮次未决输出保持 100% 原始完整传输；
+  - 日志存储引擎（`logs.Store`）全面实施硬字节预算（默认 32 MiB）与时间序字节淘汰（Byte-based LRU Eviction），彻底杜绝无界定长缓冲引发的内存击穿风险。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
