@@ -125,6 +125,141 @@ export const securityAPI = {
   },
 };
 
+export interface ActionsCatStatus {
+  configured: boolean;
+  healthy: boolean;
+  endpoint: string;
+  error?: string;
+}
+
+export interface ActionsCatAction {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule?: string;
+  timeout_sec?: number;
+  capabilities?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ActionsCatRun {
+  id: string;
+  action_id: string;
+  status: string;
+  trigger_type: string;
+  exit_code?: number;
+  duration_ms: number;
+  stdout?: string;
+  stderr?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatRunLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface TriggerActionRunRequest {
+  extra_env?: Record<string, string>;
+  trigger_metadata?: Record<string, unknown>;
+}
+
+async function actionsCatRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const instanceID = instanceState.selected?.id;
+  const selectionSignal = instanceState.signal;
+  selectionSignal.throwIfAborted();
+  if (!instanceID) {
+    throw new Error('请先选择实例');
+  }
+
+  const token = getControlToken();
+  const headers = new Headers(options.headers);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/instances/${instanceID}/api/actionscat${cleanPath}`;
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, selectionSignal])
+    : selectionSignal;
+
+  const response = await fetch(url, { ...options, headers, signal });
+  if (!response.ok) {
+    let errMsg = '';
+    try {
+      const errJson = await response.json();
+      errMsg = errJson.error || errJson.message || '';
+    } catch {
+      errMsg = (await response.text()).trim();
+    }
+    throw new Error(errMsg || response.statusText || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const actionsCatAPI = {
+  getStatus(): Promise<ActionsCatStatus> {
+    return actionsCatRequest<ActionsCatStatus>('/status');
+  },
+  listActions(): Promise<ActionsCatAction[]> {
+    return actionsCatRequest<ActionsCatAction[]>('/actions');
+  },
+  getAction(actionID: string): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>(
+      `/actions/${encodeURIComponent(actionID)}`,
+    );
+  },
+  triggerRun(
+    actionID: string,
+    req?: TriggerActionRunRequest,
+  ): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req || {}),
+      },
+    );
+  },
+  listRuns(
+    actionID: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ActionsCatRun[]> {
+    return actionsCatRequest<ActionsCatRun[]>(
+      `/actions/${encodeURIComponent(actionID)}/runs?limit=${limit}&offset=${offset}`,
+    );
+  },
+  getRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}`,
+    );
+  },
+  getRunLogs(actionID: string, runID: string): Promise<ActionsCatRunLogs> {
+    return actionsCatRequest<ActionsCatRunLogs>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}/logs`,
+    );
+  },
+  dispatch(payload: Record<string, unknown>): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>('/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
 const authInterceptor: Interceptor = (next) => async (req) => {
   const token = getControlToken();
   if (token && !req.header.has('Authorization')) {
@@ -517,6 +652,44 @@ export function createInstanceAPI() {
     },
     syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
       return mcpClient.syncMCPServer({ id });
+    },
+
+    // ActionsCat
+    getActionsCatStatus(): Promise<ActionsCatStatus> {
+      return actionsCatAPI.getStatus();
+    },
+    listActionsCatActions(): Promise<ActionsCatAction[]> {
+      return actionsCatAPI.listActions();
+    },
+    getActionCatAction(actionID: string): Promise<ActionsCatAction> {
+      return actionsCatAPI.getAction(actionID);
+    },
+    triggerActionsCatRun(
+      actionID: string,
+      req?: TriggerActionRunRequest,
+    ): Promise<ActionsCatRun> {
+      return actionsCatAPI.triggerRun(actionID, req);
+    },
+    listActionsCatRuns(
+      actionID: string,
+      limit = 50,
+      offset = 0,
+    ): Promise<ActionsCatRun[]> {
+      return actionsCatAPI.listRuns(actionID, limit, offset);
+    },
+    getActionsCatRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+      return actionsCatAPI.getRun(actionID, runID);
+    },
+    getActionsCatRunLogs(
+      actionID: string,
+      runID: string,
+    ): Promise<ActionsCatRunLogs> {
+      return actionsCatAPI.getRunLogs(actionID, runID);
+    },
+    dispatchActionsCat(
+      payload: Record<string, unknown>,
+    ): Promise<{ ok: boolean }> {
+      return actionsCatAPI.dispatch(payload);
     },
   };
 }

@@ -17,6 +17,7 @@ import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
 import { mountMCPPage } from './pages/mcp';
+import { mountActionsCatPage } from './pages/actionscat';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
@@ -38,6 +39,7 @@ const navItems = [
   { path: '/prompt', label: 'Prompt 检查', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
+  { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
   { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
   { path: '/settings', label: '系统设置', iconName: 'settings' },
@@ -280,6 +282,7 @@ function initAppShell(): void {
     '/prompt',
     '/stickers',
     '/mcp',
+    '/actionscat',
     '/chat',
     '/settings/backend',
     '/settings/commands',
@@ -293,6 +296,7 @@ function initAppShell(): void {
     mountPromptPage,
     mountStickersPage,
     mountMCPPage,
+    mountActionsCatPage,
     mountChatPage,
     mountBackendSettingsPage,
     mountCommandSettingsPage,

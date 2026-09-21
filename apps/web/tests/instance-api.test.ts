@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { createInstanceAPI, securityAPI } from '../src/api/client';
+import { createInstanceAPI, securityAPI, actionsCatAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
@@ -94,10 +94,17 @@ assert.equal(
   '/instances/b1c2d3e4/frostagent.v1.DialogueService/ListDialogues',
   'dialogue requests bypassed their owning instance',
 );
+await actionsCatAPI.listActions();
+assert.equal(
+  new URL(calls[6], 'http://localhost').pathname,
+  '/instances/b1c2d3e4/api/actionscat/actions',
+  'ActionsCat requests bypassed their owning instance',
+);
 instanceState.select(null);
 await assert.rejects(createInstanceAPI().listMCPServers(), /请先选择实例/);
 await assert.rejects(createInstanceAPI().listDialogues(), /请先选择实例/);
-assert.equal(calls.length, 6, 'zero-instance request reached the network');
+await assert.rejects(actionsCatAPI.listActions(), /请先选择实例/);
+assert.equal(calls.length, 7, 'zero-instance request reached the network');
 instanceState.logSource = 'instance';
 await assert.rejects(
   createInstanceAPI().listLogs(10, '', 0, ''),
@@ -105,19 +112,19 @@ await assert.rejects(
 );
 assert.equal(
   calls.length,
-  6,
+  7,
   'zero-instance log request silently used General',
 );
 const locked = await securityAPI.listLockedPrincipals();
 assert.deepEqual(locked, { success: true });
-assert.equal(new URL(calls[6], 'http://localhost').pathname, '/api/security/locked');
+assert.equal(new URL(calls[7], 'http://localhost').pathname, '/api/security/locked');
 await securityAPI.unlockPrincipal('test', 'user');
-assert.equal(new URL(calls[7], 'http://localhost').pathname, '/api/security/unlock');
-assert.equal(calls.length, 8, 'security requests must use the global REST API');
+assert.equal(new URL(calls[8], 'http://localhost').pathname, '/api/security/unlock');
+assert.equal(calls.length, 9, 'security requests must use the global REST API');
 instanceState.logSource = 'control-plane';
 await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(
-  new URL(calls[8], 'http://localhost').pathname,
+  new URL(calls[9], 'http://localhost').pathname,
   '/frostagent.v1.LogService/ListLogs',
   'explicit zero-instance General log request did not use the root endpoint',
 );

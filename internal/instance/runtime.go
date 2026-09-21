@@ -16,6 +16,7 @@ import (
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/actionscat"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
@@ -25,6 +26,7 @@ import (
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
 	stickersvc "FrostAgent/internal/service/sticker"
+	actionscatsvc "FrostAgent/internal/service/actionscat"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -167,6 +169,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		registry[commandTool.Name()] = commandTool
 	}
 
+	// Initialize ActionsCat client & tools
+	actionsCatClient := actionscat.New(scope.Getenv)
+	actionsCatListTool := tools.ActionsCatListActionsTool(actionsCatClient)
+	registry[actionsCatListTool.Name()] = actionsCatListTool
+	actionsCatRunTool := tools.ActionsCatRunActionTool(actionsCatClient)
+	registry[actionsCatRunTool.Name()] = actionsCatRunTool
+	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
+	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
+
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,
 		Provider:  visionProvider,
@@ -292,6 +303,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	msgSvc := messages.New(dispatcher, instanceID, scope.Getenv)
 	mux.Handle("/api/v1/messages/send", msgSvc)
+
+	actionsCatSvc := actionscatsvc.New(actionsCatClient, instanceID)
+	mux.Handle("/api/actionscat/", actionsCatSvc)
+	mux.Handle("/api/actionscat", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat/", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat", actionsCatSvc)
 
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)
