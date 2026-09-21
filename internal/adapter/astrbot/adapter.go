@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,6 +141,33 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		userID = msg.TargetID
 	}
 
+	var actionMessages []ActionMessage
+	if msg.Content != "" {
+		actionMessages = append(actionMessages, ActionMessage{
+			Type: "plain",
+			Text: msg.Content,
+		})
+	}
+	for _, att := range msg.Attachments {
+		switch att.Type {
+		case core.AttachmentTypeImage:
+			if err := validateOutboundMediaURL(att.URL); err != nil {
+				return fmt.Errorf("astrbot: %w", err)
+			}
+			actionMessages = append(actionMessages, ActionMessage{
+				Type:      "image",
+				URL:       att.URL,
+				IsSticker: att.SubType == 1,
+				SubType:   att.SubType,
+			})
+		default:
+			return fmt.Errorf("astrbot: attachment type %q is unsupported for outbound delivery", att.Type)
+		}
+	}
+	if len(actionMessages) == 0 {
+		return fmt.Errorf("astrbot: cannot send empty message (no content and no valid attachments)")
+	}
+
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
@@ -147,6 +176,7 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		GroupID:        groupID,
 		UserID:         userID,
 		Content:        msg.Content,
+		Messages:       actionMessages,
 		Attachments:    msg.Attachments,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("astrbot_send_%s", msg.TargetID),
@@ -160,7 +190,9 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -200,29 +232,38 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler。
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		done, ok := a.engine.Enter()
-		if !ok {
-			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
-			return
+		if a.engine != nil {
+			done, ok := a.engine.Enter()
+			if !ok {
+				http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+				return
+			}
+			defer done()
 		}
-		defer done()
 		localUpgrader := upgrader
-		if a.engine.Scope != nil {
+		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}
 
 		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			}
 			return
 		}
-		c := newWSConn(conn, a.engine.Scope)
-		c.Scope = a.engine.Scope
+		var c *wsConn
+		if a.engine != nil {
+			c = newWSConn(conn, a.engine.Scope)
+			c.Scope = a.engine.Scope
+		} else {
+			c = newWSConn(conn)
+		}
 		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
 			c.mock = true
 		}
 		a.registerConn(c)
-		if a.engine.Context().Err() != nil {
+		if a.engine != nil && a.engine.Context().Err() != nil {
 			c.Close()
 		}
 		defer func() {
@@ -251,18 +292,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 		}()
 
-		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+		if a.engine != nil {
+			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+		}
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
+				}
 				break
 			}
 
 			var event Event
 			if err := json.Unmarshal(message, &event); err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
+				}
 				continue
 			}
 
@@ -351,3 +398,43 @@ func (a *Adapter) CloseConnections() {
 		c.Close()
 	}
 }
+
+func validateOutboundMediaURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+
+	lower := strings.ToLower(rawURL)
+	if strings.HasPrefix(lower, "file:") || strings.HasPrefix(lower, "file/") {
+		return fmt.Errorf("insecure media url %q: file:// scheme is forbidden", rawURL)
+	}
+	if len(rawURL) >= 2 && rawURL[1] == ':' && ((rawURL[0] >= 'a' && rawURL[0] <= 'z') || (rawURL[0] >= 'A' && rawURL[0] <= 'Z')) {
+		return fmt.Errorf("insecure media url %q: local drive path is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, `\\`) || strings.HasPrefix(rawURL, "//") {
+		return fmt.Errorf("insecure media url %q: UNC or network path without scheme is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, ".") {
+		return fmt.Errorf("insecure media url %q: local path without scheme is forbidden", rawURL)
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid media url %q: %w", rawURL, err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("insecure media url %q: missing host", rawURL)
+		}
+		return nil
+	case "base64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
+	}
+}
+

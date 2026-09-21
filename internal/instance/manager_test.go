@@ -1648,6 +1648,186 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 	}
 }
 
+func TestDefaultSendMessage_RoutingAndLifecycle(t *testing.T) {
+	m := testManager(t)
+	inst1 := create(t, m, "msg-inst-1")
+	if err := m.instances[inst1.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	inst2 := create(t, m, "msg-inst-2")
+	if err := m.instances[inst2.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	sendReq := func(queryID, headerID, bodyJSON string) *httptest.ResponseRecorder {
+		url := "/api/v1/messages/send"
+		if queryID != "" {
+			url += "?instance_id=" + queryID
+		}
+		req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(bodyJSON))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+		if headerID != "" {
+			req.Header.Set("X-Instance-ID", headerID)
+		}
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. Route via body instance_id to inst2
+	bodyInst2 := fmt.Sprintf(`{"instance_id":%q,"platform":"onebot","target_id":"12345","content":"hi"}`, inst2.ID)
+	w := sendReq("", "", bodyInst2)
+	// Because no ws connection is attached to inst2's onebot adapter, dispatch fails with 502 Bad Gateway
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway from adapter dispatch, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "onebot") {
+		t.Fatalf("expected onebot adapter error in body, got: %s", w.Body.String())
+	}
+
+	// 2. Non-existent instance in body -> 404 Not Found
+	w = sendReq("", "", `{"instance_id":"00000000","platform":"onebot","target_id":"12345","content":"hi"}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent instance, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Lifecycle gate test: when instance op lock is held, requests to that instance must be rejected with 409 Busy
+	item2 := m.instances[inst2.ID]
+	item2.op.Lock()
+	w = sendReq(inst2.ID, "", `{"platform":"onebot","target_id":"12345","content":"hi"}`)
+	item2.op.Unlock()
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict when instance is busy, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. When instance is disabled, it should not accept messages
+	if err := m.Enable(inst2.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	w = sendReq(inst2.ID, "", `{"platform":"onebot","target_id":"12345","content":"hi"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for disabled instance, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDefaultSendMessage_ConcurrentDisableNoDeadlock(t *testing.T) {
+	m := testManager(t)
+	inst := create(t, m, "msg-deadlock-test")
+	if err := m.instances[inst.ID].config.Update("FROSTAGENT_API_KEY", "deadlock-test-token", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Goroutine 1: toggles enable/disable (triggers i.mu.Lock -> m.update/m.mu.Lock)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		state := false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				_ = m.Enable(inst.ID, state)
+				state = !state
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	// Goroutines 2..5: concurrently hit global send endpoint (triggers handleDefaultSendMessage)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send", strings.NewReader(`{"platform":"onebot","target_id":"123","content":"ping"}`))
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("Authorization", "Bearer deadlock-test-token")
+					w := httptest.NewRecorder()
+					m.ServeHTTP(w, req)
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+
+	// Let the race run for 1 second under load
+	time.Sleep(1 * time.Second)
+	cancel()
+	wg.Wait()
+}
+
+func TestDefaultSendMessage_ConcurrentSendSharedLifecycleLock(t *testing.T) {
+	m := testManager(t)
+	inst := create(t, m, "msg-concurrent-send")
+	if err := m.instances[inst.ID].config.Update("FROSTAGENT_API_KEY", "test-auth-token-xyz", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(inst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify concurrent send requests on the same instance can all enter handler without 409
+	const concurrency = 10
+	var wg sync.WaitGroup
+	codes := make([]int, concurrency)
+	for i := range concurrency {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send?instance_id="+inst.ID, strings.NewReader(`{"platform":"onebot","target_id":"12345","content":"concurrent"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			codes[idx] = w.Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code == http.StatusConflict {
+			t.Fatalf("goroutine %d received unexpected 409 Conflict: concurrent sends must acquire shared RLock", i)
+		}
+		// Expect 502 Bad Gateway because onebot adapter has no ws connection, confirming it entered the handler
+		if code != http.StatusBadGateway {
+			t.Fatalf("goroutine %d expected 502 (entered handler), got %d", i, code)
+		}
+	}
+
+	// Verify that while lifecycle writer lock i.op.Lock() is held, send is rejected with 409 Conflict
+	item := m.instances[inst.ID]
+	item.op.Lock()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/send?instance_id="+inst.ID, strings.NewReader(`{"platform":"onebot","target_id":"12345","content":"blocked"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-auth-token-xyz")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	item.op.Unlock()
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict when i.op.Lock is held, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestConcurrentDialogueUpdatesAndReads(t *testing.T) {
 	m := testManager(t)
 	inst := create(t, m, "race-dialogue")

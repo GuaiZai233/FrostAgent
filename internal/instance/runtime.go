@@ -21,6 +21,7 @@ import (
 	logsvc "FrostAgent/internal/service/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
 	memsvc "FrostAgent/internal/service/memory"
+	"FrostAgent/internal/service/messages"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
 	stickersvc "FrostAgent/internal/service/sticker"
@@ -288,6 +289,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		mux.Handle(stickerPath, stickerHandler)
 		mux.HandleFunc("/api/sticker/", stickerSvc.ImageHandler())
 	}
+
+	msgSvc := messages.New(dispatcher, instanceID, scope.Getenv)
+	mux.Handle("/api/v1/messages/send", msgSvc)
 
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)

@@ -201,11 +201,14 @@ async def resolve_sticker_sources(action: dict[str, Any], http_base_url: str) ->
     resolved_messages = []
     for message in messages:
         resolved = dict(message)
-        if str(message.get("type") or "") == "image" and message.get("is_sticker"):
+        is_sticker = bool(message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1)
+        if str(message.get("type") or "") == "image" and is_sticker:
             source = str(message.get("url") or message.get("path") or "")
             if not source:
                 raise StickerFetchError("sticker message has no image source")
             if source.startswith("base64://"):
+                encoded = source
+            elif (parsed := urlparse(source)).scheme in ("http", "https") and not is_sticker_endpoint_path(parsed.path):
                 encoded = source
             else:
                 image_url = sticker_download_url(source, http_base_url)
@@ -1065,8 +1068,13 @@ async def deliver_action_to_astrbot(
 
 def action_contains_sticker(action: dict[str, Any]) -> bool:
     return any(
-        str(message.get("type") or "") == "image" and message.get("is_sticker")
+        str(message.get("type") or "") == "image"
+        and (message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1)
         for message in action.get("messages") or []
+    ) or any(
+        str(attachment.get("type") or "") == "image"
+        and (attachment.get("is_sticker") or attachment.get("sub_type") == 1 or attachment.get("subType") == 1)
+        for attachment in action.get("attachments") or []
     )
 
 
@@ -1093,7 +1101,7 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
             elif message_type == "image":
                 source = str(message.get("url") or message.get("path") or "")
                 if source:
-                    if message.get("is_sticker"):
+                    if message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1:
                         parts.append(StickerImage(source))
                     else:
                         parts.append(Image(source))
@@ -1106,7 +1114,10 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
         parts.append(Plain(str(content)))
     for attachment in action.get("attachments") or []:
         if attachment.get("type") == "image" and attachment.get("url"):
-            parts.append(Image(str(attachment["url"])))
+            if attachment.get("is_sticker") or attachment.get("sub_type") == 1 or attachment.get("subType") == 1:
+                parts.append(StickerImage(str(attachment["url"])))
+            else:
+                parts.append(Image(str(attachment["url"])))
     return parts
 
 

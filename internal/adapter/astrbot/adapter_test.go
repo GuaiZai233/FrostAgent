@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestAdapterID(t *testing.T) {
@@ -205,5 +207,179 @@ func TestAstrBot_CaptureGroupCompactMessage(t *testing.T) {
 	expected := "[user] 小红 (usr_777): 我们在讨论周日活动"
 	if snap.RecentMessages[0] != expected {
 		t.Errorf("expected %q, got %q", expected, snap.RecentMessages[0])
+	}
+}
+
+func TestAdapterSend_OutboundContract(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+	srv, adapter, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	// Wait briefly for connection registration
+	for range 20 {
+		adapter.mu.RLock()
+		n := len(adapter.conns)
+		adapter.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx := context.Background()
+
+	// 1. Sticker image with SubType: 1 -> produces ActionMessage with IsSticker: true, SubType: 1
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "grp_123",
+		MessageType: "group",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/fox_sticker.png", SubType: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send sticker failed: %v", err)
+	}
+
+	var action Action
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("expected send_message, got %s", action.Action)
+	}
+	if action.GroupID != "grp_123" {
+		t.Fatalf("expected group_id grp_123, got %s", action.GroupID)
+	}
+	if len(action.Messages) != 1 {
+		t.Fatalf("expected 1 message component, got %+v", action.Messages)
+	}
+	if action.Messages[0].Type != "image" {
+		t.Fatalf("expected type image, got %s", action.Messages[0].Type)
+	}
+	if action.Messages[0].URL != "https://example.com/fox_sticker.png" {
+		t.Fatalf("expected sticker URL, got %s", action.Messages[0].URL)
+	}
+	if !action.Messages[0].IsSticker {
+		t.Fatalf("expected IsSticker=true, got %v", action.Messages[0].IsSticker)
+	}
+	if action.Messages[0].SubType != 1 {
+		t.Fatalf("expected SubType=1, got %d", action.Messages[0].SubType)
+	}
+
+	// 2. Text + regular image -> produces 2 components: plain and image
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Content:     "look at this",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/normal.png"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send text+image failed: %v", err)
+	}
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if action.UserID != "usr_456" {
+		t.Fatalf("expected user_id usr_456, got %s", action.UserID)
+	}
+	if len(action.Messages) != 2 {
+		t.Fatalf("expected 2 components, got %+v", action.Messages)
+	}
+	if action.Messages[0].Type != "plain" || action.Messages[0].Text != "look at this" {
+		t.Fatalf("expected plain component, got %+v", action.Messages[0])
+	}
+	if action.Messages[1].Type != "image" || action.Messages[1].URL != "https://example.com/normal.png" || action.Messages[1].IsSticker {
+		t.Fatalf("expected regular image component, got %+v", action.Messages[1])
+	}
+
+	// 3. Unsupported attachment (audio) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeAudio, URL: "https://example.com/audio.mp3"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported audio attachment, got nil")
+	}
+
+	// 4. Unsupported attachment (video) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeVideo, URL: "https://example.com/video.mp4"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported video attachment, got nil")
+	}
+
+	// 5. Unsupported attachment (file) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeFile, URL: "https://example.com/file.pdf"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported file attachment, got nil")
+	}
+
+	// 6. Empty URL -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: ""},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty attachment url, got nil")
+	}
+
+	// 7. Empty message (no text, no attachments) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty message, got nil")
+	}
+
+	// 8. Insecure URLs (file://, local path, UNC, ftp) -> returns error
+	insecureMediaURLs := []string{
+		"file:///etc/passwd",
+		"file:///C:/Windows/win.ini",
+		"C:\\Windows\\System32\\drivers\\etc\\hosts",
+		"C:/Windows/win.ini",
+		"/etc/passwd",
+		"./local.png",
+		"\\\\attacker\\share\\fox.png",
+		"//attacker.com/fox.png",
+		"ftp://attacker.com/fox.png",
+		"http:///no-host",
+	}
+	for _, rawURL := range insecureMediaURLs {
+		err = adapter.Send(ctx, core.OutgoingMessage{
+			TargetID:    "usr_456",
+			MessageType: "private",
+			Attachments: []core.Attachment{
+				{Type: core.AttachmentTypeImage, URL: rawURL},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected error for insecure media URL %q, got nil", rawURL)
+		}
 	}
 }
