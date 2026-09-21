@@ -304,7 +304,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	msgSvc := messages.New(dispatcher, instanceID, scope.Getenv)
 	mux.Handle("/api/v1/messages/send", msgSvc)
 
-	actionsCatSvc := actionscatsvc.New(actionsCatClient, instanceID)
+	actionsCatSvc := actionscatsvc.NewScoped(actionsCatClient, instanceID, mcpGetenv)
 	mux.Handle("/api/actionscat/", actionsCatSvc)
 	mux.Handle("/api/actionscat", actionsCatSvc)
 	mux.Handle("/api/v1/actionscat/", actionsCatSvc)

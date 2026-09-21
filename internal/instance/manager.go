@@ -12,6 +12,7 @@ import (
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
+	mcpsvc "FrostAgent/internal/service/mcp"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -146,7 +147,9 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
 	mux.HandleFunc("/api/v1/messages/send", m.handleDefaultSendMessage)
 	mux.HandleFunc("/api/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/actionscat", m.handleDefaultActionsCat)
 	mux.HandleFunc("/api/v1/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/v1/actionscat", m.handleDefaultActionsCat)
 	m.general = mux
 	// Retained data directories reserve their endpoint IDs too.
 	paths, err := filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
@@ -1086,6 +1089,16 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	stream := strings.HasSuffix(path, "/StreamLogs")
 	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
 	isActionsCat := strings.HasPrefix(path, "/api/actionscat") || strings.HasPrefix(path, "/api/v1/actionscat")
+	if isActionsCat {
+		if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "unauthorized: " + err.Error(),
+			})
+			return
+		}
+	}
 	readOnly := r.Method == "GET" || isSendMessage || isActionsCat
 	method := path[strings.LastIndex(path, "/")+1:]
 	for _, prefix := range []string{"Get", "List", "Search", "Export", "Test"} {
@@ -1214,8 +1227,20 @@ func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Reques
 }
 
 func (m *Manager) handleDefaultActionsCat(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if m.shutdown.Err() != nil {
 		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "unauthorized: " + err.Error(),
+		})
 		return
 	}
 	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
@@ -1362,4 +1387,11 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func remoteAddr(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }

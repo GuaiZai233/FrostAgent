@@ -12,19 +12,27 @@ import (
 	"strings"
 
 	client "FrostAgent/internal/actionscat"
+	mcpsvc "FrostAgent/internal/service/mcp"
 )
 
 // Service exposes an HTTP API for the FrostAgent frontend and internal caller to manage ActionsCat.
 type Service struct {
 	client     *client.Client
 	instanceID string
+	getenv     func(string) string
 }
 
 // New creates a new ActionsCat HTTP management service.
 func New(c *client.Client, instanceID string) *Service {
+	return NewScoped(c, instanceID, nil)
+}
+
+// NewScoped creates a new ActionsCat HTTP management service with scoped environment lookup for control-plane auth.
+func NewScoped(c *client.Client, instanceID string, getenv func(string) string) *Service {
 	return &Service{
 		client:     c,
 		instanceID: instanceID,
+		getenv:     getenv,
 	}
 }
 
@@ -35,6 +43,20 @@ func (s *Service) Client() *client.Client {
 
 // ServeHTTP handles requests under /api/actionscat/
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var getenv func(string) string
+	if s != nil {
+		getenv = s.getenv
+	}
+	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, getenv); err != nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized: "+err.Error())
+		return
+	}
+
 	// Strip prefix
 	path := r.URL.Path
 	for _, prefix := range []string{"/api/actionscat", "/api/v1/actionscat"} {
@@ -305,3 +327,11 @@ func (s *Service) writeError(w http.ResponseWriter, status int, message string) 
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
+
+func remoteAddr(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+

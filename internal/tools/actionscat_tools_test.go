@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"FrostAgent/internal/actionscat"
+	"FrostAgent/internal/llm"
 )
 
 func TestActionsCatTools_Unconfigured(t *testing.T) {
@@ -169,5 +171,70 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 	if strings.Contains(getNoLogs, "Hello from ActionsCat tool test!") {
 		t.Fatalf("expected logs to be stripped, got: %s", getNoLogs)
+	}
+}
+
+func TestActionsCatRunActionTool_MockSessionRefusal(t *testing.T) {
+	var postCount atomic.Int32
+	mockRun := actionscat.Run{
+		ID:          "run_mock_001",
+		ActionID:    "act_mock_target",
+		Status:      "succeeded",
+		TriggerType: "manual",
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/runs") {
+			postCount.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(mockRun)
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/actions/act_mock_target/runs/") {
+			_ = json.NewEncoder(w).Encode(mockRun)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := actionscat.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "mock_token"
+		default:
+			return ""
+		}
+	})
+
+	runTool := ActionsCatRunActionTool(client)
+
+	// 1. When running in a mock session (?mock=true / RunContext.Mock = true),
+	// execution MUST be refused without calling the backend TriggerRun API.
+	mockCtx := llm.WithRunContext(context.Background(), llm.RunContext{Mock: true})
+	out, err := runTool.ExecuteContext(mockCtx, `{"action_id": "act_mock_target"}`)
+	if err != nil {
+		t.Fatalf("unexpected error from mock tool execution: %v", err)
+	}
+	if !strings.Contains(out, "模拟会话模式下禁用 ActionsCat 执行") {
+		t.Fatalf("expected mock session refusal message, got: %s", out)
+	}
+	if calls := postCount.Load(); calls != 0 {
+		t.Fatalf("expected 0 calls to backend TriggerRun in mock mode, got %d", calls)
+	}
+
+	// 2. When running in a normal session (Mock = false), TriggerRun should proceed normally.
+	normalCtx := llm.WithRunContext(context.Background(), llm.RunContext{Mock: false})
+	normalOut, err := runTool.ExecuteContext(normalCtx, `{"action_id": "act_mock_target"}`)
+	if err != nil {
+		t.Fatalf("unexpected error from normal tool execution: %v", err)
+	}
+	if !strings.Contains(normalOut, "run_mock_001") {
+		t.Fatalf("expected successful run in normal mode, got: %s", normalOut)
+	}
+	if calls := postCount.Load(); calls != 1 {
+		t.Fatalf("expected 1 call to backend TriggerRun in normal mode, got %d", calls)
 	}
 }

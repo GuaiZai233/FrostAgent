@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"FrostAgent/internal/actionscat"
+	"FrostAgent/internal/llm"
 )
 
 const (
@@ -145,6 +146,9 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 			"required": []string{"action_id"},
 		},
 		executeContext: func(ctx context.Context, args string) (string, error) {
+			if runContext, ok := llm.RunContextFromContext(ctx); ok && runContext.Mock {
+				return "模拟会话模式下禁用 ActionsCat 执行", nil
+			}
 			if client == nil || !client.IsConfigured() {
 				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
 			}

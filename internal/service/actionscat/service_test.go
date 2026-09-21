@@ -3,6 +3,7 @@ package actionscat
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,7 @@ func TestService_Status_Unconfigured(t *testing.T) {
 	svc := New(cl, "inst_1")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 
 	svc.ServeHTTP(rec, req)
@@ -94,9 +96,15 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	svc := New(cl, "inst_test")
 
+	newReq := func(method, target string, body io.Reader) *http.Request {
+		r := httptest.NewRequest(method, target, body)
+		r.RemoteAddr = "127.0.0.1:1234"
+		return r
+	}
+
 	// 1. GET /api/actionscat/status
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/status", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -111,7 +119,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	// 2. GET /api/actionscat/actions
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/actions", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/actions", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -126,7 +134,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	// 3. GET /api/actionscat/actions/act_weather
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/actions/act_weather", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -144,7 +152,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		body, _ := json.Marshal(actclient.ManualRunReq{
 			ExtraEnv: map[string]string{"CITY": "Tokyo"},
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_weather/runs", bytes.NewReader(body))
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_weather/runs", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -159,7 +167,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	// 5. GET /api/actionscat/actions/act_weather/runs
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/actions/act_weather/runs?limit=10", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/runs?limit=10", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -174,7 +182,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	// 6. GET /api/actionscat/actions/act_weather/runs/run_weather_01
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/actions/act_weather/runs/run_weather_01", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/runs/run_weather_01", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -189,7 +197,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 
 	// 7. GET /api/actionscat/actions/act_weather/runs/run_weather_01/logs
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/actions/act_weather/runs/run_weather_01/logs", nil)
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/runs/run_weather_01/logs", nil)
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -216,9 +224,15 @@ func TestService_ValidationAndHardening(t *testing.T) {
 	})
 	svc := New(cl, "inst_test")
 
+	newReq := func(method, target string, body io.Reader) *http.Request {
+		r := httptest.NewRequest(method, target, body)
+		r.RemoteAddr = "127.0.0.1:1234"
+		return r
+	}
+
 	// 1. POST runs with malformed JSON
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte("{invalid-json")))
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte("{invalid-json")))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -228,7 +242,7 @@ func TestService_ValidationAndHardening(t *testing.T) {
 
 	// 2. POST runs with trailing tokens
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{}} {"extra": true}`)))
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{}} {"extra": true}`)))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -238,7 +252,7 @@ func TestService_ValidationAndHardening(t *testing.T) {
 
 	// 3. POST runs with reserved ACTIONSCAT_ prefix
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_OVERRIDE":"val"}}`)))
+		req := newReq(http.MethodPost, "/api/actionscat/actions/act_1/runs", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_OVERRIDE":"val"}}`)))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -248,7 +262,7 @@ func TestService_ValidationAndHardening(t *testing.T) {
 
 	// 4. POST dispatch with reserved ACTIONSCAT_ prefix
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_ACTION_ID":"val"}}`)))
+		req := newReq(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"extra_env":{"ACTIONSCAT_ACTION_ID":"val"}}`)))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -258,11 +272,94 @@ func TestService_ValidationAndHardening(t *testing.T) {
 
 	// 5. POST dispatch with malformed JSON
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"unclosed`)))
+		req := newReq(http.MethodPost, "/api/actionscat/dispatch", bytes.NewReader([]byte(`{"unclosed`)))
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 for malformed json in dispatch, got %d", rec.Code)
+		}
+	}
+}
+
+func TestService_ControlPlaneAuth(t *testing.T) {
+	cl := actclient.New(func(k string) string { return "" })
+
+	env := map[string]string{
+		"MCP_CONTROL_TOKEN": "secret_token_123",
+	}
+	getenv := func(k string) string {
+		return env[k]
+	}
+
+	svc := NewScoped(cl, "inst_auth_test", getenv)
+
+	// 1. Remote + no token -> 401 Unauthorized
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for remote without token, got %d", rec.Code)
+		}
+	}
+
+	// 2. Remote + wrong token -> 401 Unauthorized
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		req.Header.Set("Authorization", "Bearer wrong_token")
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for wrong token, got %d", rec.Code)
+		}
+	}
+
+	// 3. Remote + valid token -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		req.Header.Set("Authorization", "Bearer secret_token_123")
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for valid token, got %d", rec.Code)
+		}
+	}
+
+	// 4. Loopback default without token -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for loopback default without token, got %d", rec.Code)
+		}
+	}
+
+	// 5. Loopback with MCP_ENFORCE_LOCAL_TOKEN=true and no token -> 401 Unauthorized
+	{
+		env["MCP_ENFORCE_LOCAL_TOKEN"] = "true"
+		defer delete(env, "MCP_ENFORCE_LOCAL_TOKEN")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for loopback when MCP_ENFORCE_LOCAL_TOKEN=true and no token, got %d", rec.Code)
+		}
+
+		// Loopback with valid token when MCP_ENFORCE_LOCAL_TOKEN=true -> 200 OK
+		reqWithToken := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+		reqWithToken.RemoteAddr = "127.0.0.1:54321"
+		reqWithToken.Header.Set("Authorization", "Bearer secret_token_123")
+		recWithToken := httptest.NewRecorder()
+		svc.ServeHTTP(recWithToken, reqWithToken)
+		if recWithToken.Code != http.StatusOK {
+			t.Fatalf("expected 200 for loopback with valid token when MCP_ENFORCE_LOCAL_TOKEN=true, got %d", recWithToken.Code)
 		}
 	}
 }
