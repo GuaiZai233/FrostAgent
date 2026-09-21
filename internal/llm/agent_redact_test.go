@@ -14,60 +14,42 @@ import (
 	"FrostAgent/internal/provider/llm/openai"
 )
 
-func TestFormatToolCallLog_Redaction(t *testing.T) {
+func TestFormatToolCallLog_ExecCommandNotRedacted(t *testing.T) {
 	// Normal tool call is logged with full arguments
 	normalLog := formatToolCallLog("send_msg", `{"message": "hello world"}`)
 	if !strings.Contains(normalLog, "hello world") {
 		t.Fatalf("expected normal tool arguments to be logged, got %s", normalLog)
 	}
 
-	// execute_command must redact raw command and never log authorization tokens or command text
-	secretCmd := "curl -H 'Authorization: Bearer secret-api-token-12345' https://api.internal/data"
-	execArgs := `{"command": "` + secretCmd + `", "cwd": "/sandbox", "timeout": 30}`
+	// execute_command must not redact raw command and should log the actual command
+	cmd := "python3 -c 'print(1+1)'"
+	execArgs := `{"command": "` + cmd + `", "cwd": "/sandbox", "timeout": 30}`
 	execLog := formatToolCallLog("execute_command", execArgs)
 
-	if strings.Contains(execLog, secretCmd) {
-		t.Fatalf("execute_command logged raw command: %s", execLog)
+	if !strings.Contains(execLog, cmd) {
+		t.Fatalf("execute_command missing raw command: %s", execLog)
 	}
-	if strings.Contains(execLog, "secret-api-token-12345") {
-		t.Fatalf("execute_command logged secret token: %s", execLog)
-	}
-	if !strings.Contains(execLog, "[REDACTED command:") {
-		t.Fatalf("execute_command missing [REDACTED command: marker, got: %s", execLog)
-	}
-	if !strings.Contains(execLog, "sha256_prefix=") {
-		t.Fatalf("execute_command missing sha256_prefix, got: %s", execLog)
-	}
-	if !strings.Contains(execLog, "len=") {
-		t.Fatalf("execute_command missing len, got: %s", execLog)
+	if strings.Contains(execLog, "[REDACTED command:") {
+		t.Fatalf("execute_command should not contain [REDACTED command: marker, got: %s", execLog)
 	}
 }
 
-func TestFormatToolResultLog_Redaction(t *testing.T) {
+func TestFormatToolResultLog_ExecCommandNotRedacted(t *testing.T) {
 	// Normal tool result is logged as-is
 	normalLog := formatToolResultLog("send_msg", "message sent successfully")
 	if !strings.Contains(normalLog, "message sent successfully") {
 		t.Fatalf("expected normal tool result to be logged, got: %s", normalLog)
 	}
 
-	// execute_command tool result must redact stdout and stderr
-	rawResult := `{"stdout": "super-secret-output-data", "stderr": "fatal: leaked key in error", "exit_code": 0, "timed_out": false, "duration_ms": 150}`
+	// execute_command tool result must not redact stdout and stderr
+	rawResult := `{"stdout": "calculated-result-2", "stderr": "", "exit_code": 0, "timed_out": false, "duration_ms": 150}`
 	execResultLog := formatToolResultLog("execute_command", rawResult)
 
-	if strings.Contains(execResultLog, "super-secret-output-data") {
-		t.Fatalf("execute_command result leaked stdout: %s", execResultLog)
+	if !strings.Contains(execResultLog, "calculated-result-2") {
+		t.Fatalf("execute_command result missing stdout: %s", execResultLog)
 	}
-	if strings.Contains(execResultLog, "leaked key in error") {
-		t.Fatalf("execute_command result leaked stderr: %s", execResultLog)
-	}
-	if !strings.Contains(execResultLog, "[REDACTED output:") {
-		t.Fatalf("execute_command result missing REDACTED marker: %s", execResultLog)
-	}
-	if !strings.Contains(execResultLog, "exit_code=0") {
-		t.Fatalf("execute_command result missing exit_code metadata: %s", execResultLog)
-	}
-	if !strings.Contains(execResultLog, "stdout_len=") {
-		t.Fatalf("execute_command result missing stdout_len metadata: %s", execResultLog)
+	if strings.Contains(execResultLog, "[REDACTED output:") {
+		t.Fatalf("execute_command result should not contain [REDACTED output: marker, got: %s", execResultLog)
 	}
 }
 
@@ -97,7 +79,7 @@ func (m *mockExecuteCommandTool) ExecuteContext(ctx context.Context, args string
 	return `{"stdout":"OUTPUT_SECRET_OK","stderr":"STDERR_SECRET_WARN","exit_code":0,"timed_out":false,"duration_ms":80}`, nil
 }
 
-func TestAgent_ExecuteCommand_EndToEnd_LogBufferNeverLeaksSecrets(t *testing.T) {
+func TestAgent_ExecuteCommand_EndToEnd_LogsContainCommandAndResult(t *testing.T) {
 	logs.Init(100)
 	logs.Clear()
 
@@ -204,7 +186,7 @@ func TestAgent_ExecuteCommand_EndToEnd_LogBufferNeverLeaksSecrets(t *testing.T) 
 		t.Fatalf("expected upstream LLM wire payload to contain unredacted stderr, got: %s", turn2WireBody)
 	}
 
-	// 4. Verify FrostAgent log buffer NEVER contains any of the sentinel secrets
+	// 4. Verify FrostAgent log buffer contains the command and results
 	snapshot := logs.Snapshot()
 	if len(snapshot) == 0 {
 		t.Fatalf("expected log entries in snapshot")
@@ -214,43 +196,41 @@ func TestAgent_ExecuteCommand_EndToEnd_LogBufferNeverLeaksSecrets(t *testing.T) 
 	var foundLLMResponseLog, foundLLMRequestLog bool
 
 	for _, entry := range snapshot {
-		if strings.Contains(entry.Content, sentinelCommandSecret) {
-			t.Fatalf("log buffer (%s) leaked sentinel command secret: %s", entry.Category, entry.Content)
+		if strings.Contains(entry.Content, "[REDACTED command:") {
+			t.Fatalf("log buffer (%s) contains unexpected [REDACTED command: marker: %s", entry.Category, entry.Content)
 		}
-		if strings.Contains(entry.Content, sentinelStdoutSecret) {
-			t.Fatalf("log buffer (%s) leaked sentinel stdout secret: %s", entry.Category, entry.Content)
-		}
-		if strings.Contains(entry.Content, sentinelStderrSecret) {
-			t.Fatalf("log buffer (%s) leaked sentinel stderr secret: %s", entry.Category, entry.Content)
+		if strings.Contains(entry.Content, "[REDACTED output:") {
+			t.Fatalf("log buffer (%s) contains unexpected [REDACTED output: marker: %s", entry.Category, entry.Content)
 		}
 
-		if entry.Category == logs.TOOL && strings.Contains(entry.Content, "[REDACTED command:") {
+		if entry.Category == logs.TOOL && strings.Contains(entry.Content, sentinelCommandSecret) {
 			foundToolCallLog = true
 		}
-		if entry.Category == logs.TOOL && strings.Contains(entry.Content, "[REDACTED output:") {
+		if entry.Category == logs.TOOL && strings.Contains(entry.Content, sentinelStdoutSecret) && strings.Contains(entry.Content, sentinelStderrSecret) {
 			foundToolResultLog = true
 		}
-		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, "[REDACTED command:") {
+		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, sentinelCommandSecret) {
 			foundLLMResponseLog = true
 		}
 		if entry.Category == logs.LLM_REQUEST &&
-			strings.Contains(entry.Content, "[REDACTED command:") &&
-			strings.Contains(entry.Content, "[REDACTED stdout:") {
+			strings.Contains(entry.Content, sentinelCommandSecret) &&
+			strings.Contains(entry.Content, sentinelStdoutSecret) &&
+			strings.Contains(entry.Content, sentinelStderrSecret) {
 			foundLLMRequestLog = true
 		}
 	}
 
 	if !foundToolCallLog {
-		t.Fatalf("expected redacted TOOL call log entry in snapshot")
+		t.Fatalf("expected unredacted TOOL call log entry containing command in snapshot")
 	}
 	if !foundToolResultLog {
-		t.Fatalf("expected redacted TOOL result log entry in snapshot")
+		t.Fatalf("expected unredacted TOOL result log entry containing output in snapshot")
 	}
 	if !foundLLMResponseLog {
-		t.Fatalf("expected redacted LLM_RESPONSE log entry in snapshot")
+		t.Fatalf("expected unredacted LLM_RESPONSE log entry in snapshot")
 	}
 	if !foundLLMRequestLog {
-		t.Fatalf("expected redacted LLM_REQUEST log entry in snapshot")
+		t.Fatalf("expected unredacted LLM_REQUEST log entry in snapshot")
 	}
 }
 

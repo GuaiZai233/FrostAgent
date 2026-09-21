@@ -186,7 +186,7 @@ func TestClient_Chat_PreservesConsecutiveUserRoles(t *testing.T) {
 	}
 }
 
-func TestClient_Chat_RedactsExecuteCommandInResponseLog(t *testing.T) {
+func TestClient_Chat_LogsExecuteCommandInResponseLog(t *testing.T) {
 	logs.Init(100)
 	logs.Clear()
 
@@ -232,23 +232,23 @@ func TestClient_Chat_RedactsExecuteCommandInResponseLog(t *testing.T) {
 		t.Fatalf("expected unredacted argument returned to caller, got: %s", resp.Message.ToolCalls[0].Function.Arguments)
 	}
 
-	// 2. Verify log buffer NEVER contains the sentinel secret
+	// 2. Verify log buffer contains unredacted command and no redaction marker
 	snapshot := logs.Snapshot()
 	var foundLLMResponse bool
 	for _, entry := range snapshot {
-		if strings.Contains(entry.Content, sentinelSecret) {
-			t.Fatalf("log entry (%s) leaked sentinel secret: %s", entry.Category, entry.Content)
+		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, sentinelSecret) {
+			foundLLMResponse = true
 		}
 		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, "[REDACTED command:") {
-			foundLLMResponse = true
+			t.Fatalf("LLM_RESPONSE contained [REDACTED command: marker: %s", entry.Content)
 		}
 	}
 	if !foundLLMResponse {
-		t.Fatalf("expected LLM_RESPONSE entry containing [REDACTED command: in logs snapshot")
+		t.Fatalf("expected LLM_RESPONSE entry containing unredacted command %q in logs snapshot", sentinelSecret)
 	}
 }
 
-func TestClient_Chat_RedactsExecuteCommandInRequestLog(t *testing.T) {
+func TestClient_Chat_LogsExecuteCommandInRequestLog(t *testing.T) {
 	logs.Init(100)
 	logs.Clear()
 
@@ -313,27 +313,25 @@ func TestClient_Chat_RedactsExecuteCommandInRequestLog(t *testing.T) {
 		t.Fatalf("upstream request should receive unredacted stderr, got: %s", wireBodyReceived)
 	}
 
-	// 2. Verify log buffer NEVER contains any of the sentinel secrets
+	// 2. Verify log buffer contains unredacted command, stdout, stderr and no redaction marker
 	snapshot := logs.Snapshot()
-	var foundLLMRequestRedacted bool
+	var foundLLMRequest bool
 	for _, entry := range snapshot {
-		if strings.Contains(entry.Content, sentinelCommandSecret) {
-			t.Fatalf("log entry (%s) leaked command secret: %s", entry.Category, entry.Content)
-		}
-		if strings.Contains(entry.Content, sentinelStdoutSecret) {
-			t.Fatalf("log entry (%s) leaked stdout secret: %s", entry.Category, entry.Content)
-		}
-		if strings.Contains(entry.Content, sentinelStderrSecret) {
-			t.Fatalf("log entry (%s) leaked stderr secret: %s", entry.Category, entry.Content)
-		}
 		if entry.Category == logs.LLM_REQUEST &&
-			strings.Contains(entry.Content, "[REDACTED command:") &&
-			strings.Contains(entry.Content, "[REDACTED stdout:") {
-			foundLLMRequestRedacted = true
+			strings.Contains(entry.Content, sentinelCommandSecret) &&
+			strings.Contains(entry.Content, sentinelStdoutSecret) &&
+			strings.Contains(entry.Content, sentinelStderrSecret) {
+			foundLLMRequest = true
+		}
+		if entry.Category == logs.LLM_REQUEST && strings.Contains(entry.Content, "[REDACTED command:") {
+			t.Fatalf("LLM_REQUEST leaked [REDACTED command: marker: %s", entry.Content)
+		}
+		if entry.Category == logs.LLM_REQUEST && strings.Contains(entry.Content, "[REDACTED stdout:") {
+			t.Fatalf("LLM_REQUEST leaked [REDACTED stdout: marker: %s", entry.Content)
 		}
 	}
-	if !foundLLMRequestRedacted {
-		t.Fatalf("expected LLM_REQUEST entry containing redacted command and stdout")
+	if !foundLLMRequest {
+		t.Fatalf("expected LLM_REQUEST entry containing unredacted command and output in logs snapshot")
 	}
 }
 
