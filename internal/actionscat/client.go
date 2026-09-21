@@ -29,9 +29,11 @@ var (
 	ErrInvalidURL = errors.New("actionscat: invalid endpoint url")
 	// ErrNotFound indicates that the requested action or run was not found.
 	ErrNotFound = errors.New("actionscat: resource not found")
-	// ErrBuildTimeoutUnknownResult is returned when a build request times out in transport,
-	// indicating the build outcome is indeterminate (the backend may still be compiling).
-	ErrBuildTimeoutUnknownResult = errors.New("actionscat: build request timed out; build outcome is unknown (server may still be compiling)")
+	// ErrBuildUnknownResult is returned when a build request times out or encounters a transport error,
+	// indicating the build outcome is indeterminate (the backend may still be compiling or already completed).
+	ErrBuildUnknownResult = errors.New("actionscat: build request outcome is unknown (timeout or transport interruption; server may still be compiling)")
+	// ErrBuildTimeoutUnknownResult is maintained for backward compatibility.
+	ErrBuildTimeoutUnknownResult = ErrBuildUnknownResult
 )
 
 // Action represents an ActionsCat managed automation action.
@@ -668,24 +670,45 @@ func (c *Client) GetVersion(ctx context.Context, actionID, versionID string) (*A
 
 // BuildVersion requests compilation of a specific version into an artifact build.
 // Note: build is a synchronous, long-running operation in ActionsCat that can take up to 120s+;
-// this client uses a dedicated long timeout (defaultBuildTimeout = 180s) and does NOT retry on transport timeout.
+// this client uses a dedicated long timeout (defaultBuildTimeout = 180s) and does NOT retry on transport errors or timeout.
+// Any transport interruption (deadline exceeded, connection drop, severed body) returns ErrBuildUnknownResult.
 func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (*ArtifactBuild, error) {
 	if actionID == "" || versionID == "" {
 		return nil, errors.New("actionscat: actionID and versionID cannot be empty")
 	}
 	path := fmt.Sprintf("/api/v1/actions/%s/versions/%s/builds", url.PathEscape(actionID), url.PathEscape(versionID))
-	data, _, err := c.doRequestWithTimeout(ctx, http.MethodPost, path, nil, c.ManagementToken(), defaultBuildTimeout)
+	data, statusCode, err := c.doRequestWithTimeout(ctx, http.MethodPost, path, nil, c.ManagementToken(), defaultBuildTimeout)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
-			return nil, fmt.Errorf("%w: %v", ErrBuildTimeoutUnknownResult, err)
+		if errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrInvalidURL) {
+			return nil, err
 		}
-		return nil, err
+		if statusCode > 0 && !strings.Contains(err.Error(), "read response") {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %v", ErrBuildUnknownResult, err)
 	}
 	var bld ArtifactBuild
 	if err := json.Unmarshal(data, &bld); err != nil {
 		return nil, fmt.Errorf("actionscat: parse build: %w", err)
 	}
 	return &bld, nil
+}
+
+// ListBuilds lists all artifact builds for an action, ordered by creation time descending.
+func (c *Client) ListBuilds(ctx context.Context, actionID string) ([]ArtifactBuild, error) {
+	if actionID == "" {
+		return nil, errors.New("actionscat: actionID cannot be empty")
+	}
+	path := fmt.Sprintf("/api/v1/actions/%s/builds", url.PathEscape(actionID))
+	data, _, err := c.doRequest(ctx, http.MethodGet, path, nil, c.ManagementToken())
+	if err != nil {
+		return nil, err
+	}
+	var builds []ArtifactBuild
+	if err := json.Unmarshal(data, &builds); err != nil {
+		return nil, fmt.Errorf("actionscat: parse builds: %w", err)
+	}
+	return builds, nil
 }
 
 // GetBuild retrieves a specific artifact build for an action.

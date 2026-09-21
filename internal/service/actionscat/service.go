@@ -302,6 +302,23 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 
+		case "builds":
+			if r.Method != http.MethodGet {
+				// GET /actions/:id/builds
+				s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			builds, err := s.client.ListBuilds(r.Context(), actionID)
+			if err != nil {
+				s.handleClientError(w, err)
+				return
+			}
+			if builds == nil {
+				builds = []client.ArtifactBuild{}
+			}
+			s.writeJSON(w, http.StatusOK, builds)
+			return
+
 		case "active-build":
 			if r.Method != http.MethodPost {
 				// POST /actions/:id/active-build
@@ -421,7 +438,7 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 			}
 			bld, err := s.client.BuildVersion(r.Context(), actionID, resourceID)
 			if err != nil {
-				if errors.Is(err, client.ErrBuildTimeoutUnknownResult) {
+				if errors.Is(err, client.ErrBuildUnknownResult) {
 					s.writeError(w, http.StatusGatewayTimeout, err.Error())
 					return
 				}
@@ -487,6 +504,8 @@ func (s *Service) handleClientError(w http.ResponseWriter, err error) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, client.ErrInvalidURL):
 		s.writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, client.ErrBuildUnknownResult):
+		s.writeError(w, http.StatusGatewayTimeout, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
 		s.writeError(w, http.StatusGatewayTimeout, "ActionsCat request timeout: "+err.Error())
 	default:

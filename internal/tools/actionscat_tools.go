@@ -432,12 +432,41 @@ func prepareCreateVersionReq(input createVersionInput) (actionscat.CreateVersion
 	if input.RuntimeSpec != nil {
 		req.RuntimeSpec = *input.RuntimeSpec
 	}
-	if strings.TrimSpace(req.RuntimeSpec.Entrypoint) == "" {
-		req.RuntimeSpec.Entrypoint = "/sandbox/entrypoint"
+	// Entrypoint sanitization: default to "entrypoint", and strip any leading "/sandbox/" or "/"
+	entrypoint := strings.TrimSpace(req.RuntimeSpec.Entrypoint)
+	if entrypoint == "" {
+		entrypoint = "entrypoint"
 	}
-	if strings.TrimSpace(req.RuntimeSpec.Network.Mode) == "" {
-		req.RuntimeSpec.Network.Mode = "none"
+	entrypoint = strings.TrimPrefix(entrypoint, "/sandbox/")
+	entrypoint = strings.TrimPrefix(entrypoint, "/")
+	req.RuntimeSpec.Entrypoint = entrypoint
+
+	mode := strings.TrimSpace(strings.ToLower(req.RuntimeSpec.Network.Mode))
+	if mode == "" {
+		mode = "none"
 	}
+	switch mode {
+	case "none", "public", "allowlist", "isolated":
+		req.RuntimeSpec.Network.Mode = mode
+	default:
+		return actionscat.CreateVersionReq{}, fmt.Errorf("无效的网络模式 %q，仅支持 'none', 'public', 'allowlist', 'isolated'", mode)
+	}
+
+	if mode == "allowlist" {
+		if len(req.RuntimeSpec.Network.Allow) == 0 {
+			return actionscat.CreateVersionReq{}, fmt.Errorf("当 network.mode 为 'allowlist' 时，allow 规则列表不能为空")
+		}
+		for i, rule := range req.RuntimeSpec.Network.Allow {
+			host := strings.TrimSpace(rule.Host)
+			if host == "" {
+				return actionscat.CreateVersionReq{}, fmt.Errorf("network.allow[%d] host 不能为空", i)
+			}
+			if rule.Port < 1 || rule.Port > 65535 {
+				return actionscat.CreateVersionReq{}, fmt.Errorf("network.allow[%d] port %d 无效，必须在 1-65535 之间", i, rule.Port)
+			}
+		}
+	}
+
 	if req.RuntimeSpec.TimeoutSeconds <= 0 {
 		req.RuntimeSpec.TimeoutSeconds = 30
 	}
@@ -535,14 +564,31 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 					"type":        "object",
 					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
 					"properties": map[string]any{
-						"entrypoint":      map[string]any{"type": "string", "description": "可执行入口路径，默认 '/sandbox/entrypoint'"},
+						"entrypoint":      map[string]any{"type": "string", "description": "相对 /sandbox 的可执行入口路径，默认 'entrypoint'（若指定绝对路径如 '/sandbox/entrypoint' 或 '/entrypoint' 将自动规范化为相对路径）"},
 						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
 						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
 						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},
 						"network": map[string]any{
-							"type": "object",
+							"type":        "object",
+							"description": "网络访问策略配置",
 							"properties": map[string]any{
-								"mode": map[string]any{"type": "string", "description": "网络模式：'none'、'bridge'、'allowlist'，默认 'none'"},
+								"mode": map[string]any{
+									"type":        "string",
+									"enum":        []string{"none", "public", "allowlist", "isolated"},
+									"description": "网络模式：'none'（默认，完全无外网）、'public'（允许公网访问）、'allowlist'（出站白名单）、'isolated'（容器间互联隔离）",
+								},
+								"allow": map[string]any{
+									"type":        "array",
+									"description": "出站访问白名单规则（当 mode 为 'allowlist' 时必填且非空）",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"host": map[string]any{"type": "string", "description": "允许访问的主机名或域名"},
+											"port": map[string]any{"type": "integer", "description": "允许访问的端口号 (1-65535)"},
+										},
+										"required": []string{"host", "port"},
+									},
+								},
 							},
 						},
 					},
@@ -668,8 +714,11 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 
 			bld, err := client.BuildVersion(ctx, input.ActionID, input.VersionID)
 			if err != nil {
-				if errors.Is(err, actionscat.ErrBuildTimeoutUnknownResult) {
-					return "构建请求超时，构建结果未知 (后端可能仍在编译中)，请稍后通过 actionscat_get_build 检查状态，严禁重复提交构建或直接激活。", nil
+				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
+					return fmt.Sprintf("构建请求超时或网络传输中断，构建结果未知 (后端可能仍在编译中)。\n"+
+						"【恢复指引】：严禁立即重复触发构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
+						"查询该版本是否已在后台生成构建以及其实时状态。若状态为 succeeded，可直接获取 build_id 进行激活；若 building 则稍后重试查询。",
+						input.ActionID, input.VersionID), nil
 				}
 				return fmt.Sprintf("构建版本失败: %v", err), nil
 			}
@@ -757,6 +806,76 @@ func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
 			}
 			return string(data), nil
 		},
+	}
+}
+
+// ActionsCatListBuildsTool creates a Tool that lists artifact builds for an Action.
+// It allows inspecting build history and recovering from indeterminate build timeouts
+// without triggering duplicate builds.
+func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
+	return Tool{
+		name: "actionscat_list_builds",
+		description: "列出 ActionsCat 指定 Action 下的历史编译构建列表（按创建时间倒序排列）。" +
+			"当 actionscat_build_version 或 actionscat_deploy_action 因超时或网络中断返回未知结果时，" +
+			"必须先调用本工具检查对应 version_id 是否已创建构建及其实时状态（succeeded/failed/building），" +
+			"避免盲目重试导致并发重复编译。",
+		parameter: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "所属 Action ID",
+				},
+				"version_id": map[string]any{
+					"type":        "string",
+					"description": "可选：仅列出指定 ActionVersion 的构建记录",
+				},
+			},
+			"required": []string{"action_id"},
+		},
+	executeContext: func(ctx context.Context, args string) (string, error) {
+		if client == nil || !client.IsConfigured() {
+			return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
+		}
+
+		var input struct {
+			ActionID  string `json:"action_id"`
+			VersionID string `json:"version_id"`
+		}
+		if err := json.Unmarshal([]byte(args), &input); err != nil {
+			return fmt.Sprintf("参数解析错误: %v", err), nil
+		}
+		if strings.TrimSpace(input.ActionID) == "" {
+			return "缺少必填参数 'action_id'", nil
+		}
+
+		builds, err := client.ListBuilds(ctx, input.ActionID)
+		if err != nil {
+			return fmt.Sprintf("查询构建列表失败: %v", err), nil
+		}
+
+		var filtered []AgentBuildDTO
+		for i := range builds {
+			bld := &builds[i]
+			if input.VersionID != "" && bld.VersionID != input.VersionID {
+				continue
+			}
+			filtered = append(filtered, toAgentBuildDTO(bld, false))
+		}
+
+		if len(filtered) == 0 {
+			if input.VersionID != "" {
+				return fmt.Sprintf("未查询到 Action %s 中版本 %s 的任何构建记录。", input.ActionID, input.VersionID), nil
+			}
+			return fmt.Sprintf("未查询到 Action %s 的任何构建记录。", input.ActionID), nil
+		}
+
+		data, err := json.MarshalIndent(filtered, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("serialize builds response: %w", err)
+		}
+		return string(data), nil
+	},
 	}
 }
 
@@ -892,14 +1011,31 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 					"type":        "object",
 					"description": "运行环境配置（入口路径、网络策略、超时及资源配额等）",
 					"properties": map[string]any{
-						"entrypoint":      map[string]any{"type": "string", "description": "可执行入口路径，默认 '/sandbox/entrypoint'"},
+						"entrypoint":      map[string]any{"type": "string", "description": "相对 /sandbox 的可执行入口路径，默认 'entrypoint'（若指定绝对路径如 '/sandbox/entrypoint' 或 '/entrypoint' 将自动规范化为相对路径）"},
 						"timeout_seconds": map[string]any{"type": "integer", "description": "执行超时时间（秒），默认 30"},
 						"memory_limit_mb": map[string]any{"type": "integer", "description": "内存上限（MB）"},
 						"cpu_limit":       map[string]any{"type": "number", "description": "CPU 配额（核数）"},
 						"network": map[string]any{
-							"type": "object",
+							"type":        "object",
+							"description": "网络访问策略配置",
 							"properties": map[string]any{
-								"mode": map[string]any{"type": "string", "description": "网络模式：'none'、'bridge'、'allowlist'，默认 'none'"},
+								"mode": map[string]any{
+									"type":        "string",
+									"enum":        []string{"none", "public", "allowlist", "isolated"},
+									"description": "网络模式：'none'（默认，完全无外网）、'public'（允许公网访问）、'allowlist'（出站白名单）、'isolated'（容器间互联隔离）",
+								},
+								"allow": map[string]any{
+									"type":        "array",
+									"description": "出站访问白名单规则（当 mode 为 'allowlist' 时必填且非空）",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"host": map[string]any{"type": "string", "description": "允许访问的主机名或域名"},
+											"port": map[string]any{"type": "integer", "description": "允许访问的端口号 (1-65535)"},
+										},
+										"required": []string{"host", "port"},
+									},
+								},
 							},
 						},
 					},
@@ -962,8 +1098,11 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 			// Step 2: Build Version
 			bld, err := client.BuildVersion(ctx, input.ActionID, ver.ID)
 			if err != nil {
-				if errors.Is(err, actionscat.ErrBuildTimeoutUnknownResult) {
-					return fmt.Sprintf("部署中断: 版本 %s 构建超时，构建结果未知 (后端可能仍在编译中)。请稍后使用 actionscat_get_build 检查状态，严禁重复提交构建或直接激活。", ver.ID), nil
+				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
+					return fmt.Sprintf("部署中断: 版本 %s 构建请求超时或网络传输中断，构建结果未知 (后端可能仍在编译中)。\n"+
+						"【恢复指引】：严禁立即重新部署或重复提交构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
+						"检查该版本是否已在后台生成构建。若构建成功 (succeeded)，可调用 actionscat_activate_build 完成激活；若失败则排查日志后新建版本。",
+						ver.ID, input.ActionID, ver.ID), nil
 				}
 				return fmt.Sprintf("部署失败 (编译构建阶段): %v", err), nil
 			}

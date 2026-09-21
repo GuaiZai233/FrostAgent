@@ -185,6 +185,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[actionsCatBuildVersionTool.Name()] = actionsCatBuildVersionTool
 	actionsCatGetBuildTool := tools.ActionsCatGetBuildTool(actionsCatClient)
 	registry[actionsCatGetBuildTool.Name()] = actionsCatGetBuildTool
+	actionsCatListBuildsTool := tools.ActionsCatListBuildsTool(actionsCatClient)
+	registry[actionsCatListBuildsTool.Name()] = actionsCatListBuildsTool
 	actionsCatActivateBuildTool := tools.ActionsCatActivateBuildTool(actionsCatClient, scope)
 	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
 	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)

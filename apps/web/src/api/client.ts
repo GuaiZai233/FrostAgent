@@ -388,6 +388,11 @@ export const actionsCatAPI = {
       },
     );
   },
+  listBuilds(actionID: string): Promise<ActionsCatBuild[]> {
+    return actionsCatRequest<ActionsCatBuild[]>(
+      `/actions/${encodeURIComponent(actionID)}/builds`,
+    );
+  },
   getBuild(actionID: string, buildID: string): Promise<ActionsCatBuild> {
     return actionsCatRequest<ActionsCatBuild>(
       `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}`,

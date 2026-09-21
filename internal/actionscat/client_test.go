@@ -2,6 +2,7 @@ package actionscat
 
 import (
 	"context"
+	"io"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -408,6 +409,9 @@ func TestClient_VersionsAndBuilds(t *testing.T) {
 		case r.URL.Path == "/api/v1/actions/act_test_1/versions/ver_001/builds" && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(mockBuild)
+		case r.URL.Path == "/api/v1/actions/act_test_1/builds" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]ArtifactBuild{mockBuild})
 		case r.URL.Path == "/api/v1/actions/act_test_1/builds/bld_001" && r.Method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(mockBuild)
@@ -504,7 +508,16 @@ func TestClient_VersionsAndBuilds(t *testing.T) {
 		t.Fatalf("unexpected logs: %+v", logs)
 	}
 
-	// 7. ActivateBuild
+	// 7. ListBuilds
+	builds, err := client.ListBuilds(ctx, "act_test_1")
+	if err != nil {
+		t.Fatalf("ListBuilds failed: %v", err)
+	}
+	if len(builds) != 1 || builds[0].ID != "bld_001" {
+		t.Fatalf("unexpected builds: %+v", builds)
+	}
+
+	// 8. ActivateBuild
 	err = client.ActivateBuild(ctx, "act_test_1", SetActiveBuildReq{
 		VersionID: "ver_001",
 		BuildID:   "bld_001",
@@ -554,5 +567,132 @@ func TestClient_BuildTimeout(t *testing.T) {
 	}
 	if !errors.Is(err, ErrBuildTimeoutUnknownResult) {
 		t.Fatalf("expected ErrBuildTimeoutUnknownResult, got: %v", err)
+	}
+}
+
+
+type faultTransport struct {
+	roundTripFunc func(req *http.Request) (*http.Response, error)
+}
+
+func (f *faultTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f.roundTripFunc(req)
+}
+
+type faultyReader struct {
+	readCount int
+}
+
+func (r *faultyReader) Read(p []byte) (n int, err error) {
+	if r.readCount == 0 {
+		r.readCount++
+		copy(p, []byte(`{"id":"bld_interrupted",`))
+		return 24, nil
+	}
+	return 0, errors.New("unexpected EOF during streaming response body")
+}
+
+func (r *faultyReader) Close() error {
+	return nil
+}
+
+func TestClient_BuildUnknownResult_TransportErrors(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Parameter validation: empty IDs do not wrap in ErrBuildUnknownResult
+	cEmpty := New(func(k string) string { return "http://127.0.0.1:1" })
+	_, err := cEmpty.BuildVersion(ctx, "", "ver_1")
+	if err == nil || errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("expected param validation error, got: %v", err)
+	}
+	_, err = cEmpty.BuildVersion(ctx, "act_1", "")
+	if err == nil || errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("expected param validation error, got: %v", err)
+	}
+	_, err = cEmpty.ListBuilds(ctx, "")
+	if err == nil || errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("expected param validation error for ListBuilds, got: %v", err)
+	}
+
+	// 2. Transport level connection reset / network error -> ErrBuildUnknownResult
+	cConnErr := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://actionscat.example.internal"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+	cConnErr.httpClient = &http.Client{
+		Transport: &faultTransport{
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return nil, errors.New("dial tcp: connection reset by peer")
+			},
+		},
+	}
+	_, err = cConnErr.BuildVersion(ctx, "act_1", "ver_1")
+	if !errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("expected ErrBuildUnknownResult on connection drop, got: %v", err)
+	}
+
+	// 3. Severed response body (io.ErrUnexpectedEOF or broken stream) -> ErrBuildUnknownResult
+	cSevered := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://actionscat.example.internal"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+	cSevered.httpClient = &http.Client{
+		Transport: &faultTransport{
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       &faultyReader{},
+				}, nil
+			},
+		},
+	}
+	_, err = cSevered.BuildVersion(ctx, "act_1", "ver_1")
+	if !errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("expected ErrBuildUnknownResult on severed response body, got: %v", err)
+	}
+
+	// 4. Definite HTTP errors (400 Bad Request, 404 Not Found, 409 Conflict) -> NOT ErrBuildUnknownResult
+	cHttpErr := New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return "http://actionscat.example.internal"
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+	cHttpErr.httpClient = &http.Client{
+		Transport: &faultTransport{
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusConflict,
+					Status:     "409 Conflict",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"error":"build already running"}`)),
+				}, nil
+			},
+		},
+	}
+	_, err = cHttpErr.BuildVersion(ctx, "act_1", "ver_1")
+	if err == nil {
+		t.Fatal("expected error on 409 conflict, got nil")
+	}
+	if errors.Is(err, ErrBuildUnknownResult) {
+		t.Fatalf("definitive HTTP 409 error must NOT be wrapped as ErrBuildUnknownResult, got: %v", err)
 	}
 }

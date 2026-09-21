@@ -77,6 +77,15 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
 
+	listBuildsTool := ActionsCatListBuildsTool(client)
+	out, err = listBuildsTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "尚未配置") {
+		t.Fatalf("expected unconfigured message, got: %s", out)
+	}
+
 	createTool := ActionsCatCreateActionTool(client, scope)
 	// Missing RunContext -> should fail permission check
 	out, err = createTool.ExecuteContext(noCtx, `{"name": "New Action"}`)
@@ -909,7 +918,7 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildVersionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(out, "构建请求超时，构建结果未知") || !strings.Contains(out, "actionscat_get_build") || !strings.Contains(out, "严禁重复提交构建或直接激活") {
+	if !strings.Contains(out, "构建请求超时或网络传输中断，构建结果未知") || !strings.Contains(out, "actionscat_list_builds") || !strings.Contains(out, "严禁立即重复触发构建") {
 		t.Fatalf("expected build timeout indeterminate guidance, got: %s", out)
 	}
 
@@ -922,7 +931,283 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeployActionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(deployOut, "构建超时，构建结果未知") || !strings.Contains(deployOut, "actionscat_get_build") || !strings.Contains(deployOut, "严禁重复提交构建或直接激活") {
+	if !strings.Contains(deployOut, "构建请求超时或网络传输中断，构建结果未知") || !strings.Contains(deployOut, "actionscat_list_builds") || !strings.Contains(deployOut, "严禁立即重新部署或重复提交构建") {
 		t.Fatalf("expected deploy timeout indeterminate guidance, got: %s", deployOut)
+	}
+}
+
+
+func TestActionsCatTools_EntrypointAndNetworkValidation(t *testing.T) {
+	// 1. Files empty
+	_, err := prepareCreateVersionReq(createVersionInput{Files: nil})
+	if err == nil || !strings.Contains(err.Error(), "文件映射不能为空") {
+		t.Fatalf("expected error for empty files, got: %v", err)
+	}
+
+	// 2. Entrypoint sanitization tests
+	tests := []struct {
+		name               string
+		rawEntrypoint      string
+		expectedEntrypoint string
+	}{
+		{"default when empty", "", "entrypoint"},
+		{"plain relative", "entrypoint", "entrypoint"},
+		{"leading slash", "/entrypoint", "entrypoint"},
+		{"sandbox prefix", "/sandbox/entrypoint", "entrypoint"},
+		{"custom relative", "bin/runner", "bin/runner"},
+		{"custom leading slash", "/bin/runner", "bin/runner"},
+		{"custom sandbox prefix", "/sandbox/out/entrypoint", "out/entrypoint"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := prepareCreateVersionReq(createVersionInput{
+				Files: map[string]string{"main.go": "package main"},
+				RuntimeSpec: &actionscat.RuntimeSpec{
+					Entrypoint: tc.rawEntrypoint,
+				},
+			})
+			if err != nil {
+				t.Fatalf("prepareCreateVersionReq failed: %v", err)
+			}
+			if req.RuntimeSpec.Entrypoint != tc.expectedEntrypoint {
+				t.Fatalf("entrypoint %q: expected %q, got %q", tc.rawEntrypoint, tc.expectedEntrypoint, req.RuntimeSpec.Entrypoint)
+			}
+		})
+	}
+
+	// 3. Network mode validation
+	validModes := []struct {
+		input    string
+		expected string
+	}{
+		{"", "none"},
+		{"none", "none"},
+		{"NONE", "none"},
+		{"public", "public"},
+		{"Public", "public"},
+		{"isolated", "isolated"},
+		{"ISOLATED", "isolated"},
+		{"allowlist", "allowlist"},
+		{"ALLOWLIST", "allowlist"},
+	}
+	for _, tc := range validModes {
+		reqInput := createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			RuntimeSpec: &actionscat.RuntimeSpec{
+				Network: actionscat.NetworkPolicy{
+					Mode: tc.input,
+				},
+			},
+		}
+		if strings.ToLower(tc.input) == "allowlist" {
+			reqInput.RuntimeSpec.Network.Allow = []actionscat.NetworkAllowRule{
+				{Host: "api.example.com", Port: 443},
+			}
+		}
+		req, err := prepareCreateVersionReq(reqInput)
+		if err != nil {
+			t.Fatalf("mode %q: unexpected error: %v", tc.input, err)
+		}
+		if req.RuntimeSpec.Network.Mode != tc.expected {
+			t.Fatalf("mode %q: expected %q, got %q", tc.input, tc.expected, req.RuntimeSpec.Network.Mode)
+		}
+	}
+
+	// Invalid network modes (such as "bridge" or "custom")
+	invalidModes := []string{"bridge", "BRIDGE", "host", "container:123", "overlay"}
+	for _, mode := range invalidModes {
+		_, err := prepareCreateVersionReq(createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			RuntimeSpec: &actionscat.RuntimeSpec{
+				Network: actionscat.NetworkPolicy{
+					Mode: mode,
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "无效的网络模式") {
+			t.Fatalf("mode %q: expected invalid network mode error, got: %v", mode, err)
+		}
+	}
+
+	// 4. Network allowlist rules validation
+	// 4a. Allowlist with empty allow list
+	_, err = prepareCreateVersionReq(createVersionInput{
+		Files: map[string]string{"main.go": "package main"},
+		RuntimeSpec: &actionscat.RuntimeSpec{
+			Network: actionscat.NetworkPolicy{
+				Mode:  "allowlist",
+				Allow: nil,
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "allow 规则列表不能为空") {
+		t.Fatalf("expected empty allow rules error, got: %v", err)
+	}
+
+	// 4b. Allowlist rule with empty host
+	_, err = prepareCreateVersionReq(createVersionInput{
+		Files: map[string]string{"main.go": "package main"},
+		RuntimeSpec: &actionscat.RuntimeSpec{
+			Network: actionscat.NetworkPolicy{
+				Mode: "allowlist",
+				Allow: []actionscat.NetworkAllowRule{
+					{Host: "   ", Port: 443},
+				},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "host 不能为空") {
+		t.Fatalf("expected empty host error, got: %v", err)
+	}
+
+	// 4c. Allowlist rule with invalid port
+	invalidPorts := []int{0, -1, 65536, 70000}
+	for _, port := range invalidPorts {
+		_, err = prepareCreateVersionReq(createVersionInput{
+			Files: map[string]string{"main.go": "package main"},
+			RuntimeSpec: &actionscat.RuntimeSpec{
+				Network: actionscat.NetworkPolicy{
+					Mode: "allowlist",
+					Allow: []actionscat.NetworkAllowRule{
+						{Host: "api.example.com", Port: port},
+					},
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "无效，必须在 1-65535 之间") {
+			t.Fatalf("port %d: expected port out of range error, got: %v", port, err)
+		}
+	}
+
+	// 4d. Valid allowlist rules
+	req, err := prepareCreateVersionReq(createVersionInput{
+		Files: map[string]string{"main.go": "package main"},
+		RuntimeSpec: &actionscat.RuntimeSpec{
+			Network: actionscat.NetworkPolicy{
+				Mode: "allowlist",
+				Allow: []actionscat.NetworkAllowRule{
+					{Host: "api.example.com", Port: 443},
+					{Host: "db.internal", Port: 5432},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected valid allowlist rules to pass, got: %v", err)
+	}
+	if len(req.RuntimeSpec.Network.Allow) != 2 {
+		t.Fatalf("expected 2 allow rules, got %d", len(req.RuntimeSpec.Network.Allow))
+	}
+}
+
+func TestActionsCatTools_ListBuildsTool(t *testing.T) {
+	exitCodeZero := 0
+	exitCodeOne := 1
+
+	mockBuilds := []actionscat.ArtifactBuild{
+		{
+			ID:          "bld_101",
+			ActionID:    "act_demo",
+			VersionID:   "ver_1",
+			BuildNumber: 1,
+			Status:      "succeeded",
+			ExitCode:    &exitCodeZero,
+			CreatedAt:   time.Now().Add(-10 * time.Minute).UTC(),
+		},
+		{
+			ID:          "bld_102",
+			ActionID:    "act_demo",
+			VersionID:   "ver_2",
+			BuildNumber: 2,
+			Status:      "failed",
+			ExitCode:    &exitCodeOne,
+			Stderr:      "compile error in main.go: syntax error",
+			CreatedAt:   time.Now().Add(-5 * time.Minute).UTC(),
+		},
+		{
+			ID:          "bld_103",
+			ActionID:    "act_demo",
+			VersionID:   "ver_1",
+			BuildNumber: 3,
+			Status:      "building",
+			CreatedAt:   time.Now().UTC(),
+		},
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/actions/act_demo/builds" && r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(mockBuilds)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := actionscat.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return ts.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "valid_token"
+		default:
+			return ""
+		}
+	})
+
+	tool := ActionsCatListBuildsTool(client)
+	ctx := context.Background()
+
+	// 1. Missing action_id
+	out, err := tool.ExecuteContext(ctx, `{}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "缺少必填参数 'action_id'") {
+		t.Fatalf("expected action_id required error, got: %s", out)
+	}
+
+	// 2. Query all builds (no version_id filter)
+	out, err = tool.ExecuteContext(ctx, `{"action_id": "act_demo"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var res []AgentBuildDTO
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("failed to parse JSON result: %v (raw: %s)", err, out)
+	}
+	if len(res) != 3 {
+		t.Fatalf("expected 3 builds, got %d", len(res))
+	}
+	if res[0].ID != "bld_101" || res[1].ID != "bld_102" || res[2].ID != "bld_103" {
+		t.Fatalf("unexpected builds order: %+v", res)
+	}
+
+	// 3. Query with version_id filter ("ver_1")
+	out, err = tool.ExecuteContext(ctx, `{"action_id": "act_demo", "version_id": "ver_1"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var filtered []AgentBuildDTO
+	if err := json.Unmarshal([]byte(out), &filtered); err != nil {
+		t.Fatalf("failed to parse filtered JSON result: %v (raw: %s)", err, out)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 builds for ver_1, got %d", len(filtered))
+	}
+	for _, b := range filtered {
+		if b.VersionID != "ver_1" {
+			t.Fatalf("expected version_id ver_1, got %s", b.VersionID)
+		}
+	}
+
+	// 4. Query with non-existent version_id
+	out, err = tool.ExecuteContext(ctx, `{"action_id": "act_demo", "version_id": "ver_nonexistent"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "未查询到") || !strings.Contains(out, "ver_nonexistent") {
+		t.Fatalf("expected empty/not found message, got: %s", out)
 	}
 }

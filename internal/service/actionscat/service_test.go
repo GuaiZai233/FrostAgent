@@ -1,6 +1,8 @@
 package actionscat
 
 import (
+	"strings"
+	"context"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -121,6 +123,16 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 				})
 				return
 			}
+		case "/api/v1/actions/act_weather/builds":
+			_ = json.NewEncoder(w).Encode([]actclient.ArtifactBuild{
+				{
+					ID:        "bld_weather_01",
+					ActionID:  "act_weather",
+					VersionID: "ver_weather_01",
+					Status:    "succeeded",
+					Stdout:    "Build OK",
+				},
+			})
 		case "/api/v1/actions/act_weather/builds/bld_weather_01":
 			_ = json.NewEncoder(w).Encode(actclient.ArtifactBuild{
 				ID:        "bld_weather_01",
@@ -355,7 +367,30 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		}
 	}
 
-	// 13. GET /api/actionscat/actions/act_weather/builds/bld_weather_01
+	// 13. GET /api/actionscat/actions/act_weather/builds (ListBuilds)
+	{
+		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/builds", nil)
+		rec := httptest.NewRecorder()
+		svc.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list builds status code: %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var blds []actclient.ArtifactBuild
+		_ = json.NewDecoder(rec.Body).Decode(&blds)
+		if len(blds) != 1 || blds[0].ID != "bld_weather_01" {
+			t.Fatalf("unexpected builds: %+v", blds)
+		}
+
+		// Also verify /api/v1/ prefix alias
+		reqV1 := newReq(http.MethodGet, "/api/v1/actionscat/actions/act_weather/builds", nil)
+		recV1 := httptest.NewRecorder()
+		svc.ServeHTTP(recV1, reqV1)
+		if recV1.Code != http.StatusOK {
+			t.Fatalf("list builds v1 alias status code: %d", recV1.Code)
+		}
+	}
+
+	// 14. GET /api/actionscat/actions/act_weather/builds/bld_weather_01
 	{
 		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/builds/bld_weather_01", nil)
 		rec := httptest.NewRecorder()
@@ -370,7 +405,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		}
 	}
 
-	// 14. GET /api/actionscat/actions/act_weather/builds/bld_weather_01/logs
+	// 15. GET /api/actionscat/actions/act_weather/builds/bld_weather_01/logs
 	{
 		req := newReq(http.MethodGet, "/api/actionscat/actions/act_weather/builds/bld_weather_01/logs", nil)
 		rec := httptest.NewRecorder()
@@ -385,7 +420,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 		}
 	}
 
-	// 15. POST /api/actionscat/actions/act_weather/active-build
+	// 16. POST /api/actionscat/actions/act_weather/active-build
 	{
 		body, _ := json.Marshal(actclient.SetActiveBuildReq{
 			VersionID: "ver_weather_01",
@@ -555,5 +590,48 @@ func TestService_ControlPlaneAuth(t *testing.T) {
 		if recWithToken.Code != http.StatusOK {
 			t.Fatalf("expected 200 for loopback with valid token when MCP_ENFORCE_LOCAL_TOKEN=true, got %d", recWithToken.Code)
 		}
+	}
+}
+
+func TestService_BuildUnknownResult_GatewayTimeout(t *testing.T) {
+	backendTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/builds") && r.Method == http.MethodPost {
+			// Simulate drop / hang by sleeping or closing
+			time.Sleep(100 * time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer backendTS.Close()
+
+	cl := actclient.New(func(k string) string {
+		switch k {
+		case "ACTIONSCAT_ENDPOINT":
+			return backendTS.URL
+		case "ACTIONSCAT_MANAGEMENT_TOKEN":
+			return "test_token"
+		default:
+			return ""
+		}
+	})
+
+	svc := New(cl, "inst_timeout_test")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	// Context with tiny timeout to trigger ErrBuildUnknownResult
+	ctx, cancel := context.WithTimeout(req.Context(), 10*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	svc.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504 Gateway Timeout for ErrBuildUnknownResult, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown") {
+		t.Fatalf("expected unknown in error body, got: %s", rec.Body.String())
 	}
 }

@@ -259,7 +259,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
-  - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
+  - `execute_command` 的指令正文与返回结果（stdout、stderr）在工具调用与当前轮大模型交互日志中完整记录，不再进行脱敏打码，便于实时调试与可观测性追踪；同时日志 Store 引入总字节预算限制（默认 32 MiB）与字节淘汰机制，后续请求日志中对已由 TOOL 日志完整记录的历史大输出进行引用折叠，杜绝上下文回传导致的内存放大与 OOM 风险；终端控制台摘要保持简洁的调用状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
@@ -461,6 +461,10 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **可观测性无脱敏与日志内存预算防御 (Observability & Memory Budget Defense)**：
+  - `execute_command` 的指令正文与执行结果（stdout、stderr）在智能体工具执行日志（`logs.TOOL`）、大模型请求（`logs.LLM_REQUEST`）与响应（`logs.LLM_RESPONSE`）中完整保留真实内容，不再进行脱敏打码，保证管理员与开发者获得透明的实时排障能力；
+  - 为防止多轮 Agent 对话中历史工具执行结果在每次大模型请求上下文（`LLM_REQUEST`）中反复堆积导致二次内存放大与 OOM 隐患，协议层在记录后续请求日志时对已由 `TOOL` 日志持久化的历史长输出（> 256 字节）进行引用折叠，且上游真实线缆请求与当前轮次未决输出保持 100% 原始完整传输；
+  - 日志存储引擎（`logs.Store`）全面实施硬字节预算（默认 32 MiB）与时间序字节淘汰（Byte-based LRU Eviction），彻底杜绝无界定长缓冲引发的内存击穿风险。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
@@ -477,11 +481,11 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 严格复用 FrostAgent 控制面统一鉴权标准（`mcpsvc.CheckControlPlaneAuthScoped`），验证请求端点并要求远程访问携带 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN`，杜绝未认证调用者利用 FrostAgent 作为凭据代持代理穿透访问 ActionsCat；
   - 代理层采用 `http.MaxBytesReader`（10 MiB 上限）与严格的单对象 JSON 解码，对格式错误或截断的恶意载荷一律 Fail-Closed 拦截并返回 400，防止畸形请求产生非预期的触发副作用。
 - **智能体工具集与严格安全边界 (Agent Tools & Guardrails)**：
-  - 向大模型暴露四个标准工具：`actionscat_list_actions`、`actionscat_run_action`、`actionscat_get_run` 与 `actionscat_create_action`；
+  - 向大模型暴露完整自动化部署与运行工具集，包括动作管理、版本快照、编译构建、构建激活与执行追踪；
   - **敏感注入状态脱敏隔离 (Agent-Facing DTO Redaction)**：定义专用的 `AgentRunDTO`，显式采用字段白名单，彻底剔除 ActionsCat 内部用于持久状态注入的 `planned_env`（包含敏感凭据、数据库连接、Token 等），防止敏感信息泄漏至大模型上下文；
   - **受保护环境变量前缀拦截**：`actionscat_run_action` 严格拒绝任何以 `ACTIONSCAT_` 为前缀的自定义环境变量键，防止模型输出伪造沙箱运行上下文与受信标识；
-  - **管理写权限严格门禁 (Administrative Mutation Gate)**：`actionscat_create_action` 属于控制面持久化修改操作，工具层严格校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员允许触发；普通会话或无上下文调用直接拒绝，绝不向后端发送写请求（0 次 POST）；
-  - **Mock 模拟会话零持久化副作用 (Zero Durable Mutation Invariant)**：在带有 `?mock=true` 的在线模拟会话中，`actionscat_run_action` 与 `actionscat_create_action` 被强制前置拦截并返回提示，坚决不在模拟测试中产生真实任务执行或持久化状态改变。
+  - **管理写权限严格门禁 (Administrative Mutation Gate)**：状态变更类工具（创建动作、版本、构建、激活及部署）属于控制面持久化修改操作，工具层严格校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员允许触发；普通会话或无上下文调用直接拒绝，绝不向后端发送写请求（0 次 POST）；
+  - **Mock 模拟会话零持久化副作用 (Zero Durable Mutation Invariant)**：在带有 `?mock=true` 的在线模拟会话中，所有变更及执行工具被强制前置拦截并返回提示，坚决不在模拟测试中产生真实任务执行或持久化状态改变。
 - **可运行状态与空壳元数据显式解耦 (Runnable vs. Enabled Decoupling)**：
   - 对齐 ActionsCat 制品模型规范，Action 必须同时满足 `Enabled == true`、`ActiveVersionID != ""` 与 `ActiveBuildID != ""` 才具备可执行条件；
   - `actionscat_list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
@@ -494,4 +498,3 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 实时诊断服务端网络联通（`healthy`）与凭据认证状态（`authenticated`），直观呈现就绪徽章；
   - 卡片化动作视图：区分展示「可运行」与「未构建/未激活」状态，罗列版本号、构建号、定时规则与特权能力；
   - 交互式运行工作流：提供包含变量校验的手动触发弹窗、Action 元数据新建弹窗、测试事件分发（`/dispatch`）入口以及带语法高亮和复制功能的运行日志（STDOUT/STDERR）排查抽屉。
-

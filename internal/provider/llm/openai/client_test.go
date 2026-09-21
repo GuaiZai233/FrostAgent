@@ -186,7 +186,7 @@ func TestClient_Chat_PreservesConsecutiveUserRoles(t *testing.T) {
 	}
 }
 
-func TestClient_Chat_RedactsExecuteCommandInResponseLog(t *testing.T) {
+func TestClient_Chat_LogsExecuteCommandInResponseLog(t *testing.T) {
 	logs.Init(100)
 	logs.Clear()
 
@@ -232,23 +232,23 @@ func TestClient_Chat_RedactsExecuteCommandInResponseLog(t *testing.T) {
 		t.Fatalf("expected unredacted argument returned to caller, got: %s", resp.Message.ToolCalls[0].Function.Arguments)
 	}
 
-	// 2. Verify log buffer NEVER contains the sentinel secret
+	// 2. Verify log buffer contains unredacted command and no redaction marker
 	snapshot := logs.Snapshot()
 	var foundLLMResponse bool
 	for _, entry := range snapshot {
-		if strings.Contains(entry.Content, sentinelSecret) {
-			t.Fatalf("log entry (%s) leaked sentinel secret: %s", entry.Category, entry.Content)
+		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, sentinelSecret) {
+			foundLLMResponse = true
 		}
 		if entry.Category == logs.LLM_RESPONSE && strings.Contains(entry.Content, "[REDACTED command:") {
-			foundLLMResponse = true
+			t.Fatalf("LLM_RESPONSE contained [REDACTED command: marker: %s", entry.Content)
 		}
 	}
 	if !foundLLMResponse {
-		t.Fatalf("expected LLM_RESPONSE entry containing [REDACTED command: in logs snapshot")
+		t.Fatalf("expected LLM_RESPONSE entry containing unredacted command %q in logs snapshot", sentinelSecret)
 	}
 }
 
-func TestClient_Chat_RedactsExecuteCommandInRequestLog(t *testing.T) {
+func TestClient_Chat_LogsExecuteCommandInRequestLog(t *testing.T) {
 	logs.Init(100)
 	logs.Clear()
 
@@ -313,27 +313,25 @@ func TestClient_Chat_RedactsExecuteCommandInRequestLog(t *testing.T) {
 		t.Fatalf("upstream request should receive unredacted stderr, got: %s", wireBodyReceived)
 	}
 
-	// 2. Verify log buffer NEVER contains any of the sentinel secrets
+	// 2. Verify log buffer contains unredacted command, stdout, stderr and no redaction marker
 	snapshot := logs.Snapshot()
-	var foundLLMRequestRedacted bool
+	var foundLLMRequest bool
 	for _, entry := range snapshot {
-		if strings.Contains(entry.Content, sentinelCommandSecret) {
-			t.Fatalf("log entry (%s) leaked command secret: %s", entry.Category, entry.Content)
-		}
-		if strings.Contains(entry.Content, sentinelStdoutSecret) {
-			t.Fatalf("log entry (%s) leaked stdout secret: %s", entry.Category, entry.Content)
-		}
-		if strings.Contains(entry.Content, sentinelStderrSecret) {
-			t.Fatalf("log entry (%s) leaked stderr secret: %s", entry.Category, entry.Content)
-		}
 		if entry.Category == logs.LLM_REQUEST &&
-			strings.Contains(entry.Content, "[REDACTED command:") &&
-			strings.Contains(entry.Content, "[REDACTED stdout:") {
-			foundLLMRequestRedacted = true
+			strings.Contains(entry.Content, sentinelCommandSecret) &&
+			strings.Contains(entry.Content, sentinelStdoutSecret) &&
+			strings.Contains(entry.Content, sentinelStderrSecret) {
+			foundLLMRequest = true
+		}
+		if entry.Category == logs.LLM_REQUEST && strings.Contains(entry.Content, "[REDACTED command:") {
+			t.Fatalf("LLM_REQUEST leaked [REDACTED command: marker: %s", entry.Content)
+		}
+		if entry.Category == logs.LLM_REQUEST && strings.Contains(entry.Content, "[REDACTED stdout:") {
+			t.Fatalf("LLM_REQUEST leaked [REDACTED stdout: marker: %s", entry.Content)
 		}
 	}
-	if !foundLLMRequestRedacted {
-		t.Fatalf("expected LLM_REQUEST entry containing redacted command and stdout")
+	if !foundLLMRequest {
+		t.Fatalf("expected LLM_REQUEST entry containing unredacted command and output in logs snapshot")
 	}
 }
 
@@ -395,5 +393,114 @@ func TestClient_Chat_PreservesNonExecuteCommandLogging(t *testing.T) {
 	}
 	if !foundNormalResultInRequest {
 		t.Fatalf("expected normal tool result to be logged in LLM_REQUEST")
+	}
+}
+
+func TestClient_Chat_FoldsHistoricalToolOutputsInSubsequentRequestLogs(t *testing.T) {
+	logs.Init(100)
+	logs.Clear()
+
+	historicalStdout := strings.Repeat("H", 500)
+	currentStdout := "CURRENT_TURN_STDOUT_SENTINEL_7777"
+
+	var wireBodyReceived string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		wireBodyReceived = string(b)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "done",
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-api-key")
+	_, err := client.Chat(context.Background(), core.ChatRequest{
+		Model: "test-model",
+		Messages: []core.ChatMessage{
+			// Turn 1 (historical tool call + result)
+			{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{
+					ID:   "call_cmd_hist",
+					Type: "function",
+					Function: core.ToolCallFunction{
+						Name:      "execute_command",
+						Arguments: `{"command":"cat bigfile.txt","cwd":"/sandbox","timeout":30}`,
+					},
+				}},
+			},
+			{
+				Role:       core.RoleTool,
+				ToolCallID: "call_cmd_hist",
+				Content: fmt.Sprintf(
+					`{"stdout":%q,"stderr":"","exit_code":0,"timed_out":false,"duration_ms":100}`,
+					historicalStdout,
+				),
+			},
+			// Turn 2 (intervening assistant step)
+			{
+				Role:    core.RoleAssistant,
+				Content: "Let me check the next step.",
+				ToolCalls: []core.ToolCall{{
+					ID:   "call_cmd_curr",
+					Type: "function",
+					Function: core.ToolCallFunction{
+						Name:      "execute_command",
+						Arguments: `{"command":"echo step2","cwd":"/sandbox","timeout":30}`,
+					},
+				}},
+			},
+			// Turn 3 (current tool result, not followed by any assistant turn)
+			{
+				Role:       core.RoleTool,
+				ToolCallID: "call_cmd_curr",
+				Content: fmt.Sprintf(
+					`{"stdout":%q,"stderr":"","exit_code":0,"timed_out":false,"duration_ms":30}`,
+					currentStdout,
+				),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+
+	// 1. Upstream LLM wire payload receives the UNREDACTED full content for both turns
+	if !strings.Contains(wireBodyReceived, historicalStdout) {
+		t.Fatalf("wire request body must contain full historical stdout")
+	}
+	if !strings.Contains(wireBodyReceived, currentStdout) {
+		t.Fatalf("wire request body must contain current stdout")
+	}
+
+	// 2. Logs Store must fold historical tool output while preserving current turn output
+	snapshot := logs.Snapshot()
+	var foundLLMRequest bool
+	for _, entry := range snapshot {
+		if entry.Category == logs.LLM_REQUEST {
+			foundLLMRequest = true
+			if strings.Contains(entry.Content, historicalStdout) {
+				t.Fatalf("LLM_REQUEST log should NOT duplicate 500-byte historical stdout")
+			}
+			if !strings.Contains(entry.Content, "[historical stdout omitted: len=500, see TOOL log]") {
+				t.Fatalf("LLM_REQUEST log should contain historical stdout omitted marker, got: %s", entry.Content)
+			}
+			if !strings.Contains(entry.Content, currentStdout) {
+				t.Fatalf("LLM_REQUEST log must contain current turn unredacted stdout %q, got: %s", currentStdout, entry.Content)
+			}
+			if strings.Contains(entry.Content, "[REDACTED command:") {
+				t.Fatalf("LLM_REQUEST log should not contain redacted command marker: %s", entry.Content)
+			}
+		}
+	}
+	if !foundLLMRequest {
+		t.Fatalf("expected LLM_REQUEST log entry in snapshot")
 	}
 }

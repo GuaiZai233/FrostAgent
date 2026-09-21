@@ -25,7 +25,7 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
    - 交互式模拟对话模式（`?mock=true`）下，任何具有外部持久化副作用的操作（`actionscat_run_action`、`actionscat_create_action`、`actionscat_create_version`、`actionscat_build_version`、`actionscat_activate_build`、`actionscat_deploy_action`）必须被前置阻断并返回说明，绝不向 ActionsCat 发起真实执行或写入，确保断电全丢不变量。
 4. **构建超时与未决结果处理 (Build Timeout & Indeterminate Result Defense)**：
    - 区分普通 API 查询（`15s` 超时）与同步构建编译流程（`180s` 超时，`defaultBuildTimeout`）。底层 HTTP Client 显式禁用 transport 层自动重试与全局 client 级超时（`http.Client.Timeout = 0`），使用 context 传递 deadline。
-   - 当同步构建请求发生 context 超时或传输中断时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildTimeoutUnknownResult`（“构建结果未知”），提示 Agent 使用 `actionscat_get_build` 查询实际状态，防止状态机分歧与重复并发构建。
+   - 当同步构建请求发生 context 超时或传输中断时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildUnknownResult`（“构建结果未知”），提示 Agent 使用 `actionscat_list_builds` 查询实际状态，防止状态机分歧与重复并发构建。
 5. **构建状态门禁与版本不可变性 (Build Status Gating & Version Immutability)**：
    - 激活构建（`actionscat_activate_build`）严格前置校验构建状态，仅允许激活 `succeeded` 状态的制品构建，阻断未完成或失败构建的激活。
    - 严格遵循 ActionsCat 架构的“版本不可变（Version Immutability）”约束。若编译失败，工具提取截断的编译日志（`stderr`/`stdout`）供 Agent 排查，并明确指导 Agent 通过 `actionscat_create_version` 创建新版本，禁止对失败版本发起重复覆盖修改。
@@ -59,6 +59,7 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │                                           │ - actionscat_create_version(Admin) │  │
 │                                           │ - actionscat_build_version (Admin) │  │
 │                                           │ - actionscat_get_build             │  │
+│                                           │ - actionscat_list_builds           │  │
 │                                           │ - actionscat_activate_build(Admin) │  │
 │                                           │ - actionscat_deploy_action (Admin) │  │
 │                                           │ - actionscat_run_action (Mock/Env) │  │
@@ -71,7 +72,7 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │  │ - 校验 ACTIONSCAT_ENDPOINT、管理/调度 Token                                  │  │
 │  │ - 双超时体系: 默认查询 (15s) vs 同步构建 (180s, defaultBuildTimeout)         │  │
 │  │ - http.Client.Timeout = 0 (context 控制)，禁用 transport 自动重试            │  │
-│  │ - 构建超时精确映射为 ErrBuildTimeoutUnknownResult (避免误报失败)            │  │
+│  │ - 构建超时与传输中断精确映射为 ErrBuildUnknownResult (避免误报失败与重复构建)            │  │
 │  │ - 请求体上限 (10MiB)、双重就绪探针 (Health & Auth)                           │  │
 │  └──────────────────────────────────────┬──────────────────────────────────────┘  │
 └─────────────────────────────────────────┼─────────────────────────────────────────┘
@@ -125,6 +126,7 @@ func (c *Client) CreateVersion(ctx context.Context, actionID string, req CreateV
 func (c *Client) ListVersions(ctx context.Context, actionID string) ([]ActionVersion, error)
 func (c *Client) GetVersion(ctx context.Context, actionID, versionID string) (*ActionVersion, error)
 func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (*ArtifactBuild, error)
+func (c *Client) ListBuilds(ctx context.Context, actionID string) ([]ArtifactBuild, error)
 func (c *Client) GetBuild(ctx context.Context, actionID, buildID string) (*ArtifactBuild, error)
 func (c *Client) GetBuildLogs(ctx context.Context, actionID, buildID string) (*BuildLogs, error)
 func (c *Client) ActivateBuild(ctx context.Context, actionID string, req SetActiveBuildReq) error
@@ -143,7 +145,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 #### 双超时与未决结果判定机制
 - 标准查询默认超时 `15s`（`defaultTimeout`）；
 - 同步编译构建超时设定为独立的长超时 `180s`（`defaultBuildTimeout`）；底层 `http.Client.Timeout = 0`，由各请求的 context deadline 精确控制，并禁用 HTTP transport 层对构建请求的自动重试；
-- 构建超时精确包装为 `ErrBuildTimeoutUnknownResult`，阻断“假死当成编译失败”的状态误判。
+- 同步构建期间遭遇的任何传输中断（连接被重置、io.ErrUnexpectedEOF、响应体截断、超时）均统一包装为 `ErrBuildUnknownResult`，阻断误判并防止客户端重复并发提交构建。
 
 ### 3.2 控制面 HTTP 代理服务（`internal/service/actionscat/service.go`）
 
@@ -158,7 +160,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 ### 3.3 智能体工具集（`internal/tools/actionscat_tools.go`）
 
-向大模型 Agent Loop 暴露 9 个标准化工具，涵盖完整部署生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行）：
+向大模型 Agent Loop 暴露 10 个标准化工具，涵盖完整部署生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行）：
 
 #### 1. `actionscat_list_actions`
 - **功能**：列出已注册的 Action 列表；
@@ -183,7 +185,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 #### 4. `actionscat_build_version` (Admin)
 - **功能**：触发版本沙箱编译打包，生成制品构建（ArtifactBuild）；
-- **超时处理**：采用 `180s` 独立构建超时；若超时返回清晰的“构建超时，构建结果未知”诊断说明及 `actionscat_get_build` 查询指引；
+- **未知结果与超时处理**：采用 `180s` 独立构建超时；若超时或传输中断返回保守的“构建结果未知”诊断说明，并指示 Agent 使用 `actionscat_list_builds` 查询后台是否已生成构建，严禁盲目重试；
 - **状态门禁与版本不可变性**：
   - 校验 `build.Status == "succeeded"`；
   - 若构建失败（`failed` / `timed_out`），自动提取并截断输出（4000 字符以内）编译日志（`stderr`/`stdout`）辅助 Agent 诊断；
@@ -191,21 +193,25 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 #### 5. `actionscat_get_build`
 - **功能**：查询特定构建的任务状态、制品哈希、退出码及详细编译日志；
-- **使用场景**：用于构建超时后的异步轮询确认，或开发排查阶段提取完整编译日志。
+- **使用场景**：在已知 `build_id` 时提取完整编译日志或确认构建终态。
 
-#### 6. `actionscat_activate_build` (Admin)
+#### 6. `actionscat_list_builds`
+- **功能**：列出 Action 的历史构建记录（按创建时间倒序），支持通过 `version_id` 过滤；
+- **使用场景**：当 `actionscat_build_version` 或 `actionscat_deploy_action` 遭遇超时或传输中断时，客户端无 `build_id`。调用本工具可发现该版本是否在后端成功生成构建，避免重复触发构建。
+
+#### 7. `actionscat_activate_build` (Admin)
 - **功能**：将成功构建（`succeeded`）激活为 Action 的生效版本，使其跃迁为 `runnable` 状态；
 - **权限与状态门禁**：
   - 管理员权限门禁，`Mock==true` 拦截；
   - 激活前主动验证构建状态，拒绝激活非 `succeeded` 状态的构建。
 
-#### 7. `actionscat_deploy_action` (Admin, All-in-One)
+#### 8. `actionscat_deploy_action` (Admin, All-in-One)
 - **功能**：一站式复合部署工具，自动串联完整生命周期：
   `create_version -> build_version -> inspect status == succeeded -> activate_build`；
   执行成功后，Action 立即进入 `runnable` 状态，可直接通过 `actionscat_run_action` 执行；
 - **权限门禁**：管理员权限门禁，`Mock==true` 拦截。
 
-#### 8. `actionscat_run_action`
+#### 9. `actionscat_run_action`
 - **功能**：触发指定 Action 执行并支持同步等待结果（最长 25 秒）；
 - **参数**：`action_id: string`（必填）, `extra_env: map[string]string`, `trigger_metadata: map[string]string`, `wait: bool`；
 - **安全检查**：
@@ -213,7 +219,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - 前缀黑名单：任何以 `ACTIONSCAT_` 开头的 `extra_env` 键直接拒绝；
   - 友好报错诊断：检测到后端返回 `no active build` 时，向模型反馈清晰解释并指引部署流程。
 
-#### 9. `actionscat_get_run`
+#### 10. `actionscat_get_run`
 - **功能**：查询指定运行任务的状态、耗时、退出码及 stdout/stderr 日志；
 - **脱敏策略**：返回 `AgentRunDTO`，完全剔除 `PlannedEnv`。
 
@@ -226,7 +232,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | **控制平面凭据** | 外部未授权调用 FrostAgent 代理，利用代理持有的 token 滥用 ActionsCat | 代理入口强制调用 `CheckControlPlaneAuthScoped`，非本地回环强制 Bearer 校验，支持本地强鉴权配置 |
 | **管理面权限滥用** | 普通用户诱导 Agent 频繁调用管理工具（创建 Action/版本、构建、激活或部署）污染控制面 | 5 个状态变更工具全量接入 `ADMIN_QQ_IDS` 门禁；非管理员执行时直接返回权限不足，产生 0 次后端网络请求 |
 | **模拟会话副作用** | `?mock=true` 调试会话调用执行或变更工具触发真实沙箱编译、写入与消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更与运行操作，严格维持“断电全丢”不变量 |
-| **构建超时未决** | 耗时编译导致 HTTP 链接超时，被客户端误判为“失败”引发重复构建并发冲突 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；context 超时严格映射为 `ErrBuildTimeoutUnknownResult`，指导 Agent 使用 `get_build` 确认真实状态 |
+| **构建超时未决** | 耗时编译导致 HTTP 链接超时，被客户端误判为“失败”引发重复构建并发冲突 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |
 | **构建状态与版本污染** | 激活未完成/失败的构建导致 Action 运行时崩溃；在失败版本上重试破坏不可变快照 | `activate_build` 与 `deploy_action` 严格断言 `build.Status == "succeeded"`；对失败构建输出截断日志并强制指引 Agent 通过 `create_version` 创建新版本 |
 | **源码载荷溢出** | Agent 提交超大代码文件或递归目录耗尽内存与传输带宽 | 工具层计算源码映射总字节并硬限制为 10 MiB（`maxTotalFilesBytes`）；HTTP 代理层强制配置 `http.MaxBytesReader` 限制 10 MiB |
 | **敏感状态泄露** | 沙箱运行中注入的持久状态（`planned_env`）进入大模型上下文导致数据泄露 | 单独定义 `AgentRunDTO`，严格白名单过滤输出字段，永远剔除 `PlannedEnv` |

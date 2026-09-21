@@ -48,6 +48,8 @@ type Store struct {
 	buffer      *ring.Ring
 	mu          sync.RWMutex
 	size        int
+	maxBytes    int
+	totalBytes  int
 	subscribers map[int]*subscriber
 	nextSubID   int
 	subMu       sync.Mutex
@@ -57,10 +59,24 @@ type Store struct {
 	id          string
 }
 
-var General = New("", "General", 5000)
+const (
+	DefaultBufferSize = 5000
+	DefaultMaxBytes   = 32 * 1024 * 1024 // 32 MiB per Store
+)
+
+var General = New("", "General", DefaultBufferSize)
 
 func New(id, name string, size int) *Store {
-	s := &Store{id: id, name: name, subscribers: make(map[int]*subscriber)}
+	return NewWithLimits(id, name, size, DefaultMaxBytes)
+}
+
+func NewWithLimits(id, name string, size int, maxBytes int) *Store {
+	s := &Store{
+		id:          id,
+		name:        name,
+		subscribers: make(map[int]*subscriber),
+		maxBytes:    maxBytes,
+	}
 	s.Init(size)
 	return s
 }
@@ -75,6 +91,30 @@ func (s *Store) Init(capacity int) {
 	s.buffer = ring.New(s.size)
 	s.imageCache = make(map[string]*cachedImage)
 	s.nextEntryID = 0
+	s.totalBytes = 0
+}
+
+func entryBytes(e LogEntry) int {
+	return len(e.Content) + len(e.TraceID) + len(e.InstanceID) + len(e.InstanceName) + 64
+}
+
+func (s *Store) evictOverBudgetLocked() {
+	if s.maxBytes <= 0 || s.totalBytes <= s.maxBytes || s.buffer == nil {
+		return
+	}
+
+	curr := s.buffer
+	for i := 0; i < s.size && s.totalBytes > s.maxBytes; i++ {
+		if oldEntry, ok := curr.Value.(LogEntry); ok {
+			s.releaseImagesLocked(oldEntry.imageRefs)
+			s.totalBytes -= entryBytes(oldEntry)
+			curr.Value = nil
+		}
+		curr = curr.Next()
+	}
+	if s.totalBytes < 0 {
+		s.totalBytes = 0
+	}
 }
 
 func (s *Store) log(level Level, category Category, content string, traceID string, direction string) {
@@ -91,6 +131,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 
 	if previous, ok := s.buffer.Value.(LogEntry); ok {
 		s.releaseImagesLocked(previous.imageRefs)
+		s.totalBytes -= entryBytes(previous)
 	}
 
 	s.nextEntryID++
@@ -110,6 +151,8 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 
 	s.buffer.Value = entry
 	s.buffer = s.buffer.Next()
+	s.totalBytes += entryBytes(entry)
+	s.evictOverBudgetLocked()
 	s.mu.Unlock()
 
 	// 广播给 subscriber
@@ -233,7 +276,7 @@ func (s *Store) Snapshot() []LogEntry {
 		return logs
 	}
 
-	s.buffer.Do(func(p interface{}) {
+	s.buffer.Do(func(p any) {
 		if p != nil {
 			logs = append(logs, p.(LogEntry))
 		}
@@ -247,6 +290,26 @@ func (s *Store) Clear() {
 	defer s.mu.Unlock()
 	s.buffer = ring.New(s.size)
 	s.imageCache = make(map[string]*cachedImage)
+	s.totalBytes = 0
+}
+
+func (s *Store) SetMaxBytes(maxBytes int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxBytes = maxBytes
+	s.evictOverBudgetLocked()
+}
+
+func (s *Store) MaxBytes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxBytes
+}
+
+func (s *Store) TotalBytes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.totalBytes
 }
 
 // Subscribe returns a channel that receives new log entries matching the filter.
@@ -320,6 +383,8 @@ func LLMResponse(v string, t ...string)                      { General.LLMRespon
 func Websocket(l Level, v string, t ...string)               { General.Websocket(l, v, t...) }
 func Snapshot() []LogEntry                                   { return General.Snapshot() }
 func Clear()                                                 { General.Clear() }
+func SetMaxBytes(maxBytes int)                               { General.SetMaxBytes(maxBytes) }
+func TotalBytes() int                                        { return General.TotalBytes() }
 func Subscribe(f func(LogEntry) bool) (int, <-chan LogEntry) { return General.Subscribe(f) }
 func Unsubscribe(id int)                                     { General.Unsubscribe(id) }
 

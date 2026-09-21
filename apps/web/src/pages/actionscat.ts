@@ -140,6 +140,14 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
               查询构建任务状态、制品哈希及详细编译输出日志，用于超时排查或分析编译错误。
             </p>
           </div>
+          <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_builds</span>
+            </div>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              查询 Action 的历史构建列表，支持过滤指定版本；用于构建超时或未决状态的幂等恢复与发现。
+            </p>
+          </div>
         </div>
       </section>
 
