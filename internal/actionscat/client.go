@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"FrostAgent/internal/sandbox"
@@ -269,8 +270,11 @@ type HTTPClient interface {
 
 // Client interacts with the ActionsCat management and dispatch APIs.
 type Client struct {
-	getenv     func(string) string
-	httpClient HTTPClient
+	getenv          func(string) string
+	httpClient      HTTPClient
+	readinessMu     sync.RWMutex
+	lastReadiness   *sandbox.ReadinessReport
+	lastReadinessAt time.Time
 }
 
 // Option configures a Client.
@@ -460,7 +464,17 @@ func (c *Client) SandboxAuthToken() string {
 }
 
 // CheckSandboxReadiness probes the configured Sandbox Gateway and returns a structured readiness report.
+// Results are cached with a 30-second TTL to avoid expensive container churn on repeated calls.
 func (c *Client) CheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessReport {
+	return c.checkSandboxReadinessWithTTL(ctx, 30*time.Second)
+}
+
+// ForceCheckSandboxReadiness bypasses the TTL cache and forces an active probe of the Sandbox Gateway.
+func (c *Client) ForceCheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessReport {
+	return c.checkSandboxReadinessWithTTL(ctx, 0)
+}
+
+func (c *Client) checkSandboxReadinessWithTTL(ctx context.Context, ttl time.Duration) *sandbox.ReadinessReport {
 	ep := c.SandboxEndpoint()
 	if ep == "" {
 		return &sandbox.ReadinessReport{
@@ -469,12 +483,48 @@ func (c *Client) CheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessRe
 			Detail:   "sandbox endpoint is not configured (SANDBOX_BASE_URL / FA_SANDBOX_ENDPOINT)",
 		}
 	}
+
+	c.readinessMu.RLock()
+	if ttl > 0 && c.lastReadiness != nil && time.Since(c.lastReadinessAt) < ttl {
+		cached := c.lastReadiness
+		c.readinessMu.RUnlock()
+		return cached
+	}
+	c.readinessMu.RUnlock()
+
 	tok := c.SandboxAuthToken()
-	return sandbox.CheckReadiness(ctx, ep, tok, sandbox.ProfileGoBuilder, sandbox.ProfileActionRuntime)
+	rep := sandbox.CheckReadiness(ctx, ep, tok, sandbox.ProfileGoBuilder, sandbox.ProfileActionRuntime)
+
+	c.readinessMu.Lock()
+	c.lastReadiness = rep
+	c.lastReadinessAt = time.Now()
+	c.readinessMu.Unlock()
+
+	return rep
+}
+
+// LastSandboxReadiness returns the cached readiness report without performing active probes,
+// or a report with status "unprobed" if no active probe has been executed yet.
+func (c *Client) LastSandboxReadiness() *sandbox.ReadinessReport {
+	ep := c.SandboxEndpoint()
+	if ep == "" {
+		return nil
+	}
+	c.readinessMu.RLock()
+	defer c.readinessMu.RUnlock()
+	if c.lastReadiness != nil {
+		return c.lastReadiness
+	}
+	return &sandbox.ReadinessReport{
+		Status:   sandbox.StatusUnprobed,
+		Endpoint: ep,
+		Detail:   "沙箱网关已配置，尚未执行主动就绪探测",
+	}
 }
 
 // Status returns a high-level overview of the ActionsCat connection status,
 // distinguishing between anonymous reachability (/healthz) and management API readiness.
+// Note: This function does not perform active mutation probes on the sandbox gateway.
 func (c *Client) Status(ctx context.Context) StatusResponse {
 	var resp StatusResponse
 	endpoint := c.Endpoint()
@@ -534,7 +584,7 @@ func (c *Client) Status(ctx context.Context) StatusResponse {
 	}
 
 	if c.SandboxEndpoint() != "" {
-		resp.Sandbox = c.CheckSandboxReadiness(ctx)
+		resp.Sandbox = c.LastSandboxReadiness()
 	}
 
 	return resp

@@ -421,9 +421,9 @@ fail closed / no local fallback
 | `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
 | `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：成功返回 HTTP 204 No Content，若会话不存在则返回 HTTP 404 |
 
-### 7.4 四态就绪诊断体系 (4-Way Readiness Diagnostics)
+### 7.4 沙箱就绪诊断体系 (Readiness Diagnostics Specification)
 
-为彻底解决“黑盒 404”与“配置错误难定位”问题，FrostAgent 引入了系统化的四态就绪诊断探测（`internal/sandbox/readiness.go`），将沙箱网关连接结果精确归类为：
+为彻底解决“黑盒 404”、空对象契约伪成功与“配置错误难定位”问题，FrostAgent 引入了系统化、全生命周期的沙箱就绪诊断引擎（`internal/sandbox/readiness.go`），将沙箱网关连接结果精确归类为：
 
 ```
                               ┌───────────────────────┐
@@ -436,20 +436,28 @@ fail closed / no local fallback
                     │                                         │
          Dial / Timeout Error?                        ┌───────┴───────┐
          ├── YES ──▶ StatusEndpointUnreachable        │               │
-         └── NO                                    401 / 403?        404 on /sessions?
+         └── NO                                    401 / 403?   /sessions, /shell/exec, /release?
                                                       ├── YES ──▶ StatusAuthFailure
-                                                      └── NO          ├── YES ──▶ StatusAPIContractMissing
-                                                                      └── NO
+                                                      └── NO          ├── 404 / Malformed JSON ──▶ StatusAPIContractMissing
+                                                                      ├── 5xx Server Error     ──▶ StatusEndpointUnreachable
+                                                                      └── 200 OK
                                                                           Profiles Supported?
                                                                           ├── NO  ──▶ StatusProfileUnsupported
                                                                           └── YES ──▶ StatusReady
 ```
 
-1. **`endpoint_unreachable` (端点不可达)**：网络拒绝连接、端口未监听、DNS 解析失败或连接超时；
-2. **`auth_failure` (认证失败)**：网关返回 HTTP 401 Unauthorized 或 403 Forbidden，说明 `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` 不匹配；
-3. **`api_contract_missing` (协议契约缺失)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions` 返回 404 Not Found（明确指出当前网关为不兼容的旧版或未实现会话契约的 code-interpreter 镜像）；
-4. **`profile_unsupported` (Profile 不支持)**：网关拒绝了请求的构建或运行配置文件（例如缺少 `go-builder` 或 `action-runtime`）；
-5. **`ready` (完全就绪)**：网关服务连通、认证校验通过、会话契约完备且所有必须的 Profile 均已就绪。
+1. **`unprobed` (未探测)**：沙箱网关已配置，但尚未触发主动沙箱生命周期诊断。通过区分轻量只读状态与主动探测，彻底杜绝控制台页面加载时无谓触发容器创建销毁的副作用；
+2. **`endpoint_unreachable` (端点不可达/服务异常)**：网络拒绝连接、端口未监听、DNS 解析失败、连接超时或网关在会话生命周期中返回 HTTP 5xx 服务端错误；
+3. **`auth_failure` (认证失败)**：网关返回 HTTP 401 Unauthorized 或 403 Forbidden，说明 `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` 缺失或不匹配；
+4. **`api_contract_missing` (协议契约缺失/失范)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions`、`/api/v1/shell/exec` 或 `/api/v1/release` 返回 404 Not Found，或者返回的响应体为空、格式畸形、关键字段缺失/失配（如 `user_uuid` 或 `status` 不符合契约规范）；
+5. **`profile_unsupported` (Profile/工具链不支持)**：网关明确拒绝了请求的构建或运行配置文件（如缺少 `go-builder` 或 `action-runtime`），或者在 `go-builder` 中执行工具链校验命令（如 `go version`）失败；
+6. **`ready` (完全就绪)**：网关服务连通、认证校验通过、动态 UUIDv4 会话创建、基础命令执行验证及工作区释放清理全部成功闭环。
+
+#### 核心契约与安全机制：
+- **RFC 4122 UUIDv4 动态会话标识**：探针抛弃固定字符串，每次探测通过密码学安全随机源（`crypto/rand`）生成合法的 RFC 4122 Version 4 UUID（形如 `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`）。杜绝后端类型化框架（如 FastAPI / Pydantic `UUID` 类型）因无法解析固定字符串抛出 HTTP 422 校验失败，同时杜绝多实例并发探测产生命名冲突；
+- **全生命周期闭环验证与确定性清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 释放容器，确保 0 残留；
+- **严格响应合规校验 (Conformance Validation)**：使用 `ValidateSessionResponse` 严格校验返回的 JSON 结构体，拒绝空对象 `{}`、缺失 `user_uuid` / `profile` / `status` 或会话状态非 `ready/created` 的伪成功响应，杜绝虚假全绿；
+- **读写分离与短 TTL 缓存保护**：`GET /api/actionscat/status` 保持严格只读（仅返回缓存的最近就绪报告或 `unprobed` 标识）；主动探测接口施加 30 秒短 TTL 缓存保护，避免管理员频繁刷新导致网关高频创建容器与资源颠簸。
 
 诊断探针通过 `codeinterpreter.Client.Diagnose()` 与 `actionscat.Client.CheckSandboxReadiness()` 暴露，并在 Web 前端（`apps/web/src/pages/actionscat.ts`）提供直观的诊断看板与错误排查指引。
 

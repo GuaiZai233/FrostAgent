@@ -335,15 +335,20 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
     let desc = sb.detail || '';
 
     switch (sb.status) {
+      case 'unprobed':
+        badgeClass = 'badge-secondary';
+        badgeText = '未检测 (Unchecked)';
+        desc = sb.detail || '沙箱网关已配置，尚未执行主动就绪探测。点击诊断按钮验证 Sessions/Exec/Release 契约与工具链。';
+        break;
       case 'ready':
         badgeClass = 'badge-success';
         badgeText = '就绪 (Ready)';
-        desc = 'Gateway 处于就绪状态，已验证 Sessions/Exec 契约并支持 go-builder 与 action-runtime 配置文件。';
+        desc = 'Gateway 处于就绪状态，已验证 Sessions/Exec/Release 契约并支持 go-builder 与 action-runtime 配置文件。';
         break;
       case 'endpoint_unreachable':
         badgeClass = 'badge-destructive';
         badgeText = '无法连接 (Unreachable)';
-        desc = desc || '无法连接到 Sandbox Gateway 端点。请检查 Gateway 是否已启动。';
+        desc = desc || '无法连接到 Sandbox Gateway 端点或网关服务异常。请检查 Gateway 是否已启动。';
         break;
       case 'auth_failure':
         badgeClass = 'badge-warning';
@@ -353,12 +358,12 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       case 'api_contract_missing':
         badgeClass = 'badge-destructive';
         badgeText = '契约缺失 (Contract Missing)';
-        desc = desc || 'Gateway 在 /api/v1/sessions 返回 404。此端点缺少 ActionsCat 所需的沙箱契约。';
+        desc = desc || 'Gateway 缺少 ActionsCat 所需的沙箱契约 (/api/v1/sessions, /shell/exec 或 /release)。';
         break;
       case 'profile_unsupported':
         badgeClass = 'badge-warning';
         badgeText = 'Profile 不支持 (Profile Unsupported)';
-        desc = desc || 'Gateway 不支持所需的构建或运行时 profile (go-builder / action-runtime)。';
+        desc = desc || 'Gateway 不支持所需的构建或运行时 profile (go-builder / action-runtime)，或容器内缺少 Go 编译工具链。';
         break;
     }
 

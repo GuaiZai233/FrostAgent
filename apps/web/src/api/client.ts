@@ -127,6 +127,7 @@ export const securityAPI = {
 
 export type SandboxReadinessStatus =
   | 'ready'
+  | 'unprobed'
   | 'endpoint_unreachable'
   | 'auth_failure'
   | 'api_contract_missing'

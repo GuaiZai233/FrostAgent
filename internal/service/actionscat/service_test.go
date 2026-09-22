@@ -975,8 +975,45 @@ func TestService_SandboxReadiness(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready"})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			if r.Header.Get("X-Auth-Token") != "secret_gw_tok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			var body struct {
+				Command string `json:"command"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			stdout := "ok"
+			if body.Command == "go version" {
+				stdout = "go version go1.24.0 linux/amd64"
+			}
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    stdout,
+				"exit_code": exitCode,
+				"timed_out": false,
+			})
+		case "/api/v1/release":
+			if r.Header.Get("X-Auth-Token") != "secret_gw_tok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
 		}
