@@ -8,10 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,26 +19,6 @@ import (
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-
-func handleDefaultSession(w http.ResponseWriter, r *http.Request) bool {
-	if r.URL.Path == "/api/v1/sessions" {
-		var body struct {
-			UserUUID string `json:"user_uuid"`
-			Profile  string `json:"profile"`
-			Network  string `json:"network"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"user_uuid": body.UserUUID,
-			"profile":   body.Profile,
-			"network":   body.Network,
-			"status":    "ready",
-		})
-		return true
-	}
-	return false
-}
 
 func TestDeterministicSessionMapping(t *testing.T) {
 	clientA1 := codeinterpreter.New(sandbox.Config{
@@ -134,9 +112,6 @@ func TestExecRequest_PayloadAndRouting(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleDefaultSession(w, r) {
-			return
-		}
 		capturedMethod = r.Method
 		capturedPath = r.URL.Path
 		capturedQuery = r.URL.Query().Get("user_uuid")
@@ -197,9 +172,6 @@ func TestExecRequest_PayloadAndRouting(t *testing.T) {
 func TestExec_SuccessAndFailureSemantics(t *testing.T) {
 	t.Run("command failure exit code 7 returns nil error and exit_code 7", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if handleDefaultSession(w, r) {
-				return
-			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
 				"stdout": "",
@@ -237,9 +209,6 @@ func TestExec_SuccessAndFailureSemantics(t *testing.T) {
 
 	t.Run("command timeout returns nil error and timed_out true", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if handleDefaultSession(w, r) {
-				return
-			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
 				"stdout": "partial",
@@ -291,7 +260,7 @@ func TestExec_GatewayErrors(t *testing.T) {
 		t.Run(fmt.Sprintf("HTTP %d returns infrastructure error", code), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(code)
-				_, _ = fmt.Fprintf(w, "error with status %d and secret-token", code)
+				_, _ = w.Write([]byte(fmt.Sprintf("error with status %d and secret-token", code)))
 			}))
 			defer server.Close()
 
@@ -323,9 +292,6 @@ func TestExec_GatewayErrors(t *testing.T) {
 func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 	t.Run("malformed JSON response returns protocol error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if handleDefaultSession(w, r) {
-				return
-			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{not valid json`))
 		}))
@@ -349,16 +315,13 @@ func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 
 	t.Run("oversized response body is bounded", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if handleDefaultSession(w, r) {
-				return
-			}
 			w.WriteHeader(http.StatusOK)
 			// Send an infinite or huge stream that exceeds 16MB
 			w.Header().Set("Content-Type", "application/json")
 			// Create a string prefix that opens json
 			_, _ = w.Write([]byte(`{"stdout":"`))
 			chunk := strings.Repeat("A", 1024*1024)
-			for range 20 {
+			for i := 0; i < 20; i++ {
 				_, _ = w.Write([]byte(chunk))
 			}
 			_, _ = w.Write([]byte(`","stderr":"","exit_code":0}`))
@@ -486,7 +449,7 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
-	t.Run("404 Not Found with generic route error returns error", func(t *testing.T) {
+	t.Run("404 Not Found with generic route error returns backend error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("404 page not found"))
@@ -501,7 +464,7 @@ func TestRelease(t *testing.T) {
 
 		err := client.Release(context.Background(), "session-gone")
 		if err == nil {
-			t.Fatalf("expected error for generic 404 release, got nil")
+			t.Fatalf("expected error for generic 404 route error, got nil")
 		}
 	})
 
@@ -524,29 +487,10 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
-	t.Run("401 Unauthorized returns backend error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"detail":"invalid token"}`))
-		}))
-		defer server.Close()
-
-		client := codeinterpreter.New(sandbox.Config{
-			BaseURL:          server.URL,
-			AuthToken:        "tok",
-			SessionNamespace: "ns",
-		}, codeinterpreter.WithHTTPClient(server.Client()))
-
-		err := client.Release(context.Background(), "session-unauth")
-		if err == nil {
-			t.Fatalf("expected error on 401 release")
-		}
-	})
-
-	t.Run("200 OK is idempotent success", func(t *testing.T) {
+	t.Run("200 OK is rejected to prevent masking misconfigurations", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"released"}`))
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		}))
 		defer server.Close()
 
@@ -557,8 +501,8 @@ func TestRelease(t *testing.T) {
 		}, codeinterpreter.WithHTTPClient(server.Client()))
 
 		err := client.Release(context.Background(), "session-200")
-		if err != nil {
-			t.Fatalf("expected nil error on 200 release, got: %v", err)
+		if err == nil {
+			t.Fatalf("expected error on 200 release, got nil")
 		}
 	})
 }
@@ -622,9 +566,6 @@ func TestExec_SemanticExecutionStateInvariants(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if handleDefaultSession(w, r) {
-					return
-				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(tc.body))
 			}))
@@ -660,9 +601,6 @@ func TestExec_SemanticExecutionStateInvariants(t *testing.T) {
 func TestExec_FloatTimeoutSemantics(t *testing.T) {
 	var capturedBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleDefaultSession(w, r) {
-			return
-		}
 		var err error
 		capturedBody, err = io.ReadAll(r.Body)
 		if err != nil {
@@ -708,9 +646,6 @@ func TestExec_EscapeHeavyNearLimitResponse(t *testing.T) {
 	payload := `{"stdout":"` + rawEscapeStream + `","stderr":"` + rawEscapeStream + `","exit_code":0,"timed_out":false}`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleDefaultSession(w, r) {
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(payload))
@@ -747,9 +682,6 @@ func TestExec_Gateway422_RedactsSentinelSecretInInputField(t *testing.T) {
 	secretCommand := "curl -H 'Authorization: Bearer " + sentinelSecret + "' https://api.internal/data"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleDefaultSession(w, r) {
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -840,1050 +772,4 @@ func TestExec_LocalValidation_RejectsOversizedCwd(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cwd exceeds maximum allowed length") {
 		t.Fatalf("expected error for oversized cwd, got: %v", err)
 	}
-}
-
-func TestExec_QueryParamsParity(t *testing.T) {
-	var capturedQuery url.Values
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleDefaultSession(w, r) {
-			return
-		}
-		capturedQuery = r.URL.Query()
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{
-			"stdout": "ok",
-			"exit_code": 0,
-			"timed_out": false
-		}`))
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "tok",
-		SessionNamespace: "ns",
-	}, codeinterpreter.WithHTTPClient(server.Client()),
-		codeinterpreter.WithProfile("custom-profile"),
-		codeinterpreter.WithNetwork("isolated"))
-
-	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
-		SessionID: "sess-query-test",
-		Command:   "echo ok",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Exec failed: %v", err)
-	}
-
-	if !uuidRegex.MatchString(capturedQuery.Get("user_uuid")) {
-		t.Fatalf("expected valid UUID for user_uuid, got: %s", capturedQuery.Get("user_uuid"))
-	}
-	if capturedQuery.Get("profile") != "custom-profile" {
-		t.Fatalf("expected profile custom-profile, got: %s", capturedQuery.Get("profile"))
-	}
-	if capturedQuery.Get("network") != "isolated" {
-		t.Fatalf("expected network isolated, got: %s", capturedQuery.Get("network"))
-	}
-}
-
-func TestCreateSession_SuccessAndExecInheritance(t *testing.T) {
-	var sessionCreated bool
-	var execProfile string
-	var execNetwork string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			sessionCreated = true
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": body.UserUUID,
-				"profile":   body.Profile,
-				"network":   body.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/shell/exec":
-			execProfile = r.URL.Query().Get("profile")
-			execNetwork = r.URL.Query().Get("network")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{
-				"stdout": "session exec ok",
-				"exit_code": 0,
-				"timed_out": false
-			}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "tok",
-		SessionNamespace: "ns",
-	}, codeinterpreter.WithHTTPClient(server.Client()))
-
-	sessInfo, err := client.CreateSession(context.Background(), "session-inherit", sandbox.ProfileActionRuntime, "none", nil)
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
-	}
-	if !sessionCreated {
-		t.Fatalf("expected session creation request to server")
-	}
-	if sessInfo.Profile != sandbox.ProfileActionRuntime || sessInfo.Network != "none" || sessInfo.Status != "ready" {
-		t.Fatalf("unexpected SessionInfo: %+v", sessInfo)
-	}
-
-	res, err := client.Exec(context.Background(), sandbox.ExecRequest{
-		SessionID: "session-inherit",
-		Command:   "whoami",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Exec failed: %v", err)
-	}
-	if res.Stdout != "session exec ok" {
-		t.Fatalf("unexpected stdout: %s", res.Stdout)
-	}
-	if execProfile != sandbox.ProfileActionRuntime {
-		t.Fatalf("expected exec to inherit profile %q, got: %q", sandbox.ProfileActionRuntime, execProfile)
-	}
-	if execNetwork != "none" {
-		t.Fatalf("expected exec to inherit network none, got: %q", execNetwork)
-	}
-}
-
-func TestCreateSession_ConformanceFailures(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		// Missing required network in response
-		_, _ = w.Write([]byte(`{
-			"user_uuid": "valid-uuid",
-			"profile": "minimal",
-			"status": "ready"
-		}`))
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "tok",
-		SessionNamespace: "ns",
-	}, codeinterpreter.WithHTTPClient(server.Client()))
-
-	_, err := client.CreateSession(context.Background(), "sess-fail", "minimal", "none", nil)
-	if err == nil {
-		t.Fatalf("expected conformance failure error, got nil")
-	}
-}
-
-func TestRelease_CleansSessionMetadata(t *testing.T) {
-	var execProfile string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": body.UserUUID,
-				"profile":   body.Profile,
-				"network":   body.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/release":
-			w.WriteHeader(http.StatusOK)
-		case "/api/v1/shell/exec":
-			execProfile = r.URL.Query().Get("profile")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{
-				"stdout": "ok",
-				"exit_code": 0,
-				"timed_out": false
-			}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "tok",
-		SessionNamespace: "ns",
-	}, codeinterpreter.WithHTTPClient(server.Client()))
-
-	_, err := client.CreateSession(context.Background(), "sess-clean", sandbox.ProfileActionRuntime, "none", nil)
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
-	}
-
-	err = client.Release(context.Background(), "sess-clean")
-	if err != nil {
-		t.Fatalf("Release failed: %v", err)
-	}
-
-	// After release, subsequent Exec on same SessionID uses default profile (minimal), not action-runtime
-	_, err = client.Exec(context.Background(), sandbox.ExecRequest{
-		SessionID: "sess-clean",
-		Command:   "echo 1",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Exec failed: %v", err)
-	}
-	if execProfile != sandbox.ProfileMinimal {
-		t.Fatalf("expected profile to reset to %q after release, got: %q", sandbox.ProfileMinimal, execProfile)
-	}
-}
-
-func TestRelease_FailurePreservesSessionMetadata(t *testing.T) {
-	var releaseAttempts int
-	var releaseAttemptsMu sync.Mutex
-	var capturedExecProfile string
-	var capturedExecNetwork string
-	var execMu sync.Mutex
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": body.UserUUID,
-				"profile":   body.Profile,
-				"network":   body.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/release":
-			releaseAttemptsMu.Lock()
-			releaseAttempts++
-			attempt := releaseAttempts
-			releaseAttemptsMu.Unlock()
-
-			if attempt == 1 {
-				// 2. Release 第一次返回 500
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(`{"detail":"temporary release failure"}`))
-				return
-			}
-			// 4. Release 第二次成功
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"released"}`))
-		case "/api/v1/shell/exec":
-			execMu.Lock()
-			capturedExecProfile = r.URL.Query().Get("profile")
-			capturedExecNetwork = r.URL.Query().Get("network")
-			execMu.Unlock()
-
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{
-				"stdout": "ok",
-				"exit_code": 0,
-				"timed_out": false
-			}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "tok",
-		SessionNamespace: "ns",
-	}, codeinterpreter.WithHTTPClient(server.Client()))
-
-	ctx := context.Background()
-	sessionID := "sess-failover"
-
-	// 1. CreateSession(action-runtime, isolated)
-	sessInfo, err := client.CreateSession(ctx, sessionID, sandbox.ProfileActionRuntime, "isolated", nil)
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
-	}
-	if sessInfo.Profile != sandbox.ProfileActionRuntime || sessInfo.Network != "isolated" {
-		t.Fatalf("unexpected SessionInfo: %+v", sessInfo)
-	}
-
-	// 2. Release 第一次返回 500
-	err = client.Release(ctx, sessionID)
-	if err == nil {
-		t.Fatalf("expected error on first release (HTTP 500), got nil")
-	}
-
-	// 3. 再 Exec，同一 session query 仍必须是 action-runtime/isolated
-	_, err = client.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo test-1",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Exec failed after release error: %v", err)
-	}
-	execMu.Lock()
-	prof1 := capturedExecProfile
-	net1 := capturedExecNetwork
-	execMu.Unlock()
-	if prof1 != sandbox.ProfileActionRuntime {
-		t.Fatalf("expected exec to preserve profile %q after failed release, got: %q", sandbox.ProfileActionRuntime, prof1)
-	}
-	if net1 != "isolated" {
-		t.Fatalf("expected exec to preserve network %q after failed release, got: %q", "isolated", net1)
-	}
-
-	// 4. Release 第二次成功
-	err = client.Release(ctx, sessionID)
-	if err != nil {
-		t.Fatalf("expected second release to succeed, got: %v", err)
-	}
-
-	// 5. 之后 metadata 才清除 (next Exec resets to client default minimal/none)
-	_, err = client.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo test-2",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Exec failed after successful release: %v", err)
-	}
-	execMu.Lock()
-	prof2 := capturedExecProfile
-	net2 := capturedExecNetwork
-	execMu.Unlock()
-	if prof2 != sandbox.ProfileMinimal {
-		t.Fatalf("expected profile to reset to %q after successful release, got: %q", sandbox.ProfileMinimal, prof2)
-	}
-	if net2 != "none" {
-		t.Fatalf("expected network to reset to %q after successful release, got: %q", "none", net2)
-	}
-}
-
-func TestLifecycleGate_AntiOrphanGuarantee(t *testing.T) {
-	ctx := context.Background()
-	const sessionID = "sess-orphan-test"
-
-	var mu sync.Mutex
-	activeSessions := make(map[string]bool)
-	sessionsStarted := make(chan struct{})
-	releaseBlock := make(chan struct{})
-	var startOnce sync.Once
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			var req struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-
-			// Signal that /sessions HTTP request has reached the gateway
-			startOnce.Do(func() {
-				close(sessionsStarted)
-			})
-
-			// Block until test releases the gate
-			<-releaseBlock
-
-			mu.Lock()
-			activeSessions[req.UserUUID] = true
-			mu.Unlock()
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": req.UserUUID,
-				"profile":   req.Profile,
-				"network":   req.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/release":
-			userUUID := r.URL.Query().Get("user_uuid")
-			mu.Lock()
-			delete(activeSessions, userUUID)
-			mu.Unlock()
-
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "secret",
-		SessionNamespace: "test-ns",
-	})
-	userUUID := client.SessionIDToUUID(sessionID)
-
-	var ensureErr error
-	var releaseErr error
-	var wg sync.WaitGroup
-
-	// Step 1: Start EnsureSession in goroutine; it blocks in /api/v1/sessions
-	wg.Go(func() {
-		ensureErr = client.EnsureSession(ctx, sessionID)
-	})
-
-	// Wait until EnsureSession is actively in-flight in /api/v1/sessions
-	select {
-	case <-sessionsStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for EnsureSession to reach gateway")
-	}
-
-	// Step 2: Concurrent Release is called while /sessions is in-flight.
-	// The lifecycle gate serializes Release after provisioning.
-	wg.Go(func() {
-		releaseErr = client.Release(ctx, sessionID)
-	})
-
-	// Give Release time to queue behind EnsureSession's gate lock
-	time.Sleep(50 * time.Millisecond)
-
-	// Step 3: Unblock /sessions response. EnsureSession completes remote provisioning,
-	// and then Release immediately runs, releasing the newly created remote session!
-	close(releaseBlock)
-
-	wg.Wait()
-
-	if releaseErr != nil {
-		t.Fatalf("Release failed: %v", releaseErr)
-	}
-	_ = ensureErr
-
-	// Step 4: Verify Anti-Orphan Guarantee:
-	// - Zero local session metadata remains
-	// - Zero active remote session exists on the gateway
-	if client.HasSession(sessionID) {
-		t.Fatalf("anti-orphan violation: local metadata still exists for session %q", sessionID)
-	}
-
-	mu.Lock()
-	active := activeSessions[userUUID]
-	mu.Unlock()
-	if active {
-		t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway after Release", userUUID)
-	}
-}
-
-func TestExec_GatewayRestartEvictionRecovery(t *testing.T) {
-	ctx := context.Background()
-	const sessionID = "sess-restart-recovery"
-
-	var mu sync.Mutex
-	activeSessions := make(map[string]bool)
-	sessionCreateCount := 0
-	execCount := 0
-	forceGeneric404 := false
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			var req struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-
-			mu.Lock()
-			sessionCreateCount++
-			activeSessions[req.UserUUID] = true
-			mu.Unlock()
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": req.UserUUID,
-				"profile":   req.Profile,
-				"network":   req.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/shell/exec":
-			userUUID := r.URL.Query().Get("user_uuid")
-			profile := r.URL.Query().Get("profile")
-			network := r.URL.Query().Get("network")
-
-			mu.Lock()
-			execCount++
-			isActive := activeSessions[userUUID]
-			generic404 := forceGeneric404
-			mu.Unlock()
-
-			if generic404 {
-				// Generic router 404 (endpoint or route missing)
-				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
-				return
-			}
-
-			if !isActive {
-				// Machine-readable session missing/evicted response
-				w.WriteHeader(http.StatusNotFound)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"code":    "session_not_found",
-					"message": "session evicted or gateway restarted",
-				})
-				return
-			}
-
-			// Validate policy preservation during recovery
-			if profile != sandbox.ProfileActionRuntime || network != "isolated" {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":"policy mismatch"}`))
-				return
-			}
-
-			exitCode := 0
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"stdout":    "recovered successfully\n",
-				"stderr":    "",
-				"exit_code": &exitCode,
-				"timed_out": false,
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "secret",
-		SessionNamespace: "test-ns",
-	}, codeinterpreter.WithProfile(sandbox.ProfileActionRuntime), codeinterpreter.WithNetwork("isolated"))
-
-	// 1. Initial Exec: creates session on gateway and succeeds
-	res1, err := client.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo test-1",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("first Exec failed: %v", err)
-	}
-	if strings.TrimSpace(res1.Stdout) != "recovered successfully" {
-		t.Fatalf("unexpected stdout: %q", res1.Stdout)
-	}
-
-	mu.Lock()
-	if sessionCreateCount != 1 {
-		t.Fatalf("expected 1 session create, got %d", sessionCreateCount)
-	}
-	if execCount != 1 {
-		t.Fatalf("expected 1 exec, got %d", execCount)
-	}
-	mu.Unlock()
-
-	// 2. Simulate Gateway Restart / Eviction:
-	// Clear gateway active sessions without touching client local state
-	mu.Lock()
-	activeSessions = make(map[string]bool)
-	mu.Unlock()
-
-	// Client still has cached metadata in c.sessions:
-	if !client.HasSession(sessionID) {
-		t.Fatal("expected client to still have cached session metadata before second Exec")
-	}
-
-	// 3. Second Exec: hits 404 session_not_found on attempt 0 -> automatically purges stale metadata,
-	// re-provisions session with preserved profile/network, and retries command successfully!
-	res2, err := client.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo test-2",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("second Exec with auto-recovery failed: %v", err)
-	}
-	if strings.TrimSpace(res2.Stdout) != "recovered successfully" {
-		t.Fatalf("unexpected stdout on recovered exec: %q", res2.Stdout)
-	}
-
-	mu.Lock()
-	if sessionCreateCount != 2 {
-		t.Fatalf("expected 2 session creates (1 initial + 1 recovery), got %d", sessionCreateCount)
-	}
-	// execCount should be 3: 1 from initial + 1 from failed attempt 0 + 1 from successful retry attempt 1
-	if execCount != 3 {
-		t.Fatalf("expected 3 exec requests total, got %d", execCount)
-	}
-	mu.Unlock()
-
-	if !client.HasSession(sessionID) {
-		t.Fatal("expected client to have valid re-provisioned session metadata")
-	}
-
-	// 4. Verify Generic 404 does NOT trigger recovery and fails closed immediately
-	mu.Lock()
-	forceGeneric404 = true
-	mu.Unlock()
-
-	_, err = client.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo test-generic-404",
-		Timeout:   5 * time.Second,
-	})
-	if err == nil {
-		t.Fatal("expected generic 404 to fail closed, got nil error")
-	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Fatalf("expected error to mention 404, got: %v", err)
-	}
-}
-
-func TestEnsureSession_UnknownOutcomeReconciliation(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("ConnectionHijackClose_ReconcilesRemoteSession", func(t *testing.T) {
-		var mu sync.Mutex
-		activeSessions := make(map[string]bool)
-		var releaseCalled bool
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/api/v1/sessions":
-				var req struct {
-					UserUUID string `json:"user_uuid"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&req)
-				mu.Lock()
-				activeSessions[req.UserUUID] = true
-				mu.Unlock()
-
-				// Hijack connection and abruptly close it (simulating network reset / crash after side effect)
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatalf("server does not support hijacking")
-				}
-				conn, _, _ := hj.Hijack()
-				_ = conn.Close()
-			case "/api/v1/release":
-				userUUID := r.URL.Query().Get("user_uuid")
-				mu.Lock()
-				delete(activeSessions, userUUID)
-				releaseCalled = true
-				mu.Unlock()
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		defer server.Close()
-
-		client := codeinterpreter.New(sandbox.Config{
-			BaseURL:          server.URL,
-			AuthToken:        "secret",
-			SessionNamespace: "test-ns",
-		})
-		sessionID := "sess-unknown-hijack"
-		userUUID := client.SessionIDToUUID(sessionID)
-
-		err := client.EnsureSession(ctx, sessionID)
-		if err == nil {
-			t.Fatal("expected EnsureSession to fail on connection drop, got nil")
-		}
-		if !strings.Contains(err.Error(), "creation outcome unknown") {
-			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
-		}
-
-		mu.Lock()
-		active := activeSessions[userUUID]
-		wasReleased := releaseCalled
-		mu.Unlock()
-
-		if !wasReleased {
-			t.Fatal("expected reconciliation release to be called on unknown creation outcome")
-		}
-		if active {
-			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
-		}
-		if client.HasSession(sessionID) {
-			t.Fatal("expected local session metadata to be empty")
-		}
-	})
-
-	t.Run("Gateway500AfterSideEffect_ReconcilesRemoteSession", func(t *testing.T) {
-		var mu sync.Mutex
-		activeSessions := make(map[string]bool)
-		var releaseCalled bool
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/api/v1/sessions":
-				var req struct {
-					UserUUID string `json:"user_uuid"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&req)
-				mu.Lock()
-				activeSessions[req.UserUUID] = true
-				mu.Unlock()
-
-				// Returns 500 after having created the session
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(`{"error":"gateway internal error during init"}`))
-			case "/api/v1/release":
-				userUUID := r.URL.Query().Get("user_uuid")
-				mu.Lock()
-				delete(activeSessions, userUUID)
-				releaseCalled = true
-				mu.Unlock()
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		defer server.Close()
-
-		client := codeinterpreter.New(sandbox.Config{
-			BaseURL:          server.URL,
-			AuthToken:        "secret",
-			SessionNamespace: "test-ns",
-		})
-		sessionID := "sess-unknown-500"
-		userUUID := client.SessionIDToUUID(sessionID)
-
-		err := client.EnsureSession(ctx, sessionID)
-		if err == nil {
-			t.Fatal("expected EnsureSession to fail on 500, got nil")
-		}
-		if !strings.Contains(err.Error(), "creation outcome unknown") {
-			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
-		}
-
-		mu.Lock()
-		active := activeSessions[userUUID]
-		wasReleased := releaseCalled
-		mu.Unlock()
-
-		if !wasReleased {
-			t.Fatal("expected reconciliation release to be called on 500 unknown outcome")
-		}
-		if active {
-			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
-		}
-		if client.HasSession(sessionID) {
-			t.Fatal("expected local session metadata to be empty")
-		}
-	})
-
-	t.Run("Malformed200Response_ReconcilesRemoteSession", func(t *testing.T) {
-		var mu sync.Mutex
-		activeSessions := make(map[string]bool)
-		var releaseCalled bool
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/api/v1/sessions":
-				var req struct {
-					UserUUID string `json:"user_uuid"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&req)
-				mu.Lock()
-				activeSessions[req.UserUUID] = true
-				mu.Unlock()
-
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{corrupted-json`))
-			case "/api/v1/release":
-				userUUID := r.URL.Query().Get("user_uuid")
-				mu.Lock()
-				delete(activeSessions, userUUID)
-				releaseCalled = true
-				mu.Unlock()
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		defer server.Close()
-
-		client := codeinterpreter.New(sandbox.Config{
-			BaseURL:          server.URL,
-			AuthToken:        "secret",
-			SessionNamespace: "test-ns",
-		})
-		sessionID := "sess-unknown-malformed"
-		userUUID := client.SessionIDToUUID(sessionID)
-
-		err := client.EnsureSession(ctx, sessionID)
-		if err == nil {
-			t.Fatal("expected EnsureSession to fail on malformed JSON, got nil")
-		}
-		if !strings.Contains(err.Error(), "creation outcome unknown") {
-			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
-		}
-
-		mu.Lock()
-		active := activeSessions[userUUID]
-		wasReleased := releaseCalled
-		mu.Unlock()
-
-		if !wasReleased {
-			t.Fatal("expected reconciliation release to be called on malformed 200")
-		}
-		if active {
-			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
-		}
-		if client.HasSession(sessionID) {
-			t.Fatal("expected local session metadata to be empty")
-		}
-	})
-
-	t.Run("Explicit400Rejection_DoesNotTriggerRelease", func(t *testing.T) {
-		var releaseCalled bool
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/api/v1/sessions":
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":"invalid profile requested"}`))
-			case "/api/v1/release":
-				releaseCalled = true
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		defer server.Close()
-
-		client := codeinterpreter.New(sandbox.Config{
-			BaseURL:          server.URL,
-			AuthToken:        "secret",
-			SessionNamespace: "test-ns",
-		})
-		sessionID := "sess-known-400"
-
-		err := client.EnsureSession(ctx, sessionID)
-		if err == nil {
-			t.Fatal("expected EnsureSession to fail on 400, got nil")
-		}
-		if strings.Contains(err.Error(), "creation outcome unknown") {
-			t.Fatalf("400 should be an explicit rejection, not creation outcome unknown: %v", err)
-		}
-
-		if releaseCalled {
-			t.Fatal("reconciliation release should NOT be called on clean 400 rejection")
-		}
-		if client.HasSession(sessionID) {
-			t.Fatal("expected local session metadata to be empty")
-		}
-	})
-}
-
-func TestEnsureSession_Restart409Recovery(t *testing.T) {
-	ctx := context.Background()
-	const sessionID = "sess-restart-409"
-
-	var mu sync.Mutex
-	activeSessions := make(map[string]bool)
-	var createAttempts int
-	var releaseCount int
-	var execCount int
-	var genericConflict bool
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			mu.Lock()
-			defer mu.Unlock()
-			createAttempts++
-
-			var req struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-
-			if genericConflict {
-				w.WriteHeader(http.StatusConflict)
-				_, _ = w.Write([]byte(`{"error":"unrelated generic conflict"}`))
-				return
-			}
-
-			// If session is already active on the gateway, return 409 Conflict
-			if activeSessions[req.UserUUID] {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"code":    "session_already_exists",
-					"message": "active session already exists on gateway",
-				})
-				return
-			}
-
-			// Provision session
-			activeSessions[req.UserUUID] = true
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": req.UserUUID,
-				"profile":   req.Profile,
-				"network":   req.Network,
-				"status":    "ready",
-			})
-
-		case "/api/v1/release":
-			mu.Lock()
-			defer mu.Unlock()
-			releaseCount++
-			userUUID := r.URL.Query().Get("user_uuid")
-			delete(activeSessions, userUUID)
-			w.WriteHeader(http.StatusNoContent)
-
-		case "/api/v1/shell/exec":
-			mu.Lock()
-			defer mu.Unlock()
-			execCount++
-			userUUID := r.URL.Query().Get("user_uuid")
-			if !activeSessions[userUUID] {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"code":"session_not_found"}`))
-				return
-			}
-
-			exitCode := 0
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"stdout":    "command executed after 409 recovery\n",
-				"stderr":    "",
-				"exit_code": &exitCode,
-				"timed_out": false,
-			})
-
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	// 1. Initial process: Client 1 provisions session and executes command
-	client1 := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "secret",
-		SessionNamespace: "restart-ns",
-	})
-	userUUID := client1.SessionIDToUUID(sessionID)
-
-	res1, err := client1.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo init",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("client1 Exec failed: %v", err)
-	}
-	if strings.TrimSpace(res1.Stdout) != "command executed after 409 recovery" {
-		t.Fatalf("unexpected stdout: %q", res1.Stdout)
-	}
-
-	mu.Lock()
-	if !activeSessions[userUUID] {
-		t.Fatal("expected remote session to be active on gateway")
-	}
-	if createAttempts != 1 {
-		t.Fatalf("expected 1 create attempt, got %d", createAttempts)
-	}
-	mu.Unlock()
-
-	// 2. Simulate FrostAgent Crash & Restart:
-	// A new Client 2 starts up. Its local sessions map is empty, but the gateway still holds userUUID.
-	client2 := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "secret",
-		SessionNamespace: "restart-ns",
-	})
-	if client2.HasSession(sessionID) {
-		t.Fatal("expected new client2 to start with empty local session metadata")
-	}
-
-	// 3. Client 2 executes a command for the same sessionID:
-	// - Attempt 0 of EnsureSession hits 409 session_already_exists
-	// - Automatically purges stale remote orphan via rawRelease
-	// - Retries rawCreateSession once, succeeds, records metadata
-	// - Successfully executes shell command!
-	res2, err := client2.Exec(ctx, sandbox.ExecRequest{
-		SessionID: sessionID,
-		Command:   "echo after-restart",
-		Timeout:   5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("client2 Exec failed to recover after 409 already exists: %v", err)
-	}
-	if strings.TrimSpace(res2.Stdout) != "command executed after 409 recovery" {
-		t.Fatalf("unexpected stdout from recovered client2: %q", res2.Stdout)
-	}
-
-	mu.Lock()
-	// createAttempts: 1 (client1) + 1 (client2 409) + 1 (client2 retry success) = 3
-	if createAttempts != 3 {
-		t.Fatalf("expected 3 total create attempts, got %d", createAttempts)
-	}
-	// releaseCount: 1 (from client2 reconciling the 409)
-	if releaseCount != 1 {
-		t.Fatalf("expected 1 release call during 409 recovery, got %d", releaseCount)
-	}
-	// remote container must be active
-	if !activeSessions[userUUID] {
-		t.Fatal("expected recreated remote session to be active on gateway")
-	}
-	mu.Unlock()
-
-	if !client2.HasSession(sessionID) {
-		t.Fatal("expected client2 to have populated local session metadata after recovery")
-	}
-
-	// 4. Verify Generic 409 Conflict fails closed and does NOT trigger release or retry
-	mu.Lock()
-	genericConflict = true
-	releaseCountBefore := releaseCount
-	createAttemptsBefore := createAttempts
-	mu.Unlock()
-
-	client3 := codeinterpreter.New(sandbox.Config{
-		BaseURL:          server.URL,
-		AuthToken:        "secret",
-		SessionNamespace: "restart-ns-2",
-	})
-	err = client3.EnsureSession(ctx, "sess-generic-conflict")
-	if err == nil {
-		t.Fatal("expected EnsureSession to fail on generic 409 conflict, got nil")
-	}
-	if !strings.Contains(err.Error(), "HTTP 409") {
-		t.Fatalf("expected HTTP 409 error, got: %v", err)
-	}
-
-	mu.Lock()
-	if releaseCount != releaseCountBefore {
-		t.Fatalf("expected no release calls on generic 409, got %d (was %d)", releaseCount, releaseCountBefore)
-	}
-	if createAttempts != createAttemptsBefore+1 {
-		t.Fatalf("expected exactly 1 create attempt on generic 409 without retries, got %d", createAttempts-createAttemptsBefore)
-	}
-	mu.Unlock()
 }

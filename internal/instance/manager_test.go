@@ -186,22 +186,6 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 		switch r.URL.Path {
 		case "/api/v1/status":
 			w.WriteHeader(http.StatusOK)
-		case "/api/v1/sessions":
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"session_id": "sess-" + body.UserUUID,
-				"user_uuid":  body.UserUUID,
-				"profile":    body.Profile,
-				"network":    body.Network,
-				"status":     "ready",
-			})
 		case "/api/v1/shell/exec":
 			mu.Lock()
 			userUUIDs = append(userUUIDs, r.URL.Query().Get("user_uuid"))

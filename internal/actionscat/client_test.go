@@ -2,17 +2,14 @@ package actionscat
 
 import (
 	"context"
+	"io"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"FrostAgent/internal/sandbox"
 )
 
 func TestClient_NotConfigured(t *testing.T) {
@@ -1009,134 +1006,5 @@ func TestClient_SchedulesAndMatchers(t *testing.T) {
 	}
 	if err := client.DeleteMatcher(ctx, ""); err == nil {
 		t.Fatal("expected error on empty matcherID for DeleteMatcher")
-	}
-}
-
-func TestClient_SandboxReadiness_CacheKeyBindingAndForce(t *testing.T) {
-	ctx := context.Background()
-	var serverHits atomic.Int64
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHits.Add(1)
-		switch r.URL.Path {
-		case "/api/v1/status":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		case "/api/v1/sessions":
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"user_uuid": body.UserUUID,
-				"profile":   body.Profile,
-				"network":   body.Network,
-				"status":    "ready",
-			})
-		case "/api/v1/shell/exec":
-			var req struct {
-				Command string `json:"command"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			stdout := "ok"
-			if req.Command == "go version" {
-				stdout = "go version go1.24.0 linux/amd64"
-			}
-			exitCode := 0
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"stdout":    stdout,
-				"exit_code": exitCode,
-			})
-		case "/api/v1/release":
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	endpointVal := ts.URL
-	tokenVal := "token-1"
-
-	client := New(func(k string) string {
-		switch k {
-		case "FA_SANDBOX_ENDPOINT":
-			return endpointVal
-		case "FA_SANDBOX_AUTH_TOKEN":
-			return tokenVal
-		default:
-			return ""
-		}
-	})
-
-	// 1. Initially unprobed
-	last := client.LastSandboxReadiness()
-	if last == nil || last.Status != sandbox.StatusUnprobed {
-		t.Fatalf("expected StatusUnprobed initially, got %+v", last)
-	}
-
-	// 2. First probe executes active probe and caches result
-	initialHits := serverHits.Load()
-	rep1 := client.CheckSandboxReadiness(ctx)
-	if rep1.Status != sandbox.StatusReady {
-		t.Fatalf("expected StatusReady, got %s (detail: %s)", rep1.Status, rep1.Detail)
-	}
-	hitsAfterFirst := serverHits.Load()
-	if hitsAfterFirst <= initialHits {
-		t.Fatalf("expected server hits to increase on first probe, went from %d to %d", initialHits, hitsAfterFirst)
-	}
-
-	// 3. Second probe with same endpoint and token returns cached result without hitting server
-	rep2 := client.CheckSandboxReadiness(ctx)
-	if rep2 != rep1 {
-		t.Fatalf("expected cached report reference, got different report")
-	}
-	if serverHits.Load() != hitsAfterFirst {
-		t.Fatalf("expected no new server hits during TTL cache hit, got %d (was %d)", serverHits.Load(), hitsAfterFirst)
-	}
-
-	// 4. Changing token immediately invalidates cache: LastSandboxReadiness returns unprobed
-	tokenVal = "token-2"
-	lastAfterTokenChange := client.LastSandboxReadiness()
-	if lastAfterTokenChange == nil || lastAfterTokenChange.Status != sandbox.StatusUnprobed {
-		t.Fatalf("expected LastSandboxReadiness to return StatusUnprobed after token change, got: %+v", lastAfterTokenChange)
-	}
-
-	// 5. CheckSandboxReadiness immediately reprobes after token change
-	repTokenChange := client.CheckSandboxReadiness(ctx)
-	if repTokenChange.Status != sandbox.StatusReady {
-		t.Fatalf("expected StatusReady, got %s", repTokenChange.Status)
-	}
-	hitsAfterTokenChange := serverHits.Load()
-	if hitsAfterTokenChange <= hitsAfterFirst {
-		t.Fatalf("expected active probe on token change, server hits did not increase: %d vs %d", hitsAfterTokenChange, hitsAfterFirst)
-	}
-
-	// 6. Changing endpoint immediately invalidates cache: LastSandboxReadiness returns unprobed
-	endpointVal = ts.URL + "/v2"
-	lastAfterEpChange := client.LastSandboxReadiness()
-	if lastAfterEpChange == nil || lastAfterEpChange.Status != sandbox.StatusUnprobed {
-		t.Fatalf("expected LastSandboxReadiness to return StatusUnprobed after endpoint change, got: %+v", lastAfterEpChange)
-	}
-
-	// Restore endpoint for Force check test
-	endpointVal = ts.URL
-	repRestored := client.CheckSandboxReadiness(ctx)
-	if repRestored.Status != sandbox.StatusReady {
-		t.Fatalf("expected StatusReady, got %s", repRestored.Status)
-	}
-	hitsBeforeForce := serverHits.Load()
-
-	// 7. ForceCheckSandboxReadiness forces probe even within TTL
-	repForced := client.ForceCheckSandboxReadiness(ctx)
-	if repForced.Status != sandbox.StatusReady {
-		t.Fatalf("expected StatusReady on forced probe, got %s", repForced.Status)
-	}
-	if serverHits.Load() <= hitsBeforeForce {
-		t.Fatalf("expected ForceCheckSandboxReadiness to hit server, hits stayed at %d", serverHits.Load())
 	}
 }

@@ -5,7 +5,6 @@ import {
   type ActionsCatRun,
   type ActionsCatSchedule,
   type ActionsCatStatus,
-  type SandboxReadinessReport,
 } from '../api/client';
 import { escapeHtml, formatDateTime } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -317,85 +316,6 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
     }
   }
 
-  function renderSandboxBanner(sb?: SandboxReadinessReport): string {
-    if (!sb || !sb.endpoint) {
-      return `
-        <div class="mt-3 p-3.5 rounded-md border border-border bg-secondary/30 flex items-center justify-between gap-3 flex-wrap">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <span class="inline-flex">${icon('terminal', 'size-4')}</span>
-            <span><strong>Sandbox Gateway:</strong> 未配置 (设置 FA_SANDBOX_ENDPOINT=http://127.0.0.1:3874 启用隔离编译与沙箱执行)</span>
-          </div>
-          <a href="#/settings/backend" class="btn btn-ghost btn-sm text-xs">前往设置</a>
-        </div>
-      `;
-    }
-
-    let badgeClass = 'badge-secondary';
-    let badgeText = '未知状态';
-    let desc = sb.detail || '';
-
-    switch (sb.status) {
-      case 'unprobed':
-        badgeClass = 'badge-secondary';
-        badgeText = '未检测 (Unchecked)';
-        desc = sb.detail || '沙箱网关已配置，尚未执行主动就绪探测。点击诊断按钮验证 Sessions/Exec/Release 契约与工具链。';
-        break;
-      case 'ready':
-        badgeClass = 'badge-success';
-        badgeText = '就绪 (Ready)';
-        desc = 'Gateway 处于就绪状态，已验证 Sessions/Exec/Release 契约并支持 go-builder 与 action-runtime 配置文件。';
-        break;
-      case 'endpoint_unreachable':
-        badgeClass = 'badge-destructive';
-        badgeText = '无法连接 (Unreachable)';
-        desc = desc || '无法连接到 Sandbox Gateway 端点或网关服务异常。请检查 Gateway 是否已启动。';
-        break;
-      case 'auth_failure':
-        badgeClass = 'badge-warning';
-        badgeText = '认证失败 (Auth Failure)';
-        desc = desc || 'Gateway 拒绝了请求凭据 (HTTP 401/403)。请检查 SANDBOX_AUTH_TOKEN / FA_SANDBOX_AUTH_TOKEN。';
-        break;
-      case 'api_contract_missing':
-        badgeClass = 'badge-destructive';
-        badgeText = '契约缺失 (Contract Missing)';
-        desc = desc || 'Gateway 缺少 ActionsCat 所需的沙箱契约 (/api/v1/sessions, /shell/exec 或 /release)。';
-        break;
-      case 'profile_unsupported':
-        badgeClass = 'badge-warning';
-        badgeText = 'Profile 不支持 (Profile Unsupported)';
-        desc = desc || 'Gateway 不支持所需的构建或运行时 profile (go-builder / action-runtime)，或容器内缺少 Go 编译工具链。';
-        break;
-    }
-
-    const profileTags = sb.profiles_supported
-      ? Object.entries(sb.profiles_supported)
-          .map(([name, supported]) => `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono ${supported ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}">${escapeHtml(name)}: ${supported ? '✓' : '✗'}</span>`)
-          .join(' ')
-      : '';
-
-    return `
-      <div class="mt-3 p-3.5 rounded-md border border-border bg-secondary/30 flex flex-col gap-2">
-        <div class="flex items-center justify-between gap-2 flex-wrap">
-          <div class="flex items-center gap-2">
-            <span class="inline-flex text-primary">${icon('terminal', 'size-4')}</span>
-            <span class="text-xs font-bold text-foreground">Sandbox Gateway 就绪诊断</span>
-            <span class="badge ${badgeClass} text-[10px] py-0 px-1.5">${badgeText}</span>
-          </div>
-          <div class="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-            <span>端点: ${escapeHtml(sb.endpoint)}</span>
-            <button class="btn btn-ghost btn-icon-sm" style="width: 1.25rem; height: 1.25rem;" id="actionscat-diagnose-sandbox-btn" title="重新诊断沙箱网关">
-              ${icon('refresh', 'size-3')}
-            </button>
-          </div>
-        </div>
-        <p class="text-xs text-muted-foreground leading-relaxed">
-          ${escapeHtml(desc)}
-        </p>
-        ${profileTags ? `<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span>Profiles:</span> ${profileTags}</div>` : ''}
-      </div>
-    `;
-  }
-
   // Render Status
   function renderStatus(): void {
     if (!status) return;
@@ -498,35 +418,32 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       <span>已连接并就绪</span>
     `;
     statusContainer.innerHTML = `
-      <div class="card p-4 flex flex-col gap-3">
-        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <span class="inline-flex p-2 rounded-full bg-emerald-500/10 text-emerald-500">
-              ${icon('circle_check', 'size-5')}
-            </span>
-            <div>
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-sm font-bold text-foreground">ActionsCat 核心服务已连接</span>
-                <span class="badge badge-success text-xs">Healthy</span>
-              </div>
-              <div class="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5 font-mono">
-                <span>端点: ${escapeHtml(status.endpoint)}</span>
-                <button
-                  class="btn btn-ghost btn-icon-sm"
-                  style="width: 1.25rem; height: 1.25rem;"
-                  id="actionscat-copy-endpoint-btn"
-                  title="复制端点地址"
-                >
-                  ${icon('copy', 'size-3')}
-                </button>
-              </div>
+      <div class="card p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <span class="inline-flex p-2 rounded-full bg-emerald-500/10 text-emerald-500">
+            ${icon('circle_check', 'size-5')}
+          </span>
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-sm font-bold text-foreground">ActionsCat 核心服务已连接</span>
+              <span class="badge badge-success text-xs">Healthy</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5 font-mono">
+              <span>端点: ${escapeHtml(status.endpoint)}</span>
+              <button
+                class="btn btn-ghost btn-icon-sm"
+                style="width: 1.25rem; height: 1.25rem;"
+                id="actionscat-copy-endpoint-btn"
+                title="复制端点地址"
+              >
+                ${icon('copy', 'size-3')}
+              </button>
             </div>
           </div>
-          <div class="flex items-center gap-2 self-stretch sm:self-auto justify-end">
-            <span class="text-xs text-muted-foreground">共 ${actions.length} 个动作</span>
-          </div>
         </div>
-        ${renderSandboxBanner(status.sandbox)}
+        <div class="flex items-center gap-2 self-stretch sm:self-auto justify-end">
+          <span class="text-xs text-muted-foreground">共 ${actions.length} 个动作</span>
+        </div>
       </div>
     `;
 
@@ -534,19 +451,6 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       if (status?.endpoint) {
         await copyToClipboard(status.endpoint);
         toast.success('已复制端点地址');
-      }
-    });
-
-    statusContainer.querySelector('#actionscat-diagnose-sandbox-btn')?.addEventListener('click', async () => {
-      try {
-        const report = await actionsCatAPI.getSandboxReadiness(true);
-        if (status) {
-          status.sandbox = report;
-          renderStatus();
-        }
-        toast.info(`沙箱就绪诊断: ${report.status}`);
-      } catch (e: unknown) {
-        toast.error('沙箱诊断失败: ' + (e instanceof Error ? e.message : String(e)));
       }
     });
   }

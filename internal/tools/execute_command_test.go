@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +12,6 @@ import (
 
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/tools"
 )
 
@@ -516,148 +513,4 @@ func TestExecuteCommandTool_NilBackendReturnsMessage(t *testing.T) {
 	if !strings.Contains(result, "沙箱功能已被禁用") {
 		t.Fatalf("expected disabled message for nil backend, got %q", result)
 	}
-}
-
-func TestExecuteCommand_LazySessionProvisioning_LifecycleParity(t *testing.T) {
-	var mu sync.Mutex
-	activeSessions := make(map[string]bool)
-	var sessionsCalls int
-	var execCalls int
-	var releaseCalls int
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		switch r.URL.Path {
-		case "/api/v1/sessions":
-			sessionsCalls++
-			var body struct {
-				UserUUID string `json:"user_uuid"`
-				Profile  string `json:"profile"`
-				Network  string `json:"network"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			activeSessions[body.UserUUID] = true
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"session_id": "sess-" + body.UserUUID,
-				"user_uuid":  body.UserUUID,
-				"profile":    body.Profile,
-				"network":    body.Network,
-				"status":     "ready",
-			})
-
-		case "/api/v1/shell/exec":
-			execCalls++
-			userUUID := r.URL.Query().Get("user_uuid")
-			// A strict gateway explicitly rejects /shell/exec if session was not provisioned first via /sessions
-			if !activeSessions[userUUID] {
-				w.WriteHeader(http.StatusConflict)
-				_, _ = w.Write([]byte(`{"detail":"session not provisioned: must call /api/v1/sessions first"}`))
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{
-				"stdout": "lifecycle-parity-ok",
-				"exit_code": 0,
-				"timed_out": false
-			}`))
-
-		case "/api/v1/release":
-			releaseCalls++
-			userUUID := r.URL.Query().Get("user_uuid")
-			delete(activeSessions, userUUID)
-			w.WriteHeader(http.StatusNoContent)
-
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	cfg := sandbox.Config{
-		Enabled:          true,
-		BaseURL:          server.URL,
-		AuthToken:        "secret-token",
-		SessionNamespace: "frostagent",
-	}
-
-	dynamicBackend := sandbox.NewDynamicBackend(
-		func() sandbox.Config { return cfg },
-		func(c sandbox.Config) sandbox.Backend {
-			return codeinterpreter.New(c, codeinterpreter.WithHTTPClient(server.Client()))
-		},
-	)
-
-	tool := tools.ExecuteCommandTool(dynamicBackend)
-	ctx := llm.WithRunContext(context.Background(), llm.RunContext{SessionID: "group:session-lifecycle-test"})
-
-	// 1. First command execution: must lazily provision session via /sessions first, then /shell/exec
-	res1, err := tool.ExecuteContext(ctx, `{"command": "echo first"}`)
-	if err != nil {
-		t.Fatalf("first command execution failed: %v", err)
-	}
-	if !strings.Contains(res1, "lifecycle-parity-ok") {
-		t.Fatalf("first execution output mismatch: %s", res1)
-	}
-
-	mu.Lock()
-	if sessionsCalls != 1 {
-		t.Errorf("expected 1 session call on first command, got %d", sessionsCalls)
-	}
-	if execCalls != 1 {
-		t.Errorf("expected 1 exec call on first command, got %d", execCalls)
-	}
-	mu.Unlock()
-
-	// 2. Second command execution: session already provisioned, must reuse session without calling /sessions again
-	res2, err := tool.ExecuteContext(ctx, `{"command": "echo second"}`)
-	if err != nil {
-		t.Fatalf("second command execution failed: %v", err)
-	}
-	if !strings.Contains(res2, "lifecycle-parity-ok") {
-		t.Fatalf("second execution output mismatch: %s", res2)
-	}
-
-	mu.Lock()
-	if sessionsCalls != 1 {
-		t.Errorf("expected still 1 session call after second command (reused), got %d", sessionsCalls)
-	}
-	if execCalls != 2 {
-		t.Errorf("expected 2 exec calls after second command, got %d", execCalls)
-	}
-	mu.Unlock()
-
-	// 3. Release session
-	if err := dynamicBackend.Release(ctx, "group:session-lifecycle-test"); err != nil {
-		t.Fatalf("Release failed: %v", err)
-	}
-
-	mu.Lock()
-	if releaseCalls != 1 {
-		t.Errorf("expected 1 release call, got %d", releaseCalls)
-	}
-	mu.Unlock()
-
-	// 4. Third command execution after release: session was released, must provision a new session via /sessions
-	res3, err := tool.ExecuteContext(ctx, `{"command": "echo third"}`)
-	if err != nil {
-		t.Fatalf("third command execution failed: %v", err)
-	}
-	if !strings.Contains(res3, "lifecycle-parity-ok") {
-		t.Fatalf("third execution output mismatch: %s", res3)
-	}
-
-	mu.Lock()
-	if sessionsCalls != 2 {
-		t.Errorf("expected 2 session calls after re-provisioning, got %d", sessionsCalls)
-	}
-	if execCalls != 3 {
-		t.Errorf("expected 3 exec calls after re-provisioning, got %d", execCalls)
-	}
-	mu.Unlock()
 }
