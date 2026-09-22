@@ -5,6 +5,7 @@
 此大纲只简略地阐述各组成的实现概要，不涉及具体代码细节。
 
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
+计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
 ## FrostAgent 的组成
 
@@ -444,7 +445,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   ```
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
-  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
+  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部沙箱网关交互。原生支持 FA-Sandbox（`POST /api/v1/shell/exec`），并自动向后兼容 upstream Foxerine/code-interpreter（在 `/api/v1/shell/exec` 返回 404 时，无缝回退至 `POST /api/v1/execute` 执行极薄 Python subprocess 封装），对上层智能体工具屏蔽底层网关差异；
   - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；当沙箱在运行时被禁用时，`Release()` 仍会对已缓存的实例执行尽力而为（Best-effort）的会话清理释放，防止容器与文件系统资源泄漏；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
@@ -467,3 +468,33 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
+
+### ActionsCat 自动化平台集成系统 (ActionsCat Automation Platform Integration)
+
+为了将 FrostAgent 智能体的自然语言交互与真实业务自动化、定时任务、外部数据获取及受限脚本执行连接起来，FrostAgent 深度集成了 ActionsCat 自动化平台（详细设计见 [actionscat.md](actionscat.md)）：
+
+- **双向协同架构 (Bi-directional Integration)**：
+  - **出站调用 (FrostAgent -> ActionsCat)**：FrostAgent 作为调度中枢，通过 ActionsCat Management API（`/api/v1/actions`、`/api/v1/actions/:id/runs` 等）和 Event Ingress（`/api/v1/dispatch`），赋予大模型列出动作、排查运行日志、执行动作以及注册动作元数据的能力；
+  - **入站回传 (ActionsCat -> FrostAgent)**：运行在隔离沙箱（Worker 容器）中的 Action 通过 ActionsCat Gateway 代理或直接调用 FrostAgent 的 `/api/v1/messages/send` 消息接口（`frostagent.sendmsg` 能力），将处理结果反向推送到指定平台与会话，形成完整的执行与响应闭环。
+- **控制平面安全代理与统一样式鉴权 (Control Plane Reverse Proxy & Scoped Auth)**：
+  - 在运行时网关中注册 `/instances/{id}/api/actionscat/*` 以及全局别名 `/api/actionscat/*`（由顶层 `managementMux` 转发）；
+  - 严格复用 FrostAgent 控制面统一鉴权标准（`mcpsvc.CheckControlPlaneAuthScoped`），验证请求端点并要求远程访问携带 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN`，杜绝未认证调用者利用 FrostAgent 作为凭据代持代理穿透访问 ActionsCat；
+  - 代理层采用 `http.MaxBytesReader`（10 MiB 上限）与严格的单对象 JSON 解码，对格式错误或截断的恶意载荷一律 Fail-Closed 拦截并返回 400，防止畸形请求产生非预期的触发副作用。
+- **智能体工具集与严格安全边界 (Agent Tools & Guardrails)**：
+  - 向大模型暴露完整自动化部署与运行工具集，包括动作管理、版本快照、编译构建、构建激活与执行追踪；
+  - **敏感注入状态脱敏隔离 (Agent-Facing DTO Redaction)**：定义专用的 `AgentRunDTO`，显式采用字段白名单，彻底剔除 ActionsCat 内部用于持久状态注入的 `planned_env`（包含敏感凭据、数据库连接、Token 等），防止敏感信息泄漏至大模型上下文；
+  - **受保护环境变量前缀拦截**：`actionscat_run_action` 严格拒绝任何以 `ACTIONSCAT_` 为前缀的自定义环境变量键，防止模型输出伪造沙箱运行上下文与受信标识；
+  - **管理写权限严格门禁 (Administrative Mutation Gate)**：状态变更类工具（创建动作、版本、构建、激活及部署）属于控制面持久化修改操作，工具层严格校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员允许触发；普通会话或无上下文调用直接拒绝，绝不向后端发送写请求（0 次 POST）；
+  - **Mock 模拟会话零持久化副作用 (Zero Durable Mutation Invariant)**：在带有 `?mock=true` 的在线模拟会话中，所有变更及执行工具被强制前置拦截并返回提示，坚决不在模拟测试中产生真实任务执行或持久化状态改变。
+- **可运行状态与空壳元数据显式解耦 (Runnable vs. Enabled Decoupling)**：
+  - 对齐 ActionsCat 制品模型规范，Action 必须同时满足 `Enabled == true`、`ActiveVersionID != ""` 与 `ActiveBuildID != ""` 才具备可执行条件；
+  - `actionscat_list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
+  - 当模型尝试运行未构建动作时，工具层自动捕捉 `no active build` 并反馈清晰诊断指引。
+- **动态循环深度与运行时配置 (Configurable Agent Loop & Settings Integration)**：
+  - 为适配“列出动作 -> 检查详情 -> 执行动作 -> 轮询结果”的多步自动化调用编排，将默认最大循环迭代轮数（`MaxIterations`）调优至 10，并支持通过实例级环境变量 `AGENT_MAX_ITERATIONS` 动态配置；
+  - ActionsCat 服务端点（`ACTIONSCAT_ENDPOINT`）、管理凭据（`ACTIONSCAT_MANAGEMENT_TOKEN`）、事件调度凭据（`ACTIONSCAT_DISPATCH_TOKEN`）与 `AGENT_MAX_ITERATIONS` 全面纳入 FrostAgent Settings 的 `knownEnvVars` 注册表，敏感 Token 自动脱敏展示与安全存储。
+- **Web 控制台专属管理工作台 (Web Dashboard Management)**：
+  - 前端提供独立的 ActionsCat 控制台页面（`/#actionscat`）；
+  - 实时诊断服务端网络联通（`healthy`）与凭据认证状态（`authenticated`），直观呈现就绪徽章；
+  - 卡片化动作视图：区分展示「可运行」与「未构建/未激活」状态，罗列版本号、构建号、定时规则与特权能力；
+  - 交互式运行工作流：提供包含变量校验的手动触发弹窗、Action 元数据新建弹窗、测试事件分发（`/dispatch`）入口以及带语法高亮和复制功能的运行日志（STDOUT/STDERR）排查抽屉。
