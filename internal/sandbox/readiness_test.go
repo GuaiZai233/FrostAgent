@@ -1066,10 +1066,10 @@ func TestCheckReadiness_Release_200_Success(t *testing.T) {
 	}
 }
 
-func TestCheckReadiness_Release_Arbitrary404_Success(t *testing.T) {
+func TestCheckReadiness_Release_SessionNotFound404_Success(t *testing.T) {
 	ctx := context.Background()
 
-	// Gateway returns arbitrary 404 on release (idempotent success in production ActionsCat)
+	// Gateway returns machine-readable session_not_found 404 on release (idempotent success)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/status":
@@ -1099,7 +1099,7 @@ func TestCheckReadiness_Release_Arbitrary404_Success(t *testing.T) {
 			})
 		case "/api/v1/release":
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"detail":"session does not exist"}`))
+			_, _ = w.Write([]byte(`{"code":"session_not_found","detail":"no active session found"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -1108,8 +1108,119 @@ func TestCheckReadiness_Release_Arbitrary404_Success(t *testing.T) {
 
 	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
 	if rep.Status != sandbox.StatusReady {
-		t.Fatalf("expected idempotent 404 release to yield %s, got %s (detail: %s)", sandbox.StatusReady, rep.Status, rep.Detail)
+		t.Fatalf("expected idempotent 404 release with session_not_found to yield %s, got %s (detail: %s)", sandbox.StatusReady, rep.Status, rep.Detail)
 	}
+}
+
+func TestCheckReadiness_Release_Generic404_ContractMissing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("generic router 404 on contract release yields StatusAPIContractMissing", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/status":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"ok"}`))
+			case "/api/v1/sessions":
+				var body struct {
+					UserUUID string `json:"user_uuid"`
+					Profile  string `json:"profile"`
+					Network  string `json:"network"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"user_uuid": body.UserUUID,
+					"profile":   body.Profile,
+					"network":   body.Network,
+					"status":    "ready",
+				})
+			case "/api/v1/shell/exec":
+				exitCode := 0
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"stdout":    "ok",
+					"exit_code": exitCode,
+					"timed_out": false,
+				})
+			case "/api/v1/release":
+				// Generic router 404 - release endpoint does not exist
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+
+		rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
+		if rep.Status != sandbox.StatusAPIContractMissing {
+			t.Fatalf("expected generic 404 release to yield %s, got %s (detail: %s)", sandbox.StatusAPIContractMissing, rep.Status, rep.Detail)
+		}
+		if !strings.Contains(rep.Detail, "generic 404") && !strings.Contains(rep.Detail, "release route missing") {
+			t.Fatalf("expected detail to mention generic 404 or release route missing, got: %s", rep.Detail)
+		}
+	})
+
+	t.Run("generic router 404 on profile release yields StatusAPIContractMissing", func(t *testing.T) {
+		var releaseCount int
+		var releaseCountMu sync.Mutex
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/status":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"ok"}`))
+			case "/api/v1/sessions":
+				var body struct {
+					UserUUID string `json:"user_uuid"`
+					Profile  string `json:"profile"`
+					Network  string `json:"network"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"user_uuid": body.UserUUID,
+					"profile":   body.Profile,
+					"network":   body.Network,
+					"status":    "ready",
+				})
+			case "/api/v1/shell/exec":
+				exitCode := 0
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"stdout":    "go version go1.24.0 linux/amd64",
+					"exit_code": exitCode,
+					"timed_out": false,
+				})
+			case "/api/v1/release":
+				releaseCountMu.Lock()
+				releaseCount++
+				count := releaseCount
+				releaseCountMu.Unlock()
+
+				if count == 1 {
+					// Contract release succeeds
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				// Profile release returns generic 404
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte("404 page not found"))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+
+		rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "", sandbox.ProfileGoBuilder)
+		if rep.Status != sandbox.StatusAPIContractMissing {
+			t.Fatalf("expected generic 404 on profile release to yield %s, got %s (detail: %s)", sandbox.StatusAPIContractMissing, rep.Status, rep.Detail)
+		}
+		if !strings.Contains(rep.Detail, "generic 404") && !strings.Contains(rep.Detail, "release route missing") {
+			t.Fatalf("expected detail to mention generic 404 or release route missing, got: %s", rep.Detail)
+		}
+	})
 }
 
 func TestCheckReadiness_ProbeShellExec_QueryParams(t *testing.T) {

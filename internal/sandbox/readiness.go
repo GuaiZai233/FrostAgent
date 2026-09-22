@@ -173,6 +173,44 @@ func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToke
 	return &res, http.StatusOK, bodyStr, nil, nil
 }
 
+// IsSessionNotFoundBody checks if an HTTP response body explicitly proves that
+// the /api/v1/release endpoint exists and recognized that the requested session
+// was not found or has already been released (idempotent release success).
+// Generic router 404 bodies (e.g. `{"detail":"Not Found"}`, `404 page not found`, or empty body)
+// do not contain session-specific not-found indicators and thus indicate a missing release route.
+func IsSessionNotFoundBody(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+
+	// Check structured JSON fields (e.g. {"code": "session_not_found", "detail": "session 123 not found"})
+	var jsonMap map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &jsonMap); err == nil {
+		for _, key := range []string{"code", "error", "detail", "message", "status"} {
+			if val, ok := jsonMap[key]; ok {
+				if s, ok := val.(string); ok {
+					lower := strings.ToLower(s)
+					if lower == "session_not_found" ||
+						strings.Contains(lower, "session not found") ||
+						strings.Contains(lower, "no active session") ||
+						strings.Contains(lower, "session not active") ||
+						strings.Contains(lower, "session does not exist") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "session_not_found") ||
+		strings.Contains(lower, "session not found") ||
+		strings.Contains(lower, "no active session") ||
+		strings.Contains(lower, "session not active") ||
+		strings.Contains(lower, "session does not exist")
+}
+
 func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken, userUUID string) (int, string, error) {
 	relURL := fmt.Sprintf("%s/api/v1/release?user_uuid=%s", endpoint, url.QueryEscape(userUUID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relURL, nil)
@@ -194,10 +232,6 @@ func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken,
 	}
 	bodyStr := strings.TrimSpace(string(body))
 
-	// 200 OK, 204 No Content, and 404 Not Found (idempotent release) are all release success in production.
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
-		return resp.StatusCode, "", nil
-	}
 	return resp.StatusCode, bodyStr, nil
 }
 
@@ -591,7 +625,20 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			CheckedAt:         now,
 		}
 	}
-	if relCode != http.StatusNoContent && relCode != http.StatusOK && relCode != http.StatusNotFound {
+	if relCode == http.StatusNotFound {
+		if !IsSessionNotFoundBody(relErrBody) {
+			return &ReadinessReport{
+				Status:            StatusAPIContractMissing,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: false,
+				ProfilesSupported: make(map[string]bool),
+				Detail:            fmt.Sprintf("gateway returned generic 404 on /api/v1/release (release route missing): %s", relErrBody),
+				CheckedAt:         now,
+			}
+		}
+	} else if relCode != http.StatusNoContent && relCode != http.StatusOK {
 		return &ReadinessReport{
 			Status:            StatusAPIContractMissing,
 			Endpoint:          endpoint,
@@ -599,7 +646,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			Authenticated:     true,
 			ContractSupported: false,
 			ProfilesSupported: make(map[string]bool),
-			Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d on /api/v1/release (expected 200, 204, or 404): %s", relCode, relErrBody),
+			Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d on /api/v1/release (expected 200, 204, or session_not_found 404): %s", relCode, relErrBody),
 			CheckedAt:         now,
 		}
 	}
@@ -899,7 +946,20 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				CheckedAt:         now,
 			}
 		}
-		if pRelCode != http.StatusNoContent && pRelCode != http.StatusOK && pRelCode != http.StatusNotFound {
+		if pRelCode == http.StatusNotFound {
+			if !IsSessionNotFoundBody(pRelErrBody) {
+				return &ReadinessReport{
+					Status:            StatusAPIContractMissing,
+					Endpoint:          endpoint,
+					Healthy:           true,
+					Authenticated:     true,
+					ContractSupported: true,
+					ProfilesSupported: profilesMap,
+					Detail:            fmt.Sprintf("gateway returned generic 404 releasing profile %q session (release route missing): %s", profile, pRelErrBody),
+					CheckedAt:         now,
+				}
+			}
+		} else if pRelCode != http.StatusNoContent && pRelCode != http.StatusOK {
 			return &ReadinessReport{
 				Status:            StatusAPIContractMissing,
 				Endpoint:          endpoint,
@@ -907,7 +967,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				Authenticated:     true,
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
-				Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d releasing profile %q session (expected 200, 204, or 404): %s", pRelCode, profile, pRelErrBody),
+				Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d releasing profile %q session (expected 200, 204, or session_not_found 404): %s", pRelCode, profile, pRelErrBody),
 				CheckedAt:         now,
 			}
 		}

@@ -18,6 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/sync/singleflight"
+
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/sandbox"
 )
@@ -58,8 +60,9 @@ type Client struct {
 	profile string
 	network string
 
-	sessionsMu sync.RWMutex
-	sessions   map[string]SessionMetadata
+	sessionsMu    sync.RWMutex
+	sessions      map[string]SessionMetadata
+	sessionFlight singleflight.Group
 }
 
 // Option configures a Client.
@@ -251,6 +254,35 @@ func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network 
 	}, nil
 }
 
+// EnsureSession ensures that an active session exists on the gateway for the given sessionID.
+// If the session has already been provisioned and tracked locally, it returns nil immediately.
+// Otherwise, it issues a POST /api/v1/sessions request using the client's configured default
+// profile and network policies. Concurrent calls for the same session are coalesced via singleflight.
+func (c *Client) EnsureSession(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("cannot ensure sandbox session without sessionID")
+	}
+	userUUID := c.SessionIDToUUID(sessionID)
+
+	c.sessionsMu.RLock()
+	_, exists := c.sessions[userUUID]
+	c.sessionsMu.RUnlock()
+	if exists {
+		return nil
+	}
+
+	_, err, _ := c.sessionFlight.Do(userUUID, func() (any, error) {
+		c.sessionsMu.RLock()
+		_, alreadyExists := c.sessions[userUUID]
+		c.sessionsMu.RUnlock()
+		if alreadyExists {
+			return nil, nil
+		}
+		return c.CreateSession(ctx, sessionID, c.profile, c.network, nil)
+	})
+	return err
+}
+
 // Diagnose runs the full multi-phase sandbox readiness diagnostic suite,
 // distinguishing endpoint unreachable, auth failure, API contract missing, and profile unsupported.
 func (c *Client) Diagnose(ctx context.Context, profiles ...string) *sandbox.ReadinessReport {
@@ -258,15 +290,17 @@ func (c *Client) Diagnose(ctx context.Context, profiles ...string) *sandbox.Read
 }
 
 // Release terminates and cleans up the worker instance for the session.
+// In the unified gateway contract, HTTP 200 OK, 204 No Content, and 404 Not Found (only if
+// explicitly accompanied by a session-not-found body indicator) are considered successful
+// idempotent releases. Local session metadata is cleared ONLY upon confirmed release success;
+// network failures, 5xx server errors, or generic router 404s preserve local session metadata
+// to prevent state split-brain and subsequent policy drift.
 func (c *Client) Release(ctx context.Context, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return errors.New("cannot release sandbox without sessionID")
 	}
 
 	userUUID := c.SessionIDToUUID(sessionID)
-	c.sessionsMu.Lock()
-	delete(c.sessions, userUUID)
-	c.sessionsMu.Unlock()
 
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
@@ -288,9 +322,25 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 	defer resp.Body.Close()
 
-	// 200 OK, 204 No Content, and 404 Not Found (idempotent release) are all release success in the unified gateway contract.
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+	// 200 OK and 204 No Content are unconditional release successes.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		c.sessionsMu.Lock()
+		delete(c.sessions, userUUID)
+		c.sessionsMu.Unlock()
 		return nil
+	}
+
+	// 404 Not Found is an idempotent success ONLY when the response body explicitly indicates
+	// that the release endpoint exists and the session was not found / already released.
+	if resp.StatusCode == http.StatusNotFound {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		if sandbox.IsSessionNotFoundBody(errBody) {
+			c.sessionsMu.Lock()
+			delete(c.sessions, userUUID)
+			c.sessionsMu.Unlock()
+			return nil
+		}
+		return fmt.Errorf("sandbox gateway release returned generic HTTP 404 (endpoint missing or unrecognized): %s", sanitizeError(errBody, c.authToken))
 	}
 
 	errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
@@ -335,6 +385,18 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	}
 
 	userUUID := c.SessionIDToUUID(req.SessionID)
+
+	// Lazy ensure session: if this session has not yet been provisioned on the gateway,
+	// allocate and bind it via POST /api/v1/sessions before issuing POST /api/v1/shell/exec.
+	c.sessionsMu.RLock()
+	_, sessionExists := c.sessions[userUUID]
+	c.sessionsMu.RUnlock()
+	if !sessionExists {
+		if err := c.EnsureSession(ctx, req.SessionID); err != nil {
+			return sandbox.ExecResult{}, fmt.Errorf("failed to provision sandbox session: %w", err)
+		}
+	}
+
 	execURL, err := url.Parse(c.baseURL + "/api/v1/shell/exec")
 	if err != nil {
 		return sandbox.ExecResult{}, fmt.Errorf("invalid exec URL: %w", err)

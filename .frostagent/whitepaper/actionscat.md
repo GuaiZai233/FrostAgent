@@ -419,7 +419,11 @@ fail closed / no local fallback
 | `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
 | `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"go-builder","network":"none","status":"ready"}` |
 | `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`, `profile`, `network`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
-| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：生产环境接受 HTTP 200 OK、204 No Content 或 404 Not Found（幂等释放成功），仅在 5xx 服务端错误或传输异常时视为失败 |
+| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：接受 HTTP 200 OK、204 No Content，以及具备机器可读的会话不存在 404 响应（如 `{"code":"session_not_found"}`、`session not found` 或 `no active session`，表明 `/release` 路由存在且会话已成功回收或不存在）。严禁将路由未注册的泛型 404（如 `404 page not found` 或 `{"detail":"Not Found"}`）判定为成功；5xx 服务端错误或网络异常判定为释放失败。 |
+
+#### 会话生命周期与执行链条对齐 (Lifecycle Parity & Lazy Provisioning)：
+- **执行链懒加载与会话复用 (Lazy EnsureSession & Singleflight)**：在生产执行链路（`ExecuteCommandTool -> DynamicBackend -> codeinterpreter.Client.Exec`）中，客户端自动实施懒加载会话分配（`EnsureSession`），利用 `golang.org/x/sync/singleflight` 对同一 `user_uuid` 的并发首次命令进行请求去重。首次执行命令时自动调用 `POST /api/v1/sessions` 完成容器工作区分配与策略协商，校验通过后缓存会话上下文；后续执行直接复用，不再产生无谓的 `/sessions` 开销；
+- **防脑裂释放元数据持久性 (Zero Split-Brain Session State)**：调用 `Release` 时，当且仅当远程网关返回 200、204 或受信任的 `session_not_found` 404 确认释放成功后，客户端本地方清除该会话的元数据；若释放请求遇到 500、网络超时或泛型 404 失败，本地会话元数据（包含定制 profile 与网络策略）保持不变，重试执行与再次释放时不会丢失安全策略，彻底杜绝状态脑裂；释放成功后的下一次执行命令将重新触发 `/sessions` 创建新会话。
 
 ### 7.4 沙箱就绪诊断体系 (Readiness Diagnostics Specification)
 
@@ -455,7 +459,7 @@ fail closed / no local fallback
 
 #### 核心契约与安全机制：
 - **RFC 4122 UUIDv4 动态会话标识**：探针抛弃固定字符串，每次探测通过密码学安全随机源（`crypto/rand`）生成合法的 RFC 4122 Version 4 UUID（形如 `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`）。杜绝后端类型化框架（如 FastAPI / Pydantic `UUID` 类型）因无法解析固定字符串抛出 HTTP 422 校验失败，同时杜绝多实例并发探测产生命名冲突；
-- **全生命周期闭环验证与幂等清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 验证释放响应（镜像生产 ActionsCat 幂等释放语义，接受 HTTP 200、204 及 404 为成功释放）。若释放失败（5xx 服务端错误或超时）立即失败阻断并标记非就绪，彻底杜绝容器泄漏与假绿；
+- **全生命周期闭环验证与严格释放消歧**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 验证释放响应。释放探活精确区分机器可读的会话已不存在 404（通过 `IsSessionNotFoundBody` 解析包含 `session_not_found`、`session not found`、`no active session` 等）与网关路由缺失的泛型 404（如路由未注册导致的 `404 page not found` 或 `{"detail":"Not Found"}`）：前者视为幂等释放成功，后者直接判定为 `StatusAPIContractMissing`，杜绝因未实现 `/release` 接口而导致的容器静默泄漏与伪就绪假绿；若释放遇到 5xx 服务端错误或传输超时，立即阻断并标记为 `StatusEndpointUnreachable`；
 - **命令超时防误判 (Timeout Invariant)**：在 `/shell/exec` 探测与工具链校验阶段，探针强制检查 `exit_code == 0 && timed_out == false`。若命令执行被网关或容器运行时超时终止（`timed_out: true`），坚决判为失败（contract probe 归为 `StatusAPIContractMissing`，profile probe 归为 `StatusProfileUnsupported`），杜绝因进程挂起或未正常执行导致的假绿（False Green）伪就绪；
 - **严格响应合规校验 (Conformance Validation)**：使用 `ValidateSessionResponse` 严格校验返回的 JSON 结构体，执行大小写敏感的 UUID、profile 及 network（若指定）精确匹配，要求 status 精确为 `ready` 或 `created`，杜绝空对象 `{}`、缺失字段或松散比较带来的伪成功响应；
 - **传输层与契约失范错误解耦**：探针在 `/shell/exec` 与各探测阶段精确区分底层网络传输失败（TCP 重置、连接被拒、网络超时等，归类为 `StatusEndpointUnreachable`）与应用层契约违背（200 返回畸形 JSON、缺少 exit_code 或 HTTP 404 等，归类为 `StatusAPIContractMissing`），确保运维排障归因准确无误；

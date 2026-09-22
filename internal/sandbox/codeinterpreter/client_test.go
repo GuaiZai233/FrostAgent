@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,26 @@ import (
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func handleDefaultSession(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Path == "/api/v1/sessions" {
+		var body struct {
+			UserUUID string `json:"user_uuid"`
+			Profile  string `json:"profile"`
+			Network  string `json:"network"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"user_uuid": body.UserUUID,
+			"profile":   body.Profile,
+			"network":   body.Network,
+			"status":    "ready",
+		})
+		return true
+	}
+	return false
+}
 
 func TestDeterministicSessionMapping(t *testing.T) {
 	clientA1 := codeinterpreter.New(sandbox.Config{
@@ -113,6 +134,9 @@ func TestExecRequest_PayloadAndRouting(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleDefaultSession(w, r) {
+			return
+		}
 		capturedMethod = r.Method
 		capturedPath = r.URL.Path
 		capturedQuery = r.URL.Query().Get("user_uuid")
@@ -173,6 +197,9 @@ func TestExecRequest_PayloadAndRouting(t *testing.T) {
 func TestExec_SuccessAndFailureSemantics(t *testing.T) {
 	t.Run("command failure exit code 7 returns nil error and exit_code 7", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if handleDefaultSession(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
 				"stdout": "",
@@ -210,6 +237,9 @@ func TestExec_SuccessAndFailureSemantics(t *testing.T) {
 
 	t.Run("command timeout returns nil error and timed_out true", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if handleDefaultSession(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
 				"stdout": "partial",
@@ -293,6 +323,9 @@ func TestExec_GatewayErrors(t *testing.T) {
 func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 	t.Run("malformed JSON response returns protocol error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if handleDefaultSession(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{not valid json`))
 		}))
@@ -316,6 +349,9 @@ func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 
 	t.Run("oversized response body is bounded", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if handleDefaultSession(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			// Send an infinite or huge stream that exceeds 16MB
 			w.Header().Set("Content-Type", "application/json")
@@ -450,7 +486,7 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
-	t.Run("404 Not Found with generic route error is idempotent success", func(t *testing.T) {
+	t.Run("404 Not Found with generic route error returns error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("404 page not found"))
@@ -464,8 +500,8 @@ func TestRelease(t *testing.T) {
 		}, codeinterpreter.WithHTTPClient(server.Client()))
 
 		err := client.Release(context.Background(), "session-gone")
-		if err != nil {
-			t.Fatalf("expected nil error for generic 404 idempotent release, got: %v", err)
+		if err == nil {
+			t.Fatalf("expected error for generic 404 release, got nil")
 		}
 	})
 
@@ -586,6 +622,9 @@ func TestExec_SemanticExecutionStateInvariants(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if handleDefaultSession(w, r) {
+					return
+				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(tc.body))
 			}))
@@ -621,6 +660,9 @@ func TestExec_SemanticExecutionStateInvariants(t *testing.T) {
 func TestExec_FloatTimeoutSemantics(t *testing.T) {
 	var capturedBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleDefaultSession(w, r) {
+			return
+		}
 		var err error
 		capturedBody, err = io.ReadAll(r.Body)
 		if err != nil {
@@ -666,6 +708,9 @@ func TestExec_EscapeHeavyNearLimitResponse(t *testing.T) {
 	payload := `{"stdout":"` + rawEscapeStream + `","stderr":"` + rawEscapeStream + `","exit_code":0,"timed_out":false}`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleDefaultSession(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(payload))
@@ -702,6 +747,9 @@ func TestExec_Gateway422_RedactsSentinelSecretInInputField(t *testing.T) {
 	secretCommand := "curl -H 'Authorization: Bearer " + sentinelSecret + "' https://api.internal/data"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleDefaultSession(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -797,6 +845,9 @@ func TestExec_LocalValidation_RejectsOversizedCwd(t *testing.T) {
 func TestExec_QueryParamsParity(t *testing.T) {
 	var capturedQuery url.Values
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleDefaultSession(w, r) {
+			return
+		}
 		capturedQuery = r.URL.Query()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{
@@ -993,5 +1044,132 @@ func TestRelease_CleansSessionMetadata(t *testing.T) {
 	}
 	if execProfile != sandbox.ProfileMinimal {
 		t.Fatalf("expected profile to reset to %q after release, got: %q", sandbox.ProfileMinimal, execProfile)
+	}
+}
+
+func TestRelease_FailurePreservesSessionMetadata(t *testing.T) {
+	var releaseAttempts int
+	var releaseAttemptsMu sync.Mutex
+	var capturedExecProfile string
+	var capturedExecNetwork string
+	var execMu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/release":
+			releaseAttemptsMu.Lock()
+			releaseAttempts++
+			attempt := releaseAttempts
+			releaseAttemptsMu.Unlock()
+
+			if attempt == 1 {
+				// 2. Release 第一次返回 500
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"detail":"temporary release failure"}`))
+				return
+			}
+			// 4. Release 第二次成功
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"released"}`))
+		case "/api/v1/shell/exec":
+			execMu.Lock()
+			capturedExecProfile = r.URL.Query().Get("profile")
+			capturedExecNetwork = r.URL.Query().Get("network")
+			execMu.Unlock()
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"stdout": "ok",
+				"exit_code": 0,
+				"timed_out": false
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	ctx := context.Background()
+	sessionID := "sess-failover"
+
+	// 1. CreateSession(action-runtime, isolated)
+	sessInfo, err := client.CreateSession(ctx, sessionID, sandbox.ProfileActionRuntime, "isolated", nil)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+	if sessInfo.Profile != sandbox.ProfileActionRuntime || sessInfo.Network != "isolated" {
+		t.Fatalf("unexpected SessionInfo: %+v", sessInfo)
+	}
+
+	// 2. Release 第一次返回 500
+	err = client.Release(ctx, sessionID)
+	if err == nil {
+		t.Fatalf("expected error on first release (HTTP 500), got nil")
+	}
+
+	// 3. 再 Exec，同一 session query 仍必须是 action-runtime/isolated
+	_, err = client.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo test-1",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec failed after release error: %v", err)
+	}
+	execMu.Lock()
+	prof1 := capturedExecProfile
+	net1 := capturedExecNetwork
+	execMu.Unlock()
+	if prof1 != sandbox.ProfileActionRuntime {
+		t.Fatalf("expected exec to preserve profile %q after failed release, got: %q", sandbox.ProfileActionRuntime, prof1)
+	}
+	if net1 != "isolated" {
+		t.Fatalf("expected exec to preserve network %q after failed release, got: %q", "isolated", net1)
+	}
+
+	// 4. Release 第二次成功
+	err = client.Release(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("expected second release to succeed, got: %v", err)
+	}
+
+	// 5. 之后 metadata 才清除 (next Exec resets to client default minimal/none)
+	_, err = client.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo test-2",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec failed after successful release: %v", err)
+	}
+	execMu.Lock()
+	prof2 := capturedExecProfile
+	net2 := capturedExecNetwork
+	execMu.Unlock()
+	if prof2 != sandbox.ProfileMinimal {
+		t.Fatalf("expected profile to reset to %q after successful release, got: %q", sandbox.ProfileMinimal, prof2)
+	}
+	if net2 != "none" {
+		t.Fatalf("expected network to reset to %q after successful release, got: %q", "none", net2)
 	}
 }
