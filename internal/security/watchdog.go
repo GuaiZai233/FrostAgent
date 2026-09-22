@@ -393,6 +393,10 @@ func (w *Watchdog) Evaluate(p Principal, stage WatchdogStage, source WatchdogSou
 }
 
 func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return w.evaluateWithContext(ctx, p, stage, source, content, meta, false)
+}
+
+func (w *Watchdog) evaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent, dryRun bool) WatchdogDecision {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -420,7 +424,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		meta.Reason = "input exceeds maximum inspection limit"
 		meta.Hash = ContentHash(content)
 		meta.Preview = safePreview(content)
-		if w.audit != nil {
+		if !dryRun && w.audit != nil {
 			_ = w.audit.Append(meta)
 		}
 		return WatchdogDecision{
@@ -452,7 +456,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 			meta.Reason = fmt.Sprintf("access control unavailable: %s", SafeErrorSummary(accessErr))
 			meta.Hash = normHash
 			meta.Preview = safePreview(content)
-			if w.audit != nil {
+			if !dryRun && w.audit != nil {
 				_ = w.audit.Append(meta)
 			}
 			return WatchdogDecision{
@@ -619,7 +623,7 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 	meta.Category = classification.Category
 	meta.RiskLevel = classification.RiskLevel
 
-	if w.audit != nil && action != WatchdogPass {
+	if !dryRun && w.audit != nil && action != WatchdogPass {
 		_ = w.audit.Append(meta)
 	}
 
@@ -645,6 +649,15 @@ func (w *Watchdog) EvaluateWithContext(ctx context.Context, p Principal, stage W
 		ErrorType:        failureType,
 		SafeSummary:      failureSummary,
 	}
+}
+
+// EvaluateDryRun evaluates content without updating AccessStore strikes/locks or writing to AuditStore.
+func (w *Watchdog) EvaluateDryRun(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return w.evaluateWithContext(context.Background(), p, stage, source, content, meta, true)
+}
+
+func (w *Watchdog) EvaluateDryRunWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return w.evaluateWithContext(ctx, p, stage, source, content, meta, true)
 }
 
 func (w *Watchdog) IsLocked(p Principal) bool {

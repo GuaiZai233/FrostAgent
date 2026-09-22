@@ -41,6 +41,7 @@ var knownEnvVars = map[string]envEntry{
 	"BOT_NAME":                    {"机器人主名称，用于群聊文本唤醒", false, false, false},
 	"BOT_ALIASES":                 {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
 	"ADMIN_QQ_IDS":                {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
+	"ADMIN_COMMAND_PREFIX":        {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":   {"群聊回复时是否引用原消息", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":   {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MIN_INTERVAL":  {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
@@ -71,6 +72,10 @@ var knownEnvVars = map[string]envEntry{
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
 	"SECURITY_GATEWAY_TIMEOUT":    {"安全审查网关独立超时时间", false, true, false},
 	"SECURITY_CLASSIFIER_TIMEOUT": {"安全审查分类器独立超时时间", false, true, false},
+	"AGENT_MAX_ITERATIONS":        {"智能体单次处理允许的最大迭代轮数（默认 10）", false, true, false},
+	"ACTIONSCAT_ENDPOINT":         {"ActionsCat 核心服务地址", false, true, false},
+	"ACTIONSCAT_MANAGEMENT_TOKEN": {"ActionsCat 管理 API 认证 Token", true, true, false},
+	"ACTIONSCAT_DISPATCH_TOKEN":   {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},
 }
 
 // SandboxManager propagates atomic Control Plane sandbox configuration updates.

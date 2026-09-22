@@ -209,6 +209,15 @@ type gatewayExecResponse struct {
 	DurationMs      int64  `json:"duration_ms"`
 }
 
+type pythonExecuteRequest struct {
+	Code string `json:"code"`
+}
+
+type pythonExecuteResponse struct {
+	ResultText   *string `json:"result_text"`
+	ResultBase64 *string `json:"result_base64"`
+}
+
 // Exec executes a command inside the isolated sandbox for the given session.
 func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
 	if strings.TrimSpace(req.SessionID) == "" {
@@ -289,6 +298,15 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 
 	if resp.StatusCode != http.StatusOK {
 		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		if resp.StatusCode == http.StatusNotFound {
+			// /api/v1/shell/exec was not found on this gateway (e.g. upstream Foxerine/code-interpreter).
+			// Fall back to /api/v1/execute using a thin Python subprocess runner.
+			c.log().Info(logs.SYSTEM, fmt.Sprintf(
+				"沙箱网关 /api/v1/shell/exec 返回 404，回退至 /api/v1/execute [session: %s]: %s",
+				uuidShort, sanitizeError(errBody, c.authToken),
+			))
+			return c.execViaPythonExecute(ctx, req, userUUID, uuidShort, startTime)
+		}
 		safeErr := sanitizeGatewayExecError(resp.StatusCode, errBody, req, c.authToken)
 		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
 			"沙箱网关返回错误状态 [status: %d, session: %s, cmd_len: %d]: %s",
@@ -338,6 +356,191 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 
 	c.log().Info(logs.SYSTEM, fmt.Sprintf(
 		"✓ 沙箱命令执行完成 [session: %s, exit_code: %s, timed_out: %t, duration: %s]",
+		uuidShort, exitCodeStr, gatewayResp.TimedOut, execDuration,
+	))
+
+	return sandbox.ExecResult{
+		Stdout:          gatewayResp.Stdout,
+		Stderr:          gatewayResp.Stderr,
+		ExitCode:        gatewayResp.ExitCode,
+		TimedOut:        gatewayResp.TimedOut,
+		StdoutTruncated: gatewayResp.StdoutTruncated,
+		StderrTruncated: gatewayResp.StderrTruncated,
+		Duration:        execDuration,
+	}, nil
+}
+
+func (c *Client) execViaPythonExecute(
+	ctx context.Context,
+	req sandbox.ExecRequest,
+	userUUID, uuidShort string,
+	startTime time.Time,
+) (sandbox.ExecResult, error) {
+	executeURL, err := url.Parse(c.baseURL + "/api/v1/execute")
+	if err != nil {
+		return sandbox.ExecResult{}, fmt.Errorf("invalid execute URL: %w", err)
+	}
+	q := executeURL.Query()
+	q.Set("user_uuid", userUUID)
+	executeURL.RawQuery = q.Encode()
+
+	timeoutSec := req.Timeout.Seconds()
+	if timeoutSec <= 0 {
+		timeoutSec = 1.0
+	}
+
+	cmdJSON, err := json.Marshal(req.Command)
+	if err != nil {
+		return sandbox.ExecResult{}, fmt.Errorf("failed to marshal command for python execute: %w", err)
+	}
+
+	var cwdExpr string
+	if req.Cwd != "" {
+		cwdJSON, err := json.Marshal(req.Cwd)
+		if err != nil {
+			return sandbox.ExecResult{}, fmt.Errorf("failed to marshal cwd for python execute: %w", err)
+		}
+		cwdExpr = string(cwdJSON)
+	} else {
+		cwdExpr = "None"
+	}
+
+	pythonScript := fmt.Sprintf(`import subprocess, json, sys
+
+cmd = %s
+cwd = %s
+timeout = %f
+
+try:
+    p = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    print(json.dumps({
+        "stdout": p.stdout,
+        "stderr": p.stderr,
+        "exit_code": p.returncode,
+        "timed_out": False
+    }))
+except subprocess.TimeoutExpired as e:
+    out = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode('utf-8', 'replace') if e.stdout else "")
+    err = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', 'replace') if e.stderr else "")
+    print(json.dumps({
+        "stdout": out,
+        "stderr": err,
+        "exit_code": None,
+        "timed_out": True
+    }))
+except Exception as e:
+    print(json.dumps({
+        "stdout": "",
+        "stderr": str(e),
+        "exit_code": 1,
+        "timed_out": False
+    }))
+`, string(cmdJSON), cwdExpr, timeoutSec)
+
+	payload := pythonExecuteRequest{
+		Code: pythonScript,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return sandbox.ExecResult{}, fmt.Errorf("failed to marshal python execute payload: %w", err)
+	}
+
+	httpTimeout := req.Timeout + httpTimeoutEnvelope
+	execCtx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(execCtx, http.MethodPost, executeURL.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return sandbox.ExecResult{}, fmt.Errorf("failed to create python execute request: %w", err)
+	}
+	httpReq.Header.Set("X-Auth-Token", c.authToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
+			"沙箱 Python 执行网络失败 [session: %s, cmd_len: %d]: %v",
+			uuidShort, len(req.Command), err,
+		))
+		return sandbox.ExecResult{}, fmt.Errorf("sandbox python execution request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		safeErr := sanitizeGatewayExecError(resp.StatusCode, errBody, req, c.authToken)
+		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
+			"沙箱网关 /api/v1/execute 返回错误状态 [status: %d, session: %s]: %s",
+			resp.StatusCode, uuidShort, safeErr,
+		))
+		return sandbox.ExecResult{}, fmt.Errorf(
+			"sandbox gateway /api/v1/execute returned HTTP %d: %s",
+			resp.StatusCode,
+			safeErr,
+		)
+	}
+
+	limitedReader := io.LimitReader(resp.Body, maxResponseBodyBytes)
+	var apiResp pythonExecuteResponse
+	if err := json.NewDecoder(limitedReader).Decode(&apiResp); err != nil {
+		return sandbox.ExecResult{}, fmt.Errorf("failed to decode python execute response: %w", err)
+	}
+
+	if apiResp.ResultText == nil {
+		return sandbox.ExecResult{}, errors.New("malformed execute response: result_text is null")
+	}
+
+	resultText := strings.TrimSpace(*apiResp.ResultText)
+	var gatewayResp gatewayExecResponse
+
+	if err := json.Unmarshal([]byte(resultText), &gatewayResp); err != nil {
+		parsed := false
+		for _, line := range strings.Split(resultText, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
+				if err := json.Unmarshal([]byte(line), &gatewayResp); err == nil {
+					parsed = true
+					break
+				}
+			}
+		}
+		if !parsed {
+			exitCode := 1
+			return sandbox.ExecResult{
+				Stderr:   resultText,
+				ExitCode: &exitCode,
+				Duration: time.Since(startTime),
+			}, nil
+		}
+	}
+
+	if gatewayResp.TimedOut {
+		if gatewayResp.ExitCode != nil {
+			return sandbox.ExecResult{}, fmt.Errorf(
+				"malformed gateway response: timed_out is true but exit_code is non-nil (%d)",
+				*gatewayResp.ExitCode,
+			)
+		}
+	} else {
+		if gatewayResp.ExitCode == nil {
+			return sandbox.ExecResult{}, errors.New(
+				"malformed gateway response: exit_code is null but timed_out is false",
+			)
+		}
+	}
+
+	execDuration := time.Since(startTime)
+	if gatewayResp.DurationMs > 0 {
+		execDuration = time.Duration(gatewayResp.DurationMs) * time.Millisecond
+	}
+
+	exitCodeStr := "null"
+	if gatewayResp.ExitCode != nil {
+		exitCodeStr = fmt.Sprintf("%d", *gatewayResp.ExitCode)
+	}
+
+	c.log().Info(logs.SYSTEM, fmt.Sprintf(
+		"✓ 沙箱命令执行完成 (via /api/v1/execute fallback) [session: %s, exit_code: %s, timed_out: %t, duration: %s]",
 		uuidShort, exitCodeStr, gatewayResp.TimedOut, execDuration,
 	))
 

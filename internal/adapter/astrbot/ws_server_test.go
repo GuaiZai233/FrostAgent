@@ -2,10 +2,13 @@ package astrbot
 
 import (
 	"FrostAgent/internal/adapter/parity"
+	"FrostAgent/internal/admincmd"
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"context"
@@ -14,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -23,11 +27,12 @@ import (
 )
 
 type mockLLMProvider struct {
-	mu        sync.Mutex
-	reqCount  int
-	requests  []core.ChatRequest
-	responses []*core.ChatResponse
-	errs      []error
+	mu         sync.Mutex
+	reqCount   int
+	requests   []core.ChatRequest
+	customChat func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error)
+	responses  []*core.ChatResponse
+	errs       []error
 }
 
 func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -35,6 +40,9 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 	defer m.mu.Unlock()
 
 	m.requests = append(m.requests, req)
+	if m.customChat != nil {
+		return m.customChat(ctx, req)
+	}
 	idx := m.reqCount
 	m.reqCount++
 
@@ -1886,4 +1894,435 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 			t.Errorf("LLM 请求必须包含脱敏标记: %s", lastUserContent)
 		}
 	})
+}
+
+func TestAstrBotMockConnection_DoesNotEnqueueExtraction(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是 AstrBot 模拟会话回复",
+				},
+				Usage: &core.Usage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 连接时附带 ?mock=true
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_001",
+		UserID:      "usr_mock_1",
+		SenderName:  "MockUser",
+		Content:     "模拟私聊测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送模拟私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取模拟回复失败: %v", err)
+	}
+
+	var action Action
+	if err := json.Unmarshal(respBytes, &action); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("期望 action=send_message, 实际=%s", action.Action)
+	}
+	if action.Content != "这是 AstrBot 模拟会话回复" {
+		t.Fatalf("期望回复内容相符，实际=%s", action.Content)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 生产 Session 命名空间不应被触碰
+	if _, ok := engine.SessionManager.Get("astrbot:private:usr_mock_1"); ok {
+		t.Fatalf("Mock 会话严禁污染生产 session namespace, 生产 session 不应存在")
+	}
+
+	// 活跃 mock 连接期间存在隔离的 mock session
+	if count := engine.SessionManager.Count(); count == 0 {
+		t.Fatalf("活跃 mock 连接期间应存在隔离的 mock session")
+	}
+
+	// 连接关闭后，mock session 自动删除
+	conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	if finalCount := engine.SessionManager.Count(); finalCount != 0 {
+		t.Fatalf("mock 连接关闭后应完全清理 mock session，实际剩余 session 数量=%d", finalCount)
+	}
+}
+
+type mockSandboxBackend struct {
+	mu       sync.Mutex
+	released []string
+}
+
+func (m *mockSandboxBackend) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
+	return sandbox.ExecResult{}, nil
+}
+
+func (m *mockSandboxBackend) Release(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.released = append(m.released, sessionID)
+	return nil
+}
+
+func (m *mockSandboxBackend) Health(ctx context.Context) error {
+	return nil
+}
+
+func TestAstrBotMockConnectionInFlightTeardownAndSandboxRelease(t *testing.T) {
+	inFlightStarted := make(chan struct{})
+	continueChat := make(chan struct{})
+
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			select {
+			case <-inFlightStarted:
+			default:
+				close(inFlightStarted)
+			}
+			select {
+			case <-continueChat:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "模拟回复完成",
+				},
+			}, nil
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	mockSandbox := &mockSandboxBackend{}
+	engine.SandboxBackend = mockSandbox
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 1. 发起带 ?mock=true 的 WebSocket 连接
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_inflight",
+		UserID:      "usr_mock_999",
+		SenderName:  "MockUser",
+		Content:     "in-flight 测试",
+		Platform:    "astrbot",
+		MessageType: "private",
+		Timestamp:   time.Now().Unix(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
+	}
+
+	// 等待后台处理进入 LLM 调用 (in-flight)
+	select {
+	case <-inFlightStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时未进入 in-flight LLM 执行")
+	}
+
+	// 确认此时已存在 mock session
+	if count := engine.SessionManager.Count(); count == 0 {
+		t.Fatal("处理进行中应已存在 mock session")
+	}
+
+	// 2. 在消息仍在执行过程中，突然断开连接
+	conn.Close()
+
+	// 让 LLM 继续完成 (或由 context 取消)
+	close(continueChat)
+
+	// 等待连接关闭流程彻底完成
+	time.Sleep(100 * time.Millisecond)
+
+	// 3. 验证 session 没有被在途协程复活 (No Session Resurrection)
+	if count := engine.SessionManager.Count(); count != 0 {
+		t.Fatalf("连接断开后 mock session 不应被在途请求复活，实际剩余=%d", count)
+	}
+
+	// 4. 验证 SandboxBackend.Release 被成功调用并释放了 mock session
+	mockSandbox.mu.Lock()
+	released := append([]string(nil), mockSandbox.released...)
+	mockSandbox.mu.Unlock()
+
+	if len(released) == 0 {
+		t.Fatal("断开连接时应调用 SandboxBackend.Release 释放 mock sandbox session")
+	}
+	foundMock := false
+	for _, s := range released {
+		if strings.HasPrefix(s, "mock:") && strings.Contains(s, "private:usr_mock_999") {
+			foundMock = true
+			break
+		}
+	}
+	if !foundMock {
+		t.Fatalf("释放的 session 列表中未找到 mock session, 实际=%v", released)
+	}
+}
+
+func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "usr_admin_1",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	var llmReceivedMessages []string
+	var mu sync.Mutex
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == core.RoleUser {
+					llmReceivedMessages = append(llmReceivedMessages, fmt.Sprint(m.Content))
+				}
+			}
+			mu.Unlock()
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "收到对话",
+				},
+			}, nil
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.Scope = scope
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	engine.MemoryWriter = memory.NewWriter(store)
+	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	engine.GroupSummaryStore = summaryStore
+	engine.Security = security.NewController(tmpDir)
+	engine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	})
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	// 1. 发起带 ?mock=true 的直接对话连接
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL+"?mock=true", nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 2. 发送 /ban 888888 命令 (即使发送者为管理员 usr_admin_1)
+	banEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_ban",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/ban 888888",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	banBytes, _ := json.Marshal(banEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, banBytes); err != nil {
+		t.Fatalf("发送 ban 消息失败: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 ban 消息回复失败: %v", err)
+	}
+	var act Action
+	_ = json.Unmarshal(respBytes, &act)
+
+	// 验证 888888 未被封禁 (未执行 admin ban)
+	targetPrincipal, _ := security.NewPrincipal("astrbot", "888888")
+	if engine.Security.IsLocked(targetPrincipal) {
+		t.Fatalf("Mock 模式下严禁执行真实 /ban 指令锁定用户")
+	}
+
+	// 3. 发送 /unban 888888
+	unbanEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_unban",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/unban 888888",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	unbanBytes, _ := json.Marshal(unbanEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, unbanBytes); err != nil {
+		t.Fatalf("发送 unban 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 unban 消息回复失败: %v", err)
+	}
+
+	// 4. 发送 /reflect
+	reflectEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_reflect",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/reflect",
+		Platform:    "astrbot",
+		MessageType: "private",
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	reflectBytes, _ := json.Marshal(reflectEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, reflectBytes); err != nil {
+		t.Fatalf("发送 reflect 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 reflect 消息回复失败: %v", err)
+	}
+
+	// 5. 群聊发送 /compact
+	compactEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg_mock_compact",
+		GroupID:     "grp_mock_999",
+		UserID:      "usr_admin_1",
+		SenderName:  "AdminUser",
+		Content:     "/compact",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		IsAt:        true,
+		Timestamp:   time.Now().Unix(),
+	}
+	compactBytes, _ := json.Marshal(compactEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, compactBytes); err != nil {
+		t.Fatalf("发送 compact 消息失败: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取 compact 消息回复失败: %v", err)
+	}
+
+	// 验证群聊总结库中无任何持久化记录
+	if rec, found, _ := summaryStore.Get("group:grp_mock_999"); found {
+		t.Fatalf("Mock 模式下严禁将总结持久化到生产 group summary: %s", rec.Summary)
+	}
+
+	// 验证所有指令均被作为普通对话消息送入了 LLM 模型处理
+	mu.Lock()
+	msgs := append([]string(nil), llmReceivedMessages...)
+	mu.Unlock()
+	if len(msgs) < 4 {
+		t.Fatalf("期望 4 条指令均作为普通文本传递给 LLM，实际收到=%d 条: %v", len(msgs), msgs)
+	}
+}
+
+func TestAstrBot_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		host    string
+		allowed bool
+	}{
+		{
+			name:    "Dev proxy preserving Host (changeOrigin: false)",
+			origin:  "http://localhost:4200",
+			host:    "localhost:4200",
+			allowed: true,
+		},
+		{
+			name:    "Dev proxy rewriting Host (changeOrigin: true) rejected",
+			origin:  "http://localhost:4200",
+			host:    "127.0.0.1:8080",
+			allowed: false,
+		},
+		{
+			name:    "Production dashboard same-origin http",
+			origin:  "http://localhost:8080",
+			host:    "localhost:8080",
+			allowed: true,
+		},
+		{
+			name:    "Production dashboard same-origin https",
+			origin:  "https://dashboard.example",
+			host:    "dashboard.example",
+			allowed: true,
+		},
+		{
+			name:    "Non-browser client without Origin",
+			origin:  "",
+			host:    "127.0.0.1:1234",
+			allowed: true,
+		},
+		{
+			name:    "Cross-origin untrusted attack rejected",
+			origin:  "http://evil.example.com",
+			host:    "localhost:8080",
+			allowed: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", "/instances/test/ws/astrbot", nil)
+			if err != nil {
+				t.Fatalf("创建测试请求失败: %v", err)
+			}
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			got := checkWebSocketOrigin(req)
+			if got != tc.allowed {
+				t.Errorf("checkWebSocketOrigin(origin=%q, host=%q) = %v; want %v", tc.origin, tc.host, got, tc.allowed)
+			}
+		})
+	}
 }

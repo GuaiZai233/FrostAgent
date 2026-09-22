@@ -25,3 +25,40 @@ func TestAdapterListenerDoesNotExposeManagement(t *testing.T) {
 		}
 	}
 }
+
+func TestManagementMux_ActionsCatRouting(t *testing.T) {
+	managerCalled := false
+	var capturedPath string
+	manager := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		managerCalled = true
+		capturedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"manager":true}`))
+	})
+
+	mux := managementMux(manager)
+
+	paths := []string{
+		"/api/actionscat/status",
+		"/api/v1/actionscat/actions",
+		"/api/actionscat/actions/act_1/runs",
+	}
+
+	for _, p := range paths {
+		managerCalled = false
+		capturedPath = ""
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if !managerCalled {
+			t.Fatalf("expected path %q to route to manager, but manager was not called", p)
+		}
+		if capturedPath != p {
+			t.Fatalf("expected captured path %q, got %q", p, capturedPath)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
@@ -16,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -135,31 +137,37 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		})
 	}
 	for _, att := range msg.Attachments {
+		if err := validateOutboundMediaURL(att.URL); err != nil {
+			return fmt.Errorf("onebot: %w", err)
+		}
 		switch att.Type {
 		case core.AttachmentTypeImage:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "image",
-					Data: map[string]any{"file": att.URL},
-				})
+			data := map[string]any{"file": att.URL}
+			if att.SubType == 1 {
+				data["sub_type"] = 1
+				data["subType"] = 1
 			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "image",
+				Data: data,
+			})
 		case core.AttachmentTypeAudio:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "record",
-					Data: map[string]any{"file": att.URL},
-				})
-			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "record",
+				Data: map[string]any{"file": att.URL},
+			})
 		case core.AttachmentTypeVideo:
-			if att.URL != "" {
-				segments = append(segments, tools.OneBotSegment{
-					Type: "video",
-					Data: map[string]any{"file": att.URL},
-				})
-			}
+			segments = append(segments, tools.OneBotSegment{
+				Type: "video",
+				Data: map[string]any{"file": att.URL},
+			})
 		default:
-			a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("OneBot: 未知或不支持的附件类型 %q，已忽略", att.Type))
+			return fmt.Errorf("onebot: unsupported attachment type %q", att.Type)
 		}
+	}
+
+	if len(segments) == 0 {
+		return fmt.Errorf("onebot: cannot send empty message (no content and no valid attachments)")
 	}
 
 	// 将 TargetID 转为 int64 以符合 OneBot 规范（若非数字则保留原始字符串）
@@ -185,7 +193,9 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -224,43 +234,80 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		done, ok := a.engine.Enter()
-		if !ok {
-			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
-			return
+		if a.engine != nil {
+			done, ok := a.engine.Enter()
+			if !ok {
+				http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+				return
+			}
+			defer done()
 		}
-		defer done()
 		localUpgrader := upgrader
-		if a.engine.Scope != nil {
+		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}
 
 		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("WebSocket 升级失败: %v", err))
+			}
 			return
 		}
-		wsConn := newWSConnection(conn)
+		var wsConn *wsConnection
+		if a.engine != nil {
+			wsConn = newWSConnection(conn, a.engine.Scope)
+			wsConn.Scope = a.engine.Scope
+		} else {
+			wsConn = newWSConnection(conn)
+		}
 		wsConn.stealer = a.stealer
-		wsConn.Scope = a.engine.Scope
+		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
+			wsConn.mock = true
+		}
 		a.registerConn(wsConn)
-		if a.engine.Context().Err() != nil {
+		if a.engine != nil && a.engine.Context().Err() != nil {
 			wsConn.Close()
 		}
 		defer func() {
 			a.unregisterConn(wsConn)
+			wsConn.Close()
+			wsConn.inFlight.Wait()
 			if wsConn.stealer != nil {
 				wsConn.stealer.ClearObservedScope(wsConn.generation)
 			}
-			wsConn.Close()
+			if wsConn.mock && a.engine != nil {
+				if a.engine.SessionManager != nil {
+					wsConn.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							a.engine.SessionManager.Delete(sessionID)
+						}
+						return true
+					})
+				}
+				if a.engine.SandboxBackend != nil {
+					wsConn.mockSessions.Range(func(key, _ any) bool {
+						if sessionID, ok := key.(string); ok {
+							if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+								a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+							}
+						}
+						return true
+					})
+				}
+			}
 		}()
 
-		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+		if a.engine != nil {
+			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+		}
 
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
+				}
 				break
 			}
 
@@ -270,7 +317,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			var event model.OneBotEvent
 			if err := json.Unmarshal(message, &event); err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+				if a.engine != nil {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+				}
 				continue
 			}
 
@@ -281,6 +330,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
+				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
+				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+					continue
+				}
 				var scope *runtimescope.Scope
 				if a.engine != nil {
 					scope = a.engine.Scope
@@ -292,11 +345,20 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				principal, principalErr := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
+				secPlatform := "onebot"
+				if wsConn.mock {
+					secPlatform = "mock"
+				}
+				principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
 				if principalErr != nil {
 					continue
 				}
-				decision := a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: historyKey(event)})
+				var decision security.WatchdogDecision
+				if wsConn.mock {
+					decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				} else {
+					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				}
 				if security.Blocks(decision.Action) {
 					if decision.IsFailure {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
@@ -339,10 +401,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					warningNotice = decision.WarningNotice
 				}
 			}
-			if event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				wsConn.rememberMessageSession(int64(event.MessageID), historyKey(event))
-			}
 
 			var routeSnapshot *modelrouter.Snapshot
 			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
@@ -353,18 +411,30 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.PostType == "message" && event.MessageType == "group" {
+			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
 				captureGroupCompactMessage(event, a.engine)
 			}
 
-			wsConn.observeStickers(event)
+			if !wsConn.mock {
+				wsConn.observeStickers(event)
+			}
+			if wsConn.isClosed() {
+				continue
+			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(historyKey(event)).ReserveTurn()
+				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
 			}
-			if !a.engine.Go(func() { processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing) }) && turn != nil {
-				turn.Done()
+			wsConn.inFlight.Add(1)
+			if !a.engine.Go(func() {
+				defer wsConn.inFlight.Done()
+				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing)
+			}) {
+				wsConn.inFlight.Done()
+				if turn != nil {
+					turn.Done()
+				}
 			}
 		}
 	}
@@ -454,3 +524,43 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, 
 	}
 	return wakeSignals.Any()
 }
+
+func validateOutboundMediaURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+
+	lower := strings.ToLower(rawURL)
+	if strings.HasPrefix(lower, "file:") || strings.HasPrefix(lower, "file/") {
+		return fmt.Errorf("insecure media url %q: file:// scheme is forbidden", rawURL)
+	}
+	if len(rawURL) >= 2 && rawURL[1] == ':' && ((rawURL[0] >= 'a' && rawURL[0] <= 'z') || (rawURL[0] >= 'A' && rawURL[0] <= 'Z')) {
+		return fmt.Errorf("insecure media url %q: local drive path is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, `\\`) || strings.HasPrefix(rawURL, "//") {
+		return fmt.Errorf("insecure media url %q: UNC or network path without scheme is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, ".") {
+		return fmt.Errorf("insecure media url %q: local path without scheme is forbidden", rawURL)
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid media url %q: %w", rawURL, err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("insecure media url %q: missing host", rawURL)
+		}
+		return nil
+	case "base64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
+	}
+}
+

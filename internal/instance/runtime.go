@@ -16,14 +16,17 @@ import (
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/actionscat"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
 	memsvc "FrostAgent/internal/service/memory"
+	"FrostAgent/internal/service/messages"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
 	stickersvc "FrostAgent/internal/service/sticker"
+	actionscatsvc "FrostAgent/internal/service/actionscat"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -162,17 +165,53 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
+	var dynamicSandbox *sandbox.DynamicBackend
 	if sandboxManager != nil {
-		dynamicBackend := sandbox.NewDynamicBackend(func() sandbox.Config {
+		dynamicSandbox = sandbox.NewDynamicBackend(func() sandbox.Config {
 			cfg := sandboxManager.Get()
 			cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + instanceID
 			return cfg
 		}, func(cfg sandbox.Config) sandbox.Backend {
 			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger))
 		})
-		commandTool := tools.ExecuteCommandTool(dynamicBackend)
+		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool
 	}
+
+	// Initialize ActionsCat client & tools
+	actionsCatClient := actionscat.New(scope.Getenv)
+	actionsCatListTool := tools.ActionsCatListActionsTool(actionsCatClient)
+	registry[actionsCatListTool.Name()] = actionsCatListTool
+	actionsCatRunTool := tools.ActionsCatRunActionTool(actionsCatClient)
+	registry[actionsCatRunTool.Name()] = actionsCatRunTool
+	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
+	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
+	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient, scope)
+	registry[actionsCatCreateTool.Name()] = actionsCatCreateTool
+	actionsCatCreateVersionTool := tools.ActionsCatCreateVersionTool(actionsCatClient, scope)
+	registry[actionsCatCreateVersionTool.Name()] = actionsCatCreateVersionTool
+	actionsCatBuildVersionTool := tools.ActionsCatBuildVersionTool(actionsCatClient, scope)
+	registry[actionsCatBuildVersionTool.Name()] = actionsCatBuildVersionTool
+	actionsCatGetBuildTool := tools.ActionsCatGetBuildTool(actionsCatClient)
+	registry[actionsCatGetBuildTool.Name()] = actionsCatGetBuildTool
+	actionsCatListBuildsTool := tools.ActionsCatListBuildsTool(actionsCatClient)
+	registry[actionsCatListBuildsTool.Name()] = actionsCatListBuildsTool
+	actionsCatActivateBuildTool := tools.ActionsCatActivateBuildTool(actionsCatClient, scope)
+	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
+	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)
+	registry[actionsCatDeployActionTool.Name()] = actionsCatDeployActionTool
+	actionsCatCreateScheduleTool := tools.ActionsCatCreateScheduleTool(actionsCatClient, scope)
+	registry[actionsCatCreateScheduleTool.Name()] = actionsCatCreateScheduleTool
+	actionsCatListSchedulesTool := tools.ActionsCatListSchedulesTool(actionsCatClient)
+	registry[actionsCatListSchedulesTool.Name()] = actionsCatListSchedulesTool
+	actionsCatDeleteScheduleTool := tools.ActionsCatDeleteScheduleTool(actionsCatClient, scope)
+	registry[actionsCatDeleteScheduleTool.Name()] = actionsCatDeleteScheduleTool
+	actionsCatCreateMatcherTool := tools.ActionsCatCreateMatcherTool(actionsCatClient, scope)
+	registry[actionsCatCreateMatcherTool.Name()] = actionsCatCreateMatcherTool
+	actionsCatListMatchersTool := tools.ActionsCatListMatchersTool(actionsCatClient)
+	registry[actionsCatListMatchersTool.Name()] = actionsCatListMatchersTool
+	actionsCatDeleteMatcherTool := tools.ActionsCatDeleteMatcherTool(actionsCatClient, scope)
+	registry[actionsCatDeleteMatcherTool.Name()] = actionsCatDeleteMatcherTool
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,
@@ -221,8 +260,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
+	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", 10)
 	engine := &llm.Engine{Scope: scope,
-		MaxIterations:  5,
+		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
@@ -233,6 +273,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		SandboxBackend: dynamicSandbox,
 		Security:       securityController,
 		InstanceID:     instanceID,
 		// Billing components
@@ -295,6 +336,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		mux.Handle(stickerPath, stickerHandler)
 		mux.HandleFunc("/api/sticker/", stickerSvc.ImageHandler())
 	}
+
+	msgSvc := messages.New(dispatcher, instanceID, scope.Getenv)
+	mux.Handle("/api/v1/messages/send", msgSvc)
+
+	actionsCatSvc := actionscatsvc.NewScoped(actionsCatClient, instanceID, mcpGetenv)
+	mux.Handle("/api/actionscat/", actionsCatSvc)
+	mux.Handle("/api/actionscat", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat/", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat", actionsCatSvc)
 
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)

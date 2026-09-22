@@ -88,9 +88,16 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 	if instance == "" {
 		instance = run.InstanceID
 	}
-	decision := e.Security.Watchdog.EvaluateWithContext(e.Context(), p, stage, source, content, security.AuditEvent{
-		Instance: instance, Session: run.SessionID, Tool: tool,
-	})
+	var decision security.WatchdogDecision
+	if run.Mock {
+		decision = e.Security.Watchdog.EvaluateDryRun(p, stage, source, content, security.AuditEvent{
+			Instance: instance, Session: run.SessionID, Tool: tool,
+		})
+	} else {
+		decision = e.Security.Watchdog.EvaluateWithContext(e.Context(), p, stage, source, content, security.AuditEvent{
+			Instance: instance, Session: run.SessionID, Tool: tool,
+		})
+	}
 	return security.Blocks(decision.Action), decision
 }
 

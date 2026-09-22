@@ -5,6 +5,7 @@
 此大纲只简略地阐述各组成的实现概要，不涉及具体代码细节。
 
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
+计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
 ## FrostAgent 的组成
 
@@ -159,6 +160,85 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
+### 管理员消息指令系统 (Administrator Message Commands System)
+
+为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：
+
+- **入站早期拦截与管线旁路 (Early Ingress Interception & Pipeline Bypass)**：
+  - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于内容安全审查（`GateIngress`）、工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
+  - **前置安全旁路、非管理员静默丢弃与管理员 Access-Only 强门禁**：
+    - 指令候选识别与管理员身份鉴权优先于安全看门狗（Watchdog Ingress Gate）执行；
+    - 对于非管理员发送的指令候选消息，即使其参数包含敏感或高危特征词，也在此阶段直接静默丢弃，绝不触发安全审查拦截、绝不发出 `RejectInspectorMsg` 等安全拒绝回复，亦不产生安全审计违规计数（Strike）或账户锁定，充分保障运维指令系统的隐蔽性与防探测要求；非指令候选的常规聊天消息则继续正常流经安全审查；
+    - **已鉴权管理员 Fail-Closed 访问控制门禁**：对于通过 `ADMIN_QQ_IDS` 鉴权的管理员，在进入指令执行器（`Executor`）前强制执行 fail-closed 的 access-only 安全检查（`Security.CheckAccess(principal)`）。该检查仅验证管理员主体是否处于全局锁定状态，**绝不将运维指令参数送入内容看门狗（Watchdog）**，既杜绝了指令参数语法被误判为违规内容的误报风险，又彻底堵死了已封禁管理员利用管理指令（如 `/reset`、`/ban` 或自我解封 `/unban <selfID>`）绕过安全隔离的漏洞；
+    - 若安全访问检查判定主体已锁定（`ErrLocked`），直接返回 `RejectGatewayMsg` 拒绝执行；若安全控制器发生内部故障，同样严格 fail-closed 拦截；同时在 `Executor.Execute` 调度入口处设置同等深度防御门禁；
+  - 即使当前会话被模型路由规则全局禁用、对话模型未配置或处于故障降级状态，管理员运维指令依然具备最高优先级的执行通路与完全可用性；
+  - 指令交互完全旁路对话管线：不向会话持久历史提交消息（`Session.AddMessage`）、不进入群聊未压缩环形缓冲（`groupCompactBuffer`）、不触发记忆提取，杜绝运维指令污染日常对话语境或模型长期记忆。
+- **真实 @ 机器人强门禁 (Real-At Targeting Bot Verification)**：
+  - 无论在群聊还是私聊场景下，触发指令均严格强制要求当前消息显式包含针对 Bot 自身的**真实 @ 提及**；
+  - 严禁裸指令词触发、文本唤醒词误触、自定义别名/代称识别、引用回复偷渡以及历史消息 @ 冒充；
+  - **OneBot 端适配**：严格扫描当前单条入站消息段数组（`event.Message`），仅当匹配到协议原生段 `seg.Type == "at"` 且目标 QQ 与当前登录账号一致（`seg.Data["qq"] == event.SelfID`）时判定有效，完全忽略历史回放 `event.Messages`，严禁纯文本 `[@<botID>]` 或正则假 At 规避，并在判定成功后从消息链中精准剥离该 Bot @ 元素以提取纯指令文本；
+  - **AstrBot 端适配**：严格依赖协议层 `event.IsAt == true` 强元数据标识，并由 `StripLeadingMention` 剔除文本首部的提及前缀。
+- **代数一致性与并发执行守卫 (Epoch Invalidation & Concurrency Guards)**：
+  - **初始代数不变式**：会话默认初始 Epoch 设定为 1（`Epoch()`, `BeginRun()`, `GetOrCreate()`），确保首轮对话即处于严格的代数防线保护下；
+  - **预留时刻锚定**：适配器在预留会话轮次时刻（`turn.Epoch()`）即刻锚定 `startEpoch`，并在阻塞式引用消息查找（`lookupReplyContext` / `get_msg`）与多模态视觉预处理完成后持续核验，防止长耗时预处理掩盖并覆盖重置操作；
+  - **在途记忆提取代数守卫与上下文取消 (In-Flight Memory Extraction Epoch & Cancellation Guard)**：
+    - `SessionContext` 维护活跃提取上下文注册表（`extractionCancels map[uint64]context.CancelFunc`）与自增提取 ID，并通过 `BeginExtraction` 为后台异步记忆抽取任务绑定可取消的派生上下文；
+    - 待提取任务批次（`PendingExtractionBatch`）显式附带所属会话指针及其派生时刻的会话 Epoch 代数；
+    - 会话重置时（`ResetSession`）原子递增 Epoch，并主动调用 `CancelExtractions` 快速取消所有在途提取上下文，打断正在进行中的大模型推理 HTTP 连接；
+    - 构建前中后三道严密代数防线与主动提交代数屏障状态机 (Active-Commit Generation Barrier State Machine)：在大模型提取调用前、大模型响应解析后核验代数一致性与上下文有效性；通过 `core.ExtractionCommitBarrier`（包含 `barrierPending`、`barrierWriting`、`barrierDone`、`barrierAborted` 四态同步状态机，绑定会话当前 Epoch、上下文及完成通道 `done`）注入提取流程；支持整批任务内多路由分组顺序提交（`EndCommit()` 在代数匹配且未被取消时原子重置为 `barrierPending` 并换发全新 `done` 通道，直至任务 `cleanup()` 调用 `Close()` 终结为 `barrierDone`）；在记忆持久化提交时，`Store.SaveEntriesConditionallyContext` 在持有写锁（`Store.mu.Lock()`）内调用原子 `barrier.TryBeginCommit()`，在同一同步互斥锁下原子核验未被中止且代数匹配，并立即变迁为 `barrierWriting`（若已中止或代数不匹配则原子变迁至 `barrierAborted` 并返回 `false` 触发 `ErrConditionFailed`），彻底消除校验与标记写入之间的 TOCTOU 竞态间隙；会话重置时（`ResetSession`）通过 `SessionContext.resetMu` 串行化重置等待阶段，快照活跃屏障且在等待完成前始终保留在 `s.extractionBarriers` 登记中，原子递增 Epoch 并调用 `b.AbortAndWait()`：若屏障尚处于 `barrierPending` 则原子置为 `barrierAborted` 并即刻返回以拒绝对旧代记忆的后续提交尝试；若已取得屏障进入 `barrierWriting`，则以确定性无超时等待（`<-b.done`）阻塞至本次不可逆的磁盘 I/O 写入（`s.save(brain)`）及其 `defer barrier.EndCommit()` 完全完成，杜绝提前超时逃逸或并发重置绕过等待导致的旧世代写穿漏洞，保证会话重置返回给管理员时所有磁盘写入处于完全终态，最后再清理已终止屏障登记；
+  - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
+  - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
+  - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。
+- **私聊压缩历史序列单调性 (Sequence-Based Private Compaction Invariant)**：
+  - 会话上下文使用全局严格单调递增的序列号（`nextMsgSeq uint64`、`historySeq []uint64`）追踪每一条历史消息；
+  - 私聊压缩快照记录捕获上限 `snapshot.LastSeq`；提交时基于该序列阈值保留所有在此期间追加的新消息，免疫并发历史裁剪（`TrimHistory`/`TrimSession`）导致的切片错位与静默丢消息缺陷；
+  - 重构压缩历史后重新分配连续递增序列号，保持单调性不变与切片长度严格对齐。
+- **自适应前缀解析规范 (Adaptive Prefix Parsing)**：
+  - 默认前缀为 `/`，由实例环境变量 `ADMIN_COMMAND_PREFIX` 控制；
+  - **符号型前缀**（以标点符号结尾，如 `/`、`!`、`#`）：允许与指令名直接紧凑相连（如 `@bot /reset`）或留有任意空格（如 `@bot / reset`）；
+  - **单词型前缀**（以字母、数字或文字结尾，如 `execute`、`cmd`、`指令`）：强制要求前缀与后续指令名之间必须存在至少一个空白分隔符（如 `@bot execute reset`），前缀直接粘连（如 `executereset`）将被判定为普通聊天文本而非指令候选；
+  - 指令名称（`reset`, `ban`, `unban`, `compact`, `reflect`）统一解析为不区分大小写的标准小写指令。
+- **Option A 受信身份鉴权与零泄漏静默丢弃 (Option A Auth & Zero-Leak Silent Dropping)**：
+  - 鉴权源严格且仅沿用实例专属环境变量 `ADMIN_QQ_IDS`（以逗号、分号或空白分隔）；未配置或为空时，没有任何用户具备管理员指令权限；
+  - 调用者身份唯一源自协议层提供的真实发送者元数据（`event.UserID`），严禁信任大模型输出、用户昵称、聊天正文自称，亦不向群主、群管理员或 AstrBot 宿主管理员提供任何隐式提权；
+  - **非管理员静默丢弃（防探测）**：对于满足「真实 @ 机器人 + 匹配指令前缀」但发送者非管理员的消息，系统坚决不向聊天端返回任何提示、拒绝信息或报错回复，彻底杜绝普通群友或恶意攻击者探测 Bot 指令系统的存在性：
+    - OneBot 适配器直接返回并中断处理，不发送任何响应动作；
+    - AstrBot 适配器向协议端下发携带 `SubType: "admin_silent_drop"` 与 `SuppressLLM: true` 的 `Action{Type: "action", Action: "noop", Echo: "reply_" + event.MessageID}` 动作。AstrBot 插件捕获该特征动作后，显式调用 `event.should_call_llm(True)` 主动压制 AstrBot 宿主默认的大模型调用流程，杜绝产生额外 LLM Token 开销、聊天回复污染或上下文泄漏；而常规群聊压缩等无提示处理（标准 noop）则保持正常的事件广播链路；
+  - **管理员语法错误提示**：当已鉴权的管理员输入未知指令或参数语法错误时，系统返回紧凑的参数错误说明与当前前缀下的完整指令用法速查卡。
+- **五大核心运维指令语义与调度保障 (Core Command Semantics)**：
+  - **`reset` 会话重置与 In-Flight 及时打断**：
+    - 原子重置当前会话（支持群聊与私聊），清空持久历史记录、内存滚动摘要、未压缩消息缓冲及映射、待处理记忆提取项；
+    - 故障感知的持久摘要删除：调用 `groupsummary.Store.Delete` 物理删除磁盘文件，细化捕获底层文件系统 I/O 错误并向管理员透明反馈，杜绝掩盖删除失败假称成功；
+    - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
+    - 取消所有在途记忆提取（`CancelExtractions`）并递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交与在途记忆抽取在检测到 Epoch 变动时主动放弃落盘写入与发送回复；
+    - 回复文本：「当前会话已重置。」；
+  - **`ban <userID>` 全局封禁**：
+    - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；
+    - 防御性拦截：严禁封禁管理员调用者自身，严禁封禁 `ADMIN_QQ_IDS` 列表中的任何管理员；
+    - 跨平台规范化：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定；
+    - 回复文本：「已成功封禁用户 <userID>。」；
+  - **`unban <userID>` 全局解封**：
+    - 同样基于规范化平台 Principal，通过 `security.Controller.Unlock` 解除目标用户的全局锁定状态；
+    - 回复文本：「已成功解封用户 <userID>。」；
+  - **`compact` 强制即时上下文压缩**：
+    - 突破常规自动化压缩的缓冲区消息条数阈值（`bufferSize`）与时间冷却限制（`minInterval`），立即对当前会话启动总结压缩；
+    - **独立工作负载路由解耦**：私聊压缩解耦于普通对话模型路由，统一调度至 `WorkloadGroupCompact` 专属提供商与模型，即使当前会话被规则禁用日常对话，管理员仍可独立调度会话压缩；
+    - 群聊会话调用 `GroupCompactor.ForceCompact`，私聊会话启动专属单轮压缩工作流并在后台完成原子提交；
+    - 具备防重入状态防护：无可压缩内容或已有压缩任务正在执行时返回友好提示；
+    - **双阶段异步回执时序门禁**：设立 `startSent` 门禁通道，强制确保「已开始...压缩总结...」起始回执（AstrBot 携带 `IsIntermediate: true` 标识）由底层传输成功发散后，才释放后台异步执行完毕后的最终完成/失败通知，保证因果时序严格一致；
+  - **`reflect` 即时记忆反思**：
+    - 针对当前会话所有者（`group:<id>` 或 `private:<id>`）调度 `ReflectionManager.Start` 进行深度记忆反思提炼；
+    - 内部维护互斥运行锁，已有任务进行中时阻止重复触发；
+    - 同样采用起始回执与完成回执的双阶段异步反馈时序门禁机制。
+- **AstrBot 出站平台元数据与主动 UMO 路由 (AstrBot Outbound Platform & Proactive UMO Routing)**：
+  - 出站 `Action` 结构体显式声明 `Platform` 字段并由适配器全量填入；
+  - 当后台任务或长耗时执行超过插件等待超时（120s）回退至主动推送（`_dispatch_proactive_action`）时，系统精确依据 `Platform` 与会话类型构造 UMO（`{platform}:GroupMessage:{id}` 或 `{platform}:FriendMessage:{id}`），彻底杜绝跨平台消息投递丢失。
+- **Web 端指令设置与多实例隔离 (`#/settings/commands`)**：
+  - 前端控制台在「系统设置」第三张卡片独立提供「指令设置」入口（卡片严格排列次序：1. Bot 服务端设置，2. 网页端外观设置，3. 指令设置）；
+  - **路由守卫拦截**：当用户未选择任何激活实例进入 `#/settings/commands` 时，友好提示「请选择实例」，杜绝空指针异常；
+  - **实例级独立持久化与即时生效**：指令前缀配置绑定当前实例环境并写入 `data/instance_<id>/.env`，通过 Runtime Scope 内存映射热生效，互不串扰、不产生跨实例污染；
+  - **动态语法联动预览**：前缀修改时，页面自适应动态刷新并重绘 5 种核心指令的标准调用范式与说明表格。
+
 ### 管理控制台架构 (Web Dashboard Architecture)
 
 FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeScript + Vite + 原生 HTML/CSS + ConnectRPC）架构，具备极高的加载速度、极致简单的构建管道与出色的可维护性：
@@ -179,7 +259,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
-  - `execute_command` 的命令正文、stdout 与 stderr 不进入完整日志或终端摘要；审计元数据写入对应实例日志，并保留长度、哈希、退出码、超时及截断状态。
+  - `execute_command` 的指令正文与返回结果（stdout、stderr）在工具调用与当前轮大模型交互日志中完整记录，不再进行脱敏打码，便于实时调试与可观测性追踪；同时日志 Store 引入总字节预算限制（默认 32 MiB）与字节淘汰机制，后续请求日志中对已由 TOOL 日志完整记录的历史大输出进行引用折叠，杜绝上下文回传导致的内存放大与 OOM 风险；终端控制台摘要保持简洁的调用状态。
 - **现代化设计令牌与主题系统 (shadcn/ui 风格)**：
   - 基于 Neutral Zinc 阶梯色彩与现代语义 CSS 变量系统（`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--border`, `--destructive`, `--radius`）；
   - 支持跟随系统（`prefers-color-scheme`）、明亮浅色、深邃暗色三种模式实时无缝切换与持久化；
@@ -316,6 +396,32 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **可视化表单与 JSON 实时双向识别与同步 (Bi-directional Form-JSON Sync)**：提供「表单配置」与「JSON 编辑」双模式视图。以 `DraftServerConfig` 状态为单一事实源（Single Source of Truth），采用状态机词法扫描器（Quote-aware Scanner）在保护 URL 内双斜杠（如 `https://...`）的前提下精准剥除 JSONC 注释与尾随逗号；命令行参数采用原生数组结构（独立 argv 动态输入行），确保含空格、引号与空参数在 Form ↔ `string[]` ↔ JSON 之间 100% 无损可逆，并保证在 JSON 编辑中删减字段时完全重置对应配置为干净初始状态；支持一键识别 Claude Desktop 格式（`mcpServers`）、单服务包裹对象与标准 MCP 配置，提供格式化、一键复制与粘贴校验。
   - 基于 ConnectRPC 的 `MCPService` 端到端类型安全接口交互。
 
+### 在线直接对话与协议模拟器 (Direct Chat & Adapter Protocol Simulator)
+
+为了在无需依赖 NapCat、AstrBot 宿主等外部上游客户端的环境下对实例模型大脑与人设对话进行快速联调与回归测试，FrostAgent 提供了纯前端运行的 WebSocket 协议模拟器与在线直接对话子系统：
+
+- **定位与系统边界 (Role & Boundary)**：
+  - **完全绕过上游客户端实现**：控制台前端直接作为标准 WebSocket 客户端，分别连入后端的 `/instances/{id}/ws/onebot` 或 `/instances/{id}/ws/astrbot` 端点；
+  - **协议帧双向仿真**：前端直接对齐 OneBot v11 与 AstrBot 的协议格式，构造入站事件包（`Event`）发送至后端，并监听出站动作包（`Action`）还原对话气泡；
+  - **自动 ACK 确认闭环**：在 OneBot v11 协议中，系统出站消息遵循 `SendActionAndWait` 机制，前端监听并在收到携带 `echo` 的动作帧时立即回传成功确认帧（`{ "status": "ok", "retcode": 0, "echo": action.echo }`），有效避免后端超时或丢弃后续历史记录。
+- **断电全丢与零持久化污染保证 (Zero Durable Mutation & Complete Session Isolation)**：
+  - **连接级 Mock 标记与代际隔离 (Namespace Isolation)**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段为连接生成独立代际标识（`generation`）并标记 `mock = true`。所有入站事件生成的 Session ID 自动前缀隔离命名空间 `mock:<generation>:<baseKey>`，彻底杜绝模拟会话与生产真实用户/群聊会话混合；
+  - **断开连接自动生命周期清理与在途并发同步 (Disconnect Lifecycle Cleanup & In-Flight Barrier)**：每个连接维护独立的 `inFlight sync.WaitGroup`、继承自 `Scope.Context()` 的可取消上下文 `ctx` 与线程安全的 `mockSessions sync.Map`。在连接关闭或断开时，系统首先调用 `cancel()` 取消连接上下文（无论是否为 Mock 连接，均能使在途 `SendActionAndWait` 立即感知取消而退出，杜绝 10 秒超时挂起；对 Mock 连接亦可中断在途 LLM 推理），并等待所有执行中的消息处理协程安全退出（`inFlight.Wait()`），随后通过 `defer` 屏障遍历注销并从 `engine.SessionManager` 中彻底删除所有关联的临时会话，杜绝在途协程复活已删除会话（No Session Resurrection）；同时对所有生成的 Mock 会话调用 `SandboxBackend.Release()` 释放沙箱容器及文件系统资源，真正实现会话与沙箱级的“断电全丢”；
+  - **运行时上下文穿透 (`RunContext.Mock`)**：在消息进入 `reply()` 处理管道时，连接的 `mock` 属性被完整注入至 `llm.RunContext.Mock`，贯穿大模型推理与工具调用生命周期；
+  - **只读记忆召回与元数据零修改 (Read-Only Recall & Mutation Guarding)**：允许大模型在模拟会话中检索长期记忆库以保持逼真的人设问答上下文，但严格拦截元数据写入。系统在 `RecordRecall` 阶段校验 `!runContext.Mock`，禁止更新 `access_count` 与 `updated_at`；同时在 `memory.reflect` 反思重构工具中显式拦截（返回 `模拟会话模式下禁用记忆反思重构`）；大模型调用 `memory.write` 时拦截持久化写入并返回模拟提示；
+  - **安全审查 Dry-Run 模式 (Security Dry-Run Mode)**：在 `mock=true` 模式下，安全控制器调用 `GateIngressDryRun`、`EvaluateDryRun` 及 `EvaluateContextDryRun`，在 `mock` 独立平台上评估输入风险并按需阻断；同时在 `internal/llm/security_gate.go::securityBlocks()` 统一收口处根据 `run.Mock` 路由至 `Watchdog.EvaluateDryRun`，统一覆盖模型输出、工具参数与工具执行结果的安全校验；严禁向 `security_access.json` 累加违规次数（Strikes）、严禁锁定生产 Principal、严禁向 `security_audit.jsonl` 追加持久化审计事件，防止调试测试导致真实账号受罚或污染生产审计日志；
+  - **计费系统完全豁免 (Billing Exemption)**：Mock 连接全程绕过 `ReserveLLM` 预扣款与 `CommitLLM` 实际结算阶段，且不计入多模态 Vision 计费，确保在线调试测试绝不扣减用户的账户余额或新手礼包额度；
+  - **管理员命令旁路保护 (Admin Command Bypass)**：在 `mock=true` 模式下，系统在适配器入口及处理层全面拦截管理员指令管道（如 `/ban`、`/unban`、`/reflect`、`/compact`、`/reset` 等）。即使模拟发送者 UID 命中 `ADMIN_QQ_IDS`，此类输入也会被强制作为普通自然语言对话直接传递给大模型，严禁执行任何封禁锁库、安全审计落盘、强制触发记忆反思或写入群聊总结等运维副作用，确保零持久化修改不变量在跨模块交互中始终坚挺；
+  - **后台任务隔离与跳过**：当连接处于 Mock 模式时，系统显式跳过 `engine.EnqueueExtractionTurn`（不触发长期记忆提取）、跳过 `GroupCompactor.TriggerWithScope` / `captureGroupCompactMessage`（不触发群聊滚动总结落盘）、以及跳过 `stealer.Observe`（不偷取表情包）。会话完全驻留于临时内存中，服务重启或连接断开后完全丢弃，不污染生产存储。
+- **Web 控制台在线对话界面 (Web Dashboard Direct Chat)**：
+  - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；
+  - **多协议与多场景自由切换**：支持在 OneBot v11 与 AstrBot 两大适配器间无缝切换，并支持私聊（Private）与群聊（Group）场景模拟；
+  - **AstrBot 平台对齐 (Platform Parity)**：在 AstrBot 适配器模式下支持自定义下层平台类型（默认 `aiocqhttp`），确保事件帧与生产 QQ 身份规范化（Memory、Security 与 ModelRouter）完全对齐；
+  - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
+  - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
+  - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
+  - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
+
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)
 
 FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持核心安全不变量（Security Invariant）：**FrostAgent 绝不在宿主机上直接执行任何由大模型生成的任意命令**。
@@ -339,8 +445,8 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   ```
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
-  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
-  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；
+  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部沙箱网关交互。原生支持 FA-Sandbox（`POST /api/v1/shell/exec`），并自动向后兼容 upstream Foxerine/code-interpreter（在 `/api/v1/shell/exec` 返回 404 时，无缝回退至 `POST /api/v1/execute` 执行极薄 Python subprocess 封装），对上层智能体工具屏蔽底层网关差异；
+  - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；当沙箱在运行时被禁用时，`Release()` 仍会对已缓存的实例执行尽力而为（Best-effort）的会话清理释放，防止容器与文件系统资源泄漏；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
   - `execute_command` 工具常驻注册于 `ToolRegistry`；当沙箱运行时未启用（`SANDBOX_ENABLED=false`）时，工具在被模型调用时明确返回友好提示（“沙箱功能已被禁用，请前往 FrostAgent 管理面板启用它。”），避免弱模型因缺失工具而产生幻觉虚构执行结果；
@@ -355,6 +461,40 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；
   - 针对 Agent 循环的 64 KiB（`MaxToolOutputBytes`）限制，`execute_command` 工具层在返回前对 stdout/stderr 进行双向前后截断保护（保留头部与包含报错堆栈的尾部，中间填充标记），确保模型接收到的始终是合法可解析的结构化 JSON。
+- **可观测性无脱敏与日志内存预算防御 (Observability & Memory Budget Defense)**：
+  - `execute_command` 的指令正文与执行结果（stdout、stderr）在智能体工具执行日志（`logs.TOOL`）、大模型请求（`logs.LLM_REQUEST`）与响应（`logs.LLM_RESPONSE`）中完整保留真实内容，不再进行脱敏打码，保证管理员与开发者获得透明的实时排障能力；
+  - 为防止多轮 Agent 对话中历史工具执行结果在每次大模型请求上下文（`LLM_REQUEST`）中反复堆积导致二次内存放大与 OOM 隐患，协议层在记录后续请求日志时对已由 `TOOL` 日志持久化的历史长输出（> 256 字节）进行引用折叠，且上游真实线缆请求与当前轮次未决输出保持 100% 原始完整传输；
+  - 日志存储引擎（`logs.Store`）全面实施硬字节预算（默认 32 MiB）与时间序字节淘汰（Byte-based LRU Eviction），彻底杜绝无界定长缓冲引发的内存击穿风险。
 - **安全边界划分 (Safety Boundary Separation)**：
   - 明确区分结构化受限工具（Structured Bounded Tools，如 GitHub API、HTTP Fetch）与任意命令执行（Arbitrary Shell）；
   - 任意 Shell 命令必须且只能受限于沙箱沙盒生命周期，宿主机仅作为控制面运行。
+
+### ActionsCat 自动化平台集成系统 (ActionsCat Automation Platform Integration)
+
+为了将 FrostAgent 智能体的自然语言交互与真实业务自动化、定时任务、外部数据获取及受限脚本执行连接起来，FrostAgent 深度集成了 ActionsCat 自动化平台（详细设计见 [actionscat.md](actionscat.md)）：
+
+- **双向协同架构 (Bi-directional Integration)**：
+  - **出站调用 (FrostAgent -> ActionsCat)**：FrostAgent 作为调度中枢，通过 ActionsCat Management API（`/api/v1/actions`、`/api/v1/actions/:id/runs` 等）和 Event Ingress（`/api/v1/dispatch`），赋予大模型列出动作、排查运行日志、执行动作以及注册动作元数据的能力；
+  - **入站回传 (ActionsCat -> FrostAgent)**：运行在隔离沙箱（Worker 容器）中的 Action 通过 ActionsCat Gateway 代理或直接调用 FrostAgent 的 `/api/v1/messages/send` 消息接口（`frostagent.sendmsg` 能力），将处理结果反向推送到指定平台与会话，形成完整的执行与响应闭环。
+- **控制平面安全代理与统一样式鉴权 (Control Plane Reverse Proxy & Scoped Auth)**：
+  - 在运行时网关中注册 `/instances/{id}/api/actionscat/*` 以及全局别名 `/api/actionscat/*`（由顶层 `managementMux` 转发）；
+  - 严格复用 FrostAgent 控制面统一鉴权标准（`mcpsvc.CheckControlPlaneAuthScoped`），验证请求端点并要求远程访问携带 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN`，杜绝未认证调用者利用 FrostAgent 作为凭据代持代理穿透访问 ActionsCat；
+  - 代理层采用 `http.MaxBytesReader`（10 MiB 上限）与严格的单对象 JSON 解码，对格式错误或截断的恶意载荷一律 Fail-Closed 拦截并返回 400，防止畸形请求产生非预期的触发副作用。
+- **智能体工具集与严格安全边界 (Agent Tools & Guardrails)**：
+  - 向大模型暴露完整自动化部署与运行工具集，包括动作管理、版本快照、编译构建、构建激活与执行追踪；
+  - **敏感注入状态脱敏隔离 (Agent-Facing DTO Redaction)**：定义专用的 `AgentRunDTO`，显式采用字段白名单，彻底剔除 ActionsCat 内部用于持久状态注入的 `planned_env`（包含敏感凭据、数据库连接、Token 等），防止敏感信息泄漏至大模型上下文；
+  - **受保护环境变量前缀拦截**：`actionscat_run_action` 严格拒绝任何以 `ACTIONSCAT_` 为前缀的自定义环境变量键，防止模型输出伪造沙箱运行上下文与受信标识；
+  - **管理写权限严格门禁 (Administrative Mutation Gate)**：状态变更类工具（创建动作、版本、构建、激活及部署）属于控制面持久化修改操作，工具层严格校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员允许触发；普通会话或无上下文调用直接拒绝，绝不向后端发送写请求（0 次 POST）；
+  - **Mock 模拟会话零持久化副作用 (Zero Durable Mutation Invariant)**：在带有 `?mock=true` 的在线模拟会话中，所有变更及执行工具被强制前置拦截并返回提示，坚决不在模拟测试中产生真实任务执行或持久化状态改变。
+- **可运行状态与空壳元数据显式解耦 (Runnable vs. Enabled Decoupling)**：
+  - 对齐 ActionsCat 制品模型规范，Action 必须同时满足 `Enabled == true`、`ActiveVersionID != ""` 与 `ActiveBuildID != ""` 才具备可执行条件；
+  - `actionscat_list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
+  - 当模型尝试运行未构建动作时，工具层自动捕捉 `no active build` 并反馈清晰诊断指引。
+- **动态循环深度与运行时配置 (Configurable Agent Loop & Settings Integration)**：
+  - 为适配“列出动作 -> 检查详情 -> 执行动作 -> 轮询结果”的多步自动化调用编排，将默认最大循环迭代轮数（`MaxIterations`）调优至 10，并支持通过实例级环境变量 `AGENT_MAX_ITERATIONS` 动态配置；
+  - ActionsCat 服务端点（`ACTIONSCAT_ENDPOINT`）、管理凭据（`ACTIONSCAT_MANAGEMENT_TOKEN`）、事件调度凭据（`ACTIONSCAT_DISPATCH_TOKEN`）与 `AGENT_MAX_ITERATIONS` 全面纳入 FrostAgent Settings 的 `knownEnvVars` 注册表，敏感 Token 自动脱敏展示与安全存储。
+- **Web 控制台专属管理工作台 (Web Dashboard Management)**：
+  - 前端提供独立的 ActionsCat 控制台页面（`/#actionscat`）；
+  - 实时诊断服务端网络联通（`healthy`）与凭据认证状态（`authenticated`），直观呈现就绪徽章；
+  - 卡片化动作视图：区分展示「可运行」与「未构建/未激活」状态，罗列版本号、构建号、定时规则与特权能力；
+  - 交互式运行工作流：提供包含变量校验的手动触发弹窗、Action 元数据新建弹窗、测试事件分发（`/dispatch`）入口以及带语法高亮和复制功能的运行日志（STDOUT/STDERR）排查抽屉。

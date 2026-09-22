@@ -12,12 +12,15 @@ import (
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
+	mcpsvc "FrostAgent/internal/service/mcp"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -151,6 +154,11 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
+	mux.HandleFunc("/api/v1/messages/send", m.handleDefaultSendMessage)
+	mux.HandleFunc("/api/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/actionscat", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/v1/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/v1/actionscat", m.handleDefaultActionsCat)
 	m.general = mux
 	// Retained data directories reserve their endpoint IDs too.
 	paths, err := filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
@@ -1082,17 +1090,31 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	id := parts[0]
+	m.serveInstance(w, r, parts[0], "/"+parts[1])
+}
+
+func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path string) {
 	i, err := m.lookup(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	id = i.id
-	path := "/" + parts[1]
 	ws := strings.HasPrefix(path, "/ws/")
 	stream := strings.HasSuffix(path, "/StreamLogs")
-	readOnly := r.Method == "GET"
+	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
+	isActionsCat := strings.HasPrefix(path, "/api/actionscat") || strings.HasPrefix(path, "/api/v1/actionscat")
+	if isActionsCat {
+		if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "unauthorized: " + err.Error(),
+			})
+			return
+		}
+	}
+	readOnly := r.Method == "GET" || isSendMessage || isActionsCat
 	method := path[strings.LastIndex(path, "/")+1:]
 	for _, prefix := range []string{"Get", "List", "Search", "Export", "Test"} {
 		if strings.HasPrefix(method, prefix) {
@@ -1131,7 +1153,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if (ws || stream) && rt.Scope.Context().Err() != nil {
+	if (ws || stream || isSendMessage || isActionsCat) && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}
@@ -1167,6 +1189,146 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Request) {
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if targetInstanceID == "" {
+		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
+	}
+
+	if targetInstanceID == "" && r.Body != nil && r.Method == http.MethodPost {
+		bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to read request body: " + err.Error()})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var peek struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := json.Unmarshal(bodyBytes, &peek); err == nil {
+			targetInstanceID = strings.TrimSpace(peek.InstanceID)
+		}
+	}
+
+	if targetInstanceID != "" {
+		if _, err := m.lookup(targetInstanceID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("instance %q not found", targetInstanceID),
+			})
+			return
+		}
+		m.serveInstance(w, r, targetInstanceID, "/api/v1/messages/send")
+		return
+	}
+
+	selectedID := m.findActiveInstanceID()
+	if selectedID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle message send"})
+		return
+	}
+
+	m.serveInstance(w, r, selectedID, "/api/v1/messages/send")
+}
+
+func (m *Manager) handleDefaultActionsCat(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "unauthorized: " + err.Error(),
+		})
+		return
+	}
+	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if targetInstanceID == "" {
+		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
+	}
+	if targetInstanceID != "" {
+		if _, err := m.lookup(targetInstanceID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("instance %q not found", targetInstanceID),
+			})
+			return
+		}
+		m.serveInstance(w, r, targetInstanceID, r.URL.Path)
+		return
+	}
+
+	selectedID := m.findActiveInstanceID()
+	if selectedID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle actionscat request"})
+		return
+	}
+	m.serveInstance(w, r, selectedID, r.URL.Path)
+}
+
+func (m *Manager) findActiveInstanceID() string {
+	// Candidate selection:
+	// IMPORTANT: To avoid lock order inversion with lifecycle operations like stop()
+	// (which acquires i.mu.Lock then m.mu.Lock via m.update), NEVER acquire i.mu while holding m.mu.
+	m.mu.RLock()
+	var enabledCandidates []string
+	var allCandidates []string
+	for _, info := range m.registry.Instances {
+		if m.instances[info.ID] != nil {
+			if info.Enabled {
+				enabledCandidates = append(enabledCandidates, info.ID)
+			}
+			allCandidates = append(allCandidates, info.ID)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, id := range enabledCandidates {
+		i, err := m.lookup(id)
+		if err != nil {
+			continue
+		}
+		i.mu.RLock()
+		rt := i.runtime
+		i.mu.RUnlock()
+		if rt != nil && rt.Scope.Context().Err() == nil {
+			return id
+		}
+	}
+	for _, id := range allCandidates {
+		i, err := m.lookup(id)
+		if err != nil {
+			continue
+		}
+		i.mu.RLock()
+		rt := i.runtime
+		i.mu.RUnlock()
+		if rt != nil {
+			return id
+		}
+	}
+	return ""
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -1240,4 +1402,11 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func remoteAddr(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }

@@ -125,6 +125,402 @@ export const securityAPI = {
   },
 };
 
+export interface ActionsCatStatus {
+  configured: boolean;
+  healthy: boolean;
+  authenticated?: boolean;
+  endpoint: string;
+  error?: string;
+}
+
+export interface ActionsCatAction {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  active_version_id?: string;
+  active_build_id?: string;
+  max_concurrency?: number;
+  schedule?: string;
+  timeout_sec?: number;
+  capabilities?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ActionsCatRun {
+  id: string;
+  action_id: string;
+  status: string;
+  trigger_type: string;
+  exit_code?: number;
+  duration_ms: number;
+  stdout?: string;
+  stderr?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatRunLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface ActionsCatVersion {
+  id: string;
+  action_id: string;
+  version_number: number;
+  source_digest: string;
+  source_path?: string;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+  created_at: string;
+}
+
+export interface ActionsCatBuild {
+  id: string;
+  action_id: string;
+  version_id: string;
+  build_number: number;
+  status: string;
+  builder_profile?: string;
+  toolchain_version?: string;
+  build_command?: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+  artifact_digest?: string;
+  artifact_size?: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatBuildLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface CreateActionRequest {
+  name: string;
+  description?: string;
+  max_concurrency?: number;
+}
+
+export interface CreateVersionRequest {
+  files: Record<string, string>;
+  encodings?: Record<string, string>;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+}
+
+export interface SetActiveBuildRequest {
+  version_id: string;
+  build_id: string;
+}
+
+export interface TriggerActionRunRequest {
+  extra_env?: Record<string, string>;
+  trigger_metadata?: Record<string, string>;
+}
+
+export interface ActionsCatSchedule {
+  id: string;
+  action_id: string;
+  cron_expr: string;
+  timezone: string;
+  next_run_at: string;
+  last_run_at?: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateScheduleRequest {
+  cron_expr: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+
+export interface ActionsCatMatcher {
+  id: string;
+  action_id: string;
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field: string;
+  capture_env_map?: Record<string, string>;
+  priority: number;
+  continue_matching: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMatcherRequest {
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field?: string;
+  capture_env_map?: Record<string, string>;
+  priority?: number;
+  continue_matching?: boolean;
+  enabled?: boolean;
+}
+
+async function actionsCatRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const instanceID = instanceState.selected?.id;
+  const selectionSignal = instanceState.signal;
+  selectionSignal.throwIfAborted();
+  if (!instanceID) {
+    throw new Error('请先选择实例');
+  }
+
+  const token = getControlToken();
+  const headers = new Headers(options.headers);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/instances/${instanceID}/api/actionscat${cleanPath}`;
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, selectionSignal])
+    : selectionSignal;
+
+  const response = await fetch(url, { ...options, headers, signal });
+  if (!response.ok) {
+    let errMsg = '';
+    try {
+      const errJson = await response.json();
+      errMsg = errJson.error || errJson.message || '';
+    } catch {
+      errMsg = (await response.text()).trim();
+    }
+    throw new Error(errMsg || response.statusText || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const actionsCatAPI = {
+  getStatus(): Promise<ActionsCatStatus> {
+    return actionsCatRequest<ActionsCatStatus>('/status');
+  },
+  listActions(): Promise<ActionsCatAction[]> {
+    return actionsCatRequest<ActionsCatAction[]>('/actions');
+  },
+  createAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>('/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  },
+  getAction(actionID: string): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>(
+      `/actions/${encodeURIComponent(actionID)}`,
+    );
+  },
+  triggerRun(
+    actionID: string,
+    req?: TriggerActionRunRequest,
+  ): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req || {}),
+      },
+    );
+  },
+  listRuns(
+    actionID: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ActionsCatRun[]> {
+    return actionsCatRequest<ActionsCatRun[]>(
+      `/actions/${encodeURIComponent(actionID)}/runs?limit=${limit}&offset=${offset}`,
+    );
+  },
+  getRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}`,
+    );
+  },
+  getRunLogs(actionID: string, runID: string): Promise<ActionsCatRunLogs> {
+    return actionsCatRequest<ActionsCatRunLogs>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}/logs`,
+    );
+  },
+  listVersions(actionID: string): Promise<ActionsCatVersion[]> {
+    return actionsCatRequest<ActionsCatVersion[]>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+    );
+  },
+  createVersion(
+    actionID: string,
+    req: CreateVersionRequest,
+  ): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  getVersion(actionID: string, versionID: string): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}`,
+    );
+  },
+  buildVersion(
+    actionID: string,
+    versionID: string,
+  ): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}/builds`,
+      {
+        method: 'POST',
+      },
+    );
+  },
+  listBuilds(actionID: string): Promise<ActionsCatBuild[]> {
+    return actionsCatRequest<ActionsCatBuild[]>(
+      `/actions/${encodeURIComponent(actionID)}/builds`,
+    );
+  },
+  getBuild(actionID: string, buildID: string): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}`,
+    );
+  },
+  getBuildLogs(actionID: string, buildID: string): Promise<ActionsCatBuildLogs> {
+    return actionsCatRequest<ActionsCatBuildLogs>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}/logs`,
+    );
+  },
+  activateBuild(
+    actionID: string,
+    req: SetActiveBuildRequest,
+  ): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/actions/${encodeURIComponent(actionID)}/active-build`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  listSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+    return actionsCatRequest<ActionsCatSchedule[]>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+    );
+  },
+  createSchedule(
+    actionID: string,
+    req: CreateScheduleRequest,
+  ): Promise<ActionsCatSchedule> {
+    return actionsCatRequest<ActionsCatSchedule>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/schedules/${encodeURIComponent(scheduleID)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  },
+  listMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+    return actionsCatRequest<ActionsCatMatcher[]>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+    );
+  },
+  createMatcher(
+    actionID: string,
+    req: CreateMatcherRequest,
+  ): Promise<ActionsCatMatcher> {
+    return actionsCatRequest<ActionsCatMatcher>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteMatcher(matcherID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/matchers/${encodeURIComponent(matcherID)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  },
+  dispatch(payload: Record<string, unknown>): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>('/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
 const authInterceptor: Interceptor = (next) => async (req) => {
   const token = getControlToken();
   if (token && !req.header.has('Authorization')) {
@@ -517,6 +913,71 @@ export function createInstanceAPI() {
     },
     syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
       return mcpClient.syncMCPServer({ id });
+    },
+
+    // ActionsCat
+    getActionsCatStatus(): Promise<ActionsCatStatus> {
+      return actionsCatAPI.getStatus();
+    },
+    listActionsCatActions(): Promise<ActionsCatAction[]> {
+      return actionsCatAPI.listActions();
+    },
+    createActionsCatAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+      return actionsCatAPI.createAction(req);
+    },
+    getActionCatAction(actionID: string): Promise<ActionsCatAction> {
+      return actionsCatAPI.getAction(actionID);
+    },
+    triggerActionsCatRun(
+      actionID: string,
+      req?: TriggerActionRunRequest,
+    ): Promise<ActionsCatRun> {
+      return actionsCatAPI.triggerRun(actionID, req);
+    },
+    listActionsCatRuns(
+      actionID: string,
+      limit = 50,
+      offset = 0,
+    ): Promise<ActionsCatRun[]> {
+      return actionsCatAPI.listRuns(actionID, limit, offset);
+    },
+    getActionsCatRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+      return actionsCatAPI.getRun(actionID, runID);
+    },
+    getActionsCatRunLogs(
+      actionID: string,
+      runID: string,
+    ): Promise<ActionsCatRunLogs> {
+      return actionsCatAPI.getRunLogs(actionID, runID);
+    },
+    dispatchActionsCat(
+      payload: Record<string, unknown>,
+    ): Promise<{ ok: boolean }> {
+      return actionsCatAPI.dispatch(payload);
+    },
+    listActionsCatSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+      return actionsCatAPI.listSchedules(actionID);
+    },
+    createActionsCatSchedule(
+      actionID: string,
+      req: CreateScheduleRequest,
+    ): Promise<ActionsCatSchedule> {
+      return actionsCatAPI.createSchedule(actionID, req);
+    },
+    deleteActionsCatSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteSchedule(scheduleID);
+    },
+    listActionsCatMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+      return actionsCatAPI.listMatchers(actionID);
+    },
+    createActionsCatMatcher(
+      actionID: string,
+      req: CreateMatcherRequest,
+    ): Promise<ActionsCatMatcher> {
+      return actionsCatAPI.createMatcher(actionID, req);
+    },
+    deleteActionsCatMatcher(matcherID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteMatcher(matcherID);
     },
   };
 }

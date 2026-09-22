@@ -525,6 +525,37 @@ class MessageComponentTests(unittest.TestCase):
             self.assertIsInstance(parts[0], FakeImage)
             mocked_urlopen.assert_not_called()
 
+    def test_action_with_sub_type_image_creates_sticker_image(self) -> None:
+        action = {
+            "messages": [
+                {"type": "image", "url": "https://example.com/sticker.png", "sub_type": 1},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 1)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            self.assertEqual(parts[0].file, "https://example.com/sticker.png")
+
+    def test_attachments_fallback_with_sub_type_creates_sticker_image(self) -> None:
+        action = {
+            "attachments": [
+                {"type": "image", "url": "https://example.com/sticker.png", "sub_type": 1},
+                {"type": "image", "url": "https://example.com/normal.png"},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 2)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            self.assertEqual(parts[0].file, "https://example.com/sticker.png")
+            self.assertIsInstance(parts[1], FakeImage)
+            self.assertEqual(parts[1].source, "https://example.com/normal.png")
+
     def test_mention_user_action_returns_one_chain_result(self) -> None:
         action = {
             "messages": [
