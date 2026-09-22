@@ -125,12 +125,32 @@ export const securityAPI = {
   },
 };
 
+export type SandboxReadinessStatus =
+  | 'ready'
+  | 'unprobed'
+  | 'endpoint_unreachable'
+  | 'auth_failure'
+  | 'api_contract_missing'
+  | 'profile_unsupported';
+
+export interface SandboxReadinessReport {
+  status: SandboxReadinessStatus;
+  endpoint: string;
+  healthy: boolean;
+  authenticated: boolean;
+  contract_supported: boolean;
+  profiles_supported?: Record<string, boolean>;
+  detail?: string;
+  checked_at: string;
+}
+
 export interface ActionsCatStatus {
   configured: boolean;
   healthy: boolean;
   authenticated?: boolean;
   endpoint: string;
   error?: string;
+  sandbox?: SandboxReadinessReport;
 }
 
 export interface ActionsCatAction {
@@ -350,6 +370,10 @@ async function actionsCatRequest<T>(
 export const actionsCatAPI = {
   getStatus(): Promise<ActionsCatStatus> {
     return actionsCatRequest<ActionsCatStatus>('/status');
+  },
+  getSandboxReadiness(force = false): Promise<SandboxReadinessReport> {
+    const query = force ? '?force=true' : '';
+    return actionsCatRequest<SandboxReadinessReport>(`/sandbox/readiness${query}`);
   },
   listActions(): Promise<ActionsCatAction[]> {
     return actionsCatRequest<ActionsCatAction[]>('/actions');

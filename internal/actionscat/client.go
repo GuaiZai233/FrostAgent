@@ -3,6 +3,7 @@ package actionscat
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"FrostAgent/internal/sandbox"
 )
 
 const (
@@ -115,7 +119,7 @@ type NetworkPolicy struct {
 // RuntimeSpec describes execution constraints and entrypoint for a Run.
 type RuntimeSpec struct {
 	Entrypoint     string        `json:"entrypoint,omitempty"`      // path to entrypoint executable within artifact (e.g. "entrypoint")
-	Network        NetworkPolicy `json:"network,omitempty"`         // network access policy
+	Network        NetworkPolicy `json:"network"`                   // network access policy
 	TimeoutSeconds int           `json:"timeout_seconds,omitempty"` // default execution timeout
 	MemoryLimitMB  int           `json:"memory_limit_mb,omitempty"` // worker RAM limit
 	CPULimit       float64       `json:"cpu_limit,omitempty"`       // worker CPU cores limit
@@ -252,11 +256,12 @@ type HealthStatus struct {
 
 // StatusResponse is the summarized connection status.
 type StatusResponse struct {
-	Configured    bool   `json:"configured"`
-	Endpoint      string `json:"endpoint"`
-	Healthy       bool   `json:"healthy"`
-	Authenticated bool   `json:"authenticated"`
-	Error         string `json:"error,omitempty"`
+	Configured    bool                     `json:"configured"`
+	Endpoint      string                   `json:"endpoint"`
+	Healthy       bool                     `json:"healthy"`
+	Authenticated bool                     `json:"authenticated"`
+	Error         string                   `json:"error,omitempty"`
+	Sandbox       *sandbox.ReadinessReport `json:"sandbox,omitempty"`
 }
 
 // HTTPClient defines the minimal interface for issuing HTTP requests.
@@ -266,8 +271,13 @@ type HTTPClient interface {
 
 // Client interacts with the ActionsCat management and dispatch APIs.
 type Client struct {
-	getenv     func(string) string
-	httpClient HTTPClient
+	getenv                 func(string) string
+	httpClient             HTTPClient
+	readinessMu            sync.RWMutex
+	lastReadiness          *sandbox.ReadinessReport
+	lastReadinessAt        time.Time
+	lastReadinessEndpoint  string
+	lastReadinessTokenHash [32]byte
 }
 
 // Option configures a Client.
@@ -435,66 +445,160 @@ func (c *Client) Health(ctx context.Context) (*HealthStatus, error) {
 	return &hs, nil
 }
 
+// SandboxEndpoint returns the configured Sandbox Gateway endpoint or empty string.
+func (c *Client) SandboxEndpoint() string {
+	ep := strings.TrimRight(strings.TrimSpace(c.getenv("SANDBOX_BASE_URL")), "/")
+	if ep == "" {
+		ep = strings.TrimRight(strings.TrimSpace(c.getenv("FA_SANDBOX_ENDPOINT")), "/")
+	}
+	if ep == "" {
+		ep = strings.TrimRight(strings.TrimSpace(c.getenv("SANDBOX_ENDPOINT")), "/")
+	}
+	return ep
+}
+
+// SandboxAuthToken returns the configured Sandbox Gateway auth token.
+func (c *Client) SandboxAuthToken() string {
+	tok := strings.TrimSpace(c.getenv("SANDBOX_AUTH_TOKEN"))
+	if tok == "" {
+		tok = strings.TrimSpace(c.getenv("FA_SANDBOX_AUTH_TOKEN"))
+	}
+	return tok
+}
+
+// CheckSandboxReadiness probes the configured Sandbox Gateway and returns a structured readiness report.
+// Results are cached with a 30-second TTL to avoid expensive container churn on repeated calls.
+func (c *Client) CheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessReport {
+	return c.checkSandboxReadinessWithTTL(ctx, 30*time.Second)
+}
+
+// ForceCheckSandboxReadiness bypasses the TTL cache and forces an active probe of the Sandbox Gateway.
+func (c *Client) ForceCheckSandboxReadiness(ctx context.Context) *sandbox.ReadinessReport {
+	return c.checkSandboxReadinessWithTTL(ctx, 0)
+}
+
+func (c *Client) checkSandboxReadinessWithTTL(ctx context.Context, ttl time.Duration) *sandbox.ReadinessReport {
+	ep := c.SandboxEndpoint()
+	if ep == "" {
+		return &sandbox.ReadinessReport{
+			Status:   sandbox.StatusEndpointUnreachable,
+			Endpoint: "",
+			Detail:   "sandbox endpoint is not configured (SANDBOX_BASE_URL / FA_SANDBOX_ENDPOINT)",
+		}
+	}
+
+	tok := c.SandboxAuthToken()
+	tokHash := sha256.Sum256([]byte(tok))
+
+	c.readinessMu.RLock()
+	if ttl > 0 && c.lastReadiness != nil && c.lastReadinessEndpoint == ep && c.lastReadinessTokenHash == tokHash && time.Since(c.lastReadinessAt) < ttl {
+		cached := c.lastReadiness
+		c.readinessMu.RUnlock()
+		return cached
+	}
+	c.readinessMu.RUnlock()
+
+	rep := sandbox.CheckReadiness(ctx, ep, tok, sandbox.ProfileGoBuilder, sandbox.ProfileActionRuntime)
+
+	c.readinessMu.Lock()
+	c.lastReadiness = rep
+	c.lastReadinessAt = time.Now()
+	c.lastReadinessEndpoint = ep
+	c.lastReadinessTokenHash = tokHash
+	c.readinessMu.Unlock()
+
+	return rep
+}
+
+// LastSandboxReadiness returns the cached readiness report without performing active probes,
+// or a report with status "unprobed" if no active probe has been executed yet or if the configured
+// endpoint or auth token has changed.
+func (c *Client) LastSandboxReadiness() *sandbox.ReadinessReport {
+	ep := c.SandboxEndpoint()
+	if ep == "" {
+		return nil
+	}
+	tok := c.SandboxAuthToken()
+	tokHash := sha256.Sum256([]byte(tok))
+
+	c.readinessMu.RLock()
+	defer c.readinessMu.RUnlock()
+	if c.lastReadiness != nil && c.lastReadinessEndpoint == ep && c.lastReadinessTokenHash == tokHash {
+		return c.lastReadiness
+	}
+	return &sandbox.ReadinessReport{
+		Status:   sandbox.StatusUnprobed,
+		Endpoint: ep,
+		Detail:   "沙箱网关已配置，尚未执行主动就绪探测",
+	}
+}
+
 // Status returns a high-level overview of the ActionsCat connection status,
 // distinguishing between anonymous reachability (/healthz) and management API readiness.
+// Note: This function does not perform active mutation probes on the sandbox gateway.
 func (c *Client) Status(ctx context.Context) StatusResponse {
+	var resp StatusResponse
 	endpoint := c.Endpoint()
 	if endpoint == "" {
-		return StatusResponse{
+		resp = StatusResponse{
 			Configured:    false,
 			Endpoint:      "",
 			Healthy:       false,
 			Authenticated: false,
 			Error:         "未配置 ACTIONSCAT_ENDPOINT",
 		}
-	}
-	hs, err := c.Health(ctx)
-	if err != nil {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       false,
-			Authenticated: false,
-			Error:         err.Error(),
-		}
-	}
-	if hs.Status != "ok" {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       false,
-			Authenticated: false,
-			Error:         "健康检查状态异常",
+	} else {
+		hs, err := c.Health(ctx)
+		if err != nil {
+			resp = StatusResponse{
+				Configured:    true,
+				Endpoint:      endpoint,
+				Healthy:       false,
+				Authenticated: false,
+				Error:         err.Error(),
+			}
+		} else if hs.Status != "ok" {
+			resp = StatusResponse{
+				Configured:    true,
+				Endpoint:      endpoint,
+				Healthy:       false,
+				Authenticated: false,
+				Error:         "健康检查状态异常",
+			}
+		} else {
+			token := c.ManagementToken()
+			if token == "" {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: false,
+					Error:         "未配置 ACTIONSCAT_MANAGEMENT_TOKEN",
+				}
+			} else if _, _, err := c.doRequest(ctx, http.MethodGet, "/api/v1/actions?limit=1", nil, token); err != nil {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: false,
+					Error:         fmt.Sprintf("管理凭据认证失败: %v", err),
+				}
+			} else {
+				resp = StatusResponse{
+					Configured:    true,
+					Endpoint:      endpoint,
+					Healthy:       true,
+					Authenticated: true,
+				}
+			}
 		}
 	}
 
-	token := c.ManagementToken()
-	if token == "" {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       true,
-			Authenticated: false,
-			Error:         "未配置 ACTIONSCAT_MANAGEMENT_TOKEN",
-		}
+	if c.SandboxEndpoint() != "" {
+		resp.Sandbox = c.LastSandboxReadiness()
 	}
 
-	if _, _, err := c.doRequest(ctx, http.MethodGet, "/api/v1/actions?limit=1", nil, token); err != nil {
-		return StatusResponse{
-			Configured:    true,
-			Endpoint:      endpoint,
-			Healthy:       true,
-			Authenticated: false,
-			Error:         fmt.Sprintf("管理凭据认证失败: %v", err),
-		}
-	}
-
-	return StatusResponse{
-		Configured:    true,
-		Endpoint:      endpoint,
-		Healthy:       true,
-		Authenticated: true,
-	}
+	return resp
 }
 
 // ListActions retrieves all actions from ActionsCat.
