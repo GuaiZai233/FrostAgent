@@ -40,7 +40,7 @@ const (
 	StatusAuthFailure ReadinessStatus = "auth_failure"
 
 	// StatusAPIContractMissing indicates the gateway responded but does not implement the
-	// required ActionsCat/FrostAgent sandbox API contract (e.g. 404 on /api/v1/sessions, /shell/exec, or /release).
+	// required ActionsCat/FrostAgent sandbox API contract (e.g. 404 on /api/v1/sessions or /shell/exec, unexpected status on /release, or conformance failure).
 	StatusAPIContractMissing ReadinessStatus = "api_contract_missing"
 
 	// StatusProfileUnsupported indicates the gateway implements the contract but rejected
@@ -210,7 +210,7 @@ func releaseProbeSession(client *http.Client, endpoint, authToken, userUUID stri
 // CheckReadiness performs active multi-phase probing of a sandbox gateway to distinguish:
 // 1. endpoint unreachable / 5xx server error
 // 2. auth failure
-// 3. API contract missing (/status, /sessions, /shell/exec, /release 404 or conformance failure)
+// 3. API contract missing (/status, /sessions or /shell/exec 404, unexpected /release status, or conformance failure)
 // 4. profile unsupported (e.g. go-builder toolchain missing, action-runtime rejected)
 func CheckReadiness(ctx context.Context, endpoint, authToken string, profiles ...string) *ReadinessReport {
 	client := &http.Client{

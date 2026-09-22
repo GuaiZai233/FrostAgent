@@ -417,7 +417,7 @@ fail closed / no local fallback
 | HTTP 方法与路径 | 授权要求 | 功能描述 | 请求与响应规范 |
 | :--- | :--- | :--- | :--- |
 | `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
-| `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"...","status":"ready"}` |
+| `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"go-builder","network":"none","status":"ready"}` |
 | `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`, `profile`, `network`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
 | `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：生产环境接受 HTTP 200 OK、204 No Content 或 404 Not Found（幂等释放成功），仅在 5xx 服务端错误或传输异常时视为失败 |
 

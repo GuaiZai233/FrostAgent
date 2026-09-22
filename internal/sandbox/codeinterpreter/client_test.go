@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -449,7 +450,7 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
-	t.Run("404 Not Found with generic route error returns backend error", func(t *testing.T) {
+	t.Run("404 Not Found with generic route error is idempotent success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("404 page not found"))
@@ -463,8 +464,8 @@ func TestRelease(t *testing.T) {
 		}, codeinterpreter.WithHTTPClient(server.Client()))
 
 		err := client.Release(context.Background(), "session-gone")
-		if err == nil {
-			t.Fatalf("expected error for generic 404 route error, got nil")
+		if err != nil {
+			t.Fatalf("expected nil error for generic 404 idempotent release, got: %v", err)
 		}
 	})
 
@@ -487,10 +488,29 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
-	t.Run("200 OK is rejected to prevent masking misconfigurations", func(t *testing.T) {
+	t.Run("401 Unauthorized returns backend error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"invalid token"}`))
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "tok",
+			SessionNamespace: "ns",
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		err := client.Release(context.Background(), "session-unauth")
+		if err == nil {
+			t.Fatalf("expected error on 401 release")
+		}
+	})
+
+	t.Run("200 OK is idempotent success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(`{"status":"released"}`))
 		}))
 		defer server.Close()
 
@@ -501,8 +521,8 @@ func TestRelease(t *testing.T) {
 		}, codeinterpreter.WithHTTPClient(server.Client()))
 
 		err := client.Release(context.Background(), "session-200")
-		if err == nil {
-			t.Fatalf("expected error on 200 release, got nil")
+		if err != nil {
+			t.Fatalf("expected nil error on 200 release, got: %v", err)
 		}
 	})
 }
@@ -771,5 +791,207 @@ func TestExec_LocalValidation_RejectsOversizedCwd(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cwd exceeds maximum allowed length") {
 		t.Fatalf("expected error for oversized cwd, got: %v", err)
+	}
+}
+
+func TestExec_QueryParamsParity(t *testing.T) {
+	var capturedQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.Query()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"stdout": "ok",
+			"exit_code": 0,
+			"timed_out": false
+		}`))
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()),
+		codeinterpreter.WithProfile("custom-profile"),
+		codeinterpreter.WithNetwork("isolated"))
+
+	_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-query-test",
+		Command:   "echo ok",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec failed: %v", err)
+	}
+
+	if !uuidRegex.MatchString(capturedQuery.Get("user_uuid")) {
+		t.Fatalf("expected valid UUID for user_uuid, got: %s", capturedQuery.Get("user_uuid"))
+	}
+	if capturedQuery.Get("profile") != "custom-profile" {
+		t.Fatalf("expected profile custom-profile, got: %s", capturedQuery.Get("profile"))
+	}
+	if capturedQuery.Get("network") != "isolated" {
+		t.Fatalf("expected network isolated, got: %s", capturedQuery.Get("network"))
+	}
+}
+
+func TestCreateSession_SuccessAndExecInheritance(t *testing.T) {
+	var sessionCreated bool
+	var execProfile string
+	var execNetwork string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			sessionCreated = true
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			execProfile = r.URL.Query().Get("profile")
+			execNetwork = r.URL.Query().Get("network")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"stdout": "session exec ok",
+				"exit_code": 0,
+				"timed_out": false
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	sessInfo, err := client.CreateSession(context.Background(), "session-inherit", sandbox.ProfileActionRuntime, "none", nil)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+	if !sessionCreated {
+		t.Fatalf("expected session creation request to server")
+	}
+	if sessInfo.Profile != sandbox.ProfileActionRuntime || sessInfo.Network != "none" || sessInfo.Status != "ready" {
+		t.Fatalf("unexpected SessionInfo: %+v", sessInfo)
+	}
+
+	res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "session-inherit",
+		Command:   "whoami",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec failed: %v", err)
+	}
+	if res.Stdout != "session exec ok" {
+		t.Fatalf("unexpected stdout: %s", res.Stdout)
+	}
+	if execProfile != sandbox.ProfileActionRuntime {
+		t.Fatalf("expected exec to inherit profile %q, got: %q", sandbox.ProfileActionRuntime, execProfile)
+	}
+	if execNetwork != "none" {
+		t.Fatalf("expected exec to inherit network none, got: %q", execNetwork)
+	}
+}
+
+func TestCreateSession_ConformanceFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Missing required network in response
+		_, _ = w.Write([]byte(`{
+			"user_uuid": "valid-uuid",
+			"profile": "minimal",
+			"status": "ready"
+		}`))
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	_, err := client.CreateSession(context.Background(), "sess-fail", "minimal", "none", nil)
+	if err == nil {
+		t.Fatalf("expected conformance failure error, got nil")
+	}
+}
+
+func TestRelease_CleansSessionMetadata(t *testing.T) {
+	var execProfile string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusOK)
+		case "/api/v1/shell/exec":
+			execProfile = r.URL.Query().Get("profile")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"stdout": "ok",
+				"exit_code": 0,
+				"timed_out": false
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "tok",
+		SessionNamespace: "ns",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	_, err := client.CreateSession(context.Background(), "sess-clean", sandbox.ProfileActionRuntime, "none", nil)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	err = client.Release(context.Background(), "sess-clean")
+	if err != nil {
+		t.Fatalf("Release failed: %v", err)
+	}
+
+	// After release, subsequent Exec on same SessionID uses default profile (minimal), not action-runtime
+	_, err = client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-clean",
+		Command:   "echo 1",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec failed: %v", err)
+	}
+	if execProfile != sandbox.ProfileMinimal {
+		t.Fatalf("expected profile to reset to %q after release, got: %q", sandbox.ProfileMinimal, execProfile)
 	}
 }

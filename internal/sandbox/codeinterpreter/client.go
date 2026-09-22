@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +40,12 @@ var defaultProjectNamespace = [16]byte{
 	0xb3, 0xd4, 0x72, 0x2a, 0x46, 0x69, 0xf9, 0x39,
 }
 
+// SessionMetadata records active session profile and network policies.
+type SessionMetadata struct {
+	Profile string
+	Network string
+}
+
 // Client implements sandbox.Backend via the code-interpreter Gateway HTTP API.
 type Client struct {
 	baseURL          string
@@ -47,6 +54,12 @@ type Client struct {
 	httpClient       *http.Client
 	projectNamespace [16]byte
 	logger           *logs.Store
+
+	profile string
+	network string
+
+	sessionsMu sync.RWMutex
+	sessions   map[string]SessionMetadata
 }
 
 // Option configures a Client.
@@ -73,6 +86,16 @@ func WithLogger(logger *logs.Store) Option {
 	return func(c *Client) { c.logger = logger }
 }
 
+// WithProfile configures the default execution profile for the code interpreter client.
+func WithProfile(profile string) Option {
+	return func(c *Client) { c.profile = profile }
+}
+
+// WithNetwork configures the default network policy for the code interpreter client.
+func WithNetwork(network string) Option {
+	return func(c *Client) { c.network = network }
+}
+
 // New creates a new code-interpreter sandbox Backend client.
 func New(cfg sandbox.Config, opts ...Option) *Client {
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
@@ -85,6 +108,9 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 			Timeout: cfg.ClientTimeout,
 		},
 		projectNamespace: defaultProjectNamespace,
+		profile:          sandbox.ProfileMinimal,
+		network:          "none",
+		sessions:         make(map[string]SessionMetadata),
 	}
 
 	for _, opt := range opts {
@@ -147,6 +173,84 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+// SessionInfo represents an active sandbox session.
+type SessionInfo struct {
+	UserUUID string `json:"user_uuid"`
+	Profile  string `json:"profile"`
+	Network  string `json:"network"`
+	Status   string `json:"status"`
+}
+
+// CreateSession allocates and binds an isolated workspace session on the sandbox gateway.
+func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network string, env map[string]string) (*SessionInfo, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("cannot create sandbox session without sessionID")
+	}
+	if profile == "" {
+		profile = c.profile
+	}
+	if network == "" {
+		network = c.network
+	}
+	userUUID := c.SessionIDToUUID(sessionID)
+
+	sessionURL := c.baseURL + "/api/v1/sessions"
+	reqPayload := map[string]any{
+		"user_uuid": userUUID,
+		"profile":   profile,
+		"network":   network,
+	}
+	if len(env) > 0 {
+		reqPayload["env"] = env
+	}
+	payloadBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal session create request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build create session request: %w", err)
+	}
+	httpReq.Header.Set("X-Auth-Token", c.authToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox gateway session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return nil, fmt.Errorf("sandbox gateway create session returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read create session response: %w", err)
+	}
+
+	valResp, err := sandbox.ValidateSessionResponse(body, userUUID, profile, network)
+	if err != nil {
+		return nil, fmt.Errorf("session response validation failed: %w", err)
+	}
+
+	c.sessionsMu.Lock()
+	c.sessions[userUUID] = SessionMetadata{
+		Profile: profile,
+		Network: network,
+	}
+	c.sessionsMu.Unlock()
+
+	return &SessionInfo{
+		UserUUID: valResp.UserUUID,
+		Profile:  valResp.Profile,
+		Network:  valResp.Network,
+		Status:   valResp.Status,
+	}, nil
+}
+
 // Diagnose runs the full multi-phase sandbox readiness diagnostic suite,
 // distinguishing endpoint unreachable, auth failure, API contract missing, and profile unsupported.
 func (c *Client) Diagnose(ctx context.Context, profiles ...string) *sandbox.ReadinessReport {
@@ -160,6 +264,10 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	userUUID := c.SessionIDToUUID(sessionID)
+	c.sessionsMu.Lock()
+	delete(c.sessions, userUUID)
+	c.sessionsMu.Unlock()
+
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
 		return fmt.Errorf("invalid release URL: %w", err)
@@ -180,22 +288,12 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 	defer resp.Body.Close()
 
-	// 204 No Content -> success
-	// 404 Not Found specifically for "no active session" -> idempotent success
-	// Generic 404s (e.g. wrong base URL or reverse proxy 404) and HTTP 200 are rejected.
-	if resp.StatusCode == http.StatusNoContent {
+	// 200 OK, 204 No Content, and 404 Not Found (idempotent release) are all release success in the unified gateway contract.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 
 	errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
-	if resp.StatusCode == http.StatusNotFound {
-		lowerErr := strings.ToLower(errBody)
-		if strings.Contains(lowerErr, "no active session") || strings.Contains(lowerErr, "session not found") {
-			return nil
-		}
-		return fmt.Errorf("sandbox gateway release returned unexpected 404 (endpoint or route not found): %s", sanitizeError(errBody, c.authToken))
-	}
-
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
 }
 
@@ -243,6 +341,26 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	}
 	q := execURL.Query()
 	q.Set("user_uuid", userUUID)
+
+	profile := c.profile
+	network := c.network
+	c.sessionsMu.RLock()
+	if s, ok := c.sessions[userUUID]; ok {
+		if s.Profile != "" {
+			profile = s.Profile
+		}
+		if s.Network != "" {
+			network = s.Network
+		}
+	}
+	c.sessionsMu.RUnlock()
+
+	if profile != "" {
+		q.Set("profile", profile)
+	}
+	if network != "" {
+		q.Set("network", network)
+	}
 	execURL.RawQuery = q.Encode()
 
 	timeoutSec := req.Timeout.Seconds()
