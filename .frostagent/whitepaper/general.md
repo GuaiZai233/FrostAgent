@@ -435,7 +435,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
    ↓
   SandboxBackend (中立接口)
    ↓ HTTP
-  Compatible Sandbox Gateway (cmd/sandbox-gateway / code-interpreter)
+  Compatible Isolated Sandbox Gateway (Docker-based code-interpreter / container worker gateway)
    ↓
   Worker (Docker / MicroVM / Process Isolation)
    ↓
@@ -445,7 +445,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   ```
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
-  - 核心实现包含 `codeinterpreter.Client` 以及官方兼容网关 `internal/sandbox/gateway`（可由 `cmd/sandbox-gateway` 独立运行），完整实现 ActionsCat 与 FrostAgent 的四核心端点契约（`/api/v1/status`、`/api/v1/sessions`、`/api/v1/shell/exec`、`/api/v1/release`）以及编译与运行时配置文件（`go-builder`、`action-runtime`）；
+  - 核心客户端实现为 `codeinterpreter.Client`，通过 HTTP 协议连接到外部独立的容器化/隔离沙箱网关，对接 ActionsCat 与 FrostAgent 的四核心端点契约（`/api/v1/status`、`/api/v1/sessions`、`/api/v1/shell/exec`、`/api/v1/release`）以及编译与运行时配置文件（`go-builder`、`action-runtime`）；
   - 具备四态就绪诊断探针（`internal/sandbox/readiness.go`），能够准确区分 `endpoint_unreachable`、`auth_failure`、`api_contract_missing`（404 on /sessions）及 `profile_unsupported`；
   - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，支持通过 `SANDBOX_BASE_URL` 或 `FA_SANDBOX_ENDPOINT` 配置端点；每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；当沙箱在运行时被禁用时，`Release()` 仍会对已缓存的实例执行尽力而为（Best-effort）的会话清理释放，防止容器与文件系统资源泄漏；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。

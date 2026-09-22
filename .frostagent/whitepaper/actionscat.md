@@ -386,34 +386,42 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 ---
 
-## 七、沙箱网关契约与兼容实现 (Sandbox Gateway Contract & Compatible Implementation)
+## 七、沙箱网关契约与隔离规范 (Sandbox Gateway Contract & Isolation Specification)
 
 ### 7.1 问题背景与核心挑战
-ActionsCat 的设计初衷是将 Agent 编写的业务逻辑在强隔离沙箱环境中安全编译并执行。然而，现有的公开版 `Foxerine/code-interpreter` 仅适用于单一 Python/交互式解释器场景：
+ActionsCat 的设计初衷是将 Agent 编写的自动化任务在强隔离沙箱环境中安全编译并执行。然而，现有的公开版 `Foxerine/code-interpreter` 网关仅适用于单一 Python 交互式解释器场景：
 1. **API 契约缺失**：公开版网关未提供会话分配与生命周期管理接口（`POST /api/v1/sessions` 直接返回 HTTP 404）；
 2. **Profile 体系缺失**：缺乏专为 Go 编译优化的 `go-builder` 环境和运行隔离的 `action-runtime` 环境；
-3. **网络与回调隔离断裂**：不支持在 `network: none` 策略下保留宿主机/内部回调通信（`ACTIONSCAT_RUNTIME_ENDPOINT`），导致真实执行链条在第一步即彻底中断。
+3. **网络与回调隔离断裂**：不支持在 `network: none` 策略下保留宿主机/内部回调通信（`ACTIONSCAT_RUNTIME_ENDPOINT`），导致真实执行链条中断。
 
-为此，FrostAgent 正式制定并发布了 **ActionsCat Compatible Sandbox Gateway Specification v1.0**，并在代码库中内置了官方兼容实现（`internal/sandbox/gateway` 与 `cmd/sandbox-gateway`）。
+### 7.2 架构隔离与安全边界保证 (Architectural Invariants & Safety Bounds)
+FrostAgent 与 ActionsCat 严格恪守核心架构安全不变量：
+```text
+SandboxBackend -> external isolated worker
+no LocalBackend / HostBackend
+fail closed / no local fallback
+```
+- **绝对杜绝宿主机直跑不可信代码**：不可信 Action 代码与大模型生成命令绝不直接以宿主机 `os/exec` 进程方式执行，坚决不向不可信代码暴露宿主机操作系统根目录、进程命名空间、同机器网络服务以及宿主环境变量（避免泄露 API Token、数据库凭据或系统机密）；
+- **真实容器/微虚机隔离底座**：沙箱后端必须由具备真实强隔离能力的底层运行时（如 Docker、containerd、Firecracker、nsjail、bwrap 等）承载，必须满足：
+  1. **独立文件系统根目录**：文件操作严格限制在容器/chroot/命名空间内，杜绝路径逃逸；
+  2. **独立进程命名空间与低权限用户**：以独立非 root 用户运行，杜绝访问宿主进程树；
+  3. **独立网络命名空间**：`network: none` 必须由内核网络命名空间或防火墙强行阻断所有出站原始套接字/TCP/UDP，而非仅靠代理环境变量；
+  4. **严格的环境变量白名单**：从空环境变量构建运行上下文，只注入显式 Session 环境变量与必要 Runtime 基线，绝不继承网关宿主 `os.Environ()`；
+  5. **资源配额硬限制**：通过 cgroups/Job Objects 强制实施内存上限（`MemoryLimitMB`）与 CPU 配额（`CPULimit`）；
+  6. **确定性会话生命周期与清理**：会话超时或执行 `Release` 时，必须彻底终止该会话的整个进程树/容器并回收物理工作区。
 
-### 7.2 核心端点契约 (Gateway Contract Specification)
+### 7.3 兼容沙箱网关契约规范 (Gateway Contract Specification v1.0)
 
-兼容沙箱网关必须且仅需实现下列核心 HTTP 接口：
+兼容沙箱网关必须实现下列核心 HTTP 接口：
 
 | HTTP 方法与路径 | 授权要求 | 功能描述 | 请求与响应规范 |
 | :--- | :--- | :--- | :--- |
 | `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
 | `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"...","status":"ready"}` |
-| `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 工作区中执行隔离命令 | Query: `user_uuid`, `profile`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
-| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放并物理清理 session 工作区 | Query: `user_uuid`<br>响应：成功返回 HTTP 204 No Content，若会话不存在则返回 HTTP 404 |
+| `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
+| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：成功返回 HTTP 204 No Content，若会话不存在则返回 HTTP 404 |
 
-#### 关键路径与环境行为保证：
-- **虚拟沙箱路径映射**：命令请求中的 `/sandbox` 虚拟工作目录会被网关透明映射到该 session 分配的真实物理隔离目录（如 `<workdir>/<user_uuid>`）；
-- **Go 编译产物产出**：`go-builder` profile 执行 `go build -o /sandbox/out/entrypoint .` 时，编译产物自动归档在 session 工作区的 `out/` 目录下；
-- **网络黑洞代理 (Blackhole Proxy)**：当策略为 `network: none` 时，网关自动注入 `HTTP_PROXY=http://127.0.0.1:9`（阻止访问外部公网 IP），同时保留 `NO_PROXY=127.0.0.1,localhost,host.docker.internal`，确保沙箱进程能够安全回调 `ACTIONSCAT_RUNTIME_ENDPOINT`；
-- **Windows / Unix 跨平台适配**：可执行文件在 Windows 下自动识别 `.exe` 后缀，保证多环境测试的一致性。
-
-### 7.3 四态就绪诊断体系 (4-Way Readiness Diagnostics)
+### 7.4 四态就绪诊断体系 (4-Way Readiness Diagnostics)
 
 为彻底解决“黑盒 404”与“配置错误难定位”问题，FrostAgent 引入了系统化的四态就绪诊断探测（`internal/sandbox/readiness.go`），将沙箱网关连接结果精确归类为：
 
@@ -439,41 +447,21 @@ ActionsCat 的设计初衷是将 Agent 编写的业务逻辑在强隔离沙箱�
 
 1. **`endpoint_unreachable` (端点不可达)**：网络拒绝连接、端口未监听、DNS 解析失败或连接超时；
 2. **`auth_failure` (认证失败)**：网关返回 HTTP 401 Unauthorized 或 403 Forbidden，说明 `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` 不匹配；
-3. **`api_contract_missing` (协议契约缺失)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions` 返回 404 Not Found（明确指出网关为不兼容的旧版或交互式实现）；
+3. **`api_contract_missing` (协议契约缺失)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions` 返回 404 Not Found（明确指出当前网关为不兼容的旧版或未实现会话契约的 code-interpreter 镜像）；
 4. **`profile_unsupported` (Profile 不支持)**：网关拒绝了请求的构建或运行配置文件（例如缺少 `go-builder` 或 `action-runtime`）；
 5. **`ready` (完全就绪)**：网关服务连通、认证校验通过、会话契约完备且所有必须的 Profile 均已就绪。
 
-### 7.4 官方兼容网关二进制与部署
+诊断探针通过 `codeinterpreter.Client.Diagnose()` 与 `actionscat.Client.CheckSandboxReadiness()` 暴露，并在 Web 前端（`apps/web/src/pages/actionscat.ts`）提供直观的诊断看板与错误排查指引。
 
-FrostAgent 提供了开箱即用的官方兼容 Gateway 实现，位于 `cmd/sandbox-gateway`：
+### 7.5 配置与接入指引
 
-```bash
-# 启动兼容 Sandbox Gateway
-go run ./cmd/sandbox-gateway \
-  -addr 127.0.0.1:3874 \
-  -token my-secret-sandbox-token \
-  -workdir ./data/sandbox_sessions
-```
-
-在 `.env` 中配置：
+在 `.env` 中配置外部兼容沙箱网关：
 ```env
 SANDBOX_ENABLED=true
 FA_SANDBOX_ENDPOINT=http://127.0.0.1:3874
 FA_SANDBOX_AUTH_TOKEN=my-secret-sandbox-token
+SANDBOX_SESSION_NAMESPACE=frostagent
 ```
 
-### 7.5 端到端闭环验证保证 (End-to-End Test Assurance)
-
-FrostAgent 包含严格的无 Mock 真实端到端测试（`internal/sandbox/gateway/e2e_test.go`），在每一次构建和持续集成中自动化验证如下完整生命周期：
-1. 启动兼容 Sandbox Gateway 实例；
-2. 依次触发并断言 4 种诊断失败场景（Unreachable, Auth Failure, Contract Missing, Profile Unsupported）及最后的 Ready 状态；
-3. 创建 Action 与 Version；
-4. 使用 `go-builder` profile 真实执行 `go build -o /sandbox/out/entrypoint .` 编译 Go 源码为二进制可执行文件；
-5. 激活生成的有效制品构建（Status: succeeded）；
-6. 使用 `action-runtime` profile 并在 `network: none` 策略下拉起 Action 运行；
-7. 实时校验三项核心安全不变量：
-   - **公网连接被阻断**（访问 `https://1.1.1.1` 立即失败并由 blackhole 拦截）；
-   - **上下文环境变量正确注入**；
-   - **回环回调成功触达** `ACTIONSCAT_RUNTIME_ENDPOINT`；
-8. 任务安全退出并释放清理工作区。
+在生产环境中，请确保所连接的 Sandbox Gateway 启用了容器或微虚机后端（例如配置了具备 Go 工具链支持与会话路由的 code-interpreter worker 集群），并设置非空鉴权 Token。FrostAgent 在启动和诊断时会自动执行四态探测，确保环境安全可靠后方允许执行构建与任务调用。
 
