@@ -1173,3 +1173,286 @@ func TestRelease_FailurePreservesSessionMetadata(t *testing.T) {
 		t.Fatalf("expected network to reset to %q after successful release, got: %q", "none", net2)
 	}
 }
+
+func TestLifecycleGate_AntiOrphanGuarantee(t *testing.T) {
+	ctx := context.Background()
+	const sessionID = "sess-orphan-test"
+
+	var mu sync.Mutex
+	activeSessions := make(map[string]bool)
+	sessionsStarted := make(chan struct{})
+	releaseBlock := make(chan struct{})
+	var startOnce sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			var req struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			// Signal that /sessions HTTP request has reached the gateway
+			startOnce.Do(func() {
+				close(sessionsStarted)
+			})
+
+			// Block until test releases the gate
+			<-releaseBlock
+
+			mu.Lock()
+			activeSessions[req.UserUUID] = true
+			mu.Unlock()
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": req.UserUUID,
+				"profile":   req.Profile,
+				"network":   req.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/release":
+			userUUID := r.URL.Query().Get("user_uuid")
+			mu.Lock()
+			delete(activeSessions, userUUID)
+			mu.Unlock()
+
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret",
+		SessionNamespace: "test-ns",
+	})
+	userUUID := client.SessionIDToUUID(sessionID)
+
+	var ensureErr error
+	var releaseErr error
+	var wg sync.WaitGroup
+
+	// Step 1: Start EnsureSession in goroutine; it blocks in /api/v1/sessions
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ensureErr = client.EnsureSession(ctx, sessionID)
+	}()
+
+	// Wait until EnsureSession is actively in-flight in /api/v1/sessions
+	select {
+	case <-sessionsStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for EnsureSession to reach gateway")
+	}
+
+	// Step 2: Concurrent Release is called while /sessions is in-flight.
+	// The lifecycle gate serializes Release after provisioning.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		releaseErr = client.Release(ctx, sessionID)
+	}()
+
+	// Give Release time to queue behind EnsureSession's gate lock
+	time.Sleep(50 * time.Millisecond)
+
+	// Step 3: Unblock /sessions response. EnsureSession completes remote provisioning,
+	// and then Release immediately runs, releasing the newly created remote session!
+	close(releaseBlock)
+
+	wg.Wait()
+
+	if releaseErr != nil {
+		t.Fatalf("Release failed: %v", releaseErr)
+	}
+	_ = ensureErr
+
+	// Step 4: Verify Anti-Orphan Guarantee:
+	// - Zero local session metadata remains
+	// - Zero active remote session exists on the gateway
+	if client.HasSession(sessionID) {
+		t.Fatalf("anti-orphan violation: local metadata still exists for session %q", sessionID)
+	}
+
+	mu.Lock()
+	active := activeSessions[userUUID]
+	mu.Unlock()
+	if active {
+		t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway after Release", userUUID)
+	}
+}
+
+func TestExec_GatewayRestartEvictionRecovery(t *testing.T) {
+	ctx := context.Background()
+	const sessionID = "sess-restart-recovery"
+
+	var mu sync.Mutex
+	activeSessions := make(map[string]bool)
+	sessionCreateCount := 0
+	execCount := 0
+	forceGeneric404 := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			var req struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			mu.Lock()
+			sessionCreateCount++
+			activeSessions[req.UserUUID] = true
+			mu.Unlock()
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": req.UserUUID,
+				"profile":   req.Profile,
+				"network":   req.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			userUUID := r.URL.Query().Get("user_uuid")
+			profile := r.URL.Query().Get("profile")
+			network := r.URL.Query().Get("network")
+
+			mu.Lock()
+			execCount++
+			isActive := activeSessions[userUUID]
+			generic404 := forceGeneric404
+			mu.Unlock()
+
+			if generic404 {
+				// Generic router 404 (endpoint or route missing)
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+				return
+			}
+
+			if !isActive {
+				// Machine-readable session missing/evicted response
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code":    "session_not_found",
+					"message": "session evicted or gateway restarted",
+				})
+				return
+			}
+
+			// Validate policy preservation during recovery
+			if profile != sandbox.ProfileActionRuntime || network != "isolated" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"policy mismatch"}`))
+				return
+			}
+
+			exitCode := 0
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "recovered successfully\n",
+				"stderr":    "",
+				"exit_code": &exitCode,
+				"timed_out": false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret",
+		SessionNamespace: "test-ns",
+	}, codeinterpreter.WithProfile(sandbox.ProfileActionRuntime), codeinterpreter.WithNetwork("isolated"))
+
+	// 1. Initial Exec: creates session on gateway and succeeds
+	res1, err := client.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo test-1",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("first Exec failed: %v", err)
+	}
+	if strings.TrimSpace(res1.Stdout) != "recovered successfully" {
+		t.Fatalf("unexpected stdout: %q", res1.Stdout)
+	}
+
+	mu.Lock()
+	if sessionCreateCount != 1 {
+		t.Fatalf("expected 1 session create, got %d", sessionCreateCount)
+	}
+	if execCount != 1 {
+		t.Fatalf("expected 1 exec, got %d", execCount)
+	}
+	mu.Unlock()
+
+	// 2. Simulate Gateway Restart / Eviction:
+	// Clear gateway active sessions without touching client local state
+	mu.Lock()
+	activeSessions = make(map[string]bool)
+	mu.Unlock()
+
+	// Client still has cached metadata in c.sessions:
+	if !client.HasSession(sessionID) {
+		t.Fatal("expected client to still have cached session metadata before second Exec")
+	}
+
+	// 3. Second Exec: hits 404 session_not_found on attempt 0 -> automatically purges stale metadata,
+	// re-provisions session with preserved profile/network, and retries command successfully!
+	res2, err := client.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo test-2",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("second Exec with auto-recovery failed: %v", err)
+	}
+	if strings.TrimSpace(res2.Stdout) != "recovered successfully" {
+		t.Fatalf("unexpected stdout on recovered exec: %q", res2.Stdout)
+	}
+
+	mu.Lock()
+	if sessionCreateCount != 2 {
+		t.Fatalf("expected 2 session creates (1 initial + 1 recovery), got %d", sessionCreateCount)
+	}
+	// execCount should be 3: 1 from initial + 1 from failed attempt 0 + 1 from successful retry attempt 1
+	if execCount != 3 {
+		t.Fatalf("expected 3 exec requests total, got %d", execCount)
+	}
+	mu.Unlock()
+
+	if !client.HasSession(sessionID) {
+		t.Fatal("expected client to have valid re-provisioned session metadata")
+	}
+
+	// 4. Verify Generic 404 does NOT trigger recovery and fails closed immediately
+	mu.Lock()
+	forceGeneric404 = true
+	mu.Unlock()
+
+	_, err = client.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo test-generic-404",
+		Timeout:   5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected generic 404 to fail closed, got nil error")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Fatalf("expected error to mention 404, got: %v", err)
+	}
+}

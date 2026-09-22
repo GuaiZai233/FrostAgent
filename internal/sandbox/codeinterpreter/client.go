@@ -18,8 +18,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/sync/singleflight"
-
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/sandbox"
 )
@@ -48,6 +46,36 @@ type SessionMetadata struct {
 	Network string
 }
 
+type sessionGate struct {
+	mu       chan struct{}
+	epoch    uint64
+	released bool
+}
+
+func newSessionGate() *sessionGate {
+	g := &sessionGate{
+		mu: make(chan struct{}, 1),
+	}
+	g.mu <- struct{}{}
+	return g
+}
+
+func (g *sessionGate) lock(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-g.mu:
+		return nil
+	}
+}
+
+func (g *sessionGate) unlock() {
+	select {
+	case g.mu <- struct{}{}:
+	default:
+	}
+}
+
 // Client implements sandbox.Backend via the code-interpreter Gateway HTTP API.
 type Client struct {
 	baseURL          string
@@ -60,9 +88,25 @@ type Client struct {
 	profile string
 	network string
 
-	sessionsMu    sync.RWMutex
-	sessions      map[string]SessionMetadata
-	sessionFlight singleflight.Group
+	sessionsMu sync.RWMutex
+	sessions   map[string]SessionMetadata
+
+	gatesMu sync.Mutex
+	gates   map[string]*sessionGate
+}
+
+func (c *Client) getGate(userUUID string) *sessionGate {
+	c.gatesMu.Lock()
+	defer c.gatesMu.Unlock()
+	if c.gates == nil {
+		c.gates = make(map[string]*sessionGate)
+	}
+	g, ok := c.gates[userUUID]
+	if !ok {
+		g = newSessionGate()
+		c.gates[userUUID] = g
+	}
+	return g
 }
 
 // Option configures a Client.
@@ -114,6 +158,7 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 		profile:          sandbox.ProfileMinimal,
 		network:          "none",
 		sessions:         make(map[string]SessionMetadata),
+		gates:            make(map[string]*sessionGate),
 	}
 
 	for _, opt := range opts {
@@ -184,19 +229,8 @@ type SessionInfo struct {
 	Status   string `json:"status"`
 }
 
-// CreateSession allocates and binds an isolated workspace session on the sandbox gateway.
-func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network string, env map[string]string) (*SessionInfo, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("cannot create sandbox session without sessionID")
-	}
-	if profile == "" {
-		profile = c.profile
-	}
-	if network == "" {
-		network = c.network
-	}
-	userUUID := c.SessionIDToUUID(sessionID)
-
+// rawCreateSession performs the HTTP request to POST /api/v1/sessions and validates the response.
+func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, network string, env map[string]string) (*SessionInfo, error) {
 	sessionURL := c.baseURL + "/api/v1/sessions"
 	reqPayload := map[string]any{
 		"user_uuid": userUUID,
@@ -239,13 +273,6 @@ func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network 
 		return nil, fmt.Errorf("session response validation failed: %w", err)
 	}
 
-	c.sessionsMu.Lock()
-	c.sessions[userUUID] = SessionMetadata{
-		Profile: profile,
-		Network: network,
-	}
-	c.sessionsMu.Unlock()
-
 	return &SessionInfo{
 		UserUUID: valResp.UserUUID,
 		Profile:  valResp.Profile,
@@ -254,15 +281,80 @@ func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network 
 	}, nil
 }
 
-// EnsureSession ensures that an active session exists on the gateway for the given sessionID.
-// If the session has already been provisioned and tracked locally, it returns nil immediately.
-// Otherwise, it issues a POST /api/v1/sessions request using the client's configured default
-// profile and network policies. Concurrent calls for the same session are coalesced via singleflight.
-func (c *Client) EnsureSession(ctx context.Context, sessionID string) error {
+// createSessionLocked creates a session while holding the per-session lifecycle gate.
+// It checks generation and tombstone status to guarantee that concurrent releases abort
+// newly created remote sessions immediately, leaving zero remote orphans.
+func (c *Client) createSessionLocked(ctx context.Context, gate *sessionGate, userUUID, profile, network string, env map[string]string) (*SessionInfo, error) {
+	gate.released = false
+	startEpoch := gate.epoch
+
+	info, err := c.rawCreateSession(ctx, userUUID, profile, network, env)
+	if err != nil {
+		return nil, err
+	}
+
+	// Context check & generation/tombstone guard:
+	if ctx.Err() != nil || gate.epoch != startEpoch || gate.released {
+		_ = c.rawRelease(context.Background(), userUUID)
+		c.sessionsMu.Lock()
+		delete(c.sessions, userUUID)
+		c.sessionsMu.Unlock()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("session creation aborted: session was released during provisioning")
+	}
+
+	c.sessionsMu.Lock()
+	c.sessions[userUUID] = SessionMetadata{
+		Profile: profile,
+		Network: network,
+	}
+	c.sessionsMu.Unlock()
+
+	return info, nil
+}
+
+// CreateSession allocates and binds an isolated workspace session on the sandbox gateway.
+func (c *Client) CreateSession(ctx context.Context, sessionID, profile, network string, env map[string]string) (*SessionInfo, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("cannot create sandbox session without sessionID")
+	}
+	if profile == "" {
+		profile = c.profile
+	}
+	if network == "" {
+		network = c.network
+	}
+	userUUID := c.SessionIDToUUID(sessionID)
+	gate := c.getGate(userUUID)
+	if err := gate.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer gate.unlock()
+
+	return c.createSessionLocked(ctx, gate, userUUID, profile, network, env)
+}
+
+// EnsureSessionWithPolicy ensures that an active session exists on the gateway for the given sessionID
+// with explicit profile and network policies. Concurrent calls for the same session are serialized
+// via the per-session lifecycle gate.
+func (c *Client) EnsureSessionWithPolicy(ctx context.Context, sessionID, profile, network string, env map[string]string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return errors.New("cannot ensure sandbox session without sessionID")
 	}
+	if profile == "" {
+		profile = c.profile
+	}
+	if network == "" {
+		network = c.network
+	}
 	userUUID := c.SessionIDToUUID(sessionID)
+	gate := c.getGate(userUUID)
+	if err := gate.lock(ctx); err != nil {
+		return err
+	}
+	defer gate.unlock()
 
 	c.sessionsMu.RLock()
 	_, exists := c.sessions[userUUID]
@@ -271,16 +363,25 @@ func (c *Client) EnsureSession(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
-	_, err, _ := c.sessionFlight.Do(userUUID, func() (any, error) {
-		c.sessionsMu.RLock()
-		_, alreadyExists := c.sessions[userUUID]
-		c.sessionsMu.RUnlock()
-		if alreadyExists {
-			return nil, nil
-		}
-		return c.CreateSession(ctx, sessionID, c.profile, c.network, nil)
-	})
+	_, err := c.createSessionLocked(ctx, gate, userUUID, profile, network, env)
 	return err
+}
+
+// EnsureSession ensures that an active session exists on the gateway for the given sessionID.
+// If the session has already been provisioned and tracked locally, it returns nil immediately.
+// Otherwise, it issues a POST /api/v1/sessions request using the client's configured default
+// profile and network policies.
+func (c *Client) EnsureSession(ctx context.Context, sessionID string) error {
+	return c.EnsureSessionWithPolicy(ctx, sessionID, c.profile, c.network, nil)
+}
+
+// HasSession reports whether active session metadata is cached locally for the given sessionID.
+func (c *Client) HasSession(sessionID string) bool {
+	userUUID := c.SessionIDToUUID(sessionID)
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+	_, exists := c.sessions[userUUID]
+	return exists
 }
 
 // Diagnose runs the full multi-phase sandbox readiness diagnostic suite,
@@ -289,19 +390,7 @@ func (c *Client) Diagnose(ctx context.Context, profiles ...string) *sandbox.Read
 	return sandbox.CheckReadinessWithClient(ctx, c.httpClient, c.baseURL, c.authToken, profiles...)
 }
 
-// Release terminates and cleans up the worker instance for the session.
-// In the unified gateway contract, HTTP 200 OK, 204 No Content, and 404 Not Found (only if
-// explicitly accompanied by a session-not-found body indicator) are considered successful
-// idempotent releases. Local session metadata is cleared ONLY upon confirmed release success;
-// network failures, 5xx server errors, or generic router 404s preserve local session metadata
-// to prevent state split-brain and subsequent policy drift.
-func (c *Client) Release(ctx context.Context, sessionID string) error {
-	if strings.TrimSpace(sessionID) == "" {
-		return errors.New("cannot release sandbox without sessionID")
-	}
-
-	userUUID := c.SessionIDToUUID(sessionID)
-
+func (c *Client) rawRelease(ctx context.Context, userUUID string) error {
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
 		return fmt.Errorf("invalid release URL: %w", err)
@@ -324,9 +413,6 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 
 	// 200 OK and 204 No Content are unconditional release successes.
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-		c.sessionsMu.Lock()
-		delete(c.sessions, userUUID)
-		c.sessionsMu.Unlock()
 		return nil
 	}
 
@@ -335,9 +421,6 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	if resp.StatusCode == http.StatusNotFound {
 		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
 		if sandbox.IsSessionNotFoundBody(errBody) {
-			c.sessionsMu.Lock()
-			delete(c.sessions, userUUID)
-			c.sessionsMu.Unlock()
 			return nil
 		}
 		return fmt.Errorf("sandbox gateway release returned generic HTTP 404 (endpoint missing or unrecognized): %s", sanitizeError(errBody, c.authToken))
@@ -345,6 +428,46 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 
 	errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
+}
+
+// Release terminates and cleans up the worker instance for the session.
+// In the unified gateway contract, HTTP 200 OK, 204 No Content, and 404 Not Found (only if
+// explicitly accompanied by a session-not-found body indicator) are considered successful
+// idempotent releases. Local session metadata is cleared ONLY upon confirmed release success;
+// network failures, 5xx server errors, or generic router 404s preserve local session metadata
+// to prevent state split-brain and subsequent policy drift.
+// Synchronization with EnsureSession via sessionGate prevents orphan remote sessions if release
+// is invoked concurrently with in-flight provisioning.
+func (c *Client) Release(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("cannot release sandbox without sessionID")
+	}
+
+	userUUID := c.SessionIDToUUID(sessionID)
+	gate := c.getGate(userUUID)
+	if err := gate.lock(ctx); err != nil {
+		return err
+	}
+	defer gate.unlock()
+
+	gate.epoch++
+	gate.released = true
+
+	if err := c.rawRelease(ctx, userUUID); err != nil {
+		return err
+	}
+
+	c.sessionsMu.Lock()
+	delete(c.sessions, userUUID)
+	c.sessionsMu.Unlock()
+	return nil
+}
+
+func isSessionMissingResponse(statusCode int, errBody string) bool {
+	if statusCode != http.StatusNotFound && statusCode != http.StatusConflict && statusCode != http.StatusGone {
+		return false
+	}
+	return sandbox.IsSessionNotFoundBody(errBody)
 }
 
 type gatewayExecRequest struct {
@@ -364,6 +487,9 @@ type gatewayExecResponse struct {
 }
 
 // Exec executes a command inside the isolated sandbox for the given session.
+// If the remote gateway restarted or evicted the session container, Exec detects the machine-readable
+// session-missing response, purges stale local metadata, re-provisions the session preserving policy,
+// and retries the command at most once.
 func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
 	if strings.TrimSpace(req.SessionID) == "" {
 		return sandbox.ExecResult{}, errors.New("sandbox execution requires non-empty SessionID")
@@ -386,156 +512,178 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 
 	userUUID := c.SessionIDToUUID(req.SessionID)
 
-	// Lazy ensure session: if this session has not yet been provisioned on the gateway,
-	// allocate and bind it via POST /api/v1/sessions before issuing POST /api/v1/shell/exec.
-	c.sessionsMu.RLock()
-	_, sessionExists := c.sessions[userUUID]
-	c.sessionsMu.RUnlock()
-	if !sessionExists {
-		if err := c.EnsureSession(ctx, req.SessionID); err != nil {
-			return sandbox.ExecResult{}, fmt.Errorf("failed to provision sandbox session: %w", err)
+	for attempt := range 2 {
+		// Lazy ensure session: if this session has not yet been provisioned on the gateway,
+		// allocate and bind it via POST /api/v1/sessions before issuing POST /api/v1/shell/exec.
+		c.sessionsMu.RLock()
+		sMeta, sessionExists := c.sessions[userUUID]
+		c.sessionsMu.RUnlock()
+		if !sessionExists {
+			if err := c.EnsureSession(ctx, req.SessionID); err != nil {
+				return sandbox.ExecResult{}, fmt.Errorf("failed to provision sandbox session: %w", err)
+			}
+			c.sessionsMu.RLock()
+			sMeta = c.sessions[userUUID]
+			c.sessionsMu.RUnlock()
 		}
-	}
 
-	execURL, err := url.Parse(c.baseURL + "/api/v1/shell/exec")
-	if err != nil {
-		return sandbox.ExecResult{}, fmt.Errorf("invalid exec URL: %w", err)
-	}
-	q := execURL.Query()
-	q.Set("user_uuid", userUUID)
-
-	profile := c.profile
-	network := c.network
-	c.sessionsMu.RLock()
-	if s, ok := c.sessions[userUUID]; ok {
-		if s.Profile != "" {
-			profile = s.Profile
+		profile := c.profile
+		network := c.network
+		if sMeta.Profile != "" {
+			profile = sMeta.Profile
 		}
-		if s.Network != "" {
-			network = s.Network
+		if sMeta.Network != "" {
+			network = sMeta.Network
 		}
-	}
-	c.sessionsMu.RUnlock()
 
-	if profile != "" {
-		q.Set("profile", profile)
-	}
-	if network != "" {
-		q.Set("network", network)
-	}
-	execURL.RawQuery = q.Encode()
+		execURL, err := url.Parse(c.baseURL + "/api/v1/shell/exec")
+		if err != nil {
+			return sandbox.ExecResult{}, fmt.Errorf("invalid exec URL: %w", err)
+		}
+		q := execURL.Query()
+		q.Set("user_uuid", userUUID)
+		if profile != "" {
+			q.Set("profile", profile)
+		}
+		if network != "" {
+			q.Set("network", network)
+		}
+		execURL.RawQuery = q.Encode()
 
-	timeoutSec := req.Timeout.Seconds()
-	if timeoutSec <= 0 {
-		timeoutSec = 1.0
-	}
+		timeoutSec := req.Timeout.Seconds()
+		if timeoutSec <= 0 {
+			timeoutSec = 1.0
+		}
 
-	payload := gatewayExecRequest{
-		Command: req.Command,
-		Cwd:     req.Cwd,
-		Timeout: timeoutSec,
-	}
+		payload := gatewayExecRequest{
+			Command: req.Command,
+			Cwd:     req.Cwd,
+			Timeout: timeoutSec,
+		}
 
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return sandbox.ExecResult{}, fmt.Errorf("failed to marshal exec payload: %w", err)
-	}
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			return sandbox.ExecResult{}, fmt.Errorf("failed to marshal exec payload: %w", err)
+		}
 
-	// Give the HTTP request a safety margin over the command execution timeout
-	// so that Worker timeout cleanup has time to return a clean timed_out response.
-	httpTimeout := req.Timeout + httpTimeoutEnvelope
-	execCtx, cancel := context.WithTimeout(ctx, httpTimeout)
-	defer cancel()
+		httpTimeout := req.Timeout + httpTimeoutEnvelope
+		execCtx, cancel := context.WithTimeout(ctx, httpTimeout)
 
-	httpReq, err := http.NewRequestWithContext(execCtx, http.MethodPost, execURL.String(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return sandbox.ExecResult{}, fmt.Errorf("failed to create exec request: %w", err)
-	}
-	httpReq.Header.Set("X-Auth-Token", c.authToken)
-	httpReq.Header.Set("Content-Type", "application/json")
+		httpReq, err := http.NewRequestWithContext(execCtx, http.MethodPost, execURL.String(), bytes.NewReader(bodyBytes))
+		if err != nil {
+			cancel()
+			return sandbox.ExecResult{}, fmt.Errorf("failed to create exec request: %w", err)
+		}
+		httpReq.Header.Set("X-Auth-Token", c.authToken)
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	// Audit logging: command length, command sha256 hash, session uuid short hash.
-	// Raw command and auth token are never logged.
-	cmdHash := sha256.Sum256([]byte(req.Command))
-	uuidShort := userUUID
-	if len(uuidShort) > 8 {
-		uuidShort = uuidShort[:8]
-	}
-	startTime := time.Now()
+		cmdHash := sha256.Sum256([]byte(req.Command))
+		uuidShort := userUUID
+		if len(uuidShort) > 8 {
+			uuidShort = uuidShort[:8]
+		}
+		startTime := time.Now()
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
-			"沙箱命令执行网络失败 [session: %s, cmd_len: %d, cmd_hash: %s]: %v",
-			uuidShort, len(req.Command), hex.EncodeToString(cmdHash[:4]), err,
-		))
-		return sandbox.ExecResult{}, fmt.Errorf("sandbox execution request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			cancel()
+			c.log().Warn(logs.SYSTEM, fmt.Sprintf(
+				"沙箱命令执行网络失败 [session: %s, cmd_len: %d, cmd_hash: %s]: %v",
+				uuidShort, len(req.Command), hex.EncodeToString(cmdHash[:4]), err,
+			))
+			return sandbox.ExecResult{}, fmt.Errorf("sandbox execution request failed: %w", err)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
-		safeErr := sanitizeGatewayExecError(resp.StatusCode, errBody, req, c.authToken)
-		c.log().Warn(logs.SYSTEM, fmt.Sprintf(
-			"沙箱网关返回错误状态 [status: %d, session: %s, cmd_len: %d]: %s",
-			resp.StatusCode, uuidShort, len(req.Command), safeErr,
-		))
-		return sandbox.ExecResult{}, fmt.Errorf(
-			"sandbox gateway returned HTTP %d: %s",
-			resp.StatusCode,
-			safeErr,
-		)
-	}
+		if resp.StatusCode != http.StatusOK {
+			errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+			resp.Body.Close()
+			cancel()
 
-	limitedReader := io.LimitReader(resp.Body, maxResponseBodyBytes)
-	var gatewayResp gatewayExecResponse
-	if err := json.NewDecoder(limitedReader).Decode(&gatewayResp); err != nil {
-		return sandbox.ExecResult{}, fmt.Errorf("failed to decode sandbox gateway response: %w", err)
-	}
+			// Check for machine-readable remote session missing/evicted response:
+			// If detected on attempt 0, purge stale local metadata, re-provision with preserved policies, and retry once.
+			if attempt == 0 && isSessionMissingResponse(resp.StatusCode, errBody) {
+				c.log().Warn(logs.SYSTEM, fmt.Sprintf(
+					"沙箱网关检测到远端会话缺失/已被驱逐，正在自动重新创建会话 [session: %s, status: %d]: %s",
+					uuidShort, resp.StatusCode, errBody,
+				))
+				c.sessionsMu.Lock()
+				delete(c.sessions, userUUID)
+				c.sessionsMu.Unlock()
 
-	// Validate execution-state invariants according to adapter contract:
-	// 1. Completed: exit_code != nil && timed_out == false
-	// 2. Timed out: exit_code == nil && timed_out == true
-	// Reject impossible or incomplete combinations as gateway protocol failures.
-	if gatewayResp.TimedOut {
-		if gatewayResp.ExitCode != nil {
+				// Re-provision container preserving existing profile/network policies
+				if err := c.EnsureSessionWithPolicy(ctx, req.SessionID, profile, network, nil); err != nil {
+					return sandbox.ExecResult{}, fmt.Errorf("failed to re-provision evicted sandbox session: %w", err)
+				}
+				continue
+			}
+
+			safeErr := sanitizeGatewayExecError(resp.StatusCode, errBody, req, c.authToken)
+			c.log().Warn(logs.SYSTEM, fmt.Sprintf(
+				"沙箱网关返回错误状态 [status: %d, session: %s, cmd_len: %d]: %s",
+				resp.StatusCode, uuidShort, len(req.Command), safeErr,
+			))
 			return sandbox.ExecResult{}, fmt.Errorf(
-				"malformed gateway response: timed_out is true but exit_code is non-nil (%d)",
-				*gatewayResp.ExitCode,
+				"sandbox gateway returned HTTP %d: %s",
+				resp.StatusCode,
+				safeErr,
 			)
 		}
-	} else {
-		if gatewayResp.ExitCode == nil {
-			return sandbox.ExecResult{}, errors.New(
-				"malformed gateway response: exit_code is null but timed_out is false",
-			)
+
+		limitedReader := io.LimitReader(resp.Body, maxResponseBodyBytes)
+		var gatewayResp gatewayExecResponse
+		err = json.NewDecoder(limitedReader).Decode(&gatewayResp)
+		resp.Body.Close()
+		cancel()
+		if err != nil {
+			return sandbox.ExecResult{}, fmt.Errorf("failed to decode sandbox gateway response: %w", err)
 		}
+
+		// Validate execution-state invariants according to adapter contract:
+		// 1. Completed: exit_code != nil && timed_out == false
+		// 2. Timed out: exit_code == nil && timed_out == true
+		// Reject impossible or incomplete combinations as gateway protocol failures.
+		if gatewayResp.TimedOut {
+			if gatewayResp.ExitCode != nil {
+				return sandbox.ExecResult{}, fmt.Errorf(
+					"malformed gateway response: timed_out is true but exit_code is non-nil (%d)",
+					*gatewayResp.ExitCode,
+				)
+			}
+		} else {
+			if gatewayResp.ExitCode == nil {
+				return sandbox.ExecResult{}, errors.New(
+					"malformed gateway response: exit_code is null but timed_out is false",
+				)
+			}
+		}
+
+		execDuration := time.Since(startTime)
+		if gatewayResp.DurationMs > 0 {
+			execDuration = time.Duration(gatewayResp.DurationMs) * time.Millisecond
+		}
+
+		exitCodeStr := "null"
+		if gatewayResp.ExitCode != nil {
+			exitCodeStr = fmt.Sprintf("%d", *gatewayResp.ExitCode)
+		}
+
+		c.log().Info(logs.SYSTEM, fmt.Sprintf(
+			"✓ 沙箱命令执行完成 [session: %s, exit_code: %s, timed_out: %t, duration: %s]",
+			uuidShort, exitCodeStr, gatewayResp.TimedOut, execDuration,
+		))
+
+		return sandbox.ExecResult{
+			Stdout:          gatewayResp.Stdout,
+			Stderr:          gatewayResp.Stderr,
+			ExitCode:        gatewayResp.ExitCode,
+			TimedOut:        gatewayResp.TimedOut,
+			StdoutTruncated: gatewayResp.StdoutTruncated,
+			StderrTruncated: gatewayResp.StderrTruncated,
+			Duration:        execDuration,
+		}, nil
 	}
 
-	execDuration := time.Since(startTime)
-	if gatewayResp.DurationMs > 0 {
-		execDuration = time.Duration(gatewayResp.DurationMs) * time.Millisecond
-	}
-
-	exitCodeStr := "null"
-	if gatewayResp.ExitCode != nil {
-		exitCodeStr = fmt.Sprintf("%d", *gatewayResp.ExitCode)
-	}
-
-	c.log().Info(logs.SYSTEM, fmt.Sprintf(
-		"✓ 沙箱命令执行完成 [session: %s, exit_code: %s, timed_out: %t, duration: %s]",
-		uuidShort, exitCodeStr, gatewayResp.TimedOut, execDuration,
-	))
-
-	return sandbox.ExecResult{
-		Stdout:          gatewayResp.Stdout,
-		Stderr:          gatewayResp.Stderr,
-		ExitCode:        gatewayResp.ExitCode,
-		TimedOut:        gatewayResp.TimedOut,
-		StdoutTruncated: gatewayResp.StdoutTruncated,
-		StderrTruncated: gatewayResp.StderrTruncated,
-		Duration:        execDuration,
-	}, nil
+	return sandbox.ExecResult{}, errors.New("sandbox execution failed after retry")
 }
 
 func (c *Client) log() *logs.Store {

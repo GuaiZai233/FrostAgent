@@ -195,7 +195,11 @@ func IsSessionNotFoundBody(body string) bool {
 						strings.Contains(lower, "session not found") ||
 						strings.Contains(lower, "no active session") ||
 						strings.Contains(lower, "session not active") ||
-						strings.Contains(lower, "session does not exist") {
+						strings.Contains(lower, "session does not exist") ||
+						strings.Contains(lower, "session not provisioned") ||
+						strings.Contains(lower, "unprovisioned") ||
+						strings.Contains(lower, "session expired") ||
+						strings.Contains(lower, "session evicted") {
 						return true
 					}
 				}
@@ -208,7 +212,11 @@ func IsSessionNotFoundBody(body string) bool {
 		strings.Contains(lower, "session not found") ||
 		strings.Contains(lower, "no active session") ||
 		strings.Contains(lower, "session not active") ||
-		strings.Contains(lower, "session does not exist")
+		strings.Contains(lower, "session does not exist") ||
+		strings.Contains(lower, "session not provisioned") ||
+		strings.Contains(lower, "unprovisioned") ||
+		strings.Contains(lower, "session expired") ||
+		strings.Contains(lower, "session evicted")
 }
 
 func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken, userUUID string) (int, string, error) {

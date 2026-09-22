@@ -423,7 +423,18 @@ fail closed / no local fallback
 
 #### 会话生命周期与执行链条对齐 (Lifecycle Parity & Lazy Provisioning)：
 - **执行链懒加载与会话复用 (Lazy EnsureSession & Singleflight)**：在生产执行链路（`ExecuteCommandTool -> DynamicBackend -> codeinterpreter.Client.Exec`）中，客户端自动实施懒加载会话分配（`EnsureSession`），利用 `golang.org/x/sync/singleflight` 对同一 `user_uuid` 的并发首次命令进行请求去重。首次执行命令时自动调用 `POST /api/v1/sessions` 完成容器工作区分配与策略协商，校验通过后缓存会话上下文；后续执行直接复用，不再产生无谓的 `/sessions` 开销；
-- **防脑裂释放元数据持久性 (Zero Split-Brain Session State)**：调用 `Release` 时，当且仅当远程网关返回 200、204 或受信任的 `session_not_found` 404 确认释放成功后，客户端本地方清除该会话的元数据；若释放请求遇到 500、网络超时或泛型 404 失败，本地会话元数据（包含定制 profile 与网络策略）保持不变，重试执行与再次释放时不会丢失安全策略，彻底杜绝状态脑裂；释放成功后的下一次执行命令将重新触发 `/sessions` 创建新会话。
+- **会话生命周期门禁同步与防孤儿实例保证 (Lifecycle Gate & Anti-Orphan Guarantee)**：
+  - 为防止并发时序下出现“正在分配容器时收到释放调用，导致远端残留孤儿容器”的资源泄漏，客户端引入了基于 `userUUID` 的生命周期门禁（`sessionGate`，带 context 感知的通道互斥信号量 `chan struct{}`），全局串行化 `EnsureSession`、`CreateSession` 与 `Release`；
+  - 门禁结构维护代际计数器（`epoch uint64`）与墓碑释放标记（`released bool`）。当某一会话在执行底层 `POST /api/v1/sessions` 网络请求期间并发收到 `Release()` 调用时，`Release()` 会在门禁上排队等待底层分配完成，随后推进代际并标记墓碑；
+  - 在分配请求返回后，客户端执行代际守卫检查：若上下文已取消（`ctx.Err() != nil`）、代际已改变（`gate.epoch != startEpoch`）或已被标记为释放（`gate.released == true`），客户端立即调用远端 `rawRelease` 强制销毁刚刚创建的远端会话，并清空本地元数据，确保远端 0 孤儿容器残留、本地 0 残留状态；
+- **网关重启与容器逐出有界自愈机制 (Bounded Eviction Recovery in Exec)**：
+  - 当远端沙箱网关发生热重启、或者底层容器被网关按 LRU/空闲超时策略逐出（Evicted）时，客户端本地缓存的 `c.sessions[userUUID]` 会导致后续 `Exec()` 直接向 `/shell/exec` 发起调用，造成永久性报错；
+  - 客户端通过 `isSessionMissingResponse` 精确识别机器可读的会话缺失响应：HTTP 404/409/410 状态码且响应体包含明确的会话缺失签名（通过 `IsSessionNotFoundBody` 检测 `session_not_found`、`no active session`、`session not provisioned`、`session expired`、`session evicted` 等）；
+  - 遇到泛型路由 404（如 `404 page not found`、`{"detail":"Not Found"}`）时，客户端严格 Fail-Closed 终止并报错，杜绝盲目重试；
+  - 当在首次执行（attempt 0）检测到合法会话缺失响应时，客户端自动清除本地失效元数据缓存，调用 `EnsureSessionWithPolicy` 完整继承并保留原有 profile、network 等策略重新向网关申领新容器，随后自动重新执行命令；重试次数严格有界限制为最多 1 次（attempt 0 -> attempt 1），防止死循环震荡；
+- **防脑裂释放元数据持久性与跨仓契约对齐 (Strict Release Parity & Zero Split-Brain State)**：
+  - 调用 `Release` 时，当且仅当远程网关返回 200 OK、204 No Content，或受信任且包含机器可读会话不存在特征（`isSessionNotFoundBody`）的 404 确认释放成功后，客户端本地方清除该会话的元数据；
+  - 若释放请求遇到 500、网络超时或泛型 404 失败，本地会话元数据（包含定制 profile 与网络策略）保持不变，重试执行与再次释放时不会丢失安全策略，彻底杜绝状态脑裂；释放成功后的下一次执行命令将重新触发 `/sessions` 创建新会话。ActionsCat 与 FrostAgent 保持该严格释放契约的双向对齐。
 
 ### 7.4 沙箱就绪诊断体系 (Readiness Diagnostics Specification)
 
