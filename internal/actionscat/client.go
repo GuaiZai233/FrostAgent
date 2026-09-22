@@ -3,6 +3,7 @@ package actionscat
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,7 +119,7 @@ type NetworkPolicy struct {
 // RuntimeSpec describes execution constraints and entrypoint for a Run.
 type RuntimeSpec struct {
 	Entrypoint     string        `json:"entrypoint,omitempty"`      // path to entrypoint executable within artifact (e.g. "entrypoint")
-	Network        NetworkPolicy `json:"network,omitempty"`         // network access policy
+	Network        NetworkPolicy `json:"network"`                   // network access policy
 	TimeoutSeconds int           `json:"timeout_seconds,omitempty"` // default execution timeout
 	MemoryLimitMB  int           `json:"memory_limit_mb,omitempty"` // worker RAM limit
 	CPULimit       float64       `json:"cpu_limit,omitempty"`       // worker CPU cores limit
@@ -270,11 +271,13 @@ type HTTPClient interface {
 
 // Client interacts with the ActionsCat management and dispatch APIs.
 type Client struct {
-	getenv          func(string) string
-	httpClient      HTTPClient
-	readinessMu     sync.RWMutex
-	lastReadiness   *sandbox.ReadinessReport
-	lastReadinessAt time.Time
+	getenv                 func(string) string
+	httpClient             HTTPClient
+	readinessMu            sync.RWMutex
+	lastReadiness          *sandbox.ReadinessReport
+	lastReadinessAt        time.Time
+	lastReadinessEndpoint  string
+	lastReadinessTokenHash [32]byte
 }
 
 // Option configures a Client.
@@ -484,35 +487,43 @@ func (c *Client) checkSandboxReadinessWithTTL(ctx context.Context, ttl time.Dura
 		}
 	}
 
+	tok := c.SandboxAuthToken()
+	tokHash := sha256.Sum256([]byte(tok))
+
 	c.readinessMu.RLock()
-	if ttl > 0 && c.lastReadiness != nil && time.Since(c.lastReadinessAt) < ttl {
+	if ttl > 0 && c.lastReadiness != nil && c.lastReadinessEndpoint == ep && c.lastReadinessTokenHash == tokHash && time.Since(c.lastReadinessAt) < ttl {
 		cached := c.lastReadiness
 		c.readinessMu.RUnlock()
 		return cached
 	}
 	c.readinessMu.RUnlock()
 
-	tok := c.SandboxAuthToken()
 	rep := sandbox.CheckReadiness(ctx, ep, tok, sandbox.ProfileGoBuilder, sandbox.ProfileActionRuntime)
 
 	c.readinessMu.Lock()
 	c.lastReadiness = rep
 	c.lastReadinessAt = time.Now()
+	c.lastReadinessEndpoint = ep
+	c.lastReadinessTokenHash = tokHash
 	c.readinessMu.Unlock()
 
 	return rep
 }
 
 // LastSandboxReadiness returns the cached readiness report without performing active probes,
-// or a report with status "unprobed" if no active probe has been executed yet.
+// or a report with status "unprobed" if no active probe has been executed yet or if the configured
+// endpoint or auth token has changed.
 func (c *Client) LastSandboxReadiness() *sandbox.ReadinessReport {
 	ep := c.SandboxEndpoint()
 	if ep == "" {
 		return nil
 	}
+	tok := c.SandboxAuthToken()
+	tokHash := sha256.Sum256([]byte(tok))
+
 	c.readinessMu.RLock()
 	defer c.readinessMu.RUnlock()
-	if c.lastReadiness != nil {
+	if c.lastReadiness != nil && c.lastReadinessEndpoint == ep && c.lastReadinessTokenHash == tokHash {
 		return c.lastReadiness
 	}
 	return &sandbox.ReadinessReport{

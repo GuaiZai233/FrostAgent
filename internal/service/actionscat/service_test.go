@@ -1069,4 +1069,22 @@ func TestService_SandboxReadiness(t *testing.T) {
 	if st.Sandbox == nil || st.Sandbox.Status != "ready" {
 		t.Fatalf("expected status to include Sandbox ready, got: %+v", st.Sandbox)
 	}
+
+	// 4. Force check via ?force=true
+	reqForce := httptest.NewRequest(http.MethodGet, "/api/v1/actionscat/sandbox/readiness?force=true", nil)
+	reqForce.RemoteAddr = "127.0.0.1:1234"
+	recForce := httptest.NewRecorder()
+	svcConfigured.ServeHTTP(recForce, reqForce)
+	if recForce.Code != http.StatusOK {
+		t.Fatalf("expected 200 for force check, got %d", recForce.Code)
+	}
+	var repForce struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(recForce.Body).Decode(&repForce); err != nil {
+		t.Fatalf("decode force readiness: %v", err)
+	}
+	if repForce.Status != "ready" {
+		t.Fatalf("expected ready on force check, got %s", repForce.Status)
+	}
 }

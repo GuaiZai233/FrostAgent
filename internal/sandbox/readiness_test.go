@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -527,5 +528,339 @@ func TestCheckReadiness_FullyReady(t *testing.T) {
 		if !released[u] {
 			t.Errorf("expected session %q to be released", u)
 		}
+	}
+}
+
+func TestValidateSessionResponse_ConformanceRegression(t *testing.T) {
+	validUUID := "123e4567-e89b-12d3-a456-426614174000"
+	validProfile := sandbox.ProfileGoBuilder
+
+	tests := []struct {
+		name            string
+		body            string
+		expectedUUID    string
+		expectedProfile string
+		expectedNetwork string
+		wantErrSubstr   string
+	}{
+		{
+			name:            "empty body",
+			body:            "",
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "empty session response body",
+		},
+		{
+			name:            "missing required fields",
+			body:            `{"user_uuid":""}`,
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "missing required fields",
+		},
+		{
+			name:            "uuid case mismatch rejected",
+			body:            `{"user_uuid":"123E4567-E89B-12D3-A456-426614174000","profile":"go-builder","network":"none","status":"ready"}`,
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "user_uuid mismatch",
+		},
+		{
+			name:            "profile mismatch rejected",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"minimal","network":"none","status":"ready"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "profile mismatch",
+		},
+		{
+			name:            "missing network policy rejected",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","status":"ready"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "missing network policy",
+		},
+		{
+			name:            "wrong network policy rejected",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"public","status":"ready"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "network policy mismatch",
+		},
+		{
+			name:            "status case mismatch rejected Ready",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"none","status":"Ready"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "session status not ready/created",
+		},
+		{
+			name:            "status case mismatch rejected CREATED",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"none","status":"CREATED"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "session status not ready/created",
+		},
+		{
+			name:            "invalid status rejected",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"none","status":"running"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+			wantErrSubstr:   "session status not ready/created",
+		},
+		{
+			name:            "valid ready response passes",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"none","status":"ready"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+		},
+		{
+			name:            "valid created response passes",
+			body:            fmt.Sprintf(`{"user_uuid":%q,"profile":"go-builder","network":"none","status":"created"}`, validUUID),
+			expectedUUID:    validUUID,
+			expectedProfile: validProfile,
+			expectedNetwork: "none",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := sandbox.ValidateSessionResponse([]byte(tt.body), tt.expectedUUID, tt.expectedProfile, tt.expectedNetwork)
+			if tt.wantErrSubstr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErrSubstr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp == nil || resp.UserUUID != tt.expectedUUID || resp.Profile != tt.expectedProfile {
+					t.Fatalf("unexpected response parsed: %+v", resp)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckReadiness_ShellExec_TransportError(t *testing.T) {
+	ctx := context.Background()
+
+	// Case A: Transport error during contract /shell/exec
+	tsContractExecFail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			hj, ok := w.(http.Hijacker)
+			if ok {
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+				return
+			}
+			http.Error(w, "hijack failed", http.StatusInternalServerError)
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer tsContractExecFail.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, tsContractExecFail.Client(), tsContractExecFail.URL, "")
+	if rep.Status != sandbox.StatusEndpointUnreachable {
+		t.Fatalf("expected contract exec transport error to yield %s, got %s (detail: %s)", sandbox.StatusEndpointUnreachable, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "transport error") {
+		t.Fatalf("expected detail to mention transport error, got: %s", rep.Detail)
+	}
+
+	// Case B: Transport error during profile /shell/exec
+	tsProfileExecFail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			var req struct {
+				Command string `json:"command"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Command == "go version" {
+				hj, ok := w.(http.Hijacker)
+				if ok {
+					conn, _, _ := hj.Hijack()
+					_ = conn.Close()
+					return
+				}
+				http.Error(w, "hijack failed", http.StatusInternalServerError)
+				return
+			}
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "ok",
+				"exit_code": exitCode,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer tsProfileExecFail.Close()
+
+	repProf := sandbox.CheckReadinessWithClient(ctx, tsProfileExecFail.Client(), tsProfileExecFail.URL, "", sandbox.ProfileGoBuilder)
+	if repProf.Status != sandbox.StatusEndpointUnreachable {
+		t.Fatalf("expected profile exec transport error to yield %s, got %s (detail: %s)", sandbox.StatusEndpointUnreachable, repProf.Status, repProf.Detail)
+	}
+	if strings.Contains(repProf.Detail, "profile_unsupported") {
+		t.Fatalf("must not misclassify transport error as profile_unsupported: %s", repProf.Detail)
+	}
+}
+
+func TestCheckReadiness_ShellExec_MalformedResponse(t *testing.T) {
+	ctx := context.Background()
+
+	// Server returns HTTP 200 with malformed JSON on /shell/exec
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not-json-response`))
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
+	if rep.Status != sandbox.StatusAPIContractMissing {
+		t.Fatalf("expected malformed 200 response to yield %s, got %s (detail: %s)", sandbox.StatusAPIContractMissing, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "conformance") {
+		t.Fatalf("expected detail to mention conformance error, got: %s", rep.Detail)
+	}
+}
+
+func TestCheckReadiness_ProfileReleaseFailure(t *testing.T) {
+	ctx := context.Background()
+
+	var releaseCount int
+	var releaseCountMu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "ok",
+				"exit_code": exitCode,
+			})
+		case "/api/v1/release":
+			releaseCountMu.Lock()
+			releaseCount++
+			count := releaseCount
+			releaseCountMu.Unlock()
+
+			if count == 1 {
+				// Contract session release succeeds
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			// Profile session release fails with 500!
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"failed to remove container"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "", sandbox.ProfileMinimal)
+	if rep.Status == sandbox.StatusReady {
+		t.Fatalf("MUST NOT be ready when profile release fails! Got: %+v", rep)
+	}
+	if rep.Status != sandbox.StatusEndpointUnreachable {
+		t.Fatalf("expected 500 on profile release to yield %s, got %s (detail: %s)", sandbox.StatusEndpointUnreachable, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "releasing profile") {
+		t.Fatalf("expected detail to mention releasing profile error, got: %s", rep.Detail)
 	}
 }

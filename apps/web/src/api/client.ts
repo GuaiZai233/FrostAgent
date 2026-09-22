@@ -371,8 +371,9 @@ export const actionsCatAPI = {
   getStatus(): Promise<ActionsCatStatus> {
     return actionsCatRequest<ActionsCatStatus>('/status');
   },
-  getSandboxReadiness(): Promise<SandboxReadinessReport> {
-    return actionsCatRequest<SandboxReadinessReport>('/sandbox/readiness');
+  getSandboxReadiness(force = false): Promise<SandboxReadinessReport> {
+    const query = force ? '?force=true' : '';
+    return actionsCatRequest<SandboxReadinessReport>(`/sandbox/readiness${query}`);
   },
   listActions(): Promise<ActionsCatAction[]> {
     return actionsCatRequest<ActionsCatAction[]>('/actions');

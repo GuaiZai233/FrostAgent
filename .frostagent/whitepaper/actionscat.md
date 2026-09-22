@@ -455,9 +455,10 @@ fail closed / no local fallback
 
 #### 核心契约与安全机制：
 - **RFC 4122 UUIDv4 动态会话标识**：探针抛弃固定字符串，每次探测通过密码学安全随机源（`crypto/rand`）生成合法的 RFC 4122 Version 4 UUID（形如 `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`）。杜绝后端类型化框架（如 FastAPI / Pydantic `UUID` 类型）因无法解析固定字符串抛出 HTTP 422 校验失败，同时杜绝多实例并发探测产生命名冲突；
-- **全生命周期闭环验证与确定性清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 释放容器，确保 0 残留；
-- **严格响应合规校验 (Conformance Validation)**：使用 `ValidateSessionResponse` 严格校验返回的 JSON 结构体，拒绝空对象 `{}`、缺失 `user_uuid` / `profile` / `status` 或会话状态非 `ready/created` 的伪成功响应，杜绝虚假全绿；
-- **读写分离与短 TTL 缓存保护**：`GET /api/actionscat/status` 保持严格只读（仅返回缓存的最近就绪报告或 `unprobed` 标识）；主动探测接口施加 30 秒短 TTL 缓存保护，避免管理员频繁刷新导致网关高频创建容器与资源颠簸。
+- **全生命周期闭环验证与确定性清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 验证 HTTP 204 No Content 释放响应（包括 contract probe 与各 profile probe）。若释放失败（500 错误或超时）立即失败阻断并标记非就绪，彻底杜绝容器泄漏与假绿；
+- **严格响应合规校验 (Conformance Validation)**：使用 `ValidateSessionResponse` 严格校验返回的 JSON 结构体，执行大小写敏感的 UUID、profile 及 network（若指定）精确匹配，要求 status 精确为 `ready` 或 `created`，杜绝空对象 `{}`、缺失字段或松散比较带来的伪成功响应；
+- **传输层与契约失范错误解耦**：探针在 `/shell/exec` 与各探测阶段精确区分底层网络传输失败（TCP 重置、连接被拒、网络超时等，归类为 `StatusEndpointUnreachable`）与应用层契约违背（200 返回畸形 JSON、缺少 exit_code 或 HTTP 404 等，归类为 `StatusAPIContractMissing`），确保运维排障归因准确无误；
+- **端点/凭据绑定的短 TTL 缓存与强制刷新**：`GET /api/actionscat/status` 保持严格只读（仅返回缓存的最近就绪报告或 `unprobed` 标识）；主动探测接口施加 30 秒短 TTL 缓存保护，缓存 Key 强绑定端点规范化地址与 Token 的 SHA-256 指纹，一旦环境变量或配置变更立即失效并退回 `unprobed`。同时提供 `?force=true` 机制（Web 控制台“重新诊断”按钮显式携带），允许管理员绕过缓存执行实时探活。
 
 诊断探针通过 `codeinterpreter.Client.Diagnose()` 与 `actionscat.Client.CheckSandboxReadiness()` 暴露，并在 Web 前端（`apps/web/src/pages/actionscat.ts`）提供直观的诊断看板与错误排查指引。
 

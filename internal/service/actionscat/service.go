@@ -122,8 +122,11 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleSandboxReadiness(w http.ResponseWriter, r *http.Request) {
-	rep := s.client.CheckSandboxReadiness(r.Context())
-	s.writeJSON(w, http.StatusOK, rep)
+	if r.URL.Query().Get("force") == "true" || r.URL.Query().Get("force") == "1" {
+		s.writeJSON(w, http.StatusOK, s.client.ForceCheckSandboxReadiness(r.Context()))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, s.client.CheckSandboxReadiness(r.Context()))
 }
 
 func (s *Service) handleListActions(w http.ResponseWriter, r *http.Request) {

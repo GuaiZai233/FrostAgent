@@ -539,7 +539,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
 
     statusContainer.querySelector('#actionscat-diagnose-sandbox-btn')?.addEventListener('click', async () => {
       try {
-        const report = await actionsCatAPI.getSandboxReadiness();
+        const report = await actionsCatAPI.getSandboxReadiness(true);
         if (status) {
           status.sandbox = report;
           renderStatus();

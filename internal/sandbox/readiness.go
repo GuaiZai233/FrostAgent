@@ -89,17 +89,21 @@ func ValidateSessionResponse(body []byte, expectedUUID, expectedProfile, expecte
 	if strings.TrimSpace(resp.UserUUID) == "" || strings.TrimSpace(resp.Profile) == "" || strings.TrimSpace(resp.Status) == "" {
 		return nil, fmt.Errorf("missing required fields in session response (user_uuid, profile, status)")
 	}
-	if !strings.EqualFold(resp.UserUUID, expectedUUID) {
+	if resp.UserUUID != expectedUUID {
 		return nil, fmt.Errorf("user_uuid mismatch: expected %q, got %q", expectedUUID, resp.UserUUID)
 	}
 	if resp.Profile != expectedProfile {
 		return nil, fmt.Errorf("profile mismatch: expected %q, got %q", expectedProfile, resp.Profile)
 	}
-	if expectedNetwork != "" && resp.Network != "" && resp.Network != expectedNetwork {
-		return nil, fmt.Errorf("network policy mismatch: expected %q, got %q", expectedNetwork, resp.Network)
+	if expectedNetwork != "" {
+		if resp.Network == "" {
+			return nil, fmt.Errorf("missing network policy in session response: expected %q", expectedNetwork)
+		}
+		if resp.Network != expectedNetwork {
+			return nil, fmt.Errorf("network policy mismatch: expected %q, got %q", expectedNetwork, resp.Network)
+		}
 	}
-	st := strings.ToLower(strings.TrimSpace(resp.Status))
-	if st != "ready" && st != "created" {
+	if resp.Status != "ready" && resp.Status != "created" {
 		return nil, fmt.Errorf("session status not ready/created: got %q", resp.Status)
 	}
 	return &resp, nil
@@ -118,7 +122,7 @@ type probeExecResp struct {
 	TimedOut bool   `json:"timed_out"`
 }
 
-func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToken, userUUID, command string) (*probeExecResp, int, string, error) {
+func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToken, userUUID, command string) (*probeExecResp, int, string, error, error) {
 	execURL := fmt.Sprintf("%s/api/v1/shell/exec?user_uuid=%s", endpoint, url.QueryEscape(userUUID))
 	bodyData, _ := json.Marshal(probeExecReq{
 		Command: command,
@@ -127,7 +131,7 @@ func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToke
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, execURL, bytes.NewReader(bodyData))
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("failed to build shell/exec request: %w", err)
+		return nil, 0, "", nil, fmt.Errorf("failed to build shell/exec request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if authToken != "" {
@@ -136,26 +140,29 @@ func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToke
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", err, nil
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return nil, resp.StatusCode, "", err, nil
+	}
 	bodyStr := strings.TrimSpace(string(body))
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, bodyStr, nil
+		return nil, resp.StatusCode, bodyStr, nil, nil
 	}
 
 	var res probeExecResp
 	if err := json.Unmarshal(body, &res); err != nil {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("malformed JSON in shell/exec response: %w", err)
+		return nil, resp.StatusCode, bodyStr, nil, fmt.Errorf("malformed JSON in shell/exec response: %w", err)
 	}
 	if res.ExitCode == nil {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("shell/exec response missing exit_code")
+		return nil, resp.StatusCode, bodyStr, nil, fmt.Errorf("shell/exec response missing exit_code")
 	}
 
-	return &res, http.StatusOK, bodyStr, nil
+	return &res, http.StatusOK, bodyStr, nil, nil
 }
 
 func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken, userUUID string) (int, string, error) {
@@ -319,7 +326,12 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 
 	// 2. Probe Full Lifecycle Contract (/sessions + /shell/exec + /release)
 	contractProbeUUID := newProbeUUID()
-	defer releaseProbeSession(client, endpoint, authToken, contractProbeUUID)
+	var contractReleased bool
+	defer func() {
+		if !contractReleased {
+			releaseProbeSession(client, endpoint, authToken, contractProbeUUID)
+		}
+	}()
 
 	sessionsURL := endpoint + "/api/v1/sessions"
 	probePayload := map[string]any{
@@ -433,8 +445,20 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 	}
 
 	// Probe /api/v1/shell/exec on contract session
-	execRes, execCode, execErrBody, execErr := probeShellExec(ctx, client, endpoint, authToken, contractProbeUUID, "true")
-	if execErr != nil {
+	execRes, execCode, execErrBody, execTransportErr, execProtocolErr := probeShellExec(ctx, client, endpoint, authToken, contractProbeUUID, "true")
+	if execTransportErr != nil {
+		return &ReadinessReport{
+			Status:            StatusEndpointUnreachable,
+			Endpoint:          endpoint,
+			Healthy:           true,
+			Authenticated:     true,
+			ContractSupported: false,
+			ProfilesSupported: make(map[string]bool),
+			Detail:            fmt.Sprintf("transport error probing /api/v1/shell/exec: %v", execTransportErr),
+			CheckedAt:         now,
+		}
+	}
+	if execProtocolErr != nil {
 		return &ReadinessReport{
 			Status:            StatusAPIContractMissing,
 			Endpoint:          endpoint,
@@ -442,7 +466,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			Authenticated:     true,
 			ContractSupported: false,
 			ProfilesSupported: make(map[string]bool),
-			Detail:            fmt.Sprintf("shell/exec conformance error: %v", execErr),
+			Detail:            fmt.Sprintf("shell/exec conformance error: %v", execProtocolErr),
 			CheckedAt:         now,
 		}
 	}
@@ -569,6 +593,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			CheckedAt:         now,
 		}
 	}
+	contractReleased = true
 
 	// 3. Probe Requested Profiles (with toolchain execution verification)
 	if len(profiles) == 0 {
@@ -582,7 +607,12 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 
 	for _, profile := range profiles {
 		profileUUID := newProbeUUID()
-		defer releaseProbeSession(client, endpoint, authToken, profileUUID)
+		var profileReleased bool
+		defer func(u string, r *bool) {
+			if !*r {
+				releaseProbeSession(client, endpoint, authToken, u)
+			}
+		}(profileUUID, &profileReleased)
 
 		payload := map[string]any{
 			"user_uuid": profileUUID,
@@ -699,16 +729,28 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 		if profile == ProfileGoBuilder {
 			probeCmd = "go version"
 		}
-		pExecRes, pExecCode, pExecErrBody, pExecErr := probeShellExec(ctx, client, endpoint, authToken, profileUUID, probeCmd)
-		if pExecErr != nil {
+		pExecRes, pExecCode, pExecErrBody, pExecTransportErr, pExecProtocolErr := probeShellExec(ctx, client, endpoint, authToken, profileUUID, probeCmd)
+		if pExecTransportErr != nil {
 			return &ReadinessReport{
-				Status:            StatusProfileUnsupported,
+				Status:            StatusEndpointUnreachable,
 				Endpoint:          endpoint,
 				Healthy:           true,
 				Authenticated:     true,
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
-				Detail:            fmt.Sprintf("execution verification failed for profile %q: %v", profile, pExecErr),
+				Detail:            fmt.Sprintf("transport error executing verification inside profile %q: %v", profile, pExecTransportErr),
+				CheckedAt:         now,
+			}
+		}
+		if pExecProtocolErr != nil {
+			return &ReadinessReport{
+				Status:            StatusAPIContractMissing,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("gateway shell/exec conformance error inside profile %q: %v", profile, pExecProtocolErr),
 				CheckedAt:         now,
 			}
 		}
@@ -721,6 +763,30 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
 				Detail:            fmt.Sprintf("gateway server error executing verification inside profile %q (HTTP %d): %s", profile, pExecCode, pExecErrBody),
+				CheckedAt:         now,
+			}
+		}
+		if pExecCode == http.StatusNotFound {
+			return &ReadinessReport{
+				Status:            StatusAPIContractMissing,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("gateway returned 404 on /api/v1/shell/exec for profile %q: exec contract missing", profile),
+				CheckedAt:         now,
+			}
+		}
+		if pExecCode == http.StatusUnauthorized || pExecCode == http.StatusForbidden {
+			return &ReadinessReport{
+				Status:            StatusAuthFailure,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     false,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("authentication failed executing verification inside profile %q (HTTP %d)", profile, pExecCode),
 				CheckedAt:         now,
 			}
 		}
@@ -766,7 +832,68 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 		}
 
 		// Explicit release check for profile session
-		_, _, _ = probeRelease(ctx, client, endpoint, authToken, profileUUID)
+		pRelCode, pRelErrBody, pRelErr := probeRelease(ctx, client, endpoint, authToken, profileUUID)
+		if pRelErr != nil {
+			return &ReadinessReport{
+				Status:            StatusEndpointUnreachable,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("transport error releasing profile %q session: %v", profile, pRelErr),
+				CheckedAt:         now,
+			}
+		}
+		if pRelCode == http.StatusNotFound {
+			return &ReadinessReport{
+				Status:            StatusAPIContractMissing,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("gateway returned 404 releasing profile %q session: release contract missing", profile),
+				CheckedAt:         now,
+			}
+		}
+		if pRelCode == http.StatusUnauthorized || pRelCode == http.StatusForbidden {
+			return &ReadinessReport{
+				Status:            StatusAuthFailure,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     false,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("authentication failed releasing profile %q session (HTTP %d)", profile, pRelCode),
+				CheckedAt:         now,
+			}
+		}
+		if pRelCode >= 500 {
+			return &ReadinessReport{
+				Status:            StatusEndpointUnreachable,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("gateway internal server error releasing profile %q session (HTTP %d): %s", profile, pRelCode, pRelErrBody),
+				CheckedAt:         now,
+			}
+		}
+		if pRelCode != http.StatusNoContent {
+			return &ReadinessReport{
+				Status:            StatusAPIContractMissing,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d releasing profile %q session (expected 204): %s", pRelCode, profile, pRelErrBody),
+				CheckedAt:         now,
+			}
+		}
+		profileReleased = true
 
 		profilesMap[profile] = true
 	}
