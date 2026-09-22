@@ -418,8 +418,8 @@ fail closed / no local fallback
 | :--- | :--- | :--- | :--- |
 | `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
 | `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"...","status":"ready"}` |
-| `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
-| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：成功返回 HTTP 204 No Content，若会话不存在则返回 HTTP 404 |
+| `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`, `profile`, `network`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
+| `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：生产环境接受 HTTP 200 OK、204 No Content 或 404 Not Found（幂等释放成功），仅在 5xx 服务端错误或传输异常时视为失败 |
 
 ### 7.4 沙箱就绪诊断体系 (Readiness Diagnostics Specification)
 
@@ -438,10 +438,10 @@ fail closed / no local fallback
          ├── YES ──▶ StatusEndpointUnreachable        │               │
          └── NO                                    401 / 403?   /sessions, /shell/exec, /release?
                                                       ├── YES ──▶ StatusAuthFailure
-                                                      └── NO          ├── 404 / Malformed JSON ──▶ StatusAPIContractMissing
-                                                                      ├── 5xx Server Error     ──▶ StatusEndpointUnreachable
-                                                                      └── 200 OK
-                                                                          Profiles Supported?
+                                                      └── NO          ├── Unexpected Status / Malformed JSON ──▶ StatusAPIContractMissing
+                                                                      ├── 5xx Server Error                  ──▶ StatusEndpointUnreachable
+                                                                      └── 200 / 204 / 404 (Release)
+                                                                          Profiles Supported & Commands Passed?
                                                                           ├── NO  ──▶ StatusProfileUnsupported
                                                                           └── YES ──▶ StatusReady
 ```
@@ -449,13 +449,14 @@ fail closed / no local fallback
 1. **`unprobed` (未探测)**：沙箱网关已配置，但尚未触发主动沙箱生命周期诊断。通过区分轻量只读状态与主动探测，彻底杜绝控制台页面加载时无谓触发容器创建销毁的副作用；
 2. **`endpoint_unreachable` (端点不可达/服务异常)**：网络拒绝连接、端口未监听、DNS 解析失败、连接超时或网关在会话生命周期中返回 HTTP 5xx 服务端错误；
 3. **`auth_failure` (认证失败)**：网关返回 HTTP 401 Unauthorized 或 403 Forbidden，说明 `SANDBOX_AUTH_TOKEN` / `FA_SANDBOX_AUTH_TOKEN` 缺失或不匹配；
-4. **`api_contract_missing` (协议契约缺失/失范)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions`、`/api/v1/shell/exec` 或 `/api/v1/release` 返回 404 Not Found，或者返回的响应体为空、格式畸形、关键字段缺失/失配（如 `user_uuid` 或 `status` 不符合契约规范）；
-5. **`profile_unsupported` (Profile/工具链不支持)**：网关明确拒绝了请求的构建或运行配置文件（如缺少 `go-builder` 或 `action-runtime`），或者在 `go-builder` 中执行工具链校验命令（如 `go version`）失败；
+4. **`api_contract_missing` (协议契约缺失/失范)**：网关虽健康响应 `/api/v1/status`，但对 `/api/v1/sessions`、`/api/v1/shell/exec` 返回 404 Not Found，或者对 `/api/v1/release` 返回非预期的 4xx 状态，或者返回的响应体为空、格式畸形、关键字段缺失/失配（如 `user_uuid` 或 `status` 不符合契约规范，或命令执行超时）；
+5. **`profile_unsupported` (Profile/工具链不支持)**：网关明确拒绝了请求的构建或运行配置文件（如缺少 `go-builder` 或 `action-runtime`），或者在 `go-builder` 中执行工具链校验命令（如 `go version`）失败或超时；
 6. **`ready` (完全就绪)**：网关服务连通、认证校验通过、动态 UUIDv4 会话创建、基础命令执行验证及工作区释放清理全部成功闭环。
 
 #### 核心契约与安全机制：
 - **RFC 4122 UUIDv4 动态会话标识**：探针抛弃固定字符串，每次探测通过密码学安全随机源（`crypto/rand`）生成合法的 RFC 4122 Version 4 UUID（形如 `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`）。杜绝后端类型化框架（如 FastAPI / Pydantic `UUID` 类型）因无法解析固定字符串抛出 HTTP 422 校验失败，同时杜绝多实例并发探测产生命名冲突；
-- **全生命周期闭环验证与确定性清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 验证 HTTP 204 No Content 释放响应（包括 contract probe 与各 profile probe）。若释放失败（500 错误或超时）立即失败阻断并标记非就绪，彻底杜绝容器泄漏与假绿；
+- **全生命周期闭环验证与幂等清理**：诊断探针不局限于握手检测，而是严格执行 `POST /sessions -> POST /shell/exec -> POST /release` 完整契约。在创建 probe 会话后立即执行轻量命令测试（针对 `go-builder` 执行 `go version`），并在结束时主动调用 `/release` 验证释放响应（镜像生产 ActionsCat 幂等释放语义，接受 HTTP 200、204 及 404 为成功释放）。若释放失败（5xx 服务端错误或超时）立即失败阻断并标记非就绪，彻底杜绝容器泄漏与假绿；
+- **命令超时防误判 (Timeout Invariant)**：在 `/shell/exec` 探测与工具链校验阶段，探针强制检查 `exit_code == 0 && timed_out == false`。若命令执行被网关或容器运行时超时终止（`timed_out: true`），坚决判为失败（contract probe 归为 `StatusAPIContractMissing`，profile probe 归为 `StatusProfileUnsupported`），杜绝因进程挂起或未正常执行导致的假绿（False Green）伪就绪；
 - **严格响应合规校验 (Conformance Validation)**：使用 `ValidateSessionResponse` 严格校验返回的 JSON 结构体，执行大小写敏感的 UUID、profile 及 network（若指定）精确匹配，要求 status 精确为 `ready` 或 `created`，杜绝空对象 `{}`、缺失字段或松散比较带来的伪成功响应；
 - **传输层与契约失范错误解耦**：探针在 `/shell/exec` 与各探测阶段精确区分底层网络传输失败（TCP 重置、连接被拒、网络超时等，归类为 `StatusEndpointUnreachable`）与应用层契约违背（200 返回畸形 JSON、缺少 exit_code 或 HTTP 404 等，归类为 `StatusAPIContractMissing`），确保运维排障归因准确无误；
 - **端点/凭据绑定的短 TTL 缓存与强制刷新**：`GET /api/actionscat/status` 保持严格只读（仅返回缓存的最近就绪报告或 `unprobed` 标识）；主动探测接口施加 30 秒短 TTL 缓存保护，缓存 Key 强绑定端点规范化地址与 Token 的 SHA-256 指纹，一旦环境变量或配置变更立即失效并退回 `unprobed`。同时提供 `?force=true` 机制（Web 控制台“重新诊断”按钮显式携带），允许管理员绕过缓存执行实时探活。

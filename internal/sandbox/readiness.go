@@ -122,8 +122,16 @@ type probeExecResp struct {
 	TimedOut bool   `json:"timed_out"`
 }
 
-func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToken, userUUID, command string) (*probeExecResp, int, string, error, error) {
-	execURL := fmt.Sprintf("%s/api/v1/shell/exec?user_uuid=%s", endpoint, url.QueryEscape(userUUID))
+func probeShellExec(ctx context.Context, client *http.Client, endpoint, authToken, userUUID, command, profile, network string) (*probeExecResp, int, string, error, error) {
+	params := url.Values{}
+	params.Set("user_uuid", userUUID)
+	if profile != "" {
+		params.Set("profile", profile)
+	}
+	if network != "" {
+		params.Set("network", network)
+	}
+	execURL := fmt.Sprintf("%s/api/v1/shell/exec?%s", endpoint, params.Encode())
 	bodyData, _ := json.Marshal(probeExecReq{
 		Command: command,
 		Cwd:     "/sandbox",
@@ -180,17 +188,15 @@ func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken,
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return resp.StatusCode, "", err
+	}
 	bodyStr := strings.TrimSpace(string(body))
 
-	if resp.StatusCode == http.StatusNoContent {
-		return http.StatusNoContent, "", nil
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		lower := strings.ToLower(bodyStr)
-		if strings.Contains(lower, "no active session") || strings.Contains(lower, "session not found") {
-			return http.StatusNoContent, "", nil
-		}
+	// 200 OK, 204 No Content, and 404 Not Found (idempotent release) are all release success in production.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		return resp.StatusCode, "", nil
 	}
 	return resp.StatusCode, bodyStr, nil
 }
@@ -430,7 +436,19 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 	}
 
 	// Validate Session Conformance
-	sessionRawBody, _ := io.ReadAll(io.LimitReader(probeResp.Body, 2048))
+	sessionRawBody, readErr := io.ReadAll(io.LimitReader(probeResp.Body, 2048))
+	if readErr != nil {
+		return &ReadinessReport{
+			Status:            StatusEndpointUnreachable,
+			Endpoint:          endpoint,
+			Healthy:           true,
+			Authenticated:     true,
+			ContractSupported: false,
+			ProfilesSupported: make(map[string]bool),
+			Detail:            fmt.Sprintf("transport error reading session response body: %v", readErr),
+			CheckedAt:         now,
+		}
+	}
 	if _, valErr := ValidateSessionResponse(sessionRawBody, contractProbeUUID, ProfileMinimal, "none"); valErr != nil {
 		return &ReadinessReport{
 			Status:            StatusAPIContractMissing,
@@ -445,7 +463,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 	}
 
 	// Probe /api/v1/shell/exec on contract session
-	execRes, execCode, execErrBody, execTransportErr, execProtocolErr := probeShellExec(ctx, client, endpoint, authToken, contractProbeUUID, "true")
+	execRes, execCode, execErrBody, execTransportErr, execProtocolErr := probeShellExec(ctx, client, endpoint, authToken, contractProbeUUID, "true", ProfileMinimal, "none")
 	if execTransportErr != nil {
 		return &ReadinessReport{
 			Status:            StatusEndpointUnreachable,
@@ -518,7 +536,11 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			CheckedAt:         now,
 		}
 	}
-	if execRes == nil || execRes.ExitCode == nil || *execRes.ExitCode != 0 {
+	if execRes == nil || execRes.ExitCode == nil || *execRes.ExitCode != 0 || execRes.TimedOut {
+		detail := "gateway shell/exec failed to execute basic command successfully"
+		if execRes != nil && execRes.TimedOut {
+			detail = "gateway shell/exec command timed out"
+		}
 		return &ReadinessReport{
 			Status:            StatusAPIContractMissing,
 			Endpoint:          endpoint,
@@ -526,7 +548,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			Authenticated:     true,
 			ContractSupported: false,
 			ProfilesSupported: make(map[string]bool),
-			Detail:            "gateway shell/exec failed to execute basic command successfully",
+			Detail:            detail,
 			CheckedAt:         now,
 		}
 	}
@@ -542,18 +564,6 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			ContractSupported: false,
 			ProfilesSupported: make(map[string]bool),
 			Detail:            fmt.Sprintf("transport error probing /api/v1/release: %v", relErr),
-			CheckedAt:         now,
-		}
-	}
-	if relCode == http.StatusNotFound {
-		return &ReadinessReport{
-			Status:            StatusAPIContractMissing,
-			Endpoint:          endpoint,
-			Healthy:           true,
-			Authenticated:     true,
-			ContractSupported: false,
-			ProfilesSupported: make(map[string]bool),
-			Detail:            "gateway returned 404 on /api/v1/release: release contract missing",
 			CheckedAt:         now,
 		}
 	}
@@ -581,7 +591,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			CheckedAt:         now,
 		}
 	}
-	if relCode != http.StatusNoContent {
+	if relCode != http.StatusNoContent && relCode != http.StatusOK && relCode != http.StatusNotFound {
 		return &ReadinessReport{
 			Status:            StatusAPIContractMissing,
 			Endpoint:          endpoint,
@@ -589,7 +599,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 			Authenticated:     true,
 			ContractSupported: false,
 			ProfilesSupported: make(map[string]bool),
-			Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d on /api/v1/release (expected 204): %s", relCode, relErrBody),
+			Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d on /api/v1/release (expected 200, 204, or 404): %s", relCode, relErrBody),
 			CheckedAt:         now,
 		}
 	}
@@ -710,7 +720,19 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 		}
 
 		// Verify response payload conformance for requested profile
-		pRawBody, _ := io.ReadAll(io.LimitReader(pResp.Body, 2048))
+		pRawBody, pReadErr := io.ReadAll(io.LimitReader(pResp.Body, 2048))
+		if pReadErr != nil {
+			return &ReadinessReport{
+				Status:            StatusEndpointUnreachable,
+				Endpoint:          endpoint,
+				Healthy:           true,
+				Authenticated:     true,
+				ContractSupported: true,
+				ProfilesSupported: profilesMap,
+				Detail:            fmt.Sprintf("transport error reading profile %q session response body: %v", profile, pReadErr),
+				CheckedAt:         now,
+			}
+		}
 		if _, pValErr := ValidateSessionResponse(pRawBody, profileUUID, profile, "none"); pValErr != nil {
 			return &ReadinessReport{
 				Status:            StatusProfileUnsupported,
@@ -729,7 +751,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 		if profile == ProfileGoBuilder {
 			probeCmd = "go version"
 		}
-		pExecRes, pExecCode, pExecErrBody, pExecTransportErr, pExecProtocolErr := probeShellExec(ctx, client, endpoint, authToken, profileUUID, probeCmd)
+		pExecRes, pExecCode, pExecErrBody, pExecTransportErr, pExecProtocolErr := probeShellExec(ctx, client, endpoint, authToken, profileUUID, probeCmd, profile, "none")
 		if pExecTransportErr != nil {
 			return &ReadinessReport{
 				Status:            StatusEndpointUnreachable,
@@ -802,12 +824,16 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				CheckedAt:         now,
 			}
 		}
-		if pExecRes == nil || pExecRes.ExitCode == nil || *pExecRes.ExitCode != 0 {
+		if pExecRes == nil || pExecRes.ExitCode == nil || *pExecRes.ExitCode != 0 || pExecRes.TimedOut {
 			exitCode := -1
 			if pExecRes != nil && pExecRes.ExitCode != nil {
 				exitCode = *pExecRes.ExitCode
 			}
 			if profile == ProfileGoBuilder {
+				detail := fmt.Sprintf("go-builder profile missing working Go toolchain (go version exited with code %d)", exitCode)
+				if pExecRes != nil && pExecRes.TimedOut {
+					detail = "go-builder profile verification command timed out"
+				}
 				return &ReadinessReport{
 					Status:            StatusProfileUnsupported,
 					Endpoint:          endpoint,
@@ -815,9 +841,13 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 					Authenticated:     true,
 					ContractSupported: true,
 					ProfilesSupported: profilesMap,
-					Detail:            fmt.Sprintf("go-builder profile missing working Go toolchain (go version exited with code %d)", exitCode),
+					Detail:            detail,
 					CheckedAt:         now,
 				}
+			}
+			detail := fmt.Sprintf("execution verification failed for profile %q (exit code %d)", profile, exitCode)
+			if pExecRes != nil && pExecRes.TimedOut {
+				detail = fmt.Sprintf("execution verification timed out for profile %q", profile)
 			}
 			return &ReadinessReport{
 				Status:            StatusProfileUnsupported,
@@ -826,7 +856,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				Authenticated:     true,
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
-				Detail:            fmt.Sprintf("execution verification failed for profile %q (exit code %d)", profile, exitCode),
+				Detail:            detail,
 				CheckedAt:         now,
 			}
 		}
@@ -842,18 +872,6 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
 				Detail:            fmt.Sprintf("transport error releasing profile %q session: %v", profile, pRelErr),
-				CheckedAt:         now,
-			}
-		}
-		if pRelCode == http.StatusNotFound {
-			return &ReadinessReport{
-				Status:            StatusAPIContractMissing,
-				Endpoint:          endpoint,
-				Healthy:           true,
-				Authenticated:     true,
-				ContractSupported: true,
-				ProfilesSupported: profilesMap,
-				Detail:            fmt.Sprintf("gateway returned 404 releasing profile %q session: release contract missing", profile),
 				CheckedAt:         now,
 			}
 		}
@@ -881,7 +899,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				CheckedAt:         now,
 			}
 		}
-		if pRelCode != http.StatusNoContent {
+		if pRelCode != http.StatusNoContent && pRelCode != http.StatusOK && pRelCode != http.StatusNotFound {
 			return &ReadinessReport{
 				Status:            StatusAPIContractMissing,
 				Endpoint:          endpoint,
@@ -889,7 +907,7 @@ func CheckReadinessWithClient(ctx context.Context, client *http.Client, endpoint
 				Authenticated:     true,
 				ContractSupported: true,
 				ProfilesSupported: profilesMap,
-				Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d releasing profile %q session (expected 204): %s", pRelCode, profile, pRelErrBody),
+				Detail:            fmt.Sprintf("gateway returned unexpected HTTP %d releasing profile %q session (expected 200, 204, or 404): %s", pRelCode, profile, pRelErrBody),
 				CheckedAt:         now,
 			}
 		}

@@ -166,10 +166,10 @@ func TestCheckReadiness_APIContractMissing_Exec404(t *testing.T) {
 	}
 }
 
-func TestCheckReadiness_APIContractMissing_Release404(t *testing.T) {
+func TestCheckReadiness_APIContractMissing_ReleaseUnexpectedStatus(t *testing.T) {
 	ctx := context.Background()
 
-	// Simulate gateway where /sessions and /shell/exec exist, but /release returns 404
+	// Simulate gateway where /sessions and /shell/exec exist, but /release returns unexpected HTTP 400
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("X-Auth-Token")
 		if token != "my-secret" {
@@ -203,8 +203,8 @@ func TestCheckReadiness_APIContractMissing_Release404(t *testing.T) {
 				"exit_code": exitCode,
 			})
 		case "/api/v1/release":
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"detail":"release endpoint not found"}`))
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"detail":"bad release request"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -862,5 +862,325 @@ func TestCheckReadiness_ProfileReleaseFailure(t *testing.T) {
 	}
 	if !strings.Contains(rep.Detail, "releasing profile") {
 		t.Fatalf("expected detail to mention releasing profile error, got: %s", rep.Detail)
+	}
+}
+
+func TestCheckReadiness_ExecTimedOut_Contract(t *testing.T) {
+	ctx := context.Background()
+
+	// Gateway returns exit_code 0 but timed_out true for contract probe
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "",
+				"stderr":    "execution timed out",
+				"exit_code": exitCode,
+				"timed_out": true,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
+	if rep.Status != sandbox.StatusAPIContractMissing {
+		t.Fatalf("expected timed_out contract exec to yield %s, got %s (detail: %s)", sandbox.StatusAPIContractMissing, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "timed out") {
+		t.Fatalf("expected detail to mention timed out, got: %s", rep.Detail)
+	}
+}
+
+func TestCheckReadiness_ExecTimedOut_GoBuilder(t *testing.T) {
+	ctx := context.Background()
+
+	// Gateway contract exec succeeds, but go-builder toolchain probe times out
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			profile := r.URL.Query().Get("profile")
+			exitCode := 0
+			timedOut := false
+			if profile == sandbox.ProfileGoBuilder {
+				timedOut = true
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "go version go1.24.0 linux/amd64",
+				"exit_code": exitCode,
+				"timed_out": timedOut,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "", sandbox.ProfileGoBuilder)
+	if rep.Status != sandbox.StatusProfileUnsupported {
+		t.Fatalf("expected timed_out go-builder exec to yield %s, got %s (detail: %s)", sandbox.StatusProfileUnsupported, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "timed out") {
+		t.Fatalf("expected detail to mention timed out, got: %s", rep.Detail)
+	}
+}
+
+func TestCheckReadiness_ExecTimedOut_ActionRuntime(t *testing.T) {
+	ctx := context.Background()
+
+	// Gateway contract exec succeeds, but action-runtime verification probe times out
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			profile := r.URL.Query().Get("profile")
+			exitCode := 0
+			timedOut := false
+			if profile == sandbox.ProfileActionRuntime {
+				timedOut = true
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "ok",
+				"exit_code": exitCode,
+				"timed_out": timedOut,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "", sandbox.ProfileActionRuntime)
+	if rep.Status != sandbox.StatusProfileUnsupported {
+		t.Fatalf("expected timed_out action-runtime exec to yield %s, got %s (detail: %s)", sandbox.StatusProfileUnsupported, rep.Status, rep.Detail)
+	}
+	if !strings.Contains(rep.Detail, "timed out") {
+		t.Fatalf("expected detail to mention timed out, got: %s", rep.Detail)
+	}
+}
+
+func TestCheckReadiness_Release_200_Success(t *testing.T) {
+	ctx := context.Background()
+
+	// Gateway returns 200 OK on release for both contract and profile sessions
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "go version go1.24.0 linux/amd64",
+				"exit_code": exitCode,
+				"timed_out": false,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"released"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
+	if rep.Status != sandbox.StatusReady {
+		t.Fatalf("expected 200 OK release to yield %s, got %s (detail: %s)", sandbox.StatusReady, rep.Status, rep.Detail)
+	}
+}
+
+func TestCheckReadiness_Release_Arbitrary404_Success(t *testing.T) {
+	ctx := context.Background()
+
+	// Gateway returns arbitrary 404 on release (idempotent success in production ActionsCat)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "go version go1.24.0 linux/amd64",
+				"exit_code": exitCode,
+				"timed_out": false,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"session does not exist"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "")
+	if rep.Status != sandbox.StatusReady {
+		t.Fatalf("expected idempotent 404 release to yield %s, got %s (detail: %s)", sandbox.StatusReady, rep.Status, rep.Detail)
+	}
+}
+
+func TestCheckReadiness_ProbeShellExec_QueryParams(t *testing.T) {
+	ctx := context.Background()
+
+	var execQueries []map[string]string
+	var execMu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/sessions":
+			var body struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": body.UserUUID,
+				"profile":   body.Profile,
+				"network":   body.Network,
+				"status":    "ready",
+			})
+		case "/api/v1/shell/exec":
+			execMu.Lock()
+			execQueries = append(execQueries, map[string]string{
+				"user_uuid": r.URL.Query().Get("user_uuid"),
+				"profile":   r.URL.Query().Get("profile"),
+				"network":   r.URL.Query().Get("network"),
+			})
+			execMu.Unlock()
+
+			exitCode := 0
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "go version go1.24.0 linux/amd64",
+				"exit_code": exitCode,
+				"timed_out": false,
+			})
+		case "/api/v1/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rep := sandbox.CheckReadinessWithClient(ctx, ts.Client(), ts.URL, "", sandbox.ProfileGoBuilder)
+	if rep.Status != sandbox.StatusReady {
+		t.Fatalf("expected %s, got %s (detail: %s)", sandbox.StatusReady, rep.Status, rep.Detail)
+	}
+
+	execMu.Lock()
+	defer execMu.Unlock()
+
+	// Should have at least 2 exec queries: 1 contract (ProfileMinimal), 1 profile (ProfileGoBuilder)
+	if len(execQueries) < 2 {
+		t.Fatalf("expected at least 2 exec queries, got %d", len(execQueries))
+	}
+
+	contractQuery := execQueries[0]
+	if contractQuery["profile"] != sandbox.ProfileMinimal || contractQuery["network"] != "none" || !uuidRegex.MatchString(contractQuery["user_uuid"]) {
+		t.Fatalf("contract exec query mismatch: %+v", contractQuery)
+	}
+
+	goBuilderQuery := execQueries[1]
+	if goBuilderQuery["profile"] != sandbox.ProfileGoBuilder || goBuilderQuery["network"] != "none" || !uuidRegex.MatchString(goBuilderQuery["user_uuid"]) {
+		t.Fatalf("go-builder exec query mismatch: %+v", goBuilderQuery)
 	}
 }
