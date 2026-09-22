@@ -70,7 +70,7 @@ var knownEnvVars = map[string]envEntry{
 	"BRAIN_PATH":                  {"记忆存储 brain.json 路径", false, true, false},
 	"UPSTREAM_API_KEY":            {"上游 API 认证密钥", true, true, false},
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
-	"AGENT_MAX_ITERATIONS":        {"智能体单次处理允许的最大迭代轮数（默认 10）", false, true, false},
+	"AGENT_MAX_ITERATIONS":        {"智能体单次处理允许的最大迭代轮数（默认 35）", false, true, false},
 	"ACTIONSCAT_ENDPOINT":         {"ActionsCat 核心服务地址", false, true, false},
 	"ACTIONSCAT_MANAGEMENT_TOKEN": {"ActionsCat 管理 API 认证 Token", true, true, false},
 	"ACTIONSCAT_DISPATCH_TOKEN":   {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},

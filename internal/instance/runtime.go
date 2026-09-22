@@ -251,7 +251,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
-	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", 10)
+	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", llm.DefaultMaxIterations)
 	engine := &llm.Engine{Scope: scope,
 		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,
