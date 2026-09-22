@@ -426,7 +426,11 @@ fail closed / no local fallback
 - **会话生命周期门禁同步与防孤儿实例保证 (Lifecycle Gate & Anti-Orphan Guarantee)**：
   - 为防止并发时序下出现“正在分配容器时收到释放调用，导致远端残留孤儿容器”的资源泄漏，客户端引入了基于 `userUUID` 的生命周期门禁（`sessionGate`，带 context 感知的通道互斥信号量 `chan struct{}`），全局串行化 `EnsureSession`、`CreateSession` 与 `Release`；
   - 门禁结构维护代际计数器（`epoch uint64`）与墓碑释放标记（`released bool`）。当某一会话在执行底层 `POST /api/v1/sessions` 网络请求期间并发收到 `Release()` 调用时，`Release()` 会在门禁上排队等待底层分配完成，随后推进代际并标记墓碑；
-  - 在分配请求返回后，客户端执行代际守卫检查：若上下文已取消（`ctx.Err() != nil`）、代际已改变（`gate.epoch != startEpoch`）或已被标记为释放（`gate.released == true`），客户端立即调用远端 `rawRelease` 强制销毁刚刚创建的远端会话，并清空本地元数据，确保远端 0 孤儿容器残留、本地 0 残留状态；
+  - 在分配请求返回后，客户端执行代际守卫检查：若上下文已取消（`ctx.Err() != nil`）、代际已改变（`gate.epoch != startEpoch`）或已被标记为释放（`gate.released == true`），客户端立即调用带独立短超时的远端 `rawRelease` 强制销毁刚刚创建的远端会话，并清空本地元数据，确保远端 0 孤儿容器残留、本地 0 残留状态；
+  - **创建结果未决的有界对账清理 (Unknown-Outcome Creation Reconciliation)**：
+    - `/sessions` 是具有远端持久副作用的操作。为防止网关已成功分配容器但客户端因连接重置、超时、HTTP 5xx 服务端错误或 2xx 响应体损坏/合规校验失败而返回错误、导致远端容器静默泄漏，客户端将创建失败精确分为：
+      1. **明确 4xx 拒绝 (Definite Rejection)**：由网关前置鉴权、格式或参数校验拦截（确定未创建），正常返回错误，不触发无谓清理；
+      2. **创建结果未决 (Creation Outcome Unknown)**：网络传输故障、HTTP 5xx 或响应截断/反序列化校验失败。此时客户端基于确定性 `userUUID` 主动触发带 10 秒短超时的 `rawRelease` 对账清理并清理本地元数据；若清理成功，错误包装为明确的对账成功语义，若清理失败，错误保留 `remote session may exist: orphan cleanup failed` 告警，彻底闭环远端孤儿泄漏面；
 - **网关重启与容器逐出有界自愈机制 (Bounded Eviction Recovery in Exec)**：
   - 当远端沙箱网关发生热重启、或者底层容器被网关按 LRU/空闲超时策略逐出（Evicted）时，客户端本地缓存的 `c.sessions[userUUID]` 会导致后续 `Exec()` 直接向 `/shell/exec` 发起调用，造成永久性报错；
   - 客户端通过 `isSessionMissingResponse` 精确识别机器可读的会话缺失响应：HTTP 404/409/410 状态码且响应体包含明确的会话缺失签名（通过 `IsSessionNotFoundBody` 检测 `session_not_found`、`no active session`、`session not provisioned`、`session expired`、`session evicted` 等）；

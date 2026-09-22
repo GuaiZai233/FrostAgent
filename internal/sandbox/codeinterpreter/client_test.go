@@ -1456,3 +1456,243 @@ func TestExec_GatewayRestartEvictionRecovery(t *testing.T) {
 		t.Fatalf("expected error to mention 404, got: %v", err)
 	}
 }
+
+func TestEnsureSession_UnknownOutcomeReconciliation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ConnectionHijackClose_ReconcilesRemoteSession", func(t *testing.T) {
+		var mu sync.Mutex
+		activeSessions := make(map[string]bool)
+		var releaseCalled bool
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/sessions":
+				var req struct {
+					UserUUID string `json:"user_uuid"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				mu.Lock()
+				activeSessions[req.UserUUID] = true
+				mu.Unlock()
+
+				// Hijack connection and abruptly close it (simulating network reset / crash after side effect)
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatalf("server does not support hijacking")
+				}
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+			case "/api/v1/release":
+				userUUID := r.URL.Query().Get("user_uuid")
+				mu.Lock()
+				delete(activeSessions, userUUID)
+				releaseCalled = true
+				mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "secret",
+			SessionNamespace: "test-ns",
+		})
+		sessionID := "sess-unknown-hijack"
+		userUUID := client.SessionIDToUUID(sessionID)
+
+		err := client.EnsureSession(ctx, sessionID)
+		if err == nil {
+			t.Fatal("expected EnsureSession to fail on connection drop, got nil")
+		}
+		if !strings.Contains(err.Error(), "creation outcome unknown") {
+			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
+		}
+
+		mu.Lock()
+		active := activeSessions[userUUID]
+		wasReleased := releaseCalled
+		mu.Unlock()
+
+		if !wasReleased {
+			t.Fatal("expected reconciliation release to be called on unknown creation outcome")
+		}
+		if active {
+			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
+		}
+		if client.HasSession(sessionID) {
+			t.Fatal("expected local session metadata to be empty")
+		}
+	})
+
+	t.Run("Gateway500AfterSideEffect_ReconcilesRemoteSession", func(t *testing.T) {
+		var mu sync.Mutex
+		activeSessions := make(map[string]bool)
+		var releaseCalled bool
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/sessions":
+				var req struct {
+					UserUUID string `json:"user_uuid"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				mu.Lock()
+				activeSessions[req.UserUUID] = true
+				mu.Unlock()
+
+				// Returns 500 after having created the session
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"gateway internal error during init"}`))
+			case "/api/v1/release":
+				userUUID := r.URL.Query().Get("user_uuid")
+				mu.Lock()
+				delete(activeSessions, userUUID)
+				releaseCalled = true
+				mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "secret",
+			SessionNamespace: "test-ns",
+		})
+		sessionID := "sess-unknown-500"
+		userUUID := client.SessionIDToUUID(sessionID)
+
+		err := client.EnsureSession(ctx, sessionID)
+		if err == nil {
+			t.Fatal("expected EnsureSession to fail on 500, got nil")
+		}
+		if !strings.Contains(err.Error(), "creation outcome unknown") {
+			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
+		}
+
+		mu.Lock()
+		active := activeSessions[userUUID]
+		wasReleased := releaseCalled
+		mu.Unlock()
+
+		if !wasReleased {
+			t.Fatal("expected reconciliation release to be called on 500 unknown outcome")
+		}
+		if active {
+			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
+		}
+		if client.HasSession(sessionID) {
+			t.Fatal("expected local session metadata to be empty")
+		}
+	})
+
+	t.Run("Malformed200Response_ReconcilesRemoteSession", func(t *testing.T) {
+		var mu sync.Mutex
+		activeSessions := make(map[string]bool)
+		var releaseCalled bool
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/sessions":
+				var req struct {
+					UserUUID string `json:"user_uuid"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				mu.Lock()
+				activeSessions[req.UserUUID] = true
+				mu.Unlock()
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{corrupted-json`))
+			case "/api/v1/release":
+				userUUID := r.URL.Query().Get("user_uuid")
+				mu.Lock()
+				delete(activeSessions, userUUID)
+				releaseCalled = true
+				mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "secret",
+			SessionNamespace: "test-ns",
+		})
+		sessionID := "sess-unknown-malformed"
+		userUUID := client.SessionIDToUUID(sessionID)
+
+		err := client.EnsureSession(ctx, sessionID)
+		if err == nil {
+			t.Fatal("expected EnsureSession to fail on malformed JSON, got nil")
+		}
+		if !strings.Contains(err.Error(), "creation outcome unknown") {
+			t.Fatalf("expected error to mention creation outcome unknown, got: %v", err)
+		}
+
+		mu.Lock()
+		active := activeSessions[userUUID]
+		wasReleased := releaseCalled
+		mu.Unlock()
+
+		if !wasReleased {
+			t.Fatal("expected reconciliation release to be called on malformed 200")
+		}
+		if active {
+			t.Fatalf("anti-orphan violation: active remote session %q still alive on gateway", userUUID)
+		}
+		if client.HasSession(sessionID) {
+			t.Fatal("expected local session metadata to be empty")
+		}
+	})
+
+	t.Run("Explicit400Rejection_DoesNotTriggerRelease", func(t *testing.T) {
+		var releaseCalled bool
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/sessions":
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"invalid profile requested"}`))
+			case "/api/v1/release":
+				releaseCalled = true
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL:          server.URL,
+			AuthToken:        "secret",
+			SessionNamespace: "test-ns",
+		})
+		sessionID := "sess-known-400"
+
+		err := client.EnsureSession(ctx, sessionID)
+		if err == nil {
+			t.Fatal("expected EnsureSession to fail on 400, got nil")
+		}
+		if strings.Contains(err.Error(), "creation outcome unknown") {
+			t.Fatalf("400 should be an explicit rejection, not creation outcome unknown: %v", err)
+		}
+
+		if releaseCalled {
+			t.Fatal("reconciliation release should NOT be called on clean 400 rejection")
+		}
+		if client.HasSession(sessionID) {
+			t.Fatal("expected local session metadata to be empty")
+		}
+	})
+}
