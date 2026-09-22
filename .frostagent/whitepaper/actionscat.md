@@ -106,7 +106,8 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │                  └───────────────────────┬─────────────────┘                      │
 │                                          ▼ 自动拉起执行 (无 LLM 热路径介入)        │
 │               ┌──────────────────────────────────────────────────┐                │
-│               │ Worker Sandbox (code-interpreter / Docker)       │                │
+│               │ Worker Sandbox (FA-Sandbox / Docker)             │                │
+│               │  - profile: go-builder / action-runtime          │                │
 │               │  - network: none / 受限能力                       │                │
 │               │  - SDK WriteState / Reply                        │                │
 │               └─────────────────────────┬────────────────────────┘                │

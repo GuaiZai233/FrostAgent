@@ -773,3 +773,220 @@ func TestExec_LocalValidation_RejectsOversizedCwd(t *testing.T) {
 		t.Fatalf("expected error for oversized cwd, got: %v", err)
 	}
 }
+
+func TestExec_FallbackToPythonExecuteOn404(t *testing.T) {
+	var shellExecCalled, executeCalled bool
+	var capturedCode string
+	var capturedUUID string
+	var capturedToken string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/shell/exec":
+			shellExecCalled = true
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+		case "/api/v1/execute":
+			executeCalled = true
+			capturedUUID = r.URL.Query().Get("user_uuid")
+			capturedToken = r.Header.Get("X-Auth-Token")
+
+			var reqBody struct {
+				Code string `json:"code"`
+			}
+			bodyBytes, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(bodyBytes, &reqBody)
+			capturedCode = reqBody.Code
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"result_text": "{\"stdout\":\"fallback output\\n\",\"stderr\":\"\",\"exit_code\":0,\"timed_out\":false}\n",
+				"result_base64": null
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret-fallback-tok",
+		SessionNamespace: "frostagent",
+	}, codeinterpreter.WithHTTPClient(server.Client()))
+
+	res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+		SessionID: "sess-fallback-1",
+		Command:   "echo fallback",
+		Cwd:       "/sandbox/app",
+		Timeout:   10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("expected successful fallback, got: %v", err)
+	}
+
+	if !shellExecCalled {
+		t.Errorf("expected initial call to /api/v1/shell/exec")
+	}
+	if !executeCalled {
+		t.Errorf("expected fallback call to /api/v1/execute")
+	}
+	if !uuidRegex.MatchString(capturedUUID) {
+		t.Errorf("expected valid user_uuid in query param, got: %q", capturedUUID)
+	}
+	if capturedToken != "secret-fallback-tok" {
+		t.Errorf("expected token forwarded to /execute, got: %q", capturedToken)
+	}
+	if !strings.Contains(capturedCode, "subprocess.run") || !strings.Contains(capturedCode, "echo fallback") {
+		t.Errorf("expected python wrapper code to contain subprocess.run and command, got: %s", capturedCode)
+	}
+	if !strings.Contains(capturedCode, "/sandbox/app") {
+		t.Errorf("expected python wrapper code to contain cwd, got: %s", capturedCode)
+	}
+	if res.Stdout != "fallback output\n" {
+		t.Errorf("expected stdout 'fallback output\\n', got %q", res.Stdout)
+	}
+	if res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %v", res.ExitCode)
+	}
+	if res.TimedOut {
+		t.Errorf("expected timed_out false")
+	}
+}
+
+func TestExec_FallbackToPythonExecute_Semantics(t *testing.T) {
+	t.Run("command exit code 127 returned cleanly", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/shell/exec" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.URL.Path == "/api/v1/execute" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"result_text": "{\"stdout\":\"\",\"stderr\":\"sh: cmd: not found\\n\",\"exit_code\":127,\"timed_out\":false}"
+				}`))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL: server.URL,
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+			SessionID: "sess-127",
+			Command:   "not_found_cmd",
+			Timeout:   5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("expected nil Go error, got: %v", err)
+		}
+		if res.ExitCode == nil || *res.ExitCode != 127 {
+			t.Fatalf("expected exit code 127, got %v", res.ExitCode)
+		}
+		if !strings.Contains(res.Stderr, "not found") {
+			t.Fatalf("expected stderr to contain 'not found', got: %s", res.Stderr)
+		}
+	})
+
+	t.Run("timeout returned cleanly", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/shell/exec" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.URL.Path == "/api/v1/execute" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"result_text": "{\"stdout\":\"partial output\",\"stderr\":\"\",\"exit_code\":null,\"timed_out\":true}"
+				}`))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL: server.URL,
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+			SessionID: "sess-timeout",
+			Command:   "sleep 100",
+			Timeout:   5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("expected nil Go error, got: %v", err)
+		}
+		if !res.TimedOut {
+			t.Fatalf("expected timed_out true")
+		}
+		if res.ExitCode != nil {
+			t.Fatalf("expected exit_code nil, got %v", *res.ExitCode)
+		}
+	})
+
+	t.Run("python syntax or traceback error handled gracefully", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/shell/exec" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.URL.Path == "/api/v1/execute" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"result_text": "Traceback (most recent call last):\n  File \"<string>\", line 1\nSyntaxError: unexpected EOF"
+				}`))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL: server.URL,
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		res, err := client.Exec(context.Background(), sandbox.ExecRequest{
+			SessionID: "sess-traceback",
+			Command:   "some cmd",
+			Timeout:   5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("expected nil Go error on syntax error output, got: %v", err)
+		}
+		if res.ExitCode == nil || *res.ExitCode != 1 {
+			t.Fatalf("expected exit code 1, got %v", res.ExitCode)
+		}
+		if !strings.Contains(res.Stderr, "Traceback") {
+			t.Fatalf("expected stderr to contain traceback, got: %s", res.Stderr)
+		}
+	})
+
+	t.Run("both shell/exec and execute return 404 fails closed", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+		}))
+		defer server.Close()
+
+		client := codeinterpreter.New(sandbox.Config{
+			BaseURL: server.URL,
+		}, codeinterpreter.WithHTTPClient(server.Client()))
+
+		_, err := client.Exec(context.Background(), sandbox.ExecRequest{
+			SessionID: "sess-both-404",
+			Command:   "ls",
+			Timeout:   5 * time.Second,
+		})
+		if err == nil {
+			t.Fatalf("expected failure when both endpoints return 404")
+		}
+		if !strings.Contains(err.Error(), "404") {
+			t.Fatalf("expected error to mention 404, got: %v", err)
+		}
+	})
+}

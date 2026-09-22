@@ -445,7 +445,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   ```
 - **中立后端与实现隔离 (Neutral SandboxBackend)**：
   - `internal/sandbox.Backend` 定义中立抽象接口（`Exec`、`Release`、`Health`），解耦 FrostAgent 核心与具体的沙箱运行时技术；
-  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部 `code-interpreter` Gateway 交互；
+  - 当前实现为 `codeinterpreter.Client`，通过 HTTP 协议与外部沙箱网关交互。原生支持 FA-Sandbox（`POST /api/v1/shell/exec`），并自动向后兼容 upstream Foxerine/code-interpreter（在 `/api/v1/shell/exec` 返回 404 时，无缝回退至 `POST /api/v1/execute` 执行极薄 Python subprocess 封装），对上层智能体工具屏蔽底层网关差异；
   - Control Plane 通过共享的 `ConfigManager` 管理原子配置快照，每个实例的 `DynamicBackend` 在基础命名空间后追加稳定实例 ID，并在运行时动态感知管理面板的启停状态；当沙箱在运行时被禁用时，`Release()` 仍会对已缓存的实例执行尽力而为（Best-effort）的会话清理释放，防止容器与文件系统资源泄漏；
   - 架构中不存在 `LocalBackend` 或 `HostBackend`，彻底消除由于实现冗余带来的配置绕过风险。
 - **Fail-Closed 与无本地回退 (Fail-Closed & No Local Fallback)**：
