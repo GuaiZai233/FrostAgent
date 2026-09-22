@@ -219,6 +219,44 @@ func IsSessionNotFoundBody(body string) bool {
 		strings.Contains(lower, "session evicted")
 }
 
+// IsSessionAlreadyExistsBody checks if an HTTP response body (e.g. HTTP 409 Conflict) explicitly
+// proves that the requested session container already exists on the remote gateway.
+// Generic router 409 responses or unrelated conflicts do not match, ensuring fail-closed behavior.
+func IsSessionAlreadyExistsBody(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+
+	var jsonMap map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &jsonMap); err == nil {
+		for _, key := range []string{"code", "error", "detail", "message", "status"} {
+			if val, ok := jsonMap[key]; ok {
+				if s, ok := val.(string); ok {
+					lower := strings.ToLower(s)
+					if lower == "session_already_exists" ||
+						lower == "session_conflict" ||
+						strings.Contains(lower, "session already exists") ||
+						strings.Contains(lower, "session already active") ||
+						strings.Contains(lower, "session already created") ||
+						strings.Contains(lower, "session conflict") ||
+						strings.Contains(lower, "active session already exists") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "session_already_exists") ||
+		strings.Contains(lower, "session already exists") ||
+		strings.Contains(lower, "session already active") ||
+		strings.Contains(lower, "session already created") ||
+		strings.Contains(lower, "session conflict") ||
+		strings.Contains(lower, "active session already exists")
+}
+
 func probeRelease(ctx context.Context, client *http.Client, endpoint, authToken, userUUID string) (int, string, error) {
 	relURL := fmt.Sprintf("%s/api/v1/release?user_uuid=%s", endpoint, url.QueryEscape(userUUID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relURL, nil)

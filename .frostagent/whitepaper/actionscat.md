@@ -417,7 +417,7 @@ fail closed / no local fallback
 | HTTP 方法与路径 | 授权要求 | 功能描述 | 请求与响应规范 |
 | :--- | :--- | :--- | :--- |
 | `GET /api/v1/status` | Header `X-Auth-Token` (若配置) | 探活网关并列举支持的 profiles | 响应：`{"status":"ok","supported_profiles":["go-builder","action-runtime","minimal"]}` |
-| `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"go-builder","network":"none","status":"ready"}` |
+| `POST /api/v1/sessions` | Header `X-Auth-Token` | 分配隔离工作区会话并绑定策略 | 请求：`{"user_uuid":"...","profile":"go-builder","network":"none","runtime_callback_url":"...","env":{...}}`<br>响应：`{"user_uuid":"...","profile":"go-builder","network":"none","status":"ready"}`。<br>幂等性要求：对相同 `user_uuid` 且配置一致的重复请求，网关推荐实现幂等返回 200/201；若网关返回 HTTP 409 Conflict，必须附带机器可读签名（如 `{"code":"session_already_exists"}`）以便客户端触发有界自愈回收。 |
 | `POST /api/v1/shell/exec?user_uuid=...` | Header `X-Auth-Token` | 在指定 session 隔离容器中执行命令 | Query: `user_uuid`, `profile`, `network`<br>请求：`{"command":"...","cwd":"/sandbox","timeout":60.0}`<br>响应：`{"stdout":"...","stderr":"...","exit_code":0,"timed_out":false}` |
 | `POST /api/v1/release?user_uuid=...` | Header `X-Auth-Token` | 释放容器并物理清理 session 工作区 | Query: `user_uuid`<br>响应：接受 HTTP 200 OK、204 No Content，以及具备机器可读的会话不存在 404 响应（如 `{"code":"session_not_found"}`、`session not found` 或 `no active session`，表明 `/release` 路由存在且会话已成功回收或不存在）。严禁将路由未注册的泛型 404（如 `404 page not found` 或 `{"detail":"Not Found"}`）判定为成功；5xx 服务端错误或网络异常判定为释放失败。 |
 
@@ -431,6 +431,10 @@ fail closed / no local fallback
     - `/sessions` 是具有远端持久副作用的操作。为防止网关已成功分配容器但客户端因连接重置、超时、HTTP 5xx 服务端错误或 2xx 响应体损坏/合规校验失败而返回错误、导致远端容器静默泄漏，客户端将创建失败精确分为：
       1. **明确 4xx 拒绝 (Definite Rejection)**：由网关前置鉴权、格式或参数校验拦截（确定未创建），正常返回错误，不触发无谓清理；
       2. **创建结果未决 (Creation Outcome Unknown)**：网络传输故障、HTTP 5xx 或响应截断/反序列化校验失败。此时客户端基于确定性 `userUUID` 主动触发带 10 秒短超时的 `rawRelease` 对账清理并清理本地元数据；若清理成功，错误包装为明确的对账成功语义，若清理失败，错误保留 `remote session may exist: orphan cleanup failed` 告警，彻底闭环远端孤儿泄漏面；
+  - **进程重启与远端残留会话接管自愈 (Session Already Exists 409 Recovery)**：
+    - 由于客户端生成的 `userUUID` 具备跨进程确定性（基于 project namespace + instance ID + session ID 派生），当 FrostAgent 进程意外重启/崩溃而远端沙箱容器仍存活时，新启动的 FrostAgent 进程首次创建会话（`EnsureSession`）会遭遇网关返回 HTTP 409 Conflict；
+    - 客户端通过 `IsSessionAlreadyExistsBody` 精确识别带有机器可读指示（`session_already_exists`、`session already active`、`session conflict` 等）的 409 响应，确信远端残留有未受控的孤儿容器；
+    - 客户端自动触发带 10 秒超时的 `rawRelease` 幂等清理远端残留容器，随后自动重新向网关发起 `rawCreateSession` 分配全新容器并绑定本地策略元数据，实现会话自动接管与无缝自愈；而对于泛型 409 冲突则严格 Fail-Closed 报错，杜绝盲目重试；
 - **网关重启与容器逐出有界自愈机制 (Bounded Eviction Recovery in Exec)**：
   - 当远端沙箱网关发生热重启、或者底层容器被网关按 LRU/空闲超时策略逐出（Evicted）时，客户端本地缓存的 `c.sessions[userUUID]` 会导致后续 `Exec()` 直接向 `/shell/exec` 发起调用，造成永久性报错；
   - 客户端通过 `isSessionMissingResponse` 精确识别机器可读的会话缺失响应：HTTP 404/409/410 状态码且响应体包含明确的会话缺失签名（通过 `IsSessionNotFoundBody` 检测 `session_not_found`、`no active session`、`session not provisioned`、`session expired`、`session evicted` 等）；

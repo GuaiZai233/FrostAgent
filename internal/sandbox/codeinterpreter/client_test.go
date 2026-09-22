@@ -291,7 +291,7 @@ func TestExec_GatewayErrors(t *testing.T) {
 		t.Run(fmt.Sprintf("HTTP %d returns infrastructure error", code), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(code)
-				_, _ = w.Write([]byte(fmt.Sprintf("error with status %d and secret-token", code)))
+				_, _ = fmt.Fprintf(w, "error with status %d and secret-token", code)
 			}))
 			defer server.Close()
 
@@ -358,7 +358,7 @@ func TestExec_MalformedAndOversizedResponse(t *testing.T) {
 			// Create a string prefix that opens json
 			_, _ = w.Write([]byte(`{"stdout":"`))
 			chunk := strings.Repeat("A", 1024*1024)
-			for i := 0; i < 20; i++ {
+			for range 20 {
 				_, _ = w.Write([]byte(chunk))
 			}
 			_, _ = w.Write([]byte(`","stderr":"","exit_code":0}`))
@@ -1239,11 +1239,9 @@ func TestLifecycleGate_AntiOrphanGuarantee(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Step 1: Start EnsureSession in goroutine; it blocks in /api/v1/sessions
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		ensureErr = client.EnsureSession(ctx, sessionID)
-	}()
+	})
 
 	// Wait until EnsureSession is actively in-flight in /api/v1/sessions
 	select {
@@ -1254,11 +1252,9 @@ func TestLifecycleGate_AntiOrphanGuarantee(t *testing.T) {
 
 	// Step 2: Concurrent Release is called while /sessions is in-flight.
 	// The lifecycle gate serializes Release after provisioning.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		releaseErr = client.Release(ctx, sessionID)
-	}()
+	})
 
 	// Give Release time to queue behind EnsureSession's gate lock
 	time.Sleep(50 * time.Millisecond)
@@ -1695,4 +1691,199 @@ func TestEnsureSession_UnknownOutcomeReconciliation(t *testing.T) {
 			t.Fatal("expected local session metadata to be empty")
 		}
 	})
+}
+
+func TestEnsureSession_Restart409Recovery(t *testing.T) {
+	ctx := context.Background()
+	const sessionID = "sess-restart-409"
+
+	var mu sync.Mutex
+	activeSessions := make(map[string]bool)
+	var createAttempts int
+	var releaseCount int
+	var execCount int
+	var genericConflict bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			mu.Lock()
+			defer mu.Unlock()
+			createAttempts++
+
+			var req struct {
+				UserUUID string `json:"user_uuid"`
+				Profile  string `json:"profile"`
+				Network  string `json:"network"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			if genericConflict {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":"unrelated generic conflict"}`))
+				return
+			}
+
+			// If session is already active on the gateway, return 409 Conflict
+			if activeSessions[req.UserUUID] {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code":    "session_already_exists",
+					"message": "active session already exists on gateway",
+				})
+				return
+			}
+
+			// Provision session
+			activeSessions[req.UserUUID] = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_uuid": req.UserUUID,
+				"profile":   req.Profile,
+				"network":   req.Network,
+				"status":    "ready",
+			})
+
+		case "/api/v1/release":
+			mu.Lock()
+			defer mu.Unlock()
+			releaseCount++
+			userUUID := r.URL.Query().Get("user_uuid")
+			delete(activeSessions, userUUID)
+			w.WriteHeader(http.StatusNoContent)
+
+		case "/api/v1/shell/exec":
+			mu.Lock()
+			defer mu.Unlock()
+			execCount++
+			userUUID := r.URL.Query().Get("user_uuid")
+			if !activeSessions[userUUID] {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"code":"session_not_found"}`))
+				return
+			}
+
+			exitCode := 0
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "command executed after 409 recovery\n",
+				"stderr":    "",
+				"exit_code": &exitCode,
+				"timed_out": false,
+			})
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// 1. Initial process: Client 1 provisions session and executes command
+	client1 := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret",
+		SessionNamespace: "restart-ns",
+	})
+	userUUID := client1.SessionIDToUUID(sessionID)
+
+	res1, err := client1.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo init",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("client1 Exec failed: %v", err)
+	}
+	if strings.TrimSpace(res1.Stdout) != "command executed after 409 recovery" {
+		t.Fatalf("unexpected stdout: %q", res1.Stdout)
+	}
+
+	mu.Lock()
+	if !activeSessions[userUUID] {
+		t.Fatal("expected remote session to be active on gateway")
+	}
+	if createAttempts != 1 {
+		t.Fatalf("expected 1 create attempt, got %d", createAttempts)
+	}
+	mu.Unlock()
+
+	// 2. Simulate FrostAgent Crash & Restart:
+	// A new Client 2 starts up. Its local sessions map is empty, but the gateway still holds userUUID.
+	client2 := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret",
+		SessionNamespace: "restart-ns",
+	})
+	if client2.HasSession(sessionID) {
+		t.Fatal("expected new client2 to start with empty local session metadata")
+	}
+
+	// 3. Client 2 executes a command for the same sessionID:
+	// - Attempt 0 of EnsureSession hits 409 session_already_exists
+	// - Automatically purges stale remote orphan via rawRelease
+	// - Retries rawCreateSession once, succeeds, records metadata
+	// - Successfully executes shell command!
+	res2, err := client2.Exec(ctx, sandbox.ExecRequest{
+		SessionID: sessionID,
+		Command:   "echo after-restart",
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("client2 Exec failed to recover after 409 already exists: %v", err)
+	}
+	if strings.TrimSpace(res2.Stdout) != "command executed after 409 recovery" {
+		t.Fatalf("unexpected stdout from recovered client2: %q", res2.Stdout)
+	}
+
+	mu.Lock()
+	// createAttempts: 1 (client1) + 1 (client2 409) + 1 (client2 retry success) = 3
+	if createAttempts != 3 {
+		t.Fatalf("expected 3 total create attempts, got %d", createAttempts)
+	}
+	// releaseCount: 1 (from client2 reconciling the 409)
+	if releaseCount != 1 {
+		t.Fatalf("expected 1 release call during 409 recovery, got %d", releaseCount)
+	}
+	// remote container must be active
+	if !activeSessions[userUUID] {
+		t.Fatal("expected recreated remote session to be active on gateway")
+	}
+	mu.Unlock()
+
+	if !client2.HasSession(sessionID) {
+		t.Fatal("expected client2 to have populated local session metadata after recovery")
+	}
+
+	// 4. Verify Generic 409 Conflict fails closed and does NOT trigger release or retry
+	mu.Lock()
+	genericConflict = true
+	releaseCountBefore := releaseCount
+	createAttemptsBefore := createAttempts
+	mu.Unlock()
+
+	client3 := codeinterpreter.New(sandbox.Config{
+		BaseURL:          server.URL,
+		AuthToken:        "secret",
+		SessionNamespace: "restart-ns-2",
+	})
+	err = client3.EnsureSession(ctx, "sess-generic-conflict")
+	if err == nil {
+		t.Fatal("expected EnsureSession to fail on generic 409 conflict, got nil")
+	}
+	if !strings.Contains(err.Error(), "HTTP 409") {
+		t.Fatalf("expected HTTP 409 error, got: %v", err)
+	}
+
+	mu.Lock()
+	if releaseCount != releaseCountBefore {
+		t.Fatalf("expected no release calls on generic 409, got %d (was %d)", releaseCount, releaseCountBefore)
+	}
+	if createAttempts != createAttemptsBefore+1 {
+		t.Fatalf("expected exactly 1 create attempt on generic 409 without retries, got %d", createAttempts-createAttemptsBefore)
+	}
+	mu.Unlock()
 }

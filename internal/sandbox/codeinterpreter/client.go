@@ -230,8 +230,9 @@ type SessionInfo struct {
 }
 
 // rawCreateSession performs the HTTP request to POST /api/v1/sessions and validates the response.
-// It returns the SessionInfo, a boolean indicating if creation outcome is unknown (requiring reconciliation cleanup), and error.
-func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, network string, env map[string]string) (*SessionInfo, bool, error) {
+// It returns the SessionInfo, a boolean indicating if creation outcome is unknown (requiring reconciliation cleanup),
+// a boolean indicating if the session already exists on the gateway (409 Conflict), and an error.
+func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, network string, env map[string]string) (*SessionInfo, bool, bool, error) {
 	sessionURL := c.baseURL + "/api/v1/sessions"
 	reqPayload := map[string]any{
 		"user_uuid": userUUID,
@@ -243,12 +244,12 @@ func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, networ
 	}
 	payloadBytes, err := json.Marshal(reqPayload)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to marshal session create request: %w", err)
+		return nil, false, false, fmt.Errorf("failed to marshal session create request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionURL, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to build create session request: %w", err)
+		return nil, false, false, fmt.Errorf("failed to build create session request: %w", err)
 	}
 	httpReq.Header.Set("X-Auth-Token", c.authToken)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -256,7 +257,7 @@ func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, networ
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		// Transport error, timeout, or reset: outcome is unknown (gateway may have created the container).
-		return nil, true, fmt.Errorf("sandbox gateway session request failed: %w", err)
+		return nil, true, false, fmt.Errorf("sandbox gateway session request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -265,19 +266,20 @@ func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, networ
 		// 5xx indicates gateway server error after request was received (outcome unknown).
 		// 4xx indicates explicit client-side rejection (outcome known: rejected, not created).
 		isUnknown := resp.StatusCode >= http.StatusInternalServerError
-		return nil, isUnknown, fmt.Errorf("sandbox gateway create session returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
+		isAlreadyExists := resp.StatusCode == http.StatusConflict && sandbox.IsSessionAlreadyExistsBody(errBody)
+		return nil, isUnknown, isAlreadyExists, fmt.Errorf("sandbox gateway create session returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	if err != nil {
 		// 2xx response body read truncated/interrupted: container was provisioned on gateway.
-		return nil, true, fmt.Errorf("failed to read create session response: %w", err)
+		return nil, true, false, fmt.Errorf("failed to read create session response: %w", err)
 	}
 
 	valResp, err := sandbox.ValidateSessionResponse(body, userUUID, profile, network)
 	if err != nil {
 		// Conformance failure on 2xx: container was created on gateway.
-		return nil, true, fmt.Errorf("session response validation failed: %w", err)
+		return nil, true, false, fmt.Errorf("session response validation failed: %w", err)
 	}
 
 	return &SessionInfo{
@@ -285,20 +287,54 @@ func (c *Client) rawCreateSession(ctx context.Context, userUUID, profile, networ
 		Profile:  valResp.Profile,
 		Network:  valResp.Network,
 		Status:   valResp.Status,
-	}, false, nil
+	}, false, false, nil
 }
 
 // createSessionLocked creates a session while holding the per-session lifecycle gate.
-// It checks generation and tombstone status, as well as unknown-outcome provisioning failures,
-// to guarantee that concurrent releases and unknown creation outcomes reconcile immediately,
-// leaving zero remote orphans and zero stale local metadata.
+// It checks generation and tombstone status, handles recovery for 409 session-already-exists conflicts,
+// and manages unknown-outcome provisioning failures to guarantee that concurrent releases and unknown creation outcomes
+// reconcile immediately, leaving zero remote orphans and zero stale local metadata.
 func (c *Client) createSessionLocked(ctx context.Context, gate *sessionGate, userUUID, profile, network string, env map[string]string) (*SessionInfo, error) {
 	gate.released = false
 	startEpoch := gate.epoch
 
-	info, isUnknownOutcome, err := c.rawCreateSession(ctx, userUUID, profile, network, env)
+	info, isUnknownOutcome, isAlreadyExists, err := c.rawCreateSession(ctx, userUUID, profile, network, env)
 	if err != nil {
-		if isUnknownOutcome {
+		if isAlreadyExists {
+			// Remote session already exists from a prior process run/crash (local cache miss, remote hit).
+			// Bounded reconciliation: release the stale lingering session and recreate once.
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cleanErr := c.rawRelease(cleanCtx, userUUID)
+			cleanCancel()
+
+			c.sessionsMu.Lock()
+			delete(c.sessions, userUUID)
+			c.sessionsMu.Unlock()
+
+			if cleanErr != nil {
+				return nil, fmt.Errorf("%w (session already exists on gateway, but stale session cleanup failed: %v)", err, cleanErr)
+			}
+
+			// Retry creation once after purging the stale remote container
+			info, isUnknownOutcome, _, err = c.rawCreateSession(ctx, userUUID, profile, network, env)
+			if err != nil {
+				if isUnknownOutcome {
+					cleanCtx2, cleanCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+					cleanErr2 := c.rawRelease(cleanCtx2, userUUID)
+					cleanCancel2()
+
+					c.sessionsMu.Lock()
+					delete(c.sessions, userUUID)
+					c.sessionsMu.Unlock()
+
+					if cleanErr2 != nil {
+						return nil, fmt.Errorf("%w (recreation outcome unknown; orphan cleanup failed: %v)", err, cleanErr2)
+					}
+					return nil, fmt.Errorf("%w (recreation outcome unknown; remote session reconciled via cleanup)", err)
+				}
+				return nil, fmt.Errorf("failed to recreate session after clearing existing session: %w", err)
+			}
+		} else if isUnknownOutcome {
 			// Bounded reconciliation cleanup to prevent remote orphan container leaks
 			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			cleanErr := c.rawRelease(cleanCtx, userUUID)
@@ -312,8 +348,9 @@ func (c *Client) createSessionLocked(ctx context.Context, gate *sessionGate, use
 				return nil, fmt.Errorf("%w (creation outcome unknown; remote session may exist: orphan cleanup failed: %v)", err, cleanErr)
 			}
 			return nil, fmt.Errorf("%w (creation outcome unknown; remote session reconciled via cleanup)", err)
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 
 	// Context check & generation/tombstone guard:
