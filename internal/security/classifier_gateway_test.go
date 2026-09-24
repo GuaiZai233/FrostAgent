@@ -322,23 +322,23 @@ func TestLLMClassifierInvokesProviderAndParsesResponse(t *testing.T) {
 	}
 }
 
-// TestCriticalContentCannotAccrueStrikesOrLock verifies that when a classifier returns
-// CRITICAL risk content, the content is blocked but the user NEVER accumulates strikes or gets locked,
-// because classification is decoupled from punishment.
-func TestCriticalContentCannotAccrueStrikesOrLock(t *testing.T) {
+// TestHighRiskContentCannotAccrueStrikesOrLock verifies that when a classifier returns
+// HIGH risk content, the content is blocked but the user NEVER accumulates strikes or gets locked,
+// preserving the zero-punishment invariant for benign/medium/high risk levels.
+func TestHighRiskContentCannotAccrueStrikesOrLock(t *testing.T) {
 	mock := &mockLLMProvider{
-		response: `{"category": "malicious_execution", "risk_level": "critical", "reason": "destructive commands"}`,
+		response: `{"category": "malicious_execution", "risk_level": "high", "reason": "destructive commands discussion"}`,
 	}
 	access := NewAccessStore(t.TempDir() + "/access.json")
 	wd := NewWatchdogWithProvider(access, nil, mock, "security-gateway")
 
 	principal := testPrincipal(t, "test-platform", "benign-actor-1")
 
-	// Submit repeated critical content 5 times
+	// Submit repeated high risk content 5 times
 	for i := range 5 {
 		decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, "explain why rm -rf / is dangerous", AuditEvent{})
-		if decision.Action != WatchdogBlock {
-			t.Fatalf("iteration %d: expected WatchdogBlock, got %s", i, decision.Action)
+		if decision.Action != WatchdogFilter {
+			t.Fatalf("iteration %d: expected WatchdogFilter, got %s", i, decision.Action)
 		}
 		if wd.IsLocked(principal) {
 			t.Fatalf("iteration %d: actor must not be locked", i)
@@ -354,6 +354,39 @@ func TestCriticalContentCannotAccrueStrikesOrLock(t *testing.T) {
 	}
 	if len(record.StrikeTimes) != 0 {
 		t.Fatalf("actor must have 0 strikes, got %d", len(record.StrikeTimes))
+	}
+}
+
+// TestCriticalContentEscalatesToStrikeAndLock verifies that when a classifier returns
+// CRITICAL risk content for attributable user direct input, repeated submissions escalate
+// through the graduated enforcement contract (Block -> Strike -> Strike -> Lock).
+func TestCriticalContentEscalatesToStrikeAndLock(t *testing.T) {
+	mock := &mockLLMProvider{
+		response: `{"category": "malicious_execution", "risk_level": "critical", "reason": "destructive commands"}`,
+	}
+	access := NewAccessStore(t.TempDir() + "/access.json")
+	wd := NewWatchdogWithProvider(access, nil, mock, "security-gateway")
+
+	principal := testPrincipal(t, "test-platform", "critical-actor-1")
+	payload := "rm -rf / --no-preserve-root"
+
+	expectedActions := []WatchdogAction{WatchdogBlock, WatchdogStrike, WatchdogStrike, WatchdogLock}
+	for i, expected := range expectedActions {
+		decision := wd.Evaluate(principal, StageIngress, SourceUserDirect, payload, AuditEvent{})
+		if decision.Action != expected {
+			t.Fatalf("iteration %d: expected %s, got %s", i+1, expected, decision.Action)
+		}
+	}
+
+	locked, record, err := access.IsLocked(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("actor must be locked after reaching threshold")
+	}
+	if len(record.StrikeTimes) != 3 {
+		t.Fatalf("actor must have 3 strikes, got %d", len(record.StrikeTimes))
 	}
 }
 

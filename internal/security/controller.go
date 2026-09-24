@@ -298,7 +298,7 @@ func (c *Controller) EvaluateContextDryRun(p Principal, source WatchdogSource, c
 }
 
 func Blocks(action WatchdogAction) bool {
-	return action == WatchdogBlock || action == WatchdogLock
+	return action == WatchdogBlock || action == WatchdogStrike || action == WatchdogLock
 }
 
 // IsLocked checks whether the principal is currently locked in the access store.

@@ -573,6 +573,7 @@ func (w *Watchdog) evaluateWithContext(ctx context.Context, p Principal, stage W
 	var sanitizedContent string
 	var warningNotice string
 	var storeErr error
+	var isFailure bool
 
 	// Merge successful raw/normalized results by the strongest risk level,
 	// independent of call order/form, and use the corresponding classification/category for the resulting action.
@@ -605,6 +606,35 @@ func (w *Watchdog) evaluateWithContext(ctx context.Context, p Principal, stage W
 			action = WatchdogBlock
 			reason = classification.Reason
 			sanitizedContent = SanitizedMessageForCategory(classification.Category)
+			if !dryRun && !classifierErr && source == SourceUserDirect {
+				if w.access == nil {
+					action = WatchdogBlock
+					reason = "access control unavailable"
+					storeErr = errors.New("access store unconfigured")
+					failureType = "unconfigured"
+					failureSummary = "access store is nil"
+					isFailure = true
+					logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储状态异常 (Fail-Closed): principal=%s error_type=unconfigured reason=access store is nil eval_id=%s", p.Key(), evaluationID))
+				} else {
+					strikes, locked, err := w.access.RecordBlockedSubmission(p, normHash, isEvasion, time.Now().UTC(), w.strikeWindow, w.lockAfter)
+					if err != nil {
+						failureType = ErrorType(err)
+						failureSummary = SafeErrorSummary(err)
+						logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制存储持久化失败 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), failureType, failureSummary, evaluationID))
+						action = WatchdogBlock
+						reason = fmt.Sprintf("access control persistence failure: %s", failureSummary)
+						storeErr = err
+						isFailure = true
+					} else if locked {
+						action = WatchdogLock
+						reason = "repeated active attempts to evade watchdog blocks"
+					} else if strikes > 0 {
+						action = WatchdogStrike
+					} else {
+						action = WatchdogBlock
+					}
+				}
+			}
 		default:
 			action = WatchdogPass
 			reason = classification.Reason
@@ -627,7 +657,7 @@ func (w *Watchdog) evaluateWithContext(ctx context.Context, p Principal, stage W
 		_ = w.audit.Append(meta)
 	}
 
-	isFailure := classifierErr || storeErr != nil
+	isFailure = isFailure || classifierErr || storeErr != nil
 	if isFailure {
 		if failureType == "" {
 			failureType = "internal"
