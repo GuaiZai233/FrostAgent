@@ -389,7 +389,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" && !c.mock {
-				if !isExplicitlyWoken(event, scope) {
+				if isExplicitlyWoken(event, scope) {
+					stageGroupCompactMessage(event, a.engine)
+				} else {
 					captureGroupCompactMessage(event, a.engine)
 				}
 			}

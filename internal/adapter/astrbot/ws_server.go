@@ -244,6 +244,64 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	captureGroupCompactText(event, visibleText, engine)
 }
 
+func stageGroupCompactText(event Event, text string, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	session.StageGroupCompactMessage(
+		llm.GroupCompactMessage{
+			Role:      "user",
+			Sender:    senderDisplayName(event),
+			SenderID:  event.UserID,
+			Content:   strings.TrimSpace(text),
+			MessageID: event.MessageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		event.MessageID,
+	)
+}
+
+func stageGroupCompactMessage(event Event, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" {
+		return
+	}
+	visibleText := astrBotVisibleText(event)
+	stageGroupCompactText(event, visibleText, engine)
+}
+
+func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string) {
+	replyText = strings.TrimSpace(replyText)
+	if session == nil || engine == nil || replyText == "" {
+		return
+	}
+
+	botName := engine.Getenv("BOT_NAME")
+	if botName == "" {
+		botName = "霜降"
+	}
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	session.StageGroupCompactMessage(
+		llm.GroupCompactMessage{
+			Role:      "assistant",
+			Sender:    botName,
+			Content:   replyText,
+			MessageID: messageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		messageID,
+	)
+}
+
 func astrBotVisibleText(event Event) string {
 	parts := make([]string, 0, 3)
 	if text := strings.TrimSpace(event.Content); text != "" {
@@ -974,7 +1032,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 				if event.MessageType == "group" && !conn.mock {
-					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
+					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID)
 				}
 			}
 			return nil
@@ -1040,7 +1098,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if runResult.Silent {
 			engine.TrimSession(session)
 			if event.MessageType == "group" && !runResult.Banned {
-				captureGroupCompactMessage(event, engine)
+				if session != nil {
+					session.PromoteGroupCompactMessage(event.MessageID)
+					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
+						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+					}
+				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
 			return
@@ -1072,6 +1135,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	if sendErr != nil {
 		if session != nil {
+			if event.MessageType == "group" {
+				session.DropGroupCompactMessage(event.MessageID, event.UserID)
+			}
 			session.SetDeliveryFailure(llm.DeliveryFailure{
 				Platform: platform,
 				Action:   "send_message",
@@ -1092,7 +1158,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if event.MessageType == "group" && !runResult.Banned {
-		captureGroupCompactMessage(event, engine)
+		if session != nil {
+			session.PromoteGroupCompactMessage(event.MessageID)
+		}
 	}
 	if strings.TrimSpace(historyReplyText) != "" {
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
@@ -1123,7 +1191,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if event.MessageType == "group" && !conn.mock {
-		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
+		botReply := extractBotReplyText(replyText)
+		if strings.TrimSpace(botReply) != "" {
+			appendAssistantGroupMessage(session, engine, owner, botReply, routeScope)
+		} else if engine != nil && engine.GroupCompactor != nil {
+			engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+		}
 	}
 }
 

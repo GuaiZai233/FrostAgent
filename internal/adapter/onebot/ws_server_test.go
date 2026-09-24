@@ -5432,3 +5432,193 @@ func TestOneBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testing.T) {
+	chatStarted := make(chan struct{})
+	finishChat := make(chan struct{})
+
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			select {
+			case chatStarted <- struct{}{}:
+			default:
+			}
+			<-finishChat
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是对 OneBot 唤醒消息的最终回复。",
+				},
+				Usage: &core.Usage{PromptTokens: 25, CompletionTokens: 15, TotalTokens: 40},
+			}, nil
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(mockLLM, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	const groupID int64 = 776655
+	const wakeMsgID int32 = 1001
+	const wakeUserID int64 = 112233
+	const bgMsgID int32 = 1002
+	const bgUserID int64 = 445566
+
+	// 1. 发送显式唤醒的群消息 (@bot Alice wake message)
+	wakeEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      wakeUserID,
+		MessageID:   wakeMsgID,
+		Sender:      &model.OneBotSender{Nickname: "Alice"},
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":" Alice wake question"}}]`),
+	}
+	wakeBytes, _ := json.Marshal(wakeEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeBytes); err != nil {
+		t.Fatalf("发送唤醒事件失败: %v", err)
+	}
+
+	// 等待 LLM Chat 收到请求并挂起
+	select {
+	case <-chatStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待 Chat 开始超时")
+	}
+
+	// 2. 唤醒轮次在途时，背景群聊闲聊抵达 (未唤醒)
+	bgEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      bgUserID,
+		MessageID:   bgMsgID,
+		Sender:      &model.OneBotSender{Nickname: "Bob"},
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"Bob background chatter"}}]`),
+	}
+	bgBytes, _ := json.Marshal(bgEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, bgBytes); err != nil {
+		t.Fatalf("发送背景事件失败: %v", err)
+	}
+
+	// 稍作等待确保背景消息进入 WebSocket read loop
+	time.Sleep(50 * time.Millisecond)
+
+	sessionKey := fmt.Sprintf("group:%d", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if !ok {
+		t.Fatalf("session %q not found", sessionKey)
+	}
+	sess := sessCore.(*llm.SessionContext)
+
+	// 验证在途状态下的 groupCompactBuffer：
+	// 顺序必须保持 Alice(wake) -> Bob(bg)
+	inFlightBuf := sess.GroupCompactBufferMessages()
+	if len(inFlightBuf) != 2 {
+		t.Fatalf("期望在途 buffer 中有 2 条消息，实际: %d (%+v)", len(inFlightBuf), inFlightBuf)
+	}
+	if inFlightBuf[0].MessageID != fmt.Sprintf("%d", wakeMsgID) || inFlightBuf[0].Sender != "Alice" {
+		t.Errorf("期望第 0 条为 Alice 的唤醒消息，实际: %+v", inFlightBuf[0])
+	}
+	if inFlightBuf[1].MessageID != fmt.Sprintf("%d", bgMsgID) || inFlightBuf[1].Sender != "Bob" {
+		t.Errorf("期望第 1 条为 Bob 的背景消息，实际: %+v", inFlightBuf[1])
+	}
+
+	// 验证未提交状态下无法被 SnapshotGroupCompact 快照出
+	if snap, ready := sess.SnapshotGroupCompact(1); ready || len(snap.Messages) > 0 {
+		t.Fatalf("未提交的唤醒消息不得被 compactor 快照，实际: ready=%v msgs=%+v", ready, snap.Messages)
+	}
+
+	// 验证未提交状态下不会泄露给 SnapshotGroupContext 的 recent messages
+	contextSnap := sess.SnapshotGroupContext(10, 1000, "")
+	for _, m := range contextSnap.RecentStructuredMessages {
+		if m.MessageID == fmt.Sprintf("%d", wakeMsgID) {
+			t.Fatalf("未提交的唤醒消息不得出现在 SnapshotGroupContext 中: %+v", m)
+		}
+	}
+
+	// 3. 释放 LLM Chat 完成本轮
+	close(finishChat)
+
+	// 读取出站消息（可能先收到 get_group_info，然后收到 send_group_msg 回复）
+	for {
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取出站响应失败: %v", err)
+		}
+		var action model.OneBotAction
+		if err := json.Unmarshal(respBytes, &action); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if action.Action == "get_group_info" {
+			groupInfoResponse := map[string]any{
+				"status":  "ok",
+				"retcode": 0,
+				"data": map[string]any{
+					"group_id":   groupID,
+					"group_name": "测试安全群",
+				},
+				"echo": action.Echo,
+			}
+			resBytes, _ := json.Marshal(groupInfoResponse)
+			_ = conn.WriteMessage(websocket.TextMessage, resBytes)
+			continue
+		}
+
+		// 回复发送成功的平台 ACK
+		ackBytes, _ := json.Marshal(map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"echo":    action.Echo,
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, ackBytes); err != nil {
+			t.Fatalf("发送平台 ACK 失败: %v", err)
+		}
+		break
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. 验证轮次成功完成后：
+	// 顺序必须保持严格时间顺序：Alice(wake) -> Bob(bg) -> Assistant(reply)
+	finalBuf := sess.GroupCompactBufferMessages()
+	if len(finalBuf) != 3 {
+		t.Fatalf("期望最终 buffer 中有 3 条消息，实际: %d (%+v)", len(finalBuf), finalBuf)
+	}
+	if finalBuf[0].MessageID != fmt.Sprintf("%d", wakeMsgID) || finalBuf[0].Role != "user" {
+		t.Errorf("第 0 条应为 Alice 的唤醒消息，实际: %+v", finalBuf[0])
+	}
+	if finalBuf[1].MessageID != fmt.Sprintf("%d", bgMsgID) || finalBuf[1].Role != "user" {
+		t.Errorf("第 1 条应为 Bob 的背景消息，实际: %+v", finalBuf[1])
+	}
+	if finalBuf[2].Role != "assistant" || !strings.Contains(finalBuf[2].Content, "这是对 OneBot 唤醒消息的最终回复。") {
+		t.Errorf("第 2 条应为 Assistant 回复，实际: %+v", finalBuf[2])
+	}
+
+	// 5. 验证 SnapshotGroupCompact 能够成功快照所有消息，且严格保持 Alice -> Bob -> Assistant
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望在轮次完成后 SnapshotGroupCompact 成功")
+	}
+	if len(snap.Messages) != 3 {
+		t.Fatalf("期望快照中有 3 条消息，实际: %d", len(snap.Messages))
+	}
+	if snap.Messages[0].MessageID != fmt.Sprintf("%d", wakeMsgID) || snap.Messages[1].MessageID != fmt.Sprintf("%d", bgMsgID) || snap.Messages[2].Role != "assistant" {
+		t.Fatalf("快照中的消息时序颠倒: %+v", snap.Messages)
+	}
+}
