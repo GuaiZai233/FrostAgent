@@ -2349,3 +2349,110 @@ func TestAstrBot_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
 		})
 	}
 }
+
+func TestAstrBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeSimple)
+	engine.ToolRegistry["ban_user"] = tools.NewBanUserTool(engine.Security)
+
+	// Configure mockLLM to return a tool call to ban_user
+	mockLLM.responses = []*core.ChatResponse{
+		{
+			Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{
+					{
+						ID:   "call_ban_astr_1",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      "ban_user",
+							Arguments: `{"reason":"malicious jailbreak attack"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	const attackerUserID = "astr-attacker-123"
+	const groupID = "grp-astr-999"
+	const attackMsgID = "msg-astr-001"
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   attackMsgID,
+		UserID:      attackerUserID,
+		SenderName:  "MaliciousAttacker",
+		GroupID:     groupID,
+		GroupName:   "AstrSecurityGroup",
+		Content:     "jailbreak prompt injection payload",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write message failed: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read rejection response failed: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("unmarshal action failed: %v", err)
+	}
+	if act.Action != "send_message" {
+		t.Fatalf("expected action=send_message, got %s", act.Action)
+	}
+	if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+		t.Errorf("expected rejection message containing %q, got %q", security.RejectGatewayMsg, act.Content)
+	}
+
+	// Verify attacker principal is locked in Security Controller
+	p, err := security.NewPrincipal("astrbot", attackerUserID)
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !engine.Security.IsLocked(p) {
+		t.Fatal("expected attacker to be locked in Security Controller")
+	}
+
+	// Verify session history has been purged (DropLastMessage called)
+	sessionKey := fmt.Sprintf("group:%s", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if ok {
+		sess := sessCore.(*llm.SessionContext)
+		history := sess.Snapshot()
+		for _, m := range history {
+			if strings.Contains(fmt.Sprint(m.Content), "jailbreak prompt injection payload") {
+				t.Fatalf("attacker input was not dropped from session history: %+v", history)
+			}
+			if m.Role == "assistant" {
+				t.Fatalf("assistant message should not be committed on ban turn: %+v", history)
+			}
+		}
+
+		// Verify group compact buffer does not contain attacker message
+		compactBuffer := sess.GroupCompactBufferMessages()
+		for _, cm := range compactBuffer {
+			if cm.SenderID == attackerUserID || cm.MessageID == attackMsgID {
+				t.Fatalf("attacker message was not dropped from group compact buffer: %+v", cm)
+			}
+		}
+	}
+}

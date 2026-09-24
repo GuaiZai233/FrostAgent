@@ -1008,6 +1008,17 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return
 		}
 
+		if runResult.Banned {
+			if session != nil {
+				session.DropLastMessage()
+				if event.MessageType == "group" {
+					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+				}
+			}
+			_ = sendDirectReply(event, conn, runResult.Content)
+			return
+		}
+
 		if billingState != nil && billingState.BillingActive {
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {
 				session.TrimHistory(len(session.Snapshot()) - 1)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type Service struct {
@@ -14,6 +15,7 @@ type Service struct {
 	getenv     func(string) string
 	store      *instanceconfig.Store
 	updater    func(key, value string) error
+	applyMu    sync.Mutex
 }
 
 func New(controller *securityctl.Controller) *Service {
@@ -89,6 +91,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mode := securityctl.ParseControlMode(rawMode)
+		s.applyMu.Lock()
+		defer s.applyMu.Unlock()
+		if s.store != nil && s.store.HasOverride("SECURITY_CONTROL_MODE") {
+			http.Error(w, "cannot update mode: SECURITY_CONTROL_MODE is overridden by environment variable", http.StatusConflict)
+			return
+		}
 		if s.store != nil {
 			if err := s.store.Update("SECURITY_CONTROL_MODE", string(mode), false); err != nil {
 				http.Error(w, "failed to persist mode: "+err.Error(), http.StatusInternalServerError)

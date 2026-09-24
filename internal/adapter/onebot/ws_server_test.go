@@ -5301,3 +5301,134 @@ func TestWS_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
 		})
 	}
 }
+
+func TestOneBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeSimple)
+	engine.ToolRegistry["ban_user"] = tools.NewBanUserTool(engine.Security)
+
+	// Configure mockLLM to return a tool call to ban_user
+	mockLLM.responses = []*core.ChatResponse{
+		{
+			Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{
+					{
+						ID:   "call_ban_test_1",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      "ban_user",
+							Arguments: `{"reason":"malicious prompt injection"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	const attackerUserID int64 = 888123
+	const groupID int64 = 777456
+	const attackMsgID int32 = 5001
+
+	// Send group message from attacker
+	event := model.OneBotEvent{
+		SelfID:      100000,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      attackerUserID,
+		MessageID:   attackMsgID,
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"100000"}},{"type":"text","data":{"text":" inject malicious prompt"}}]`),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write message failed: %v", err)
+	}
+
+	// Read outgoing messages; if server asks for get_group_info, reply to it
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read response failed: %v", err)
+	}
+	var act model.OneBotAction
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("unmarshal action failed: %v", err)
+	}
+	if act.Action == "get_group_info" {
+		groupInfoResponse := map[string]any{
+			"status":  "ok",
+			"retcode": 0,
+			"data": map[string]any{
+				"group_id":   groupID,
+				"group_name": "Test Security Group",
+			},
+			"echo": act.Echo,
+		}
+		resBytes, _ := json.Marshal(groupInfoResponse)
+		if err := conn.WriteMessage(websocket.TextMessage, resBytes); err != nil {
+			t.Fatalf("send group info response failed: %v", err)
+		}
+
+		_, respBytes, err = conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read rejection response failed: %v", err)
+		}
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("unmarshal rejection action failed: %v", err)
+		}
+	}
+	if act.Action != "send_group_msg" {
+		t.Fatalf("expected action=send_group_msg, got %s", act.Action)
+	}
+
+	// Verify rejection text contains RejectGatewayMsg
+	params, _ := act.Params.(map[string]any)
+	msgStr, _ := params["message"].(string)
+	if !strings.Contains(msgStr, security.RejectGatewayMsg) {
+		t.Errorf("expected rejection message containing %q, got %q", security.RejectGatewayMsg, msgStr)
+	}
+
+	// Verify attacker principal is locked in Security Controller
+	p, err := security.NewPrincipal("qq", fmt.Sprintf("%d", attackerUserID))
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !engine.Security.IsLocked(p) {
+		t.Fatal("expected attacker to be locked in Security Controller")
+	}
+
+	// Verify session history has been purged (DropLastMessage called)
+	sessionKey := fmt.Sprintf("group:%d", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if ok {
+		sess := sessCore.(*llm.SessionContext)
+		history := sess.Snapshot()
+		for _, m := range history {
+			if strings.Contains(fmt.Sprint(m.Content), "inject malicious prompt") {
+				t.Fatalf("attacker input was not dropped from session history: %+v", history)
+			}
+			if m.Role == "assistant" {
+				t.Fatalf("assistant message should not be committed on ban turn: %+v", history)
+			}
+		}
+
+		// Verify group compact buffer does not contain attacker message
+		compactBuffer := sess.GroupCompactBufferMessages()
+		for _, cm := range compactBuffer {
+			if cm.SenderID == fmt.Sprintf("%d", attackerUserID) || cm.MessageID == fmt.Sprintf("%d", attackMsgID) {
+				t.Fatalf("attacker message was not dropped from group compact buffer: %+v", cm)
+			}
+		}
+	}
+}

@@ -122,6 +122,15 @@ func (s *Store) Get(k string) string {
 	}
 	return s.values[k]
 }
+func (s *Store) HasOverride(k string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, exists := s.overrides[k]
+	return exists
+}
 func (s *Store) Snapshot() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

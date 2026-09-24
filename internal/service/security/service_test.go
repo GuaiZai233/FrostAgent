@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"FrostAgent/internal/instanceconfig"
@@ -226,5 +227,103 @@ func TestSecurityControlModeEndpoints(t *testing.T) {
 	}
 	if modeResp.Mode != string(securityctl.ControlModeOff) {
 		t.Fatalf("expected mode %q, got %q", securityctl.ControlModeOff, modeResp.Mode)
+	}
+}
+
+func TestSecurityControlModeEnvironmentOverride(t *testing.T) {
+	os.Unsetenv("MCP_CONTROL_TOKEN")
+	os.Unsetenv("ADMIN_TOKEN")
+	os.Unsetenv("MCP_ENFORCE_LOCAL_TOKEN")
+	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
+
+	// Set process environment override for SECURITY_CONTROL_MODE
+	t.Setenv("SECURITY_CONTROL_MODE", "aggressive")
+
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	envContent := []byte("MCP_CONTROL_TOKEN=override-token\nSECURITY_CONTROL_MODE=simple\n")
+	if err := os.WriteFile(envPath, envContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	globalStore, err := instanceconfig.Open(envPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !globalStore.HasOverride("SECURITY_CONTROL_MODE") {
+		t.Fatal("expected globalStore to have override for SECURITY_CONTROL_MODE")
+	}
+
+	ctrl := securityctl.NewController(tmpDir)
+	ctrl.SetMode(securityctl.ControlModeAggressive)
+	svc := NewWithStore(ctrl, globalStore.Get, globalStore)
+
+	// Attempt to update mode via POST -> should return 409 Conflict
+	req := httptest.NewRequest(http.MethodPost, "/api/security/mode", bytes.NewReader([]byte(`{"mode":"off"}`)))
+	req.Header.Set("Authorization", "Bearer override-token")
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on environment override, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Verify controller and store remained unchanged
+	if ctrl.Mode() != securityctl.ControlModeAggressive {
+		t.Fatalf("expected controller mode to remain aggressive, got %q", ctrl.Mode())
+	}
+	if globalStore.Get("SECURITY_CONTROL_MODE") != "aggressive" {
+		t.Fatalf("expected store to remain aggressive, got %q", globalStore.Get("SECURITY_CONTROL_MODE"))
+	}
+}
+
+func TestSecurityControlModeConcurrentUpdates(t *testing.T) {
+	os.Unsetenv("MCP_CONTROL_TOKEN")
+	os.Unsetenv("ADMIN_TOKEN")
+	os.Unsetenv("MCP_ENFORCE_LOCAL_TOKEN")
+	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
+	os.Unsetenv("SECURITY_CONTROL_MODE")
+
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	envContent := []byte("MCP_CONTROL_TOKEN=concurrent-token\n")
+	if err := os.WriteFile(envPath, envContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	globalStore, err := instanceconfig.Open(envPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctrl := securityctl.NewController(tmpDir)
+	svc := NewWithStore(ctrl, globalStore.Get, globalStore)
+
+	modes := []string{"off", "simple", "aggressive"}
+	const workers = 30
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	for i := 0; i < workers; i++ {
+		targetMode := modes[i%len(modes)]
+		go func(m string) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/security/mode", bytes.NewReader([]byte(`{"mode":"`+m+`"}`)))
+			req.Header.Set("Authorization", "Bearer concurrent-token")
+			w := httptest.NewRecorder()
+			svc.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("concurrent update failed: status=%d body=%s", w.Code, w.Body.String())
+			}
+		}(targetMode)
+	}
+
+	wg.Wait()
+
+	// Ensure final state is consistent between store and controller
+	storeMode := globalStore.Get("SECURITY_CONTROL_MODE")
+	ctrlMode := string(ctrl.Mode())
+	if storeMode != ctrlMode {
+		t.Fatalf("inconsistent final state: store=%q, ctrl=%q", storeMode, ctrlMode)
 	}
 }

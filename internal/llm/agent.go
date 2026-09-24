@@ -61,11 +61,13 @@ func truncateRunes(value string, limit int) string {
 // AgentRunResult carries the final content and side-effect decisions from one
 // agent loop. Silent is true when the model successfully invokes the terminal
 // stay_silent tool or returns the standalone internal silence marker. Provider
-// failures never set it.
+// failures never set it. Banned is true when the turn was terminated by an
+// autonomous ban action (ban_user tool).
 type AgentRunResult struct {
 	Content       string
 	MemoryWritten bool
 	Silent        bool
+	Banned        bool
 	Usage         core.Usage
 	Error         error
 }
@@ -860,6 +862,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						return AgentRunResult{
 							Content:       security.RejectGatewayMsg,
 							MemoryWritten: memoryWritten,
+							Banned:        true,
 							Usage:         totalUsage,
 						}
 					}

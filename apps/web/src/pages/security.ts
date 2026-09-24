@@ -232,7 +232,7 @@ export function mountSecurityPage(container: HTMLElement): () => void {
         currentMode = res.mode;
         updateModeUI(currentMode, false);
       }
-    } catch (error) {
+    } catch {
       if (!disposed && modeStatusBadge) {
         modeStatusBadge.textContent = '获取模式失败';
         modeStatusBadge.className = 'badge badge-destructive text-xs';

@@ -832,6 +832,21 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			return
 		}
 
+		if runResult.Banned {
+			if session != nil {
+				session.DropLastMessage()
+				if event.MessageType == "group" {
+					var msgID string
+					if event.MessageID != 0 {
+						msgID = strconv.FormatInt(int64(event.MessageID), 10)
+					}
+					session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+				}
+			}
+			sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+			return
+		}
+
 		// 计费回执处理与历史保护
 		if billingState != nil && billingState.BillingActive {
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {

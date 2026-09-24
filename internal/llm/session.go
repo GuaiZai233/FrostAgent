@@ -887,6 +887,24 @@ func (s *SessionContext) TrimHistory(max int) {
 	s.UpdatedAt = time.Now()
 }
 
+// DropLastMessage removes the most recent message from history,
+// for instance when a turn is cancelled or aborted due to an autonomous ban.
+func (s *SessionContext) DropLastMessage() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.History) == 0 {
+		return
+	}
+	s.History = s.History[:len(s.History)-1]
+	if len(s.historySeq) > len(s.History) {
+		s.historySeq = s.historySeq[:len(s.History)]
+	}
+	s.UpdatedAt = time.Now()
+}
+
 // DefaultMaxGroupCompactBufferSize 是未压缩消息缓冲区的兜底安全上限，
 // 防止在上游 LLM 长时间不可用且海量消息涌入时发生内存泄漏。
 const DefaultMaxGroupCompactBufferSize = 200
@@ -949,6 +967,39 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 // AppendGroupCompactString parses a raw message string and appends it to the compact buffer.
 func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize int, messageID ...string) int {
 	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
+}
+
+// DropGroupCompactMessage removes any group compact messages matching messageID (if non-empty)
+// or the most recent message matching senderID (if non-empty).
+func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.groupCompactBuffer) == 0 {
+		return
+	}
+	msgID := strings.TrimSpace(messageID)
+	sndID := strings.TrimSpace(senderID)
+	if msgID != "" {
+		for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
+			if s.groupCompactBuffer[i].message.MessageID == msgID {
+				s.groupCompactBuffer = append(s.groupCompactBuffer[:i], s.groupCompactBuffer[i+1:]...)
+				s.UpdatedAt = time.Now()
+				return
+			}
+		}
+	}
+	if sndID != "" {
+		for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
+			if s.groupCompactBuffer[i].message.SenderID == sndID {
+				s.groupCompactBuffer = append(s.groupCompactBuffer[:i], s.groupCompactBuffer[i+1:]...)
+				s.UpdatedAt = time.Now()
+				return
+			}
+		}
+	}
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -1203,6 +1254,20 @@ func (s *SessionContext) GroupCompactBufferCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.groupCompactBuffer)
+}
+
+// GroupCompactBufferMessages returns a copy of all buffered group compact messages.
+func (s *SessionContext) GroupCompactBufferMessages() []GroupCompactMessage {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([]GroupCompactMessage, len(s.groupCompactBuffer))
+	for i, item := range s.groupCompactBuffer {
+		res[i] = item.message
+	}
+	return res
 }
 
 // PendingExtractionBatch wraps an asynchronous memory extraction batch with its originating session and generation epoch.

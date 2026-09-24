@@ -121,11 +121,16 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
     - **模式联动与工具短路拦截（Tool Short-Circuiting & Loop Break）**：
       - 在 `off` 模式下：`ban_user` 不写入 `AccessStore`，不记录审计日志，直接返回文案：`安全审查已关闭，ban_user 工具未生效。`；
       - 在 `simple` 与 `aggressive` 模式下：`ban_user` 立即调用 `ctrl.LockWithMeta` 将主体持久化加入全局黑名单并记录审计日志；随后返回专用哨兵错误 `security.ErrBanUserSuccess`；
-      - `llm.Engine` 工具执行循环拦截该错误后，立即中断智能体执行循环，取消当前批次中尚未执行的兄弟工具，完全跳过次级主模型推理调用，并直接向触发者返回标准网关拦截文案：`FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`。
+      - `llm.Engine` 工具执行循环拦截该错误后，立即中断智能体执行循环，取消当前批次中尚未执行的兄弟工具，完全跳过次级主模型推理调用，并直接向触发者返回标准网关拦截文案：`FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`，并在 `AgentRunResult` 中显式置 `Banned: true` 穿透至适配器。
+    - **适配器级短路与会话/记忆清洗不变量（Adapter-Level Short-Circuit & Context Sanitization Invariant）**：当智能体触发自主封禁（`AgentRunResult.Banned == true`）时，该终止状态显式穿透至平台适配器层（OneBot、AstrBot）：
+      - 立即调用 `session.DropLastMessage()` 从会话历史中物理剔除触发本次封禁的恶意用户输入，彻底杜绝恶意注入 Prompt 污染长期对话历史；
+      - 在群聊场景下，同步调用 `session.DropGroupCompactMessage(messageID, senderID)` 从群消息精简缓冲区（`groupCompactBuffer`）中移除该条恶意消息，防止后续上下文折叠时将攻击载荷写入群摘要；
+      - 坚决跳过助理回复历史提交（`commitAssistantHistory`）与自动记忆提取流水线（`EnqueueExtractionTurn`），实现全链路上下文与记忆的零污染；
+      - 直接通过传输层发送标准网关阻断提示（`RejectGatewayMsg`）并提前返回。
     - **审查免除不变量**：`ban_user` 工具的入参与执行结果在全模式下均免除 Watchdog 语义分类器审查，杜绝封禁理由中包含敏感违规词时触发分类器拦截导致封禁执行失败。
   - **控制面端点与 Web 控制台呈现**：
     - `GET /api/security/mode`：返回当前生效模式 `{"mode": "off" | "simple" | "aggressive"}`；
-    - `POST /api/security/mode`：校验请求体模式合法性（非法枚举返回 400 Bad Request），持久化并热更新控制器；
+    - `POST /api/security/mode`：校验请求体模式合法性（非法枚举返回 400 Bad Request），通过互斥锁（`applyMu`）严格串行化配置持久化与内存控制器热更新，防止并发竞态导致分叉；若宿主进程环境变量已定义 `SECURITY_CONTROL_MODE`（通过 `Store.HasOverride` 探测），以 `409 Conflict` 明确拒绝修改，严格保证环境变量最高优先级；
     - Web Console「安全控制」页提供 3 项单选组件卡片，展示清晰的说明文案与模式标签，具备页面加载自动探测、切换即时提交、防重复提交（提交期间禁用选项并展示 Spinner）、失败自动回滚与 Toast 提示等完整交互体验。
 - **内部测试与 Synthetic Principal**：通用 `eval` / synthetic principal 概念保留用于内部 Watchdog 单元测试及未来的自动化测试 Harness；系统不暴露或维护任何面向第三方的 HTTP Evaluation API（如 `/v1/messages`），后续真实平台测试将通过新的 Telegram Adapter 完成。
 - **细粒度系统错误可观测性与用户侧严格泛化不可用不变量（Detailed Error Observability & User-Facing Generalization Invariant）**：
