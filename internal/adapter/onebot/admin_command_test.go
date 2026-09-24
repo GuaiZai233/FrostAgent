@@ -701,7 +701,8 @@ func TestOneBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeS
 
 	// 2. Contrast: Regular chat message with dangerous keyword is checked by GateIngress
 	dangerMsgBytes, _ := json.Marshal([]map[string]any{
-		{"type": "text", "data": map[string]any{"text": "rm -rf /"}},
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " rm -rf /"}},
 	})
 	dangerEvent := model.OneBotEvent{
 		SelfID:      10001,

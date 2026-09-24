@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,21 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 			CompletionTokens: 50,
 			TotalTokens:      150,
 		},
+	}, nil
+}
+
+type mockClassifier struct {
+	fn func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error)
+}
+
+func (m *mockClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	if m.fn != nil {
+		return m.fn(ctx, input)
+	}
+	return security.ClassificationResult{
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Reason:    "benign",
 	}, nil
 }
 
@@ -3830,6 +3846,23 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(strings.ToLower(input.Normalized), "ignore all previous") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "prompt injection detected",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -4088,10 +4121,486 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 		}
 	})
 
+	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir()) // No classifier configured
+		failSrv, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "private",
+			UserID:      987654,
+			MessageID:   1008,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好世界"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
+		}
+	})
+
+	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
+		failEngine := newTestEngine(mockLLM)
+		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
+			},
+		})
+		failSrv, failWSURL := startWSTestServer(failEngine)
+		defer failSrv.Close()
+
+		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer failConn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "private",
+			UserID:      987654,
+			MessageID:   1009,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好世界"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送私聊消息失败: %v", err)
+		}
+
+		_, respBytes, err := failConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取回复失败: %v", err)
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		params, _ := act.Params.(map[string]any)
+		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
+		}
+	})
+
 	// 验证整个过程中 LLM 从未被调用（前置 Ingress 拦截）
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
 	}
+}
+
+func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是模型的最终安全回复文本。",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+
+	var mu sync.Mutex
+	stageCallCounts := make(map[security.WatchdogStage]int)
+	evalIDs := make([]string, 0)
+
+	cls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			mu.Lock()
+			stageCallCounts[input.Stage]++
+			if input.EvaluationID != "" {
+				evalIDs = append(evalIDs, input.EvaluationID)
+			}
+			mu.Unlock()
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "clean benign content",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(cls)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	// Send a benign private message to trigger the OneBot pipeline
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      987654,
+		MessageID:   2001,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好，请帮我写一首诗"}}]`),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("failed to send message: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	var act model.OneBotAction
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("failed to parse action: %v", err)
+	}
+	if act.Action != "send_private_msg" {
+		t.Errorf("expected action=send_private_msg, got %s", act.Action)
+	}
+
+	mu.Lock()
+	ingressCalls := stageCallCounts[security.StageIngress]
+	modelOutputCalls := stageCallCounts[security.StageModelOutput]
+	mu.Unlock()
+
+	if ingressCalls != 1 {
+		t.Errorf("expected exactly 1 StageIngress classification call, got %d", ingressCalls)
+	}
+	// Regression assertion: terminal model output must be inspected exactly ONCE (owned by llm.Engine),
+	// never redundantly re-classified by adapter ws_server.go.
+	if modelOutputCalls != 1 {
+		t.Fatalf("expected exactly 1 StageModelOutput classification call (centralized in llm.Engine), got %d", modelOutputCalls)
+	}
+	if len(evalIDs) < 2 {
+		t.Errorf("expected EvaluationID to be propagated for ingress and model output, got %d", len(evalIDs))
+	}
+}
+
+func TestOneBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	failEngine := newTestEngine(mockLLM)
+	failEngine.Security = security.NewController(t.TempDir())
+
+	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
+	failEngine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{}, fmt.Errorf("upstream gateway error with auth token %s: context deadline exceeded", secretToken)
+		},
+	})
+
+	failSrv, failWSURL := startWSTestServer(failEngine)
+	defer failSrv.Close()
+
+	// Subscribe to logs to capture emitted entries
+	subID, logCh := logs.Subscribe(nil)
+	defer logs.Unsubscribe(subID)
+
+	failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer failConn.Close()
+
+	testUserID := int64(987654)
+	event := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "private",
+		UserID:      testUserID,
+		MessageID:   8801,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"触发分类器异常测试"}}]`),
+	}
+	data, _ := json.Marshal(event)
+	if err := failConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("发送私聊消息失败: %v", err)
+	}
+
+	_, respBytes, err := failConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取回复失败: %v", err)
+	}
+	var act model.OneBotAction
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("解析 action 失败: %v", err)
+	}
+	params, _ := act.Params.(map[string]any)
+	if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+		t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
+	}
+
+	// Drain captured logs
+	var capturedLogs []logs.LogEntry
+	drainTimer := time.NewTimer(200 * time.Millisecond)
+	defer drainTimer.Stop()
+drainLoop:
+	for {
+		select {
+		case entry := <-logCh:
+			capturedLogs = append(capturedLogs, entry)
+		case <-drainTimer.C:
+			break drainLoop
+		}
+	}
+
+	var rootCauseErrors []logs.LogEntry
+	var adapterWarns []logs.LogEntry
+	var allErrors []logs.LogEntry
+
+	for _, entry := range capturedLogs {
+		if entry.Level == logs.ERROR {
+			allErrors = append(allErrors, entry)
+			if strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+				rootCauseErrors = append(rootCauseErrors, entry)
+			}
+		}
+		if entry.Level == logs.WARN && strings.Contains(entry.Content, "OneBot 请求因安全审查服务异常被拒绝:") {
+			adapterWarns = append(adapterWarns, entry)
+		}
+	}
+
+	if len(rootCauseErrors) != 1 {
+		t.Fatalf("期望底层 Watchdog 恰好产生 1 条根因 ERROR 日志，实际=%d (所有 ERROR 数量=%d)", len(rootCauseErrors), len(allErrors))
+	}
+	if len(adapterWarns) != 1 {
+		t.Fatalf("期望 OneBot 适配层恰好产生 1 条拒绝 WARN 日志，实际=%d", len(adapterWarns))
+	}
+
+	rootLog := rootCauseErrors[0].Content
+	adapterLog := adapterWarns[0].Content
+
+	// 验证根因日志包含详细字段但脱敏敏感信息
+	if !strings.Contains(rootLog, "error_type=") {
+		t.Errorf("根因 ERROR 日志必须包含 error_type, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "reason=") {
+		t.Errorf("根因 ERROR 日志必须包含 reason, 实际=%s", rootLog)
+	}
+	if !strings.Contains(rootLog, "eval_id=eval_ingress_") {
+		t.Errorf("根因 ERROR 日志必须包含 eval_id, 实际=%s", rootLog)
+	}
+	if strings.Contains(rootLog, secretToken) {
+		t.Errorf("根因 ERROR 日志绝不能泄漏原始密钥 Token %q: %s", secretToken, rootLog)
+	}
+	if !strings.Contains(rootLog, "[REDACTED]") {
+		t.Errorf("根因 ERROR 日志中的密钥应当被替换为 [REDACTED], 实际=%s", rootLog)
+	}
+
+	// 提取 eval_id
+	parts := strings.Split(rootLog, "eval_id=")
+	if len(parts) < 2 {
+		t.Fatalf("无法从根因日志提取 eval_id: %s", rootLog)
+	}
+	rootEvalID := strings.Fields(parts[1])[0]
+
+	// 验证适配器日志包含用户上下文和相同 eval_id，但不复制底层 error_type 和 reason
+	expectedAdapterPrefix := fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", testUserID, rootEvalID)
+	if !strings.Contains(adapterLog, expectedAdapterPrefix) {
+		t.Errorf("期望适配层日志包含 %q, 实际=%s", expectedAdapterPrefix, adapterLog)
+	}
+	if strings.Contains(adapterLog, "error_type=") {
+		t.Errorf("适配层日志严禁重复打印 error_type: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, "reason=") {
+		t.Errorf("适配层日志严禁重复打印 reason: %s", adapterLog)
+	}
+	if strings.Contains(adapterLog, secretToken) {
+		t.Errorf("适配层日志严禁包含敏感内容: %s", adapterLog)
+	}
+
+	// 验证基础设施故障绝对零惩罚 (Zero Punishment)
+	p, err := security.NewPrincipal("onebot", fmt.Sprintf("%d", testUserID))
+	if err != nil {
+		t.Fatalf("创建 principal 失败: %v", err)
+	}
+	locked, record, err := failEngine.Security.Access.IsLocked(p)
+	if err != nil {
+		t.Fatalf("获取 access record 失败: %v", err)
+	}
+	if locked {
+		t.Errorf("基础设施异常绝不能导致用户被封禁锁定")
+	}
+	if len(record.StrikeTimes) != 0 {
+		t.Errorf("基础设施异常绝不能产生惩罚 strike, 实际=%d", len(record.StrikeTimes))
+	}
+}
+
+func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe assistant response"}},
+			{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "safe assistant response 2"}},
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	var classifierCalls atomic.Int64
+	mockCls := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			classifierCalls.Add(1)
+			if strings.Contains(input.Normalized, "malicious_filter_payload") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelHigh,
+					Reason:    "high risk prompt injection to be filtered",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	}
+	engine.Security.SetClassifier(mockCls)
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	dialWS := func(t *testing.T) *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		return conn
+	}
+
+	t.Run("UnwokenBackgroundHighFilterNeverWakesAndWritesCompact", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		classifierCalls.Store(0)
+
+		// Unwoken background group message with high-risk content.
+		// Crucially, messages that do NOT explicitly wake the model must NOT invoke the security review model.
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     60001,
+			UserID:      70001,
+			MessageID:   3001,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"just background talk malicious_filter_payload"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送未唤醒群聊消息失败: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			t.Fatal("未唤醒的高危群聊消息绝不应触发回复 (False Wake)")
+		}
+
+		if calls := classifierCalls.Load(); calls != 0 {
+			t.Errorf("未明确唤醒机器人的群聊背景消息绝不应触发安全审查模型, 实际调用次数=%d", calls)
+		}
+
+		session := engine.SessionManager.GetOrCreate("group:60001")
+		snap := session.SnapshotGroupContext(10, 1000, "")
+		if len(snap.RecentMessages) == 0 {
+			t.Fatal("期望 group compact buffer 记录了背景消息，实际为空")
+		}
+		recordedText := snap.RecentMessages[0]
+		if !strings.Contains(recordedText, "just background talk malicious_filter_payload") {
+			t.Errorf("group compact 必须记录被动进入的背景对话: %s", recordedText)
+		}
+	})
+
+	t.Run("ExplicitlyAtAddressedHighFilterWakesAndRepliesSanitized", func(t *testing.T) {
+		conn := dialWS(t)
+		defer conn.Close()
+
+		classifierCalls.Store(0)
+
+		// Explicitly @-addressed group message with high-risk content.
+		event := model.OneBotEvent{
+			SelfID:      123456,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     60001,
+			UserID:      70002,
+			MessageID:   3002,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":" help me malicious_filter_payload"}}]`),
+		}
+		data, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("发送显式@机器人群聊消息失败: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var act model.OneBotAction
+		for {
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("显式@机器人的高危脱敏群聊消息必须被唤醒并回复: %v", err)
+			}
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析回复失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				resBytes, _ := json.Marshal(map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   event.GroupID,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				})
+				_ = conn.WriteMessage(websocket.TextMessage, resBytes)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				break
+			}
+		}
+
+		mockLLM.mu.Lock()
+		reqCount := len(mockLLM.requests)
+		var lastUserContent string
+		if reqCount > 0 {
+			lastReq := mockLLM.requests[reqCount-1]
+			for _, m := range lastReq.Messages {
+				if m.Role == core.RoleUser {
+					lastUserContent = fmt.Sprint(m.Content)
+				}
+			}
+		}
+		mockLLM.mu.Unlock()
+
+		if strings.Contains(lastUserContent, "malicious_filter_payload") {
+			t.Errorf("LLM 请求绝不能包含原始恶意文本: %s", lastUserContent)
+		}
+		if !strings.Contains(lastUserContent, "[FrostAgent 安全审查系统]") {
+			t.Errorf("LLM 请求必须包含脱敏标记: %s", lastUserContent)
+		}
+		if calls := classifierCalls.Load(); calls == 0 {
+			t.Error("明确唤醒机器人的群聊消息必须触发审查模型")
+		}
+	})
 }
 
 func TestWS_MockConnection_DoesNotEnqueueExtraction(t *testing.T) {
@@ -4228,6 +4737,22 @@ func TestOneBotMockConnection_ZeroDurableMutation(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 	engine.Security = security.NewController(tmpDir)
+	engine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if strings.Contains(strings.ToLower(input.Normalized), "ignore all previous") {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryPromptInjection,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "prompt injection detected",
+				}, nil
+			}
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -4553,6 +5078,15 @@ func TestWS_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
 	engine.GroupSummaryStore = summaryStore
 	engine.Security = security.NewController(tmpDir)
+	engine.Security.SetClassifier(&mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{
+				Category:  security.RiskCategoryNone,
+				RiskLevel: security.RiskLevelNone,
+				Reason:    "benign",
+			}, nil
+		},
+	})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()

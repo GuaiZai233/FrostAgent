@@ -35,7 +35,8 @@ type RunContext struct {
 	Billing             *BillingRunState
 	RouteScope          modelrouter.Scope
 	RouteSnapshot       *modelrouter.Snapshot
-	Mock                bool // Mock / ephemeral session: do not write to persistent memory or group summary
+	SecurityNotice      string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
+	Mock                bool   // Mock / ephemeral session: do not write to persistent memory or group summary
 	Epoch               uint64
 }
 

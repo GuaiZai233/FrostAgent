@@ -1,4 +1,4 @@
-package security
+﻿package security
 
 import (
 	"crypto/sha256"
@@ -92,18 +92,21 @@ func (s *AccessStore) IsLocked(p Principal) (bool, AccessRecord, error) {
 	return ok && record.State == AccessLocked, record, nil
 }
 
-func (s *AccessStore) LastBlockedHash(p Principal, cutoff time.Time) string {
+func (s *AccessStore) LastBlockedHash(p Principal, cutoff time.Time) (string, error) {
+	if s == nil {
+		return "", nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	file, err := s.load()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	record, ok := file.Records[p.Key()]
 	if !ok || record.LastBlockedAt.IsZero() || record.LastBlockedAt.Before(cutoff) {
-		return ""
+		return "", nil
 	}
-	return record.LastBlockedHash
+	return record.LastBlockedHash, nil
 }
 
 func (s *AccessStore) ListLocked() ([]AccessRecord, error) {

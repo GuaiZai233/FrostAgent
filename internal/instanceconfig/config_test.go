@@ -138,6 +138,9 @@ func TestAppendToRawEnvWithoutFinalNewline(t *testing.T) {
 
 func TestApplyScopeMetadataIsDisjoint(t *testing.T) {
 	for key := range InstanceRestartKeys {
+		if SharedKeys[key] {
+			continue
+		}
 		if GlobalKeys[key] || ControlPlaneRestartKeys[key] {
 			t.Fatalf("instance restart key %s has conflicting scope", key)
 		}
@@ -178,5 +181,50 @@ func TestWriteAtomicDurableReportsPostCommitSyncFailure(t *testing.T) {
 	}
 	if string(data) != "BOT_NAME=committed\n" {
 		t.Fatalf("rename did not commit visible data: %q", data)
+	}
+}
+
+func TestSharedKeysAllowedOnBothStores(t *testing.T) {
+	dir := t.TempDir()
+	instanceStore, err := Open(filepath.Join(dir, "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalStore, err := Open(filepath.Join(dir, "global.env"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for key := range SharedKeys {
+		if !InstanceRestartKeys[key] {
+			t.Fatalf("shared key %s must be in InstanceRestartKeys", key)
+		}
+		if !ControlPlaneRestartKeys[key] {
+			t.Fatalf("shared key %s must be in ControlPlaneRestartKeys", key)
+		}
+
+		// Verify instance store allows Update, Get, Replace
+		if err := instanceStore.Update(key, "30s", false); err != nil {
+			t.Fatalf("failed to update shared key %s on instance store: %v", key, err)
+		}
+		if instanceStore.Get(key) != "30s" {
+			t.Fatalf("expected instance store to have %s=30s, got %q", key, instanceStore.Get(key))
+		}
+		// Must not leak to global store
+		if globalStore.Get(key) != "" {
+			t.Fatalf("instance store update leaked to global store for %s: %q", key, globalStore.Get(key))
+		}
+
+		// Verify global store allows Update, Get, Replace
+		if err := globalStore.Update(key, "45s", false); err != nil {
+			t.Fatalf("failed to update shared key %s on global store: %v", key, err)
+		}
+		if globalStore.Get(key) != "45s" {
+			t.Fatalf("expected global store to have %s=45s, got %q", key, globalStore.Get(key))
+		}
+		// Must not overwrite instance store
+		if instanceStore.Get(key) != "30s" {
+			t.Fatalf("global store update mutated instance store for %s: %q", key, instanceStore.Get(key))
+		}
 	}
 }

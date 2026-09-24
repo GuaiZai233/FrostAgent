@@ -934,6 +934,11 @@ func (m *Manager) sharedPathForTest() string {
 func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "Security Gateway") {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"category\":\"none\",\"risk_level\":\"none\",\"intent\":\"benign\",\"confidence\":0.99}"},"finish_reason":"stop"}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"mock reply"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
 	}))
 	defer upstream.Close()

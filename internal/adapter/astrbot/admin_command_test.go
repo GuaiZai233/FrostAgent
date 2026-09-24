@@ -636,7 +636,7 @@ func TestAstrBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBefore
 		Type:        "event",
 		EventType:   "message",
 		MessageID:   "msg_sec_002",
-		IsAt:        false,
+		IsAt:        true,
 		UserID:      "20002",
 		GroupID:     "30001",
 		MessageType: "group",

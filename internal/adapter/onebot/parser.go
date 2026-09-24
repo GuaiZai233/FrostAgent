@@ -183,3 +183,57 @@ func ParseMessageSegments(raw json.RawMessage) []content.MessageSegment {
 
 	return nil
 }
+
+// EventRouting captures the trusted ingress routing state evaluated on the pristine transport event.
+type EventRouting struct {
+	Derived      bool
+	WakeSignals  GroupWakeSignals
+	ReplyContext resolvedReplyContext
+}
+
+// SanitizeOneBotMessage rewrites unsafe text with sanitizedContent while preserving non-text routing segments.
+func SanitizeOneBotMessage(raw json.RawMessage, sanitizedContent string) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		b, _ := json.Marshal(sanitizedContent)
+		return b
+	}
+	segments := ParseMessageSegments(raw)
+	if len(segments) == 0 {
+		b, _ := json.Marshal(sanitizedContent)
+		return b
+	}
+	var rawSegments []content.MessageSegment
+	isArray := json.Unmarshal(raw, &rawSegments) == nil
+	if !isArray {
+		b, _ := json.Marshal(sanitizedContent)
+		return b
+	}
+
+	var newSegments []content.MessageSegment
+	hasText := false
+	for _, seg := range segments {
+		if seg.Type == "text" {
+			if !hasText {
+				newSegments = append(newSegments, content.MessageSegment{
+					Type: "text",
+					Data: map[string]any{"text": sanitizedContent},
+				})
+				hasText = true
+			}
+		} else {
+			newSegments = append(newSegments, seg)
+		}
+	}
+	if !hasText {
+		newSegments = append(newSegments, content.MessageSegment{
+			Type: "text",
+			Data: map[string]any{"text": sanitizedContent},
+		})
+	}
+	b, err := json.Marshal(newSegments)
+	if err != nil {
+		fallback, _ := json.Marshal(sanitizedContent)
+		return fallback
+	}
+	return b
+}

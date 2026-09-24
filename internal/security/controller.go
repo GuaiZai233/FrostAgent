@@ -1,8 +1,13 @@
-package security
+﻿package security
 
 import (
+	"FrostAgent/internal/core"
+	"FrostAgent/internal/logs"
+	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"time"
 )
 
 var (
@@ -13,6 +18,7 @@ var (
 const (
 	RejectInspectorMsg = "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！"
 	RejectGatewayMsg   = "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。"
+	RejectFailureMsg   = "FrostAgent 错误：Request rejected by security service: 安全审查服务暂时不可用，请稍后重试。"
 )
 
 type Controller struct {
@@ -25,6 +31,120 @@ func NewController(dataDir string) *Controller {
 	access := NewAccessStore(filepath.Join(dataDir, "security_access.json"))
 	audit := NewAuditStore(filepath.Join(dataDir, "security_audit.jsonl"), 1000)
 	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit)}
+}
+
+func (c *Controller) ClassifierTimeout() time.Duration {
+	if c != nil && c.Watchdog != nil {
+		return c.Watchdog.ClassifierTimeout()
+	}
+	return DefaultClassifierTimeout
+}
+
+func (c *Controller) SetClassifierTimeout(d time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetClassifierTimeout(d)
+	}
+}
+
+func (c *Controller) SetClassifier(classifier Classifier) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetClassifier(classifier)
+	}
+}
+
+func (c *Controller) SetLLMProvider(provider core.LLMProvider, model string) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetLLMProvider(provider, model)
+	}
+}
+
+func (c *Controller) SetLLMProviderWithTimeout(provider core.LLMProvider, model string, timeout time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetLLMProviderWithTimeout(provider, model, timeout)
+	}
+}
+
+func (c *Controller) SetInstanceProvider(instanceID string, provider core.LLMProvider, model string) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetInstanceProvider(instanceID, provider, model)
+	}
+}
+
+func (c *Controller) SetInstanceProviderWithTimeout(instanceID string, provider core.LLMProvider, model string, timeout time.Duration) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetInstanceProviderWithTimeout(instanceID, provider, model, timeout)
+	}
+}
+
+func (c *Controller) SetInstanceClassifier(instanceID string, classifier Classifier) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.SetInstanceClassifier(instanceID, classifier)
+	}
+}
+
+func (c *Controller) RemoveInstanceProvider(instanceID string) {
+	if c != nil && c.Watchdog != nil {
+		c.Watchdog.RemoveInstanceProvider(instanceID)
+	}
+}
+
+// ForRuntime creates a scoped runtime Controller sharing global AccessStore and AuditStore,
+// with a dedicated Watchdog using the given provider without mutating the parent Controller.
+func (c *Controller) ForRuntime(provider core.LLMProvider, model string) *Controller {
+	return c.ForRuntimeWithTimeout(provider, model, c.ClassifierTimeout())
+}
+
+// ForRuntimeWithTimeout creates a scoped runtime Controller with an explicit timeout.
+func (c *Controller) ForRuntimeWithTimeout(provider core.LLMProvider, model string, timeout time.Duration) *Controller {
+	if c == nil {
+		return nil
+	}
+	wd := NewWatchdog(c.Access, c.Audit)
+	if timeout > 0 {
+		wd.SetClassifierTimeout(timeout)
+	}
+	if provider != nil {
+		wd.SetLLMProviderWithTimeout(provider, model, timeout)
+	}
+	return &Controller{
+		Access:   c.Access,
+		Audit:    c.Audit,
+		Watchdog: wd,
+	}
+}
+
+// ForInstance registers the instance provider on the shared controller and returns a scoped
+// runtime Controller sharing global AccessStore and AuditStore.
+func (c *Controller) ForInstance(instanceID string, provider core.LLMProvider, model string) *Controller {
+	return c.ForInstanceWithTimeout(instanceID, provider, model, c.ClassifierTimeout())
+}
+
+// ForInstanceWithTimeout registers the instance provider with an explicit timeout and returns a scoped runtime Controller.
+func (c *Controller) ForInstanceWithTimeout(instanceID string, provider core.LLMProvider, model string, timeout time.Duration) *Controller {
+	if c == nil {
+		return nil
+	}
+	if instanceID != "" {
+		c.SetInstanceProviderWithTimeout(instanceID, provider, model, timeout)
+	}
+	wd := NewWatchdog(c.Access, c.Audit)
+	if timeout > 0 {
+		wd.SetClassifierTimeout(timeout)
+	}
+	if provider != nil {
+		wd.SetLLMProviderWithTimeout(provider, model, timeout)
+	}
+	return &Controller{
+		Access:   c.Access,
+		Audit:    c.Audit,
+		Watchdog: wd,
+	}
+}
+
+func NewControllerWithProvider(dataDir string, provider core.LLMProvider, model string) *Controller {
+	ctrl := NewController(dataDir)
+	ctrl.SetLLMProvider(provider, model)
+	return ctrl
 }
 
 // GateIngress applies the global lock before any stateful ingress processing,
@@ -73,15 +193,38 @@ func (c *Controller) Unlock(p Principal) error {
 }
 
 func (c *Controller) GateIngress(p Principal, content string, meta AuditEvent) WatchdogDecision {
+	return c.GateIngressWithContext(context.Background(), p, content, meta)
+}
+
+func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, content string, meta AuditEvent) WatchdogDecision {
 	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
+	if meta.ID == "" {
+		meta.ID = GenerateEvaluationID(StageIngress)
+	}
 	if c.Access == nil || c.Watchdog == nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=access store or watchdog is nil eval_id=%s", meta.ID))
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       "security control unavailable",
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    "unconfigured",
+			SafeSummary:  "access store or watchdog is nil",
+		}
 	}
 	locked, record, err := c.Access.IsLocked(p)
 	if err != nil {
-		return WatchdogDecision{Action: WatchdogBlock, Reason: "access-control state unavailable"}
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制状态异常 (Fail-Closed): principal=%s error_type=%s reason=%s eval_id=%s", p.Key(), ErrorType(err), SafeErrorSummary(err), meta.ID))
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       fmt.Sprintf("access-control state unavailable: %s", SafeErrorSummary(err)),
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    ErrorType(err),
+			SafeSummary:  SafeErrorSummary(err),
+		}
 	}
 	if locked {
 		meta.Principal = p
@@ -90,10 +233,12 @@ func (c *Controller) GateIngress(p Principal, content string, meta AuditEvent) W
 		meta.Action = WatchdogBlock
 		meta.Reason = record.Reason
 		meta.Hash = ContentHash(content)
-		_ = c.Audit.Append(meta)
-		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta}
+		if c.Audit != nil {
+			_ = c.Audit.Append(meta)
+		}
+		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta, EvaluationID: meta.ID}
 	}
-	return c.Watchdog.Evaluate(p, StageIngress, SourceUserDirect, content, meta)
+	return c.Watchdog.EvaluateWithContext(ctx, p, StageIngress, SourceUserDirect, content, meta)
 }
 
 // GateIngressDryRun evaluates ingress content without mutating AccessStore strikes/locks or AuditStore.
@@ -122,10 +267,14 @@ func (c *Controller) GateIngressDryRun(p Principal, content string, meta AuditEv
 
 // Evaluate passes content to the underlying Watchdog with explicit stage and provenance source.
 func (c *Controller) Evaluate(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateWithContext(context.Background(), p, stage, source, content, meta)
+}
+
+func (c *Controller) EvaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	if c == nil || c.Watchdog == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
-	return c.Watchdog.Evaluate(p, stage, source, content, meta)
+	return c.Watchdog.EvaluateWithContext(ctx, p, stage, source, content, meta)
 }
 
 // EvaluateDryRun evaluates content with the underlying Watchdog without mutating AccessStore or AuditStore.
@@ -163,13 +312,17 @@ func (c *Controller) IsLocked(p Principal) bool {
 
 // RejectMessage returns the user-facing error message for a blocked security decision.
 // If the principal is locked (in AccessStore, via WatchdogLock action, or with ErrLocked reason),
-// it returns RejectGatewayMsg. Otherwise, it returns RejectInspectorMsg.
+// it returns RejectGatewayMsg. If the block is due to classifier/infrastructure failure (IsFailure),
+// it returns RejectFailureMsg. Otherwise, it returns RejectInspectorMsg.
 func (c *Controller) RejectMessage(p Principal, decision WatchdogDecision) string {
 	if c != nil && c.IsLocked(p) {
 		return RejectGatewayMsg
 	}
 	if decision.Action == WatchdogLock || decision.Reason == ErrLocked.Error() {
 		return RejectGatewayMsg
+	}
+	if decision.IsFailure {
+		return RejectFailureMsg
 	}
 	return RejectInspectorMsg
 }

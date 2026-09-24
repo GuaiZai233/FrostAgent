@@ -7,6 +7,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
@@ -325,15 +326,25 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+			var warningNotice string
+			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
 				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
 					continue
 				}
+				var scope *runtimescope.Scope
+				if a.engine != nil {
+					scope = a.engine.Scope
+				}
+				routing = EventRouting{
+					Derived:     true,
+					WakeSignals: DetectGroupWakeSignals(event, scope),
+				}
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
+				isExplicitlyWoken(event, a.engine, routing) {
 				secPlatform := "onebot"
 				if wsConn.mock {
 					secPlatform = "mock"
@@ -346,11 +357,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if wsConn.mock {
 					decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 				} else {
-					decision = a.engine.Security.GateIngress(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 				}
 				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
-					if shouldSendSecurityDirectReply(event, a.engine) {
+					if decision.IsFailure {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+						if event.MessageType == "group" && decision.SanitizedContent != "" {
+							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+						}
+					}
+					if shouldSendSecurityDirectReply(event, a.engine, routing) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						action := "send_private_msg"
 						type1 := "user_id"
@@ -363,6 +381,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
 					}
 					continue
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制脱敏: user=%d category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+					event.Message = SanitizeOneBotMessage(event.Message, decision.SanitizedContent)
+					if len(event.Messages) > 0 && string(event.Messages) != "null" {
+						var raws []json.RawMessage
+						if err := json.Unmarshal(event.Messages, &raws); err == nil && len(raws) > 0 {
+							var sanitizedRaws []json.RawMessage
+							for _, raw := range raws {
+								sanitizedRaws = append(sanitizedRaws, SanitizeOneBotMessage(raw, decision.SanitizedContent))
+							}
+							b, _ := json.Marshal(sanitizedRaws)
+							event.Messages = b
+						} else {
+							event.Messages = nil
+						}
+					}
+				} else if decision.Action == security.WatchdogWarn {
+					warningNotice = decision.WarningNotice
 				}
 			}
 
@@ -393,7 +429,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn.inFlight.Add(1)
 			if !a.engine.Go(func() {
 				defer wsConn.inFlight.Done()
-				processEvent(wsConn, event, a.engine, turn, routeSnapshot)
+				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing)
 			}) {
 				wsConn.inFlight.Done()
 				if turn != nil {
@@ -470,7 +506,7 @@ func (a *Adapter) CloseConnections() {
 	}
 }
 
-func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) bool {
+func isExplicitlyWoken(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
 	if event.MessageType == "private" {
 		return true
 	}
@@ -478,12 +514,19 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine) 
 		return false
 	}
 	if engine != nil && engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
-		return true
+		return false
 	}
-	if engine != nil && DetectGroupWakeSignals(event, engine.Scope).Any() {
-		return true
+	var wakeSignals GroupWakeSignals
+	if len(routings) > 0 && routings[0].Derived {
+		wakeSignals = routings[0].WakeSignals
+	} else if engine != nil {
+		wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
 	}
-	return false
+	return wakeSignals.Any()
+}
+
+func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
+	return isExplicitlyWoken(event, engine, routings...)
 }
 
 func validateOutboundMediaURL(rawURL string) error {

@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
@@ -316,15 +317,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
-
+			var warningNotice string
+			var scope *runtimescope.Scope
+			if a.engine != nil {
+				scope = a.engine.Scope
+			}
+			pristineShouldReply := false
 			if event.MessageType == "group" || event.MessageType == "private" {
 				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
+				pristineShouldReply = shouldReply(event, scope)
+				if event.Metadata == nil {
+					event.Metadata = make(map[string]any)
+				}
+				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 			}
 
-			if a.engine != nil && a.engine.Security != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
+			if a.engine != nil && a.engine.Security != nil && pristineShouldReply {
 				platform := event.Platform
 				if platform == "" {
 					platform = "astrbot"
@@ -340,15 +350,32 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if c.mock {
 					decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
 				} else {
-					decision = a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
 				}
 				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
-					if shouldReply(event, a.engine.Scope) {
-						msg := a.engine.Security.RejectMessage(principal, decision)
-						_ = sendDirectReply(event, c, msg)
+					if decision.IsFailure {
+						if a.engine != nil && a.engine.Scope != nil {
+							a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+						} else {
+							logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+						}
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+						if event.MessageType == "group" && decision.SanitizedContent != "" {
+							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+						}
 					}
+					msg := a.engine.Security.RejectMessage(principal, decision)
+					_ = sendDirectReply(event, c, msg)
 					continue
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+					event.Content = decision.SanitizedContent
+					if len(event.Messages) > 0 {
+						event.Messages = []string{decision.SanitizedContent}
+					}
+				} else if decision.Action == security.WatchdogWarn {
+					warningNotice = decision.WarningNotice
 				}
 			}
 
@@ -380,7 +407,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			c.inFlight.Add(1)
 			if !a.engine.Go(func() {
 				defer c.inFlight.Done()
-				processEvent(c, event, a.engine, turn, routeSnapshot)
+				processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
 			}) {
 				c.inFlight.Done()
 				if turn != nil {
