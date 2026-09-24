@@ -344,7 +344,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
+				isExplicitlyWoken(event, a.engine, routing) {
 				secPlatform := "onebot"
 				if wsConn.mock {
 					secPlatform = "mock"
@@ -506,7 +506,7 @@ func (a *Adapter) CloseConnections() {
 	}
 }
 
-func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
+func isExplicitlyWoken(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
 	if event.MessageType == "private" {
 		return true
 	}
@@ -514,7 +514,7 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, 
 		return false
 	}
 	if engine != nil && engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
-		return true
+		return false
 	}
 	var wakeSignals GroupWakeSignals
 	if len(routings) > 0 && routings[0].Derived {
@@ -523,6 +523,10 @@ func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, 
 		wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
 	}
 	return wakeSignals.Any()
+}
+
+func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
+	return isExplicitlyWoken(event, engine, routings...)
 }
 
 func validateOutboundMediaURL(rawURL string) error {

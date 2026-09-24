@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1407,10 +1408,17 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 			t.Fatalf("发送未唤醒群聊违规消息失败: %v", err)
 		}
 
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		_, _, err := conn.ReadMessage()
-		if err == nil {
-			t.Error("未唤醒机器人的群聊拦截不应发送报错回复")
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("读取未唤醒群聊消息响应失败: %v", err)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析 action 失败: %v", err)
+		}
+		if act.Action != "noop" {
+			t.Errorf("未唤醒群聊消息必须返回 noop 且绝不发送报错回复, 实际 action=%s", act.Action)
 		}
 	})
 
@@ -1757,8 +1765,10 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	var classifierCalls atomic.Int64
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			classifierCalls.Add(1)
 			if strings.Contains(input.Normalized, "malicious_filter_payload") || strings.Contains(input.Content, "malicious_filter_payload") {
 				return security.ClassificationResult{
 					Category:  security.RiskCategoryPromptInjection,
@@ -1789,9 +1799,10 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 		conn := dialWS(t)
 		defer conn.Close()
 
+		classifierCalls.Store(0)
+
 		// Unwoken background group message with high-risk content.
-		// The sanitized content "[FrostAgent 安全审查系统]..." contains default alias "FrostAgent",
-		// which MUST NOT trigger a false alias wake.
+		// Crucially, messages that do NOT explicitly wake the model must NOT invoke the security review model.
 		event := Event{
 			Type:        "event",
 			EventType:   "message",
@@ -1823,23 +1834,26 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 			t.Errorf("未唤醒的高危脱敏群聊消息必须返回 noop 绝不触发对话回复, 实际 action=%s", act.Action)
 		}
 
+		if calls := classifierCalls.Load(); calls != 0 {
+			t.Errorf("未明确唤醒机器人的群聊背景消息绝不应触发安全审查模型, 实际调用次数=%d", calls)
+		}
+
 		session := engine.SessionManager.GetOrCreate("astrbot:group:grp_decoupled_88")
 		snap := session.SnapshotGroupContext(10, 1000, "")
 		if len(snap.RecentMessages) == 0 {
-			t.Fatal("期望 group compact buffer 记录了脱敏后的消息，实际为空")
+			t.Fatal("期望 group compact buffer 记录了背景消息，实际为空")
 		}
 		recordedText := snap.RecentMessages[0]
-		if strings.Contains(recordedText, "malicious_filter_payload") {
-			t.Errorf("group compact 不得包含原始恶意文本: %s", recordedText)
-		}
-		if !strings.Contains(recordedText, "[FrostAgent 安全审查系统]") {
-			t.Errorf("group compact 必须记录脱敏后标记: %s", recordedText)
+		if !strings.Contains(recordedText, "just background talk malicious_filter_payload") {
+			t.Errorf("group compact 必须记录被动进入的背景对话: %s", recordedText)
 		}
 	})
 
 	t.Run("ExplicitlyAtAddressedHighFilterWakesAndRepliesSanitized", func(t *testing.T) {
 		conn := dialWS(t)
 		defer conn.Close()
+
+		classifierCalls.Store(0)
 
 		// Explicitly addressed group message with high-risk content.
 		event := Event{
@@ -1872,6 +1886,10 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 		}
 		if act.Action != "send_message" {
 			t.Errorf("期望 action=send_message, 实际=%s", act.Action)
+		}
+
+		if calls := classifierCalls.Load(); calls == 0 {
+			t.Error("显式唤醒的高危群聊消息必须触发审查模型")
 		}
 
 		mockLLM.mu.Lock()

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4455,8 +4456,10 @@ func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	var classifierCalls atomic.Int64
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			classifierCalls.Add(1)
 			if strings.Contains(input.Normalized, "malicious_filter_payload") {
 				return security.ClassificationResult{
 					Category:  security.RiskCategoryPromptInjection,
@@ -4487,9 +4490,10 @@ func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
 		conn := dialWS(t)
 		defer conn.Close()
 
+		classifierCalls.Store(0)
+
 		// Unwoken background group message with high-risk content.
-		// Crucially, the sanitized content "[FrostAgent 安全审查系统]..." contains default alias "FrostAgent",
-		// which MUST NOT trigger a false alias wake.
+		// Crucially, messages that do NOT explicitly wake the model must NOT invoke the security review model.
 		event := model.OneBotEvent{
 			SelfID:      123456,
 			PostType:    "message",
@@ -4507,26 +4511,29 @@ func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
 		conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 		_, _, err := conn.ReadMessage()
 		if err == nil {
-			t.Fatal("未唤醒的高危脱敏群聊消息绝不应触发回复 (False Wake)")
+			t.Fatal("未唤醒的高危群聊消息绝不应触发回复 (False Wake)")
+		}
+
+		if calls := classifierCalls.Load(); calls != 0 {
+			t.Errorf("未明确唤醒机器人的群聊背景消息绝不应触发安全审查模型, 实际调用次数=%d", calls)
 		}
 
 		session := engine.SessionManager.GetOrCreate("group:60001")
 		snap := session.SnapshotGroupContext(10, 1000, "")
 		if len(snap.RecentMessages) == 0 {
-			t.Fatal("期望 group compact buffer 记录了脱敏后的消息，实际为空")
+			t.Fatal("期望 group compact buffer 记录了背景消息，实际为空")
 		}
 		recordedText := snap.RecentMessages[0]
-		if strings.Contains(recordedText, "malicious_filter_payload") {
-			t.Errorf("group compact 不得包含原始恶意文本: %s", recordedText)
-		}
-		if !strings.Contains(recordedText, "[FrostAgent 安全审查系统]") {
-			t.Errorf("group compact 必须记录脱敏后标记: %s", recordedText)
+		if !strings.Contains(recordedText, "just background talk malicious_filter_payload") {
+			t.Errorf("group compact 必须记录被动进入的背景对话: %s", recordedText)
 		}
 	})
 
 	t.Run("ExplicitlyAtAddressedHighFilterWakesAndRepliesSanitized", func(t *testing.T) {
 		conn := dialWS(t)
 		defer conn.Close()
+
+		classifierCalls.Store(0)
 
 		// Explicitly @-addressed group message with high-risk content.
 		event := model.OneBotEvent{
@@ -4589,6 +4596,9 @@ func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
 		}
 		if !strings.Contains(lastUserContent, "[FrostAgent 安全审查系统]") {
 			t.Errorf("LLM 请求必须包含脱敏标记: %s", lastUserContent)
+		}
+		if calls := classifierCalls.Load(); calls == 0 {
+			t.Error("明确唤醒机器人的群聊消息必须触发审查模型")
 		}
 	})
 }

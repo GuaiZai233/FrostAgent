@@ -249,11 +249,11 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		} else {
 			wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
 		}
-		replyContext := conn.lookupReplyContext(event)
-		conn.observeResolvedReply(event, replyContext)
-		if !wakeSignals.Any() && !replyContext.MentionsBot {
+		if !wakeSignals.Any() {
 			return
 		}
+		replyContext := conn.lookupReplyContext(event)
+		conn.observeResolvedReply(event, replyContext)
 		if engine != nil && engine.SessionManager != nil {
 			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
 				if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {

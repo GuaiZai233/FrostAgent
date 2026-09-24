@@ -322,19 +322,19 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if a.engine != nil {
 				scope = a.engine.Scope
 			}
+			pristineShouldReply := false
 			if event.MessageType == "group" || event.MessageType == "private" {
 				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
-				pristineShouldReply := shouldReply(event, scope)
+				pristineShouldReply = shouldReply(event, scope)
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 			}
 
-			if a.engine != nil && a.engine.Security != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
+			if a.engine != nil && a.engine.Security != nil && pristineShouldReply {
 				platform := event.Platform
 				if platform == "" {
 					platform = "astrbot"
@@ -365,10 +365,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					if shouldReply(event, a.engine.Scope) {
-						msg := a.engine.Security.RejectMessage(principal, decision)
-						_ = sendDirectReply(event, c, msg)
-					}
+					msg := a.engine.Security.RejectMessage(principal, decision)
+					_ = sendDirectReply(event, c, msg)
 					continue
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
