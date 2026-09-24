@@ -3846,6 +3846,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if strings.Contains(strings.ToLower(input.Normalized), "ignore all previous") {
@@ -4124,6 +4125,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir()) // No classifier configured
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failSrv, failWSURL := startWSTestServer(failEngine)
 		defer failSrv.Close()
 
@@ -4163,6 +4165,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failEngine.Security.SetClassifier(&mockClassifier{
 			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
@@ -4223,6 +4226,7 @@ func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 
 	var mu sync.Mutex
 	stageCallCounts := make(map[security.WatchdogStage]int)
@@ -4303,6 +4307,7 @@ func TestOneBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T)
 	mockLLM := &mockLLMProvider{}
 	failEngine := newTestEngine(mockLLM)
 	failEngine.Security = security.NewController(t.TempDir())
+	failEngine.Security.SetMode(security.ControlModeAggressive)
 
 	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
 	failEngine.Security.SetClassifier(&mockClassifier{
@@ -4456,6 +4461,7 @@ func TestOneBotGroupFilterDecoupledRouting(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	var classifierCalls atomic.Int64
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {

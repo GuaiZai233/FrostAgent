@@ -103,3 +103,128 @@ func TestSecurityAuthHonorsScopedConfigWithoutProcessEnv(t *testing.T) {
 		t.Fatalf("expected principal to be unlocked, locked=%v err=%v", locked, err)
 	}
 }
+
+func TestSecurityControlModeEndpoints(t *testing.T) {
+	os.Unsetenv("MCP_CONTROL_TOKEN")
+	os.Unsetenv("ADMIN_TOKEN")
+	os.Unsetenv("MCP_ENFORCE_LOCAL_TOKEN")
+	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
+
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	envContent := []byte("MCP_CONTROL_TOKEN=mode-secret-token\nMCP_ENFORCE_LOCAL_TOKEN=true\n")
+	if err := os.WriteFile(envPath, envContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	globalStore, err := instanceconfig.Open(envPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctrl := securityctl.NewController(tmpDir)
+	svc := NewWithStore(ctrl, globalStore.Get, globalStore)
+
+	// 1. GET /api/security/mode unauthorized
+	req := httptest.NewRequest(http.MethodGet, "/api/security/mode", nil)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", w.Code)
+	}
+
+	// 2. GET /api/security/mode authorized -> default is simple
+	req = httptest.NewRequest(http.MethodGet, "/api/security/mode", nil)
+	req.Header.Set("Authorization", "Bearer mode-secret-token")
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var modeResp struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &modeResp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if modeResp.Mode != string(securityctl.ControlModeSimple) {
+		t.Fatalf("expected initial mode %q, got %q", securityctl.ControlModeSimple, modeResp.Mode)
+	}
+
+	// 3. POST /api/security/mode unauthorized
+	req = httptest.NewRequest(http.MethodPost, "/api/security/mode", bytes.NewReader([]byte(`{"mode":"aggressive"}`)))
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for post without auth, got %d", w.Code)
+	}
+
+	// 4. POST /api/security/mode with invalid mode -> 400 Bad Request
+	invalidModes := []string{`{"mode":""}`, `{"mode":"invalid_mode"}`, `{"mode":123}`, `bad json`}
+	for _, body := range invalidModes {
+		req = httptest.NewRequest(http.MethodPost, "/api/security/mode", bytes.NewReader([]byte(body)))
+		req.Header.Set("Authorization", "Bearer mode-secret-token")
+		w = httptest.NewRecorder()
+		svc.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid body %q, got %d", body, w.Code)
+		}
+	}
+
+	// 5. POST /api/security/mode with "aggressive" -> 200 OK, persists to store & updates ctrl
+	req = httptest.NewRequest(http.MethodPost, "/api/security/mode", bytes.NewReader([]byte(`{"mode":"aggressive"}`)))
+	req.Header.Set("Authorization", "Bearer mode-secret-token")
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &modeResp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if modeResp.Mode != string(securityctl.ControlModeAggressive) {
+		t.Fatalf("expected response mode %q, got %q", securityctl.ControlModeAggressive, modeResp.Mode)
+	}
+	if ctrl.Mode() != securityctl.ControlModeAggressive {
+		t.Fatalf("expected controller mode to be aggressive, got %q", ctrl.Mode())
+	}
+	if globalStore.Get("SECURITY_CONTROL_MODE") != "aggressive" {
+		t.Fatalf("expected store to have aggressive, got %q", globalStore.Get("SECURITY_CONTROL_MODE"))
+	}
+
+	// Verify persistence in .env file directly
+	rawEnv, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rawEnv, []byte("SECURITY_CONTROL_MODE=aggressive")) {
+		t.Fatalf(".env file does not contain updated mode: %s", string(rawEnv))
+	}
+
+	// 6. POST /api/security/mode with "off" (also test trailing slash)
+	req = httptest.NewRequest(http.MethodPost, "/api/security/mode/", bytes.NewReader([]byte(`{"mode":"off"}`)))
+	req.Header.Set("Authorization", "Bearer mode-secret-token")
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for trailing slash POST, got %d", w.Code)
+	}
+	if ctrl.Mode() != securityctl.ControlModeOff {
+		t.Fatalf("expected controller mode to be off, got %q", ctrl.Mode())
+	}
+
+	// 7. GET /api/security/mode (with trailing slash) -> returns "off"
+	req = httptest.NewRequest(http.MethodGet, "/api/security/mode/", nil)
+	req.Header.Set("Authorization", "Bearer mode-secret-token")
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for trailing slash GET, got %d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &modeResp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if modeResp.Mode != string(securityctl.ControlModeOff) {
+		t.Fatalf("expected mode %q, got %q", securityctl.ControlModeOff, modeResp.Mode)
+	}
+}

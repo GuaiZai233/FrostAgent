@@ -106,6 +106,13 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		if rawTimeout != "" {
 			m.security.SetClassifierTimeout(security.ValidateClassifierTimeout(rawTimeout, security.DefaultClassifierTimeout))
 		}
+
+		rawMode := strings.TrimSpace(global.Get("SECURITY_CONTROL_MODE"))
+		if rawMode != "" && !security.IsValidControlMode(rawMode) {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("SECURITY_CONTROL_MODE 配置值非法 %q，安全回退到 simple 模式", rawMode))
+		}
+		mode := security.ParseControlMode(rawMode)
+		m.security.SetMode(mode)
 	}
 	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
 	if err == nil {
@@ -352,6 +359,9 @@ func (m *Manager) List() ([]Info, int) {
 
 // SecurityController returns the single controller shared by every runtime.
 func (m *Manager) SecurityController() *security.Controller { return m.security }
+
+// GlobalConfig returns the global configuration store.
+func (m *Manager) GlobalConfig() *instanceconfig.Store { return m.global }
 
 // ControlPlaneGetenv returns the configuration getter used for control plane authorization.
 func (m *Manager) ControlPlaneGetenv() func(string) string { return m.mcpGetenv }

@@ -1281,6 +1281,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if strings.Contains(input.Content, "ignore all previous instructions") {
@@ -1517,6 +1518,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failSrv, _, failWSURL := startWSTestServer(failEngine)
 		defer failSrv.Close()
 
@@ -1558,6 +1560,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failEngine.Security.SetClassifier(&mockClassifier{
 			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
@@ -1610,6 +1613,7 @@ func TestAstrBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T
 	mockLLM := &mockLLMProvider{}
 	failEngine := newTestEngine(mockLLM)
 	failEngine.Security = security.NewController(t.TempDir())
+	failEngine.Security.SetMode(security.ControlModeAggressive)
 
 	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
 	failEngine.Security.SetClassifier(&mockClassifier{
@@ -1765,6 +1769,7 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	var classifierCalls atomic.Int64
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {

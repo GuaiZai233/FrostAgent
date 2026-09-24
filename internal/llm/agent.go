@@ -855,6 +855,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					res, err = tool.Execute(tc.Function.Arguments)
 				}
 				if err != nil {
+					if errors.Is(err, security.ErrBanUserSuccess) {
+						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
+						return AgentRunResult{
+							Content:       security.RejectGatewayMsg,
+							MemoryWritten: memoryWritten,
+							Usage:         totalUsage,
+						}
+					}
 					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
 				} else {
 					toolSucceeded = true

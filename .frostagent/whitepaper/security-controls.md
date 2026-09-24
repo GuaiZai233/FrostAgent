@@ -96,7 +96,37 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
   - **构建未决结果与状态门禁**：同步编译构建采用独立长超时（180s），任何传输中断（连接重置、意外截断）、超时、HTTP 5xx 服务端错误（因 ActionsCat Core 先落盘持久化 Build 记录后执行沙箱编译）以及 2xx 响应不可解析均严格包装为 `ErrBuildUnknownResult`（映射为 HTTP 504 Gateway Timeout），阻断误报失败状态，并通过 `actionscat_list_builds` 引导 Agent 幂等排查后台状态（包含初次为空时的短暂重试查询建议）防止并发重复构建；激活构建必须断言 `build.Status == "succeeded"`，并在编译失败时输出截断日志与不可变版本新建指引；
   - **敏感凭据脱敏隔离**：外部任务系统执行结果暴露给模型前，严格采用 DTO 白名单过滤，彻底剥离持久状态注入项（如 `planned_env`），防止凭据泄露至大模型上下文；
   - **受保护运行环境变量防御**：工具层对传入的动态环境变量进行保留前缀黑名单校验（拦截 `ACTIONSCAT_*`），杜绝模型输出伪造沙箱内的受信任执行身份。
-- **管理面板与控制面接口**：控制面根路径提供受 Bearer 认证保护的 `/api/security/locked` 与 `/api/security/unlock` REST 端点，与 MCP 控制面深度复用统一的 Scoped `instanceconfig.Store` 鉴权源，在无需将 Token 镜像到操作系统进程环境变量的配置存储模式下依然能够严格受控，配合 Web 控制台「安全控制」页提供全局锁定状态的可视化查看与人工解锁支持。
+- **管理面板与控制面接口**：控制面根路径提供受 Bearer 认证保护的 `/api/security/locked`、`/api/security/unlock`、`/api/security/mode` REST 端点，与 MCP 控制面深度复用统一的 Scoped `instanceconfig.Store` 鉴权源，在无需将 Token 镜像到操作系统进程环境变量的配置存储模式下依然能够严格受控，配合 Web 控制台「安全控制」页提供全局模式热切换、锁定状态的可视化查看与人工解锁支持。
+- **全局安全控制模式与智能体自主封禁体系（Security Control Modes & Autonomous Banning Architecture）**：
+  为兼顾低资源与个人场景的零审查开销诉求，以及高对抗多用户环境下的严格安全边界，系统引入三级全局安全控制模式，并为智能体赋予自主防卫（`ban_user`）能力：
+  - **三级控制模式定义与行为矩阵**：
+    - **`off`（无审查）**：完全关闭所有语义安全审查。用户直接输入、引用回复、群聊上下文、多模态视觉描述、平台元数据、工具入参、工具执行结果及模型最终输出均彻底跳过 Watchdog 分类器调用，分类器模型请求数严格为 0。`ban_user` 工具处于未激活状态（调用后返回提示文案且不实施锁定与审计）。
+    - **`simple`（简单模式，系统默认）**：跳过所有文本和工具调用的常规语义审查网关，审查模型调用消耗严格为 0；智能体自主封禁能力（`ban_user` 工具）保持激活；管理员手动封禁指令（`/ban`、`/unban`）与 `AccessStore` 全局封禁库持续强校验生效。当系统未配置 `SECURITY_CONTROL_MODE` 或配置了无效字符串时，系统一律回退至 `simple` 模式并记录告警。
+    - **`aggressive`（激进模式）**：激活全流程深层语义审查。直接用户输入、上下文、工具调用与模型回复均经由 LLM 分类器执行高严格度审查，遭遇审查模型异常或网络超时严格执行 Option A Fail-Closed 阻断。
+  - **跨模式永恒生效的安全底座不变量**：
+    无论处于 `off`、`simple` 还是 `aggressive` 模式：
+    - 主体身份访问控制检查（`CheckAccess`）均在入口最前沿执行；命中已封禁主体一律拒绝并返回 `RejectGatewayMsg`；
+    - `AccessStore` 故障严格执行 Fail-Closed 基础设施阻断，绝不因模式为 `off` 或 `simple` 而降级放行损坏或不可访问的存储；
+    - 适配器主体规范化与传输协议解耦持续生效；
+    - 命令执行沙箱隔离（Sandbox Isolation）持续生效；
+    - 管理员管理指令（`/ban`、`/unban`）及控制面 API 持续生效。
+  - **原子引用共享与全实例零重启热生效（Thread-Safe Atomic Pointer Sharing & Hot Reloading）**：
+    控制模式存储在 Control Plane 的全局根配置（`instanceconfig.GlobalKeys["SECURITY_CONTROL_MODE"]`）。`security.Controller` 内部维护 `mode *atomic.Pointer[ControlMode]`。当父控制器派生子控制器（`ForRuntimeWithTimeout`、`ForInstanceWithTimeout`）时，子控制器直接共享该指针引用。通过 REST API `POST /api/security/mode` 动态修改模式时，不仅原子更新持久化 `.env`，并且通过 `atomic.Pointer.Store` 立即对全系统所有已有及新创建的实例运行时生效，全过程无需重启 Control Plane 进程或重启实例。
+  - **智能体自主封禁工具（`ban_user` Tool Specification）**：
+    系统为智能体注册内置工具 `ban_user`，赋予其在遭受恶意攻击或滥用时主动终止对话并封禁攻击者的能力：
+    - **作用域隔离**：该工具仅向主对话 Bot 实例运行时注册，严格不向后台辅助智能体或第三方工具池泄漏。
+    - **单一职责契约**：工具名称固定为 `ban_user`，参数 Schema 严格限制为单一字段 `{"reason": "简要封禁原因"}`。
+    - **受信任上下文主体提取**：封禁目标主体严禁由模型参数声明（杜绝模型幻觉或提示词注入伪造他人 ID），而是严格从不可伪造的请求执行上下文 `llm.RunContext` 中提取 `ActorPlatform` 与 `ActorUserID`。传输适配器标识映射遵循规范化规则（OneBot -> `qq:<UID>`，AstrBot -> `astrbot:<UID>`）；对于 `mock` 调试会话，作为零持久化规则的显式例外，`mock:<UID>` 允许正常写入全局 `AccessStore` 并记录审计事件，以支持确定性安全测试。
+    - **无视管理员豁免（No Admin Exemption）**：智能体执行 `ban_user` 时不检查 `admincmd.IsAdmin`，即使当前交互主体为管理员账号亦可由 Bot 触发封禁，遵循安全防卫绝对不变量。
+    - **模式联动与工具短路拦截（Tool Short-Circuiting & Loop Break）**：
+      - 在 `off` 模式下：`ban_user` 不写入 `AccessStore`，不记录审计日志，直接返回文案：`安全审查已关闭，ban_user 工具未生效。`；
+      - 在 `simple` 与 `aggressive` 模式下：`ban_user` 立即调用 `ctrl.LockWithMeta` 将主体持久化加入全局黑名单并记录审计日志；随后返回专用哨兵错误 `security.ErrBanUserSuccess`；
+      - `llm.Engine` 工具执行循环拦截该错误后，立即中断智能体执行循环，取消当前批次中尚未执行的兄弟工具，完全跳过次级主模型推理调用，并直接向触发者返回标准网关拦截文案：`FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。`。
+    - **审查免除不变量**：`ban_user` 工具的入参与执行结果在全模式下均免除 Watchdog 语义分类器审查，杜绝封禁理由中包含敏感违规词时触发分类器拦截导致封禁执行失败。
+  - **控制面端点与 Web 控制台呈现**：
+    - `GET /api/security/mode`：返回当前生效模式 `{"mode": "off" | "simple" | "aggressive"}`；
+    - `POST /api/security/mode`：校验请求体模式合法性（非法枚举返回 400 Bad Request），持久化并热更新控制器；
+    - Web Console「安全控制」页提供 3 项单选组件卡片，展示清晰的说明文案与模式标签，具备页面加载自动探测、切换即时提交、防重复提交（提交期间禁用选项并展示 Spinner）、失败自动回滚与 Toast 提示等完整交互体验。
 - **内部测试与 Synthetic Principal**：通用 `eval` / synthetic principal 概念保留用于内部 Watchdog 单元测试及未来的自动化测试 Harness；系统不暴露或维护任何面向第三方的 HTTP Evaluation API（如 `/v1/messages`），后续真实平台测试将通过新的 Telegram Adapter 完成。
 - **细粒度系统错误可观测性与用户侧严格泛化不可用不变量（Detailed Error Observability & User-Facing Generalization Invariant）**：
   - 在所有安全故障处理点（`Watchdog.EvaluateWithContext`、`Controller.GateIngress`、`llm.Engine` 以及平台适配器 Ingress），系统错误日志（`logs.Error(logs.SYSTEM, ...)`）结构化记录具体的 Go 错误类型 `error_type=%s`（通过 `ErrorType(err)` 递归 `errors.Unwrap` 提取底层根因类型链条，如 `*fmt.wrapError[*os.PathError]` 或 `*json.SyntaxError`）以及经安全脱敏、控制字符规整与有界截断（限制在 256 字符，追加 `...` 后缀）的错误摘要 `reason=%s`（通过 `SafeErrorSummary(err)`，消除 Bearer Token、API Key、密码、URL 认证凭据与 `\r\n` 日志注入风险），并恒定保留上下文评估追踪 ID `eval_id=%s`。

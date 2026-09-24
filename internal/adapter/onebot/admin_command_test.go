@@ -636,6 +636,7 @@ func TestOneBotProcessEvent_EpochInvalidationBeforeReply(t *testing.T) {
 func TestOneBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeSecurityGate(t *testing.T) {
 	tmpDir := t.TempDir()
 	secCtrl := security.NewController(tmpDir)
+	secCtrl.SetMode(security.ControlModeAggressive)
 
 	scope := newAdminTestScope(t, map[string]string{
 		admincmd.AdminQQIDsEnv:         "20001",
