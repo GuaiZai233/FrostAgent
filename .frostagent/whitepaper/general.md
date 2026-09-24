@@ -491,7 +491,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - `actionscat_list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
   - 当模型尝试运行未构建动作时，工具层自动捕捉 `no active build` 并反馈清晰诊断指引。
 - **动态循环深度与运行时配置 (Configurable Agent Loop & Settings Integration)**：
-  - 为适配“列出动作 -> 检查详情 -> 执行动作 -> 轮询结果”的多步自动化调用编排，将默认最大循环迭代轮数（`MaxIterations`）调优至 10，并支持通过实例级环境变量 `AGENT_MAX_ITERATIONS` 动态配置；
+  - 为适配“列出动作 -> 检查详情 -> 执行动作 -> 轮询结果”等多步自动化调用编排，将默认最大循环迭代轮数（`MaxIterations`）设置为 35，并支持通过实例级环境变量 `AGENT_MAX_ITERATIONS` 独立配置（不同实例分开隔离生效）；
   - ActionsCat 服务端点（`ACTIONSCAT_ENDPOINT`）、管理凭据（`ACTIONSCAT_MANAGEMENT_TOKEN`）、事件调度凭据（`ACTIONSCAT_DISPATCH_TOKEN`）与 `AGENT_MAX_ITERATIONS` 全面纳入 FrostAgent Settings 的 `knownEnvVars` 注册表，敏感 Token 自动脱敏展示与安全存储。
 - **Web 控制台专属管理工作台 (Web Dashboard Management)**：
   - 前端提供独立的 ActionsCat 控制台页面（`/#actionscat`）；

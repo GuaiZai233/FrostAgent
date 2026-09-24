@@ -39,6 +39,9 @@ const (
 	StaySilentToolName    = "stay_silent"
 	AssistantSilentMarker = "<assistant_silent />"
 
+	// DefaultMaxIterations is the fallback loop iteration limit for LLM execution.
+	DefaultMaxIterations = 35
+
 	MaxSingleInputTokens = 32000
 	MaxContextTokens     = 128000
 	MaxToolOutputBytes   = 65536 // 64KB
@@ -110,6 +113,17 @@ type Engine struct {
 	// Security is shared by every runtime owned by the Control Plane.
 	Security   *security.Controller
 	InstanceID string
+}
+
+// EffectiveMaxIterations resolves the effective iteration limit captured
+// on Engine.MaxIterations, falling back to DefaultMaxIterations (35) if unset.
+// It preserves restart-required semantics so running engines do not mutate
+// mid-flight before an instance restart.
+func (e *Engine) EffectiveMaxIterations() int {
+	if e != nil && e.MaxIterations > 0 {
+		return e.MaxIterations
+	}
+	return DefaultMaxIterations
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -502,7 +516,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 
 	// 主循环
-	for i := 0; i < e.MaxIterations; i++ {
+	maxIterations := e.EffectiveMaxIterations()
+	for i := range maxIterations {
 		if err := e.securityAccess(runCtx); err != nil {
 			return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
 		}

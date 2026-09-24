@@ -27,6 +27,7 @@ const instanceRestartKeys = new Set([
   'BILLING_SAFETY_MULTIPLIER',
   'BILLING_PROMPT_PRICE_PER_MILLION',
   'BILLING_COMPLETION_PRICE_PER_MILLION',
+  'AGENT_MAX_ITERATIONS',
 ]);
 const controlPlaneRestartKeys = new Set([
   'LISTEN_ADDR',
