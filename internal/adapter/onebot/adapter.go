@@ -412,7 +412,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
-				captureGroupCompactMessage(event, a.engine)
+				if isExplicitlyWoken(event, a.engine, routing) {
+					stageGroupCompactMessage(event, a.engine)
+				} else {
+					captureGroupCompactMessage(event, a.engine)
+				}
 			}
 
 			if !wsConn.mock {

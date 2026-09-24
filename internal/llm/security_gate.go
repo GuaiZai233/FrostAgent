@@ -8,6 +8,8 @@ import (
 	"FrostAgent/internal/security"
 )
 
+var ErrBanUserSuccess = security.ErrBanUserSuccess
+
 func (e *Engine) securityAccess(run RunContext) error {
 	if e.Security == nil {
 		return nil
@@ -57,6 +59,12 @@ func (e *Engine) securityEvaluate(run RunContext, stage security.WatchdogStage, 
 			SafeSummary:  safeSummary,
 		}
 	}
+
+	// In off and simple modes, or for the ban_user tool in all modes, bypass semantic watchdog evaluation completely.
+	if e.Security.Mode() != security.ControlModeAggressive || tool == security.BanUserToolName {
+		return false, security.WatchdogDecision{Action: security.WatchdogPass}
+	}
+
 	if e.Security.Watchdog == nil {
 		evalID := security.GenerateEvaluationID(stage)
 		e.Log().Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=watchdog is nil eval_id=%s", evalID))

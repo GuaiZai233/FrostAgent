@@ -389,7 +389,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" && !c.mock {
-				captureGroupCompactMessage(event, a.engine)
+				if isExplicitlyWoken(event, scope) {
+					stageGroupCompactMessage(event, a.engine)
+				} else {
+					captureGroupCompactMessage(event, a.engine)
+				}
 			}
 
 			if !c.mock {
@@ -463,5 +467,15 @@ func validateOutboundMediaURL(rawURL string) error {
 	default:
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
+}
+
+func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	return shouldReply(event, scopes...)
 }
 

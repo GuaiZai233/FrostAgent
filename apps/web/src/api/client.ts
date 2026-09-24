@@ -95,6 +95,8 @@ export interface LockedPrincipal {
   locked_at?: string;
 }
 
+export type SecurityControlMode = 'off' | 'simple' | 'aggressive';
+
 // Security controls belong to the control plane, never to a selected instance.
 async function securityRequest<T>(path: string, body?: unknown): Promise<T> {
   const headers = new Headers({ Accept: 'application/json' });
@@ -122,6 +124,12 @@ export const securityAPI = {
     userID: string,
   ): Promise<{ unlocked: LockedPrincipal['principal'] }> {
     return securityRequest('unlock', { platform, user_id: userID });
+  },
+  getMode(): Promise<{ mode: SecurityControlMode }> {
+    return securityRequest('mode');
+  },
+  setMode(mode: SecurityControlMode): Promise<{ mode: SecurityControlMode }> {
+    return securityRequest('mode', { mode });
   },
 };
 

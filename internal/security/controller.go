@@ -7,15 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
 
 var (
-	ErrLocked  = errors.New("principal is globally locked")
-	ErrBlocked = errors.New("content blocked by watchdog")
+	ErrLocked         = errors.New("principal is globally locked")
+	ErrBlocked        = errors.New("content blocked by watchdog")
+	ErrBanUserSuccess = errors.New("ban_user: user banned successfully")
 )
 
 const (
+	BanUserToolName    = "ban_user"
 	RejectInspectorMsg = "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！"
 	RejectGatewayMsg   = "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。"
 	RejectFailureMsg   = "FrostAgent 错误：Request rejected by security service: 安全审查服务暂时不可用，请稍后重试。"
@@ -25,12 +28,46 @@ type Controller struct {
 	Access   *AccessStore
 	Watchdog *Watchdog
 	Audit    *AuditStore
+	mode     *atomic.Pointer[ControlMode]
 }
 
 func NewController(dataDir string) *Controller {
 	access := NewAccessStore(filepath.Join(dataDir, "security_access.json"))
 	audit := NewAuditStore(filepath.Join(dataDir, "security_audit.jsonl"), 1000)
-	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit)}
+	var modePtr atomic.Pointer[ControlMode]
+	defaultMode := ControlModeSimple
+	modePtr.Store(&defaultMode)
+	return &Controller{
+		Access:   access,
+		Audit:    audit,
+		Watchdog: NewWatchdog(access, audit),
+		mode:     &modePtr,
+	}
+}
+
+// Mode returns the active security control mode. Unset or nil modes default to ControlModeSimple.
+func (c *Controller) Mode() ControlMode {
+	if c == nil || c.mode == nil {
+		return ControlModeSimple
+	}
+	m := c.mode.Load()
+	if m == nil {
+		return ControlModeSimple
+	}
+	return *m
+}
+
+// SetMode updates the active security control mode atomically across all runtimes sharing this controller.
+func (c *Controller) SetMode(m ControlMode) {
+	if c == nil {
+		return
+	}
+	parsed := ParseControlMode(string(m))
+	if c.mode == nil {
+		var modePtr atomic.Pointer[ControlMode]
+		c.mode = &modePtr
+	}
+	c.mode.Store(&parsed)
 }
 
 func (c *Controller) ClassifierTimeout() time.Duration {
@@ -110,6 +147,7 @@ func (c *Controller) ForRuntimeWithTimeout(provider core.LLMProvider, model stri
 		Access:   c.Access,
 		Audit:    c.Audit,
 		Watchdog: wd,
+		mode:     c.mode,
 	}
 }
 
@@ -138,6 +176,7 @@ func (c *Controller) ForInstanceWithTimeout(instanceID string, provider core.LLM
 		Access:   c.Access,
 		Audit:    c.Audit,
 		Watchdog: wd,
+		mode:     c.mode,
 	}
 }
 
@@ -167,6 +206,10 @@ func (c *Controller) CheckAccess(p Principal) error {
 }
 
 func (c *Controller) Lock(p Principal, reason string) error {
+	return c.LockWithMeta(p, reason, AuditEvent{Stage: StageIngress, Source: SourceUserDirect})
+}
+
+func (c *Controller) LockWithMeta(p Principal, reason string, meta AuditEvent) error {
 	if c == nil || c.Access == nil {
 		return errors.New("access control unavailable")
 	}
@@ -174,7 +217,20 @@ func (c *Controller) Lock(p Principal, reason string) error {
 		return err
 	}
 	if c.Audit != nil {
-		_ = c.Audit.Append(AuditEvent{Principal: p, Stage: StageIngress, Source: SourceUserDirect, Action: WatchdogLock, Reason: reason, Hash: ContentHash(reason)})
+		if meta.ID == "" {
+			meta.ID = GenerateEvaluationID(StageToolResult)
+		}
+		if meta.Stage == "" {
+			meta.Stage = StageToolResult
+		}
+		if meta.Source == "" {
+			meta.Source = SourceToolResult
+		}
+		meta.Principal = p
+		meta.Action = WatchdogLock
+		meta.Reason = reason
+		meta.Hash = ContentHash(reason)
+		_ = c.Audit.Append(meta)
 	}
 	return nil
 }
@@ -203,15 +259,15 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 	if meta.ID == "" {
 		meta.ID = GenerateEvaluationID(StageIngress)
 	}
-	if c.Access == nil || c.Watchdog == nil {
-		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=access store or watchdog is nil eval_id=%s", meta.ID))
+	if c.Access == nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=access store is nil eval_id=%s", meta.ID))
 		return WatchdogDecision{
 			Action:       WatchdogBlock,
 			Reason:       "security control unavailable",
 			IsFailure:    true,
 			EvaluationID: meta.ID,
 			ErrorType:    "unconfigured",
-			SafeSummary:  "access store or watchdog is nil",
+			SafeSummary:  "access store is nil",
 		}
 	}
 	locked, record, err := c.Access.IsLocked(p)
@@ -238,6 +294,23 @@ func (c *Controller) GateIngressWithContext(ctx context.Context, p Principal, co
 		}
 		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta, EvaluationID: meta.ID}
 	}
+
+	// In off and simple modes, skip all semantic security gateway evaluation.
+	if c.Mode() != ControlModeAggressive {
+		return WatchdogDecision{Action: WatchdogPass, EvaluationID: meta.ID}
+	}
+
+	if c.Watchdog == nil {
+		logs.Error(logs.SYSTEM, fmt.Sprintf("安全控制网关未配置 (Fail-Closed): error_type=unconfigured reason=watchdog is nil eval_id=%s", meta.ID))
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       "security control unavailable",
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    "unconfigured",
+			SafeSummary:  "watchdog is nil",
+		}
+	}
 	return c.Watchdog.EvaluateWithContext(ctx, p, StageIngress, SourceUserDirect, content, meta)
 }
 
@@ -246,7 +319,10 @@ func (c *Controller) GateIngressDryRun(p Principal, content string, meta AuditEv
 	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
 	}
-	if c.Access == nil || c.Watchdog == nil {
+	if meta.ID == "" {
+		meta.ID = GenerateEvaluationID(StageIngress)
+	}
+	if c.Access == nil {
 		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
 	}
 	locked, record, err := c.Access.IsLocked(p)
@@ -260,7 +336,16 @@ func (c *Controller) GateIngressDryRun(p Principal, content string, meta AuditEv
 		meta.Action = WatchdogBlock
 		meta.Reason = record.Reason
 		meta.Hash = ContentHash(content)
-		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta}
+		return WatchdogDecision{Action: WatchdogBlock, Reason: ErrLocked.Error(), Event: meta, EvaluationID: meta.ID}
+	}
+
+	// In off and simple modes, skip all semantic security gateway evaluation.
+	if c.Mode() != ControlModeAggressive {
+		return WatchdogDecision{Action: WatchdogPass, EvaluationID: meta.ID}
+	}
+
+	if c.Watchdog == nil {
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
 	}
 	return c.Watchdog.EvaluateDryRun(p, StageIngress, SourceUserDirect, content, meta)
 }
@@ -271,16 +356,43 @@ func (c *Controller) Evaluate(p Principal, stage WatchdogStage, source WatchdogS
 }
 
 func (c *Controller) EvaluateWithContext(ctx context.Context, p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
-	if c == nil || c.Watchdog == nil {
+	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
+	}
+	if meta.ID == "" {
+		meta.ID = GenerateEvaluationID(stage)
+	}
+	// In off and simple modes, skip semantic evaluation completely.
+	if c.Mode() != ControlModeAggressive {
+		return WatchdogDecision{Action: WatchdogPass, EvaluationID: meta.ID}
+	}
+	if c.Watchdog == nil {
+		return WatchdogDecision{
+			Action:       WatchdogBlock,
+			Reason:       "security control unavailable",
+			IsFailure:    true,
+			EvaluationID: meta.ID,
+			ErrorType:    "unconfigured",
+			SafeSummary:  "watchdog is nil",
+		}
 	}
 	return c.Watchdog.EvaluateWithContext(ctx, p, stage, source, content, meta)
 }
 
 // EvaluateDryRun evaluates content with the underlying Watchdog without mutating AccessStore or AuditStore.
 func (c *Controller) EvaluateDryRun(p Principal, stage WatchdogStage, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
-	if c == nil || c.Watchdog == nil {
+	if c == nil {
 		return WatchdogDecision{Action: WatchdogPass}
+	}
+	if meta.ID == "" {
+		meta.ID = GenerateEvaluationID(stage)
+	}
+	// In off and simple modes, skip semantic evaluation completely.
+	if c.Mode() != ControlModeAggressive {
+		return WatchdogDecision{Action: WatchdogPass, EvaluationID: meta.ID}
+	}
+	if c.Watchdog == nil {
+		return WatchdogDecision{Action: WatchdogBlock, Reason: "security control unavailable"}
 	}
 	return c.Watchdog.EvaluateDryRun(p, stage, source, content, meta)
 }

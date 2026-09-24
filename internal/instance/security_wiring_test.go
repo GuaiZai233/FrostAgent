@@ -122,6 +122,7 @@ func TestProductionPathInvokesLLMSecurityGateway(t *testing.T) {
 	}
 
 	// Wire spy into the security controller for this instance
+	m.SecurityController().SetMode(security.ControlModeAggressive)
 	m.SecurityController().SetInstanceProvider(info.ID, spy, "model-router-security-gateway")
 
 	engine := m.instances[info.ID].runtime.Engine
@@ -186,6 +187,7 @@ func TestTwoInstancesUseDistinctLLMProvidersWithoutBleed(t *testing.T) {
 	}
 
 	secCtrl := m.SecurityController()
+	secCtrl.SetMode(security.ControlModeAggressive)
 	secCtrl.SetInstanceProvider(infoA.ID, spyA, "model-router-security-gateway")
 	secCtrl.SetInstanceProvider(infoB.ID, spyB, "model-router-security-gateway")
 
@@ -333,6 +335,7 @@ func TestConcurrentRuntimeRebuildAndEvaluationRace(t *testing.T) {
 	}
 
 	secCtrl := m.SecurityController()
+	secCtrl.SetMode(security.ControlModeAggressive)
 	secCtrl.SetInstanceProvider(infoA.ID, spyA, "model-router-security-gateway")
 	secCtrl.SetInstanceProvider(infoB.ID, spyB, "model-router-security-gateway")
 
@@ -444,6 +447,7 @@ func TestProductionRuntimeFailClosedOnLLMError(t *testing.T) {
 				response: tc.response,
 			}
 			secCtrl := m.SecurityController()
+			secCtrl.SetMode(security.ControlModeAggressive)
 			secCtrl.SetInstanceProvider(info.ID, errProvider, "model-router-security-gateway")
 
 			engine := m.instances[info.ID].runtime.Engine
@@ -549,6 +553,7 @@ func TestProductionRuntimeTransformedInputCall2ErrorFailsClosed(t *testing.T) {
 	}
 
 	secCtrl := m.SecurityController()
+	secCtrl.SetMode(security.ControlModeAggressive)
 	secCtrl.SetInstanceProvider(info.ID, stepProvider, "model-router-security-gateway")
 
 	engine := m.instances[info.ID].runtime.Engine

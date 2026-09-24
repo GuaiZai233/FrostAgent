@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,6 +117,7 @@ func ParseGroupCompactMessage(content string, messageID ...string) GroupCompactM
 type groupCompactItem struct {
 	sequence uint64
 	message  GroupCompactMessage
+	staged   bool
 }
 
 // SummaryGroup maps the latest compact batch to the cumulative running summary
@@ -242,12 +244,16 @@ type SessionContext struct {
 	nextMsgSeq         uint64
 	privateCompacting  bool
 
-	groupCompactSummary    string
-	groupCompactBuffer     []groupCompactItem
-	groupCompactSequence   uint64
-	groupCompactGeneration uint64
-	groupSummaryGroups     []SummaryGroup
-	pendingTurns           [][]memory.PendingExtractionItem
+	groupCompactSummary     string
+	groupCompactBuffer      []groupCompactItem
+	groupCompactSequence    uint64
+	groupCompactGeneration  uint64
+	groupSummaryGroups      []SummaryGroup
+	prevGroupCompactSummary string
+	prevGroupSummaryGroups  []SummaryGroup
+	lastCommittedMessageIDs []string
+	lastCommittedSenderIDs  []string
+	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold    int
 	deliveryFailure        *DeliveryFailure
 
@@ -627,6 +633,10 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
+	s.prevGroupCompactSummary = ""
+	s.prevGroupSummaryGroups = nil
+	s.lastCommittedMessageIDs = nil
+	s.lastCommittedSenderIDs = nil
 	s.groupCompactGeneration++
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
@@ -887,16 +897,45 @@ func (s *SessionContext) TrimHistory(max int) {
 	s.UpdatedAt = time.Now()
 }
 
+// DropLastMessage removes the most recent message from history,
+// for instance when a turn is cancelled or aborted due to an autonomous ban.
+func (s *SessionContext) DropLastMessage() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.History) == 0 {
+		return
+	}
+	s.History = s.History[:len(s.History)-1]
+	if len(s.historySeq) > len(s.History) {
+		s.historySeq = s.historySeq[:len(s.History)]
+	}
+	s.UpdatedAt = time.Now()
+}
+
 // DefaultMaxGroupCompactBufferSize 是未压缩消息缓冲区的兜底安全上限，
 // 防止在上游 LLM 长时间不可用且海量消息涌入时发生内存泄漏。
 const DefaultMaxGroupCompactBufferSize = 200
 
 // AppendGroupCompactMessage appends one visible group message to the running
-// compact buffer. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
+// compact buffer as committed. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
 // The uncommitted buffer is capped at maxBufferSize (defaulting to DefaultMaxGroupCompactBufferSize if <= 0)
 // to allow in-flight compactions to complete without eagerly dropping raw messages.
 // Optional messageID can be provided to support deduplication with the triggering message.
 func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	return s.appendGroupCompactInternal(item, false, maxBufferSize, messageID...)
+}
+
+// StageGroupCompactMessage appends one visible group message to the running
+// compact buffer marked as staged (not eligible for compactor snapshot until promoted).
+// It preserves ingress arrival ordering while isolating unconfirmed wake turns.
+func (s *SessionContext) StageGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	return s.appendGroupCompactInternal(item, true, maxBufferSize, messageID...)
+}
+
+func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBufferSize int, messageID ...string) int {
 	var msg GroupCompactMessage
 	switch v := item.(type) {
 	case GroupCompactMessage:
@@ -936,6 +975,7 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
 		sequence: s.groupCompactSequence,
 		message:  msg,
+		staged:   staged,
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
 		drop := len(s.groupCompactBuffer) - maxBufferSize
@@ -946,9 +986,106 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 	return len(s.groupCompactBuffer)
 }
 
+// PromoteGroupCompactMessage marks staged messages matching messageID (or all staged messages if messageID is empty)
+// as committed.
+func (s *SessionContext) PromoteGroupCompactMessage(messageID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgID := strings.TrimSpace(messageID)
+	promoted := false
+	for i := range s.groupCompactBuffer {
+		if s.groupCompactBuffer[i].staged {
+			if msgID == "" || s.groupCompactBuffer[i].message.MessageID == msgID {
+				s.groupCompactBuffer[i].staged = false
+				promoted = true
+			}
+		}
+	}
+	if promoted {
+		s.UpdatedAt = time.Now()
+	}
+	return promoted
+}
+
 // AppendGroupCompactString parses a raw message string and appends it to the compact buffer.
 func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize int, messageID ...string) int {
 	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
+}
+
+// DropGroupCompactMessage removes group compact messages matching messageID (if non-empty)
+// or senderID (if non-empty and messageID is empty).
+// It always increments groupCompactGeneration to invalidate any in-flight compaction snapshot.
+// If the latest committed summary was derived from a snapshot containing the dropped messageID,
+// it rolls back the running summary and summary groups to the pre-compaction clean state.
+// Note: Cleanup is scoped strictly to the specified messageID to avoid dropping historical
+// clean batches with mixed senders.
+func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgID := strings.TrimSpace(messageID)
+	sndID := strings.TrimSpace(senderID)
+	dropped := false
+
+	if len(s.groupCompactBuffer) > 0 {
+		var filtered []groupCompactItem
+		for _, item := range s.groupCompactBuffer {
+			// When messageID is provided, scope cleanup strictly to that messageID.
+			// Only fall back to matching by senderID when messageID is unspecified.
+			if msgID != "" {
+				if item.message.MessageID == msgID {
+					dropped = true
+					continue
+				}
+			} else if sndID != "" {
+				if item.message.SenderID == sndID {
+					dropped = true
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		s.groupCompactBuffer = filtered
+	}
+
+	// Check if the current committed summary was polluted by this specific message.
+	// Only match by messageID to prevent historical mixed-sender batches from being discarded.
+	hasPollution := false
+	if msgID != "" {
+		if slices.Contains(s.lastCommittedMessageIDs, msgID) {
+			hasPollution = true
+		}
+		if !hasPollution {
+			for _, grp := range s.groupSummaryGroups {
+				if slices.Contains(grp.MessageIDs, msgID) {
+					hasPollution = true
+					break
+				}
+			}
+		}
+	}
+
+	if hasPollution {
+		s.groupCompactSummary = s.prevGroupCompactSummary
+		s.groupSummaryGroups = s.prevGroupSummaryGroups
+		s.prevGroupCompactSummary = ""
+		s.prevGroupSummaryGroups = nil
+		s.lastCommittedMessageIDs = nil
+		s.lastCommittedSenderIDs = nil
+		dropped = true
+	}
+
+	// Always increment generation to invalidate any in-flight compactor snapshot
+	s.groupCompactGeneration++
+	s.UpdatedAt = time.Now()
+	return dropped
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -981,6 +1118,9 @@ func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, m
 
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
+		if item.staged {
+			continue
+		}
 		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
 		}
@@ -1033,6 +1173,10 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
 
+		if item.staged {
+			continue
+		}
+
 		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
 		}
@@ -1077,6 +1221,9 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 }
 
 // SnapshotGroupCompact returns a batch once bufferSize raw messages are ready.
+// Only committed (unstaged) messages are eligible for compaction, stopping at the
+// first staged message to preserve contiguous sequence ordering and ensure unconfirmed
+// wake turns cannot enter an in-flight compactor.
 // It does not mutate session state; CommitGroupCompact performs the atomic
 // replacement after the asynchronous summary succeeds.
 func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnapshot, bool) {
@@ -1086,17 +1233,30 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
 		return GroupCompactSnapshot{}, false
 	}
-	msgs := make([]GroupCompactMessage, len(s.groupCompactBuffer))
-	msgIDs := make([]string, len(s.groupCompactBuffer))
-	for i, item := range s.groupCompactBuffer {
-		msgs[i] = item.message
-		msgIDs[i] = item.message.MessageID
+
+	eligibleCount := 0
+	for _, item := range s.groupCompactBuffer {
+		if item.staged {
+			break
+		}
+		eligibleCount++
+	}
+
+	if eligibleCount < bufferSize {
+		return GroupCompactSnapshot{}, false
+	}
+
+	msgs := make([]GroupCompactMessage, eligibleCount)
+	msgIDs := make([]string, eligibleCount)
+	for i := 0; i < eligibleCount; i++ {
+		msgs[i] = s.groupCompactBuffer[i].message
+		msgIDs[i] = s.groupCompactBuffer[i].message.MessageID
 	}
 	return GroupCompactSnapshot{
 		Summary:         s.groupCompactSummary,
 		Messages:        msgs,
 		MessageIDs:      msgIDs,
-		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
+		ThroughSequence: s.groupCompactBuffer[eligibleCount-1].sequence,
 		Generation:      s.groupCompactGeneration,
 	}, true
 }
@@ -1114,6 +1274,19 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 	if snapshot.Generation != s.groupCompactGeneration {
 		return false
 	}
+
+	// Stash previous clean state for potential rollback upon subsequent ban
+	s.prevGroupCompactSummary = s.groupCompactSummary
+	s.prevGroupSummaryGroups = s.groupSummaryGroups
+
+	senderIDs := make([]string, 0, len(snapshot.Messages))
+	for _, m := range snapshot.Messages {
+		if m.SenderID != "" {
+			senderIDs = append(senderIDs, m.SenderID)
+		}
+	}
+	s.lastCommittedMessageIDs = snapshot.MessageIDs
+	s.lastCommittedSenderIDs = senderIDs
 
 	s.groupCompactSummary = summary
 
@@ -1188,14 +1361,39 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
+	s.prevGroupCompactSummary = ""
+	s.prevGroupSummaryGroups = nil
+	s.lastCommittedMessageIDs = nil
+	s.lastCommittedSenderIDs = nil
 	s.UpdatedAt = time.Now()
 }
 
+// GroupCompactGeneration returns the current compact generation epoch.
+func (s *SessionContext) GroupCompactGeneration() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupCompactGeneration
+}
+
 // GroupCompactReady reports whether another full raw-message batch is ready.
+// Only committed (unstaged) messages count toward compaction readiness.
 func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return bufferSize > 0 && len(s.groupCompactBuffer) >= bufferSize
+	if bufferSize <= 0 {
+		return false
+	}
+	eligibleCount := 0
+	for _, item := range s.groupCompactBuffer {
+		if item.staged {
+			break
+		}
+		eligibleCount++
+	}
+	return eligibleCount >= bufferSize
 }
 
 // GroupCompactBufferCount returns the number of raw messages currently buffered.
@@ -1203,6 +1401,20 @@ func (s *SessionContext) GroupCompactBufferCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.groupCompactBuffer)
+}
+
+// GroupCompactBufferMessages returns a copy of all buffered group compact messages.
+func (s *SessionContext) GroupCompactBufferMessages() []GroupCompactMessage {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([]GroupCompactMessage, len(s.groupCompactBuffer))
+	for i, item := range s.groupCompactBuffer {
+		res[i] = item.message
+	}
+	return res
 }
 
 // PendingExtractionBatch wraps an asynchronous memory extraction batch with its originating session and generation epoch.
