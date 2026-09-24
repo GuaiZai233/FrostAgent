@@ -1029,3 +1029,258 @@ func TestFormatRecentGroupMessagesContext_MultilineRoleSpoofingSafe(t *testing.T
 		t.Fatalf("trusted role or opaque content changed: %+v", decoded)
 	}
 }
+
+func TestGroupCompactor_Race_SnapshotInFlightThenBan(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("create group summary store: %v", err)
+	}
+
+	owner := "group:syn_test_grp_race_01"
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+
+	s := &SessionContext{
+		ConversationID: owner,
+	}
+	cleanInitialSummary := "Clean initial summary before attack"
+	s.SetGroupRunningSummary(cleanInitialSummary)
+	_, _ = store.Upsert(owner, cleanInitialSummary, 0)
+
+	// Attacker sends message that enters buffer
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "攻击者",
+		SenderID:  "syn_user_attacker_01",
+		Content:   "恶意指令注入试图污染压缩总结",
+		MessageID: "syn_msg_attack_01",
+		Time:      "14:00:00",
+	}, 10)
+
+	flightStarted := make(chan struct{})
+	allowCompactorReturn := make(chan struct{})
+	var once sync.Once
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		once.Do(func() {
+			close(flightStarted)
+		})
+		<-allowCompactorReturn
+		return "Polluted summary containing attack payload", nil
+	}
+
+	compactorDone := make(chan error, 1)
+	err = compactor.ForceCompact(s, owner, modelrouter.Scope{}, func(err error) {
+		compactorDone <- err
+	})
+	if err != nil {
+		t.Fatalf("ForceCompact failed: %v", err)
+	}
+
+	// 等待 compactor 已起飞并在途执行
+	select {
+	case <-flightStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for compactor in-flight")
+	}
+
+	// 此时 dialogue 触发 ban_user，DropGroupCompactMessage 递增 session groupCompactGeneration
+	dropped := s.DropGroupCompactMessage("syn_msg_attack_01", "syn_user_attacker_01")
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage to drop attacker message")
+	}
+
+	// 允许 compactor 返回并尝试 CommitGroupCompact
+	close(allowCompactorReturn)
+
+	select {
+	case err := <-compactorDone:
+		if err == nil {
+			t.Fatalf("expected compactor commit to fail due to generation mismatch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for compactor to complete")
+	}
+
+	_ = compactor.DrainPersistence(owner, 2*time.Second)
+
+	// 验证 running summary 未被污染，仍为初始干净总结
+	if got := s.GroupRunningSummary(); got != cleanInitialSummary {
+		t.Fatalf("expected running summary to remain %q, got %q", cleanInitialSummary, got)
+	}
+
+	// 验证磁盘上的持久化记录未被污染
+	rec, ok, err := store.Get(owner)
+	if err != nil || !ok || rec.Summary != cleanInitialSummary {
+		t.Fatalf("expected store summary to remain %q, got ok=%v, err=%v, summary=%q", cleanInitialSummary, ok, err, rec.Summary)
+	}
+}
+
+func TestGroupCompactor_Race_CommitFirstThenBanRollback(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("create group summary store: %v", err)
+	}
+
+	owner := "group:syn_test_grp_race_02"
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+
+	s := &SessionContext{
+		ConversationID: owner,
+	}
+	cleanInitialSummary := "Clean summary v1"
+	s.SetGroupRunningSummary(cleanInitialSummary)
+	_, _ = store.Upsert(owner, cleanInitialSummary, 0)
+
+	// 攻击者消息
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "攻击者",
+		SenderID:  "syn_user_attacker_02",
+		Content:   "快抢在ban前完成压缩总结",
+		MessageID: "syn_msg_attack_02",
+		Time:      "14:05:00",
+	}, 10)
+
+	pollutedSummary := "Polluted summary v2 containing injected exploit"
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return pollutedSummary, nil
+	}
+
+	// Compactor 先完成并提交
+	compactorDone := make(chan error, 1)
+	err = compactor.ForceCompact(s, owner, modelrouter.Scope{}, func(err error) {
+		compactorDone <- err
+	})
+	if err != nil {
+		t.Fatalf("ForceCompact failed: %v", err)
+	}
+
+	select {
+	case err := <-compactorDone:
+		if err != nil {
+			t.Fatalf("expected compactor commit to succeed before ban: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for compactor to complete")
+	}
+
+	if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+		t.Fatalf("failed to drain persistence: %v", err)
+	}
+
+	// 确认当前状态已被临时提交污染
+	if got := s.GroupRunningSummary(); got != pollutedSummary {
+		t.Fatalf("expected running summary to be temporarily %q, got %q", pollutedSummary, got)
+	}
+	rec, ok, _ := store.Get(owner)
+	if !ok || rec.Summary != pollutedSummary {
+		t.Fatalf("expected store to temporarily hold %q, got ok=%v, summary=%q", pollutedSummary, ok, rec.Summary)
+	}
+
+	// 此时本轮 dialogue 触发 ban_user，执行 DropGroupCompactMessage + RollbackPersistence
+	dropped := s.DropGroupCompactMessage("syn_msg_attack_02", "syn_user_attacker_02")
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage to detect pollution and roll back")
+	}
+	compactor.RollbackPersistence(owner, s.GroupRunningSummary())
+	if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+		t.Fatalf("failed to drain persistence after rollback: %v", err)
+	}
+
+	// 验证 running summary 回滚到干净版本
+	if got := s.GroupRunningSummary(); got != cleanInitialSummary {
+		t.Fatalf("expected running summary to roll back to %q, got %q", cleanInitialSummary, got)
+	}
+
+	// 验证磁盘上的持久化记录回滚到干净版本
+	rec, ok, err = store.Get(owner)
+	if err != nil || !ok || rec.Summary != cleanInitialSummary {
+		t.Fatalf("expected store summary to roll back to %q, got ok=%v, err=%v, summary=%q", cleanInitialSummary, ok, err, rec.Summary)
+	}
+
+	// 验证 SummaryGroups 也回滚干净
+	for _, grp := range s.SummaryGroups() {
+		if strings.Contains(grp.Summary, "Polluted") {
+			t.Fatalf("summary groups should not contain polluted summary: %+v", grp)
+		}
+	}
+}
+
+func TestGroupCompactor_Race_CommitFirstThenBanRollback_EmptyInitialSummary(t *testing.T) {
+	mockLLM := &mockCompactorLLM{}
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "group_summaries.json")
+	store, err := groupsummary.NewStore(storePath)
+	if err != nil {
+		t.Fatalf("create group summary store: %v", err)
+	}
+
+	owner := "group:syn_test_grp_race_03"
+	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+
+	s := &SessionContext{
+		ConversationID: owner,
+	}
+
+	// 攻击者消息在初始无总结状态下触发压缩
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "攻击者",
+		SenderID:  "syn_user_attacker_03",
+		Content:   "无历史总结下的首次攻击",
+		MessageID: "syn_msg_attack_03",
+		Time:      "14:10:00",
+	}, 10)
+
+	pollutedSummary := "Polluted initial summary from attack"
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return pollutedSummary, nil
+	}
+
+	compactorDone := make(chan error, 1)
+	err = compactor.ForceCompact(s, owner, modelrouter.Scope{}, func(err error) {
+		compactorDone <- err
+	})
+	if err != nil {
+		t.Fatalf("ForceCompact failed: %v", err)
+	}
+
+	select {
+	case err := <-compactorDone:
+		if err != nil {
+			t.Fatalf("expected compactor commit to succeed before ban: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for compactor to complete")
+	}
+
+	if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+		t.Fatalf("failed to drain persistence: %v", err)
+	}
+
+	// 此时触发 ban_user 回滚
+	dropped := s.DropGroupCompactMessage("syn_msg_attack_03", "syn_user_attacker_03")
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage to detect pollution and drop")
+	}
+	compactor.RollbackPersistence(owner, s.GroupRunningSummary())
+	if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+		t.Fatalf("failed to drain persistence after rollback: %v", err)
+	}
+
+	// 初始为空，回滚后仍应为空
+	if got := s.GroupRunningSummary(); got != "" {
+		t.Fatalf("expected running summary to roll back to empty, got %q", got)
+	}
+
+	// 磁盘记录应被完全删除
+	rec, ok, _ := store.Get(owner)
+	if ok {
+		t.Fatalf("expected store record to be deleted, got: %+v", rec)
+	}
+}

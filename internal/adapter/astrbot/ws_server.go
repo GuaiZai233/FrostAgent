@@ -1013,6 +1013,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				session.DropLastMessage()
 				if event.MessageType == "group" {
 					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+					if engine != nil && engine.GroupCompactor != nil {
+						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
+					}
 				}
 			}
 			_ = sendDirectReply(event, conn, runResult.Content)
@@ -1036,6 +1039,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 		if runResult.Silent {
 			engine.TrimSession(session)
+			if event.MessageType == "group" && !runResult.Banned {
+				captureGroupCompactMessage(event, engine)
+			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
 			return
 		}
@@ -1085,6 +1091,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		return
 	}
 
+	if event.MessageType == "group" && !runResult.Banned {
+		captureGroupCompactMessage(event, engine)
+	}
 	if strings.TrimSpace(historyReplyText) != "" {
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
 	}

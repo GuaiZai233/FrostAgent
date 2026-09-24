@@ -754,6 +754,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.TrimSession(session)
 
 			if event.MessageType == "group" {
+				captureGroupCompactMessage(event, engine)
 				botReply := extractBotReplyText(replyText)
 				if strings.TrimSpace(botReply) != "" {
 					botName := engine.Getenv("BOT_NAME")
@@ -841,6 +842,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
 					session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+					if engine != nil && engine.GroupCompactor != nil {
+						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
+					}
 				}
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
@@ -869,6 +873,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// memory extraction.
 		if runResult.Silent {
 			engine.TrimSession(session)
+			if event.MessageType == "group" && !runResult.Banned {
+				captureGroupCompactMessage(event, engine)
+			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", conn.historyKey(event)))
 			return
 		}
@@ -881,6 +888,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				commitAssistantHistory(strings.Join(deliveredToolReplies, "\n"))
 			} else {
 				engine.TrimSession(session)
+				if event.MessageType == "group" && !runResult.Banned {
+					captureGroupCompactMessage(event, engine)
+				}
 			}
 			if receiptText == "" {
 				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("本轮收到空最终回复，跳过发送: session=%s", conn.historyKey(event)))
