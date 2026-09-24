@@ -186,12 +186,12 @@ func TestEngineModelOutputPolicyFilter(t *testing.T) {
 	}
 }
 
-type dummyTool struct{}
+type gateDummyTool struct{}
 
-func (d *dummyTool) Name() string               { return "dummy_tool" }
-func (d *dummyTool) Description() string        { return "dummy tool" }
-func (d *dummyTool) Parameters() map[string]any { return map[string]any{} }
-func (d *dummyTool) Execute(args string) (string, error) {
+func (d *gateDummyTool) Name() string               { return "dummy_tool" }
+func (d *gateDummyTool) Description() string        { return "dummy tool" }
+func (d *gateDummyTool) Parameters() map[string]any { return map[string]any{} }
+func (d *gateDummyTool) Execute(args string) (string, error) {
 	return "normal tool execution result", nil
 }
 
@@ -239,7 +239,7 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 2,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}
@@ -330,7 +330,7 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 2,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}
@@ -490,7 +490,7 @@ func TestEngineToolArgumentAccessStoreFailure(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}
@@ -909,7 +909,7 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 2,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}
@@ -967,7 +967,7 @@ func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 2,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}
@@ -1051,7 +1051,7 @@ func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
 
 	engine := &Engine{
 		MaxIterations: 2,
-		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &dummyTool{}},
+		ToolRegistry:  map[string]ToolExecutor{"dummy_tool": &gateDummyTool{}},
 		Security:      controller,
 		Provider:      provider,
 	}

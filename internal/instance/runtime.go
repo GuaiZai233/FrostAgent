@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"FrostAgent/internal/actionscat"
 	"FrostAgent/internal/adapter/astrbot"
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/billing"
@@ -16,7 +17,7 @@ import (
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/sandbox/codeinterpreter"
 	"FrostAgent/internal/security"
-	"FrostAgent/internal/actionscat"
+	actionscatsvc "FrostAgent/internal/service/actionscat"
 	"FrostAgent/internal/service/botstatus"
 	"FrostAgent/internal/service/dialogue"
 	logsvc "FrostAgent/internal/service/logs"
@@ -26,7 +27,6 @@ import (
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
 	stickersvc "FrostAgent/internal/service/sticker"
-	actionscatsvc "FrostAgent/internal/service/actionscat"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"fmt"
@@ -260,7 +260,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
-	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", 10)
+	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", llm.DefaultMaxIterations)
 	engine := &llm.Engine{Scope: scope,
 		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,

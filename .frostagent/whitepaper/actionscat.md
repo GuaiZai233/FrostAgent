@@ -53,7 +53,7 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 │                                                                                   │
 │  ┌──────────────────────┐    Tool Call    ┌────────────────────────────────────┐  │
 │  │   LLM Agent Loop     │ ──────────────▶ │ internal/tools/actionscat_tools    │  │
-│  │ (MaxIterations = 10) │                 │                                    │  │
+│  │ (MaxIterations = 35) │                 │                                    │  │
 │  └──────────────────────┘                 │ - actionscat_list_actions (DTO)    │  │
 │                                           │ - actionscat_create_action (Admin) │  │
 │                                           │ - actionscat_create_version(Admin) │  │
@@ -350,7 +350,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 | `ACTIONSCAT_ENDPOINT` | ActionsCat 核心服务地址（如 `http://127.0.0.1:8080`） | 空（未配置） | 实例级 | 否 |
 | `ACTIONSCAT_MANAGEMENT_TOKEN` | ActionsCat 管理 API Bearer Token | 空 | 实例级 | 是（脱敏显示） |
 | `ACTIONSCAT_DISPATCH_TOKEN` | ActionsCat 事件分发 Token（可选，默认复用管理 Token） | 空 | 实例级 | 是（脱敏显示） |
-| `AGENT_MAX_ITERATIONS` | 智能体单次处理允许的最大工具迭代轮数 | `10` | 实例级 | 否 |
+| `AGENT_MAX_ITERATIONS` | 智能体单次处理允许的最大工具迭代轮数 | `35` | 实例级（各实例独立配置） | 否 |
 
 ---
 

@@ -72,7 +72,7 @@ var knownEnvVars = map[string]envEntry{
 	"CODER_API_KEY":               {"Coder API 密钥", true, true, false},
 	"SECURITY_GATEWAY_TIMEOUT":    {"安全审查网关独立超时时间", false, true, false},
 	"SECURITY_CLASSIFIER_TIMEOUT": {"安全审查分类器独立超时时间", false, true, false},
-	"AGENT_MAX_ITERATIONS":        {"智能体单次处理允许的最大迭代轮数（默认 10）", false, true, false},
+	"AGENT_MAX_ITERATIONS":        {"智能体单次处理允许的最大迭代轮数（默认 35）", false, true, false},
 	"ACTIONSCAT_ENDPOINT":         {"ActionsCat 核心服务地址", false, true, false},
 	"ACTIONSCAT_MANAGEMENT_TOKEN": {"ActionsCat 管理 API 认证 Token", true, true, false},
 	"ACTIONSCAT_DISPATCH_TOKEN":   {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},
