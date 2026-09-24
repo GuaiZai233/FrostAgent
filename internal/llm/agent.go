@@ -115,17 +115,11 @@ type Engine struct {
 	InstanceID string
 }
 
-// EffectiveMaxIterations resolves the effective iteration limit, prioritizing
-// instance-scoped AGENT_MAX_ITERATIONS, then explicit Engine.MaxIterations,
-// and finally DefaultMaxIterations (35).
+// EffectiveMaxIterations resolves the effective iteration limit captured
+// on Engine.MaxIterations, falling back to DefaultMaxIterations (35) if unset.
+// It preserves restart-required semantics so running engines do not mutate
+// mid-flight before an instance restart.
 func (e *Engine) EffectiveMaxIterations() int {
-	if e != nil && e.Scope != nil {
-		if raw := strings.TrimSpace(e.Scope.Getenv("AGENT_MAX_ITERATIONS")); raw != "" {
-			if val, err := strconv.Atoi(raw); err == nil && val > 0 {
-				return val
-			}
-		}
-	}
 	if e != nil && e.MaxIterations > 0 {
 		return e.MaxIterations
 	}
@@ -523,7 +517,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	// 主循环
 	maxIterations := e.EffectiveMaxIterations()
-	for i := 0; i < maxIterations; i++ {
+	for i := range maxIterations {
 		if err := e.securityAccess(runCtx); err != nil {
 			return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
 		}
