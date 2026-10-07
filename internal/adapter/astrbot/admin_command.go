@@ -57,15 +57,25 @@ func extractAstrBotAdminCommand(event Event, prefix string) (cmd admincmd.Parsed
 			if strings.EqualFold(target, "all") || target == "全体成员" || target == "0" {
 				return cmd, true, fmt.Errorf("%s 指令不支持对全体成员执行操作", cmd.Type)
 			}
-			if len(cmd.Args) == 1 {
-				arg := strings.TrimSpace(cmd.Args[0])
-				if strings.HasPrefix(arg, "@") || strings.HasPrefix(arg, "[@") || strings.HasPrefix(arg, "[") {
-					cmd.Args[0] = target
-				}
-			} else if len(cmd.Args) == 0 && err != nil {
+			if len(cmd.Args) == 0 {
 				cmd.Args = []string{target}
 				cmd.RawArgs = target
 				err = nil
+			} else if len(cmd.Args) == 1 {
+				arg := strings.TrimSpace(cmd.Args[0])
+				if strings.HasPrefix(arg, "@") || strings.HasPrefix(arg, "[") {
+					cmd.Args[0] = target
+					cmd.RawArgs = target
+					err = nil
+				} else if arg == target {
+					cmd.Args[0] = target
+					cmd.RawArgs = target
+					err = nil
+				} else {
+					return cmd, true, fmt.Errorf("%s 指令目标冲突：文本参数 %q 与提及目标不一致", cmd.Type, arg)
+				}
+			} else {
+				return cmd, true, fmt.Errorf("%s 指令格式错误，不能同时指定多个目标或参数", cmd.Type)
 			}
 		}
 	}

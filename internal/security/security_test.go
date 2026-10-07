@@ -1550,6 +1550,7 @@ func TestNewPrincipal_Validation(t *testing.T) {
 		{"qq", "admin-1"},
 		{"astrbot", "custom_id.123"},
 		{"telegram", "user_123"},
+		{"eval", "client:attacker"},
 	}
 	for _, tc := range valid {
 		p, err := NewPrincipal(tc.platform, tc.userID)
@@ -1565,14 +1566,10 @@ func TestNewPrincipal_Validation(t *testing.T) {
 		platform string
 		userID   string
 	}{
-		{"qq", "[@10002]"},
-		{"qq", "@10002"},
-		{"qq", "qq:10002"},
-		{"qq", "123 456"},
-		{"qq", "[10002]"},
-		{"qq", "user[123]"},
 		{"qq", ""},
 		{"qq", "   "},
+		{strings.Repeat("a", 65), "10002"},
+		{"qq", strings.Repeat("b", 257)},
 	}
 	for _, tc := range invalid {
 		_, err := NewPrincipal(tc.platform, tc.userID)

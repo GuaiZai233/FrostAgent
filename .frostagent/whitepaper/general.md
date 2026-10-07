@@ -223,9 +223,9 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - **防御性拦截与特权保护不变性 (Preservation of Self and Admin Protections)**：
       - 执行器在判断 `targetID == cmdCtx.CallerUserID` 和 `admincmd.IsAdmin(targetID, scope)` 前，先行调用 `CleanTargetID` 获得纯净的目标用户 ID；
       - 杜绝恶意规避：任何管理员均无法通过 `@admin` 或 `[@admin]` 等提及包装绕过管理员保护和自我封禁保护；
-    - **安全主体硬化与 Fail-Closed 不变性 (Security Principal Hardening & Fail-Closed Invariants)**：
-      - `security.NewPrincipal` 严格禁止 `UserID` 中包含 `[]:@` 及空白字符等符号，从类型构造器底层阻断任何形如 `qq:[@10002]` 的伪 Principal 生成与持久化至 `AccessStore`；
-      - 遇到多个目标提及（如 `/ban @user1 @user2`）、未知/格式错误提及或非法字符时，系统统一执行严格的 Fail-Closed 策略并向管理员返回清晰的错误提示，绝不向 `AccessStore` 写入任何错误或伪造的封禁记录；
+    - **指令边界校验与 Fail-Closed 不变性 (Command Boundary Sanitization & Fail-Closed Invariants)**：
+      - 在管理指令与适配器入口边界通过 `admincmd.CleanTargetID` 严格校验目标主体，从源头阻断任何形如 `qq:[@10002]` 的伪 Principal 生成与持久化至 `AccessStore`；
+      - 遇到多个目标提及（如 `/ban @user1 @user2`）、文本参数与提及目标冲突（如 `/ban user_A` 但提及了 `user_B`）、未知/格式错误提及或非法字符时，系统统一执行严格的 Fail-Closed 策略并向管理员返回清晰的错误提示，绝不向 `AccessStore` 写入任何错误或伪造的封禁记录；
     - **跨平台规范化**：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定与解封；
     - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；通过 `security.Controller.Unlock` 解除锁定状态；
     - 回复文本：「已成功封禁用户 <userID>。」 / 「已成功解封用户 <userID>。」；

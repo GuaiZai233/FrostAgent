@@ -143,6 +143,45 @@ func TestExtractAstrBotAdminCommand(t *testing.T) {
 	if !isCand || err == nil || !strings.Contains(err.Error(), "不支持对全体成员") {
 		t.Fatalf("expected wildcard mention error, got isCand=%v err=%v", isCand, err)
 	}
+
+	// 10. Conflicting bare text ID and structured mention fails closed
+	eventConflictBare := Event{
+		IsAt:    true,
+		Content: "@bot /ban user_101",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102"},
+		},
+	}
+	_, isCand, err = extractAstrBotAdminCommand(eventConflictBare, "/")
+	if !isCand || err == nil || !strings.Contains(err.Error(), "指令目标冲突") {
+		t.Fatalf("expected conflicting bare ID error, got isCand=%v err=%v", isCand, err)
+	}
+
+	// 11. Matching bare text ID and structured mention succeeds
+	eventMatchingBare := Event{
+		IsAt:    true,
+		Content: "@bot /ban user_102",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102"},
+		},
+	}
+	cmd, isCand, err = extractAstrBotAdminCommand(eventMatchingBare, "/")
+	if !isCand || err != nil || cmd.Type != admincmd.CmdBan || len(cmd.Args) != 1 || cmd.Args[0] != "user_102" {
+		t.Fatalf("expected matching bare ID to succeed with user_102, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
+
+	// 12. Multiple text arguments with structured mention fails closed
+	eventMultiTextArgs := Event{
+		IsAt:    true,
+		Content: "@bot /ban user_101 @target",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102"},
+		},
+	}
+	_, isCand, err = extractAstrBotAdminCommand(eventMultiTextArgs, "/")
+	if !isCand || err == nil || !strings.Contains(err.Error(), "不能同时指定多个目标或参数") {
+		t.Fatalf("expected multiple text arguments error, got isCand=%v err=%v", isCand, err)
+	}
 }
 
 func setupTestAstrBotWS(t *testing.T) (*wsConn, chan Action, func()) {
@@ -881,6 +920,40 @@ func TestAstrBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 	reply = sendAndRecv(eventWildcard)
 	if !strings.Contains(reply, "不支持对全体成员") {
 		t.Errorf("expected wildcard rejection reply, got: %q", reply)
+	}
+
+	// 6. Conflicting bare text ID and structured mention fails closed without modifying AccessStore
+	eventConflict := Event{
+		MessageID:   "msg_conflict_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /ban target_5",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"target_6"},
+		},
+	}
+	reply = sendAndRecv(eventConflict)
+	if !strings.Contains(reply, "指令目标冲突") {
+		t.Errorf("expected conflicting target error reply, got: %q", reply)
+	}
+	p5, _ := security.NewPrincipal("astrbot", "target_5")
+	p6, _ := security.NewPrincipal("astrbot", "target_6")
+	if secCtrl.IsLocked(p5) || secCtrl.IsLocked(p6) {
+		t.Errorf("neither target_5 nor target_6 should be locked on conflicting bare ID and mention")
+	}
+
+	// Assert no record in AccessStore for either target
+	lockedRecords, err := secCtrl.Access.ListLocked()
+	if err != nil {
+		t.Fatalf("ListLocked failed: %v", err)
+	}
+	for _, rec := range lockedRecords {
+		if rec.Principal.UserID == "target_5" || rec.Principal.UserID == "target_6" {
+			t.Errorf("found unexpected locked principal in AccessStore: %+v", rec.Principal)
+		}
 	}
 }
 
