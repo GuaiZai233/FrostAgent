@@ -20,6 +20,7 @@ var GlobalKeys = map[string]bool{
 	"SANDBOX_ENABLED": true, "SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
 	"DEFAULT_DIALOGUE_TEMPLATE": true,
+	"SECURITY_CONTROL_MODE":     true,
 }
 var InstanceRestartKeys = map[string]bool{
 	"MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true,
@@ -120,6 +121,15 @@ func (s *Store) Get(k string) string {
 		return value
 	}
 	return s.values[k]
+}
+func (s *Store) HasOverride(k string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, exists := s.overrides[k]
+	return exists
 }
 func (s *Store) Snapshot() map[string]string {
 	s.mu.RLock()

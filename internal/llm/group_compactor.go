@@ -534,6 +534,73 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 	c.Go(func() { c.persistWorker(owner, wakeCh) })
 }
 
+// RollbackPersistence synchronizes persistence state with a rolled-back clean summary.
+// If cleanSummary is non-empty, it replaces any pending record and updates the on-disk store.
+// If cleanSummary is empty, it removes any pending record and deletes the record from the on-disk store.
+func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) {
+	if c == nil || owner == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	storeGeneration := uint64(0)
+	if c.store != nil {
+		storeGeneration = c.store.Generation(owner)
+	}
+	cleanSummary = strings.TrimSpace(cleanSummary)
+	if cleanSummary == "" {
+		delete(c.pendingPersist, owner)
+		if c.store != nil {
+			_ = c.store.Delete(owner)
+		}
+		if c.persistActive[owner] {
+			wakeCh := c.persistWake[owner]
+			select {
+			case wakeCh <- struct{}{}:
+			default:
+			}
+		}
+		return
+	}
+
+	c.pendingPersist[owner] = &pendingPersistRecord{
+		owner:           owner,
+		summary:         cleanSummary,
+		storeGeneration: storeGeneration,
+		retryCount:      0,
+	}
+
+	if c.persistActive[owner] {
+		wakeCh := c.persistWake[owner]
+		select {
+		case wakeCh <- struct{}{}:
+		default:
+		}
+		return
+	}
+
+	if c.store != nil {
+		applied, err := c.store.Upsert(owner, cleanSummary, storeGeneration)
+		if err == nil {
+			if !applied {
+				c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结回滚持久化 (%s)", owner))
+			}
+			delete(c.pendingPersist, owner)
+			return
+		}
+	} else {
+		delete(c.pendingPersist, owner)
+		return
+	}
+
+	// Upsert failed; launch worker to retry in background.
+	c.persistActive[owner] = true
+	wakeCh := make(chan struct{}, 1)
+	c.persistWake[owner] = wakeCh
+	c.Go(func() { c.persistWorker(owner, wakeCh) })
+}
+
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 	for {
 		if c.Context().Err() != nil {

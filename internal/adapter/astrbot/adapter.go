@@ -388,21 +388,28 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.MessageType == "group" && !c.mock {
-				captureGroupCompactMessage(event, a.engine)
-			}
-
-			if !c.mock {
-				a.observeStickers(event)
-			}
-
-			if c.mock && c.isClosed() {
+			if c.isClosed() {
 				continue
 			}
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
+			}
+
+			if event.MessageType == "group" && !c.mock {
+				if isExplicitlyWoken(event, scope) {
+					guard := stageGroupCompactMessage(event, a.engine)
+					if turn != nil {
+						turn.AttachStagedGuard(guard)
+					}
+				} else {
+					captureGroupCompactMessage(event, a.engine)
+				}
+			}
+
+			if !c.mock {
+				a.observeStickers(event)
 			}
 			c.inFlight.Add(1)
 			if !a.engine.Go(func() {
@@ -463,5 +470,15 @@ func validateOutboundMediaURL(rawURL string) error {
 	default:
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
+}
+
+func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	return shouldReply(event, scopes...)
 }
 

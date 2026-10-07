@@ -411,13 +411,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
-				captureGroupCompactMessage(event, a.engine)
-			}
-
-			if !wsConn.mock {
-				wsConn.observeStickers(event)
-			}
 			if wsConn.isClosed() {
 				continue
 			}
@@ -425,6 +418,21 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
+			}
+
+			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
+				if isExplicitlyWoken(event, a.engine, routing) {
+					guard := stageGroupCompactMessage(event, a.engine)
+					if turn != nil {
+						turn.AttachStagedGuard(guard)
+					}
+				} else {
+					captureGroupCompactMessage(event, a.engine)
+				}
+			}
+
+			if !wsConn.mock {
+				wsConn.observeStickers(event)
 			}
 			wsConn.inFlight.Add(1)
 			if !a.engine.Go(func() {
