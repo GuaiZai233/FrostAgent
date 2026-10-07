@@ -212,14 +212,23 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
     - 取消所有在途记忆提取（`CancelExtractions`）并递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交与在途记忆抽取在检测到 Epoch 变动时主动放弃落盘写入与发送回复；
     - 回复文本：「当前会话已重置。」；
-  - **`ban <userID>` 全局封禁**：
-    - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；
-    - 防御性拦截：严禁封禁管理员调用者自身，严禁封禁 `ADMIN_QQ_IDS` 列表中的任何管理员；
-    - 跨平台规范化：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定；
-    - 回复文本：「已成功封禁用户 <userID>。」；
-  - **`unban <userID>` 全局解封**：
-    - 同样基于规范化平台 Principal，通过 `security.Controller.Unlock` 解除目标用户的全局锁定状态；
-    - 回复文本：「已成功解封用户 <userID>。」；
+  - **`ban <userID>` 全局封禁** 与 **`unban <userID>` 全局解封**：
+    - **结构化提及解析与协议对齐 (Structured Mention Resolution)**：
+      - **OneBot 适配器**：废除原先将非 Bot 的目标提及段降级为纯文本提示标记（`[@<targetID>]`）的退化序列化流程。在 `extractOneBotAdminCommand` 中直接遍历入站消息段数组（`[]content.MessageSegment`），识别目标 `at` 段（`seg.Type == "at"` 且 `atQQ != selfID`），将其目标 ID 作为真实标识提取并拼接至指令文本流中，从根本上解决群聊中 `@Bot /ban @User` 降级为伪文本标记的缺陷；
+      - **AstrBot 适配器**：在 Python 插件层安全提取入站提及目标并透传至事件元数据（`event.Metadata["mentioned_user_ids"]`），在 Go 适配器层 `extractAstrBotAdminCommand` 中解析目标提及，并在出现多个提及目标或全员通配时 Fail-Closed；
+    - **目标用户 ID 深度规范化与清洗 (`admincmd.CleanTargetID`)**：
+      - 提供统一纵深防御层，规范化兼容裸 ID（`10002`、`user-99`）、带 `@` 前缀的提及（`@10002`）以及中括号标记（`[@10002]`、`[10002]`），自动剥离外层符号得到纯净的主体 ID；
+      - 严格拒绝全局通配符（`all`、`全体成员`、`0`）、非法定界符（冒号、空格、中括号、尖括号、反斜杠、引号等）以及非 ASCII 字符或群昵称（如 `[@测试昵称]`）；
+      - 完美向下兼容：原生兼容裸 ID（`/ban 10002`）与真实提及（`/ban @10002`）；
+    - **防御性拦截与特权保护不变性 (Preservation of Self and Admin Protections)**：
+      - 执行器在判断 `targetID == cmdCtx.CallerUserID` 和 `admincmd.IsAdmin(targetID, scope)` 前，先行调用 `CleanTargetID` 获得纯净的目标用户 ID；
+      - 杜绝恶意规避：任何管理员均无法通过 `@admin` 或 `[@admin]` 等提及包装绕过管理员保护和自我封禁保护；
+    - **安全主体硬化与 Fail-Closed 不变性 (Security Principal Hardening & Fail-Closed Invariants)**：
+      - `security.NewPrincipal` 严格禁止 `UserID` 中包含 `[]:@` 及空白字符等符号，从类型构造器底层阻断任何形如 `qq:[@10002]` 的伪 Principal 生成与持久化至 `AccessStore`；
+      - 遇到多个目标提及（如 `/ban @user1 @user2`）、未知/格式错误提及或非法字符时，系统统一执行严格的 Fail-Closed 策略并向管理员返回清晰的错误提示，绝不向 `AccessStore` 写入任何错误或伪造的封禁记录；
+    - **跨平台规范化**：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定与解封；
+    - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；通过 `security.Controller.Unlock` 解除锁定状态；
+    - 回复文本：「已成功封禁用户 <userID>。」 / 「已成功解封用户 <userID>。」；
   - **`compact` 强制即时上下文压缩**：
     - 突破常规自动化压缩的缓冲区消息条数阈值（`bufferSize`）与时间冷却限制（`minInterval`），立即对当前会话启动总结压缩；
     - **独立工作负载路由解耦**：私聊压缩解耦于普通对话模型路由，统一调度至 `WorkloadGroupCompact` 专属提供商与模型，即使当前会话被规则禁用日常对话，管理员仍可独立调度会话压缩；

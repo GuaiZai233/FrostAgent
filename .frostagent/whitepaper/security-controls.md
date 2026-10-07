@@ -3,6 +3,7 @@
 FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是把权限判断分散到各个工具、平台适配器或实例运行时。本体系为 FrostAgent 所有平台适配器（OneBot、AstrBot 以及未来的 Telegram 等）提供统一的 Global Access Control 与 Watchdog 安全基础设施。
 
 - **主体身份规范化与 Transport 解耦**：可信身份始终由平台适配器统一归一化生成，主键为 `(canonical_platform, user_id)`。Adapter/Transport 协议名称（如 `onebot`、`aiocqhttp`、`cqhttp`）明确与用户平台身份解耦，统一映射为标准平台标识（如 `qq`），确保同一真实用户在不同协议传输接入下共享同一身份标识与安全审计边界。模型输入、工具参数与模型文本均不可声明或伪造身份。
+  - **安全主体校验与定界符硬化 (Security Principal Hardening)**：`security.NewPrincipal` 严格禁止 `UserID` 中包含中括号（`[`、`]`）、冒号（`:`）、空格、控制字符或 `@` 等非法定界符，从主体构造器底层切断任何由前端或适配器序列化错误引入的伪 Principal（如 `qq:[@123456789]`）进入 `AccessStore` 的可能。与运维指令层 `CleanTargetID` 深度配合，确保只有合法清洗后的规范化用户 ID 才能参与状态持久化与网关门禁比对。
 - **全局访问状态、存储错误冒泡与跨实例一致性（Atomic Access State & Error Propagation）**：`AccessStore` 将 `ACTIVE` / `LOCKED` 状态持久化到全局根数据目录（`BRAIN_PATH`），并使用跨进程文件锁和操作系统原子替换写入协调并发（Windows 平台采用带 `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` 的 `MoveFileExW`，POSIX 平台采用临时文件替换与父目录 `fsync`），杜绝因删除后重命名失败引发的 fail-open 风险。多实例共享全局唯一 Controller，任何实例或适配器发生的手动管理锁定操作立即对全量实例和全部适配器生效。`AccessStore` 的所有核心方法（`IsLocked`、`Lock`、`Unlock` 以及 `LastBlockedHash`）均完整显式返回并向上冒泡底层 I/O、损坏或原子更新错误，杜绝静默吞错退化为失真状态。
 - **纯 LLM 安全网关架构与 Option A 严格 Fail-Closed（Pure LLM Gateway Architecture & Option A Fail-Closed）**：
   - 彻底移除了原先硬编码在 `watchdog.go` 内的静态正则表达式列表（`dangerousPatterns`），并遵照 Maintainer 架构裁定**将本地基于规则/正则的语义内容分类器（`CalibratedClassifier`）和通用回退分类器（`HybridClassifier`）从整个代码库中完全物理删除**。语义安全风险分类职责完全收束至基于 `core.LLMProvider` 驱动的 LLM 安全网关。系统保留完整的确定性安全底座（输入规范化、来源溯源、内容哈希、规避检测记账、大小限制、AccessStore 状态与审计脱敏日志），但语义违规判定由且仅由 LLM 网关完成。

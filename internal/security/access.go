@@ -49,6 +49,9 @@ func NewPrincipal(platform, userID string) (Principal, error) {
 	if platform == "" || userID == "" || len(platform) > 64 || len(userID) > 256 {
 		return Principal{}, errors.New("invalid security principal")
 	}
+	if strings.ContainsAny(userID, " \t\r\n\x00[]:@") {
+		return Principal{}, errors.New("invalid security principal: malformed userID")
+	}
 	return Principal{Platform: platform, UserID: userID}, nil
 }
 

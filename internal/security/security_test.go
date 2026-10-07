@@ -1539,3 +1539,45 @@ func TestDualClassificationMergeStrongestRiskLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestNewPrincipal_Validation(t *testing.T) {
+	valid := []struct {
+		platform string
+		userID   string
+	}{
+		{"qq", "10002"},
+		{"qq", "user-99"},
+		{"qq", "admin-1"},
+		{"astrbot", "custom_id.123"},
+		{"telegram", "user_123"},
+	}
+	for _, tc := range valid {
+		p, err := NewPrincipal(tc.platform, tc.userID)
+		if err != nil {
+			t.Errorf("NewPrincipal(%q, %q) unexpected error: %v", tc.platform, tc.userID, err)
+		}
+		if p.UserID != tc.userID {
+			t.Errorf("NewPrincipal(%q, %q).UserID = %q, want %q", tc.platform, tc.userID, p.UserID, tc.userID)
+		}
+	}
+
+	invalid := []struct {
+		platform string
+		userID   string
+	}{
+		{"qq", "[@10002]"},
+		{"qq", "@10002"},
+		{"qq", "qq:10002"},
+		{"qq", "123 456"},
+		{"qq", "[10002]"},
+		{"qq", "user[123]"},
+		{"qq", ""},
+		{"qq", "   "},
+	}
+	for _, tc := range invalid {
+		_, err := NewPrincipal(tc.platform, tc.userID)
+		if err == nil {
+			t.Errorf("NewPrincipal(%q, %q) expected error, got nil", tc.platform, tc.userID)
+		}
+	}
+}

@@ -91,6 +91,58 @@ func TestExtractAstrBotAdminCommand(t *testing.T) {
 	if !isCand || err == nil {
 		t.Fatalf("expected candidate with error, got isCand=%v err=%v", isCand, err)
 	}
+
+	// 6. Mention target in metadata resolves to target ID
+	eventMentionBan := Event{
+		IsAt:    true,
+		Content: "@bot /ban @target",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102"},
+		},
+	}
+	cmd, isCand, err = extractAstrBotAdminCommand(eventMentionBan, "/")
+	if !isCand || err != nil || cmd.Type != admincmd.CmdBan || len(cmd.Args) != 1 || cmd.Args[0] != "user_102" {
+		t.Fatalf("expected CmdBan with target user_102, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
+
+	// 7. Mention target in metadata for unban
+	eventMentionUnban := Event{
+		IsAt:    true,
+		Content: "@bot /unban @target",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102"},
+		},
+	}
+	cmd, isCand, err = extractAstrBotAdminCommand(eventMentionUnban, "/")
+	if !isCand || err != nil || cmd.Type != admincmd.CmdUnban || len(cmd.Args) != 1 || cmd.Args[0] != "user_102" {
+		t.Fatalf("expected CmdUnban with target user_102, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
+
+	// 8. Multiple mentions in metadata fail closed
+	eventMultiMention := Event{
+		IsAt:    true,
+		Content: "@bot /ban @target1 @target2",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"user_102", "user_103"},
+		},
+	}
+	_, isCand, err = extractAstrBotAdminCommand(eventMultiMention, "/")
+	if !isCand || err == nil || !strings.Contains(err.Error(), "不能同时指定多个提及目标") {
+		t.Fatalf("expected multiple mentions error, got isCand=%v err=%v", isCand, err)
+	}
+
+	// 9. Wildcard in metadata fails closed
+	eventWildcard := Event{
+		IsAt:    true,
+		Content: "@bot /ban @all",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"all"},
+		},
+	}
+	_, isCand, err = extractAstrBotAdminCommand(eventWildcard, "/")
+	if !isCand || err == nil || !strings.Contains(err.Error(), "不支持对全体成员") {
+		t.Fatalf("expected wildcard mention error, got isCand=%v err=%v", isCand, err)
+	}
 }
 
 func setupTestAstrBotWS(t *testing.T) (*wsConn, chan Action, func()) {
@@ -657,3 +709,178 @@ func TestAstrBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBefore
 		t.Errorf("expected exactly 1 security audit event for normal dangerous message, got %d", len(auditsAfter))
 	}
 }
+
+func TestAstrBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
+	conn, actionCh, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:             scope,
+		Security:          secCtrl,
+		SessionManager:    llm.NewSessionManager(),
+		GroupSummaryStore: summaryStore,
+		ModelName:         "mock-model",
+		Provider:          &mockLLMProvider{},
+	}
+	conn.Scope = scope
+
+	sendAndRecv := func(event Event) string {
+		t.Helper()
+		handled := handleAdminCommand(conn, event, engine)
+		if !handled {
+			t.Fatalf("expected handleAdminCommand to return true")
+		}
+		select {
+		case act := <-actionCh:
+			return act.Content
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for reply")
+			return ""
+		}
+	}
+
+	// 1. Admin sends @bot /ban @target with mentioned_user_ids: ["target_1"]
+	eventBan := Event{
+		MessageID:   "msg_ban_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /ban @target",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"target_1"},
+		},
+	}
+	reply := sendAndRecv(eventBan)
+	if !strings.Contains(reply, "已成功封禁用户 target_1。") {
+		t.Errorf("expected ban success reply, got: %q", reply)
+	}
+
+	targetPrincipal, err := security.NewPrincipal("astrbot", "target_1")
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !secCtrl.IsLocked(targetPrincipal) {
+		t.Errorf("expected target principal astrbot:target_1 to be locked")
+	}
+
+	// Assert NO pseudo-principal like [@target_1] in AccessStore
+	records, err := secCtrl.Access.ListLocked()
+	if err != nil {
+		t.Fatalf("Access.ListLocked failed: %v", err)
+	}
+	for _, rec := range records {
+		if strings.ContainsAny(rec.Principal.UserID, "[]@:") {
+			t.Errorf("found malformed/pseudo principal in AccessStore: %+v", rec.Principal)
+		}
+	}
+
+	// 2. Admin sends @bot /unban @target with mentioned_user_ids: ["target_1"]
+	eventUnban := Event{
+		MessageID:   "msg_unban_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /unban @target",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"target_1"},
+		},
+	}
+	reply = sendAndRecv(eventUnban)
+	if !strings.Contains(reply, "已成功解封用户 target_1。") {
+		t.Errorf("expected unban success reply, got: %q", reply)
+	}
+	if secCtrl.IsLocked(targetPrincipal) {
+		t.Errorf("expected target principal astrbot:target_1 to be unlocked")
+	}
+
+	// 3. Admin sends bare ID /ban target_2 and /unban target_2
+	eventBareBan := Event{
+		MessageID:   "msg_bare_ban_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /ban target_2",
+	}
+	reply = sendAndRecv(eventBareBan)
+	if !strings.Contains(reply, "已成功封禁用户 target_2。") {
+		t.Errorf("expected bare ID ban success reply, got: %q", reply)
+	}
+	barePrincipal, _ := security.NewPrincipal("astrbot", "target_2")
+	if !secCtrl.IsLocked(barePrincipal) {
+		t.Errorf("expected bare target astrbot:target_2 to be locked")
+	}
+
+	eventBareUnban := Event{
+		MessageID:   "msg_bare_unban_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /unban target_2",
+	}
+	reply = sendAndRecv(eventBareUnban)
+	if !strings.Contains(reply, "已成功解封用户 target_2。") {
+		t.Errorf("expected bare ID unban success reply, got: %q", reply)
+	}
+	if secCtrl.IsLocked(barePrincipal) {
+		t.Errorf("expected bare target astrbot:target_2 to be unlocked")
+	}
+
+	// 4. Multiple mentions fail closed
+	eventMulti := Event{
+		MessageID:   "msg_multi_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /ban @target1 @target2",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"target_3", "target_4"},
+		},
+	}
+	reply = sendAndRecv(eventMulti)
+	if !strings.Contains(reply, "不能同时指定多个提及目标") {
+		t.Errorf("expected multiple targets error reply, got: %q", reply)
+	}
+	p3, _ := security.NewPrincipal("astrbot", "target_3")
+	p4, _ := security.NewPrincipal("astrbot", "target_4")
+	if secCtrl.IsLocked(p3) || secCtrl.IsLocked(p4) {
+		t.Errorf("neither target should be locked on multiple mentions failure")
+	}
+
+	// 5. Wildcard fails closed
+	eventWildcard := Event{
+		MessageID:   "msg_wildcard_01",
+		IsAt:        true,
+		UserID:      "20001",
+		GroupID:     "30001",
+		MessageType: "group",
+		Platform:    "astrbot",
+		Content:     "[@bot] /ban @all",
+		Metadata: map[string]any{
+			"mentioned_user_ids": []string{"all"},
+		},
+	}
+	reply = sendAndRecv(eventWildcard)
+	if !strings.Contains(reply, "不支持对全体成员") {
+		t.Errorf("expected wildcard rejection reply, got: %q", reply)
+	}
+}
+

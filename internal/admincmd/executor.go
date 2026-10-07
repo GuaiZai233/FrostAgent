@@ -126,9 +126,17 @@ func (e *Executor) executeBan(ctx context.Context, cmdCtx CommandContext, cmd Pa
 	if len(cmd.Args) != 1 {
 		return errors.New("ban 指令格式错误，需要指定一个用户ID：ban <userID>")
 	}
-	targetID := strings.TrimSpace(cmd.Args[0])
-	if targetID == "" {
+	rawTarget := strings.TrimSpace(cmd.Args[0])
+	if rawTarget == "" {
 		return errors.New("ban 指令目标用户ID不能为空")
+	}
+	platform := cmdCtx.RouteScope.Platform
+	if platform == "" {
+		platform = "qq"
+	}
+	targetID, err := CleanTargetID(rawTarget, platform)
+	if err != nil {
+		return fmt.Errorf("无效的目标用户ID: %w", err)
 	}
 	if targetID == cmdCtx.CallerUserID {
 		return cmdCtx.Reply(ctx, "无法封禁当前调用者账号。", false)
@@ -139,10 +147,6 @@ func (e *Executor) executeBan(ctx context.Context, cmdCtx CommandContext, cmd Pa
 	}
 	if e.Engine == nil || e.Engine.Security == nil {
 		return errors.New("安全控制器不可用")
-	}
-	platform := cmdCtx.RouteScope.Platform
-	if platform == "" {
-		platform = "qq"
 	}
 	principal, err := security.NewPrincipal(platform, targetID)
 	if err != nil {
@@ -158,16 +162,20 @@ func (e *Executor) executeUnban(ctx context.Context, cmdCtx CommandContext, cmd 
 	if len(cmd.Args) != 1 {
 		return errors.New("unban 指令格式错误，需要指定一个用户ID：unban <userID>")
 	}
-	targetID := strings.TrimSpace(cmd.Args[0])
-	if targetID == "" {
+	rawTarget := strings.TrimSpace(cmd.Args[0])
+	if rawTarget == "" {
 		return errors.New("unban 指令目标用户ID不能为空")
-	}
-	if e.Engine == nil || e.Engine.Security == nil {
-		return errors.New("安全控制器不可用")
 	}
 	platform := cmdCtx.RouteScope.Platform
 	if platform == "" {
 		platform = "qq"
+	}
+	targetID, err := CleanTargetID(rawTarget, platform)
+	if err != nil {
+		return fmt.Errorf("无效的目标用户ID: %w", err)
+	}
+	if e.Engine == nil || e.Engine.Security == nil {
+		return errors.New("安全控制器不可用")
 	}
 	principal, err := security.NewPrincipal(platform, targetID)
 	if err != nil {
