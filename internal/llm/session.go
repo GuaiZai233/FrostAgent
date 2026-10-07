@@ -999,6 +999,8 @@ func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBu
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
 		excess := len(s.groupCompactBuffer) - maxBufferSize
+		// First pass: strictly evict committed entries first (oldest to newest)
+		// to protect in-flight staged barriers from ordinary chatter bursts.
 		dropped := 0
 		w := 0
 		for _, item := range s.groupCompactBuffer {
@@ -1009,7 +1011,23 @@ func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBu
 			s.groupCompactBuffer[w] = item
 			w++
 		}
+		for i := w; i < len(s.groupCompactBuffer); i++ {
+			s.groupCompactBuffer[i] = groupCompactItem{}
+		}
 		s.groupCompactBuffer = s.groupCompactBuffer[:w]
+
+		// Second pass: if the count of staged entries itself exceeds maxBufferSize
+		// (e.g. under an upstream LLM stall where multiple wake turns arrive and queue up),
+		// evict the oldest staged entries as a hard backpressure safety valve to enforce
+		// the ceiling and prevent unbounded memory growth.
+		if len(s.groupCompactBuffer) > maxBufferSize {
+			stagedExcess := len(s.groupCompactBuffer) - maxBufferSize
+			copy(s.groupCompactBuffer, s.groupCompactBuffer[stagedExcess:])
+			for i := len(s.groupCompactBuffer) - stagedExcess; i < len(s.groupCompactBuffer); i++ {
+				s.groupCompactBuffer[i] = groupCompactItem{}
+			}
+			s.groupCompactBuffer = s.groupCompactBuffer[:len(s.groupCompactBuffer)-stagedExcess]
+		}
 	}
 	s.UpdatedAt = time.Now()
 	return len(s.groupCompactBuffer)

@@ -1513,3 +1513,101 @@ func TestGroupCompactor_SmallBufferCeiling_StalledWakeTurn_PreservesStagedBarrie
 		t.Fatalf("expected snap messages 1 and 2 to be D and E, got %+v, %+v", snapAfter.Messages[1], snapAfter.Messages[2])
 	}
 }
+
+func TestGroupCompactor_SmallBufferCeiling_StagedCountExceedsMaxBufferSize_EnforcesHardBoundAndPreservesChronology(t *testing.T) {
+	s := &SessionContext{
+		ConversationID: "group:grp_staged_burst_001",
+	}
+
+	maxBuffer := 3
+
+	// 1. 模拟上游 LLM 缓慢/卡死时，并发涌入 6 条显式唤醒的暂存消息 (S1..S6)
+	stagedIDs := []string{"syn_staged_1", "syn_staged_2", "syn_staged_3", "syn_staged_4", "syn_staged_5", "syn_staged_6"}
+	for i, id := range stagedIDs {
+		bufLen := s.StageGroupCompactMessage(GroupCompactMessage{
+			Role:      "user",
+			Sender:    fmt.Sprintf("User%d", i+1),
+			SenderID:  fmt.Sprintf("syn_usr_%d", i+1),
+			Content:   fmt.Sprintf("Wake message %d", i+1),
+			MessageID: id,
+			Time:      fmt.Sprintf("10:00:0%d", i),
+		}, maxBuffer, id)
+
+		// 验证关键不变量：无论暂存消息如何并发突发涌入，缓冲区长度绝不能突破 maxBufferSize 限制
+		if bufLen > maxBuffer {
+			t.Fatalf("step %d (%s): buffer length %d exceeded maxBufferSize %d", i, id, bufLen, maxBuffer)
+		}
+	}
+
+	// 2. 验证缓冲区当前长度严格等于 maxBuffer (3)，且仅保留最新的 S4, S5, S6
+	msgs := s.GroupCompactBufferMessages()
+	if len(msgs) != maxBuffer {
+		t.Fatalf("expected buffer length %d, got %d", maxBuffer, len(msgs))
+	}
+	expectedIDs := []string{"syn_staged_4", "syn_staged_5", "syn_staged_6"}
+	for i, expID := range expectedIDs {
+		if msgs[i].MessageID != expID {
+			t.Errorf("expected buffer index %d to be %s, got: %+v", i, expID, msgs[i])
+		}
+	}
+
+	// 3. 验证暂存屏障不变量：此时 S4 处于队首且仍处于 staged 状态，SnapshotGroupCompact 绝不能生成快照
+	snap, ok := s.SnapshotGroupCompact(1)
+	if ok || len(snap.Messages) > 0 {
+		t.Fatalf("expected SnapshotGroupCompact to be blocked by staged item S4, got ok=%v, msgs=%d", ok, len(snap.Messages))
+	}
+
+	// 4. 此时插入新的背景闲聊 C1 (committed)
+	// 验证第一层策略：只要存在已提交消息，优先逐出已提交消息，保护在途暂存屏障 S4, S5, S6
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Chatter",
+		SenderID:  "syn_usr_chatter",
+		Content:   "Chatter message 1",
+		MessageID: "syn_msg_c1",
+		Time:      "10:00:10",
+	}, maxBuffer)
+
+	msgsAfterChatter := s.GroupCompactBufferMessages()
+	if len(msgsAfterChatter) != maxBuffer {
+		t.Fatalf("expected buffer length %d, got %d", maxBuffer, len(msgsAfterChatter))
+	}
+	for i, expID := range expectedIDs {
+		if msgsAfterChatter[i].MessageID != expID {
+			t.Errorf("expected buffer index %d to remain %s, got: %+v", i, expID, msgsAfterChatter[i])
+		}
+	}
+
+	// 5. S4 轮次完成并转正 (Promote)
+	promoted := s.PromoteGroupCompactMessage("syn_staged_4")
+	if !promoted {
+		t.Fatalf("expected S4 to be promoted")
+	}
+
+	// 6. 转正后，S4 变为已提交状态，后续 S5, S6 仍为 staged
+	// SnapshotGroupCompact 应该能够且仅能够截取 S4，并在遇到 S5 时截断停止
+	snapAfter, okAfter := s.SnapshotGroupCompact(1)
+	if !okAfter || len(snapAfter.Messages) != 1 {
+		t.Fatalf("expected SnapshotGroupCompact to return 1 message for S4, got ok=%v, len=%d", okAfter, len(snapAfter.Messages))
+	}
+	if snapAfter.Messages[0].MessageID != "syn_staged_4" {
+		t.Fatalf("expected snap message 0 to be S4, got %+v", snapAfter.Messages[0])
+	}
+
+	// 7. 验证被早先容量淘汰的 S1, S2, S3 在稍后触发转正或丢弃时的安全性
+	// Promote 已经不在 buffer 的 S1 应安全返回 false，不 panic，不卡死
+	promotedS1 := s.PromoteGroupCompactMessage("syn_staged_1")
+	if promotedS1 {
+		t.Errorf("expected promotedS1 to be false since S1 was evicted earlier")
+	}
+
+	// Drop 已经不在 buffer 且未进入 summary 的 S2 应返回 false，但必须成功自增代际以使在途快照失效
+	genBefore := s.GroupCompactGeneration()
+	droppedS2 := s.DropGroupCompactMessage("syn_staged_2", "syn_usr_2")
+	if droppedS2 {
+		t.Errorf("expected droppedS2 to be false since S2 was evicted earlier")
+	}
+	if s.GroupCompactGeneration() != genBefore+1 {
+		t.Errorf("expected groupCompactGeneration to increment on drop, got %d, expected %d", s.GroupCompactGeneration(), genBefore+1)
+	}
+}
