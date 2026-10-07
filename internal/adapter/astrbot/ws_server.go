@@ -244,16 +244,26 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	captureGroupCompactText(event, visibleText, engine)
 }
 
-func stageGroupCompactText(event Event, text string, engine *llm.Engine) {
+func stageGroupCompactText(event Event, text string, engine *llm.Engine) *llm.StagedGroupCompactGuard {
 	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
-	session.StageGroupCompactMessage(
+	onPromote := func() {
+		if engine.GroupCompactor != nil {
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
+			engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
+		}
+	}
+	guard, _ := session.StageGroupCompactWithGuard(
 		llm.GroupCompactMessage{
 			Role:      "user",
 			Sender:    senderDisplayName(event),
@@ -263,16 +273,19 @@ func stageGroupCompactText(event Event, text string, engine *llm.Engine) {
 			Time:      time.Now().Format("15:04:05"),
 		},
 		maxBufferSize,
+		event.UserID,
+		onPromote,
 		event.MessageID,
 	)
+	return guard
 }
 
-func stageGroupCompactMessage(event Event, engine *llm.Engine) {
+func stageGroupCompactMessage(event Event, engine *llm.Engine) *llm.StagedGroupCompactGuard {
 	if engine == nil || event.GroupID == "" {
-		return
+		return nil
 	}
 	visibleText := astrBotVisibleText(event)
-	stageGroupCompactText(event, visibleText, engine)
+	return stageGroupCompactText(event, visibleText, engine)
 }
 
 func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string) {
@@ -627,7 +640,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		logImages,
 	)
 
-	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch, warningNotice...)
+	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch, turn, warningNotice...)
 }
 
 func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...string) {
@@ -643,10 +656,10 @@ func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...strin
 			}
 		}
 	}
-	replyWithSnapshot(event, engine, conn, snapshot, startEpoch, warningNotice...)
+	replyWithSnapshot(event, engine, conn, snapshot, startEpoch, nil, warningNotice...)
 }
 
-func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, warningNotice ...string) {
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -1070,7 +1083,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if session != nil {
 				session.DropLastMessage()
 				if event.MessageType == "group" {
-					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Drop()
+					} else {
+						session.DropGroupCompactMessage(event.MessageID, event.UserID)
+					}
 					if engine != nil && engine.GroupCompactor != nil {
 						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
 					}
@@ -1099,7 +1116,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			engine.TrimSession(session)
 			if event.MessageType == "group" && !runResult.Banned {
 				if session != nil {
-					session.PromoteGroupCompactMessage(event.MessageID)
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else {
+						session.PromoteGroupCompactMessage(event.MessageID)
+					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
 						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 					}
@@ -1136,7 +1157,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if sendErr != nil {
 		if session != nil {
 			if event.MessageType == "group" {
-				session.DropGroupCompactMessage(event.MessageID, event.UserID)
+				if turn != nil && turn.StagedGuard() != nil {
+					turn.StagedGuard().Drop()
+				} else {
+					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+				}
 			}
 			session.SetDeliveryFailure(llm.DeliveryFailure{
 				Platform: platform,
@@ -1159,7 +1184,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if event.MessageType == "group" && !runResult.Banned {
 		if session != nil {
-			session.PromoteGroupCompactMessage(event.MessageID)
+			if turn != nil && turn.StagedGuard() != nil {
+				turn.StagedGuard().Promote()
+			} else {
+				session.PromoteGroupCompactMessage(event.MessageID)
+			}
 		}
 	}
 	if strings.TrimSpace(historyReplyText) != "" {

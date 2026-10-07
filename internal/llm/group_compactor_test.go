@@ -1415,3 +1415,101 @@ func TestGroupCompactor_MixedSender_DropMessageDoesNotRollbackHistoricalMixedBat
 		t.Fatalf("expected Charlie's clean message to remain in buffer, got: %+v", remainingMessages)
 	}
 }
+
+func TestGroupCompactor_SmallBufferCeiling_StalledWakeTurn_PreservesStagedBarrier(t *testing.T) {
+	s := &SessionContext{
+		ConversationID: "group:grp_small_cap_001",
+	}
+
+	maxBuffer := 3
+
+	// 1. A(wake, staged) 抵达并进入暂存态
+	s.StageGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Alice",
+		SenderID:  "syn_user_alice_01",
+		Content:   "Alice wake message",
+		MessageID: "syn_msg_a_wake",
+		Time:      "10:00:00",
+	}, maxBuffer, "syn_msg_a_wake")
+
+	// 2. 模拟 LLM 思考耗时较长（Stalled wake turn），背景闲聊 B, C 陆续到达 (committed)
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Bob",
+		SenderID:  "syn_user_bob_01",
+		Content:   "Bob background chatter 1",
+		MessageID: "syn_msg_b_bg",
+		Time:      "10:00:01",
+	}, maxBuffer)
+
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Charlie",
+		SenderID:  "syn_user_charlie_01",
+		Content:   "Charlie background chatter 2",
+		MessageID: "syn_msg_c_bg",
+		Time:      "10:00:02",
+	}, maxBuffer)
+
+	// 当前缓冲区有 A(staged), B(committed), C(committed)，长度达到上限 3
+	if msgs := s.GroupCompactBufferMessages(); len(msgs) != 3 {
+		t.Fatalf("expected buffer length 3, got %d", len(msgs))
+	}
+
+	// 3. 此时新的背景闲聊 D, E 陆续到达，超出 maxBuffer 限制
+	// 关键验证点 (B2)：缓冲区容量上限绝不能盲目把处于首位的暂存屏障 A 逐出，必须优先逐出已提交的旧闲聊 (B, C)
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Dave",
+		SenderID:  "syn_user_dave_01",
+		Content:   "Dave background chatter 3",
+		MessageID: "syn_msg_d_bg",
+		Time:      "10:00:03",
+	}, maxBuffer)
+
+	s.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "Eve",
+		SenderID:  "syn_user_eve_01",
+		Content:   "Eve background chatter 4",
+		MessageID: "syn_msg_e_bg",
+		Time:      "10:00:04",
+	}, maxBuffer)
+
+	// 4. 断言：A 绝不能被逐出，且仍然处于首位作为屏障
+	msgs := s.GroupCompactBufferMessages()
+	if len(msgs) != 3 {
+		t.Fatalf("expected buffer length 3, got %d", len(msgs))
+	}
+	if msgs[0].MessageID != "syn_msg_a_wake" {
+		t.Fatalf("expected first item to remain A(wake), got: %+v", msgs[0])
+	}
+	if msgs[1].MessageID != "syn_msg_d_bg" || msgs[2].MessageID != "syn_msg_e_bg" {
+		t.Fatalf("expected committed items to be D and E, got: %+v, %+v", msgs[1], msgs[2])
+	}
+
+	// 5. 断言：因为 A 仍处于 staged 状态，SnapshotGroupCompact 绝不能生成快照并压缩后续的 D 和 E
+	snap, ok := s.SnapshotGroupCompact(3)
+	if ok || len(snap.Messages) > 0 {
+		t.Fatalf("expected SnapshotGroupCompact to be blocked by staged item A, but got ok=%v, msgs=%d", ok, len(snap.Messages))
+	}
+
+	// 6. 此时 A 正常结束并提交 (Promote)
+	promoted := s.PromoteGroupCompactMessage("syn_msg_a_wake")
+	if !promoted {
+		t.Fatalf("expected PromoteGroupCompactMessage to succeed")
+	}
+
+	// 7. 转正后，A, D, E 均已提交，物理时序 A -> D -> E 完整保留
+	snapAfter, okAfter := s.SnapshotGroupCompact(3)
+	if !okAfter || len(snapAfter.Messages) != 3 {
+		t.Fatalf("expected SnapshotGroupCompact to succeed after promote, got ok=%v, msgs=%d", okAfter, len(snapAfter.Messages))
+	}
+	if snapAfter.Messages[0].MessageID != "syn_msg_a_wake" {
+		t.Fatalf("expected snap message 0 to be A, got %+v", snapAfter.Messages[0])
+	}
+	if snapAfter.Messages[1].MessageID != "syn_msg_d_bg" || snapAfter.Messages[2].MessageID != "syn_msg_e_bg" {
+		t.Fatalf("expected snap messages 1 and 2 to be D and E, got %+v, %+v", snapAfter.Messages[1], snapAfter.Messages[2])
+	}
+}

@@ -388,9 +388,21 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			if c.isClosed() {
+				continue
+			}
+			var turn *llm.SessionTurn
+			if a.engine != nil && a.engine.SessionManager != nil &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
+			}
+
 			if event.MessageType == "group" && !c.mock {
 				if isExplicitlyWoken(event, scope) {
-					stageGroupCompactMessage(event, a.engine)
+					guard := stageGroupCompactMessage(event, a.engine)
+					if turn != nil {
+						turn.AttachStagedGuard(guard)
+					}
 				} else {
 					captureGroupCompactMessage(event, a.engine)
 				}
@@ -398,15 +410,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if !c.mock {
 				a.observeStickers(event)
-			}
-
-			if c.mock && c.isClosed() {
-				continue
-			}
-			var turn *llm.SessionTurn
-			if a.engine != nil && a.engine.SessionManager != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
 			}
 			c.inFlight.Add(1)
 			if !a.engine.Go(func() {

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -158,10 +159,11 @@ type GroupCompactSnapshot struct {
 // separate from the history mutex because a full LLM turn calls methods that
 // briefly lock session state themselves.
 type SessionTurn struct {
-	wait  <-chan struct{}
-	done  chan struct{}
-	once  sync.Once
-	epoch uint64
+	wait        <-chan struct{}
+	done        chan struct{}
+	once        sync.Once
+	epoch       uint64
+	stagedGuard *StagedGroupCompactGuard
 }
 
 func (t *SessionTurn) Wait() {
@@ -172,8 +174,26 @@ func (t *SessionTurn) Wait() {
 
 func (t *SessionTurn) Done() {
 	if t != nil {
+		if t.stagedGuard != nil {
+			t.stagedGuard.Done()
+		}
 		t.once.Do(func() { close(t.done) })
 	}
+}
+
+// AttachStagedGuard binds a staged group compact guard to this turn.
+func (t *SessionTurn) AttachStagedGuard(g *StagedGroupCompactGuard) {
+	if t != nil {
+		t.stagedGuard = g
+	}
+}
+
+// StagedGuard returns the attached staged guard, if any.
+func (t *SessionTurn) StagedGuard() *StagedGroupCompactGuard {
+	if t == nil {
+		return nil
+	}
+	return t.stagedGuard
 }
 
 func (t *SessionTurn) Epoch() uint64 {
@@ -978,12 +998,87 @@ func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBu
 		staged:   staged,
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
-		drop := len(s.groupCompactBuffer) - maxBufferSize
-		copy(s.groupCompactBuffer, s.groupCompactBuffer[drop:])
-		s.groupCompactBuffer = s.groupCompactBuffer[:maxBufferSize]
+		excess := len(s.groupCompactBuffer) - maxBufferSize
+		dropped := 0
+		w := 0
+		for _, item := range s.groupCompactBuffer {
+			if !item.staged && dropped < excess {
+				dropped++
+				continue
+			}
+			s.groupCompactBuffer[w] = item
+			w++
+		}
+		s.groupCompactBuffer = s.groupCompactBuffer[:w]
 	}
 	s.UpdatedAt = time.Now()
 	return len(s.groupCompactBuffer)
+}
+
+// StagedGroupCompactGuard guarantees exactly-once finalization for staged group compact sequence slots.
+type StagedGroupCompactGuard struct {
+	session   *SessionContext
+	messageID string
+	senderID  string
+	onPromote func()
+	finalized atomic.Bool
+}
+
+// NewStagedGroupCompactGuard creates a guard that guarantees exactly-once finalization of a staged sequence slot.
+func (s *SessionContext) NewStagedGroupCompactGuard(messageID, senderID string, onPromote func()) *StagedGroupCompactGuard {
+	return &StagedGroupCompactGuard{
+		session:   s,
+		messageID: strings.TrimSpace(messageID),
+		senderID:  strings.TrimSpace(senderID),
+		onPromote: onPromote,
+	}
+}
+
+// StageGroupCompactWithGuard appends one visible group message marked as staged and returns an exactly-once finalization guard.
+func (s *SessionContext) StageGroupCompactWithGuard(item any, maxBufferSize int, senderID string, onPromote func(), messageID ...string) (*StagedGroupCompactGuard, int) {
+	var msgID string
+	if len(messageID) > 0 {
+		msgID = strings.TrimSpace(messageID[0])
+	}
+	bufLen := s.StageGroupCompactMessage(item, maxBufferSize, msgID)
+	guard := s.NewStagedGroupCompactGuard(msgID, senderID, onPromote)
+	return guard, bufLen
+}
+
+// Promote marks the staged message as committed, clearing the compaction barrier,
+// and invokes any registered onPromote callback (e.g. triggering asynchronous compaction).
+func (g *StagedGroupCompactGuard) Promote() bool {
+	if g == nil || !g.finalized.CompareAndSwap(false, true) {
+		return false
+	}
+	promoted := false
+	if g.session != nil {
+		promoted = g.session.PromoteGroupCompactMessage(g.messageID)
+	}
+	if g.onPromote != nil {
+		g.onPromote()
+	}
+	return promoted
+}
+
+// Drop permanently removes the staged message and invalidates in-flight compaction snapshots.
+func (g *StagedGroupCompactGuard) Drop() bool {
+	if g == nil || !g.finalized.CompareAndSwap(false, true) {
+		return false
+	}
+	if g.session != nil {
+		return g.session.DropGroupCompactMessage(g.messageID, g.senderID)
+	}
+	return false
+}
+
+// Done ensures the staged message is finalized exactly once. If neither Promote nor Drop
+// has been explicitly called, it defaults to Promote to ensure the compaction barrier is not leaked.
+func (g *StagedGroupCompactGuard) Done() {
+	if g == nil {
+		return
+	}
+	g.Promote()
 }
 
 // PromoteGroupCompactMessage marks staged messages matching messageID (or all staged messages if messageID is empty)

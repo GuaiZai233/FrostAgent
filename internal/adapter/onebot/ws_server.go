@@ -262,7 +262,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, notice)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -284,12 +284,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, notice)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, warningNotice ...string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -758,7 +758,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)
 				}
-				session.PromoteGroupCompactMessage(msgID)
+				if turn != nil && turn.StagedGuard() != nil {
+					turn.StagedGuard().Promote()
+				} else {
+					session.PromoteGroupCompactMessage(msgID)
+				}
 				botReply := extractBotReplyText(replyText)
 				if strings.TrimSpace(botReply) != "" {
 					botName := engine.Getenv("BOT_NAME")
@@ -845,7 +849,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Drop()
+					} else {
+						session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+					}
 					if engine != nil && engine.GroupCompactor != nil {
 						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
 					}
@@ -882,7 +890,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)
 				}
-				session.PromoteGroupCompactMessage(msgID)
+				if turn != nil && turn.StagedGuard() != nil {
+					turn.StagedGuard().Promote()
+				} else {
+					session.PromoteGroupCompactMessage(msgID)
+				}
 				if engine != nil && engine.GroupCompactor != nil && !conn.mock {
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
@@ -904,7 +916,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					session.PromoteGroupCompactMessage(msgID)
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else {
+						session.PromoteGroupCompactMessage(msgID)
+					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
 						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 					}
@@ -1024,7 +1040,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if event.MessageID != 0 {
 				msgID = strconv.FormatInt(int64(event.MessageID), 10)
 			}
-			session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+			if turn != nil && turn.StagedGuard() != nil {
+				turn.StagedGuard().Drop()
+			} else {
+				session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+			}
 		}
 		reason := strings.TrimSpace(ackResp.Wording)
 		if reason == "" {
@@ -1124,9 +1144,9 @@ func captureGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
 	captureGroupCompactText(event, visibleText, engine)
 }
 
-func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Engine) {
+func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Engine) *llm.StagedGroupCompactGuard {
 	if engine == nil || event.GroupID <= 0 || strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	session := engine.SessionManager.GetOrCreate(historyKey(event))
 	var msgID string
@@ -1137,7 +1157,14 @@ func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Eng
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
-	session.StageGroupCompactMessage(
+	onPromote := func() {
+		if engine.GroupCompactor != nil {
+			owner, _ := memory.OwnerForGroup(event.GroupID)
+			routeScope := oneBotRouteScope(event)
+			engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+		}
+	}
+	guard, _ := session.StageGroupCompactWithGuard(
 		llm.GroupCompactMessage{
 			Role:      "user",
 			Sender:    senderDisplayName(event),
@@ -1147,17 +1174,20 @@ func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Eng
 			Time:      time.Now().Format("15:04:05"),
 		},
 		maxBufferSize,
+		strconv.FormatInt(event.UserID, 10),
+		onPromote,
 		msgID,
 	)
+	return guard
 }
 
-func stageGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) {
+func stageGroupCompactMessage(event model.OneBotEvent, engine *llm.Engine) *llm.StagedGroupCompactGuard {
 	if engine == nil || event.GroupID <= 0 {
-		return
+		return nil
 	}
 	segments := ParseMessageSegments(event.Message)
 	visibleText := extractUserText(segments, event.Message, engine.Scope)
-	stageGroupCompactText(event, visibleText, engine)
+	return stageGroupCompactText(event, visibleText, engine)
 }
 
 func formatGroupSpeakerMessage(event model.OneBotEvent, text string) string {

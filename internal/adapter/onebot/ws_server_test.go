@@ -5622,3 +5622,143 @@ func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testi
 		t.Fatalf("快照中的消息时序颠倒: %+v", snap.Messages)
 	}
 }
+
+func TestOneBot_GroupCompact_EarlyReturn_DisabledMention_FinalizesStagedSlot(t *testing.T) {
+	t.Setenv("GROUP_REPLY_ON_MENTION", "false")
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(mockLLM, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	const groupID int64 = 887766
+	const wakeMsgID int32 = 2001
+	const wakeUserID int64 = 112233
+	const bgMsgID int32 = 2002
+	const bgUserID int64 = 445566
+
+	// 1. 发送显式唤醒的群消息 (@bot Alice wake message)
+	wakeEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      wakeUserID,
+		MessageID:   wakeMsgID,
+		Sender:      &model.OneBotSender{Nickname: "Alice"},
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":" Alice wake question"}}]`),
+	}
+	wakeBytes, _ := json.Marshal(wakeEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeBytes); err != nil {
+		t.Fatalf("发送唤醒事件失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 2. 发送背景消息
+	bgEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      bgUserID,
+		MessageID:   bgMsgID,
+		Sender:      &model.OneBotSender{Nickname: "Bob"},
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"Bob background chatter"}}]`),
+	}
+	bgBytes, _ := json.Marshal(bgEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, bgBytes); err != nil {
+		t.Fatalf("发送背景事件失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	sessionKey := fmt.Sprintf("group:%d", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if !ok {
+		t.Fatalf("session %q not found", sessionKey)
+	}
+	sess := sessCore.(*llm.SessionContext)
+
+	// 验证未出现 staged 槽位残留导致 Snapshot 永久死锁
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望由于 SessionTurn 自动终结，Alice 槽位已提交且 SnapshotGroupCompact 成功，但快照被阻塞")
+	}
+	if len(snap.Messages) < 2 {
+		t.Fatalf("期望快照包含至少 2 条消息，实际: %d", len(snap.Messages))
+	}
+}
+
+func TestOneBot_GroupCompact_EarlyReturn_OverlongInput_FinalizesStagedSlot(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(mockLLM, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	const groupID int64 = 887767
+	const wakeMsgID int32 = 2101
+	const wakeUserID int64 = 112233
+
+	// 构造超长文本 (>30000 runes) 触发 reply() 内单条消息长度过长提前返回
+	overlongText := strings.Repeat("A", 30005)
+	wakeEvent := model.OneBotEvent{
+		SelfID:      123456,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     groupID,
+		UserID:      wakeUserID,
+		MessageID:   wakeMsgID,
+		Sender:      &model.OneBotSender{Nickname: "Alice"},
+		Message:     json.RawMessage(fmt.Sprintf(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":" %s"}}]`, overlongText)),
+	}
+	wakeBytes, _ := json.Marshal(wakeEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeBytes); err != nil {
+		t.Fatalf("发送唤醒事件失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	sessionKey := fmt.Sprintf("group:%d", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if !ok {
+		t.Fatalf("session %q not found", sessionKey)
+	}
+	sess := sessCore.(*llm.SessionContext)
+
+	// 验证超长提前返回后，staged guard 在 turn.Done() 时自动提升，compactor 不会被永久阻断
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望超长输入提前返回后，Staged slot 自动提交且 SnapshotGroupCompact 成功")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].MessageID != fmt.Sprintf("%d", wakeMsgID) {
+		t.Fatalf("期望快照中有 Alice 的消息，实际: %+v", snap.Messages)
+	}
+}

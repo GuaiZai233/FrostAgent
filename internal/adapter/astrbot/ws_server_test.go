@@ -2769,3 +2769,131 @@ func TestAstrBot_IntermediateAssistantStaging_SendMessageThenBanUser_PurgesBoth(
 		}
 	}
 }
+
+func TestAstrBot_GroupCompact_EarlyReturn_EventTypeMismatch_FinalizesStagedSlot(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(&mockLLMProvider{}, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	event := Event{
+		Type:        "event",
+		EventType:   "notice", // 非 message 类型触发 processEvent 早期返回
+		MessageID:   "msg-wake-early-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-early-001",
+		GroupName:   "EarlyTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	// 调用 processEvent，其在 event.EventType != "message" 处早期返回
+	processEvent(nil, event, engine, turn, nil)
+
+	// 验证由于 SessionTurn 自动守护机制，Alice 的 staged 槽位在退出时已被自动提升，
+	// Compactor snapshot 能够成功快照，不会发生永久阻塞
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望由于 SessionTurn.Done 自动提升，SnapshotGroupCompact 成功，但快照被阻塞")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].MessageID != "msg-wake-early-001" {
+		t.Fatalf("期望快照中包含 Alice 的已提交消息，实际: %+v", snap.Messages)
+	}
+}
+
+func TestAstrBot_GroupCompact_WorkerSpawnFailure_FinalizesStagedSlot(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg-wake-spawn-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-spawn-fail-001",
+		GroupName:   "SpawnFailTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	// 模拟 adapter.go 中 if !a.engine.Go(...) { turn.Done() }
+	turn.Done()
+
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望 turn.Done() 自动提交 staged guard，SnapshotGroupCompact 成功")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].MessageID != "msg-wake-spawn-001" {
+		t.Fatalf("期望快照中包含 Alice 的消息，实际: %+v", snap.Messages)
+	}
+}
+
+func TestAstrBot_GroupCompact_DeliveryFailure_DropsStagedSlot(t *testing.T) {
+	conn, _, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+	// 关闭连接使后续 sendDirectReply 失败
+	conn.Close()
+
+	engine := newTestEngine(&mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "测试回复",
+				},
+			}, nil
+		},
+	})
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg-wake-deliv-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-delivery-fail-001",
+		GroupName:   "DeliveryFailTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	processEvent(conn, event, engine, turn, nil)
+
+	// 验证投递失败时，guard.Drop() 被调用，且 turn.Done() 退出不会重新提升或复活该消息
+	buf := sess.GroupCompactBufferMessages()
+	if len(buf) != 0 {
+		t.Fatalf("期望投递失败后 buffer 为空，实际: %+v", buf)
+	}
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if ok || len(snap.Messages) > 0 {
+		t.Fatalf("期望投递失败后无快照，实际: ok=%v msgs=%+v", ok, snap.Messages)
+	}
+}
