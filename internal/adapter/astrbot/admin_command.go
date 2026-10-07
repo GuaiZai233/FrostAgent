@@ -12,6 +12,29 @@ import (
 	"strings"
 )
 
+func extractMentionedUserIDs(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["mentioned_user_ids"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		res := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				res = append(res, strings.TrimSpace(s))
+			}
+		}
+		return res
+	}
+	return nil
+}
+
 // extractAstrBotAdminCommand parses an AstrBot event to see if it is an administrator command candidate.
 // It strictly requires a real @ targeting the bot (event.IsAt == true).
 func extractAstrBotAdminCommand(event Event, prefix string) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
@@ -19,7 +42,44 @@ func extractAstrBotAdminCommand(event Event, prefix string) (cmd admincmd.Parsed
 		return cmd, false, nil
 	}
 	text := admincmd.StripLeadingMention(event.Content)
-	return admincmd.ParseCandidate(text, prefix)
+	cmd, isCandidate, err = admincmd.ParseCandidate(text, prefix)
+	if !isCandidate {
+		return cmd, false, nil
+	}
+
+	if cmd.Type == admincmd.CmdBan || cmd.Type == admincmd.CmdUnban {
+		mentionedUserIDs := extractMentionedUserIDs(event.Metadata)
+		if len(mentionedUserIDs) > 1 {
+			return cmd, true, fmt.Errorf("%s 指令格式错误，不能同时指定多个提及目标", cmd.Type)
+		}
+		if len(mentionedUserIDs) == 1 {
+			target := mentionedUserIDs[0]
+			if strings.EqualFold(target, "all") || target == "全体成员" || target == "0" {
+				return cmd, true, fmt.Errorf("%s 指令不支持对全体成员执行操作", cmd.Type)
+			}
+			if len(cmd.Args) == 0 {
+				cmd.Args = []string{target}
+				cmd.RawArgs = target
+				err = nil
+			} else if len(cmd.Args) == 1 {
+				arg := strings.TrimSpace(cmd.Args[0])
+				if strings.HasPrefix(arg, "@") || strings.HasPrefix(arg, "[") {
+					cmd.Args[0] = target
+					cmd.RawArgs = target
+					err = nil
+				} else if arg == target {
+					cmd.Args[0] = target
+					cmd.RawArgs = target
+					err = nil
+				} else {
+					return cmd, true, fmt.Errorf("%s 指令目标冲突：文本参数 %q 与提及目标不一致", cmd.Type, arg)
+				}
+			} else {
+				return cmd, true, fmt.Errorf("%s 指令格式错误，不能同时指定多个目标或参数", cmd.Type)
+			}
+		}
+	}
+	return cmd, isCandidate, err
 }
 
 func sendAstrBotAdminReply(event Event, conn *wsConn, text string, isIntermediate bool) error {

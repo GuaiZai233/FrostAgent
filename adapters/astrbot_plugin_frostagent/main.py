@@ -481,7 +481,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
 
     session_id = f"{platform}:group:{group_id}" if message_type == "group" else f"{platform}:private:{user_id}"
     self_id = extract_self_id(event)
-    has_other_mention, has_other_content, has_media_content = extract_interaction_metadata(event, self_id)
+    has_other_mention, has_other_content, has_media_content, mentioned_user_ids = extract_interaction_metadata(event, self_id)
     if attachments:
         has_media_content = True
 
@@ -508,6 +508,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "has_other_content": has_other_content,
         "has_media_content": has_media_content,
         "has_images": has_media_content,
+        "mentioned_user_ids": mentioned_user_ids,
     }
     if reply_message_id:
         metadata["reply_message_id"] = reply_message_id
@@ -548,15 +549,17 @@ def extract_self_id(event: AstrMessageEvent) -> str:
 def extract_interaction_metadata(
     event: AstrMessageEvent,
     self_id: str,
-) -> tuple[bool, bool, bool]:
+) -> tuple[bool, bool, bool, list[str]]:
     """提取入站消息结构特征，用于跨适配器 mention-only 等语义判定：
     - has_other_mention: 是否包含除 Bot 之外的其他 @ 提及（如 @其他群友 或 @全体成员）
     - has_other_content: 是否包含非文本、非图片、非引用、非提及的其它消息组件（如 Face, Record, Video, File 等）
     - has_media_content: 是否包含图片或表情等多媒体结构（Image, MFace），无论媒体附件是否成功提取/下载
+    - mentioned_user_ids: 除 Bot 自身之外所提及的所有目标用户 ID 列表（保持顺序）
     """
     has_other_mention = False
     has_other_content = False
     has_media_content = False
+    mentioned_user_ids: list[str] = []
 
     components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
     if isinstance(components, list) and components:
@@ -566,6 +569,8 @@ def extract_interaction_metadata(
                 target_qq = str(first_attr(comp, "qq", "target_id", "user_id") or "").strip()
                 if not self_id or target_qq != self_id:
                     has_other_mention = True
+                    if target_qq and target_qq not in mentioned_user_ids:
+                        mentioned_user_ids.append(target_qq)
             elif "plain" in comp_type or "reply" in comp_type:
                 continue
             elif "image" in comp_type or "mface" in comp_type:
@@ -587,6 +592,8 @@ def extract_interaction_metadata(
                 target_qq = str(first_attr(data, "qq", "target_id", "user_id") or "").strip()
                 if not self_id or target_qq != self_id:
                     has_other_mention = True
+                    if target_qq and target_qq not in mentioned_user_ids:
+                        mentioned_user_ids.append(target_qq)
             elif seg_type in ("text", "reply"):
                 continue
             elif seg_type in ("image", "mface"):
@@ -594,7 +601,7 @@ def extract_interaction_metadata(
             else:
                 has_other_content = True
 
-    return has_other_mention, has_other_content, has_media_content
+    return has_other_mention, has_other_content, has_media_content, mentioned_user_ids
 
 
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:

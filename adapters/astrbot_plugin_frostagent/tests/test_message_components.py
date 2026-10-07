@@ -590,7 +590,53 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(payload["content"], "")
             self.assertTrue(payload["is_at"])
             self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(payload["metadata"]["mentioned_user_ids"], ["other_user"])
             self.assertFalse(payload["metadata"]["has_other_content"])
+
+    def test_build_payload_preserves_multiple_mentions_in_metadata(self) -> None:
+        event = InboundEvent([
+            FakeAt(qq="bot_self"),
+            FakeAt(qq="user_a"),
+            FakeAt(qq="user_b"),
+        ])
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertTrue(payload["is_at"])
+            self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(
+                payload["metadata"]["mentioned_user_ids"],
+                ["user_a", "user_b"],
+            )
+
+    def test_build_payload_extracts_mentioned_user_ids_from_raw_segments_fallback(self) -> None:
+        event = InboundEvent(
+            [],
+            raw_segments=[
+                {"type": "at", "data": {"qq": "bot_self"}},
+                {"type": "at", "data": {"qq": "raw_user_1"}},
+                {"type": "text", "data": {"text": "hello"}},
+            ],
+        )
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertTrue(payload["is_at"])
+            self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(
+                payload["metadata"]["mentioned_user_ids"],
+                ["raw_user_1"],
+            )
 
     def test_build_payload_preserves_non_text_content_in_metadata(self) -> None:
         class FakeFace:
@@ -624,6 +670,7 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(payload["content"], "")
             self.assertTrue(payload["is_at"])
             self.assertFalse(payload["metadata"]["has_other_mention"])
+            self.assertEqual(payload["metadata"]["mentioned_user_ids"], [])
             self.assertFalse(payload["metadata"]["has_other_content"])
             self.assertFalse(payload["metadata"]["has_media_content"])
             self.assertFalse(payload["metadata"]["has_images"])
