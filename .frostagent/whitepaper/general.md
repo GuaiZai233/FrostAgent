@@ -160,6 +160,30 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
+### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
+
+为了让智能体在群聊场景中具备像真实群友一样自发参与讨论的互动能力，同时避免被动全量响应造成的 Token 浪费与群友打扰，FrostAgent 引入了基于概率触发与大模型主动静默研判的双重主动回复架构：
+
+- **入站概率 Roll 与触发唤醒抽象 (Probability Roll & Inbound Wake Signal)**：
+  - 各适配器（OneBot v11 与 AstrBot）在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true` 或 AstrBot 元数据 `_frostagent_proactive_reply: true`），作为有效唤醒信号进入主处理管线；
+  - 概率由实例环境变量 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
+  - 若群聊配置了 `GROUP_REPLY_ON_MENTION=false`（群聊不回复），则主动回复与被提及回复一并受到总开关压制，保证行为策略的一致性。
+- **Prompt 缓存不变式与单轮指令前置注入 (Prompt Caching Invariant & Turn-Level Prefix Injection)**：
+  - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
+  - **单轮请求指令动态注入**：主动回复的前置指导指令严格且仅在当前轮次的请求级提示词（`durablePrompt` 与 `requestPrompt`）最前端拼接，格式为：
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_slient工具静默。`
+  - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保多轮对话下的公共静态前缀完全一致、100% 保持缓存命中。
+- **双拼写静默决策工具与零出站保障 (Dual-Spelling Silence Tool: `stay_silent` & `stay_slient`)**：
+  - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的静默终止工具；
+  - **双拼写兼容注册**：由于用户提示词指定使用 `stay_slient`，为彻底防范大模型在规范拼写（`stay_silent`）与提示词拼写（`stay_slient`）之间的调用偏差，底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）同时注册并识别规范工具 `stay_silent` 与兼容别名 `stay_slient`；
+  - **终态静默拦截**：无论模型调用哪种拼写，Agent 执行器均判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，适配器接收到静默结果后完全不发送任何回复动作，实现无痕静默退出。
+- **安全审查门禁完整性 (Security Gating Invariant)**：
+  - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞。
+- **Web 控制台可视化滑块与手动精确输入**：
+  - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
+  - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；
+  - 开启时强制校验不低于 0.01，并通过 ConnectRPC `updateEnvVar` 实时持久化至 `.env` 并即时内存生效。
+
 ### 管理员消息指令系统 (Administrator Message Commands System)
 
 为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：

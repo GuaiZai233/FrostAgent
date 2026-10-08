@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
@@ -398,7 +399,14 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	return result
 }
 
-func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+func shouldReply(event *Event, scopes ...*runtimescope.Scope) bool {
+	return shouldReplyWithRNG(event, nil, scopes...)
+}
+
+func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
 	if event.Metadata != nil {
 		if val, ok := event.Metadata["_frostagent_should_reply"]; ok {
 			if b, ok := val.(bool); ok {
@@ -420,7 +428,21 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 		if isBotNameMentioned(event.Content, scope) {
 			return true
 		}
-		return slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) })
+		if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+			return true
+		}
+		var getenv func(string) string
+		if scope != nil {
+			getenv = scope.Getenv
+		}
+		if proactive.RollWithRand(getenv, rng) {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any)
+			}
+			event.Metadata["_frostagent_proactive_reply"] = true
+			return true
+		}
+		return false
 	}
 	return true
 }
@@ -532,7 +554,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		platform = "astrbot"
 	}
 
-	if !shouldReply(event, engine.Scope) {
+	if !shouldReply(&event, engine.Scope) {
 		engine.Log().Debug(
 			logs.WEBSOCKET,
 			fmt.Sprintf(
@@ -863,6 +885,17 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
+
+	isProactive := false
+	if event.Metadata != nil {
+		if v, ok := event.Metadata["_frostagent_proactive_reply"].(bool); ok && v {
+			isProactive = true
+		}
+	}
+	if isProactive {
+		durablePrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, durablePrompt)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
 
 	var (
 		replyText            string

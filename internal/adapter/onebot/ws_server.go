@@ -26,6 +26,7 @@ import (
 
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/security"
 
 	"github.com/gorilla/websocket"
@@ -262,7 +263,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, notice)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, wakeSignals, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -284,12 +285,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, notice)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, GroupWakeSignals{}, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, warningNotice ...string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, wakeSignals GroupWakeSignals, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -640,6 +641,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if vettedReply != "" {
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
 		}
+	}
+
+	if wakeSignals.Proactive {
+		durablePrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, durablePrompt)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
 	}
 
 	// 4. Call the agent engine with history

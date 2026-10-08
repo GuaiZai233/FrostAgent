@@ -36,8 +36,9 @@ type contextualToolExecutor interface {
 }
 
 const (
-	StaySilentToolName    = "stay_silent"
-	AssistantSilentMarker = "<assistant_silent />"
+	StaySilentToolName      = "stay_silent"
+	StaySlientAliasToolName = "stay_slient"
+	AssistantSilentMarker   = "<assistant_silent />"
 
 	// DefaultMaxIterations is the fallback loop iteration limit for LLM execution.
 	DefaultMaxIterations = 35
@@ -46,6 +47,11 @@ const (
 	MaxContextTokens     = 128000
 	MaxToolOutputBytes   = 65536 // 64KB
 )
+
+// IsStaySilentTool reports whether the tool name matches stay_silent or its alias stay_slient.
+func IsStaySilentTool(name string) bool {
+	return name == StaySilentToolName || name == StaySlientAliasToolName
+}
 
 func truncateRunes(value string, limit int) string {
 	if limit <= 0 {
@@ -859,7 +865,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				} else {
 					toolSucceeded = true
 					toolResult = res
-					if tc.Function.Name == StaySilentToolName {
+					if IsStaySilentTool(tc.Function.Name) {
 						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
 						return AgentRunResult{
 							MemoryWritten: memoryWritten,
@@ -965,7 +971,7 @@ func staySilentConflict(toolCalls []ToolCall) string {
 		return ""
 	}
 	for _, toolCall := range toolCalls {
-		if toolCall.Function.Name == StaySilentToolName {
+		if IsStaySilentTool(toolCall.Function.Name) {
 			return "工具调用冲突：stay_silent 必须单独调用，不能与其他工具同时使用；请重新选择要执行的动作"
 		}
 	}

@@ -327,10 +327,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
-				pristineShouldReply = shouldReply(event, scope)
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
+				pristineShouldReply = shouldReply(&event, scope)
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 			}
 
