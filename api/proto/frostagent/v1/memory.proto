@@ -39,10 +39,10 @@ message MemoryEntry {
 }
 
 message ListMemoriesRequest {
-  string scope = 1;           // "private" or "group" (empty = "private")
-  string group_id = 2;        // required when scope == "group"
-  string owner = 3;           // filter by owner (empty = all)
-  Pagination pagination = 4;
+  string owner = 1;           // filter by owner (empty = all)
+  Pagination pagination = 2;
+  string scope = 3;           // "private" or "group" (empty = "private")
+  string group_id = 4;        // required when scope == "group"
 }
 
 message ListMemoriesResponse {
@@ -51,10 +51,10 @@ message ListMemoriesResponse {
 }
 
 message SearchMemoriesRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;        // required when scope == "group"
-  string query = 3;
-  Pagination pagination = 4;
+  string query = 1;
+  Pagination pagination = 2;
+  string scope = 3;           // "private" or "group"
+  string group_id = 4;        // required when scope == "group"
 }
 
 message SearchMemoriesResponse {
@@ -63,12 +63,12 @@ message SearchMemoriesResponse {
 }
 
 message AddMemoryRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;        // required when scope == "group"
-  string owner = 3;
-  string content = 4;
-  repeated string tags = 5;
-  string visibility = 6;      // deprecated
+  string owner = 1;
+  string content = 2;
+  repeated string tags = 3;
+  string visibility = 4;      // deprecated
+  string scope = 5;           // "private" or "group"
+  string group_id = 6;        // required when scope == "group"
 }
 
 message AddMemoryResponse {
@@ -77,12 +77,12 @@ message AddMemoryResponse {
 }
 
 message UpdateMemoryRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;        // required when scope == "group"
-  string id = 3;
-  string content = 4;
-  repeated string tags = 5;
-  string visibility = 6;      // deprecated
+  string id = 1;
+  string content = 2;
+  repeated string tags = 3;
+  string visibility = 4;      // deprecated
+  string scope = 5;           // "private" or "group"
+  string group_id = 6;        // required when scope == "group"
 }
 
 message UpdateMemoryResponse {
@@ -91,9 +91,9 @@ message UpdateMemoryResponse {
 }
 
 message DeleteMemoryRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;        // required when scope == "group"
-  string id = 3;
+  string id = 1;
+  string scope = 2;           // "private" or "group"
+  string group_id = 3;        // required when scope == "group"
 }
 
 message DeleteMemoryResponse {
@@ -127,10 +127,10 @@ message ExportMemoriesResponse {
 }
 
 message ImportMemoriesRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;
-  string json_content = 3;    // export JSON string to import
-  bool overwrite = 4;         // overwrite existing IDs
+  string json_content = 1;    // export JSON string to import
+  bool overwrite = 2;         // overwrite existing IDs
+  string scope = 3;           // "private" or "group"
+  string group_id = 4;
 }
 
 message ImportMemoriesResponse {
@@ -140,9 +140,9 @@ message ImportMemoriesResponse {
 }
 
 message TriggerReflectionRequest {
-  string scope = 1;           // "private" or "group"
-  string group_id = 2;
-  string owner = 3;           // empty = reflect all owners
+  string owner = 1;           // empty = reflect all owners
+  string scope = 2;           // "private" or "group"
+  string group_id = 3;
 }
 
 message TriggerReflectionResponse {

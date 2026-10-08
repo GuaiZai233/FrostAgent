@@ -60,17 +60,18 @@ const DistillGroupCompactPrompt = `请从以下一批群聊历史消息中，提
 返回 JSON 数组，每条包含：
 - content: 自然语言描述（简洁、独立可理解）
 - tags: 关键词标签数组（2-5个）
-- speaker_id: 消息中实际发言者的 QQ 号（必须与提供消息中的 sender_id 完全一致；如果涉及多人或规则，留空 ""）
-- is_self: 布尔值。当且仅当该成员亲口自述关于自己的第一人称长期事实时为 true，否则为 false。
+- source_msg_index: 整数，该事实直接来源的消息编号（对应待提炼消息列表中的 msg_index）
+- is_self: 布尔值。当且仅当该条消息的发言成员亲口自述关于自己的第一人称长期事实（如“我擅长写Go代码”）时为 true。如果涉及他人、多人、群规或客观事实，必须为 false。
 
 提炼与去重规则：
 1. 严禁与上方“已有群记忆”重复！如果事实已被记录，不得再次提取。
-2. 转述他人（例如“小张说小李搬家了”）必须标明归属（例如“小张称小李搬家了”），is_self 必须为 false，speaker_id 设为空 ""，tags 包含涉及人物。
-3. 群规、公共约定、群内重要公告，is_self 为 false，speaker_id 为 ""。
+2. 转述他人（例如“小张说小李搬家了”）必须标明归属（例如“小张称小李搬家了”），is_self 必须为 false，tags 包含涉及人物。
+3. 群规、公共约定、群内重要公告，is_self 必须为 false。
 4. 忽略临时闲聊、流水账、即时表情、短对话。
 5. 拿不准或无新增长期价值信息时，返回空数组 []。
+6. 只返回符合格式的 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明。
 
-待提炼的群消息：
+待提炼的群消息列表（JSON 格式）：
 {conversation}`
 
 const distillGroupCompactPrompt = DistillGroupCompactPrompt

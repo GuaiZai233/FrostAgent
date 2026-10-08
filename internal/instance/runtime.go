@@ -102,6 +102,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Initialize memory system
 	store := memory.NewStore(filepath.Join(dir, "brain.json"))
 	groupManager := memory.NewGroupManager(dir, scope)
+	if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
+		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("迁移旧群聊记忆失败: %v", err))
+	}
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope

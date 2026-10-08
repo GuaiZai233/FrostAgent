@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/memory.proto.
  */
 export const file_frostagent_v1_memory: GenFile = /*@__PURE__*/
-  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSLKAQoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAkSEgoKdXBkYXRlZF9hdBgIIAEoCRIUCgxhY2Nlc3NfY291bnQYCSABKAUSDQoFc2NvcGUYCiABKAkSEAoIZ3JvdXBfaWQYCyABKAkidAoTTGlzdE1lbW9yaWVzUmVxdWVzdBINCgVzY29wZRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRINCgVvd25lchgDIAEoCRItCgpwYWdpbmF0aW9uGAQgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInMKFExpc3RNZW1vcmllc1Jlc3BvbnNlEiwKCG1lbW9yaWVzGAEgAygLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInYKFVNlYXJjaE1lbW9yaWVzUmVxdWVzdBINCgVzY29wZRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRINCgVxdWVyeRgDIAEoCRItCgpwYWdpbmF0aW9uGAQgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInUKFlNlYXJjaE1lbW9yaWVzUmVzcG9uc2USLAoIbWVtb3JpZXMYASADKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Ei0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24idQoQQWRkTWVtb3J5UmVxdWVzdBINCgVzY29wZRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRINCgVvd25lchgDIAEoCRIPCgdjb250ZW50GAQgASgJEgwKBHRhZ3MYBSADKAkSEgoKdmlzaWJpbGl0eRgGIAEoCSJOChFBZGRNZW1vcnlSZXNwb25zZRIqCgZtZW1vcnkYASABKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Eg0KBWVycm9yGAIgASgJInUKE1VwZGF0ZU1lbW9yeVJlcXVlc3QSDQoFc2NvcGUYASABKAkSEAoIZ3JvdXBfaWQYAiABKAkSCgoCaWQYAyABKAkSDwoHY29udGVudBgEIAEoCRIMCgR0YWdzGAUgAygJEhIKCnZpc2liaWxpdHkYBiABKAkiNgoUVXBkYXRlTWVtb3J5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJCChNEZWxldGVNZW1vcnlSZXF1ZXN0Eg0KBXNjb3BlGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJEgoKAmlkGAMgASgJIjYKFERlbGV0ZU1lbW9yeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiOAoVR2V0TWVtb3J5U3RhdHNSZXF1ZXN0Eg0KBXNjb3BlGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJIpUCChZHZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEg0KBXRvdGFsGAEgASgFEhQKDHB1YmxpY19jb3VudBgCIAEoBRIVCg1wcml2YXRlX2NvdW50GAMgASgFEkQKCGJ5X293bmVyGAQgAygLMjIuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlLkJ5T3duZXJFbnRyeRIaChJwcml2YXRlX2NoYXRfY291bnQYBSABKAUSGAoQZ3JvdXBfY2hhdF9jb3VudBgGIAEoBRITCgtncm91cF9jb3VudBgHIAEoBRouCgxCeU93bmVyRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgFOgI4ASI4ChVFeHBvcnRNZW1vcmllc1JlcXVlc3QSDQoFc2NvcGUYASABKAkSEAoIZ3JvdXBfaWQYAiABKAkiPQoWRXhwb3J0TWVtb3JpZXNSZXNwb25zZRIUCgxqc29uX2NvbnRlbnQYASABKAkSDQoFZXJyb3IYAiABKAkiYQoVSW1wb3J0TWVtb3JpZXNSZXF1ZXN0Eg0KBXNjb3BlGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJEhQKDGpzb25fY29udGVudBgDIAEoCRIRCglvdmVyd3JpdGUYBCABKAgiSgoWSW1wb3J0TWVtb3JpZXNSZXNwb25zZRIQCghpbXBvcnRlZBgBIAEoBRIPCgdza2lwcGVkGAIgASgFEg0KBWVycm9yGAMgASgJIkoKGFRyaWdnZXJSZWZsZWN0aW9uUmVxdWVzdBINCgVzY29wZRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRINCgVvd25lchgDIAEoCSKeAQoZVHJpZ2dlclJlZmxlY3Rpb25SZXNwb25zZRIPCgdzdGFydGVkGAEgASgIEg8KB3J1bm5pbmcYAiABKAgSDQoFb3duZXIYAyABKAkSEgoKc3RhcnRlZF9hdBgEIAEoCRIZChFsYXN0X2NvbXBsZXRlZF9hdBgFIAEoCRISCgpsYXN0X2Vycm9yGAYgASgJEg0KBWVycm9yGAcgASgJInQKDEdyb3VwU3VtbWFyeRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEhQKDG1lbWJlcl9jb3VudBgDIAEoBRIUCgxtZW1vcnlfY291bnQYBCABKAUSEgoKdXBkYXRlZF9hdBgFIAEoCSITChFMaXN0R3JvdXBzUmVxdWVzdCJBChJMaXN0R3JvdXBzUmVzcG9uc2USKwoGZ3JvdXBzGAEgAygLMhsuZnJvc3RhZ2VudC52MS5Hcm91cFN1bW1hcnki3AEKDU1lbWJlclByb2ZpbGUSDwoHdXNlcl9pZBgBIAEoCRIQCghuaWNrbmFtZRgCIAEoCRIMCgRjYXJkGAMgASgJEgwKBHJvbGUYBCABKAkSFgoOcHJlZmVycmVkX25hbWUYBSABKAkSDwoHYWxpYXNlcxgGIAMoCRIUCgxjYWxsaW5nX25hbWUYByABKAkSDgoGc291cmNlGAggASgJEhIKCmNyZWF0ZWRfYXQYCSABKAkSEgoKdXBkYXRlZF9hdBgKIAEoCRIVCg1sYXN0X3Nwb2tlX2F0GAsgASgJIncKDEdyb3VwUHJvZmlsZRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEi0KB21lbWJlcnMYAyADKAsyHC5mcm9zdGFnZW50LnYxLk1lbWJlclByb2ZpbGUSEgoKdXBkYXRlZF9hdBgEIAEoCSIqChZHZXRHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJIlYKF0dldEdyb3VwUHJvZmlsZVJlc3BvbnNlEiwKB3Byb2ZpbGUYASABKAsyGy5mcm9zdGFnZW50LnYxLkdyb3VwUHJvZmlsZRINCgVlcnJvchgCIAEoCSJBChlVcGRhdGVHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJEhIKCmdyb3VwX25hbWUYAiABKAkiPAoaVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJoChpVcGRhdGVNZW1iZXJQcm9maWxlUmVxdWVzdBIQCghncm91cF9pZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEhYKDnByZWZlcnJlZF9uYW1lGAMgASgJEg8KB2FsaWFzZXMYBCADKAkiPQobVXBkYXRlTWVtYmVyUHJvZmlsZVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAky3AkKDU1lbW9yeVNlcnZpY2USVwoMTGlzdE1lbW9yaWVzEiIuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXNwb25zZRJdCg5TZWFyY2hNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuU2VhcmNoTWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5TZWFyY2hNZW1vcmllc1Jlc3BvbnNlEk4KCUFkZE1lbW9yeRIfLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVxdWVzdBogLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVzcG9uc2USVwoMVXBkYXRlTWVtb3J5EiIuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXNwb25zZRJXCgxEZWxldGVNZW1vcnkSIi5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlc3BvbnNlEl0KDkdldE1lbW9yeVN0YXRzEiQuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1JlcXVlc3QaJS5mcm9zdGFnZW50LnYxLkdldE1lbW9yeVN0YXRzUmVzcG9uc2USXQoORXhwb3J0TWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLkV4cG9ydE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuRXhwb3J0TWVtb3JpZXNSZXNwb25zZRJdCg5JbXBvcnRNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuSW1wb3J0TWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5JbXBvcnRNZW1vcmllc1Jlc3BvbnNlEmYKEVRyaWdnZXJSZWZsZWN0aW9uEicuZnJvc3RhZ2VudC52MS5UcmlnZ2VyUmVmbGVjdGlvblJlcXVlc3QaKC5mcm9zdGFnZW50LnYxLlRyaWdnZXJSZWZsZWN0aW9uUmVzcG9uc2USUQoKTGlzdEdyb3VwcxIgLmZyb3N0YWdlbnQudjEuTGlzdEdyb3Vwc1JlcXVlc3QaIS5mcm9zdGFnZW50LnYxLkxpc3RHcm91cHNSZXNwb25zZRJgCg9HZXRHcm91cFByb2ZpbGUSJS5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlcXVlc3QaJi5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlc3BvbnNlEmkKElVwZGF0ZUdyb3VwUHJvZmlsZRIoLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVxdWVzdBopLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USbAoTVXBkYXRlTWVtYmVyUHJvZmlsZRIpLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtYmVyUHJvZmlsZVJlcXVlc3QaKi5mcm9zdGFnZW50LnYxLlVwZGF0ZU1lbWJlclByb2ZpbGVSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
+  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSLKAQoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAkSEgoKdXBkYXRlZF9hdBgIIAEoCRIUCgxhY2Nlc3NfY291bnQYCSABKAUSDQoFc2NvcGUYCiABKAkSEAoIZ3JvdXBfaWQYCyABKAkidAoTTGlzdE1lbW9yaWVzUmVxdWVzdBINCgVvd25lchgBIAEoCRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEg0KBXNjb3BlGAMgASgJEhAKCGdyb3VwX2lkGAQgASgJInMKFExpc3RNZW1vcmllc1Jlc3BvbnNlEiwKCG1lbW9yaWVzGAEgAygLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInYKFVNlYXJjaE1lbW9yaWVzUmVxdWVzdBINCgVxdWVyeRgBIAEoCRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEg0KBXNjb3BlGAMgASgJEhAKCGdyb3VwX2lkGAQgASgJInUKFlNlYXJjaE1lbW9yaWVzUmVzcG9uc2USLAoIbWVtb3JpZXMYASADKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Ei0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24idQoQQWRkTWVtb3J5UmVxdWVzdBINCgVvd25lchgBIAEoCRIPCgdjb250ZW50GAIgASgJEgwKBHRhZ3MYAyADKAkSEgoKdmlzaWJpbGl0eRgEIAEoCRINCgVzY29wZRgFIAEoCRIQCghncm91cF9pZBgGIAEoCSJOChFBZGRNZW1vcnlSZXNwb25zZRIqCgZtZW1vcnkYASABKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Eg0KBWVycm9yGAIgASgJInUKE1VwZGF0ZU1lbW9yeVJlcXVlc3QSCgoCaWQYASABKAkSDwoHY29udGVudBgCIAEoCRIMCgR0YWdzGAMgAygJEhIKCnZpc2liaWxpdHkYBCABKAkSDQoFc2NvcGUYBSABKAkSEAoIZ3JvdXBfaWQYBiABKAkiNgoUVXBkYXRlTWVtb3J5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJCChNEZWxldGVNZW1vcnlSZXF1ZXN0EgoKAmlkGAEgASgJEg0KBXNjb3BlGAIgASgJEhAKCGdyb3VwX2lkGAMgASgJIjYKFERlbGV0ZU1lbW9yeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiOAoVR2V0TWVtb3J5U3RhdHNSZXF1ZXN0Eg0KBXNjb3BlGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJIpUCChZHZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEg0KBXRvdGFsGAEgASgFEhQKDHB1YmxpY19jb3VudBgCIAEoBRIVCg1wcml2YXRlX2NvdW50GAMgASgFEkQKCGJ5X293bmVyGAQgAygLMjIuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlLkJ5T3duZXJFbnRyeRIaChJwcml2YXRlX2NoYXRfY291bnQYBSABKAUSGAoQZ3JvdXBfY2hhdF9jb3VudBgGIAEoBRITCgtncm91cF9jb3VudBgHIAEoBRouCgxCeU93bmVyRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgFOgI4ASI4ChVFeHBvcnRNZW1vcmllc1JlcXVlc3QSDQoFc2NvcGUYASABKAkSEAoIZ3JvdXBfaWQYAiABKAkiPQoWRXhwb3J0TWVtb3JpZXNSZXNwb25zZRIUCgxqc29uX2NvbnRlbnQYASABKAkSDQoFZXJyb3IYAiABKAkiYQoVSW1wb3J0TWVtb3JpZXNSZXF1ZXN0EhQKDGpzb25fY29udGVudBgBIAEoCRIRCglvdmVyd3JpdGUYAiABKAgSDQoFc2NvcGUYAyABKAkSEAoIZ3JvdXBfaWQYBCABKAkiSgoWSW1wb3J0TWVtb3JpZXNSZXNwb25zZRIQCghpbXBvcnRlZBgBIAEoBRIPCgdza2lwcGVkGAIgASgFEg0KBWVycm9yGAMgASgJIkoKGFRyaWdnZXJSZWZsZWN0aW9uUmVxdWVzdBINCgVvd25lchgBIAEoCRINCgVzY29wZRgCIAEoCRIQCghncm91cF9pZBgDIAEoCSKeAQoZVHJpZ2dlclJlZmxlY3Rpb25SZXNwb25zZRIPCgdzdGFydGVkGAEgASgIEg8KB3J1bm5pbmcYAiABKAgSDQoFb3duZXIYAyABKAkSEgoKc3RhcnRlZF9hdBgEIAEoCRIZChFsYXN0X2NvbXBsZXRlZF9hdBgFIAEoCRISCgpsYXN0X2Vycm9yGAYgASgJEg0KBWVycm9yGAcgASgJInQKDEdyb3VwU3VtbWFyeRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEhQKDG1lbWJlcl9jb3VudBgDIAEoBRIUCgxtZW1vcnlfY291bnQYBCABKAUSEgoKdXBkYXRlZF9hdBgFIAEoCSITChFMaXN0R3JvdXBzUmVxdWVzdCJBChJMaXN0R3JvdXBzUmVzcG9uc2USKwoGZ3JvdXBzGAEgAygLMhsuZnJvc3RhZ2VudC52MS5Hcm91cFN1bW1hcnki3AEKDU1lbWJlclByb2ZpbGUSDwoHdXNlcl9pZBgBIAEoCRIQCghuaWNrbmFtZRgCIAEoCRIMCgRjYXJkGAMgASgJEgwKBHJvbGUYBCABKAkSFgoOcHJlZmVycmVkX25hbWUYBSABKAkSDwoHYWxpYXNlcxgGIAMoCRIUCgxjYWxsaW5nX25hbWUYByABKAkSDgoGc291cmNlGAggASgJEhIKCmNyZWF0ZWRfYXQYCSABKAkSEgoKdXBkYXRlZF9hdBgKIAEoCRIVCg1sYXN0X3Nwb2tlX2F0GAsgASgJIncKDEdyb3VwUHJvZmlsZRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEi0KB21lbWJlcnMYAyADKAsyHC5mcm9zdGFnZW50LnYxLk1lbWJlclByb2ZpbGUSEgoKdXBkYXRlZF9hdBgEIAEoCSIqChZHZXRHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJIlYKF0dldEdyb3VwUHJvZmlsZVJlc3BvbnNlEiwKB3Byb2ZpbGUYASABKAsyGy5mcm9zdGFnZW50LnYxLkdyb3VwUHJvZmlsZRINCgVlcnJvchgCIAEoCSJBChlVcGRhdGVHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJEhIKCmdyb3VwX25hbWUYAiABKAkiPAoaVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJoChpVcGRhdGVNZW1iZXJQcm9maWxlUmVxdWVzdBIQCghncm91cF9pZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEhYKDnByZWZlcnJlZF9uYW1lGAMgASgJEg8KB2FsaWFzZXMYBCADKAkiPQobVXBkYXRlTWVtYmVyUHJvZmlsZVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAky3AkKDU1lbW9yeVNlcnZpY2USVwoMTGlzdE1lbW9yaWVzEiIuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXNwb25zZRJdCg5TZWFyY2hNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuU2VhcmNoTWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5TZWFyY2hNZW1vcmllc1Jlc3BvbnNlEk4KCUFkZE1lbW9yeRIfLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVxdWVzdBogLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVzcG9uc2USVwoMVXBkYXRlTWVtb3J5EiIuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXNwb25zZRJXCgxEZWxldGVNZW1vcnkSIi5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlc3BvbnNlEl0KDkdldE1lbW9yeVN0YXRzEiQuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1JlcXVlc3QaJS5mcm9zdGFnZW50LnYxLkdldE1lbW9yeVN0YXRzUmVzcG9uc2USXQoORXhwb3J0TWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLkV4cG9ydE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuRXhwb3J0TWVtb3JpZXNSZXNwb25zZRJdCg5JbXBvcnRNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuSW1wb3J0TWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5JbXBvcnRNZW1vcmllc1Jlc3BvbnNlEmYKEVRyaWdnZXJSZWZsZWN0aW9uEicuZnJvc3RhZ2VudC52MS5UcmlnZ2VyUmVmbGVjdGlvblJlcXVlc3QaKC5mcm9zdGFnZW50LnYxLlRyaWdnZXJSZWZsZWN0aW9uUmVzcG9uc2USUQoKTGlzdEdyb3VwcxIgLmZyb3N0YWdlbnQudjEuTGlzdEdyb3Vwc1JlcXVlc3QaIS5mcm9zdGFnZW50LnYxLkxpc3RHcm91cHNSZXNwb25zZRJgCg9HZXRHcm91cFByb2ZpbGUSJS5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlcXVlc3QaJi5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlc3BvbnNlEmkKElVwZGF0ZUdyb3VwUHJvZmlsZRIoLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVxdWVzdBopLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USbAoTVXBkYXRlTWVtYmVyUHJvZmlsZRIpLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtYmVyUHJvZmlsZVJlcXVlc3QaKi5mcm9zdGFnZW50LnYxLlVwZGF0ZU1lbWJlclByb2ZpbGVSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * MemoryEntry mirrors the internal memory model for the UI.
@@ -94,30 +94,30 @@ export const MemoryEntrySchema: GenMessage<MemoryEntry> = /*@__PURE__*/
  */
 export type ListMemoriesRequest = Message<"frostagent.v1.ListMemoriesRequest"> & {
   /**
+   * filter by owner (empty = all)
+   *
+   * @generated from field: string owner = 1;
+   */
+  owner: string;
+
+  /**
+   * @generated from field: frostagent.v1.Pagination pagination = 2;
+   */
+  pagination?: Pagination | undefined;
+
+  /**
    * "private" or "group" (empty = "private")
    *
-   * @generated from field: string scope = 1;
+   * @generated from field: string scope = 3;
    */
   scope: string;
 
   /**
    * required when scope == "group"
    *
-   * @generated from field: string group_id = 2;
+   * @generated from field: string group_id = 4;
    */
   groupId: string;
-
-  /**
-   * filter by owner (empty = all)
-   *
-   * @generated from field: string owner = 3;
-   */
-  owner: string;
-
-  /**
-   * @generated from field: frostagent.v1.Pagination pagination = 4;
-   */
-  pagination?: Pagination | undefined;
 };
 
 /**
@@ -154,28 +154,28 @@ export const ListMemoriesResponseSchema: GenMessage<ListMemoriesResponse> = /*@_
  */
 export type SearchMemoriesRequest = Message<"frostagent.v1.SearchMemoriesRequest"> & {
   /**
+   * @generated from field: string query = 1;
+   */
+  query: string;
+
+  /**
+   * @generated from field: frostagent.v1.Pagination pagination = 2;
+   */
+  pagination?: Pagination | undefined;
+
+  /**
    * "private" or "group"
    *
-   * @generated from field: string scope = 1;
+   * @generated from field: string scope = 3;
    */
   scope: string;
 
   /**
    * required when scope == "group"
    *
-   * @generated from field: string group_id = 2;
+   * @generated from field: string group_id = 4;
    */
   groupId: string;
-
-  /**
-   * @generated from field: string query = 3;
-   */
-  query: string;
-
-  /**
-   * @generated from field: frostagent.v1.Pagination pagination = 4;
-   */
-  pagination?: Pagination | undefined;
 };
 
 /**
@@ -212,40 +212,40 @@ export const SearchMemoriesResponseSchema: GenMessage<SearchMemoriesResponse> = 
  */
 export type AddMemoryRequest = Message<"frostagent.v1.AddMemoryRequest"> & {
   /**
-   * "private" or "group"
-   *
-   * @generated from field: string scope = 1;
-   */
-  scope: string;
-
-  /**
-   * required when scope == "group"
-   *
-   * @generated from field: string group_id = 2;
-   */
-  groupId: string;
-
-  /**
-   * @generated from field: string owner = 3;
+   * @generated from field: string owner = 1;
    */
   owner: string;
 
   /**
-   * @generated from field: string content = 4;
+   * @generated from field: string content = 2;
    */
   content: string;
 
   /**
-   * @generated from field: repeated string tags = 5;
+   * @generated from field: repeated string tags = 3;
    */
   tags: string[];
 
   /**
    * deprecated
    *
-   * @generated from field: string visibility = 6;
+   * @generated from field: string visibility = 4;
    */
   visibility: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 5;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 6;
+   */
+  groupId: string;
 };
 
 /**
@@ -282,40 +282,40 @@ export const AddMemoryResponseSchema: GenMessage<AddMemoryResponse> = /*@__PURE_
  */
 export type UpdateMemoryRequest = Message<"frostagent.v1.UpdateMemoryRequest"> & {
   /**
-   * "private" or "group"
-   *
-   * @generated from field: string scope = 1;
-   */
-  scope: string;
-
-  /**
-   * required when scope == "group"
-   *
-   * @generated from field: string group_id = 2;
-   */
-  groupId: string;
-
-  /**
-   * @generated from field: string id = 3;
+   * @generated from field: string id = 1;
    */
   id: string;
 
   /**
-   * @generated from field: string content = 4;
+   * @generated from field: string content = 2;
    */
   content: string;
 
   /**
-   * @generated from field: repeated string tags = 5;
+   * @generated from field: repeated string tags = 3;
    */
   tags: string[];
 
   /**
    * deprecated
    *
-   * @generated from field: string visibility = 6;
+   * @generated from field: string visibility = 4;
    */
   visibility: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 5;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 6;
+   */
+  groupId: string;
 };
 
 /**
@@ -352,23 +352,23 @@ export const UpdateMemoryResponseSchema: GenMessage<UpdateMemoryResponse> = /*@_
  */
 export type DeleteMemoryRequest = Message<"frostagent.v1.DeleteMemoryRequest"> & {
   /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
    * "private" or "group"
    *
-   * @generated from field: string scope = 1;
+   * @generated from field: string scope = 2;
    */
   scope: string;
 
   /**
    * required when scope == "group"
    *
-   * @generated from field: string group_id = 2;
+   * @generated from field: string group_id = 3;
    */
   groupId: string;
-
-  /**
-   * @generated from field: string id = 3;
-   */
-  id: string;
 };
 
 /**
@@ -530,30 +530,30 @@ export const ExportMemoriesResponseSchema: GenMessage<ExportMemoriesResponse> = 
  */
 export type ImportMemoriesRequest = Message<"frostagent.v1.ImportMemoriesRequest"> & {
   /**
-   * "private" or "group"
-   *
-   * @generated from field: string scope = 1;
-   */
-  scope: string;
-
-  /**
-   * @generated from field: string group_id = 2;
-   */
-  groupId: string;
-
-  /**
    * export JSON string to import
    *
-   * @generated from field: string json_content = 3;
+   * @generated from field: string json_content = 1;
    */
   jsonContent: string;
 
   /**
    * overwrite existing IDs
    *
-   * @generated from field: bool overwrite = 4;
+   * @generated from field: bool overwrite = 2;
    */
   overwrite: boolean;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string group_id = 4;
+   */
+  groupId: string;
 };
 
 /**
@@ -595,23 +595,23 @@ export const ImportMemoriesResponseSchema: GenMessage<ImportMemoriesResponse> = 
  */
 export type TriggerReflectionRequest = Message<"frostagent.v1.TriggerReflectionRequest"> & {
   /**
+   * empty = reflect all owners
+   *
+   * @generated from field: string owner = 1;
+   */
+  owner: string;
+
+  /**
    * "private" or "group"
    *
-   * @generated from field: string scope = 1;
+   * @generated from field: string scope = 2;
    */
   scope: string;
 
   /**
-   * @generated from field: string group_id = 2;
+   * @generated from field: string group_id = 3;
    */
   groupId: string;
-
-  /**
-   * empty = reflect all owners
-   *
-   * @generated from field: string owner = 3;
-   */
-  owner: string;
 };
 
 /**

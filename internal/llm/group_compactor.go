@@ -513,11 +513,18 @@ func (c *GroupCompactor) compact(
 	}
 }
 
+type distillMessageItem struct {
+	MsgIndex   int    `json:"msg_index"`
+	SenderName string `json:"sender_name"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+}
+
 type distillExtractedEntry struct {
-	Content   string   `json:"content"`
-	Tags      []string `json:"tags"`
-	SpeakerID string   `json:"speaker_id"`
-	IsSelf    bool     `json:"is_self"`
+	Content        string   `json:"content"`
+	Tags           []string `json:"tags"`
+	SourceMsgIndex *int     `json:"source_msg_index"`
+	IsSelf         bool     `json:"is_self"`
 }
 
 func (c *GroupCompactor) distillGroupMemories(
@@ -554,27 +561,34 @@ func (c *GroupCompactor) distillGroupMemories(
 		existingMemoriesStr.WriteString("已有群记忆：\n（暂无记录）")
 	} else {
 		existingMemoriesStr.WriteString("已有群记忆：\n")
-		limit := 50
-		if len(existing) < limit {
-			limit = len(existing)
-		}
-		for i := 0; i < limit; i++ {
+		limit := min(len(existing), 50)
+		for i := range limit {
 			fmt.Fprintf(&existingMemoriesStr, "- %s\n", existing[i].Content)
 		}
 	}
 
-	trustedSenderIDs := make(map[string]bool)
-	var conv strings.Builder
-	for _, m := range snapshot.Messages {
-		if m.SenderID != "" {
-			trustedSenderIDs[m.SenderID] = true
+	var msgItems []distillMessageItem
+	for i, m := range snapshot.Messages {
+		name := m.Sender
+		if name == "" {
+			name = "群友"
 		}
-		fmt.Fprintf(&conv, "[sender_id: %s, sender: %s, role: %s]: %s\n", m.SenderID, m.Sender, m.Role, m.Content)
+		msgItems = append(msgItems, distillMessageItem{
+			MsgIndex:   i,
+			SenderName: name,
+			Role:       m.Role,
+			Content:    m.Content,
+		})
+	}
+	convJSON, err := json.MarshalIndent(msgItems, "", "  ")
+	if err != nil {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] 序列化待提炼消息失败: %v", instanceID, groupID, err))
+		return
 	}
 
 	prompt := strings.Replace(memory.DistillGroupCompactPrompt, "{current_time}", memory.CurrentTimeLabel(time.Now()), 1)
 	prompt = strings.Replace(prompt, "{existing_memories}", existingMemoriesStr.String(), 1)
-	prompt = strings.Replace(prompt, "{conversation}", conv.String(), 1)
+	prompt = strings.Replace(prompt, "{conversation}", string(convJSON), 1)
 
 	req := core.ChatRequest{
 		Model: c.model,
@@ -624,8 +638,14 @@ func (c *GroupCompactor) distillGroupMemories(
 			continue
 		}
 		ownerKey := memory.GroupOwnerExplicit
-		if e.IsSelf && e.SpeakerID != "" && trustedSenderIDs[e.SpeakerID] {
-			ownerKey = e.SpeakerID
+		if e.IsSelf && e.SourceMsgIndex != nil {
+			idx := *e.SourceMsgIndex
+			if idx >= 0 && idx < len(snapshot.Messages) {
+				srcMsg := snapshot.Messages[idx]
+				if srcMsg.Role != "assistant" && srcMsg.SenderID != "" {
+					ownerKey = srcMsg.SenderID
+				}
+			}
 		}
 
 		b := make([]byte, 8)
@@ -640,7 +660,7 @@ func (c *GroupCompactor) distillGroupMemories(
 			GroupID:   groupID,
 			Content:   e.Content,
 			Tags:      e.Tags,
-			Source:    memory.SourceCompact,
+			Source:    memory.SourceDistill,
 			CreatedAt: now,
 			UpdatedAt: now,
 		})

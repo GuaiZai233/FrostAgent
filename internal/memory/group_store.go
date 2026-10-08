@@ -3,6 +3,8 @@ package memory
 import (
 	"FrostAgent/internal/core"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +16,9 @@ import (
 	"time"
 )
 
-// SafeGroupKey converts any group identifier into a Windows-safe directory name.
-// Strips prefixes like "group:", "qq:group:", etc., and replaces reserved filesystem
-// characters (<>:"/\|?*) with underscores.
-func SafeGroupKey(groupID string) string {
-	s := strings.TrimSpace(groupID)
+// CanonicalGroupID strips common IM platform prefixes from a group ID.
+func CanonicalGroupID(raw string) string {
+	s := strings.TrimSpace(raw)
 	for _, prefix := range []string{
 		"aiocqhttp:group:",
 		"onebot:group:",
@@ -31,24 +31,52 @@ func SafeGroupKey(groupID string) string {
 			break
 		}
 	}
-	var sb strings.Builder
-	for _, r := range s {
-		switch r {
-		case '<', '>', ':', '"', '/', '\\', '|', '?', '*':
-			sb.WriteRune('_')
-		default:
-			if r < 32 {
-				sb.WriteRune('_')
-			} else {
-				sb.WriteRune(r)
-			}
-		}
+	return strings.TrimSpace(s)
+}
+
+func isWindowsReservedDeviceName(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
 	}
-	res := strings.TrimSpace(sb.String())
-	if res == "" {
+}
+
+// SafeGroupKey converts any group identifier into an injective, Windows-safe, traversal-proof directory name.
+// It uses a deterministic SHA-256 hash combined with an alphanumeric prefix to guarantee 1:1 mapping (injective)
+// without collisions between distinct IDs (e.g. "abc:def" vs "abc/def" vs "abc_def").
+// It also guarantees no Windows reserved device names, no path traversal (".."), and no trailing dots/spaces.
+func SafeGroupKey(groupID string) string {
+	canon := CanonicalGroupID(groupID)
+	if canon == "" {
 		return "unknown_group"
 	}
-	return res
+
+	h := sha256.Sum256([]byte(canon))
+	hashHex := hex.EncodeToString(h[:])[:16]
+
+	// Build a readable alphanumeric prefix (ASCII only, up to 24 chars)
+	var sb strings.Builder
+	for _, r := range canon {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('_')
+		}
+		if sb.Len() >= 24 {
+			break
+		}
+	}
+	rawPrefix := strings.Trim(sb.String(), "_.")
+	if rawPrefix == "" || isWindowsReservedDeviceName(rawPrefix) {
+		rawPrefix = "grp"
+	}
+
+	return fmt.Sprintf("g_%s_%s", rawPrefix, hashHex)
 }
 
 // GroupStore manages independent persistent storage for a single QQ group.
@@ -68,15 +96,34 @@ type GroupStore struct {
 
 // NewGroupStore creates a GroupStore for the given groupID under baseDir.
 func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
-	safeKey := SafeGroupKey(groupID)
-	groupDir := filepath.Join(baseDir, "groups", safeKey)
+	canon := CanonicalGroupID(groupID)
+	if canon == "" {
+		return nil, errors.New("group_id cannot be empty")
+	}
+	safeKey := SafeGroupKey(canon)
+	groupsBase := filepath.Clean(filepath.Join(baseDir, "groups"))
+	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
+
+	rel, err := filepath.Rel(groupsBase, groupDir)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return nil, fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	}
+
+	// Transparently upgrade legacy directory if it exists and new directory doesn't
+	oldDir := filepath.Join(groupsBase, canon)
+	if _, err := os.Stat(oldDir); err == nil {
+		if _, err := os.Stat(groupDir); os.IsNotExist(err) {
+			_ = os.Rename(oldDir, groupDir)
+		}
+	}
+
 	if err := os.MkdirAll(groupDir, 0755); err != nil {
 		return nil, fmt.Errorf("create group storage dir: %w", err)
 	}
 
 	catalogPath := filepath.Join(groupDir, "catalog.json")
 	store := &GroupStore{
-		groupID:     groupID,
+		groupID:     canon,
 		dir:         groupDir,
 		profilePath: filepath.Join(groupDir, "profile.json"),
 		memoryPath:  filepath.Join(groupDir, "memory.json"),
@@ -84,6 +131,22 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 		routes:      make(map[string]core.RouteContext),
 		catalog:     NewCatalogStore(catalogPath),
 	}
+
+	// Verify immutable identity on disk if profile exists
+	profile, err := store.loadProfileLocked()
+	if err == nil {
+		if profile.GroupID != "" {
+			if CanonicalGroupID(profile.GroupID) != canon {
+				return nil, fmt.Errorf("group profile identity mismatch: expected %s, found %s", canon, profile.GroupID)
+			}
+		} else {
+			profile.GroupID = canon
+		}
+		if _, statErr := os.Stat(store.profilePath); os.IsNotExist(statErr) {
+			_ = store.saveProfileLocked(profile)
+		}
+	}
+
 	return store, nil
 }
 
@@ -132,8 +195,9 @@ func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &GroupProfile{
-				GroupID: s.groupID,
-				Members: make(map[string]*MemberProfile),
+				GroupID:   s.groupID,
+				Members:   make(map[string]*MemberProfile),
+				UpdatedAt: time.Now(),
 			}, nil
 		}
 		return nil, fmt.Errorf("read group profile: %w", err)
@@ -145,13 +209,10 @@ func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
 	if profile.Members == nil {
 		profile.Members = make(map[string]*MemberProfile)
 	}
-	if profile.GroupID == "" {
-		profile.GroupID = s.groupID
-	}
 	return &profile, nil
 }
 
-// saveProfile writes the group profile to disk atomically.
+// saveProfileLocked writes the group profile to disk.
 func (s *GroupStore) saveProfileLocked(profile *GroupProfile) error {
 	profile.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(profile, "", "  ")
@@ -291,11 +352,11 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 	if !exists {
 		member = &MemberProfile{
 			UserID:    userID,
-			Role:      GroupRoleUnknown,
 			CreatedAt: time.Now(),
 		}
 		profile.Members[userID] = member
 	}
+
 	member.PreferredName = strings.TrimSpace(preferredName)
 	cleanAliases := make([]string, 0, len(aliases))
 	seen := make(map[string]bool)
@@ -311,7 +372,7 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 	return s.saveProfileLocked(profile)
 }
 
-// loadMemory reads the group memory entries from disk.
+// loadMemoryLocked reads the group memory entries from disk.
 func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 	data, err := os.ReadFile(s.memoryPath)
 	if err != nil {
@@ -332,7 +393,7 @@ func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 	return &brain, nil
 }
 
-// saveMemory writes the group memory data to disk atomically.
+// saveMemoryLocked writes the group memory data to disk atomically.
 func (s *GroupStore) saveMemoryLocked(brain *BrainData) error {
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
@@ -528,11 +589,8 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 	return fmt.Errorf("memory %s not found in group %s", entry.ID, s.groupID)
 }
 
-// RecordRecall increments access count and updates access time for entries.
-func (s *GroupStore) RecordRecall(entries []MemoryEntry) error {
-	if len(entries) == 0 {
-		return nil
-	}
+// IncrementAccessCount bumps the access count and updates the timestamp for the specified memory IDs.
+func (s *GroupStore) IncrementAccessCount(memoryIDs ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -541,29 +599,82 @@ func (s *GroupStore) RecordRecall(entries []MemoryEntry) error {
 		return err
 	}
 
-	ids := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		ids[e.ID] = true
+	targetMap := make(map[string]bool, len(memoryIDs))
+	for _, id := range memoryIDs {
+		if id != "" {
+			targetMap[id] = true
+		}
+	}
+	if len(targetMap) == 0 {
+		return nil
 	}
 
 	now := time.Now()
-	for i := range brain.Entries {
-		if ids[brain.Entries[i].ID] {
+	changed := false
+	for i, entry := range brain.Entries {
+		if targetMap[entry.ID] {
 			brain.Entries[i].AccessCount++
 			brain.Entries[i].UpdatedAt = now
+			changed = true
 		}
+	}
+
+	if !changed {
+		return nil
 	}
 	return s.saveMemoryLocked(brain)
 }
 
-// ApplyReflection applies reflection deletions atomically for group memory.
-func (s *GroupStore) ApplyReflection(owner string, outdatedIDs []string) ([]MemoryEntry, []string, error) {
+// RecordRecall increments the access count and updates the timestamp for recalled memories.
+func (s *GroupStore) RecordRecall(entries []MemoryEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.ID != "" {
+			ids = append(ids, e.ID)
+		}
+	}
+	return s.IncrementAccessCount(ids...)
+}
+
+// SaveMergeArchive saves a merge archive to the group store.
+func (s *GroupStore) SaveMergeArchive(archive MemoryMergeArchive) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	brain, err := s.loadMemoryLocked()
 	if err != nil {
-		return nil, nil, err
+		return err
+	}
+	brain.MergeArchives = append(brain.MergeArchives, archive)
+	return s.saveMemoryLocked(brain)
+}
+
+// ListMergeArchives returns all merge archives in the group store.
+func (s *GroupStore) ListMergeArchives() ([]MemoryMergeArchive, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	brain, err := s.loadMemoryLocked()
+	if err != nil {
+		return nil, err
+	}
+	return brain.MergeArchives, nil
+}
+
+// applyReflectionWithMerges applies validated merge proposals and deletes outdated entries for this group.
+func (s *GroupStore) applyReflectionWithMerges(
+	merges []validatedMerge,
+	outdatedIDs []string,
+) (reflectionApplyResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.loadMemoryLocked()
+	if err != nil {
+		return reflectionApplyResult{}, err
 	}
 
 	outdated := make(map[string]bool, len(outdatedIDs))
@@ -571,20 +682,120 @@ func (s *GroupStore) ApplyReflection(owner string, outdatedIDs []string) ([]Memo
 		outdated[id] = true
 	}
 
-	remaining := make([]MemoryEntry, 0, len(brain.Entries))
-	var removed []string
-	for _, entry := range brain.Entries {
-		if outdated[entry.ID] {
-			removed = append(removed, entry.ID)
-		} else {
-			remaining = append(remaining, entry)
+	// A source mentioned by a merge must never be deleted as outdated in the same cycle
+	for _, merge := range merges {
+		for _, source := range merge.Sources {
+			delete(outdated, source.ID)
 		}
 	}
-	brain.Entries = remaining
-	if err := s.saveMemoryLocked(brain); err != nil {
-		return nil, nil, err
+
+	currentByID := make(map[string]MemoryEntry, len(brain.Entries))
+	existingIDs := make(map[string]bool, len(brain.Entries))
+	for _, entry := range brain.Entries {
+		currentByID[entry.ID] = entry
+		existingIDs[entry.ID] = true
 	}
-	return remaining, removed, nil
+
+	now := time.Now()
+	consumed := make(map[string]bool)
+	mergedEntries := make([]MemoryEntry, 0, len(merges))
+	archives := make([]MemoryMergeArchive, 0, len(merges))
+	for _, merge := range merges {
+		if len(merge.Sources) < 2 || len(merge.Sources) > maxMergeSources ||
+			strings.TrimSpace(merge.Content) == "" || len([]rune(merge.Content)) > maxMergedContent ||
+			len(merge.Tags) == 0 || len(merge.Tags) > maxMergedTags {
+			continue
+		}
+
+		currentSources := make([]MemoryEntry, 0, len(merge.Sources))
+		seenSources := make(map[string]bool, len(merge.Sources))
+		valid := true
+		for _, snapshot := range merge.Sources {
+			current, ok := currentByID[snapshot.ID]
+			if !ok || seenSources[current.ID] || consumed[current.ID] ||
+				!sameMergeSource(current, snapshot) {
+				valid = false
+				break
+			}
+			seenSources[current.ID] = true
+			currentSources = append(currentSources, current)
+		}
+		if !valid {
+			continue
+		}
+
+		mergedID := generateID()
+		for existingIDs[mergedID] {
+			mergedID = generateID()
+		}
+		existingIDs[mergedID] = true
+
+		mergedOwner := GroupOwnerExplicit
+		if len(currentSources) > 0 {
+			firstOwner := currentSources[0].Owner
+			allSame := true
+			for _, cs := range currentSources[1:] {
+				if cs.Owner != firstOwner {
+					allSame = false
+					break
+				}
+			}
+			if allSame && firstOwner != "" {
+				mergedOwner = firstOwner
+			}
+		}
+
+		merged := buildMergedEntry(mergedID, mergedOwner, merge, currentSources, now)
+		merged.ScopeType = ScopeGroup
+		merged.GroupID = s.groupID
+		mergedEntries = append(mergedEntries, merged)
+		archives = append(archives, MemoryMergeArchive{
+			MergedID: mergedID,
+			Owner:    mergedOwner,
+			Sources:  currentSources,
+			MergedAt: now,
+		})
+		for _, source := range currentSources {
+			consumed[source.ID] = true
+		}
+	}
+
+	remaining := make([]MemoryEntry, 0, len(brain.Entries))
+	removedIDs := make([]string, 0, len(consumed)+len(outdated))
+	actualOutdated := make([]string, 0, len(outdated))
+	for _, entry := range brain.Entries {
+		if consumed[entry.ID] {
+			removedIDs = append(removedIDs, entry.ID)
+			continue
+		}
+		if outdated[entry.ID] {
+			removedIDs = append(removedIDs, entry.ID)
+			actualOutdated = append(actualOutdated, entry.ID)
+			continue
+		}
+		remaining = append(remaining, entry)
+	}
+
+	remaining = append(remaining, mergedEntries...)
+	brain.Entries = remaining
+	brain.MergeArchives = append(brain.MergeArchives, archives...)
+
+	if err := s.saveMemoryLocked(brain); err != nil {
+		return reflectionApplyResult{}, err
+	}
+
+	mergedSourceCount := 0
+	for _, archive := range archives {
+		mergedSourceCount += len(archive.Sources)
+	}
+
+	return reflectionApplyResult{
+		Remaining:         remaining,
+		RemovedIDs:        removedIDs,
+		OutdatedIDs:       actualOutdated,
+		MergedEntries:     mergedEntries,
+		MergedSourceCount: mergedSourceCount,
+	}, nil
 }
 
 // ExportData exports the group memory data.

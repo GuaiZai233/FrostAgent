@@ -468,6 +468,41 @@ func (s *Service) TriggerReflection(
 		}), nil
 	}
 
+	scope := req.Msg.GetScope()
+	groupID := req.Msg.GetGroupId()
+	if scope == "group" || groupID != "" {
+		if groupID == "" {
+			return connect.NewResponse(&v1.TriggerReflectionResponse{
+				Error: "group_id is required for group reflection",
+			}), nil
+		}
+		if s.groupManager == nil {
+			return connect.NewResponse(&v1.TriggerReflectionResponse{
+				Error: "group memory manager not initialized",
+			}), nil
+		}
+		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		if err != nil {
+			return connect.NewResponse(&v1.TriggerReflectionResponse{
+				Error: err.Error(),
+			}), nil
+		}
+		status, started, err := s.reflections.StartGroup(groupStore)
+		if err != nil {
+			return connect.NewResponse(&v1.TriggerReflectionResponse{
+				Error: err.Error(),
+			}), nil
+		}
+		return connect.NewResponse(&v1.TriggerReflectionResponse{
+			Started:         started,
+			Running:         status.Running,
+			Owner:           status.Owner,
+			StartedAt:       formatOptionalTime(status.StartedAt),
+			LastCompletedAt: formatOptionalTime(status.LastCompletedAt),
+			LastError:       status.LastError,
+		}), nil
+	}
+
 	status, started, err := s.reflections.Start(req.Msg.GetOwner())
 	if err != nil {
 		return connect.NewResponse(&v1.TriggerReflectionResponse{

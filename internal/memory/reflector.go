@@ -228,6 +228,183 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 	return r.applyResult(owner, entries, raw)
 }
 
+// ReflectGroup performs reflection for an isolated group's GroupStore.
+// It reflects all memories in the group store, synthesizes topics and merges,
+// removes outdated entries, saves to the group's isolated catalog.json,
+// and records merge archives in the group's memory.json.
+// It strictly never accesses or mutates private Store or private CatalogStore.
+func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) error {
+	if !r.Available() {
+		return fmt.Errorf("LLM provider or model not configured for reflector")
+	}
+	if groupStore == nil {
+		return fmt.Errorf("group store is required")
+	}
+
+	groupID := groupStore.GroupID()
+	entries, err := groupStore.ListAll()
+	if err != nil {
+		return fmt.Errorf("list group memories for reflection: %w", err)
+	}
+	if len(entries) == 0 {
+		return groupStore.CatalogStore().Delete(groupID)
+	}
+
+	var memories strings.Builder
+	for _, entry := range entries {
+		fmt.Fprintf(
+			&memories,
+			"- [%s] (owner: %s, tags: %s): %s\n",
+			entry.ID,
+			entry.Owner,
+			strings.Join(entry.Tags, ", "),
+			entry.Content,
+		)
+	}
+
+	prompt := strings.NewReplacer(
+		"{owner}", "群聊 "+groupID,
+		"{memories}", memories.String(),
+		"{current_time}", CurrentTimeLabel(time.Now()),
+	).Replace(reflectPrompt)
+
+	callCtx := ctx
+	cancel := func() {}
+	if r.config.ReflectTimeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, r.config.ReflectTimeout)
+	}
+	defer cancel()
+
+	startedAt := time.Now()
+	promptBytes := len([]byte(prompt))
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"开始群记忆反思请求：groupID=%s，记忆=%d 条，prompt=%d bytes，timeout=%s",
+			groupID,
+			len(entries),
+			promptBytes,
+			r.config.ReflectTimeout,
+		),
+	)
+
+	resp, err := r.provider.Chat(callCtx, core.ChatRequest{
+		Model: r.model,
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: prompt},
+		},
+		MaxTokens:   4096,
+		Temperature: 0.2,
+		Route:       groupStore.RouteForOwner(GroupOwnerExplicit),
+	})
+	if err != nil {
+		return fmt.Errorf(
+			"call group reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
+			time.Since(startedAt).Round(time.Millisecond),
+			len(entries),
+			promptBytes,
+			err,
+		)
+	}
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"群记忆反思响应完成：groupID=%s，耗时=%s",
+			groupID,
+			time.Since(startedAt).Round(time.Millisecond),
+		),
+	)
+
+	raw, ok := resp.Message.Content.(string)
+	if !ok {
+		return fmt.Errorf("unexpected reflection response type: %T", resp.Message.Content)
+	}
+	return r.applyGroupResult(groupStore, entries, raw)
+}
+
+func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEntry, raw string) error {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	var result reflectResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return fmt.Errorf("parse reflection result: %w", err)
+	}
+
+	allowedIDs := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		allowedIDs[entry.ID] = true
+	}
+
+	requestedOutdated := make(map[string]bool, len(result.OutdatedIDs))
+	for _, rawID := range result.OutdatedIDs {
+		id := strings.TrimSpace(rawID)
+		if allowedIDs[id] {
+			requestedOutdated[id] = true
+		}
+	}
+
+	merges, protectedIDs, rejectedMerges := validateReflectionMerges(
+		entries,
+		result.Merges,
+		requestedOutdated,
+	)
+	if rejectedMerges > 0 {
+		r.Log().Warn(
+			logs.SYSTEM,
+			fmt.Sprintf("群反思忽略了 %d 组不安全的记忆合并候选", rejectedMerges),
+		)
+	}
+
+	outdated := make([]string, 0, len(result.OutdatedIDs))
+	seenOutdated := make(map[string]bool)
+	for _, rawID := range result.OutdatedIDs {
+		id := strings.TrimSpace(rawID)
+		if allowedIDs[id] && !protectedIDs[id] && !seenOutdated[id] {
+			outdated = append(outdated, id)
+			seenOutdated[id] = true
+		}
+	}
+
+	applied, err := groupStore.applyReflectionWithMerges(merges, outdated)
+	if err != nil {
+		return fmt.Errorf("apply group reflection changes: %w", err)
+	}
+	topics := cleanTopics(result.Topics)
+	groupID := groupStore.GroupID()
+	if len(applied.Remaining) == 0 {
+		if err := groupStore.CatalogStore().Delete(groupID); err != nil {
+			return fmt.Errorf("delete empty group memory catalog: %w", err)
+		}
+	} else {
+		if err := groupStore.CatalogStore().Replace(UserMemoryCatalog{
+			Owner:       groupID,
+			Topics:      topics,
+			MemoryCount: len(applied.Remaining),
+			GeneratedAt: time.Now(),
+		}); err != nil {
+			return fmt.Errorf("save group memory catalog: %w", err)
+		}
+	}
+
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"群反思完成：groupID=%s，处理 %d 条记忆，合并 %d 组（归档 %d 条来源），删除 %d 条过时记忆，生成 %d 个主题",
+			groupID,
+			len(entries),
+			len(applied.MergedEntries),
+			applied.MergedSourceCount,
+			len(applied.OutdatedIDs),
+			len(topics),
+		),
+	)
+	return nil
+}
+
 type reflectResult struct {
 	Topics      []MemoryTopic  `json:"topics"`
 	OutdatedIDs []string       `json:"outdated_ids"`

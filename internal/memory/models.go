@@ -49,8 +49,10 @@ const (
 	SourceManual Source = "manual"
 	// SourceReflect 由反思系统生成。
 	SourceReflect Source = "reflect"
-	// SourceCompact 标记旧版本写入 brain.json 的群聊总结；新总结不再写入记忆。
+	// SourceCompact 标记旧版本写入 brain.json 的群聊总结（已废弃：新总结不再写入记忆）。
 	SourceCompact Source = "compact"
+	// SourceDistill 由后台从滚动压缩快照中提炼的群聊长期记忆。
+	SourceDistill Source = "distill"
 )
 
 // MemoryEntry represents a single memory record.

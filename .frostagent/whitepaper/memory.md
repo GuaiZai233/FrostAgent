@@ -24,9 +24,9 @@
    - 称呼解析优先级严格遵循：`preferred_name`（优先称呼） > `nickname`（群昵称/昵称） > 中性称呼（“群友”）。群名片（`card`）严格仅用于身份识别与消除歧义，**绝不**作为称呼。
 6. **双输入路径与滚动压缩提炼（Dual Input Paths & Rolling Compact）**：
    - **路径一（实时对话提炼）**：群内所有消息均触发成员观测；正常回复及真实调用 `stay_silent` 工具的成功交互触发单轮记忆提取。安全拦截、路由禁用、取消等非主动沉默状态不触发记忆提取。
-   - **路径二（滚动压缩提炼）**：群聊消息缓冲区触发滚动压缩（Running Compact）时，提取快照中的原始文本结构，比对现有群记忆去重后进行尽力而为的长期事实提炼。
-7. **Windows 文件系统安全存储**：
-   - 群组持久化目录统一使用 `SafeGroupKey` 进行标准化，彻底替换 `:`、`/`、`\`、`*`、`?`、`"`、`<`、`>`、`|` 等非法字符，防止 Windows 平台路径报错。
+   - **路径二（滚动压缩提炼）**：群聊消息缓冲区触发滚动压缩（Running Compact）时，提取快照中的原始文本结构，比对现有群记忆去重后进行尽力而为的长期事实提炼（`SourceDistill`）。
+7. **Windows 文件系统安全存储与单射映射**：
+   - 群组持久化目录统一使用单射哈希方案 `SafeGroupKey` 进行标准化，彻底避免冒号、斜杠导致的跨群碰撞或目录穿越，规避 Windows 保留设备名称冲突。
 
 ---
 
@@ -84,7 +84,7 @@ instance_<id>/
 ├── brain.json                  # 私聊统一大脑记忆
 ├── memory_catalog.json         # 私聊主题目录
 └── groups/
-    └── <safe_group_key>/       # Windows 平台安全目录名 (如 group_123456789)
+    └── <safe_group_key>/       # Windows 平台安全目录名 (如 g_123456_a1b2c3d4e5f60718)
         ├── profile.json        # 群聊档案与成员列表
         ├── memory.json         # 群聊独立记忆条目
         └── catalog.json        # 群聊主题目录索引
@@ -92,14 +92,12 @@ instance_<id>/
 
 ### 3.1 安全群目录命名规则 (`SafeGroupKey`)
 
-去除或转换平台特定前缀（如 `group:`、`qq:group:`、`onebot:group:`、`astrbot:group:`），将 Windows 文件系统保留字符及非法字符全部替换为下划线 `_`：
-
-```go
-func SafeGroupKey(raw string) string {
-    // 移除平台前缀后，将 : / \ * ? " < > | 替换为 _
-    // 确保绝对跨平台路径兼容
-}
-```
+采用**前缀规范化 + 确定性 SHA-256 单射哈希 + 路径边界约束**方案：
+- 剥离各适配器平台协议前缀（如 `group:`、`qq:group:`、`onebot:group:`、`astrbot:group:`）。
+- 计算规范化群号的 SHA-256 哈希取前 16 位十六进制字符。
+- 提取前 24 位安全字母数字构成前缀，组合为 `g_<safe_prefix>_<hashHex>`。
+- 保证任意不同的原始群号（如 `abc:def`、`abc/def`、`abc_def`）绝不会映射到同一物理目录；绝对杜绝 `..` 路径穿越；规避 Windows 设备保留名（`CON`、`PRN`、`NUL`、`AUX` 等）。
+- 并在 `NewGroupStore` 中通过 `filepath.Rel` 执行硬边界检查，杜绝越界访问。
 
 ### 3.2 群档案模型 (`GroupProfile` & `MemberProfile`)
 
@@ -163,15 +161,33 @@ func (m *MemberProfile) ResolveCallingName() string {
 
 ### 路径二：滚动压缩提炼（Rolling Compact Distillation）
 1. **快照抓取**：当群聊消息缓冲达到阈值触发滚动压缩时，生成 `GroupCompactSnapshot`。
-2. **结构化去重提炼**：
-   - 后台调度器调用专用提示词（`DistillGroupCompactPrompt`），将快照内的结构化发言传递给提取模型。
-   - 提炼模型输出包含 `content`、`tags`、`owner`、`is_self`。
-   - 在持久化前，与当前群已有的记忆条目进行文本去重与语义去重。
-3. **降级与容错**：提炼过程失败时以实例 Logger 输出 `WARN` 日志（格式含 `[Instance: <name>]`），绝不阻塞或中断滚动压缩上下文更新流程。
+2. **防注入消息溯源绑定**：
+   - 消息以严格 JSON 数组格式（包含 `msg_index`、`sender_name`、`role`、`content`）呈现给模型，杜绝聊天头伪造与提示词注入。
+   - 提炼模型输出仅需返回 `source_msg_index` 与 `is_self`。
+   - 后端根据 `source_msg_index` 严格由快照绑定对应的可信 `SenderID`，模型无法伪造或窜改归属。若非第一人称自述或索引无效，归属强制为 `"group"`。
+3. **长期记忆区分与网关可达性**：
+   - 滚动压缩生成的是群长期记忆事实，来源标识为 `SourceDistill`（区别于旧版废弃的会话段落总结 `SourceCompact`）。
+   - `Gateway.FilterGroup` 保留 `SourceDistill` 记忆供召回与工具检索，排除废弃的 `SourceCompact` 临时段落。
+4. **降级与容错**：提炼过程失败时以实例 Logger 输出 `WARN` 日志（格式含 `[Instance: <name>]`），绝不阻塞或中断滚动压缩上下文更新流程。
 
 ---
 
-## 五、记忆条目数据模型
+## 五、群聊反思（Group-Scoped Reflection）与历史数据热迁移
+
+### 5.1 群聊独立反思机制 (`ReflectGroup` & `StartGroup`)
+- 群反思完全作用于群自身的 `GroupStore`，直接读取 `groups/<safe_key>/memory.json` 并调用模型进行合并提炼与过期淘汰。
+- 反思产生的记忆合并归档直接保存在群的 `memory.json` 中，主题目录写入专属的 `groups/<safe_key>/catalog.json`。
+- 绝不触碰或修改私聊的 `brain.json` 和 `memory_catalog.json`，确保物理隔离与安全边界。
+
+### 5.2 旧版本群聊记忆热迁移 (`MigrateLegacyGroupMemories`)
+- 实例启动时自动检查 `brain.json` 中是否残留 `owner: group:<id>`、`OwnerGroup` 或 `ScopeGroup` 的旧条目与合并归档。
+- 发现旧群数据时，先建立带时间戳的完整备份文件 `brain.json.bak.<timestamp>`。
+- 按群号自动分发导入到对应的 `GroupStore` 中，并实现条目 ID 去重以保证迁移的完全幂等性。
+- 原子重写 `brain.json`，清理群聊条目，仅保留纯私聊用户记忆。
+
+---
+
+## 六、记忆条目数据模型与 Protobuf 演进规范
 
 ```go
 type MemoryEntry struct {
@@ -179,7 +195,7 @@ type MemoryEntry struct {
     Owner       string    `json:"owner"`        // 私聊为用户QQ号；群聊中个人自述为发言人QQ，客观事实/第三人传闻为 "group"
     Content     string    `json:"content"`      // 记忆内容客观表述
     Tags        []string  `json:"tags"`         // 检索标签（包含主体、领域等）
-    Source      string    `json:"source"`       // "extract" | "manual" | "reflect" | "compact"
+    Source      string    `json:"source"`       // "extract" | "manual" | "reflect" | "compact" | "distill"
     CreatedAt   time.Time `json:"created_at"`
     UpdatedAt   time.Time `json:"updated_at"`
     AccessCount int       `json:"access_count"`
@@ -188,13 +204,9 @@ type MemoryEntry struct {
 }
 ```
 
----
-
-## 六、日志与控制台规范
-
-- 控制台单行汇总及 `Console(entry)` 对于 `WARN` 和 `ERROR` 级别保留诊断详情（最长支持 4096 个字符/runes），以便运维定位故障。
-- `INFO` 与 `DEBUG` 级别的日志保持敏感凭据脱敏。
-- 所有子系统警告与错误均使用实例 `Scope` 输出，带有 `[Instance: <name>]` 标签，禁止匿名输出。
+### 6.1 Protobuf 向前兼容性规范
+- 所有已发布的 Protobuf 字段 Tag 序号严格保持不可变更（例如 `UpdateMemoryRequest` 中的 `id=1, content=2, tags=3, visibility=4`）。
+- 新增字段一律追加在未使用的高位 Tag 编号（如 `scope=5, group_id=6`），严格防止客户端二进制反序列化错位与崩溃。
 
 ---
 
@@ -210,6 +222,7 @@ Web 管理面板提供多维度管理界面：
 4. **群成员与称呼编辑**：
    - 表格清晰展示成员 QQ、群内昵称、群名片、群身份、当前生效称呼（调用 `ResolveCallingName` 算法展示）。
    - 支持在线编辑群成员的“优先称呼”（`preferred_name`）与“别名”（`aliases`）。
-5. **分域导入与导出**：
+5. **分域导入、导出与反思**：
    - 私聊与群聊分别支持导出独立作用域的 JSON 文件。
    - 导入时严格导入到当前选中的作用域，杜绝跨群交叉污染。
+   - 支持触发群聊专属记忆反思。
