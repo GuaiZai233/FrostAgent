@@ -344,6 +344,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
+					if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				}
 				var decision security.WatchdogDecision
@@ -368,6 +371,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					if isExplicitWake(&event, scope) {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						_ = sendDirectReply(event, c, msg)
+					} else if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
 					}
 					continue
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
@@ -386,6 +391,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				routeSnapshot = a.engine.ModelRouter.Snapshot()
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
+					if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				}
 			}
@@ -414,6 +422,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				c.inFlight.Done()
 				if turn != nil {
 					turn.Done()
+				}
+				if isProactiveReply(&event) {
+					_ = sendTerminalNoopWithSuppress(event, c)
 				}
 			}
 		}

@@ -912,13 +912,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
-	isProactive := false
-	if event.Metadata != nil {
-		if v, ok := event.Metadata["_frostagent_proactive_reply"].(bool); ok && v {
-			isProactive = true
-		}
-	}
-	if isProactive {
+	if isProactiveReply(&event) {
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
 	}
 
@@ -1084,6 +1078,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if runResult.Silent {
 			engine.TrimSession(session)
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
+			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
 		}
 
@@ -1195,7 +1190,23 @@ func astrBotRouteScope(event Event) modelrouter.Scope {
 	return scope
 }
 
+func isProactiveReply(event *Event) bool {
+	if event == nil || event.Metadata == nil {
+		return false
+	}
+	v, ok := event.Metadata["_frostagent_proactive_reply"].(bool)
+	return ok && v
+}
+
 func sendTerminalNoop(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, isProactiveReply(&event))
+}
+
+func sendTerminalNoopWithSuppress(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, true)
+}
+
+func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) error {
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
@@ -1204,11 +1215,12 @@ func sendTerminalNoop(event Event, conn *wsConn) error {
 		platform = "astrbot"
 	}
 	return conn.WriteJSON(Action{
-		Type:      "action",
-		Action:    "noop",
-		Platform:  platform,
-		SessionID: conn.sessionKey(event),
-		Echo:      "reply_" + event.MessageID,
+		Type:        "action",
+		Action:      "noop",
+		SuppressLLM: suppressLLM,
+		Platform:    platform,
+		SessionID:   conn.sessionKey(event),
+		Echo:        "reply_" + event.MessageID,
 	})
 }
 

@@ -115,7 +115,7 @@ test('ProactiveSettingsSync collapses rapid intermediate slider updates to lates
 test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure and restores real server state', async () => {
   let reloadCalled = false;
   let errorCaught: Error | null = null;
-  let lastRenderedState: (ProactiveState & { isSaving: boolean }) | null = null;
+  const renderedStates: Array<ProactiveState & { isSaving: boolean }> = [];
 
   const mockApi: ProactiveAPI = {
     async updateEnvVar({ key }) {
@@ -132,7 +132,7 @@ test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure
     { enabled: false, probability: 0.05 },
     {
       onStateChange: (state) => {
-        lastRenderedState = { ...state };
+        renderedStates.push({ ...state });
       },
       onError: (err) => {
         errorCaught = err;
@@ -157,7 +157,8 @@ test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure
   assert.equal(sync.getState().enabled, false);
   assert.equal(sync.getState().probability, 0.05);
   assert.equal(sync.getState().isSaving, false);
-  assert.ok(lastRenderedState);
+  assert.ok(renderedStates.length > 0);
+  const lastRenderedState = renderedStates[renderedStates.length - 1];
   assert.equal(lastRenderedState.enabled, false);
   assert.equal(lastRenderedState.isSaving, false);
 });

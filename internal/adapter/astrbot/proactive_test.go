@@ -171,6 +171,26 @@ func TestAstrBotProactiveMultiTurnHistoryPurity(t *testing.T) {
 		t.Fatalf("发送第一轮事件失败: %v", err)
 	}
 
+	// 第1轮触发 stay_silent，验证收到协议级 noop 控制帧且 suppress_llm=true，保证 AstrBot 插件不超时且抑制下游 LLM
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, respBytes1, readErr1 := conn.ReadMessage()
+	if readErr1 != nil {
+		t.Fatalf("读取第1轮静默终态控制帧失败: %v", readErr1)
+	}
+	var action1 Action
+	if err := json.Unmarshal(respBytes1, &action1); err != nil {
+		t.Fatalf("解析第1轮动作失败: %v", err)
+	}
+	if action1.Action != "noop" {
+		t.Fatalf("期望第1轮动作类型为 noop，实际=%s", action1.Action)
+	}
+	if !action1.SuppressLLM {
+		t.Fatalf("期望第1轮动作设置 suppress_llm=true")
+	}
+	if action1.Echo != "reply_msg_proactive_101" {
+		t.Fatalf("期望第1轮 echo=reply_msg_proactive_101, 实际=%s", action1.Echo)
+	}
+
 	// 等待第1轮进入并处理完毕（由于 stay_silent，不向群发送出站消息，历史中写入 1 条 user message）
 	sess := engine.SessionManager.GetOrCreate("astrbot:group:10001")
 	deadline := time.Now().Add(2 * time.Second)
@@ -316,11 +336,24 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 			t.Fatalf("发送事件失败: %v", err)
 		}
 
-		// 等待并检查是否有消息被发出（应该被静默丢弃，绝不能向群发送拒绝回复）
-		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		_, _, readErr := conn.ReadMessage()
-		if readErr == nil {
-			t.Fatalf("主动回复命中被安全拦截的消息应该被静默丢弃，但收到了一出站回复")
+		// 校验收到协议级 terminal noop 动作且 suppress_llm=true，绝不能向群发送可见的 send_message 回复
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("期望收到安全拦截的终态 noop 控制动作，但读取失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action == "send_message" {
+			t.Fatalf("主动回复命中被安全拦截的消息绝不能向群发送可见回复: %s", act.Content)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望终态动作 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_sec_201" {
+			t.Fatalf("期望 echo=reply_msg_sec_201, 实际=%s", act.Echo)
 		}
 
 		// LLM 也绝不能被调用
@@ -369,10 +402,24 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 			t.Fatalf("发送事件失败: %v", err)
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		_, _, readErr := conn.ReadMessage()
-		if readErr == nil {
-			t.Fatalf("安全服务异常时的主动回复应静默丢弃，但收到了一出站回复")
+		// 校验收到协议级 terminal noop 动作且 suppress_llm=true
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("期望收到安全服务异常时的终态 noop 控制动作，但读取失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action == "send_message" {
+			t.Fatalf("安全服务异常时的主动回复绝不能发送可见回复: %s", act.Content)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_sec_202" {
+			t.Fatalf("期望 echo=reply_msg_sec_202, 实际=%s", act.Echo)
 		}
 	})
 
@@ -435,6 +482,122 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 		}
 		if action.Content != security.RejectGatewayMsg && !strings.Contains(action.Content, "封禁") && !strings.Contains(action.Content, "security") {
 			t.Fatalf("期望收到封禁拒绝提示，实际=%s", action.Content)
+		}
+	})
+
+	t.Run("ordinary unaddressed group message without proactive hit sends plain noop without suppress_llm", func(t *testing.T) {
+		provider := &mockLLMProvider{}
+		engine := newTestEngine(provider)
+		// PROACTIVE_REPLY_PROBABILITY unset (disabled)
+		engine.Scope = newTestScopeWithEnv(t, nil)
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		unaddressedEvent := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_unwoken_301",
+			Content:     "普通群闲聊内容",
+			Platform:    "astrbot",
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(unaddressedEvent)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("期望收到普通未唤醒群聊的普通 noop，但读取失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" {
+			t.Fatalf("期望 action=noop, 实际=%s", act.Action)
+		}
+		if act.SuppressLLM {
+			t.Fatalf("普通未唤醒群聊的 noop 绝不能设置 suppress_llm=true, 需保持原生事件传播语义")
+		}
+		if act.Echo != "reply_msg_unwoken_301" {
+			t.Fatalf("期望 echo=reply_msg_unwoken_301, 实际=%s", act.Echo)
+		}
+	})
+
+	t.Run("proactive roll hit with empty final response sends noop with suppress_llm", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "",
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		ev := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_empty_401",
+			Content:     "闲聊触发空回复",
+			Platform:    "astrbot",
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("期望收到空回复时的终态 noop，但读取失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" {
+			t.Fatalf("期望 action=noop, 实际=%s", act.Action)
+		}
+		if !act.SuppressLLM {
+			t.Fatalf("主动回复空最终响应必须设置 suppress_llm=true")
+		}
+		if act.Echo != "reply_msg_empty_401" {
+			t.Fatalf("期望 echo=reply_msg_empty_401, 实际=%s", act.Echo)
 		}
 	})
 }

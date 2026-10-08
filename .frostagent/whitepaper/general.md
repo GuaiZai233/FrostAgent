@@ -176,10 +176,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **双拼写静默决策工具与零出站保障 (Dual-Spelling Silence Tool: `stay_silent` & `stay_slient`)**：
   - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的静默终止工具；
   - **双拼写兼容注册**：由于用户提示词指定使用 `stay_slient`，为彻底防范大模型在规范拼写（`stay_silent`）与提示词拼写（`stay_slient`）之间的调用偏差，底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）同时注册并识别规范工具 `stay_silent` 与兼容别名 `stay_slient`；
-  - **终态静默拦截**：无论模型调用哪种拼写，Agent 执行器均判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，适配器接收到静默结果后完全不发送任何回复动作，实现无痕静默退出。
+  - **终态静默拦截与协议控制动作**：无论模型调用哪种拼写，Agent 执行器均判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
+  - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
 - **入站安全审查 Fail-Closed 与主动静默丢弃 (Security Gating & Silent Dropping)**：
   - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞；
-  - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。
+  - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。在 AstrBot 适配器中，静默丢弃同样下发携带 `suppress_llm: true` 的协议级 `noop` 控制动作，在杜绝向群发送可见消息的同时，可靠抑制 AstrBot 原生兜底 LLM；普通未唤醒的群聊闲聊背景消息则保持原有的无抑制 `noop`（`suppress_llm: false`），完整保持客户端原生事件传播链。
 - **Web 控制台可视化滑块、异步串行队列与最后意图优先同步**：
   - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
   - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；
