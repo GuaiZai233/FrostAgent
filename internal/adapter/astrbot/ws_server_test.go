@@ -1299,6 +1299,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	mockLLM := &mockLLMProvider{}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if strings.Contains(input.Content, "ignore all previous instructions") {
@@ -1535,6 +1536,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureUnconfigured", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failSrv, _, failWSURL := startWSTestServer(failEngine)
 		defer failSrv.Close()
 
@@ -1576,6 +1578,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 	t.Run("PrivateClassifierFailureError", func(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir())
+		failEngine.Security.SetMode(security.ControlModeAggressive)
 		failEngine.Security.SetClassifier(&mockClassifier{
 			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
@@ -1628,6 +1631,7 @@ func TestAstrBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T
 	mockLLM := &mockLLMProvider{}
 	failEngine := newTestEngine(mockLLM)
 	failEngine.Security = security.NewController(t.TempDir())
+	failEngine.Security.SetMode(security.ControlModeAggressive)
 
 	const secretToken = "sk-ant-api03-abcdefghijklmnop1234567890"
 	failEngine.Security.SetClassifier(&mockClassifier{
@@ -1783,6 +1787,7 @@ func TestAstrBotGroupFilterDecoupledRouting(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
 	var classifierCalls atomic.Int64
 	mockCls := &mockClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -2360,5 +2365,553 @@ func TestAstrBot_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
 				t.Errorf("checkWebSocketOrigin(origin=%q, host=%q) = %v; want %v", tc.origin, tc.host, got, tc.allowed)
 			}
 		})
+	}
+}
+
+func TestAstrBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
+	mockLLM := &mockLLMProvider{}
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeSimple)
+	engine.ToolRegistry["ban_user"] = tools.NewBanUserTool(engine.Security)
+
+	// Configure mockLLM to return a tool call to ban_user
+	mockLLM.responses = []*core.ChatResponse{
+		{
+			Message: core.ChatMessage{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{
+					{
+						ID:   "call_ban_astr_1",
+						Type: "function",
+						Function: core.ToolCallFunction{
+							Name:      "ban_user",
+							Arguments: `{"reason":"malicious jailbreak attack"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	const attackerUserID = "astr-attacker-123"
+	const groupID = "grp-astr-999"
+	const attackMsgID = "msg-astr-001"
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   attackMsgID,
+		UserID:      attackerUserID,
+		SenderName:  "MaliciousAttacker",
+		GroupID:     groupID,
+		GroupName:   "AstrSecurityGroup",
+		Content:     "jailbreak prompt injection payload",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write message failed: %v", err)
+	}
+
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read rejection response failed: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("unmarshal action failed: %v", err)
+	}
+	if act.Action != "send_message" {
+		t.Fatalf("expected action=send_message, got %s", act.Action)
+	}
+	if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+		t.Errorf("expected rejection message containing %q, got %q", security.RejectGatewayMsg, act.Content)
+	}
+
+	// Verify attacker principal is locked in Security Controller
+	p, err := security.NewPrincipal("astrbot", attackerUserID)
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !engine.Security.IsLocked(p) {
+		t.Fatal("expected attacker to be locked in Security Controller")
+	}
+
+	// Verify session history has been purged (DropLastMessage called)
+	sessionKey := fmt.Sprintf("group:%s", groupID)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if ok {
+		sess := sessCore.(*llm.SessionContext)
+		history := sess.Snapshot()
+		for _, m := range history {
+			if strings.Contains(fmt.Sprint(m.Content), "jailbreak prompt injection payload") {
+				t.Fatalf("attacker input was not dropped from session history: %+v", history)
+			}
+			if m.Role == "assistant" {
+				t.Fatalf("assistant message should not be committed on ban turn: %+v", history)
+			}
+		}
+
+		// Verify group compact buffer does not contain attacker message
+		compactBuffer := sess.GroupCompactBufferMessages()
+		for _, cm := range compactBuffer {
+			if cm.SenderID == attackerUserID || cm.MessageID == attackMsgID {
+				t.Fatalf("attacker message was not dropped from group compact buffer: %+v", cm)
+			}
+		}
+	}
+}
+
+func TestAstrBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testing.T) {
+	chatStarted := make(chan struct{})
+	finishChat := make(chan struct{})
+
+	mockLLM := &mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			select {
+			case chatStarted <- struct{}{}:
+			default:
+			}
+			<-finishChat
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是对唤醒消息的最终回复。",
+				},
+				Usage: &core.Usage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			}, nil
+		},
+	}
+	engine := newTestEngine(mockLLM)
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(mockLLM, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	const groupID = "grp-chron-001"
+	const wakeMsgID = "msg-wake-001"
+	const wakeUserID = "usr-wake-001"
+	const bgMsgID = "msg-bg-002"
+	const bgUserID = "usr-bg-002"
+
+	// 1. 发送唤醒群消息
+	wakeEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   wakeMsgID,
+		UserID:      wakeUserID,
+		SenderName:  "Alice",
+		GroupID:     groupID,
+		GroupName:   "ChronologyTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	wakeData, _ := json.Marshal(wakeEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, wakeData); err != nil {
+		t.Fatalf("write wake event failed: %v", err)
+	}
+
+	// 等待 LLM Chat 收到并挂起
+	select {
+	case <-chatStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for chat to start")
+	}
+
+	// 2. 在唤醒轮次在途时，背景群聊消息抵达
+	bgEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   bgMsgID,
+		UserID:      bgUserID,
+		SenderName:  "Bob",
+		GroupID:     groupID,
+		GroupName:   "ChronologyTestGroup",
+		Content:     "Bob background chatter",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      false,
+		Timestamp:   time.Now().Unix(),
+	}
+	bgData, _ := json.Marshal(bgEvent)
+	if err := conn.WriteMessage(websocket.TextMessage, bgData); err != nil {
+		t.Fatalf("write bg event failed: %v", err)
+	}
+
+	// 稍作等待确保背景消息已进入 WebSocket read loop 并写入 session buffer
+	time.Sleep(50 * time.Millisecond)
+
+	sessionKey := sessionKey(wakeEvent)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if !ok {
+		t.Fatalf("session %q not found", sessionKey)
+	}
+	sess := sessCore.(*llm.SessionContext)
+
+	// 检查在途状态下的 groupCompactBuffer：
+	// 顺序必须保持 Alice(wake) -> Bob(bg)
+	inFlightBuf := sess.GroupCompactBufferMessages()
+	if len(inFlightBuf) != 2 {
+		t.Fatalf("expected 2 items in in-flight buffer, got %d: %+v", len(inFlightBuf), inFlightBuf)
+	}
+	if inFlightBuf[0].MessageID != wakeMsgID || inFlightBuf[0].Content != "Alice wake question" {
+		t.Errorf("expected item 0 to be wake message from Alice, got: %+v", inFlightBuf[0])
+	}
+	if inFlightBuf[1].MessageID != bgMsgID || inFlightBuf[1].Content != "Bob background chatter" {
+		t.Errorf("expected item 1 to be bg message from Bob, got: %+v", inFlightBuf[1])
+	}
+
+	// 验证未提交状态下无法被 SnapshotGroupCompact 快照出
+	if snap, ready := sess.SnapshotGroupCompact(1); ready || len(snap.Messages) > 0 {
+		t.Fatalf("staged wake message must not be ready or committable for compactor snapshot, got: ready=%v msgs=%+v", ready, snap.Messages)
+	}
+
+	// 验证未提交状态下不会泄露给 SnapshotGroupContext 的 recent messages
+	contextSnap := sess.SnapshotGroupContext(10, 1000, "")
+	for _, m := range contextSnap.RecentStructuredMessages {
+		if m.MessageID == wakeMsgID {
+			t.Fatalf("staged wake message must not appear in SnapshotGroupContext, got: %+v", m)
+		}
+	}
+
+	// 3. 释放 LLM Chat 完成本轮
+	close(finishChat)
+
+	// 读取出站回复
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read assistant reply failed: %v", err)
+	}
+	var act Action
+	if err := json.Unmarshal(respBytes, &act); err != nil {
+		t.Fatalf("unmarshal action failed: %v", err)
+	}
+	if act.Content != "这是对唤醒消息的最终回复。" {
+		t.Fatalf("unexpected reply content: %q", act.Content)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. 验证轮次成功完成后：
+	// 顺序必须保持严格时间顺序：Alice(wake) -> Bob(bg) -> Assistant(reply)
+	finalBuf := sess.GroupCompactBufferMessages()
+	if len(finalBuf) != 3 {
+		t.Fatalf("expected 3 items in final buffer, got %d: %+v", len(finalBuf), finalBuf)
+	}
+	if finalBuf[0].MessageID != wakeMsgID || finalBuf[0].Role != "user" {
+		t.Errorf("item 0 should be Alice's wake message, got %+v", finalBuf[0])
+	}
+	if finalBuf[1].MessageID != bgMsgID || finalBuf[1].Role != "user" {
+		t.Errorf("item 1 should be Bob's background message, got %+v", finalBuf[1])
+	}
+	if finalBuf[2].Role != "assistant" || finalBuf[2].Content != "这是对唤醒消息的最终回复。" {
+		t.Errorf("item 2 should be Assistant reply, got %+v", finalBuf[2])
+	}
+
+	// 5. 验证现在 SnapshotGroupCompact 能够成功快照所有消息，且顺序一致
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("expected SnapshotGroupCompact to succeed after turn completion")
+	}
+	if len(snap.Messages) != 3 {
+		t.Fatalf("expected 3 messages in compactor snapshot, got %d", len(snap.Messages))
+	}
+	if snap.Messages[0].MessageID != wakeMsgID || snap.Messages[1].MessageID != bgMsgID || snap.Messages[2].Role != "assistant" {
+		t.Fatalf("snapshot message order inverted: %+v", snap.Messages)
+	}
+}
+
+func TestAstrBot_IntermediateAssistantStaging_SendMessageThenBanUser_PurgesBoth(t *testing.T) {
+	mockLLM := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_intermediate_send",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"messages":[{"type":"plain","text":"正在帮您处理恶意提权指令..."}]}`,
+							},
+						},
+					},
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:   "call_autonomous_ban",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      "ban_user",
+								Arguments: `{"reason":"detected malicious prompt injection during turn"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(mockLLM)
+	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeSimple)
+	sendTool := tools.SendMsgTool()
+	engine.ToolRegistry[sendTool.Name()] = sendTool
+	engine.ToolRegistry["ban_user"] = tools.NewBanUserTool(engine.Security)
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer conn.Close()
+
+	const attackerUserID = "usr-attack-007"
+	const groupID = "grp-secure-007"
+	const attackMsgID = "msg-attack-007"
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   attackMsgID,
+		UserID:      attackerUserID,
+		SenderName:  "AttackerUser",
+		GroupID:     groupID,
+		GroupName:   "AttackTargetGroup",
+		Content:     "execute malicious escalation payload",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	data, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write attack event failed: %v", err)
+	}
+
+	// 1. 客户端接收 send_message 发出的中间消息
+	_, intermediateBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read intermediate message failed: %v", err)
+	}
+	var intermediateAct Action
+	if err := json.Unmarshal(intermediateBytes, &intermediateAct); err != nil {
+		t.Fatalf("unmarshal intermediate action failed: %v", err)
+	}
+	if intermediateAct.Action != "send_message" || !strings.Contains(intermediateAct.Content, "正在帮您处理恶意提权指令") {
+		t.Fatalf("unexpected intermediate action: %+v", intermediateAct)
+	}
+
+	// 2. 客户端接收 ban_user 触发的封禁拦截回复
+	_, banRespBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read ban rejection message failed: %v", err)
+	}
+	var banAct Action
+	if err := json.Unmarshal(banRespBytes, &banAct); err != nil {
+		t.Fatalf("unmarshal ban action failed: %v", err)
+	}
+	if banAct.Action != "send_message" || !strings.Contains(banAct.Content, security.RejectGatewayMsg) {
+		t.Fatalf("expected rejection gateway message, got: %+v", banAct)
+	}
+
+	// 3. 验证攻击者主体被 Security Controller 锁定
+	p, err := security.NewPrincipal("astrbot", attackerUserID)
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !engine.Security.IsLocked(p) {
+		t.Fatal("expected attacker to be locked in Security Controller")
+	}
+
+	// 4. 验证会话历史中已被彻底清除
+	sessionKey := sessionKey(event)
+	sessCore, ok := engine.SessionManager.Get(sessionKey)
+	if !ok {
+		t.Fatalf("session %q not found", sessionKey)
+	}
+	sess := sessCore.(*llm.SessionContext)
+
+	for _, m := range sess.Snapshot() {
+		if strings.Contains(fmt.Sprint(m.Content), "malicious escalation") {
+			t.Fatalf("attacker input was not dropped from session history: %+v", m)
+		}
+		if m.Role == "assistant" {
+			t.Fatalf("assistant message should not be committed on ban turn: %+v", m)
+		}
+	}
+
+	// 5. 核心断言：验证 groupCompactBuffer 中既没有攻击者的消息，也没有中间阶段发送的 assistant 消息！
+	compactBuffer := sess.GroupCompactBufferMessages()
+	for _, cm := range compactBuffer {
+		if cm.SenderID == attackerUserID || cm.MessageID == attackMsgID {
+			t.Fatalf("attacker message was not dropped from group compact buffer: %+v", cm)
+		}
+		if strings.Contains(cm.Content, "正在帮您处理恶意提权指令") {
+			t.Fatalf("intermediate assistant message was not purged on ban_user: %+v", cm)
+		}
+	}
+}
+
+func TestAstrBot_GroupCompact_EarlyReturn_EventTypeMismatch_FinalizesStagedSlot(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(&mockLLMProvider{}, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	event := Event{
+		Type:        "event",
+		EventType:   "notice", // 非 message 类型触发 processEvent 早期返回
+		MessageID:   "msg-wake-early-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-early-001",
+		GroupName:   "EarlyTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	// 调用 processEvent，其在 event.EventType != "message" 处早期返回
+	processEvent(nil, event, engine, turn, nil)
+
+	// 验证由于 SessionTurn 自动守护机制，Alice 的 staged 槽位在退出时已被自动提升，
+	// Compactor snapshot 能够成功快照，不会发生永久阻塞
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望由于 SessionTurn.Done 自动提升，SnapshotGroupCompact 成功，但快照被阻塞")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].MessageID != "msg-wake-early-001" {
+		t.Fatalf("期望快照中包含 Alice 的已提交消息，实际: %+v", snap.Messages)
+	}
+}
+
+func TestAstrBot_GroupCompact_WorkerSpawnFailure_FinalizesStagedSlot(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg-wake-spawn-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-spawn-fail-001",
+		GroupName:   "SpawnFailTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	// 模拟 adapter.go 中 if !a.engine.Go(...) { turn.Done() }
+	turn.Done()
+
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("期望 turn.Done() 自动提交 staged guard，SnapshotGroupCompact 成功")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].MessageID != "msg-wake-spawn-001" {
+		t.Fatalf("期望快照中包含 Alice 的消息，实际: %+v", snap.Messages)
+	}
+}
+
+func TestAstrBot_GroupCompact_DeliveryFailure_DropsStagedSlot(t *testing.T) {
+	conn, _, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+	// 关闭连接使后续 sendDirectReply 失败
+	conn.Close()
+
+	engine := newTestEngine(&mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "测试回复",
+				},
+			}, nil
+		},
+	})
+	event := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "msg-wake-deliv-001",
+		UserID:      "usr-wake-001",
+		SenderName:  "Alice",
+		GroupID:     "grp-delivery-fail-001",
+		GroupName:   "DeliveryFailTestGroup",
+		Content:     "Alice wake question",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	sess := engine.SessionManager.GetOrCreate(sessionKey(event))
+	turn := sess.ReserveTurn()
+	guard := stageGroupCompactMessage(event, engine)
+	turn.AttachStagedGuard(guard)
+
+	processEvent(conn, event, engine, turn, nil)
+
+	// 验证投递失败时，guard.Drop() 被调用，且 turn.Done() 退出不会重新提升或复活该消息
+	buf := sess.GroupCompactBufferMessages()
+	if len(buf) != 0 {
+		t.Fatalf("期望投递失败后 buffer 为空，实际: %+v", buf)
+	}
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if ok || len(snap.Messages) > 0 {
+		t.Fatalf("期望投递失败后无快照，实际: ok=%v msgs=%+v", ok, snap.Messages)
 	}
 }

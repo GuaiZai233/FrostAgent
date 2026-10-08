@@ -203,6 +203,80 @@ func TestExecutor_BanAndUnban(t *testing.T) {
 	if err := secCtrl.CheckAccess(p); err != nil {
 		t.Errorf("expected user to be unlocked, got: %v", err)
 	}
+
+	// 5. Self-protection cannot be bypassed via mentions (@admin-1 or [@admin-1])
+	replies = nil
+	_ = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{"@admin-1"}})
+	if len(replies) == 0 || replies[0] != "无法封禁当前调用者账号。" {
+		t.Errorf("expected cannot ban caller with @ prefix, got: %v", replies)
+	}
+	replies = nil
+	_ = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{"[@admin-1]"}})
+	if len(replies) == 0 || replies[0] != "无法封禁当前调用者账号。" {
+		t.Errorf("expected cannot ban caller with [@...] token, got: %v", replies)
+	}
+
+	// 6. Admin protection cannot be bypassed via mentions (@admin-2 or [@admin-2])
+	replies = nil
+	_ = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{"@admin-2"}})
+	if len(replies) == 0 || replies[0] != "无法封禁管理员账号。" {
+		t.Errorf("expected cannot ban admin with @ prefix, got: %v", replies)
+	}
+	replies = nil
+	_ = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{"[@admin-2]"}})
+	if len(replies) == 0 || replies[0] != "无法封禁管理员账号。" {
+		t.Errorf("expected cannot ban admin with [@...] token, got: %v", replies)
+	}
+
+	// 7. Ban normal user via mention (@user-99)
+	replies = nil
+	err = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{"@user-99"}})
+	if err != nil {
+		t.Fatalf("ban with @ failed: %v", err)
+	}
+	if len(replies) == 0 || replies[0] != "已成功封禁用户 user-99。" {
+		t.Errorf("expected success ban reply with clean ID, got: %v", replies)
+	}
+	if err := secCtrl.CheckAccess(p); err != security.ErrLocked {
+		t.Errorf("expected real principal user-99 to be locked, got: %v", err)
+	}
+
+	// Verify no pseudo-principals exist in AccessStore
+	lockedList, err := secCtrl.Access.ListLocked()
+	if err != nil {
+		t.Fatalf("ListLocked failed: %v", err)
+	}
+	for _, rec := range lockedList {
+		if strings.Contains(rec.Principal.UserID, "@") || strings.Contains(rec.Principal.UserID, "[") {
+			t.Errorf("found dirty pseudo-principal in AccessStore: %+v", rec.Principal)
+		}
+	}
+
+	// 8. Unban normal user via bracket mention ([@user-99])
+	replies = nil
+	err = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdUnban, Args: []string{"[@user-99]"}})
+	if err != nil {
+		t.Fatalf("unban with [@...] failed: %v", err)
+	}
+	if len(replies) == 0 || replies[0] != "已成功解封用户 user-99。" {
+		t.Errorf("expected success unban reply with clean ID, got: %v", replies)
+	}
+	if err := secCtrl.CheckAccess(p); err != nil {
+		t.Errorf("expected user-99 to be unlocked, got: %v", err)
+	}
+
+	// 9. Wildcard and nickname targets fail closed without modifying AccessStore
+	invalidTargets := []string{"@all", "[@all]", "[@全体成员]", "[@测试昵称]"}
+	for _, invalid := range invalidTargets {
+		err = exec.Execute(context.Background(), cmdCtx, ParsedCommand{Type: CmdBan, Args: []string{invalid}})
+		if err == nil {
+			t.Errorf("expected error for invalid target %q, got nil", invalid)
+		}
+	}
+	lockedAfter, _ := secCtrl.Access.ListLocked()
+	if len(lockedAfter) != 0 {
+		t.Errorf("expected no locked records after invalid attempts, got %d", len(lockedAfter))
+	}
 }
 
 func TestExecutor_Compact_Group(t *testing.T) {

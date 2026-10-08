@@ -245,6 +245,77 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	captureGroupCompactText(event, visibleText, engine)
 }
 
+func stageGroupCompactText(event Event, text string, engine *llm.Engine) *llm.StagedGroupCompactGuard {
+	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	onPromote := func() {
+		if engine.GroupCompactor != nil {
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
+			engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
+		}
+	}
+	guard, _ := session.StageGroupCompactWithGuard(
+		llm.GroupCompactMessage{
+			Role:      "user",
+			Sender:    senderDisplayName(event),
+			SenderID:  event.UserID,
+			Content:   strings.TrimSpace(text),
+			MessageID: event.MessageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		event.UserID,
+		onPromote,
+		event.MessageID,
+	)
+	return guard
+}
+
+func stageGroupCompactMessage(event Event, engine *llm.Engine) *llm.StagedGroupCompactGuard {
+	if engine == nil || event.GroupID == "" {
+		return nil
+	}
+	visibleText := astrBotVisibleText(event)
+	return stageGroupCompactText(event, visibleText, engine)
+}
+
+func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string) {
+	replyText = strings.TrimSpace(replyText)
+	if session == nil || engine == nil || replyText == "" {
+		return
+	}
+
+	botName := engine.Getenv("BOT_NAME")
+	if botName == "" {
+		botName = "霜降"
+	}
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	session.StageGroupCompactMessage(
+		llm.GroupCompactMessage{
+			Role:      "assistant",
+			Sender:    botName,
+			Content:   replyText,
+			MessageID: messageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		messageID,
+	)
+}
+
 func astrBotVisibleText(event Event) string {
 	parts := make([]string, 0, 3)
 	if text := strings.TrimSpace(event.Content); text != "" {
@@ -617,7 +688,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		logImages,
 	)
 
-	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch, warningNotice...)
+	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch, turn, warningNotice...)
 }
 
 func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...string) {
@@ -633,10 +704,10 @@ func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...strin
 			}
 		}
 	}
-	replyWithSnapshot(event, engine, conn, snapshot, startEpoch, warningNotice...)
+	replyWithSnapshot(event, engine, conn, snapshot, startEpoch, nil, warningNotice...)
 }
 
-func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, warningNotice ...string) {
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -1026,7 +1097,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 				if event.MessageType == "group" && !conn.mock {
-					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
+					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID)
 				}
 			}
 			return nil
@@ -1060,6 +1131,24 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return
 		}
 
+		if runResult.Banned {
+			if session != nil {
+				session.DropLastMessage()
+				if event.MessageType == "group" {
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Drop()
+					} else {
+						session.DropGroupCompactMessage(event.MessageID, event.UserID)
+					}
+					if engine != nil && engine.GroupCompactor != nil {
+						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
+					}
+				}
+			}
+			_ = sendDirectReply(event, conn, runResult.Content)
+			return
+		}
+
 		if billingState != nil && billingState.BillingActive {
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {
 				session.TrimHistory(len(session.Snapshot()) - 1)
@@ -1084,6 +1173,18 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 		if runResult.Silent {
 			engine.TrimSession(session)
+			if event.MessageType == "group" && !runResult.Banned {
+				if session != nil {
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else {
+						session.PromoteGroupCompactMessage(event.MessageID)
+					}
+					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
+						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+					}
+				}
+			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
 			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
@@ -1115,6 +1216,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	if sendErr != nil {
 		if session != nil {
+			if event.MessageType == "group" {
+				if turn != nil && turn.StagedGuard() != nil {
+					turn.StagedGuard().Drop()
+				} else {
+					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+				}
+			}
 			session.SetDeliveryFailure(llm.DeliveryFailure{
 				Platform: platform,
 				Action:   "send_message",
@@ -1134,6 +1242,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		return
 	}
 
+	if event.MessageType == "group" && !runResult.Banned {
+		if session != nil {
+			if turn != nil && turn.StagedGuard() != nil {
+				turn.StagedGuard().Promote()
+			} else {
+				session.PromoteGroupCompactMessage(event.MessageID)
+			}
+		}
+	}
 	if strings.TrimSpace(historyReplyText) != "" {
 		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
 	}
@@ -1163,7 +1280,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if event.MessageType == "group" && !conn.mock {
-		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
+		botReply := extractBotReplyText(replyText)
+		if strings.TrimSpace(botReply) != "" {
+			appendAssistantGroupMessage(session, engine, owner, botReply, routeScope)
+		} else if engine != nil && engine.GroupCompactor != nil {
+			engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+		}
 	}
 }
 

@@ -59,6 +59,7 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 	logs.Clear()
 
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			return security.ClassificationResult{}, errors.New("upstream gateway timeout")
@@ -120,6 +121,7 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 
 func TestEngineModelOutputPolicyBlock(t *testing.T) {
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			return security.ClassificationResult{
@@ -154,6 +156,7 @@ func TestEngineModelOutputPolicyBlock(t *testing.T) {
 
 func TestEngineModelOutputPolicyFilter(t *testing.T) {
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			return security.ClassificationResult{
@@ -200,6 +203,7 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 	logs.Clear()
 
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if input.Stage == security.StageToolArgument {
@@ -292,6 +296,7 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 	logs.Clear()
 
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if input.Stage == security.StageToolResult {
@@ -861,6 +866,7 @@ func TestEngineMediumRiskTemporarySecurityNoticeInjection(t *testing.T) {
 
 func TestEngineToolResultPolicyFilter(t *testing.T) {
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if input.Stage == security.StageToolResult {
@@ -927,6 +933,7 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 
 func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if input.Stage == security.StageToolArgument {
@@ -1011,6 +1018,7 @@ func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
 
 func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
 	controller := security.NewController(t.TempDir())
+	controller.SetMode(security.ControlModeAggressive)
 	controller.Watchdog.SetClassifier(&mockGateClassifier{
 		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
 			if input.Stage == security.StageToolResult {
@@ -1096,6 +1104,7 @@ func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
 func TestEngineSecurityBlocks_MockDryRunDoesNotAudit(t *testing.T) {
 	tmpDir := t.TempDir()
 	controller := security.NewController(tmpDir)
+	controller.SetMode(security.ControlModeAggressive)
 	engine := &Engine{Security: controller, InstanceID: "test-inst"}
 
 	mockRun := RunContext{

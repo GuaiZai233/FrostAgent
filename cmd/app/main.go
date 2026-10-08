@@ -71,7 +71,7 @@ func managementMux(manager http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/api/instances", manager)
 	if registry, ok := manager.(*instance.Manager); ok {
-		mux.Handle("/api/security/", secsvc.NewScoped(registry.SecurityController(), registry.ControlPlaneGetenv()))
+		mux.Handle("/api/security/", secsvc.NewWithStore(registry.SecurityController(), registry.ControlPlaneGetenv(), registry.GlobalConfig()))
 	}
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)

@@ -155,6 +155,42 @@ func TestExtractOneBotAdminCommand(t *testing.T) {
 	if !isCand || err != nil || cmd.Type != admincmd.CmdReset {
 		t.Fatalf("expected word prefix CmdReset, got isCand=%v err=%v type=%v", isCand, err, cmd.Type)
 	}
+
+	// 7. @bot /ban @target extracts target QQ as argument
+	atTargetMsg, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban "}},
+		{"type": "at", "data": map[string]any{"qq": "20002"}},
+	})
+	eventAtTarget := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     atTargetMsg,
+	}
+	cmd, isCand, err = extractOneBotAdminCommand(eventAtTarget, "/", scope)
+	if !isCand || err != nil || cmd.Type != admincmd.CmdBan || len(cmd.Args) != 1 || cmd.Args[0] != "20002" {
+		t.Fatalf("expected CmdBan with target 20002, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
+
+	// 8. @bot /unban @target extracts target QQ as argument
+	atTargetUnbanMsg, _ := json.Marshal([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /unban "}},
+		{"type": "at", "data": map[string]any{"qq": "20002"}},
+	})
+	eventAtTargetUnban := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     atTargetUnbanMsg,
+	}
+	cmd, isCand, err = extractOneBotAdminCommand(eventAtTargetUnban, "/", scope)
+	if !isCand || err != nil || cmd.Type != admincmd.CmdUnban || len(cmd.Args) != 1 || cmd.Args[0] != "20002" {
+		t.Fatalf("expected CmdUnban with target 20002, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
 }
 
 func setupTestWS(t *testing.T) (*wsConnection, chan model.OneBotAction, func()) {
@@ -636,6 +672,7 @@ func TestOneBotProcessEvent_EpochInvalidationBeforeReply(t *testing.T) {
 func TestOneBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeSecurityGate(t *testing.T) {
 	tmpDir := t.TempDir()
 	secCtrl := security.NewController(tmpDir)
+	secCtrl.SetMode(security.ControlModeAggressive)
 
 	scope := newAdminTestScope(t, map[string]string{
 		admincmd.AdminQQIDsEnv:         "20001",
@@ -728,3 +765,154 @@ func TestOneBotIngress_NonAdminCommandWithWatchdogKeyword_SilentlyDroppedBeforeS
 		t.Errorf("expected exactly 1 security audit event for normal dangerous message, got %d", len(auditsAfter))
 	}
 }
+
+func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
+	wsConn, actionCh, cleanup := setupTestWS(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	secCtrl := security.NewController(tmpDir)
+
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminQQIDsEnv:         "20001",
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+
+	engine := &llm.Engine{
+		Scope:             scope,
+		Security:          secCtrl,
+		SessionManager:    llm.NewSessionManager(),
+		GroupSummaryStore: summaryStore,
+		ModelName:         "mock-model",
+		Provider:          &mockLLMProvider{},
+	}
+	wsConn.Scope = scope
+
+	sendAndRecv := func(segments []map[string]any) string {
+		t.Helper()
+		msgBytes, _ := json.Marshal(segments)
+		event := model.OneBotEvent{
+			SelfID:      10001,
+			UserID:      20001,
+			GroupID:     30001,
+			MessageType: "group",
+			Message:     msgBytes,
+		}
+		handled := handleAdminCommand(wsConn, event, engine)
+		if !handled {
+			t.Fatalf("expected handleAdminCommand to return true")
+		}
+		select {
+		case act := <-actionCh:
+			params, _ := act.Params.(map[string]any)
+			msg, _ := params["message"].(string)
+			return msg
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for reply")
+			return ""
+		}
+	}
+
+	// 1. Admin sends @bot + /ban + @target (20002)
+	reply := sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban "}},
+		{"type": "at", "data": map[string]any{"qq": "20002"}},
+	})
+	if !strings.Contains(reply, "已成功封禁用户 20002。") {
+		t.Errorf("expected ban success reply, got: %q", reply)
+	}
+
+	targetPrincipal, err := security.NewPrincipal("qq", "20002")
+	if err != nil {
+		t.Fatalf("NewPrincipal failed: %v", err)
+	}
+	if !secCtrl.IsLocked(targetPrincipal) {
+		t.Errorf("expected target principal qq:20002 to be locked")
+	}
+
+	// Assert NO pseudo-principal like qq:[@20002] was created or persisted in AccessStore
+	records, err := secCtrl.Access.ListLocked()
+	if err != nil {
+		t.Fatalf("Access.ListLocked failed: %v", err)
+	}
+	for _, rec := range records {
+		if strings.ContainsAny(rec.Principal.UserID, "[]@:") {
+			t.Errorf("found malformed/pseudo principal in AccessStore: %+v", rec.Principal)
+		}
+	}
+
+	// 2. Admin sends @bot + /unban + @target (20002)
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /unban "}},
+		{"type": "at", "data": map[string]any{"qq": "20002"}},
+	})
+	if !strings.Contains(reply, "已成功解封用户 20002。") {
+		t.Errorf("expected unban success reply, got: %q", reply)
+	}
+	if secCtrl.IsLocked(targetPrincipal) {
+		t.Errorf("expected target principal qq:20002 to be unlocked")
+	}
+
+	// 3. Admin sends bare ID /ban 20003 and /unban 20003
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban 20003"}},
+	})
+	if !strings.Contains(reply, "已成功封禁用户 20003。") {
+		t.Errorf("expected bare ID ban success reply, got: %q", reply)
+	}
+	bareTarget, _ := security.NewPrincipal("qq", "20003")
+	if !secCtrl.IsLocked(bareTarget) {
+		t.Errorf("expected bare target qq:20003 to be locked")
+	}
+
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /unban 20003"}},
+	})
+	if !strings.Contains(reply, "已成功解封用户 20003。") {
+		t.Errorf("expected bare ID unban success reply, got: %q", reply)
+	}
+	if secCtrl.IsLocked(bareTarget) {
+		t.Errorf("expected bare target qq:20003 to be unlocked")
+	}
+
+	// 4. Multiple target mentions fail closed: @bot + /ban + @target1 + @target2
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban "}},
+		{"type": "at", "data": map[string]any{"qq": "20004"}},
+		{"type": "text", "data": map[string]any{"text": " "}},
+		{"type": "at", "data": map[string]any{"qq": "20005"}},
+	})
+	if !strings.Contains(reply, "ban 指令格式错误，需要指定一个用户ID") {
+		t.Errorf("expected multiple targets error, got: %q", reply)
+	}
+	p20004, _ := security.NewPrincipal("qq", "20004")
+	p20005, _ := security.NewPrincipal("qq", "20005")
+	if secCtrl.IsLocked(p20004) || secCtrl.IsLocked(p20005) {
+		t.Errorf("neither target should be locked on multiple targets error")
+	}
+
+	// 5. Wildcard fail closed: @bot + /ban all
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban all"}},
+	})
+	if !strings.Contains(reply, "不支持对全体成员或全局通配符执行该操作") {
+		t.Errorf("expected wildcard rejection, got: %q", reply)
+	}
+
+	// 6. Malformed mention / nickname in text fails closed
+	reply = sendAndRecv([]map[string]any{
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /ban [@测试昵称]"}},
+	})
+	if !strings.Contains(reply, "包含非法字符或非ASCII字符（禁止使用昵称）") {
+		t.Errorf("expected nickname rejection, got: %q", reply)
+	}
+}
+

@@ -20,6 +20,7 @@ import (
 // extractOneBotAdminCommand parses a OneBot event to see if it is an administrator command candidate.
 // It strictly requires a real @ targeting the bot (matching event.SelfID) in the current message only.
 func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *runtimescope.Scope) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
+	_ = scope
 	selfIDStr := strconv.FormatInt(event.SelfID, 10)
 	if selfIDStr == "0" || selfIDStr == "" {
 		return cmd, false, nil
@@ -60,8 +61,38 @@ func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *ru
 		return cmd, false, nil
 	}
 
-	text := extractUserText(remainingSegments, nil, scope)
-	text = strings.TrimSpace(text)
+	var b strings.Builder
+	for _, seg := range remainingSegments {
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				b.WriteString(text)
+			}
+		case "at":
+			qqVal := seg.Data["qq"]
+			var atQQ string
+			switch v := qqVal.(type) {
+			case string:
+				atQQ = strings.TrimSpace(v)
+			case float64:
+				atQQ = strconv.FormatFloat(v, 'f', -1, 64)
+			case json.Number:
+				atQQ = v.String()
+			case int:
+				atQQ = strconv.Itoa(v)
+			case int64:
+				atQQ = strconv.FormatInt(v, 10)
+			}
+			b.WriteString(" ")
+			b.WriteString(atQQ)
+			b.WriteString(" ")
+		default:
+			b.WriteString(" [")
+			b.WriteString(seg.Type)
+			b.WriteString("] ")
+		}
+	}
+	text := strings.TrimSpace(b.String())
 	return admincmd.ParseCandidate(text, prefix)
 }
 

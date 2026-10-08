@@ -129,32 +129,33 @@ func ParseCandidate(text, prefix string) (cmd ParsedCommand, isCandidate bool, e
 		rawArgs = strings.TrimSpace(remainder[len(parts[0]):])
 	}
 
-	switch CommandType(cmdName) {
+	cmd = ParsedCommand{Type: CommandType(cmdName), Args: args, RawArgs: rawArgs}
+	switch cmd.Type {
 	case CmdReset:
 		if len(args) != 0 {
 			return cmd, true, fmt.Errorf("reset 指令不需要任何参数")
 		}
-		return ParsedCommand{Type: CmdReset, Args: args, RawArgs: rawArgs}, true, nil
+		return cmd, true, nil
 	case CmdBan:
 		if len(args) != 1 {
 			return cmd, true, fmt.Errorf("ban 指令格式错误，需要指定一个用户ID：ban <userID>")
 		}
-		return ParsedCommand{Type: CmdBan, Args: args, RawArgs: rawArgs}, true, nil
+		return cmd, true, nil
 	case CmdUnban:
 		if len(args) != 1 {
 			return cmd, true, fmt.Errorf("unban 指令格式错误，需要指定一个用户ID：unban <userID>")
 		}
-		return ParsedCommand{Type: CmdUnban, Args: args, RawArgs: rawArgs}, true, nil
+		return cmd, true, nil
 	case CmdCompact:
 		if len(args) != 0 {
 			return cmd, true, fmt.Errorf("compact 指令不需要任何参数")
 		}
-		return ParsedCommand{Type: CmdCompact, Args: args, RawArgs: rawArgs}, true, nil
+		return cmd, true, nil
 	case CmdReflect:
 		if len(args) != 0 {
 			return cmd, true, fmt.Errorf("reflect 指令不需要任何参数")
 		}
-		return ParsedCommand{Type: CmdReflect, Args: args, RawArgs: rawArgs}, true, nil
+		return cmd, true, nil
 	default:
 		return cmd, true, fmt.Errorf("未知指令：%s", cmdName)
 	}
