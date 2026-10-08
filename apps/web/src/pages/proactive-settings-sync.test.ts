@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ProactiveSettingsSync,
   type ProactiveAPI,
+  type ProactiveState,
 } from './proactive-settings-sync.ts';
 
 test('ProactiveSettingsSync serializes rapid Toggle ON -> Toggle OFF ensuring last intent wins', async () => {
@@ -111,9 +112,10 @@ test('ProactiveSettingsSync collapses rapid intermediate slider updates to lates
   assert.equal(sync.getState().probability, 0.3);
 });
 
-test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure', async () => {
+test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure and restores real server state', async () => {
   let reloadCalled = false;
   let errorCaught: Error | null = null;
+  let lastRenderedState: (ProactiveState & { isSaving: boolean }) | null = null;
 
   const mockApi: ProactiveAPI = {
     async updateEnvVar({ key }) {
@@ -124,17 +126,24 @@ test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure
     },
   };
 
-  const sync = new ProactiveSettingsSync(
+  let sync!: ProactiveSettingsSync;
+  sync = new ProactiveSettingsSync(
     mockApi,
     { enabled: false, probability: 0.05 },
     {
-      onStateChange: () => {},
+      onStateChange: (state) => {
+        lastRenderedState = { ...state };
+      },
       onError: (err) => {
         errorCaught = err;
       },
       onSuccess: () => {},
       onReloadNeeded: async () => {
         reloadCalled = true;
+        // In real backend-settings.ts, onReloadNeeded invokes loadData() which applies actual server values
+        const seq = sync.nextLoadSeq();
+        const applied = sync.applyServerConfig(false, 0.05, seq);
+        assert.equal(applied, true, 'recovery loadData config must be accepted by applyServerConfig');
       },
     },
   );
@@ -144,7 +153,13 @@ test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure
   assert.ok(errorCaught);
   assert.match((errorCaught as Error).message, /Database locked/);
   assert.equal(reloadCalled, true);
+  // Authoritative server state is restored, not stuck on optimistic enabled=true
+  assert.equal(sync.getState().enabled, false);
+  assert.equal(sync.getState().probability, 0.05);
   assert.equal(sync.getState().isSaving, false);
+  assert.ok(lastRenderedState);
+  assert.equal(lastRenderedState.enabled, false);
+  assert.equal(lastRenderedState.isSaving, false);
 });
 
 test('applyServerConfig rejects out-of-order stale load responses and in-flight overrides', async () => {
@@ -178,6 +193,89 @@ test('applyServerConfig rejects out-of-order stale load responses and in-flight 
   // State remains from seq2
   assert.equal(sync.getState().enabled, true);
   assert.equal(sync.getState().probability, 0.5);
+});
+
+test('deferred GET started prior to save or during save cannot revert successful state after save completes', async () => {
+  const sync = new ProactiveSettingsSync(
+    {
+      async updateEnvVar() {
+        return { success: true };
+      },
+    },
+    { enabled: false, probability: 0.05 },
+    {
+      onStateChange: () => {},
+      onError: () => {},
+      onSuccess: () => {},
+      onReloadNeeded: async () => {},
+    },
+  );
+
+  // 1. A GET is initiated prior to user mutation (e.g. initial loadData)
+  const preEditGetSeq = sync.nextLoadSeq();
+
+  // 2. User sets target and save completes successfully
+  await sync.setTarget(true, 0.5);
+  assert.equal(sync.getState().enabled, true);
+  assert.equal(sync.getState().probability, 0.5);
+  assert.equal(sync.getState().isSaving, false);
+
+  // 3. Stale pre-edit GET resolves after save
+  const appliedPreEdit = sync.applyServerConfig(false, 0.01, preEditGetSeq);
+  assert.equal(appliedPreEdit, false, 'Pre-edit GET must be rejected after save completes');
+  assert.equal(sync.getState().enabled, true);
+  assert.equal(sync.getState().probability, 0.5);
+
+  // 4. A GET initiated DURING save also cannot revert state after save
+  let resolveSave: (() => void) | null = null;
+  const slowApi: ProactiveAPI = {
+    async updateEnvVar({ key }) {
+      if (key === 'PROACTIVE_REPLY_PROBABILITY') {
+        await new Promise<void>((r) => {
+          resolveSave = r;
+        });
+      }
+      return { success: true };
+    },
+  };
+  const sync2 = new ProactiveSettingsSync(
+    slowApi,
+    { enabled: false, probability: 0.05 },
+    {
+      onStateChange: () => {},
+      onError: () => {},
+      onSuccess: () => {},
+      onReloadNeeded: async () => {},
+    },
+  );
+
+  const savePromise = sync2.setTarget(true, 0.8);
+  while (!resolveSave) {
+    await new Promise((r) => setImmediate(r));
+  }
+  // GET initiated while save is in-flight
+  const duringSaveGetSeq = sync2.nextLoadSeq();
+
+  // Save completes
+  const finishSave: () => void = resolveSave;
+  finishSave();
+  await savePromise;
+  assert.equal(sync2.getState().enabled, true);
+  assert.equal(sync2.getState().probability, 0.8);
+  assert.equal(sync2.getState().isSaving, false);
+
+  // GET initiated during save arrives now
+  const appliedDuringSave = sync2.applyServerConfig(false, 0.01, duringSaveGetSeq);
+  assert.equal(appliedDuringSave, false, 'GET initiated during save must be rejected after save completes');
+  assert.equal(sync2.getState().enabled, true);
+  assert.equal(sync2.getState().probability, 0.8);
+
+  // 5. Fresh GET initiated AFTER save completes IS accepted
+  const postSaveGetSeq = sync2.nextLoadSeq();
+  const appliedPostSave = sync2.applyServerConfig(true, 0.8, postSaveGetSeq);
+  assert.equal(appliedPostSave, true, 'GET initiated after save completes must be accepted');
+  assert.equal(sync2.getState().enabled, true);
+  assert.equal(sync2.getState().probability, 0.8);
 });
 
 test('ProactiveSettingsSync clamps probability within [0.01, 1.00]', () => {

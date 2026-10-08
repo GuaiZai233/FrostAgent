@@ -25,7 +25,9 @@ export class ProactiveSettingsSync {
   private isSaving = false;
   private pendingTarget: ProactiveState | null = null;
   private opPromise: Promise<void> = Promise.resolve();
-  private latestLoadSeq = 0;
+  private loadSeqCounter = 0;
+  private minValidLoadSeq = 0;
+  private latestAcceptedLoadSeq = 0;
 
   constructor(
     api: ProactiveAPI,
@@ -56,7 +58,11 @@ export class ProactiveSettingsSync {
   }
 
   nextLoadSeq(): number {
-    return ++this.latestLoadSeq;
+    return ++this.loadSeqCounter;
+  }
+
+  private invalidatePreEditLoads(): void {
+    this.minValidLoadSeq = this.loadSeqCounter + 1;
   }
 
   applyServerConfig(
@@ -64,10 +70,10 @@ export class ProactiveSettingsSync {
     probability: number,
     seq: number,
   ): boolean {
-    if (seq < this.latestLoadSeq) {
+    if (seq < this.minValidLoadSeq || seq < this.latestAcceptedLoadSeq) {
       return false; // Stale load response
     }
-    this.latestLoadSeq = seq;
+    this.latestAcceptedLoadSeq = seq;
     if (this.isSaving || this.pendingTarget !== null) {
       // Don't overwrite active user edits while save is in flight
       return false;
@@ -85,6 +91,9 @@ export class ProactiveSettingsSync {
       enabled,
       probability: ProactiveSettingsSync.clampProb(prob),
     };
+
+    // Invalidate any GET requests started before this local edit was initiated
+    this.invalidatePreEditLoads();
 
     // Optimistically update current state and notify UI
     this.current = { ...target };
@@ -109,18 +118,27 @@ export class ProactiveSettingsSync {
       try {
         await this.executeSave(target);
         this.current = target;
+        // Invalidate any reads initiated before this save completed on the server
+        this.invalidatePreEditLoads();
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        // Discard any remaining pending target and end saving phase
+        // so that the subsequent recovery load can be accepted and applied
+        this.pendingTarget = null;
+        this.isSaving = false;
+        this.listeners.onStateChange(this.getState());
         this.listeners.onError(error);
         try {
           await this.listeners.onReloadNeeded();
         } catch {
           // ignore reload error
         }
-        break;
+        return;
       }
     }
     this.isSaving = false;
+    // Invalidate any reads initiated during save so they cannot clobber the final saved state
+    this.invalidatePreEditLoads();
     this.listeners.onStateChange(this.getState());
   }
 
