@@ -197,3 +197,34 @@ func TestBanUserToolMockSessionPersistence(t *testing.T) {
 		t.Fatalf("expected record reason %q, got %q", "mock injection test", record.Reason)
 	}
 }
+
+func TestBanUserToolProactiveRejection(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctrl := security.NewController(tmpDir)
+	ctrl.SetMode(security.ControlModeAggressive)
+	tool := NewBanUserTool(ctrl)
+
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{
+		ActorPlatform: "qq",
+		ActorUserID:   "proactive-bystander-1",
+		Proactive:     true,
+		InstanceID:    "inst-proactive",
+		SessionID:     "sess-proactive",
+	})
+
+	_, err := tool.ExecuteContext(ctx, `{"reason":"proactive ban attempt"}`)
+	if err == nil {
+		t.Fatal("expected error when ban_user is called in proactive turn, got nil")
+	}
+	if err.Error() != "ban_user: 主动回复轮次禁止封禁用户" {
+		t.Fatalf("expected error %q, got %q", "ban_user: 主动回复轮次禁止封禁用户", err.Error())
+	}
+
+	p, err := security.NewPrincipal("qq", "proactive-bystander-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctrl.IsLocked(p) {
+		t.Fatal("bystander must not be locked in AccessStore during proactive turn")
+	}
+}

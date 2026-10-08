@@ -840,6 +840,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			RouteSnapshot:  routeSnapshot,
 			SecurityNotice: notice,
 			Mock:          conn.mock,
+			Proactive:     wakeSignals.Proactive,
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -864,7 +865,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 				}
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+			if !wakeSignals.Proactive {
+				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+			}
 			return
 		}
 
@@ -885,9 +888,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			)
 		}
 
-		if wakeSignals.Proactive && runResult.Error != nil {
+		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
 			engine.TrimSession(session)
-			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常，静默丢弃: session=%s, err=%v", conn.historyKey(event), runResult.Error))
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
 		}
 

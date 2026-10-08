@@ -11,6 +11,7 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -837,6 +838,374 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 		msgStr, _ := params["message"].(string)
 		if !strings.Contains(msgStr, "本次消耗") && !strings.Contains(msgStr, "雪花") {
 			t.Fatalf("显式唤醒回复必须附带计费回执，实际: %s", msgStr)
+		}
+	})
+}
+
+func TestOneBotProactiveSecurityOptionA(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+
+	t.Run("unaddressed proactive turn attempting ban_user does not send group msg and does not lock bystander", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{})
+
+		banTool := tools.NewBanUserTool(ctrl)
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_ban_1",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: security.BanUserToolName, Arguments: `{"reason":"proactive ban attempt"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry[security.BanUserToolName] = banTool
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   601,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通群聊未艾特"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复尝试 ban_user 不应向群发送消息: %+v", act)
+			}
+		}
+
+		p, _ := security.NewPrincipal("qq", "20001")
+		if ctrl.IsLocked(p) {
+			t.Fatal("主动回复尝试 ban_user 不应封禁无辜旁观者")
+		}
+	})
+
+	t.Run("unaddressed proactive turn with OutputBlocked drops silently without sending group msg", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageModelOutput {
+					return security.ClassificationResult{
+						Category:  security.RiskCategoryViolenceTerrorism,
+						RiskLevel: security.RiskLevelCritical,
+						Reason:    "blocked output in proactive turn",
+					}, nil
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			},
+		})
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "恶意内容输出",
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   602,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通闲聊"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复 OutputBlocked 时不应向群发送消息: %+v", act)
+			}
+		}
+	})
+
+	t.Run("explicit wake turn with OutputBlocked transmits security notice", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageModelOutput {
+					return security.ClassificationResult{
+						Category:  security.RiskCategoryViolenceTerrorism,
+						RiskLevel: security.RiskLevelCritical,
+						Reason:    "blocked output in explicit wake",
+					}, nil
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			},
+		})
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "恶意内容输出",
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   603,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 帮我回答"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "FrostAgent安全控制：模型输出已拦截。") {
+			t.Fatalf("显式唤醒 OutputBlocked 时应发送拦截提示，实际: %s", msgStr)
+		}
+	})
+
+	t.Run("explicit wake turn with ban_user locks user and sends notice", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{})
+
+		banTool := tools.NewBanUserTool(ctrl)
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_ban_2",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: security.BanUserToolName, Arguments: `{"reason":"explicit prompt injection"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry[security.BanUserToolName] = banTool
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   604,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 恶意攻击提示词"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		p, _ := security.NewPrincipal("qq", "20001")
+		if !ctrl.IsLocked(p) {
+			t.Fatal("显式唤醒 ban_user 必须成功锁定用户")
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, security.RejectGatewayMsg) {
+			t.Fatalf("显式唤醒 ban_user 应发送封禁拒绝提示，实际: %s", msgStr)
 		}
 	})
 }

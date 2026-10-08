@@ -1125,6 +1125,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
 			Mock:          conn.mock,
+			Proactive:     isProactiveReply(&event),
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -1145,7 +1146,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			_ = sendDirectReply(event, conn, runResult.Content)
+			if isProactiveReply(&event) {
+				_ = sendTerminalNoopWithSuppress(event, conn)
+			} else {
+				_ = sendDirectReply(event, conn, runResult.Content)
+			}
 			return
 		}
 
@@ -1164,9 +1169,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			)
 		}
 
-		if isProactiveReply(&event) && runResult.Error != nil {
+		if isProactiveReply(&event) && (runResult.Error != nil || runResult.OutputBlocked) {
 			engine.TrimSession(session)
-			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常，静默丢弃: session=%s, err=%v", conn.sessionKey(event), runResult.Error))
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.sessionKey(event), runResult.Error, runResult.OutputBlocked))
 			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
 		}

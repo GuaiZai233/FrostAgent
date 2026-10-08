@@ -56,6 +56,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 
 			switch params.Action {
 			case "write":
+				if runContext.Proactive {
+					return "主动回复轮次禁止写入记忆", nil
+				}
 				if runContext.Mock {
 					return "记忆已记录（模拟会话：断电即丢，不持久化保存）", nil
 				}
@@ -96,7 +99,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				if len(filtered) == 0 {
 					return "未找到相关记忆", nil
 				}
-				if !runContext.Mock {
+				if !runContext.Mock && !runContext.Proactive {
 					if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
 					}
@@ -126,6 +129,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return string(result), nil
 
 			case "reflect":
+				if runContext.Proactive {
+					return "主动回复轮次禁止触发记忆反思重构", nil
+				}
 				if runContext.Mock {
 					return "模拟会话模式下禁用记忆反思重构", nil
 				}

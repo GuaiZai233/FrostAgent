@@ -68,14 +68,45 @@ func truncateRunes(value string, limit int) string {
 // agent loop. Silent is true when the model successfully invokes the terminal
 // stay_silent tool or returns the standalone internal silence marker. Provider
 // failures never set it. Banned is true when the turn was terminated by an
-// autonomous ban action (ban_user tool).
+// autonomous ban action (ban_user tool). OutputBlocked is true when the final
+// answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
 	Content       string
 	MemoryWritten bool
 	Silent        bool
 	Banned        bool
+	OutputBlocked bool
 	Usage         core.Usage
 	Error         error
+}
+
+// IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
+// Proactive turns allow terminal silence, final text replies, and allowlisted read-only tools.
+// Mutating tools (ban_user, execute_command, send_message, stickers, actions mutations, etc.) are strictly disallowed.
+func IsProactiveAllowedTool(name string) bool {
+	switch name {
+	case StaySilentToolName, StaySlientAliasToolName:
+		return true
+	case "memory":
+		return true
+	case "actionscat_list_actions", "actionscat_get_run", "actionscat_get_build",
+		"actionscat_list_builds", "actionscat_list_schedules", "actionscat_list_matchers":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) isToolAllowedForProactive(name string) bool {
+	if IsProactiveAllowedTool(name) {
+		return true
+	}
+	if tool, exists := e.findToolExecutor(name); exists {
+		if pa, ok := tool.(interface{ IsProactiveAllowed() bool }); ok {
+			return pa.IsProactiveAllowed()
+		}
+	}
+	return false
 }
 
 // Engine 结构体，用于管理智能体的执行
@@ -547,6 +578,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
 		modelTools := e.EffectiveTools()
+		if hasRunCtx && runCtx.Proactive {
+			var proactiveTools []core.Tool
+			for _, t := range modelTools {
+				if e.isToolAllowedForProactive(t.Name) {
+					proactiveTools = append(proactiveTools, t)
+				}
+			}
+			modelTools = proactiveTools
+		}
 
 		coreMsgs := convertToCoreMessages(messages)
 		if hasRunCtx && runCtx.SecurityNotice != "" {
@@ -783,16 +823,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
+			outputBlocked := false
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
+					outputBlocked = true
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					contentStr = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
 				} else {
 					contentStr = "FrostAgent安全控制：模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
+					outputBlocked = true
 				}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
@@ -807,6 +850,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
+				OutputBlocked: outputBlocked,
 				Usage:         totalUsage,
 			}
 		}
@@ -826,6 +870,22 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		for _, tc := range responseMsg.ToolCalls {
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+			}
+			if hasRunCtx && runCtx.Proactive && !e.isToolAllowedForProactive(tc.Function.Name) {
+				e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复轮次禁止调用副作用工具 [%s]", tc.Function.Name), "主动回复禁止副作用工具")
+				if tc.Function.Name == security.BanUserToolName {
+					return AgentRunResult{
+						MemoryWritten: memoryWritten,
+						Silent:        true,
+						Usage:         totalUsage,
+					}
+				}
+				messages = append(messages, ChatMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf("FrostAgent错误：主动回复轮次禁止调用工具 %s", tc.Function.Name),
+					ToolCallID: tc.ID,
+				})
+				continue
 			}
 			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
@@ -864,6 +924,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
+						if hasRunCtx && runCtx.Proactive {
+							return AgentRunResult{
+								MemoryWritten: memoryWritten,
+								Silent:        true,
+								Usage:         totalUsage,
+							}
+						}
 						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
 						return AgentRunResult{
 							Content:       security.RejectGatewayMsg,

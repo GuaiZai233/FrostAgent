@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/security"
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 )
@@ -193,5 +194,152 @@ func TestSecurityGateModesClassifierBypass(t *testing.T) {
 				t.Fatalf("expected 0 classifier calls in %s mode, got %d", mode, classifierCalls.Load())
 			}
 		})
+	}
+}
+
+type mockSilentTool struct{}
+
+func (m *mockSilentTool) Name() string               { return StaySilentToolName }
+func (m *mockSilentTool) Description() string        { return "silent" }
+func (m *mockSilentTool) Parameters() map[string]any { return map[string]any{} }
+func (m *mockSilentTool) Execute(args string) (string, error) {
+	return "ok", nil
+}
+
+func TestProactiveTurnDisallowsSideEffectingToolsAndBanUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctrl := security.NewController(tmpDir)
+	ctrl.SetMode(security.ControlModeAggressive)
+
+	banExecuted := atomic.Int32{}
+	siblingExecuted := atomic.Int32{}
+
+	banTool := &mockBanTool{executed: &banExecuted, ctrl: ctrl}
+	sibTool := &siblingTool{executed: &siblingExecuted}
+	silentTool := &mockSilentTool{}
+
+	var receivedTools []core.Tool
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			receivedTools = req.Tools
+			// Model attempts to call ban_user on proactive turn
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:       "call_ban",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: security.BanUserToolName, Arguments: `{"reason":"proactive ban attempt"}`},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 5,
+		ToolRegistry: map[string]ToolExecutor{
+			security.BanUserToolName: banTool,
+			"sibling_tool":           sibTool,
+			StaySilentToolName:       silentTool,
+		},
+		Security: ctrl,
+		Provider: provider,
+	}
+
+	runCtx := RunContext{
+		ActorPlatform: "qq",
+		ActorUserID:   "bystander-user-456",
+		InstanceID:    "inst-test",
+		SessionID:     "sess-test",
+		Proactive:     true,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "unaddressed group chat"}}, runCtx)
+
+	// 1. Proactive tools offered to LLM must NOT contain ban_user or sibling_tool
+	for _, tool := range receivedTools {
+		if tool.Name == security.BanUserToolName || tool.Name == "sibling_tool" {
+			t.Fatalf("proactive turn should not offer tool %s to model schema", tool.Name)
+		}
+	}
+
+	// 2. ban_user execution must be blocked server-side: executed == 0
+	if banExecuted.Load() != 0 {
+		t.Fatalf("expected ban_user not executed in proactive turn, got %d", banExecuted.Load())
+	}
+
+	// 3. Bystander must NOT be locked in AccessStore
+	p, _ := security.NewPrincipal("qq", "bystander-user-456")
+	if ctrl.IsLocked(p) {
+		t.Fatal("bystander must not be locked during proactive turn ban attempt")
+	}
+
+	// 4. Result must terminate silently without Banned flag
+	if !result.Silent {
+		t.Fatal("expected result.Silent to be true on proactive ban attempt")
+	}
+	if result.Banned {
+		t.Fatal("expected result.Banned to be false on proactive ban attempt")
+	}
+}
+
+func TestProactiveTurnOutputBlockedWatchdog(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctrl := security.NewController(tmpDir)
+	ctrl.SetMode(security.ControlModeAggressive)
+
+	ctrl.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if input.Stage == security.StageModelOutput {
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryViolenceTerrorism,
+					RiskLevel: security.RiskLevelCritical,
+					Reason:    "blocked output",
+				}, nil
+			}
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+		},
+	})
+
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "bad output text",
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 1,
+		Security:      ctrl,
+		Provider:      provider,
+	}
+
+	runCtx := RunContext{
+		ActorPlatform: "qq",
+		ActorUserID:   "user-1",
+		Proactive:     true,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hi"}}, runCtx)
+	if !result.OutputBlocked {
+		t.Fatal("expected OutputBlocked to be true when StageModelOutput is blocked by watchdog")
+	}
+
+	// Also verify classifier outage triggers OutputBlocked == true
+	ctrl.Watchdog.SetClassifier(&mockGateClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			return security.ClassificationResult{}, errors.New("classifier service down")
+		},
+	})
+	resultOutage := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hi"}}, runCtx)
+	if !resultOutage.OutputBlocked {
+		t.Fatal("expected OutputBlocked to be true when classifier has an outage at StageModelOutput")
 	}
 }

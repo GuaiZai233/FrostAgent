@@ -189,6 +189,15 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **执行异常静默丢弃与无打扰容灾 (Silent Error Handling & Zero Group Disturbance)**：
   - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机或工具执行异常，系统严格执行静默丢弃策略：仅在控制台/日志记录警告日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
   - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
+- **主动回复只读模式与副作用工具强禁闭机制 (Proactive Reply Read-Only Confinement & Side-Effect Prevention, Option A)**：
+  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、或变异类 ActionsCat/MCP 工具）；
+  - **P1: 三层纵深防御只读收敛**：
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用工具，向模型仅暴露安全只读与控制工具（`stay_silent`、`stay_slient`、`memory` 搜索/列表、`actionscat_*` 只读工具），从调用源头消除模型生成变异工具调用的可能；
+    - **服务端引擎运行时拦截 (Server-Side Runtime Interception & Silent Exit)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
+    - **工具实现层双重校验 (Tool-Level Defense-in-Depth)**：`ban_user` 工具在执行前提取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，坚决不持久化锁定；`memory` 工具在主动回复轮次严格禁止 `write` 写入与 `reflect` 反思重构，且 `search` 搜索时旁路 `RecordRecall`（不增加 `AccessCount`、不修改时间戳），杜绝长期记忆与画像污染；
+  - **P2: 模型输出看门狗阻断透传与静默丢弃 (Output Watchdog Gating & Silent Dropping, `OutputBlocked`)**：
+    - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
+    - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 执行完全静默丢弃（OneBot 不发送群消息；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或报错，同时在显式唤醒轮次中完整保留标准安全警示。
 - **Web 控制台可视化滑块、异步串行队列与最后意图优先同步**：
   - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
   - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；

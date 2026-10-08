@@ -10,6 +10,7 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1053,6 +1054,331 @@ func TestAstrBotProactiveBillingExemption(t *testing.T) {
 
 		if !strings.Contains(act.Content, "本次消耗") && !strings.Contains(act.Content, "雪花") {
 			t.Fatalf("显式唤醒回复必须附带计费回执，实际: %s", act.Content)
+		}
+	})
+}
+
+func TestAstrBotProactiveSecurityOptionA(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+
+	t.Run("unaddressed proactive turn attempting ban_user drops silently with suppressed noop and does not lock bystander", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{})
+
+		banTool := tools.NewBanUserTool(ctrl)
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_ban_1",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: security.BanUserToolName, Arguments: `{"reason":"proactive ban attempt"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry[security.BanUserToolName] = banTool
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_1",
+			Content:     "普通群聊未艾特",
+			Platform:    "astrbot",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_optA_1" {
+			t.Fatalf("期望 echo=reply_msg_optA_1, 实际=%s", act.Echo)
+		}
+
+		p, _ := security.NewPrincipal("astrbot", "20001")
+		if ctrl.IsLocked(p) {
+			t.Fatal("主动回复尝试 ban_user 不应封禁无辜旁观者")
+		}
+	})
+
+	t.Run("unaddressed proactive turn with OutputBlocked drops silently with suppressed noop", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageModelOutput {
+					return security.ClassificationResult{
+						Category:  security.RiskCategoryViolenceTerrorism,
+						RiskLevel: security.RiskLevelCritical,
+						Reason:    "blocked output in proactive turn",
+					}, nil
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			},
+		})
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "恶意内容输出",
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_2",
+			Content:     "普通群聊",
+			Platform:    "astrbot",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_optA_2" {
+			t.Fatalf("期望 echo=reply_msg_optA_2, 实际=%s", act.Echo)
+		}
+	})
+
+	t.Run("explicit wake turn with OutputBlocked transmits security notice", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageModelOutput {
+					return security.ClassificationResult{
+						Category:  security.RiskCategoryViolenceTerrorism,
+						RiskLevel: security.RiskLevelCritical,
+						Reason:    "blocked output in explicit wake",
+					}, nil
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			},
+		})
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "恶意内容输出",
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_3",
+			Content:     "帮我写点东西",
+			Platform:    "astrbot",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
+		}
+		if !strings.Contains(act.Content, "FrostAgent安全控制：模型输出已拦截。") {
+			t.Fatalf("显式唤醒拦截应发送安全提示，实际=%s", act.Content)
+		}
+	})
+
+	t.Run("explicit wake turn with ban_user locks user and transmits security notice", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{})
+
+		banTool := tools.NewBanUserTool(ctrl)
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_ban_2",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: security.BanUserToolName, Arguments: `{"reason":"explicit prompt injection"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry[security.BanUserToolName] = banTool
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_4",
+			Content:     "恶意提示词攻击",
+			Platform:    "astrbot",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+
+		p, _ := security.NewPrincipal("astrbot", "20001")
+		if !ctrl.IsLocked(p) {
+			t.Fatal("显式唤醒 ban_user 必须成功锁定用户")
+		}
+
+		if act.Action != "send_message" {
+			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
+		}
+		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+			t.Fatalf("显式唤醒 ban_user 应发送封禁提示，实际=%s", act.Content)
 		}
 	})
 }
