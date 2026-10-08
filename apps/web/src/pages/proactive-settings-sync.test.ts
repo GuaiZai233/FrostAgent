@@ -126,8 +126,7 @@ test('ProactiveSettingsSync calls onReloadNeeded on partial or total API failure
     },
   };
 
-  let sync!: ProactiveSettingsSync;
-  sync = new ProactiveSettingsSync(
+  const sync: ProactiveSettingsSync = new ProactiveSettingsSync(
     mockApi,
     { enabled: false, probability: 0.05 },
     {
