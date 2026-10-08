@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
@@ -10,9 +11,14 @@ import (
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -598,6 +604,455 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 		}
 		if act.Echo != "reply_msg_empty_401" {
 			t.Fatalf("期望 echo=reply_msg_empty_401, 实际=%s", act.Echo)
+		}
+	})
+}
+
+type mockAlcyoneState struct {
+	mu           sync.Mutex
+	reserveCount int
+	commitCount  int
+	releaseCount int
+	reserveHandler func(w http.ResponseWriter, r *http.Request)
+	commitHandler  func(w http.ResponseWriter, r *http.Request)
+	releaseHandler func(w http.ResponseWriter, r *http.Request)
+	balanceHandler func(w http.ResponseWriter, r *http.Request)
+}
+
+func mockAlcyoneBillingServer(t *testing.T) (*httptest.Server, *mockAlcyoneState) {
+	t.Helper()
+	state := &mockAlcyoneState{}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/v1/balance" {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.balanceHandler != nil {
+				state.balanceHandler(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": billing.BalanceResult{
+					Exists:       true,
+					Platform:     "astrbot",
+					ExternalID:   "20001",
+					BalanceMinor: 10000,
+				},
+			})
+			return
+		}
+
+		if r.URL.Path == "/v1/billing/llm/reservations" && r.Method == http.MethodPost {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.reserveHandler != nil {
+				state.reserveHandler(w, r)
+				return
+			}
+			var req billing.LLMReserveRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			state.reserveCount++
+			resID := fmt.Sprintf("res_%d", state.reserveCount)
+			result := billing.LLMReservationResult{
+				ReservationID: resID,
+				UserUID:       "user_mock_uid",
+				Decision:      billing.DecisionReserved,
+				Status:        billing.StatusReserved,
+				ReservedMinor: req.AmountMinor,
+				BalanceMinor:  10000,
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": result})
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/v1/billing/llm/reservations/") && strings.HasSuffix(r.URL.Path, "/commit") {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.commitHandler != nil {
+				state.commitHandler(w, r)
+				return
+			}
+			var req map[string]int64
+			json.NewDecoder(r.Body).Decode(&req)
+			actualMinor := req["actual_minor"]
+			state.commitCount++
+			result := billing.LLMReservationResult{
+				ReservationID: "res_mock",
+				Decision:      billing.DecisionReserved,
+				Status:        billing.StatusCommitted,
+				BalanceMinor:  10000 - actualMinor,
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": result})
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/v1/billing/llm/reservations/") && strings.HasSuffix(r.URL.Path, "/release") {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.releaseHandler != nil {
+				state.releaseHandler(w, r)
+				return
+			}
+			state.releaseCount++
+			result := billing.LLMReservationResult{
+				ReservationID: "res_mock",
+				Decision:      billing.DecisionReserved,
+				Status:        billing.StatusReleased,
+				BalanceMinor:  10000,
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": result})
+			return
+		}
+
+		http.NotFound(w, r)
+	})
+
+	srv := httptest.NewServer(handler)
+	return srv, state
+}
+
+func TestAstrBotProactiveBillingExemption(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+
+	t.Run("proactive reply calling stay_silent incurs zero reservation or commit charge", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{{
+							ID:   "call_silent_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      llm.StaySilentToolName,
+								Arguments: `{}`,
+							},
+						}},
+					},
+					Usage: &core.Usage{
+						PromptTokens:     100,
+						CompletionTokens: 20,
+						TotalTokens:      120,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		staySilent := tools.StaySilentTool()
+		engine.ToolRegistry[staySilent.Name()] = staySilent
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_bill_501",
+			Content:     "大家有人在吗？",
+			Platform:    "astrbot",
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取静默终态动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析终态动作失败: %v", err)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_bill_501" {
+			t.Fatalf("期望 echo=reply_msg_bill_501, 实际=%s", act.Echo)
+		}
+
+		if state.reserveCount != initialReserveCount {
+			t.Fatalf("主动回复 stay_silent 不应扣费预留: 期望 reserveCount=%d, 实际=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount != initialCommitCount {
+			t.Fatalf("主动回复 stay_silent 不应提交扣费: 期望 commitCount=%d, 实际=%d", initialCommitCount, state.commitCount)
+		}
+	})
+
+	t.Run("proactive reply answering freely without billing deduction or receipt", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "大家好，我是霜降！",
+					},
+					Usage: &core.Usage{
+						PromptTokens:     100,
+						CompletionTokens: 30,
+						TotalTokens:      130,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_bill_502",
+			Content:     "今天天气真好",
+			Platform:    "astrbot",
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取回复动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
+		}
+		if act.Content != "大家好，我是霜降！" {
+			t.Fatalf("期望回复内容='大家好，我是霜降！', 实际=%s", act.Content)
+		}
+
+		if state.reserveCount != initialReserveCount {
+			t.Fatalf("主动回复不应预扣费: 期望 reserveCount=%d, 实际=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount != initialCommitCount {
+			t.Fatalf("主动回复不应提交计费: 期望 commitCount=%d, 实际=%d", initialCommitCount, state.commitCount)
+		}
+
+		if strings.Contains(act.Content, "本次消耗") || strings.Contains(act.Content, "雪花") {
+			t.Fatalf("主动回复不应附带计费账单回执，实际: %s", act.Content)
+		}
+	})
+
+	t.Run("proactive reply with LLM error silently drops with suppressed noop", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			errs: []error{errors.New("mock upstream timeout 504")},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_bill_503",
+			Content:     "今天有什么新鲜事？",
+			Platform:    "astrbot",
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("期望收到异常时的终态 noop，但读取失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action == "send_message" {
+			t.Fatalf("主动回复发生异常时不应向群发送可见消息: %s", act.Content)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_bill_503" {
+			t.Fatalf("期望 echo=reply_msg_bill_503, 实际=%s", act.Echo)
+		}
+	})
+
+	t.Run("explicit wake preserves standard billing reservation and receipt", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "收到，马上为您处理！",
+					},
+					Usage: &core.Usage{
+						PromptTokens:     200,
+						CompletionTokens: 50,
+						TotalTokens:      250,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_bill_504",
+			Content:     "帮我计算一下",
+			Platform:    "astrbot",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取显式唤醒响应失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析显式唤醒响应失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
+		}
+
+		if state.reserveCount <= initialReserveCount {
+			t.Fatalf("显式唤醒必须走计费预留: initial=%d, actual=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount <= initialCommitCount {
+			t.Fatalf("显式唤醒必须走计费结算: initial=%d, actual=%d", initialCommitCount, state.commitCount)
+		}
+
+		if !strings.Contains(act.Content, "本次消耗") && !strings.Contains(act.Content, "雪花") {
+			t.Fatalf("显式唤醒回复必须附带计费回执，实际: %s", act.Content)
 		}
 	})
 }

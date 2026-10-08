@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
@@ -11,6 +12,7 @@ import (
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -460,6 +462,381 @@ func TestOneBotProactiveSecuritySilentDrop(t *testing.T) {
 		msgStr, _ := params["message"].(string)
 		if !strings.Contains(msgStr, "封禁") && !strings.Contains(msgStr, "security") {
 			t.Fatalf("期望收到封禁拒绝提示，实际=%s", msgStr)
+		}
+	})
+}
+
+func TestOneBotProactiveBillingExemption(t *testing.T) {
+	alcyoneSrv, state := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+
+	t.Run("proactive reply calling stay_silent incurs zero reservation or commit charge", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{{
+							ID:   "call_silent_1",
+							Type: "function",
+							Function: core.ToolCallFunction{
+								Name:      llm.StaySilentToolName,
+								Arguments: `{}`,
+							},
+						}},
+					},
+					Usage: &core.Usage{
+						PromptTokens:     100,
+						CompletionTokens: 20,
+						TotalTokens:      120,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		staySilent := tools.StaySilentTool()
+		engine.ToolRegistry[staySilent.Name()] = staySilent
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   501,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"有人在吗？"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		// 等待处理完毕，处理可能的 get_group_info 预热，但绝不能收到 send_group_msg
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			_, respBytes, readErr := conn.ReadMessage()
+			if readErr != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err == nil && act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				b, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("stay_silent 主动回复不应向群发送出站消息: %+v", act)
+			}
+		}
+
+		if state.reserveCount != initialReserveCount {
+			t.Fatalf("主动回复 stay_silent 不应扣费预留: 期望 reserveCount=%d, 实际=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount != initialCommitCount {
+			t.Fatalf("主动回复 stay_silent 不应提交扣费: 期望 commitCount=%d, 实际=%d", initialCommitCount, state.commitCount)
+		}
+	})
+
+	t.Run("proactive reply answering freely without billing deduction or receipt", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "大家好，我是霜降！",
+					},
+					Usage: &core.Usage{
+						PromptTokens:     100,
+						CompletionTokens: 30,
+						TotalTokens:      130,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   502,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"今天天气真好"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				b, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		if state.reserveCount != initialReserveCount {
+			t.Fatalf("主动回复不应预扣费: 期望 reserveCount=%d, 实际=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount != initialCommitCount {
+			t.Fatalf("主动回复不应提交计费: 期望 commitCount=%d, 实际=%d", initialCommitCount, state.commitCount)
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if strings.Contains(msgStr, "本次消耗") || strings.Contains(msgStr, "雪花") {
+			t.Fatalf("主动回复不应附带计费账单回执，实际: %s", msgStr)
+		}
+	})
+
+	t.Run("proactive reply with LLM error silently drops without sending error to group", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			errs: []error{errors.New("mock upstream timeout 504")},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   503,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"今天有什么新鲜事？"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			_, respBytes, readErr := conn.ReadMessage()
+			if readErr != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err == nil && act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				b, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复发生异常时应静默丢弃，绝不能向群发送错误消息: %+v", act)
+			}
+		}
+	})
+
+	t.Run("explicit wake preserves standard billing reservation and receipt", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "收到，马上为您处理！",
+					},
+					Usage: &core.Usage{
+						PromptTokens:     200,
+						CompletionTokens: 50,
+						TotalTokens:      250,
+					},
+				},
+			},
+		}
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+		engine.BillingClient = billingClient
+		engine.BillingConfig = billing.Config{
+			Enabled:          true,
+			BaseURL:          alcyoneSrv.URL,
+			Timeout:          2 * time.Second,
+			MaxOutputTokens:  2048,
+			SafetyMultiplier: 1.2,
+			ModelName:        "deepseek-chat",
+		}
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		initialReserveCount := state.reserveCount
+		initialCommitCount := state.commitCount
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   504,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 帮我计算一下"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				b, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		if state.reserveCount <= initialReserveCount {
+			t.Fatalf("显式唤醒必须走计费预留: initial=%d, actual=%d", initialReserveCount, state.reserveCount)
+		}
+		if state.commitCount <= initialCommitCount {
+			t.Fatalf("显式唤醒必须走计费结算: initial=%d, actual=%d", initialCommitCount, state.commitCount)
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "本次消耗") && !strings.Contains(msgStr, "雪花") {
+			t.Fatalf("显式唤醒回复必须附带计费回执，实际: %s", msgStr)
 		}
 	})
 }

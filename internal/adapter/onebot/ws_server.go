@@ -337,7 +337,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// Fast-fail once before downloading or processing either current or quoted images.
-	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 		bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 		bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
 		bCancel()
@@ -662,7 +662,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if engine != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
 				Platform:      "qq",
@@ -852,6 +852,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				billingState.LastBalanceMinor,
 				billingState.WelcomeGranted,
 			)
+		}
+
+		if wakeSignals.Proactive && runResult.Error != nil {
+			engine.TrimSession(session)
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常，静默丢弃: session=%s, err=%v", conn.historyKey(event), runResult.Error))
+			return
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It

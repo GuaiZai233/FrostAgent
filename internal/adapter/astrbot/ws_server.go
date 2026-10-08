@@ -698,7 +698,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		} else {
 			// 计费检查 (视觉处理前检查)
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
-			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
 				bCancel()
@@ -925,7 +925,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
@@ -1073,6 +1073,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				billingState.LastBalanceMinor,
 				billingState.WelcomeGranted,
 			)
+		}
+
+		if isProactiveReply(&event) && runResult.Error != nil {
+			engine.TrimSession(session)
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常，静默丢弃: session=%s, err=%v", conn.sessionKey(event), runResult.Error))
+			_ = sendTerminalNoopWithSuppress(event, conn)
+			return
 		}
 
 		if runResult.Silent {
