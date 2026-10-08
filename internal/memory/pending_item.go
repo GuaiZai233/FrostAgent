@@ -7,8 +7,12 @@ import "FrostAgent/internal/core"
 // 这个类型放在 memory 包（而不是 llm 包）以避免反向依赖：llm 通过此类型
 // 喂数据给 memory.Writer。
 type PendingExtractionItem struct {
-	Owner     string            // 主键字符串（userID 或 "group:<群号>"）
-	OwnerType OwnerType         // 区分人 / 群
-	Route     core.RouteContext // 自动提取模型所使用的群级路由
-	Message   core.ChatMessage  // 消息内容（user 或 assistant）
+	Owner       string            // 主键字符串（userID 或 "group:<群号>"）
+	OwnerType   OwnerType         // 区分人 / 群
+	ScopeType   ScopeType         // 作用域：private 或 group
+	GroupID     string            // 群号（ScopeType == ScopeGroup 时）
+	SpeakerID   string            // 发言者真实 QQ 号（受信任元数据）
+	SpeakerName string            // 发言者称呼或昵称
+	Route       core.RouteContext // 自动提取模型所使用的群级路由
+	Message     core.ChatMessage  // 消息内容（user 或 assistant）
 }

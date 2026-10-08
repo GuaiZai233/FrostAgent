@@ -15,6 +15,12 @@ service MemoryService {
   rpc ExportMemories(ExportMemoriesRequest) returns (ExportMemoriesResponse);
   rpc ImportMemories(ImportMemoriesRequest) returns (ImportMemoriesResponse);
   rpc TriggerReflection(TriggerReflectionRequest) returns (TriggerReflectionResponse);
+
+  // Group profile and member management
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse);
+  rpc GetGroupProfile(GetGroupProfileRequest) returns (GetGroupProfileResponse);
+  rpc UpdateGroupProfile(UpdateGroupProfileRequest) returns (UpdateGroupProfileResponse);
+  rpc UpdateMemberProfile(UpdateMemberProfileRequest) returns (UpdateMemberProfileResponse);
 }
 
 // MemoryEntry mirrors the internal memory model for the UI.
@@ -24,15 +30,19 @@ message MemoryEntry {
   string content = 3;
   repeated string tags = 4;
   string source = 5;
-  string visibility = 6;
+  string visibility = 6;      // deprecated
   string created_at = 7;
   string updated_at = 8;
   int32 access_count = 9;
+  string scope = 10;          // "private" or "group"
+  string group_id = 11;       // group id when scope == "group"
 }
 
 message ListMemoriesRequest {
-  string owner = 1;           // filter by owner (empty = all)
-  Pagination pagination = 2;
+  string scope = 1;           // "private" or "group" (empty = "private")
+  string group_id = 2;        // required when scope == "group"
+  string owner = 3;           // filter by owner (empty = all)
+  Pagination pagination = 4;
 }
 
 message ListMemoriesResponse {
@@ -41,8 +51,10 @@ message ListMemoriesResponse {
 }
 
 message SearchMemoriesRequest {
-  string query = 1;
-  Pagination pagination = 2;
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;        // required when scope == "group"
+  string query = 3;
+  Pagination pagination = 4;
 }
 
 message SearchMemoriesResponse {
@@ -51,10 +63,12 @@ message SearchMemoriesResponse {
 }
 
 message AddMemoryRequest {
-  string owner = 1;
-  string content = 2;
-  repeated string tags = 3;
-  string visibility = 4;      // "public" or "private" (default private)
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;        // required when scope == "group"
+  string owner = 3;
+  string content = 4;
+  repeated string tags = 5;
+  string visibility = 6;      // deprecated
 }
 
 message AddMemoryResponse {
@@ -63,10 +77,12 @@ message AddMemoryResponse {
 }
 
 message UpdateMemoryRequest {
-  string id = 1;
-  string content = 2;
-  repeated string tags = 3;
-  string visibility = 4;
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;        // required when scope == "group"
+  string id = 3;
+  string content = 4;
+  repeated string tags = 5;
+  string visibility = 6;      // deprecated
 }
 
 message UpdateMemoryResponse {
@@ -75,7 +91,9 @@ message UpdateMemoryResponse {
 }
 
 message DeleteMemoryRequest {
-  string id = 1;
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;        // required when scope == "group"
+  string id = 3;
 }
 
 message DeleteMemoryResponse {
@@ -83,16 +101,25 @@ message DeleteMemoryResponse {
   string error = 2;
 }
 
-message GetMemoryStatsRequest {}
+message GetMemoryStatsRequest {
+  string scope = 1;           // "private", "group", or empty
+  string group_id = 2;        // group id when scope == "group"
+}
 
 message GetMemoryStatsResponse {
   int32 total = 1;
-  int32 public_count = 2;
-  int32 private_count = 3;
+  int32 public_count = 2;     // deprecated, always 0
+  int32 private_count = 3;    // deprecated, always 0
   map<string, int32> by_owner = 4;
+  int32 private_chat_count = 5;
+  int32 group_chat_count = 6;
+  int32 group_count = 7;
 }
 
-message ExportMemoriesRequest {}
+message ExportMemoriesRequest {
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;
+}
 
 message ExportMemoriesResponse {
   string json_content = 1;    // full export JSON string
@@ -100,8 +127,10 @@ message ExportMemoriesResponse {
 }
 
 message ImportMemoriesRequest {
-  string json_content = 1;    // export JSON string to import
-  bool overwrite = 2;         // overwrite existing IDs
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;
+  string json_content = 3;    // export JSON string to import
+  bool overwrite = 4;         // overwrite existing IDs
 }
 
 message ImportMemoriesResponse {
@@ -111,7 +140,9 @@ message ImportMemoriesResponse {
 }
 
 message TriggerReflectionRequest {
-  string owner = 1;           // empty = reflect all owners
+  string scope = 1;           // "private" or "group"
+  string group_id = 2;
+  string owner = 3;           // empty = reflect all owners
 }
 
 message TriggerReflectionResponse {
@@ -122,4 +153,71 @@ message TriggerReflectionResponse {
   string last_completed_at = 5;
   string last_error = 6;
   string error = 7;
+}
+
+// Group and Member Profile models
+message GroupSummary {
+  string group_id = 1;
+  string group_name = 2;
+  int32 member_count = 3;
+  int32 memory_count = 4;
+  string updated_at = 5;
+}
+
+message ListGroupsRequest {}
+
+message ListGroupsResponse {
+  repeated GroupSummary groups = 1;
+}
+
+message MemberProfile {
+  string user_id = 1;
+  string nickname = 2;
+  string card = 3;
+  string role = 4;
+  string preferred_name = 5;
+  repeated string aliases = 6;
+  string calling_name = 7;    // resolved calling name
+  string source = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string last_spoke_at = 11;
+}
+
+message GroupProfile {
+  string group_id = 1;
+  string group_name = 2;
+  repeated MemberProfile members = 3;
+  string updated_at = 4;
+}
+
+message GetGroupProfileRequest {
+  string group_id = 1;
+}
+
+message GetGroupProfileResponse {
+  GroupProfile profile = 1;
+  string error = 2;
+}
+
+message UpdateGroupProfileRequest {
+  string group_id = 1;
+  string group_name = 2;
+}
+
+message UpdateGroupProfileResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateMemberProfileRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string preferred_name = 3;
+  repeated string aliases = 4;
+}
+
+message UpdateMemberProfileResponse {
+  bool success = 1;
+  string error = 2;
 }

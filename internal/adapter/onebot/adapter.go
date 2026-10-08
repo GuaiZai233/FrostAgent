@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
@@ -326,6 +327,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.MetaEventType == "heartbeat" {
 				continue
 			}
+
+			if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
+				groupIDStr := strconv.FormatInt(event.GroupID, 10)
+				userIDStr := strconv.FormatInt(event.UserID, 10)
+				if groupIDStr != "" && userIDStr != "" {
+					if gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr); err == nil {
+						switch event.NoticeType {
+						case "group_admin":
+							if event.SubType == "set" {
+								_ = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleAdmin)
+							} else if event.SubType == "unset" {
+								_ = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleMember)
+							}
+						}
+					}
+				}
+			}
+
 			var warningNotice string
 			var routing EventRouting
 			if event.PostType == "message" &&
@@ -421,6 +440,23 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
+				if a.engine != nil && a.engine.GroupManager != nil {
+					groupIDStr := strconv.FormatInt(event.GroupID, 10)
+					userIDStr := strconv.FormatInt(event.UserID, 10)
+					if groupIDStr != "" && userIDStr != "" {
+						if gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr); err == nil {
+							nickname := ""
+							card := ""
+							role := memory.GroupRoleUnknown
+							if event.Sender != nil {
+								nickname = event.Sender.Nickname
+								card = event.Sender.Card
+								role = memory.NormalizeGroupRole(event.Sender.Role)
+							}
+							_, _ = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
+						}
+					}
+				}
 				if isExplicitlyWoken(event, a.engine, routing) {
 					guard := stageGroupCompactMessage(event, a.engine)
 					if turn != nil {

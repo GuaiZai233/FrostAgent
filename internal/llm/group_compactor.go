@@ -4,8 +4,11 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,6 +104,15 @@ type GroupCompactor struct {
 	pendingPersist map[string]*pendingPersistRecord
 	persistActive  map[string]bool
 	persistWake    map[string]chan struct{}
+
+	groupManager *memory.GroupManager
+}
+
+// SetGroupManager configures the group manager for compact distillation.
+func (c *GroupCompactor) SetGroupManager(gm *memory.GroupManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.groupManager = gm
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -493,11 +505,157 @@ func (c *GroupCompactor) compact(
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
+	c.distillGroupMemories(owner, routeScope, snapshot)
 	for _, cb := range onComplete {
 		if cb != nil {
 			cb(nil)
 		}
 	}
+}
+
+type distillExtractedEntry struct {
+	Content   string   `json:"content"`
+	Tags      []string `json:"tags"`
+	SpeakerID string   `json:"speaker_id"`
+	IsSelf    bool     `json:"is_self"`
+}
+
+func (c *GroupCompactor) distillGroupMemories(
+	owner string,
+	routeScope modelrouter.Scope,
+	snapshot GroupCompactSnapshot,
+) {
+	if c == nil || c.groupManager == nil || c.provider == nil || len(snapshot.Messages) == 0 {
+		return
+	}
+
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if groupID == "" {
+		return
+	}
+
+	instanceID := ""
+	if c.Scope != nil {
+		instanceID = c.Scope.InstanceID()
+	}
+
+	groupStore, err := c.groupManager.GetGroupStore(groupID)
+	if err != nil {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼获取存储失败: %v", instanceID, groupID, err))
+		return
+	}
+
+	existing, _ := groupStore.ListAll()
+	var existingMemoriesStr strings.Builder
+	if len(existing) == 0 {
+		existingMemoriesStr.WriteString("已有群记忆：\n（暂无记录）")
+	} else {
+		existingMemoriesStr.WriteString("已有群记忆：\n")
+		limit := 50
+		if len(existing) < limit {
+			limit = len(existing)
+		}
+		for i := 0; i < limit; i++ {
+			fmt.Fprintf(&existingMemoriesStr, "- %s\n", existing[i].Content)
+		}
+	}
+
+	trustedSenderIDs := make(map[string]bool)
+	var conv strings.Builder
+	for _, m := range snapshot.Messages {
+		if m.SenderID != "" {
+			trustedSenderIDs[m.SenderID] = true
+		}
+		fmt.Fprintf(&conv, "[sender_id: %s, sender: %s, role: %s]: %s\n", m.SenderID, m.Sender, m.Role, m.Content)
+	}
+
+	prompt := strings.Replace(memory.DistillGroupCompactPrompt, "{current_time}", memory.CurrentTimeLabel(time.Now()), 1)
+	prompt = strings.Replace(prompt, "{existing_memories}", existingMemoriesStr.String(), 1)
+	prompt = strings.Replace(prompt, "{conversation}", conv.String(), 1)
+
+	req := core.ChatRequest{
+		Model: c.model,
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: prompt},
+		},
+		MaxTokens:   1024,
+		Temperature: 0.2,
+		Route: core.RouteContext{
+			Platform: routeScope.Platform,
+			GroupID:  routeScope.GroupID,
+		},
+	}
+
+	resp, err := c.provider.Chat(c.Context(), req)
+	if err != nil {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼LLM调用失败: %v", instanceID, groupID, err))
+		return
+	}
+
+	raw, ok := resp.Message.Content.(string)
+	if !ok {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼返回格式异常", instanceID, groupID))
+		return
+	}
+
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	if raw == "" || raw == "[]" {
+		return
+	}
+
+	var entries []distillExtractedEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼JSON解析失败: %v", instanceID, groupID, err))
+		return
+	}
+
+	now := time.Now()
+	var toSave []memory.MemoryEntry
+	for _, e := range entries {
+		if strings.TrimSpace(e.Content) == "" {
+			continue
+		}
+		ownerKey := memory.GroupOwnerExplicit
+		if e.IsSelf && e.SpeakerID != "" && trustedSenderIDs[e.SpeakerID] {
+			ownerKey = e.SpeakerID
+		}
+
+		b := make([]byte, 8)
+		rand.Read(b)
+		id := "mem_" + hex.EncodeToString(b)
+
+		toSave = append(toSave, memory.MemoryEntry{
+			ID:        id,
+			Owner:     ownerKey,
+			OwnerType: memory.OwnerGroup,
+			ScopeType: memory.ScopeGroup,
+			GroupID:   groupID,
+			Content:   e.Content,
+			Tags:      e.Tags,
+			Source:    memory.SourceCompact,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	if len(toSave) == 0 {
+		return
+	}
+
+	if err := groupStore.SaveGroupEntriesConditionallyContext(c.Context(), toSave, nil); err != nil {
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼保存失败: %v", instanceID, groupID, err))
+		return
+	}
+
+	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 提炼了 %d 条新记忆 (群: %s)", len(toSave), groupID))
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {

@@ -38,6 +38,13 @@ import {
   type ExportMemoriesResponse,
   type ImportMemoriesResponse,
   type TriggerReflectionResponse,
+  type ListGroupsResponse,
+  type GetGroupProfileResponse,
+  type UpdateGroupProfileResponse,
+  type UpdateMemberProfileResponse,
+  type GroupSummary,
+  type GroupProfile,
+  type MemberProfile,
   type ModelRouterConfiguration,
   type GetStateResponse,
   type SaveDraftResponse,
@@ -64,7 +71,7 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
-export type { MCPServerInfo, MCPToolInfo };
+export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
 
 const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
 
@@ -754,29 +761,37 @@ export function createInstanceAPI() {
       pageSize: number,
       pageToken = '',
       owner = '',
+      scope = '',
+      groupId = '',
     ): Promise<ListMemoriesResponse> {
       return memoryClient.listMemories({
         pagination: { pageSize, pageToken },
         owner,
+        scope,
+        groupId,
       });
     },
 
-    deleteMemory(id: string): Promise<DeleteMemoryResponse> {
-      return memoryClient.deleteMemory({ id });
+    deleteMemory(id: string, scope = '', groupId = ''): Promise<DeleteMemoryResponse> {
+      return memoryClient.deleteMemory({ id, scope, groupId });
     },
 
-    getMemoryStats(): Promise<GetMemoryStatsResponse> {
-      return memoryClient.getMemoryStats({});
+    getMemoryStats(scope = '', groupId = ''): Promise<GetMemoryStatsResponse> {
+      return memoryClient.getMemoryStats({ scope, groupId });
     },
 
     searchMemories(
       query: string,
       pageSize: number,
       pageToken = '',
+      scope = '',
+      groupId = '',
     ): Promise<SearchMemoriesResponse> {
       return memoryClient.searchMemories({
         query,
         pagination: { pageSize, pageToken },
+        scope,
+        groupId,
       });
     },
 
@@ -784,38 +799,64 @@ export function createInstanceAPI() {
       owner: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<AddMemoryResponse> {
-      return memoryClient.addMemory({ owner, content, tags, visibility });
+      return memoryClient.addMemory({ owner, content, tags, scope, groupId });
     },
 
     updateMemory(
       id: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<UpdateMemoryResponse> {
       return memoryClient.updateMemory({
         id,
         content,
         tags,
-        visibility,
+        scope,
+        groupId,
       });
     },
 
-    exportMemories(): Promise<ExportMemoriesResponse> {
-      return memoryClient.exportMemories({});
+    exportMemories(scope = '', groupId = ''): Promise<ExportMemoriesResponse> {
+      return memoryClient.exportMemories({ scope, groupId });
     },
 
     importMemories(
       jsonContent: string,
       overwrite: boolean,
+      scope = '',
+      groupId = '',
     ): Promise<ImportMemoriesResponse> {
-      return memoryClient.importMemories({ jsonContent, overwrite });
+      return memoryClient.importMemories({ jsonContent, overwrite, scope, groupId });
     },
 
-    triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
-      return memoryClient.triggerReflection({ owner });
+    triggerMemoryReflection(owner = '', scope = '', groupId = ''): Promise<TriggerReflectionResponse> {
+      return memoryClient.triggerReflection({ owner, scope, groupId });
+    },
+
+    listGroups(): Promise<ListGroupsResponse> {
+      return memoryClient.listGroups({});
+    },
+
+    getGroupProfile(groupId: string): Promise<GetGroupProfileResponse> {
+      return memoryClient.getGroupProfile({ groupId });
+    },
+
+    updateGroupProfile(groupId: string, groupName: string): Promise<UpdateGroupProfileResponse> {
+      return memoryClient.updateGroupProfile({ groupId, groupName });
+    },
+
+    updateMemberProfile(
+      groupId: string,
+      userId: string,
+      preferredName: string,
+      aliases: string[],
+    ): Promise<UpdateMemberProfileResponse> {
+      return memoryClient.updateMemberProfile({ groupId, userId, preferredName, aliases });
     },
 
     // Dialogue Examples

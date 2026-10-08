@@ -64,12 +64,14 @@ func truncateRunes(value string, limit int) string {
 // failures never set it. Banned is true when the turn was terminated by an
 // autonomous ban action (ban_user tool).
 type AgentRunResult struct {
-	Content       string
-	MemoryWritten bool
-	Silent        bool
-	Banned        bool
-	Usage         core.Usage
-	Error         error
+	Content          string
+	MemoryWritten    bool
+	Silent           bool
+	StaySilentCalled bool
+	SilenceReason    string // "stay_silent", "security_block", "route_disabled", "canceled", "epoch_changed", "provider_fallback"
+	Banned           bool
+	Usage            core.Usage
+	Error            error
 }
 
 // Engine 结构体，用于管理智能体的执行
@@ -99,6 +101,7 @@ type Engine struct {
 	MemoryGateway     *memory.Gateway
 	MemoryCatalog     *memory.CatalogStore
 	MemoryReflections *memory.ReflectionManager
+	GroupManager      *memory.GroupManager
 	GroupCompactor    *GroupCompactor
 	GroupSummaryStore *groupsummary.Store
 
@@ -195,7 +198,7 @@ func (e *Engine) RunMessagesWithContext(
 	runContext RunContext,
 ) AgentRunResult {
 	if err := e.securityAccess(runContext); err != nil {
-		return AgentRunResult{Silent: true, Error: err}
+		return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err}
 	}
 	owner := runContext.Owner
 	if owner != "" && e.MemoryWriter != nil {
@@ -229,28 +232,71 @@ func (e *Engine) RunMessagesWithContext(
 			systemPrompt += "\n\n" + e.PersonaDialogue()
 		}
 
-		if owner != "" && e.MemoryCatalog != nil {
-			catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
-			if err != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
-			} else if catalogContext != "" {
-				systemPrompt += "\n\n" + catalogContext
+		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
+		if isGroupChat {
+			groupID := runContext.RouteScope.GroupID
+			if groupID == "" && strings.HasPrefix(owner, "group:") {
+				groupID = strings.TrimPrefix(owner, "group:")
 			}
-		}
+			senderID := runContext.ActorUserID
 
-		// 召回 → 网关过滤 → 注入
-		if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
-			lastUserMsg := extractLastUserMessage(messages)
-			raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
-			if err == nil {
-				filtered := e.MemoryGateway.Filter(raw, owner)
-				filtered = e.MemoryReader.Limit(filtered)
-				if len(filtered) > 0 {
-					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
-					systemPrompt += "\n\n" + memoryContext
-					if !runContext.Mock {
-						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+			if e.GroupManager != nil && groupID != "" {
+				groupStore, gErr := e.GroupManager.GetGroupStore(groupID)
+				if gErr == nil && groupStore != nil {
+					profile, pErr := groupStore.GetProfile()
+					var senderProfile *memory.MemberProfile
+					if pErr == nil && profile != nil {
+						senderProfile = profile.GetMember(senderID)
+						if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
+							systemPrompt += "\n\n" + memberPrompt
+						}
+					}
+
+					if e.MemoryGateway != nil {
+						lastUserMsg := extractLastUserMessage(messages)
+						raw, sErr := groupStore.Search(lastUserMsg, 20)
+						if sErr == nil && len(raw) > 0 {
+							filtered := e.MemoryGateway.FilterGroup(raw)
+							if len(filtered) > 20 {
+								filtered = filtered[:20]
+							}
+							if len(filtered) > 0 {
+								groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
+								systemPrompt += "\n\n" + groupMemContext
+								if !runContext.Mock {
+									if err := groupStore.RecordRecall(filtered); err != nil {
+										e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录群记忆召回次数失败: %v", err))
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			if owner != "" && e.MemoryCatalog != nil {
+				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
+				if err != nil {
+					e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
+				} else if catalogContext != "" {
+					systemPrompt += "\n\n" + catalogContext
+				}
+			}
+
+			// 召回 → 网关过滤 → 注入
+			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+				lastUserMsg := extractLastUserMessage(messages)
+				raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
+				if err == nil {
+					filtered := e.MemoryGateway.FilterPrivate(raw, owner)
+					filtered = e.MemoryReader.Limit(filtered)
+					if len(filtered) > 0 {
+						memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
+						systemPrompt += "\n\n" + memoryContext
+						if !runContext.Mock {
+							if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+							}
 						}
 					}
 				}
@@ -333,41 +379,76 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 		return
 	}
 
-	type ownerBatch struct {
-		owner     string
-		ownerType memory.OwnerType
-		route     core.RouteContext
-		messages  []core.ChatMessage
+	type itemBatch struct {
+		isGroup     bool
+		groupID     string
+		speakerID   string
+		speakerName string
+		owner       string
+		ownerType   memory.OwnerType
+		route       core.RouteContext
+		messages    []core.ChatMessage
 	}
-	groups := make(map[string]*ownerBatch)
+	groups := make(map[string]*itemBatch)
 	order := make([]string, 0)
 	for _, item := range batch.Items {
-		if item.Owner == "" {
-			continue
-		}
-		key := string(item.OwnerType) + "\x00" + item.Owner + "\x00" + item.Route.Platform + "\x00" + item.Route.GroupID
-		group := groups[key]
-		if group == nil {
-			group = &ownerBatch{
-				owner:     item.Owner,
-				ownerType: memory.NormalizeOwnerType(item.OwnerType),
-				route:     item.Route,
+		if item.ScopeType == memory.ScopeGroup || item.GroupID != "" {
+			groupID := item.GroupID
+			if groupID == "" && strings.HasPrefix(item.Owner, "group:") {
+				groupID = strings.TrimPrefix(item.Owner, "group:")
 			}
-			groups[key] = group
-			order = append(order, key)
+			key := "group\x00" + groupID + "\x00" + item.SpeakerID + "\x00" + item.Route.Platform
+			group := groups[key]
+			if group == nil {
+				group = &itemBatch{
+					isGroup:     true,
+					groupID:     groupID,
+					speakerID:   item.SpeakerID,
+					speakerName: item.SpeakerName,
+					route:       item.Route,
+				}
+				groups[key] = group
+				order = append(order, key)
+			}
+			group.messages = append(group.messages, item.Message)
+		} else {
+			if item.Owner == "" {
+				continue
+			}
+			key := "private\x00" + string(item.OwnerType) + "\x00" + item.Owner + "\x00" + item.Route.Platform + "\x00" + item.Route.GroupID
+			group := groups[key]
+			if group == nil {
+				group = &itemBatch{
+					isGroup:   false,
+					owner:     item.Owner,
+					ownerType: memory.NormalizeOwnerType(item.OwnerType),
+					route:     item.Route,
+				}
+				groups[key] = group
+				order = append(order, key)
+			}
+			group.messages = append(group.messages, item.Message)
 		}
-		group.messages = append(group.messages, item.Message)
 	}
 	for _, key := range order {
 		if !validator() {
 			return
 		}
 		group := groups[key]
-		if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
-			if errors.Is(err, context.Canceled) || !validator() {
-				return
+		if group.isGroup {
+			if err := e.MemoryWriter.ExtractGroupTurnWithRouteContext(ctx, group.groupID, group.speakerID, group.speakerName, group.route, group.messages, validator); err != nil {
+				if errors.Is(err, context.Canceled) || !validator() {
+					return
+				}
+				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊批量提取记忆失败 (群: %s): %v", group.groupID, err))
 			}
-			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
+		} else {
+			if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
+				if errors.Is(err, context.Canceled) || !validator() {
+					return
+				}
+				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
+			}
 		}
 	}
 }
@@ -507,7 +588,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, runCtx.RouteScope)
 		if err != nil {
 			if errors.Is(err, modelrouter.ErrDisabled) {
-				return AgentRunResult{Silent: true}
+				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
 				Content: fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
@@ -521,16 +602,16 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	maxIterations := e.EffectiveMaxIterations()
 	for i := range maxIterations {
 		if err := e.securityAccess(runCtx); err != nil {
-			return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+			return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
 		}
 		if err := ctx.Err(); err != nil {
-			return AgentRunResult{Silent: true, Error: err}
+			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err}
 		}
 		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
 				if sess, isSess := sessCore.(*SessionContext); isSess {
 					if sess.Epoch() != runCtx.Epoch {
-						return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated")}
+						return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated")}
 					}
 				}
 			}
@@ -792,9 +873,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if isStandaloneAssistantSilentMarker(contentStr) {
 				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
 				return AgentRunResult{
-					MemoryWritten: memoryWritten,
-					Silent:        true,
-					Usage:         totalUsage,
+					MemoryWritten:    memoryWritten,
+					Silent:           true,
+					StaySilentCalled: false,
+					SilenceReason:    "provider_fallback",
+					Usage:            totalUsage,
 				}
 			}
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
@@ -819,13 +902,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		for _, tc := range responseMsg.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
 			}
 			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
 					if sess, isSess := sessCore.(*SessionContext); isSess {
 						if sess.Epoch() != runCtx.Epoch {
-							return AgentRunResult{Silent: true, Error: errors.New("session epoch invalidated"), Usage: totalUsage}
+							return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated"), Usage: totalUsage}
 						}
 					}
 				}
@@ -873,9 +956,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					if tc.Function.Name == StaySilentToolName {
 						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
 						return AgentRunResult{
-							MemoryWritten: memoryWritten,
-							Silent:        true,
-							Usage:         totalUsage,
+							MemoryWritten:    memoryWritten,
+							Silent:           true,
+							StaySilentCalled: true,
+							SilenceReason:    "stay_silent",
+							Usage:            totalUsage,
 						}
 					}
 					if isMemoryWriteAction(tc, res) {

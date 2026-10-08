@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
@@ -398,6 +399,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" && !c.mock {
+				if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
+					if gStore, err := a.engine.GroupManager.GetGroupStore(event.GroupID); err == nil {
+						role := memory.GroupRoleUnknown
+						if r, ok := event.Metadata["role"].(string); ok {
+							role = memory.NormalizeGroupRole(r)
+						}
+						_, _ = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+						if event.GroupName != "" {
+							_ = gStore.UpdateGroupName(event.GroupName)
+						}
+					}
+				}
 				if isExplicitlyWoken(event, scope) {
 					guard := stageGroupCompactMessage(event, a.engine)
 					if turn != nil {

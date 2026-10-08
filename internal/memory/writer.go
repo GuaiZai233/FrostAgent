@@ -18,7 +18,8 @@ import (
 // Writer handles memory writing.
 type Writer struct {
 	*runtimescope.Scope
-	store *Store
+	store        *Store
+	groupManager *GroupManager
 	// LLM fields (set via SetLLM)
 	provider core.LLMProvider
 	model    string
@@ -27,6 +28,11 @@ type Writer struct {
 // NewWriter creates a new memory writer.
 func NewWriter(store *Store) *Writer {
 	return &Writer{store: store}
+}
+
+// SetGroupManager configures the group manager for group chat memory extraction.
+func (w *Writer) SetGroupManager(gm *GroupManager) {
+	w.groupManager = gm
 }
 
 // SetLLM configures the LLM provider for automatic memory extraction.
@@ -293,9 +299,193 @@ func (w *Writer) parseAndSave(
 	return nil
 }
 
-// generateID creates a random hex ID prefixed with "mem_".
-func generateID() string {
+type groupExtractedEntry struct {
+	Content string   `json:"content"`
+	Tags    []string `json:"tags"`
+	IsSelf  bool     `json:"is_self"`
+}
+
+// ExtractGroupTurnWithRouteContext extracts group memories from a turn with context and validator.
+func (w *Writer) ExtractGroupTurnWithRouteContext(
+	ctx context.Context,
+	groupID string,
+	speakerID string,
+	speakerName string,
+	route core.RouteContext,
+	messages []core.ChatMessage,
+	validator func() bool,
+) error {
+	if ctx == nil {
+		ctx = w.Context()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+	if validator != nil && !validator() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+	if w.provider == nil || w.model == "" || w.groupManager == nil || groupID == "" {
+		return nil
+	}
+
+	// Format recent messages for the prompt
+	var conversation strings.Builder
+	for _, msg := range messages {
+		if msg.Role == core.RoleSystem {
+			continue
+		}
+		content := fmt.Sprintf("%v", msg.Content)
+		fmt.Fprintf(&conversation, "[%s]: %s\n", msg.Role, content)
+	}
+
+	prompt := strings.Replace(extractGroupPrompt, "{conversation}", conversation.String(), 1)
+	prompt = strings.Replace(prompt, "{current_time}", CurrentTimeLabel(time.Now()), 1)
+	if speakerName == "" {
+		speakerName = "群友"
+	}
+	prompt = strings.Replace(prompt, "{speaker_name}", speakerName, 1)
+	prompt = strings.Replace(prompt, "{speaker_id}", speakerID, 1)
+
+	req := core.ChatRequest{
+		Model: w.model,
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: prompt},
+		},
+		MaxTokens:   1024,
+		Temperature: 0.3,
+		Route:       route,
+	}
+
+	resp, err := w.provider.Chat(ctx, req)
+	if err != nil {
+		if errors.Is(err, modelrouter.ErrDisabled) {
+			return nil
+		}
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊记忆提取LLM调用失败 (群 %s): %v", groupID, err))
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+	if validator != nil && !validator() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+
+	raw, ok := resp.Message.Content.(string)
+	if !ok {
+		return fmt.Errorf("unexpected response type: %T", resp.Message.Content)
+	}
+
+	return w.parseAndSaveGroup(ctx, groupID, speakerID, raw, validator)
+}
+
+func (w *Writer) parseAndSaveGroup(
+	ctx context.Context,
+	groupID string,
+	speakerID string,
+	raw string,
+	validator func() bool,
+) error {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+
+	var entries []groupExtractedEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊记忆提取JSON解析失败: %v, raw: %s", err, raw))
+		return err
+	}
+
+	if w == nil || w.groupManager == nil {
+		return nil
+	}
+
+	groupStore, err := w.groupManager.GetGroupStore(groupID)
+	if err != nil {
+		return err
+	}
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil && !barrier.IsValid() {
+		return errors.New("extraction cancelled or invalidated")
+	}
+
+	now := time.Now()
+	var toSave []MemoryEntry
+	for _, e := range entries {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if barrier != nil && !barrier.IsValid() {
+			return errors.New("extraction cancelled or invalidated")
+		}
+		if validator != nil && !validator() {
+			return errors.New("extraction cancelled or invalidated")
+		}
+		if strings.TrimSpace(e.Content) == "" {
+			continue
+		}
+
+		owner := GroupOwnerExplicit
+		if e.IsSelf && speakerID != "" {
+			owner = speakerID
+		}
+
+		entry := MemoryEntry{
+			ID:        generateID(),
+			Owner:     owner,
+			OwnerType: OwnerGroup,
+			ScopeType: ScopeGroup,
+			GroupID:   groupID,
+			Content:   e.Content,
+			Tags:      e.Tags,
+			Source:    SourceExtract,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		toSave = append(toSave, entry)
+	}
+
+	if len(toSave) == 0 {
+		return nil
+	}
+
+	if err := groupStore.SaveGroupEntriesConditionallyContext(ctx, toSave, validator); err != nil {
+		if errors.Is(err, ErrConditionFailed) || (ctx != nil && ctx.Err() != nil) {
+			return errors.New("extraction cancelled or invalidated")
+		}
+		w.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊记忆保存失败 (群 %s): %v", groupID, err))
+		return err
+	}
+
+	w.Log().Info(logs.SYSTEM, fmt.Sprintf("从群聊对话中提取了 %d 条记忆 (群: %s)", len(toSave), groupID))
+	return nil
+}
+
+// GenerateID creates a random hex ID prefixed with "mem_".
+func GenerateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return "mem_" + hex.EncodeToString(b)
+}
+
+func generateID() string {
+	return GenerateID()
 }

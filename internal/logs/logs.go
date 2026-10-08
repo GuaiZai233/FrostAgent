@@ -118,7 +118,11 @@ func (s *Store) evictOverBudgetLocked() {
 }
 
 func (s *Store) log(level Level, category Category, content string, traceID string, direction string) {
-	s.logWithImages(level, category, content, traceID, direction, nil, "...")
+	consoleContent := "..."
+	if level == WARN || level == ERROR {
+		consoleContent = content
+	}
+	s.logWithImages(level, category, content, traceID, direction, nil, consoleContent)
 }
 
 func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string) {
@@ -355,7 +359,11 @@ func (s *Store) broadcast(entry LogEntry) {
 }
 
 func Console(e LogEntry) string {
-	return formatConsoleLine(e.Timestamp, e.InstanceID, e.InstanceName, e.Level, e.Category, "...")
+	body := "..."
+	if e.Level == WARN || e.Level == ERROR {
+		body = e.Content
+	}
+	return formatConsoleLine(e.Timestamp, e.InstanceID, e.InstanceName, e.Level, e.Category, body)
 }
 
 func formatConsoleLine(timestamp time.Time, instanceID, instanceName string, level Level, category Category, body string) string {
@@ -365,8 +373,12 @@ func formatConsoleLine(timestamp time.Time, instanceID, instanceName string, lev
 	}
 	body = strings.Join(strings.Fields(body), " ")
 	r := []rune(body)
-	if len(r) > 200 {
-		body = string(r[:197]) + "..."
+	maxLen := 200
+	if level == WARN || level == ERROR {
+		maxLen = 4096
+	}
+	if len(r) > maxLen {
+		body = string(r[:maxLen-3]) + "..."
 	}
 	return fmt.Sprintf("[%s](%s)[%s][%s] %s", timestamp.Format("15:04:05"), label, level, category, body)
 }

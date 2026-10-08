@@ -61,6 +61,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		return nil, err
 	}
 	scope := runtimescope.New(config, global, logger)
+	scope.SetInstanceID(instanceID)
 	if !enabled {
 		scope.Cancel()
 	}
@@ -100,9 +101,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	// Initialize memory system
 	store := memory.NewStore(filepath.Join(dir, "brain.json"))
+	groupManager := memory.NewGroupManager(dir, scope)
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope
+	writer.SetGroupManager(groupManager)
 	writer.SetLLM(memoryProvider, "model-router-memory-extract")
 	groupSummaryStore, err := groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
 	if err != nil {
@@ -121,6 +124,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		groupCompactMinInterval,
 	)
 	groupCompactor.Scope = scope
+	groupCompactor.SetGroupManager(groupManager)
 	if groupCompactMaxBufferSize > 0 {
 		if groupCompactMaxBufferSize < groupCompactBufferSize {
 			scope.Log().Warn(
@@ -289,6 +293,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		MemoryGateway:     gateway,
 		MemoryCatalog:     catalog,
 		MemoryReflections: reflections,
+		GroupManager:      groupManager,
 		GroupCompactor:    groupCompactor,
 		GroupSummaryStore: groupSummaryStore,
 		// Persona dialogue prompt
@@ -324,7 +329,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle(mcpPath, mcpHandler)
 
 	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
-		memsvc.New(store, engine.MemoryReflections),
+		memsvc.New(store, groupManager, engine.MemoryReflections),
 	)
 	mux.Handle(memoryPath, memoryHandler)
 
