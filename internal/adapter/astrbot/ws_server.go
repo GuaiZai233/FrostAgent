@@ -403,6 +403,32 @@ func shouldReply(event *Event, scopes ...*runtimescope.Scope) bool {
 	return shouldReplyWithRNG(event, nil, scopes...)
 }
 
+func isExplicitWake(event *Event, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	scope := runtimescope.First(scopes)
+	if scope != nil && scope.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return false
+	}
+	if event.IsWake || event.IsAt {
+		return true
+	}
+	if isBotNameMentioned(event.Content, scope) {
+		return true
+	}
+	if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+		return true
+	}
+	return false
+}
+
 func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
 	if event == nil {
 		return false
@@ -893,7 +919,6 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 	if isProactive {
-		durablePrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, durablePrompt)
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
 	}
 

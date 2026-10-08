@@ -24,6 +24,11 @@ type GroupWakeSignals struct {
 	Proactive bool
 }
 
+// Explicit reports whether the bot was explicitly addressed (via at or alias/name).
+func (s GroupWakeSignals) Explicit() bool {
+	return s.AtBot || s.Alias
+}
+
 // Any reports whether at least one direct group wake signal was detected.
 func (s GroupWakeSignals) Any() bool {
 	return s.AtBot || s.Alias || s.Proactive

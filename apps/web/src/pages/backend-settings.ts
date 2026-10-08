@@ -51,6 +51,7 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
+import { ProactiveSettingsSync } from './proactive-settings-sync';
 
 function configurationBadges(key: string): string {
   const ownership = globalKeys.has(key)
@@ -310,9 +311,18 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const saveRawEnvBtn =
     container.querySelector<HTMLButtonElement>('#save-raw-env-btn')!;
 
-  function updateProactiveUI(enabled: boolean, prob: number) {
+  function updateProactiveUI(
+    enabled: boolean,
+    prob: number,
+    isSaving = false,
+  ) {
     proactiveReplyCb.checked = enabled;
-    proactiveReplyStatusText.textContent = enabled ? '已启用' : '已停用';
+    proactiveReplyCb.disabled = isSaving;
+    proactiveReplyStatusText.textContent = isSaving
+      ? '保存中...'
+      : enabled
+        ? '已启用'
+        : '已停用';
     proactiveReplyStatusText.className = enabled
       ? 'text-xs font-medium text-primary'
       : 'text-xs font-medium text-muted';
@@ -326,14 +336,37 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     proactiveReplyNumber.value = probStr;
     proactiveReplyProbDisplay.textContent = `${probStr} (${Math.round(clampedProb * 100)}%)`;
 
-    proactiveReplySlider.disabled = !enabled;
-    proactiveReplyNumber.disabled = !enabled;
-    proactiveReplyControls.style.opacity = enabled ? '1' : '0.55';
-    proactiveReplyControls.style.pointerEvents = enabled ? 'auto' : 'none';
+    proactiveReplySlider.disabled = !enabled || isSaving;
+    proactiveReplyNumber.disabled = !enabled || isSaving;
+    proactiveReplyControls.style.opacity = !enabled || isSaving ? '0.55' : '1';
+    proactiveReplyControls.style.pointerEvents =
+      enabled && !isSaving ? 'auto' : 'none';
   }
+
+  const proactiveSync = new ProactiveSettingsSync(
+    api,
+    { enabled: proactiveReplyEnabled, probability: proactiveReplyProbability },
+    {
+      onStateChange: (state) => {
+        proactiveReplyEnabled = state.enabled;
+        proactiveReplyProbability = state.probability;
+        updateProactiveUI(state.enabled, state.probability, state.isSaving);
+      },
+      onError: (err) => {
+        toast.error('更新失败: ' + err.message);
+      },
+      onSuccess: (msg) => {
+        toast.success(msg);
+      },
+      onReloadNeeded: async () => {
+        await loadData();
+      },
+    },
+  );
 
   async function loadData() {
     if (isUnmounted) return;
+    const loadSeq = proactiveSync.nextLoadSeq();
     loading = true;
     renderTable();
 
@@ -356,26 +389,28 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
       const parsedProb = parseFloat(probValStr);
 
+      let serverEnabled = false;
       if (enabledValStr === 'false') {
-        proactiveReplyEnabled = false;
+        serverEnabled = false;
       } else if (enabledValStr === 'true') {
-        proactiveReplyEnabled = true;
+        serverEnabled = true;
       } else {
-        proactiveReplyEnabled = !isNaN(parsedProb) && parsedProb > 0;
+        serverEnabled = !isNaN(parsedProb) && parsedProb > 0;
       }
 
+      let serverProb = 0.05;
       if (!isNaN(parsedProb) && parsedProb >= 0.01 && parsedProb <= 1.0) {
-        proactiveReplyProbability = Math.round(parsedProb * 100) / 100;
-      } else if (proactiveReplyEnabled) {
-        proactiveReplyProbability = 0.01;
+        serverProb = Math.round(parsedProb * 100) / 100;
+      } else if (serverEnabled) {
+        serverProb = 0.01;
       } else {
-        proactiveReplyProbability = 0.05;
+        serverProb = 0.05;
       }
 
       groupMentionCb.checked = groupReplyOnMention;
       groupAtCb.checked = enableAtOther;
       groupReplyCb.checked = enableReplyOther;
-      updateProactiveUI(proactiveReplyEnabled, proactiveReplyProbability);
+      proactiveSync.applyServerConfig(serverEnabled, serverProb, loadSeq);
     } catch (err) {
       if (isUnmounted) return;
       toast.error(
@@ -767,86 +802,18 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
   // Proactive reply handlers
   async function handleProactiveToggle(enabled: boolean) {
-    try {
-      let prob = parseFloat(proactiveReplyNumber.value);
-      if (isNaN(prob) || prob < 0.01) {
-        prob = 0.01;
-      }
-      if (prob > 1.0) {
-        prob = 1.0;
-      }
-      prob = Math.round(prob * 100) / 100;
-      proactiveReplyProbability = prob;
-      proactiveReplyEnabled = enabled;
-      updateProactiveUI(enabled, prob);
-
-      if (enabled) {
-        const [resProb, resEn] = await Promise.all([
-          api.updateEnvVar({
-            key: 'PROACTIVE_REPLY_PROBABILITY',
-            value: prob.toFixed(2),
-            isSecret: false,
-          }),
-          api.updateEnvVar({
-            key: 'ENABLE_PROACTIVE_REPLY',
-            value: 'true',
-            isSecret: false,
-          }),
-        ]);
-        if (resProb.success && resEn.success) {
-          toast.success(`主动回复已开启 (触发概率: ${prob.toFixed(2)})`);
-          void loadData();
-        } else {
-          toast.error('开启失败: ' + (resProb.error || resEn.error));
-        }
-      } else {
-        const res = await api.updateEnvVar({
-          key: 'ENABLE_PROACTIVE_REPLY',
-          value: 'false',
-          isSecret: false,
-        });
-        if (res.success) {
-          toast.success('主动回复已停用');
-          void loadData();
-        } else {
-          toast.error('停用失败: ' + res.error);
-        }
-      }
-    } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }
-
-  async function handleProactiveProbChange(val: number) {
-    let prob = Math.round(val * 100) / 100;
+    let prob = parseFloat(proactiveReplyNumber.value);
     if (isNaN(prob) || prob < 0.01) {
       prob = 0.01;
     }
     if (prob > 1.0) {
       prob = 1.0;
     }
-    proactiveReplyProbability = prob;
-    updateProactiveUI(proactiveReplyEnabled, prob);
+    await proactiveSync.setTarget(enabled, prob);
+  }
 
-    try {
-      const res = await api.updateEnvVar({
-        key: 'PROACTIVE_REPLY_PROBABILITY',
-        value: prob.toFixed(2),
-        isSecret: false,
-      });
-      if (res.success) {
-        toast.success(`主动回复概率已更新为 ${prob.toFixed(2)}`);
-        void loadData();
-      } else {
-        toast.error('更新失败: ' + res.error);
-      }
-    } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
+  async function handleProactiveProbChange(val: number) {
+    await proactiveSync.setTarget(proactiveReplyEnabled, val);
   }
 
   // Raw .env save

@@ -365,8 +365,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					msg := a.engine.Security.RejectMessage(principal, decision)
-					_ = sendDirectReply(event, c, msg)
+					if isExplicitWake(&event, scope) {
+						msg := a.engine.Security.RejectMessage(principal, decision)
+						_ = sendDirectReply(event, c, msg)
+					}
 					continue
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))

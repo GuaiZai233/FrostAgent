@@ -644,7 +644,6 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	if wakeSignals.Proactive {
-		durablePrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, durablePrompt)
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
 	}
 
