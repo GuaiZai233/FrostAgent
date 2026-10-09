@@ -271,13 +271,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	} else {
 		logs.General.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
-	mcpEnvironment := map[string]string{
-		"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
-		"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
-		"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
-		"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
-	}
-	m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
+	m.mcpGetenv = global.Get
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
 		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
@@ -835,6 +829,9 @@ func safeTree(dir string) error {
 	})
 }
 func (m *Manager) Delete(id string, all bool) error {
+	if m.db != nil {
+		return fmt.Errorf("use prepare, backup, and confirm to delete a SQL instance")
+	}
 	i, err := m.lookup(id)
 	if err != nil {
 		return err
@@ -968,6 +965,9 @@ func (m *Manager) Delete(id string, all bool) error {
 }
 
 func (m *Manager) Copy(target, source string) error {
+	if m.db != nil {
+		return fmt.Errorf("instance copy requires the SQL import workflow")
+	}
 	if target == source {
 		return fmt.Errorf("不能复用自身")
 	}
@@ -1490,6 +1490,41 @@ func writeError(w http.ResponseWriter, err error) {
 }
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
+	if m.db != nil {
+		parts := strings.Split(path, "/")
+		if len(parts) == 2 && parts[1] == "backup" && r.Method == http.MethodGet {
+			data, err := m.InstanceZIP(parts[0])
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/zip")
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(data)
+			return
+		}
+		if len(parts) == 3 && parts[1] == "delete" && r.Method == http.MethodPost {
+			var err error
+			switch parts[2] {
+			case "prepare":
+				err = m.PrepareDeletion(parts[0])
+			case "cancel":
+				err = m.CancelDeletion(parts[0])
+			case "confirm":
+				err = m.ConfirmDeletion(parts[0])
+			default:
+				http.NotFound(w, r)
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
+	}
 	if path == "" && r.Method == "GET" {
 		items, next := m.List()
 		writeJSON(w, map[string]any{"instances": items, "next_name": fmt.Sprintf("实例%d", next)})

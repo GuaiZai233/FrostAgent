@@ -3,7 +3,6 @@ package main
 import (
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/instance"
-	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	secsvc "FrostAgent/internal/service/security"
 	"context"
@@ -17,19 +16,12 @@ import (
 )
 
 func run() error {
-	global, err := instanceconfig.Open(".env", true)
-	if err != nil {
-		return err
-	}
-	templateDialogue := global.Get("DEFAULT_DIALOGUE_TEMPLATE")
-	if templateDialogue == "" {
-		templateDialogue = "eval/dialogue/dialogue.yml"
-	}
-	manager, err := instance.New("data", global, templateDialogue)
+	manager, err := instance.NewDatabase("data")
 	if err != nil {
 		return err
 	}
 	defer manager.Close()
+	global := manager.GlobalConfig()
 	mux := managementMux(manager)
 	listen := global.Get("LISTEN_ADDR")
 	if listen == "" {
