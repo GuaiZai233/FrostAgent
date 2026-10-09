@@ -1878,3 +1878,192 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 		t.Errorf("expected owner to be %q, got %q", "syn_user_zhangsan_01", entries[0].Owner)
 	}
 }
+
+func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_compactor_polarity"
+	groupID := "syn_test_grp_compactor_polarity"
+	speakerID := "syn_user_zhangsan_01"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	snapshot := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "张三",
+				SenderID:  speakerID,
+				Content:   "我今天来打机，李四喜欢玩舞萌",
+				MessageID: "msg_0",
+				Time:      "10:00:00",
+			},
+			{
+				Role:      "user",
+				Sender:    "张三",
+				SenderID:  speakerID,
+				Content:   "我不是管理员",
+				MessageID: "msg_1",
+				Time:      "10:01:00",
+			},
+			{
+				Role:      "user",
+				Sender:    "张三",
+				SenderID:  speakerID,
+				Content:   "我不喜欢舞萌",
+				MessageID: "msg_2",
+				Time:      "10:02:00",
+			},
+		},
+	}
+
+	idx0 := 0
+	idx1 := 1
+	idx2 := 2
+
+	distillOutput := []distillExtractedEntry{
+		{
+			// Finding 1 regression: "我不是管理员" -> negation dropped to "我是管理员"
+			Content:        "我是管理员",
+			Tags:           []string{"admin"},
+			Evidence:       "不是管理员",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// Finding 1 regression: "我不是管理员" -> negation dropped to "用户是管理员" with partial evidence "管理员"
+			Content:        "用户是管理员",
+			Tags:           []string{"admin"},
+			Evidence:       "管理员",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "我喜欢舞萌"
+			Content:        "我喜欢舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "不喜欢舞萌",
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		{
+			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "用户喜欢舞萌" with partial evidence "舞萌"
+			Content:        "用户喜欢舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "舞萌",
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		{
+			// Finding 2 regression: source message has unrelated "我", but evidence/claim is about third-party 李四
+			// False self-attribution must be rejected!
+			Content:        "李四喜欢玩舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "李四喜欢玩舞萌",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// Finding 2 regression: partial evidence "喜欢玩舞萌" for third person 李四 with IsSelf: true
+			Content:        "李四喜欢舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "喜欢玩舞萌",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// Finding 2: Preserve valid quoted self-claim (first-person statement in source)
+			Content:        "用户今天来打机",
+			Tags:           []string{"game"},
+			Evidence:       "我今天来打机",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// Preserve valid negated self-claim (negation maintained)
+			Content:        "用户不喜欢舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "我不喜欢舞萌",
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		{
+			// Valid third-person claim saved as group fact (IsSelf: false)
+			Content:        "李四喜欢玩舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "李四喜欢玩舞萌",
+			SourceMsgIndex: &idx0,
+			IsSelf:         false,
+		},
+	}
+
+	rawJSON, err := json.Marshal(distillOutput)
+	if err != nil {
+		t.Fatalf("marshal distill output failed: %v", err)
+	}
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON), nil
+	}
+
+	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	entriesByContent := make(map[string][]memory.MemoryEntry)
+	for _, ent := range entries {
+		entriesByContent[ent.Content] = append(entriesByContent[ent.Content], ent)
+	}
+
+	// 1. Preserved valid quoted self-claim: "用户今天来打机" -> Owner == speakerID
+	selfEntries, ok := entriesByContent["用户今天来打机"]
+	if !ok || len(selfEntries) == 0 {
+		t.Fatalf("expected preserved self-claim '用户今天来打机' to be saved")
+	}
+	if selfEntries[0].Owner != speakerID {
+		t.Errorf("expected '用户今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+	}
+
+	// 2. Preserved valid negative self-claim: "用户不喜欢舞萌" -> Owner == speakerID
+	negEntries, ok := entriesByContent["用户不喜欢舞萌"]
+	if !ok || len(negEntries) == 0 {
+		t.Fatalf("expected preserved negative claim '用户不喜欢舞萌' to be saved")
+	}
+	if negEntries[0].Owner != speakerID {
+		t.Errorf("expected '用户不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+	}
+
+	// 3. Valid group fact: "李四喜欢玩舞萌" (IsSelf: false) -> Owner == GroupOwnerExplicit
+	groupEntries, ok := entriesByContent["李四喜欢玩舞萌"]
+	if !ok || len(groupEntries) == 0 {
+		t.Fatalf("expected group fact '李四喜欢玩舞萌' to be saved")
+	}
+	if groupEntries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected '李四喜欢玩舞萌' owner to be %q, got %q", memory.GroupOwnerExplicit, groupEntries[0].Owner)
+	}
+
+	// Verify that none of the inverted or false self-attribution claims were saved
+	rejectedContents := []string{
+		"我是管理员",
+		"用户是管理员",
+		"我喜欢舞萌",
+		"用户喜欢舞萌",
+		"李四喜欢舞萌",
+	}
+	for _, rej := range rejectedContents {
+		if _, exists := entriesByContent[rej]; exists {
+			t.Errorf("expected rejected content %q to NOT exist in store", rej)
+		}
+	}
+}

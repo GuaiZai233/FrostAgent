@@ -194,3 +194,179 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 		}
 	}
 }
+
+func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := NewStore(storePath)
+	gm := NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockWriterLLM{}
+	writer := NewWriter(store)
+	writer.SetGroupManager(gm)
+	writer.SetLLM(mockLLM, "mock-writer-model")
+
+	groupID := "syn_test_grp_writer_polarity"
+	speakerID := "syn_u_speaker_01"
+	speakerName := "张三"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	messages := []core.ChatMessage{
+		{
+			Role:    core.RoleUser,
+			Content: "张三: 我今天来打机，李四喜欢玩舞萌",
+		},
+		{
+			Role:    core.RoleUser,
+			Content: "张三: 我不是管理员",
+		},
+		{
+			Role:    core.RoleUser,
+			Content: "张三: 我不喜欢舞萌",
+		},
+	}
+
+	extractedEntries := []groupExtractedEntry{
+		{
+			// Finding 1 regression: "我不是管理员" -> negation dropped to "我是管理员"
+			Content:  "我是管理员",
+			Tags:     []string{"admin"},
+			Evidence: "不是管理员",
+			IsSelf:   true,
+		},
+		{
+			// Finding 1 regression: "我不是管理员" -> negation dropped to "用户是管理员" with partial evidence "管理员"
+			Content:  "用户是管理员",
+			Tags:     []string{"admin"},
+			Evidence: "管理员",
+			IsSelf:   true,
+		},
+		{
+			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "我喜欢舞萌"
+			Content:  "我喜欢舞萌",
+			Tags:     []string{"game"},
+			Evidence: "不喜欢舞萌",
+			IsSelf:   true,
+		},
+		{
+			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "用户喜欢舞萌" with partial evidence "舞萌"
+			Content:  "用户喜欢舞萌",
+			Tags:     []string{"game"},
+			Evidence: "舞萌",
+			IsSelf:   true,
+		},
+		{
+			// Finding 2 regression: source message has unrelated "我", but evidence/claim is about 李四
+			// False self-attribution must be rejected!
+			Content:  "李四喜欢玩舞萌",
+			Tags:     []string{"game"},
+			Evidence: "李四喜欢玩舞萌",
+			IsSelf:   true,
+		},
+		{
+			// Finding 2 regression: partial evidence "喜欢玩舞萌" for third person 李四 with IsSelf: true
+			Content:  "李四喜欢舞萌",
+			Tags:     []string{"game"},
+			Evidence: "喜欢玩舞萌",
+			IsSelf:   true,
+		},
+		{
+			// Finding 2: Preserve valid quoted self-claim (first-person statement in source)
+			Content:  "用户今天来打机",
+			Tags:     []string{"game"},
+			Evidence: "我今天来打机",
+			IsSelf:   true,
+		},
+		{
+			// Preserve valid negated self-claim (negation maintained)
+			Content:  "用户不喜欢舞萌",
+			Tags:     []string{"game"},
+			Evidence: "我不喜欢舞萌",
+			IsSelf:   true,
+		},
+		{
+			// Valid third-person claim saved as group fact (IsSelf: false)
+			Content:  "李四喜欢玩舞萌",
+			Tags:     []string{"game"},
+			Evidence: "李四喜欢玩舞萌",
+			IsSelf:   false,
+		},
+	}
+
+	rawJSON, err := json.Marshal(extractedEntries)
+	if err != nil {
+		t.Fatalf("marshal extracted entries failed: %v", err)
+	}
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON), nil
+	}
+
+	err = writer.ExtractGroupTurnWithRouteContext(
+		context.Background(),
+		groupID,
+		speakerID,
+		speakerName,
+		core.RouteContext{},
+		messages,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ExtractGroupTurnWithRouteContext failed: %v", err)
+	}
+
+	savedEntries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	entriesByContent := make(map[string][]MemoryEntry)
+	for _, ent := range savedEntries {
+		entriesByContent[ent.Content] = append(entriesByContent[ent.Content], ent)
+	}
+
+	// 1. Preserved valid quoted self-claim: "用户今天来打机" -> Owner == speakerID
+	selfEntries, ok := entriesByContent["用户今天来打机"]
+	if !ok || len(selfEntries) == 0 {
+		t.Fatalf("expected preserved self-claim '用户今天来打机' to be saved")
+	}
+	if selfEntries[0].Owner != speakerID {
+		t.Errorf("expected '用户今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+	}
+
+	// 2. Preserved valid negative self-claim: "用户不喜欢舞萌" -> Owner == speakerID
+	negEntries, ok := entriesByContent["用户不喜欢舞萌"]
+	if !ok || len(negEntries) == 0 {
+		t.Fatalf("expected preserved negative claim '用户不喜欢舞萌' to be saved")
+	}
+	if negEntries[0].Owner != speakerID {
+		t.Errorf("expected '用户不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+	}
+
+	// 3. Valid group fact: "李四喜欢玩舞萌" (IsSelf: false) -> Owner == GroupOwnerExplicit
+	groupEntries, ok := entriesByContent["李四喜欢玩舞萌"]
+	if !ok || len(groupEntries) == 0 {
+		t.Fatalf("expected group fact '李四喜欢玩舞萌' to be saved")
+	}
+	if groupEntries[0].Owner != GroupOwnerExplicit {
+		t.Errorf("expected '李四喜欢玩舞萌' owner to be %q, got %q", GroupOwnerExplicit, groupEntries[0].Owner)
+	}
+
+	// Verify that none of the inverted or false self-attribution claims were saved as speakerID
+	rejectedContents := []string{
+		"我是管理员",
+		"用户是管理员",
+		"我喜欢舞萌",
+		"用户喜欢舞萌",
+		"李四喜欢舞萌",
+	}
+	for _, rej := range rejectedContents {
+		if _, exists := entriesByContent[rej]; exists {
+			t.Errorf("expected rejected content %q to NOT exist in store", rej)
+		}
+	}
+}

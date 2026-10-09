@@ -493,6 +493,11 @@ func (w *Writer) parseAndSaveGroup(
 			continue
 		}
 
+		// Guard against polarity inversion (e.g. dropping negation "我不是管理员" -> "我是管理员")
+		if HasPolarityInversion(evidence, cleanContent, matchedUserMsg) {
+			continue
+		}
+
 		// Validate that content does not introduce unsupported additions (fabricated suffix / predicates)
 		if HasUnsupportedAdditions(cleanContent, matchedUserMsg, speakerName) {
 			continue
@@ -503,7 +508,7 @@ func (w *Writer) parseAndSaveGroup(
 			if speakerID == "" {
 				continue
 			}
-			if !IsFirstPersonStatement(evidence, matchedUserMsg, speakerName) {
+			if !IsFirstPersonStatement(evidence, cleanContent, matchedUserMsg, speakerName) {
 				continue
 			}
 			owner = speakerID

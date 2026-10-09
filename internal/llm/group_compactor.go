@@ -666,7 +666,12 @@ func (c *GroupCompactor) distillGroupMemories(
 			continue
 		}
 
-		// 3b. Validate that content does not contain unsupported additions (e.g. fabricated suffixes / predicates).
+		// 3b. Guard against polarity inversion (e.g. dropping negation "我不是管理员" -> "我是管理员")
+		if memory.HasPolarityInversion(evidence, cleanContent, srcMsg.Content) {
+			continue
+		}
+
+		// 3c. Validate that content does not contain unsupported additions (e.g. fabricated suffixes / predicates).
 		if memory.HasUnsupportedAdditions(cleanContent, srcMsg.Content, srcMsg.Sender) {
 			continue
 		}
@@ -675,7 +680,7 @@ func (c *GroupCompactor) distillGroupMemories(
 		ownerKey := memory.GroupOwnerExplicit
 		if e.IsSelf {
 			// Must be a genuine first-person statement from this speaker.
-			if !memory.IsFirstPersonStatement(evidence, srcMsg.Content, srcMsg.Sender) {
+			if !memory.IsFirstPersonStatement(evidence, cleanContent, srcMsg.Content, srcMsg.Sender) {
 				// Reject ungrounded personal attribution (e.g. cross-speaker claim falsely marked as is_self).
 				continue
 			}
