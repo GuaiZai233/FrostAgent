@@ -453,54 +453,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 								card = event.Sender.Card
 								role = memory.NormalizeGroupRole(event.Sender.Role)
 							}
-							if a.engine != nil && a.engine.Security != nil {
-								sec := a.engine.Security
-								if sec.Mode() == security.ControlModeAggressive {
-									if principal, pErr := security.NewPrincipal("qq", userIDStr); pErr == nil {
-										vetter := sec.GetMetadataVetter()
-										sessionKey := wsConn.historyKey(event)
-
-										checkOrDispatch := func(text string, onSafe func(string)) string {
-											if text == "" {
-												return ""
-											}
-											if safe, cached := vetter.Check(text); cached {
-												if safe {
-													return text
-												}
-												return ""
-											}
-											// Not cached: do NOT block receive loop!
-											// Do not persist unvetted values until vetting passes.
-											if vetter.MarkInFlight(text) {
-												textToVet := text
-												a.engine.Go(func() {
-													defer vetter.ClearInFlight(textToVet)
-													ctx, cancel := context.WithTimeout(a.engine.Context(), 5*time.Second)
-													defer cancel()
-													dec := sec.EvaluateContextWithContext(ctx, principal, security.SourcePlatformMeta, textToVet, security.AuditEvent{
-														Instance: a.engine.InstanceID,
-														Session:  sessionKey,
-													})
-													isSafe := !(dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock)
-													vetter.Record(textToVet, isSafe)
-													if isSafe {
-														onSafe(textToVet)
-													}
-												})
-											}
-											return ""
-										}
-
-										nickname = checkOrDispatch(nickname, func(safeNick string) {
-											_, _ = gStore.ObserveMember(userIDStr, safeNick, "", "", "onebot")
-										})
-										card = checkOrDispatch(card, func(safeCard string) {
-											_, _ = gStore.ObserveMember(userIDStr, "", safeCard, "", "onebot")
-										})
-									}
-								}
-							}
 							_, _ = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
 							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
 							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})

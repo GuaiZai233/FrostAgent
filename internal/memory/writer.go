@@ -401,13 +401,15 @@ func (w *Writer) ExtractGroupTurnWithRouteContext(
 		return fmt.Errorf("unexpected response type: %T", resp.Message.Content)
 	}
 
-	return w.parseAndSaveGroup(ctx, groupID, speakerID, raw, validator)
+	return w.parseAndSaveGroup(ctx, groupID, speakerID, speakerName, messages, raw, validator)
 }
 
 func (w *Writer) parseAndSaveGroup(
 	ctx context.Context,
 	groupID string,
 	speakerID string,
+	speakerName string,
+	messages []core.ChatMessage,
 	raw string,
 	validator func() bool,
 ) error {
@@ -441,6 +443,13 @@ func (w *Writer) parseAndSaveGroup(
 		return errors.New("extraction cancelled or invalidated")
 	}
 
+	var userMsgs []string
+	for _, msg := range messages {
+		if msg.Role == core.RoleUser {
+			userMsgs = append(userMsgs, fmt.Sprintf("%v", msg.Content))
+		}
+	}
+
 	now := time.Now()
 	var toSave []MemoryEntry
 	for _, e := range entries {
@@ -453,12 +462,50 @@ func (w *Writer) parseAndSaveGroup(
 		if validator != nil && !validator() {
 			return errors.New("extraction cancelled or invalidated")
 		}
-		if strings.TrimSpace(e.Content) == "" {
+		cleanContent := strings.TrimSpace(e.Content)
+		if cleanContent == "" {
+			continue
+		}
+
+		// Evidence verification:
+		evidence := strings.TrimSpace(e.Evidence)
+		evRunes := []rune(evidence)
+		if len(evRunes) < 3 {
+			// Reject missing or trivial evidence
+			continue
+		}
+
+		// Must match a genuine user message in this turn (rejects missing, foreign, or assistant-derived evidence)
+		var matchedUserMsg string
+		for _, u := range userMsgs {
+			if strings.Contains(u, evidence) {
+				matchedUserMsg = u
+				break
+			}
+		}
+		if matchedUserMsg == "" {
+			continue
+		}
+
+		// Substantive token overlap between evidence and content
+		overlap, totalEvTokens := CountSubstantiveTokenOverlap(evidence, cleanContent)
+		if totalEvTokens == 0 || overlap == 0 || (float64(overlap)/float64(totalEvTokens) < 0.4 && overlap < 2) {
+			continue
+		}
+
+		// Validate that content does not introduce unsupported additions (fabricated suffix / predicates)
+		if HasUnsupportedAdditions(cleanContent, matchedUserMsg, speakerName) {
 			continue
 		}
 
 		owner := GroupOwnerExplicit
-		if e.IsSelf && speakerID != "" {
+		if e.IsSelf {
+			if speakerID == "" {
+				continue
+			}
+			if !IsFirstPersonStatement(evidence, matchedUserMsg, speakerName) {
+				continue
+			}
 			owner = speakerID
 		}
 
@@ -468,7 +515,7 @@ func (w *Writer) parseAndSaveGroup(
 			OwnerType: OwnerGroup,
 			ScopeType: ScopeGroup,
 			GroupID:   groupID,
-			Content:   e.Content,
+			Content:   cleanContent,
 			Tags:      e.Tags,
 			Source:    SourceExtract,
 			CreatedAt: now,

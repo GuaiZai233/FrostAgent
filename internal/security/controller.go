@@ -25,11 +25,10 @@ const (
 )
 
 type Controller struct {
-	Access         *AccessStore
-	Watchdog       *Watchdog
-	Audit          *AuditStore
-	MetadataVetter *MetadataVetter
-	mode           *atomic.Pointer[ControlMode]
+	Access   *AccessStore
+	Watchdog *Watchdog
+	Audit    *AuditStore
+	mode     *atomic.Pointer[ControlMode]
 }
 
 func NewController(dataDir string) *Controller {
@@ -39,25 +38,11 @@ func NewController(dataDir string) *Controller {
 	defaultMode := ControlModeSimple
 	modePtr.Store(&defaultMode)
 	return &Controller{
-		Access:         access,
-		Audit:          audit,
-		Watchdog:       NewWatchdog(access, audit),
-		MetadataVetter: NewMetadataVetter(),
-		mode:           &modePtr,
+		Access:   access,
+		Audit:    audit,
+		Watchdog: NewWatchdog(access, audit),
+		mode:     &modePtr,
 	}
-}
-
-var defaultMetadataVetter = NewMetadataVetter()
-
-// GetMetadataVetter returns the controller's metadata vetting cache, or a default instance if nil.
-func (c *Controller) GetMetadataVetter() *MetadataVetter {
-	if c == nil {
-		return defaultMetadataVetter
-	}
-	if c.MetadataVetter == nil {
-		c.MetadataVetter = NewMetadataVetter()
-	}
-	return c.MetadataVetter
 }
 
 // Mode returns the active security control mode. Unset or nil modes default to ControlModeSimple.

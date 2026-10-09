@@ -405,64 +405,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						if r, ok := event.Metadata["role"].(string); ok {
 							role = memory.NormalizeGroupRole(r)
 						}
-						senderName := event.SenderName
-						senderCard := event.SenderCard
-						groupName := event.GroupName
-						if a.engine.Security != nil {
-							sec := a.engine.Security
-							if sec.Mode() == security.ControlModeAggressive {
-								secPlatform := astrBotQQPlatform
-								if principal, pErr := security.NewPrincipal(secPlatform, event.UserID); pErr == nil {
-									vetter := sec.GetMetadataVetter()
-									sessionKey := c.sessionKey(event)
-
-									checkOrDispatch := func(text string, onSafe func(string)) string {
-										if text == "" {
-											return ""
-										}
-										if safe, cached := vetter.Check(text); cached {
-											if safe {
-												return text
-											}
-											return ""
-										}
-										// Not cached: do NOT block receive loop!
-										// Do not persist unvetted values until vetting passes.
-										if vetter.MarkInFlight(text) {
-											textToVet := text
-											a.engine.Go(func() {
-												defer vetter.ClearInFlight(textToVet)
-												ctx, cancel := context.WithTimeout(a.engine.Context(), 5*time.Second)
-												defer cancel()
-												dec := sec.EvaluateContextWithContext(ctx, principal, security.SourcePlatformMeta, textToVet, security.AuditEvent{
-													Instance: a.engine.InstanceID,
-													Session:  sessionKey,
-												})
-												isSafe := !(dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock)
-												vetter.Record(textToVet, isSafe)
-												if isSafe {
-													onSafe(textToVet)
-												}
-											})
-										}
-										return ""
-									}
-
-									senderName = checkOrDispatch(senderName, func(safeName string) {
-										_, _ = gStore.ObserveMember(event.UserID, safeName, "", "", "astrbot")
-									})
-									senderCard = checkOrDispatch(senderCard, func(safeCard string) {
-										_, _ = gStore.ObserveMember(event.UserID, "", safeCard, "", "astrbot")
-									})
-									groupName = checkOrDispatch(groupName, func(safeGroupName string) {
-										_ = gStore.UpdateGroupName(safeGroupName)
-									})
-								}
-							}
-						}
-						_, _ = gStore.ObserveMember(event.UserID, senderName, senderCard, string(role), "astrbot")
-						if groupName != "" {
-							_ = gStore.UpdateGroupName(groupName)
+						_, _ = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+						if event.GroupName != "" {
+							_ = gStore.UpdateGroupName(event.GroupName)
 						}
 						routeScope := astrBotRouteScope(event)
 						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})

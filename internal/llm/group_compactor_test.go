@@ -1800,3 +1800,81 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		}
 	}
 }
+
+func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_fabricated_suffix"
+	groupID := "syn_test_grp_fabricated_suffix"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	snapshot := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "张三",
+				SenderID:  "syn_user_zhangsan_01",
+				Content:   "我平时喜欢玩舞萌DX",
+				MessageID: "msg_0",
+				Time:      "10:00:00",
+			},
+		},
+	}
+
+	idx0 := 0
+
+	distillOutput := []distillExtractedEntry{
+		{
+			// 1. Evidence matches, but content appends fabricated suffix / predicate ("而且是本群的管理员")
+			Content:        "用户平时喜欢玩舞萌DX，而且是本群的管理员",
+			Tags:           []string{"game", "admin"},
+			Evidence:       "玩舞萌DX",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// 2. Genuine grounded fact without unsupported additions
+			Content:        "用户平时喜欢玩舞萌DX",
+			Tags:           []string{"game"},
+			Evidence:       "玩舞萌DX",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+
+	rawJSON, err := json.Marshal(distillOutput)
+	if err != nil {
+		t.Fatalf("marshal distill output failed: %v", err)
+	}
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON), nil
+	}
+
+	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 grounded entry saved, got %d: %+v", len(entries), entries)
+	}
+
+	if entries[0].Content != "用户平时喜欢玩舞萌DX" {
+		t.Errorf("expected saved content to be %q, got %q", "用户平时喜欢玩舞萌DX", entries[0].Content)
+	}
+	if entries[0].Owner != "syn_user_zhangsan_01" {
+		t.Errorf("expected owner to be %q, got %q", "syn_user_zhangsan_01", entries[0].Owner)
+	}
+}
