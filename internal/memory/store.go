@@ -2,6 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ var (
 // All memories are stored in a single brain.json file.
 type Store struct {
 	path    string
+	sql     *sqlBrainStore
 	mu      sync.RWMutex
 	routeMu sync.RWMutex
 	routes  map[string]core.RouteContext
@@ -34,8 +36,16 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
+// NewSQLStore creates an instance-scoped private memory store.
+func NewSQLStore(db *storage.DB, instanceID string) *Store {
+	return &Store{sql: &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopePrivate}}
+}
+
 // load reads the brain data from disk.
 func (s *Store) load() (*BrainData, error) {
+	if s.sql != nil {
+		return s.sql.load()
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -55,6 +65,9 @@ func (s *Store) load() (*BrainData, error) {
 
 // save writes the brain data to disk.
 func (s *Store) save(brain *BrainData) error {
+	if s.sql != nil {
+		return s.sql.save(brain)
+	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal brain: %w", err)
