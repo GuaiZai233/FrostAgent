@@ -98,7 +98,7 @@ func TestRoll(t *testing.T) {
 }
 
 func TestPromptPrefix(t *testing.T) {
-	expected := "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_slient工具静默。"
+	expected := "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。"
 	if PromptPrefix != expected {
 		t.Errorf("PromptPrefix mismatch:\ngot:  %q\nwant: %q", PromptPrefix, expected)
 	}

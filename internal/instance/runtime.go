@@ -162,8 +162,6 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[sendMsgTool.Name()] = sendMsgTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
-	staySlientAliasTool := tools.StaySlientAliasTool()
-	registry[staySlientAliasTool.Name()] = staySlientAliasTool
 	if securityController != nil {
 		banUserTool := tools.NewBanUserTool(securityController)
 		registry[banUserTool.Name()] = banUserTool

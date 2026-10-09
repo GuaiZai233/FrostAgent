@@ -36,9 +36,8 @@ type contextualToolExecutor interface {
 }
 
 const (
-	StaySilentToolName      = "stay_silent"
-	StaySlientAliasToolName = "stay_slient"
-	AssistantSilentMarker   = "<assistant_silent />"
+	StaySilentToolName    = "stay_silent"
+	AssistantSilentMarker = "<assistant_silent />"
 
 	// DefaultMaxIterations is the fallback loop iteration limit for LLM execution.
 	DefaultMaxIterations = 35
@@ -51,9 +50,9 @@ const (
 // ErrMaxIterationsReached indicates the agent exhausted its allowed iterations without a final response.
 var ErrMaxIterationsReached = errors.New("达到最大迭代次数，未能得出最终答案")
 
-// IsStaySilentTool reports whether the tool name matches stay_silent or its alias stay_slient.
+// IsStaySilentTool reports whether the tool name matches stay_silent.
 func IsStaySilentTool(name string) bool {
-	return name == StaySilentToolName || name == StaySlientAliasToolName
+	return name == StaySilentToolName
 }
 
 func truncateRunes(value string, limit int) string {
@@ -88,7 +87,7 @@ type AgentRunResult struct {
 // ActionsCat and other external/privileged/mutating tools are strictly disallowed.
 func IsProactiveAllowedTool(name string) bool {
 	switch name {
-	case StaySilentToolName, StaySlientAliasToolName:
+	case StaySilentToolName:
 		return true
 	case "memory":
 		return true

@@ -15,7 +15,7 @@ const (
 	EnvEnabled = "ENABLE_PROACTIVE_REPLY"
 
 	// PromptPrefix is prepended to the prompt when proactive reply is triggered.
-	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_slient工具静默。"
+	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。"
 
 	// MinProbability defines the minimum probability when proactive reply is turned on (0.01).
 	MinProbability = 0.01

@@ -171,12 +171,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_slient工具静默。`
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。`
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
-- **双拼写静默决策工具与零出站保障 (Dual-Spelling Silence Tool: `stay_silent` & `stay_slient`)**：
-  - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的静默终止工具；
-  - **双拼写兼容注册**：由于用户提示词指定使用 `stay_slient`，为彻底防范大模型在规范拼写（`stay_silent`）与提示词拼写（`stay_slient`）之间的调用偏差，底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）同时注册并识别规范工具 `stay_silent` 与兼容别名 `stay_slient`；
-  - **终态静默拦截与协议控制动作**：无论模型调用哪种拼写，Agent 执行器均判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
+- **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
+  - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
+  - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
   - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
 - **入站安全审查 Fail-Closed 与主动静默丢弃 (Security Gating & Silent Dropping)**：
   - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞；
@@ -192,7 +191,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **主动回复只读模式与副作用工具强禁闭机制 (Proactive Reply Read-Only Confinement & Side-Effect Prevention, Option A)**：
   - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
-    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用与外部特权工具，向模型仅暴露控制与记忆工具（`stay_silent`、`stay_slient`、`memory` 记忆管理），从调用源头消除模型生成变异工具调用的可能；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用与外部特权工具，向模型仅暴露控制与记忆工具（`stay_silent`、`memory` 记忆管理），从调用源头消除模型生成变异工具调用的可能；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
     - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
     - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
     - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；

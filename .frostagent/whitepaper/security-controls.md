@@ -162,7 +162,7 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
 - **主动回复安全防卫与 Option A 纵深隔离体系 (Proactive Reply Security Isolation & Option A Defense-in-Depth)**：
   主动回复是 Bot 在未被艾特或呼叫的情形下基于概率自发参与群聊互动的机制。发言群友并无唤醒意图，这使得主动回复场景具有独特的安全威胁模型：若大模型因上下文诱导、越狱提示词或幻觉做出破坏性操作，可能误封旁观群友（Bystander Abuse）或向外部产生非预期副作用。根据 PR #162 Maintainer 裁定，系统严格执行 Option A 纵深防御方案：
   - **P1: 主动回复轮次禁用副作用与特权工具（Side-Effect Tool Confinement）**：
-    - **白名单收敛**：主动回复轮次仅允许安全只读与控制类工具（`stay_silent`, `stay_slient`, `memory` 记忆管理），严格禁止调用任何特权副作用工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、ActionsCat 工具以及 MCP 变异工具）；ActionsCat 工具因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可检查外部日志与构建，在任意群友触发的未定向轮次中可能导致信息泄露与权限越界，故从主动回复白名单中彻底排除；
+    - **白名单收敛**：主动回复轮次仅允许安全只读与控制类工具（`stay_silent` 与 `memory` 记忆管理），严格禁止调用任何特权副作用工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、ActionsCat 工具以及 MCP 变异工具）；ActionsCat 工具因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可检查外部日志与构建，在任意群友触发的未定向轮次中可能导致信息泄露与权限越界，故从主动回复白名单中彻底排除；
     - **Pre-call Schema 过滤**：在向大模型发起请求前，`llm.Engine` 通过 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）检查 `RunContext.Proactive`。若为主动回复轮次，动态过滤工具 Schema（`modelTools`），从源头阻止模型感知和生成副作用工具调用；
     - **服务端执行入口硬拦截与全量静默熔断**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message`、ActionsCat 或任何非白名单工具），`Engine` 服务端调度器立即阻断工具执行并直接返回 `Silent: true`，立即熔断循环，不调用模型、不向会话追加错误消息继续消耗迭代；清除 `Banned` 标记，绝对禁止向 `AccessStore` 写入锁定状态，绝对不向群聊发送任何报错文本；
     - **迭代耗尽静默防打扰**：主动回复轮次若耗尽最大迭代次数，同样以 `Silent: true` 与 `ErrMaxIterationsReached` 终态退出，杜绝将内部迭代耗尽错误文本（`FrostAgent错误：达到最大迭代次数，未能得出最终答案`）发送至未艾特机器人的群聊；

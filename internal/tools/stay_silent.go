@@ -36,10 +36,3 @@ func StaySilentTool() Tool {
 		},
 	}
 }
-
-// StaySlientAliasTool provides an alias for stay_silent supporting the stay_slient spelling.
-func StaySlientAliasTool() Tool {
-	t := StaySilentTool()
-	t.name = llm.StaySlientAliasToolName
-	return t
-}
