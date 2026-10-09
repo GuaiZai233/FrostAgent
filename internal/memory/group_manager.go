@@ -3,6 +3,8 @@ package memory
 import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/storage"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +16,7 @@ import (
 
 // GroupSummary provides an overview of an observed group for management and statistics.
 type GroupSummary struct {
+	Platform    string    `json:"platform,omitempty"`
 	GroupID     string    `json:"group_id"`
 	GroupName   string    `json:"group_name"`
 	MemberCount int       `json:"member_count"`
@@ -26,10 +29,12 @@ type GroupSummary struct {
 // (e.g. "123456" vs "group:123456" vs "qq:group:123456") resolve to the exact same
 // GroupStore pointer and synchronization lock.
 type GroupManager struct {
-	baseDir string
-	scope   *runtimescope.Scope
-	mu      sync.RWMutex
-	groups  map[string]*GroupStore // keyed by SafeGroupKey
+	baseDir    string
+	db         *storage.DB
+	instanceID string
+	scope      *runtimescope.Scope
+	mu         sync.RWMutex
+	groups     map[string]*GroupStore // keyed by SafeGroupKey
 }
 
 // NewGroupManager creates a new GroupManager rooted at baseDir.
@@ -41,20 +46,32 @@ func NewGroupManager(baseDir string, scope *runtimescope.Scope) *GroupManager {
 	}
 }
 
+func NewSQLGroupManager(db *storage.DB, instanceID string, scope *runtimescope.Scope) *GroupManager {
+	return &GroupManager{db: db, instanceID: instanceID, scope: scope, groups: make(map[string]*GroupStore)}
+}
+
 // GetGroupStore returns the GroupStore for groupID, loading or creating it on demand.
 // GroupID is canonicalized and hashed through SafeGroupKey to guarantee that distinct
 // representations of the same group share the exact same underlying GroupStore instance and mutex.
 func (m *GroupManager) GetGroupStore(groupID string) (*GroupStore, error) {
+	return m.GetGroupStoreForPlatform("qq", groupID)
+}
+
+func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*GroupStore, error) {
 	if groupID == "" {
 		return nil, fmt.Errorf("group_id cannot be empty")
 	}
 
-	canon := CanonicalGroupID(groupID)
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return nil, fmt.Errorf("platform cannot be empty")
+	}
+	canon := CanonicalGroupID(strings.TrimPrefix(groupID, platform+":group:"))
 	if canon == "" {
 		return nil, fmt.Errorf("canonical group_id cannot be empty")
 	}
 
-	safeKey := SafeGroupKey(canon)
+	safeKey := platform + ":" + SafeGroupKey(canon)
 
 	m.mu.RLock()
 	store, exists := m.groups[safeKey]
@@ -71,7 +88,12 @@ func (m *GroupManager) GetGroupStore(groupID string) (*GroupStore, error) {
 		return store, nil
 	}
 
-	store, err := NewGroupStore(m.baseDir, canon)
+	var err error
+	if m.db != nil {
+		store, err = newSQLGroupStore(m.db, m.instanceID, platform, canon)
+	} else {
+		store, err = NewGroupStore(m.baseDir, canon)
+	}
 	if err != nil {
 		if m.scope != nil {
 			m.scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("初始化群 [%s] 存储失败: %v", canon, err))
@@ -84,6 +106,48 @@ func (m *GroupManager) GetGroupStore(groupID string) (*GroupStore, error) {
 
 // ListGroups scans the groups directory and returns summaries of all stored groups.
 func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
+	if m.db != nil {
+		rows, err := m.db.SQL.QueryContext(context.Background(), m.db.Bind(`SELECT platform, group_id FROM group_profiles WHERE instance_id = ?
+			UNION SELECT platform, group_id FROM memory_entries WHERE instance_id = ? AND scope_type = 'group'`),
+			m.instanceID, m.instanceID)
+		if err != nil {
+			return nil, err
+		}
+		type groupKey struct{ platform, id string }
+		var keys []groupKey
+		for rows.Next() {
+			var key groupKey
+			if err := rows.Scan(&key.platform, &key.id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			keys = append(keys, key)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+		result := make([]GroupSummary, 0, len(keys))
+		for _, key := range keys {
+			store, err := m.GetGroupStoreForPlatform(key.platform, key.id)
+			if err != nil {
+				return nil, err
+			}
+			profile, err := store.GetProfile()
+			if err != nil {
+				return nil, err
+			}
+			memories, err := store.ListAll()
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, GroupSummary{Platform: key.platform, GroupID: key.id,
+				GroupName: profile.GroupName, MemberCount: len(profile.Members),
+				MemoryCount: len(memories), UpdatedAt: profile.UpdatedAt})
+		}
+		return result, nil
+	}
 	groupsDir := filepath.Join(m.baseDir, "groups")
 	entries, err := os.ReadDir(groupsDir)
 	if err != nil {
@@ -159,11 +223,51 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 
 // DeleteGroup removes persistent storage and cached store for a group.
 func (m *GroupManager) DeleteGroup(groupID string) error {
+	return m.DeleteGroupForPlatform("qq", groupID)
+}
+
+func (m *GroupManager) DeleteGroupForPlatform(platform, groupID string) error {
 	canon := CanonicalGroupID(groupID)
 	if canon == "" {
 		return fmt.Errorf("canonical group_id cannot be empty")
 	}
-	safeKey := SafeGroupKey(canon)
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	safeKey := platform + ":" + SafeGroupKey(canon)
+	if m.db != nil {
+		ctx := context.Background()
+		tx, err := m.db.SQL.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, statement := range []string{
+			`DELETE FROM memory_entries WHERE instance_id = ? AND scope_type = 'group' AND platform = ? AND group_id = ?`,
+			`DELETE FROM memory_merge_archives WHERE instance_id = ? AND scope_type = 'group' AND platform = ? AND group_id = ?`,
+			`DELETE FROM memory_catalogs WHERE instance_id = ? AND scope_type = 'group' AND platform = ? AND group_id = ?`,
+			`DELETE FROM group_profiles WHERE instance_id = ? AND platform = ? AND group_id = ?`,
+		} {
+			if _, err := tx.ExecContext(ctx, m.db.Bind(statement), m.instanceID, platform, canon); err != nil {
+				return err
+			}
+		}
+		summaryID := canon
+		if platform == "qq" {
+			summaryID = "group:" + canon
+		}
+		if _, err := tx.ExecContext(ctx, m.db.Bind(`DELETE FROM group_summaries
+			WHERE instance_id = ? AND platform = ? AND group_id = ?`), m.instanceID, platform, summaryID); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		delete(m.groups, safeKey)
+		m.mu.Unlock()
+		return nil
+	}
+	cacheKey := safeKey
+	safeKey = SafeGroupKey(canon)
 	groupsBase := filepath.Clean(filepath.Join(m.baseDir, "groups"))
 	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
 
@@ -173,7 +277,7 @@ func (m *GroupManager) DeleteGroup(groupID string) error {
 	}
 
 	m.mu.Lock()
-	delete(m.groups, safeKey)
+	delete(m.groups, cacheKey)
 	m.mu.Unlock()
 
 	if err := os.RemoveAll(groupDir); err != nil {

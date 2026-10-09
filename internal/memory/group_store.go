@@ -2,6 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/storage"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,6 +85,8 @@ func SafeGroupKey(groupID string) string {
 // in an isolated directory under groups/<safe_group_key>/.
 type GroupStore struct {
 	groupID     string
+	platform    string
+	sql         *sqlBrainStore
 	dir         string
 	profilePath string
 	memoryPath  string
@@ -142,6 +145,20 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 	return store, nil
 }
 
+func newSQLGroupStore(db *storage.DB, instanceID, platform, groupID string) (*GroupStore, error) {
+	canon := CanonicalGroupID(groupID)
+	if canon == "" || platform == "" {
+		return nil, errors.New("group platform and ID are required")
+	}
+	store := &GroupStore{
+		groupID: canon, platform: platform,
+		sql:    &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopeGroup, platform: platform, groupID: canon},
+		routes: make(map[string]core.RouteContext),
+	}
+	store.catalog = NewSQLCatalogStore(db, instanceID, ScopeGroup, platform, canon)
+	return store, nil
+}
+
 // GroupID returns the logical group ID.
 func (s *GroupStore) GroupID() string {
 	return s.groupID
@@ -183,6 +200,9 @@ func (s *GroupStore) atomicWriteFile(path string, data []byte) error {
 
 // loadProfile reads the group profile from disk.
 func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
+	if s.sql != nil {
+		return s.loadSQLProfile()
+	}
 	data, err := os.ReadFile(s.profilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -206,6 +226,9 @@ func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
 
 // saveProfileLocked writes the group profile to disk.
 func (s *GroupStore) saveProfileLocked(profile *GroupProfile) error {
+	if s.sql != nil {
+		return s.saveSQLProfile(profile)
+	}
 	profile.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -368,6 +391,9 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 
 // loadMemoryLocked reads the group memory entries from disk.
 func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
+	if s.sql != nil {
+		return s.sql.load()
+	}
 	data, err := os.ReadFile(s.memoryPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -389,6 +415,9 @@ func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 
 // saveMemoryLocked writes the group memory data to disk atomically.
 func (s *GroupStore) saveMemoryLocked(brain *BrainData) error {
+	if s.sql != nil {
+		return s.sql.save(brain)
+	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal group memory: %w", err)
@@ -1053,4 +1082,3 @@ func mergeMemoryTags(existing, incoming []string) []string {
 	}
 	return SanitizeTags(res)
 }
-

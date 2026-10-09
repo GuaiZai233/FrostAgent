@@ -108,7 +108,10 @@ var schemaStatements = []string{
 	)`,
 	`CREATE TABLE group_members (
 		instance_id TEXT NOT NULL, platform TEXT NOT NULL, group_id TEXT NOT NULL,
-		user_id TEXT NOT NULL, profile_json TEXT NOT NULL,
+		user_id TEXT NOT NULL, nickname TEXT NOT NULL DEFAULT '', card TEXT NOT NULL DEFAULT '',
+		role TEXT NOT NULL DEFAULT '', preferred_name TEXT NOT NULL DEFAULT '',
+		aliases_json TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_spoke_at TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (instance_id, platform, group_id, user_id),
 		FOREIGN KEY (instance_id, platform, group_id)
 			REFERENCES group_profiles(instance_id, platform, group_id) ON DELETE CASCADE
@@ -122,7 +125,7 @@ var schemaStatements = []string{
 	`CREATE TABLE group_summaries (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		platform TEXT NOT NULL, group_id TEXT NOT NULL, summary TEXT NOT NULL,
-		generation BIGINT NOT NULL, updated_at TEXT NOT NULL,
+		generation BIGINT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
 		PRIMARY KEY (instance_id, platform, group_id)
 	)`,
 	`CREATE TABLE sticker_entries (
