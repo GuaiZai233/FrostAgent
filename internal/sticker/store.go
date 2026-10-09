@@ -1,6 +1,8 @@
 package sticker
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -11,10 +13,23 @@ import (
 )
 
 type Store struct {
-	mu      sync.RWMutex
-	dir     string
-	index   map[string]*Entry
-	ordered []string
+	mu         sync.RWMutex
+	dir        string
+	index      map[string]*Entry
+	ordered    []string
+	db         *storage.DB
+	instanceID string
+}
+
+func NewSQLStore(db *storage.DB, instanceID, dir string) (*Store, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	s := &Store{db: db, instanceID: instanceID, dir: dir, index: make(map[string]*Entry)}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func NewStore(dir string) (*Store, error) {
@@ -34,6 +49,9 @@ func NewStore(dir string) (*Store, error) {
 func (s *Store) indexPath() string { return filepath.Join(s.dir, "index.json") }
 
 func (s *Store) load() error {
+	if s.db != nil {
+		return s.loadSQL()
+	}
 	data, err := os.ReadFile(s.indexPath())
 	if err != nil {
 		return err
@@ -68,6 +86,9 @@ func refreshInappropriateState(e *Entry) {
 }
 
 func (s *Store) saveSnapshot(index map[string]*Entry, ordered []string) error {
+	if s.db != nil {
+		return s.saveSQL(index, ordered)
+	}
 	entries := make([]Entry, 0, len(ordered))
 	for _, id := range ordered {
 		if e, ok := index[id]; ok {
@@ -90,6 +111,95 @@ func (s *Store) saveSnapshot(index map[string]*Entry, ordered []string) error {
 		os.Remove(tmp)
 	}
 	return nil
+}
+
+func (s *Store) loadSQL() error {
+	ctx := context.Background()
+	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT id, file_name, description, weight, status,
+		model_suspected, manual_blocked, created_at, updated_at FROM sticker_entries
+		WHERE instance_id = ? ORDER BY position, id`), s.instanceID)
+	if err != nil {
+		return err
+	}
+	s.index = make(map[string]*Entry)
+	s.ordered = nil
+	for rows.Next() {
+		e := &Entry{}
+		var status string
+		var modelSuspected, manualBlocked int
+		if err := rows.Scan(&e.ID, &e.FileName, &e.Description, &e.Weight, &status,
+			&modelSuspected, &manualBlocked, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		e.Status = Status(status)
+		e.ModelSuspected, e.ManualBlocked = modelSuspected != 0, manualBlocked != 0
+		refreshInappropriateState(e)
+		s.index[e.ID] = e
+		s.ordered = append(s.ordered, e.ID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	keywords, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT sticker_id, keyword FROM sticker_keywords
+		WHERE instance_id = ? ORDER BY sticker_id, position`), s.instanceID)
+	if err != nil {
+		return err
+	}
+	defer keywords.Close()
+	for keywords.Next() {
+		var id, keyword string
+		if err := keywords.Scan(&id, &keyword); err != nil {
+			return err
+		}
+		if e := s.index[id]; e != nil {
+			e.Keywords = append(e.Keywords, keyword)
+		}
+	}
+	return keywords.Err()
+}
+
+func (s *Store) saveSQL(index map[string]*Entry, ordered []string) error {
+	ctx := context.Background()
+	tx, err := s.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM sticker_entries WHERE instance_id = ?`), s.instanceID); err != nil {
+		return err
+	}
+	for position, id := range ordered {
+		e := index[id]
+		if e == nil {
+			continue
+		}
+		modelSuspected, manualBlocked := 0, 0
+		if e.ModelSuspected {
+			modelSuspected = 1
+		}
+		if e.ManualBlocked {
+			manualBlocked = 1
+		}
+		if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO sticker_entries
+			(instance_id, id, file_name, description, weight, status, model_suspected,
+			manual_blocked, created_at, updated_at, position)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), s.instanceID, e.ID, e.FileName,
+			e.Description, e.Weight, e.Status, modelSuspected, manualBlocked, e.CreatedAt,
+			e.UpdatedAt, position); err != nil {
+			return err
+		}
+		for keywordPosition, keyword := range e.Keywords {
+			if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO sticker_keywords
+				(instance_id, sticker_id, position, keyword) VALUES (?, ?, ?, ?)`),
+				s.instanceID, e.ID, keywordPosition, keyword); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 func cloneIndex(index map[string]*Entry) map[string]*Entry {

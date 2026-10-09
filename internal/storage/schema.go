@@ -130,8 +130,16 @@ var schemaStatements = []string{
 	)`,
 	`CREATE TABLE sticker_entries (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
-		id TEXT NOT NULL, metadata_json TEXT NOT NULL, position INTEGER NOT NULL,
+		id TEXT NOT NULL, file_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+		weight INTEGER NOT NULL, status TEXT NOT NULL, model_suspected INTEGER NOT NULL,
+		manual_blocked INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+		position INTEGER NOT NULL,
 		PRIMARY KEY (instance_id, id)
+	)`,
+	`CREATE TABLE sticker_keywords (
+		instance_id TEXT NOT NULL, sticker_id TEXT NOT NULL, position INTEGER NOT NULL,
+		keyword TEXT NOT NULL, PRIMARY KEY (instance_id, sticker_id, position),
+		FOREIGN KEY (instance_id, sticker_id) REFERENCES sticker_entries(instance_id, id) ON DELETE CASCADE
 	)`,
 	`CREATE TABLE access_records (
 		principal_key TEXT PRIMARY KEY, state TEXT NOT NULL, record_json TEXT NOT NULL
@@ -147,7 +155,7 @@ var schemaStatements = []string{
 }
 
 var tables = []string{
-	"pending_deletions", "security_audit", "access_records", "sticker_entries",
+	"pending_deletions", "security_audit", "access_records", "sticker_keywords", "sticker_entries",
 	"group_summaries", "memory_catalogs", "group_members", "group_profiles",
 	"memory_merge_archives", "memory_tags", "memory_entries", "dialogues",
 	"mcp_tool_policies", "mcp_servers", "model_bindings", "models", "model_secrets",
