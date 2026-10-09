@@ -159,6 +159,10 @@ func (s *Service) GetSessions(
 		createdAt := sess.CreatedAt
 		updatedAt := sess.UpdatedAt
 		sess.Unlock()
+		groupName := sess.GroupName()
+		if groupName == "" && s.engine.SessionManager != nil {
+			groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
+		}
 		viewsByID[sess.ConversationID] = sessionView{
 			info: &v1.SessionInfo{
 				SessionId:    sess.ConversationID,
@@ -167,6 +171,7 @@ func (s *Service) GetSessions(
 				CreatedAt:    createdAt.Format(time.RFC3339),
 				LastActive:   updatedAt.Format(time.RFC3339),
 				GroupSummary: sess.GroupRunningSummary(),
+				GroupName:    groupName,
 			},
 			createdAt: createdAt,
 			updatedAt: updatedAt,
@@ -195,6 +200,9 @@ func (s *Service) GetSessions(
 					if existing.info.GroupSummary == "" {
 						existing.info.GroupSummary = record.Summary
 					}
+					if existing.info.GroupName == "" && s.engine.SessionManager != nil {
+						existing.info.GroupName = s.engine.SessionManager.GetGroupName(record.SessionID)
+					}
 					if record.CreatedAt.Before(existing.createdAt) {
 						existing.createdAt = record.CreatedAt
 						existing.info.CreatedAt = record.CreatedAt.Format(time.RFC3339)
@@ -206,6 +214,10 @@ func (s *Service) GetSessions(
 					viewsByID[targetID] = existing
 					continue
 				}
+				gName := ""
+				if s.engine.SessionManager != nil {
+					gName = s.engine.SessionManager.GetGroupName(record.SessionID)
+				}
 				viewsByID[record.SessionID] = sessionView{
 					info: &v1.SessionInfo{
 						SessionId:    record.SessionID,
@@ -213,6 +225,7 @@ func (s *Service) GetSessions(
 						CreatedAt:    record.CreatedAt.Format(time.RFC3339),
 						LastActive:   record.UpdatedAt.Format(time.RFC3339),
 						GroupSummary: record.Summary,
+						GroupName:    gName,
 					},
 					createdAt: record.CreatedAt,
 					updatedAt: record.UpdatedAt,

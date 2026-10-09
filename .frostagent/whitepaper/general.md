@@ -168,6 +168,14 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 各适配器（OneBot v11 与 AstrBot）在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true` 或 AstrBot 元数据 `_frostagent_proactive_reply: true`），作为有效唤醒信号进入主处理管线；
   - 概率由实例环境变量 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
   - 若群聊配置了 `GROUP_REPLY_ON_MENTION=false`（群聊不回复），则主动回复与被提及回复一并受到总开关压制，保证行为策略的一致性。
+- **群聊白名单入站门禁与零触发保障 (Group Whitelist Ingress Gate & Zero-Trigger Guarantee)**：
+  - 为了支持精准控制主动回复的生效范围、杜绝非预期群聊中的自发插嘴，FrostAgent 引入了群聊白名单机制（由实例环境变量 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 控制）；
+  - **白名单激活判定**：当显式设置 `ENABLE_PROACTIVE_REPLY_WHITELIST=true` 时开启白名单模式（显式设置 `false` 则关闭）；若未显式配置开关，当 `PROACTIVE_REPLY_GROUP_WHITELIST` 存在非空条目时默认启用；
+  - **前置硬门禁拦截**：适配器在进行概率随机掷骰前，通过 `proactive.RollGroupWithRand` 检查目标群聊（`proactive.IsGroupAllowed`）。一旦白名单模式启动，任何不在白名单列表（`PROACTIVE_REPLY_GROUP_WHITELIST`）中的群聊直接短路拒绝、永远不触发主动回复随机 Roll 与大模型调用，实现确定性的零出站与零触发保障；
+  - **跨平台多格式解析**：白名单群号列表支持逗号、分号及各类空白符分隔解析（`proactive.ParseGroupWhitelist`），并自动修剪空白与去重。
+- **跨平台群名称缓存与会话元数据传播 (Cross-Platform Group Name Caching)**：
+  - 各适配器（OneBot v11 与 AstrBot）在接收到群聊消息、群资料查询（`get_group_info`）或协议事件（`event.GroupName`）时，将群名称同步记录到 `SessionManager`（`SetGroupName` / `GetGroupName`）与内存活跃 `SessionContext` 中；
+  - 控制平面 API（`botstatus.Service.GetSessions`）在返回会话列表时携带 `group_name` 字段（Protobuf `frostagent.v1.SessionInfo.group_name`），不仅涵盖当前内存中的活跃群聊，还包含由持久化群聊纪要存储（`GroupSummaryStore`）还原的持久会话，实现全平台统一的群聊名称回显。
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
@@ -199,10 +207,13 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - **P2: 模型输出看门狗阻断透传、格式化校验与静默丢弃 (Output Watchdog Gating & Formatting Silence, `OutputBlocked`)**：
     - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
     - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 以及后置消息组装校验失败（引用校验失败、多媒体消息构建失败、单条消息超长等）执行完全静默丢弃（OneBot 不发送群消息并回滚会话；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或内部格式化错误提示，同时在显式唤醒轮次中完整保留标准安全警示与错误反馈。
-- **Web 控制台可视化滑块、异步串行队列与最后意图优先同步**：
+- **Web 控制台可视化滑块、白名单配置与状态同步**：
   - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
   - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；
-  - 开启时强制校验范围严格限制在 `[0.01, 1.00]`，通过 `ProactiveSettingsSync` 异步串行任务队列调度写操作，连续拖动滑块时自动折叠中间态实现最后意图优先（Last-Intent-Wins），网络保存中锁死控件交互，在本地突变发生与完成时使在途陈旧读取失效（Invalidate Pre-Edit Loads），并在保存失败时主动退出写保护并重载权威真实服务端状态，防御乱序陈旧数据覆盖。
+  - 开启时强制校验范围严格限制在 `[0.01, 1.00]`，通过 `ProactiveSettingsSync` 异步串行任务队列调度写操作，连续拖动滑块时自动折叠中间态实现最后意图优先（Last-Intent-Wins），网络保存中锁死控件交互，在本地突变发生与完成时使在途陈旧读取失效（Invalidate Pre-Edit Loads），并在保存失败时主动退出写保护并重载权威真实服务端状态，防御乱序陈旧数据覆盖；
+  - **白名单可视化管理**：提供「群聊白名单模式」独立开关、群聊下拉快捷选择栏与手动输入框：
+    - 下拉选择栏聚合系统最近活跃会话与持久历史会话，优先展示带群名称缓存的条目（如 `123456（王源粉丝群）`），若尚未更新群名称缓存则展示纯群号（如 `34567`）；
+    - 支持手动输入群号添加，界面提供标签（Tags）展示当前已配置的白名单群号及缓存群名，支持一键移除与原子提交环境变量保存（`ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST`），确保白名单管理灵活直观。
 
 ### 管理员消息指令系统 (Administrator Message Commands System)
 

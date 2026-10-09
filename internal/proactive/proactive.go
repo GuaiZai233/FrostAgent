@@ -14,6 +14,12 @@ const (
 	// EnvEnabled is an optional environment variable to explicitly enable or disable proactive reply.
 	EnvEnabled = "ENABLE_PROACTIVE_REPLY"
 
+	// EnvGroupWhitelist is the environment variable for proactive reply group whitelist (comma-separated).
+	EnvGroupWhitelist = "PROACTIVE_REPLY_GROUP_WHITELIST"
+
+	// EnvWhitelistEnabled is the environment variable to explicitly enable or disable group whitelist mode.
+	EnvWhitelistEnabled = "ENABLE_PROACTIVE_REPLY_WHITELIST"
+
 	// PromptPrefix is prepended to the prompt when proactive reply is triggered.
 	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。"
 
@@ -80,4 +86,76 @@ func RollWithRand(getenv func(string) string, rng func() float64) bool {
 	}
 	roll := rng()
 	return roll < prob
+}
+
+// ParseGroupWhitelist parses a comma-, newline-, semicolon-, or whitespace-delimited group ID string into a set.
+func ParseGroupWhitelist(raw string) map[string]struct{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	items := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
+	})
+	result := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result[item] = struct{}{}
+		}
+	}
+	return result
+}
+
+// IsWhitelistEnabled reports whether group whitelist mode is enabled for proactive reply.
+// Returns true if ENABLE_PROACTIVE_REPLY_WHITELIST is "true".
+// Returns false if ENABLE_PROACTIVE_REPLY_WHITELIST is "false".
+// If unset, returns true if PROACTIVE_REPLY_GROUP_WHITELIST contains at least one non-empty entry.
+func IsWhitelistEnabled(getenv func(string) string) bool {
+	if getenv == nil {
+		return false
+	}
+	en := strings.TrimSpace(getenv(EnvWhitelistEnabled))
+	if strings.EqualFold(en, "true") {
+		return true
+	}
+	if strings.EqualFold(en, "false") {
+		return false
+	}
+	whitelist := ParseGroupWhitelist(getenv(EnvGroupWhitelist))
+	return len(whitelist) > 0
+}
+
+// IsGroupAllowed checks if the given group ID is permitted to trigger proactive reply.
+// When whitelist mode is disabled, all groups are allowed (returns true).
+// Once whitelist mode is enabled, only groups present in the whitelist are allowed.
+// If whitelist mode is enabled and the whitelist is empty, no groups are allowed (returns false).
+func IsGroupAllowed(getenv func(string) string, groupID string) bool {
+	if !IsWhitelistEnabled(getenv) {
+		return true
+	}
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return false
+	}
+	whitelist := ParseGroupWhitelist(getenv(EnvGroupWhitelist))
+	if len(whitelist) == 0 {
+		return false
+	}
+	_, ok := whitelist[groupID]
+	return ok
+}
+
+// RollGroup evaluates whether an inbound group message hits the proactive reply probability and satisfies whitelist rules.
+func RollGroup(getenv func(string) string, groupID string) bool {
+	return RollGroupWithRand(getenv, groupID, rand.Float64)
+}
+
+// RollGroupWithRand evaluates whether an inbound group message hits using a custom RNG function and group whitelist check.
+// Once whitelist mode is active, non-whitelist groups never trigger proactive reply.
+func RollGroupWithRand(getenv func(string) string, groupID string, rng func() float64) bool {
+	if !IsGroupAllowed(getenv, groupID) {
+		return false
+	}
+	return RollWithRand(getenv, rng)
 }

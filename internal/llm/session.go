@@ -282,6 +282,28 @@ type SessionContext struct {
 	// memories). Empty until the first LLM request for this session.
 	lastSystemPrompt string
 	lastModelName    string
+	groupName        string
+}
+
+// GroupName returns the cached group name for this session, if any.
+func (s *SessionContext) GroupName() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupName
+}
+
+// SetGroupName updates the cached group name for this session.
+func (s *SessionContext) SetGroupName(name string) {
+	name = strings.TrimSpace(name)
+	if s == nil || name == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupName = name
 }
 
 // SetDeliveryFailure records a transient delivery failure on the session.
@@ -1604,6 +1626,7 @@ const minHistory = 4
 type SessionManager struct {
 	*runtimescope.Scope
 	sessions          map[string]*SessionContext
+	groupNames        map[string]string
 	mu                sync.RWMutex
 	groupSummaryStore *groupsummary.Store
 	MaxHistory        int           // 单个会话保留的最大历史消息数
@@ -1616,6 +1639,7 @@ func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
 	sm := &SessionManager{
 		Scope:      scope,
 		sessions:   make(map[string]*SessionContext),
+		groupNames: make(map[string]string),
 		MaxHistory: 50,
 		TTL:        24 * time.Hour,
 	}
@@ -1694,6 +1718,10 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 			summary = record.Summary
 		}
 	}
+	gName := sm.groupNames[canonicalID]
+	if gName == "" {
+		gName = sm.groupNames[sessionID]
+	}
 	session := &SessionContext{
 		ConversationID:      sessionID,
 		History:             make([]ChatMessage, 0),
@@ -1701,9 +1729,67 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		UpdatedAt:           time.Now(),
 		epoch:               1,
 		groupCompactSummary: summary,
+		groupName:           gName,
 	}
 	sm.sessions[canonicalID] = session
 	return session
+}
+
+// SetGroupName records or updates the cached human-readable group name for a session.
+func (sm *SessionManager) SetGroupName(sessionID, name string) {
+	name = strings.TrimSpace(name)
+	if sm == nil || name == "" {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.groupNames == nil {
+		sm.groupNames = make(map[string]string)
+	}
+	sm.groupNames[canonicalID] = name
+	sm.groupNames[sessionID] = name
+	if s, exists := sm.sessions[canonicalID]; exists {
+		s.SetGroupName(name)
+	} else if s, exists := sm.sessions[sessionID]; exists {
+		s.SetGroupName(name)
+	}
+}
+
+// GetGroupName returns the cached group name for a session, if known.
+func (sm *SessionManager) GetGroupName(sessionID string) string {
+	if sm == nil {
+		return ""
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if name, ok := sm.groupNames[canonicalID]; ok && name != "" {
+		return name
+	}
+	if name, ok := sm.groupNames[sessionID]; ok && name != "" {
+		return name
+	}
+	for _, alias := range memory.SessionKeyAliases(sessionID) {
+		if name, ok := sm.groupNames[alias]; ok && name != "" {
+			return name
+		}
+	}
+	if s, exists := sm.sessions[canonicalID]; exists {
+		return s.GroupName()
+	}
+	if s, exists := sm.sessions[sessionID]; exists {
+		return s.GroupName()
+	}
+	return ""
 }
 
 // startCleanupRoutine 定时清理过期会话

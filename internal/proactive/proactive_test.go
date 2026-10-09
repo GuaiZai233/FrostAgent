@@ -103,3 +103,116 @@ func TestPromptPrefix(t *testing.T) {
 		t.Errorf("PromptPrefix mismatch:\ngot:  %q\nwant: %q", PromptPrefix, expected)
 	}
 }
+
+func TestGroupWhitelist(t *testing.T) {
+	mockEnv := func(env map[string]string) func(string) string {
+		return func(k string) string {
+			return env[k]
+		}
+	}
+
+	t.Run("ParseGroupWhitelist", func(t *testing.T) {
+		res := ParseGroupWhitelist("123456, 34567,9999\n8888;7777")
+		expected := []string{"123456", "34567", "9999", "8888", "7777"}
+		for _, exp := range expected {
+			if _, ok := res[exp]; !ok {
+				t.Errorf("expected group %s in parsed whitelist", exp)
+			}
+		}
+		if len(res) != len(expected) {
+			t.Errorf("expected %d groups, got %d", len(expected), len(res))
+		}
+
+		if empty := ParseGroupWhitelist("   "); empty != nil {
+			t.Errorf("expected nil for whitespace, got %v", empty)
+		}
+	})
+
+	t.Run("IsWhitelistEnabled", func(t *testing.T) {
+		// 1. Unset and no groups -> disabled
+		if IsWhitelistEnabled(mockEnv(map[string]string{})) {
+			t.Errorf("expected disabled when unset")
+		}
+
+		// 2. Explicitly true
+		if !IsWhitelistEnabled(mockEnv(map[string]string{
+			EnvWhitelistEnabled: "true",
+		})) {
+			t.Errorf("expected enabled when set to true")
+		}
+
+		// 3. Explicitly false even if groups exist
+		if IsWhitelistEnabled(mockEnv(map[string]string{
+			EnvWhitelistEnabled: "false",
+			EnvGroupWhitelist:    "123456,34567",
+		})) {
+			t.Errorf("expected disabled when explicitly false")
+		}
+
+		// 4. Unset but groups exist -> defaults to enabled
+		if !IsWhitelistEnabled(mockEnv(map[string]string{
+			EnvGroupWhitelist: "123456",
+		})) {
+			t.Errorf("expected enabled when groups exist and switch unset")
+		}
+	})
+
+	t.Run("IsGroupAllowed", func(t *testing.T) {
+		// Whitelist disabled -> all groups allowed
+		envDisabled := mockEnv(map[string]string{
+			EnvWhitelistEnabled: "false",
+			EnvGroupWhitelist:    "123456",
+		})
+		if !IsGroupAllowed(envDisabled, "99999") {
+			t.Errorf("expected all groups allowed when whitelist disabled")
+		}
+
+		// Whitelist enabled with groups
+		envEnabled := mockEnv(map[string]string{
+			EnvWhitelistEnabled: "true",
+			EnvGroupWhitelist:    "123456, 34567",
+		})
+		if !IsGroupAllowed(envEnabled, "123456") {
+			t.Errorf("expected 123456 allowed")
+		}
+		if !IsGroupAllowed(envEnabled, "34567") {
+			t.Errorf("expected 34567 allowed")
+		}
+		if IsGroupAllowed(envEnabled, "99999") {
+			t.Errorf("expected 99999 NOT allowed (not in whitelist)")
+		}
+		if IsGroupAllowed(envEnabled, "") {
+			t.Errorf("expected empty group NOT allowed")
+		}
+
+		// Whitelist enabled but list is empty -> no groups allowed
+		envEmpty := mockEnv(map[string]string{
+			EnvWhitelistEnabled: "true",
+			EnvGroupWhitelist:    "",
+		})
+		if IsGroupAllowed(envEmpty, "123456") {
+			t.Errorf("expected group NOT allowed when whitelist is empty")
+		}
+	})
+
+	t.Run("RollGroupWithRand", func(t *testing.T) {
+		env := mockEnv(map[string]string{
+			EnvProbability:       "0.50",
+			EnvWhitelistEnabled: "true",
+			EnvGroupWhitelist:    "123456, 34567",
+		})
+
+		hitRng := func() float64 { return 0.1 }
+
+		// Whitelisted group hits RNG -> triggers
+		if !RollGroupWithRand(env, "123456", hitRng) {
+			t.Errorf("expected whitelisted group to trigger when hitting RNG")
+		}
+
+		// Non-whitelisted group never triggers even if RNG hits!
+		if RollGroupWithRand(env, "99999", hitRng) {
+			t.Errorf("expected non-whitelisted group to NEVER trigger")
+		}
+	})
+}
+
