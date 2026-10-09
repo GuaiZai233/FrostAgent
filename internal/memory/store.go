@@ -41,6 +41,16 @@ func NewSQLStore(db *storage.DB, instanceID string) *Store {
 	return &Store{sql: &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopePrivate}}
 }
 
+func (s *Store) ListMergeArchives() ([]MemoryMergeArchive, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	brain, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return append([]MemoryMergeArchive(nil), brain.MergeArchives...), nil
+}
+
 // load reads the brain data from disk.
 func (s *Store) load() (*BrainData, error) {
 	if s.sql != nil {

@@ -108,8 +108,9 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 	if m.db != nil {
 		rows, err := m.db.SQL.QueryContext(context.Background(), m.db.Bind(`SELECT platform, group_id FROM group_profiles WHERE instance_id = ?
-			UNION SELECT platform, group_id FROM memory_entries WHERE instance_id = ? AND scope_type = 'group'`),
-			m.instanceID, m.instanceID)
+			UNION SELECT platform, group_id FROM memory_entries WHERE instance_id = ? AND scope_type = 'group'
+			UNION SELECT platform, group_id FROM memory_merge_archives WHERE instance_id = ? AND scope_type = 'group'`),
+			m.instanceID, m.instanceID, m.instanceID)
 		if err != nil {
 			return nil, err
 		}
