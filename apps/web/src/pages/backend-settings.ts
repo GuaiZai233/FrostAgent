@@ -51,6 +51,7 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
+import { ProactiveSettingsSync } from './proactive-settings-sync';
 
 function configurationBadges(key: string): string {
   const ownership = globalKeys.has(key)
@@ -79,6 +80,8 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let groupReplyOnMention = false;
   let enableAtOther = false;
   let enableReplyOther = false;
+  let proactiveReplyEnabled = false;
+  let proactiveReplyProbability = 0.05;
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -117,38 +120,104 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
       <!-- Table View Container -->
       <div id="tab-table-content" class="flex flex-col gap-4">
-        <!-- Group Behavior Settings Card -->
+        <!-- Bot Behavior Settings Card -->
         <article class="card p-4">
           <div class="card-header border-b border-border pb-3 mb-3">
             <div class="flex items-center gap-2">
-              <span class="text-primary flex items-center">${icon('users', 'w-4 h-4')}</span>
-              <h2 class="card-title text-sm font-semibold">群聊回复行为策略</h2>
+              <span class="text-primary flex items-center">${icon('bot', 'w-4 h-4')}</span>
+              <h2 class="card-title text-sm font-semibold">Bot 行为与回复策略</h2>
             </div>
           </div>
-          <div class="card-content grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
-              </div>
-            </label>
 
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
+          <!-- Proactive Reply Section -->
+          <div class="mb-4 pb-4 border-b border-border" id="proactive-reply-card">
+            <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-primary flex items-center">${icon('sparkles', 'w-4 h-4')}</span>
+                <div>
+                  <h3 class="text-xs font-semibold text-foreground">主动回复</h3>
+                  <p class="text-[11px] text-muted mt-0.5">未被唤醒的入站群聊消息先 roll 概率；触发后由模型研判值得插嘴则回复，否则调用 stay_silent 静默</p>
+                </div>
               </div>
-            </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <span class="text-xs font-medium text-muted" id="proactive-reply-status-text">已停用</span>
+                <input type="checkbox" id="proactive-reply-cb" class="checkbox" />
+              </label>
+            </div>
 
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
+            <div class="p-3 bg-muted/40 rounded-lg border border-border flex flex-col gap-2.5" id="proactive-reply-controls" style="transition: opacity 0.2s ease;">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs font-semibold text-foreground">触发概率</span>
+                  <span class="text-[11px] text-muted font-mono">(PROACTIVE_REPLY_PROBABILITY)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-mono font-semibold text-primary" id="proactive-reply-prob-display">0.05 (5%)</span>
+                </div>
               </div>
-            </label>
+
+              <div class="flex items-center gap-4 pt-1">
+                <input
+                  type="range"
+                  id="proactive-reply-slider"
+                  class="slider flex-1"
+                  min="0.01"
+                  max="1.00"
+                  step="0.01"
+                  value="0.05"
+                />
+                <div class="flex items-center gap-1.5" style="width: 7.5rem;">
+                  <input
+                    type="number"
+                    id="proactive-reply-number"
+                    class="input input-sm font-mono text-right"
+                    min="0.01"
+                    max="1.00"
+                    step="0.01"
+                    value="0.05"
+                    placeholder="0.05"
+                    style="width: 5.5rem;"
+                  />
+                  <span class="text-xs text-muted">/ 1.0</span>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between text-[11px] text-muted mt-0.5">
+                <span>0.01 (1%)</span>
+                <span>精度 0.01 ~ 1.00，开启后最低 0.01，支持滑块或手动输入</span>
+                <span>1.00 (100%)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Group Response Rules -->
+          <div>
+            <h3 class="text-xs font-semibold text-foreground mb-2.5">群聊回复规则</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+                <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
+                <div>
+                  <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
+                  <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
+                </div>
+              </label>
+
+              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+                <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
+                <div>
+                  <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
+                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
+                </div>
+              </label>
+
+              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
+                <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
+                <div>
+                  <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
+                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
+                </div>
+              </label>
+            </div>
           </div>
         </article>
 
@@ -212,6 +281,24 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   )!;
   const addEnvBtn = container.querySelector<HTMLButtonElement>('#add-env-btn')!;
 
+  const proactiveReplyCb =
+    container.querySelector<HTMLInputElement>('#proactive-reply-cb')!;
+  const proactiveReplyStatusText = container.querySelector<HTMLElement>(
+    '#proactive-reply-status-text',
+  )!;
+  const proactiveReplyControls = container.querySelector<HTMLElement>(
+    '#proactive-reply-controls',
+  )!;
+  const proactiveReplySlider = container.querySelector<HTMLInputElement>(
+    '#proactive-reply-slider',
+  )!;
+  const proactiveReplyNumber = container.querySelector<HTMLInputElement>(
+    '#proactive-reply-number',
+  )!;
+  const proactiveReplyProbDisplay = container.querySelector<HTMLElement>(
+    '#proactive-reply-prob-display',
+  )!;
+
   const groupMentionCb =
     container.querySelector<HTMLInputElement>('#group-mention-cb')!;
   const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
@@ -224,8 +311,62 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const saveRawEnvBtn =
     container.querySelector<HTMLButtonElement>('#save-raw-env-btn')!;
 
+  function updateProactiveUI(
+    enabled: boolean,
+    prob: number,
+    isSaving = false,
+  ) {
+    proactiveReplyCb.checked = enabled;
+    proactiveReplyCb.disabled = isSaving;
+    proactiveReplyStatusText.textContent = isSaving
+      ? '保存中...'
+      : enabled
+        ? '已启用'
+        : '已停用';
+    proactiveReplyStatusText.className = enabled
+      ? 'text-xs font-medium text-primary'
+      : 'text-xs font-medium text-muted';
+
+    const clampedProb = Math.min(
+      1.0,
+      Math.max(0.01, Math.round(prob * 100) / 100),
+    );
+    const probStr = clampedProb.toFixed(2);
+    proactiveReplySlider.value = probStr;
+    proactiveReplyNumber.value = probStr;
+    proactiveReplyProbDisplay.textContent = `${probStr} (${Math.round(clampedProb * 100)}%)`;
+
+    proactiveReplySlider.disabled = !enabled || isSaving;
+    proactiveReplyNumber.disabled = !enabled || isSaving;
+    proactiveReplyControls.style.opacity = !enabled || isSaving ? '0.55' : '1';
+    proactiveReplyControls.style.pointerEvents =
+      enabled && !isSaving ? 'auto' : 'none';
+  }
+
+  const proactiveSync = new ProactiveSettingsSync(
+    api,
+    { enabled: proactiveReplyEnabled, probability: proactiveReplyProbability },
+    {
+      onStateChange: (state) => {
+        proactiveReplyEnabled = state.enabled;
+        proactiveReplyProbability = state.probability;
+        updateProactiveUI(state.enabled, state.probability, state.isSaving);
+      },
+      onError: (err) => {
+        toast.error('更新失败: ' + err.message);
+      },
+      onSuccess: (msg) => {
+        toast.success(msg);
+      },
+      onReloadNeeded: async () => {
+        await loadData();
+      },
+    },
+  );
+
   async function loadData() {
     if (isUnmounted) return;
+    const loadSeq = proactiveSync.nextLoadSeq();
     loading = true;
     renderTable();
 
@@ -244,9 +385,32 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
       enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
 
+      const probValStr = getVal('PROACTIVE_REPLY_PROBABILITY');
+      const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
+      const parsedProb = parseFloat(probValStr);
+
+      let serverEnabled = false;
+      if (enabledValStr === 'false') {
+        serverEnabled = false;
+      } else if (enabledValStr === 'true') {
+        serverEnabled = true;
+      } else {
+        serverEnabled = !isNaN(parsedProb) && parsedProb > 0;
+      }
+
+      let serverProb = 0.05;
+      if (!isNaN(parsedProb) && parsedProb >= 0.01 && parsedProb <= 1.0) {
+        serverProb = Math.round(parsedProb * 100) / 100;
+      } else if (serverEnabled) {
+        serverProb = 0.01;
+      } else {
+        serverProb = 0.05;
+      }
+
       groupMentionCb.checked = groupReplyOnMention;
       groupAtCb.checked = enableAtOther;
       groupReplyCb.checked = enableReplyOther;
+      proactiveSync.applyServerConfig(serverEnabled, serverProb, loadSeq);
     } catch (err) {
       if (isUnmounted) return;
       toast.error(
@@ -636,6 +800,22 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     }
   }
 
+  // Proactive reply handlers
+  async function handleProactiveToggle(enabled: boolean) {
+    let prob = parseFloat(proactiveReplyNumber.value);
+    if (isNaN(prob) || prob < 0.01) {
+      prob = 0.01;
+    }
+    if (prob > 1.0) {
+      prob = 1.0;
+    }
+    await proactiveSync.setTarget(enabled, prob);
+  }
+
+  async function handleProactiveProbChange(val: number) {
+    await proactiveSync.setTarget(proactiveReplyEnabled, val);
+  }
+
   // Raw .env save
   async function saveRawEnv() {
     if (saving) return;
@@ -693,6 +873,40 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         groupReplyCb.checked,
       ),
   );
+
+  // Proactive reply event handlers
+  proactiveReplyCb.addEventListener('change', () => {
+    void handleProactiveToggle(proactiveReplyCb.checked);
+  });
+
+  proactiveReplySlider.addEventListener('input', () => {
+    const val = parseFloat(proactiveReplySlider.value);
+    if (!isNaN(val)) {
+      const clamped = Math.min(
+        1.0,
+        Math.max(0.01, Math.round(val * 100) / 100),
+      );
+      proactiveReplyNumber.value = clamped.toFixed(2);
+      proactiveReplyProbDisplay.textContent = `${clamped.toFixed(2)} (${Math.round(clamped * 100)}%)`;
+    }
+  });
+
+  proactiveReplySlider.addEventListener('change', () => {
+    const val = parseFloat(proactiveReplySlider.value);
+    void handleProactiveProbChange(val);
+  });
+
+  proactiveReplyNumber.addEventListener('change', () => {
+    const val = parseFloat(proactiveReplyNumber.value);
+    void handleProactiveProbChange(val);
+  });
+
+  proactiveReplyNumber.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      proactiveReplyNumber.blur();
+    }
+  });
 
   addEnvBtn.addEventListener('click', openAddEnvModal);
   saveRawEnvBtn.addEventListener('click', () => void saveRawEnv());
