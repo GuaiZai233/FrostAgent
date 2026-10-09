@@ -3,6 +3,7 @@ package astrbot
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/sticker"
 	"context"
 	"errors"
@@ -381,5 +382,81 @@ func TestAdapterSend_OutboundContract(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error for insecure media URL %q, got nil", rawURL)
 		}
+	}
+}
+
+func TestAstrBot_RoutePropagation_QQPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+	engine := newTestEngine(&mockLLMProvider{})
+	engine.GroupManager = gm
+
+	srv, adapter, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	for range 20 {
+		adapter.mu.RLock()
+		n := len(adapter.conns)
+		adapter.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	groupID := "syn_grp_qq_route_99"
+	event := Event{
+		Type:        "event",
+		MessageID:   "msg_route_001",
+		SessionID:   "aiocqhttp:group:" + groupID,
+		UserID:      "syn_usr_route_01",
+		SenderName:  "TestUser",
+		GroupID:     groupID,
+		GroupName:   "QQTestGroup",
+		Content:     "hello world",
+		Platform:    "aiocqhttp", // Dynamic QQ adapter platform
+		MessageType: "group",
+	}
+
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+
+	// Wait for event to be processed and route remembered
+	var route core.RouteContext
+	var found bool
+	for range 50 {
+		gStore, err := gm.GetGroupStore(groupID)
+		if err == nil {
+			route = gStore.RouteForOwner(groupID)
+			if route.Platform == "aiocqhttp" {
+				found = true
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !found {
+		t.Fatalf("expected route to be remembered in GroupStore, got Platform=%q", route.Platform)
+	}
+	if route.Platform != "aiocqhttp" {
+		t.Errorf("expected route Platform to be %q, got %q", "aiocqhttp", route.Platform)
+	}
+	if route.GroupID != groupID {
+		t.Errorf("expected route GroupID to be %q, got %q", groupID, route.GroupID)
+	}
+
+	// Also verify GroupOwnerExplicit route has dynamic QQ platform
+	gStore, _ := gm.GetGroupStore(groupID)
+	explicitRoute := gStore.RouteForOwner(memory.GroupOwnerExplicit)
+	if explicitRoute.Platform != "aiocqhttp" {
+		t.Errorf("expected GroupOwnerExplicit route Platform to be %q, got %q", "aiocqhttp", explicitRoute.Platform)
 	}
 }

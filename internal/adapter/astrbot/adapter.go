@@ -409,41 +409,54 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						senderCard := event.SenderCard
 						groupName := event.GroupName
 						if a.engine.Security != nil {
-							secPlatform := astrBotQQPlatform
-							if c.mock {
-								secPlatform = "mock"
-							}
-							if principal, pErr := security.NewPrincipal(secPlatform, event.UserID); pErr == nil {
-								evalFn := a.engine.Security.EvaluateContext
-								if c.mock {
-									evalFn = a.engine.Security.EvaluateContextDryRun
-								}
-								if senderName != "" {
-									dec := evalFn(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
-										Instance: a.engine.InstanceID,
-										Session:  c.sessionKey(event),
-									})
-									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
-										senderName = ""
+							sec := a.engine.Security
+							if sec.Mode() == security.ControlModeAggressive {
+								secPlatform := astrBotQQPlatform
+								if principal, pErr := security.NewPrincipal(secPlatform, event.UserID); pErr == nil {
+									vetter := sec.GetMetadataVetter()
+									sessionKey := c.sessionKey(event)
+
+									checkOrDispatch := func(text string, onSafe func(string)) string {
+										if text == "" {
+											return ""
+										}
+										if safe, cached := vetter.Check(text); cached {
+											if safe {
+												return text
+											}
+											return ""
+										}
+										// Not cached: do NOT block receive loop!
+										// Do not persist unvetted values until vetting passes.
+										if vetter.MarkInFlight(text) {
+											textToVet := text
+											a.engine.Go(func() {
+												defer vetter.ClearInFlight(textToVet)
+												ctx, cancel := context.WithTimeout(a.engine.Context(), 5*time.Second)
+												defer cancel()
+												dec := sec.EvaluateContextWithContext(ctx, principal, security.SourcePlatformMeta, textToVet, security.AuditEvent{
+													Instance: a.engine.InstanceID,
+													Session:  sessionKey,
+												})
+												isSafe := !(dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock)
+												vetter.Record(textToVet, isSafe)
+												if isSafe {
+													onSafe(textToVet)
+												}
+											})
+										}
+										return ""
 									}
-								}
-								if senderCard != "" {
-									dec := evalFn(principal, security.SourcePlatformMeta, senderCard, security.AuditEvent{
-										Instance: a.engine.InstanceID,
-										Session:  c.sessionKey(event),
+
+									senderName = checkOrDispatch(senderName, func(safeName string) {
+										_, _ = gStore.ObserveMember(event.UserID, safeName, "", "", "astrbot")
 									})
-									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
-										senderCard = ""
-									}
-								}
-								if groupName != "" {
-									dec := evalFn(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
-										Instance: a.engine.InstanceID,
-										Session:  c.sessionKey(event),
+									senderCard = checkOrDispatch(senderCard, func(safeCard string) {
+										_, _ = gStore.ObserveMember(event.UserID, "", safeCard, "", "astrbot")
 									})
-									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
-										groupName = ""
-									}
+									groupName = checkOrDispatch(groupName, func(safeGroupName string) {
+										_ = gStore.UpdateGroupName(safeGroupName)
+									})
 								}
 							}
 						}
@@ -451,8 +464,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						if groupName != "" {
 							_ = gStore.UpdateGroupName(groupName)
 						}
-						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "astrbot", GroupID: event.GroupID})
-						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: "astrbot", GroupID: event.GroupID})
+						routeScope := astrBotRouteScope(event)
+						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
 					}
 				}
 				if isExplicitlyWoken(event, scope) {

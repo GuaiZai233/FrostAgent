@@ -1665,7 +1665,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 
 	distillOutput := []distillExtractedEntry{
 		{
-			// Valid evidence: "matcha latte" exists in Msg 0 ("Alice drinks matcha latte every morning")
+			// 1. Valid first-person evidence: "matcha latte" exists in Msg 0 ("Alice drinks matcha latte every morning"), content is grounded
 			Content:        "Alice drinks matcha latte",
 			Tags:           []string{"drink"},
 			Evidence:       "matcha latte",
@@ -1673,7 +1673,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 			IsSelf:         true,
 		},
 		{
-			// Hallucinated evidence: "swimming" does NOT exist in Msg 1 ("Bob enjoys hiking and mountain climbing")
+			// 2. Hallucinated evidence: "swimming in pool" does NOT exist in Msg 1 -> must NOT be saved at all
 			Content:        "Bob likes swimming in summer",
 			Tags:           []string{"sport"},
 			Evidence:       "swimming in pool",
@@ -1681,7 +1681,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 			IsSelf:         true,
 		},
 		{
-			// Assistant message: role is "assistant", cannot attribute to assistant
+			// 3. Assistant message: role is "assistant" -> must NOT be saved at all
 			Content:        "Assistant preference note",
 			Tags:           []string{"bot"},
 			Evidence:       "noted",
@@ -1689,7 +1689,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 			IsSelf:         true,
 		},
 		{
-			// Trivial evidence: single character "A" (< 2 runes)
+			// 4. Trivial evidence: single character "A" (< 3 runes) -> must NOT be saved at all
 			Content:        "Alice likes morning walks",
 			Tags:           []string{"morning"},
 			Evidence:       "A",
@@ -1697,19 +1697,43 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 			IsSelf:         true,
 		},
 		{
-			// General group fact (is_self = false)
-			Content:        "Group holds morning discussions",
-			Tags:           []string{"group"},
-			Evidence:       "matcha",
-			SourceMsgIndex: &idx0,
+			// 5. Valid general group fact: is_self = false, evidence matches Msg 1 ("mountain climbing") and grounds content -> saved as group
+			Content:        "Group members enjoy mountain climbing",
+			Tags:           []string{"group", "hiking"},
+			Evidence:       "mountain climbing",
+			SourceMsgIndex: &idx1,
 			IsSelf:         false,
 		},
 		{
-			// Out of bounds index
+			// 6. Out of bounds index -> must NOT be saved at all
 			Content:        "Out of bounds index note",
 			Tags:           []string{"oob"},
 			Evidence:       "matcha",
 			SourceMsgIndex: &idxOut,
+			IsSelf:         true,
+		},
+		{
+			// 7. Common unrelated 2-character evidence ("今天") -> must NOT be saved at all
+			Content:        "Bob is administrator of the project",
+			Tags:           []string{"admin"},
+			Evidence:       "今天",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// 8. Unrelated evidence: "hiking and mountain" exists in Msg 1, but content "Bob is administrator" has 0 overlap -> must NOT be saved at all
+			Content:        "Bob is administrator of the project",
+			Tags:           []string{"admin"},
+			Evidence:       "hiking and mountain",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// 9. Cross-speaker claimed content: Msg 0 is Alice, but claims is_self=true for Bob -> must NOT be saved at all
+			Content:        "Bob enjoys matcha drinks",
+			Tags:           []string{"drink"},
+			Evidence:       "drinks matcha latte",
+			SourceMsgIndex: &idx0,
 			IsSelf:         true,
 		},
 	}
@@ -1730,8 +1754,12 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		t.Fatalf("ListAll failed: %v", err)
 	}
 
-	if len(entries) != len(distillOutput) {
-		t.Fatalf("expected %d entries saved, got %d", len(distillOutput), len(entries))
+	for i, ent := range entries {
+		t.Logf("saved entry [%d]: Owner=%q Content=%q", i, ent.Owner, ent.Content)
+	}
+	// Only entry 1 (Alice valid personal fact) and entry 5 (valid group fact) must be saved!
+	if len(entries) != 2 {
+		t.Fatalf("expected exactly 2 grounded entries saved, got %d", len(entries))
 	}
 
 	entriesByContent := make(map[string]memory.MemoryEntry)
@@ -1748,35 +1776,8 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, "syn_user_alice_99")
 	}
 
-	// 2. Hallucinated evidence -> Falls back to group
-	e2, ok := entriesByContent["Bob likes swimming in summer"]
-	if !ok {
-		t.Fatalf("entry 2 missing")
-	}
-	if e2.Owner != memory.GroupOwnerExplicit {
-		t.Errorf("entry 2 hallucinated evidence owner mismatch: got %q, want %q", e2.Owner, memory.GroupOwnerExplicit)
-	}
-
-	// 3. Assistant message -> Falls back to group
-	e3, ok := entriesByContent["Assistant preference note"]
-	if !ok {
-		t.Fatalf("entry 3 missing")
-	}
-	if e3.Owner != memory.GroupOwnerExplicit {
-		t.Errorf("entry 3 assistant role owner mismatch: got %q, want %q", e3.Owner, memory.GroupOwnerExplicit)
-	}
-
-	// 4. Trivial evidence (< 2 runes) -> Falls back to group
-	e4, ok := entriesByContent["Alice likes morning walks"]
-	if !ok {
-		t.Fatalf("entry 4 missing")
-	}
-	if e4.Owner != memory.GroupOwnerExplicit {
-		t.Errorf("entry 4 trivial evidence owner mismatch: got %q, want %q", e4.Owner, memory.GroupOwnerExplicit)
-	}
-
-	// 5. General group fact -> Owner is group
-	e5, ok := entriesByContent["Group holds morning discussions"]
+	// 5. Valid general group fact -> Owner is group
+	e5, ok := entriesByContent["Group members enjoy mountain climbing"]
 	if !ok {
 		t.Fatalf("entry 5 missing")
 	}
@@ -1784,12 +1785,18 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		t.Errorf("entry 5 general fact owner mismatch: got %q, want %q", e5.Owner, memory.GroupOwnerExplicit)
 	}
 
-	// 6. Out of bounds index -> Falls back to group
-	e6, ok := entriesByContent["Out of bounds index note"]
-	if !ok {
-		t.Fatalf("entry 6 missing")
+	// Verify ungrounded and rejected entries are NEVER saved
+	rejectedContents := []string{
+		"Bob likes swimming in summer",
+		"Assistant preference note",
+		"Alice likes morning walks",
+		"Out of bounds index note",
+		"Bob is administrator of the project",
+		"Bob enjoys matcha drinks",
 	}
-	if e6.Owner != memory.GroupOwnerExplicit {
-		t.Errorf("entry 6 out-of-bounds owner mismatch: got %q, want %q", e6.Owner, memory.GroupOwnerExplicit)
+	for _, rejected := range rejectedContents {
+		if _, exists := entriesByContent[rejected]; exists {
+			t.Errorf("expected rejected entry %q to NOT be saved in store, but found it", rejected)
+		}
 	}
 }

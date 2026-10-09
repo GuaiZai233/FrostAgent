@@ -2,13 +2,16 @@ package onebot
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,4 +277,125 @@ func TestAdapterSend_OutboundContract(t *testing.T) {
 			t.Fatalf("expected error for insecure media URL %q, got nil", rawURL)
 		}
 	}
+}
+
+func TestOneBot_MetadataVetting_NonBlocking(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+	secCtrl := security.NewController(tmpDir)
+	secCtrl.SetMode(security.ControlModeAggressive)
+
+	var classifierCalled atomic.Int32
+	slowClassifier := &mockClassifier{
+		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			classifierCalled.Add(1)
+			// Simulate a slow remote classifier
+			select {
+			case <-time.After(200 * time.Millisecond):
+				return security.ClassificationResult{
+					Category:  security.RiskCategoryNone,
+					RiskLevel: security.RiskLevelNone,
+					Reason:    "benign",
+				}, nil
+			case <-ctx.Done():
+				return security.ClassificationResult{}, ctx.Err()
+			}
+		},
+	}
+	secCtrl.SetClassifier(slowClassifier)
+
+	engine := newTestEngine(&mockLLMProvider{})
+	engine.Security = secCtrl
+	engine.GroupManager = gm
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	// Wait briefly for connection registration
+	time.Sleep(50 * time.Millisecond)
+
+	// Send 20 unwoken chatter messages rapidly with identical nickname and card
+	unvettedNick := "FoxNick_TestVetting"
+	unvettedCard := "FoxCard_TestVetting"
+	startTime := time.Now()
+
+	for i := range 20 {
+		event := model.OneBotEvent{
+			PostType:    "message",
+			MessageType: "group",
+			MessageID:   int32(2000 + i),
+			GroupID:     777888,
+			UserID:      888999,
+			Sender: &model.OneBotSender{
+				UserID:   888999,
+				Nickname: unvettedNick,
+				Card:     unvettedCard,
+			},
+			Message: []byte(`[{"type":"text","data":{"text":"unwoken chatter line"}}]`),
+		}
+		data, mErr := json.Marshal(event)
+		if mErr != nil {
+			t.Fatalf("marshal event: %v", mErr)
+		}
+		if wErr := conn.WriteMessage(websocket.TextMessage, data); wErr != nil {
+			t.Fatalf("write message: %v", wErr)
+		}
+	}
+
+	// 1. Non-blocking verification: sending 20 messages with a 200ms classifier took < 500ms
+	sendDuration := time.Since(startTime)
+	if sendDuration > 500*time.Millisecond {
+		t.Errorf("expected non-blocking write to complete quickly, took %v", sendDuration)
+	}
+
+	// 2. Unvetted persistence check: immediately after sending, unvetted values must NOT be persisted
+	gStore, err := gm.GetGroupStore("777888")
+	if err == nil {
+		prof, pErr := gStore.GetProfile()
+		if pErr == nil {
+			mem := prof.GetMember("888999")
+			if mem != nil && (mem.Nickname == unvettedNick || mem.Card == unvettedCard) {
+				t.Errorf("unvetted nickname/card leaked into persistent profile before vetting completed: %+v", mem)
+			}
+		}
+	}
+
+	// 3. Wait for background vetting to complete
+	vetter := secCtrl.GetMetadataVetter()
+	deadline := time.Now().Add(2 * time.Second)
+	vettedSafe := false
+	for time.Now().Before(deadline) {
+		safeNick, cachedNick := vetter.Check(unvettedNick)
+		safeCard, cachedCard := vetter.Check(unvettedCard)
+		if cachedNick && safeNick && cachedCard && safeCard {
+			vettedSafe = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !vettedSafe {
+		t.Errorf("expected background vetting to finish and record safe cache entries")
+	}
+
+	// 4. Bounded evaluation count: across 20 messages, deduplication bounded evaluations to <= 4 (1-2 for nick, 1-2 for card)
+	count := classifierCalled.Load()
+	if count > 4 {
+		t.Errorf("expected deduplicated evaluations (<= 4), got %d", count)
+	}
+
+	// 5. Ensure all in-flight background goroutines and disk writes finish before TempDir cleanup on Windows
+	for range 50 {
+		if vetter.InFlightCount() == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
 }

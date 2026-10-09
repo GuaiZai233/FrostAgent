@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -635,23 +637,50 @@ func (c *GroupCompactor) distillGroupMemories(
 	now := time.Now()
 	var toSave []memory.MemoryEntry
 	for _, e := range entries {
-		if strings.TrimSpace(e.Content) == "" {
+		cleanContent := strings.TrimSpace(e.Content)
+		if cleanContent == "" {
 			continue
 		}
+
+		// 1. Every distilled fact must be explicitly anchored to a valid source message in the snapshot.
+		if e.SourceMsgIndex == nil {
+			continue
+		}
+		idx := *e.SourceMsgIndex
+		if idx < 0 || idx >= len(snapshot.Messages) {
+			continue
+		}
+		srcMsg := snapshot.Messages[idx]
+		if srcMsg.Role == "assistant" || srcMsg.SenderID == "" {
+			continue
+		}
+
+		// 2. Evidence validation: must be a non-trivial (>= 3 runes) verbatim substring of the source message.
+		evidence := strings.TrimSpace(e.Evidence)
+		evRunes := []rune(evidence)
+		if len(evRunes) < 3 || !strings.Contains(srcMsg.Content, evidence) {
+			continue
+		}
+
+		// 3. Grounding validation: the proposed content must legitimately derive from the evidence.
+		overlap, totalEvTokens := countSubstantiveTokenOverlap(evidence, cleanContent)
+		if totalEvTokens == 0 || overlap == 0 || (float64(overlap)/float64(totalEvTokens) < 0.4 && overlap < 2) {
+			continue
+		}
+
+		// 4. Attribution validation:
 		ownerKey := memory.GroupOwnerExplicit
-		if e.IsSelf && e.SourceMsgIndex != nil {
-			idx := *e.SourceMsgIndex
-			if idx >= 0 && idx < len(snapshot.Messages) {
-				srcMsg := snapshot.Messages[idx]
-				evidence := strings.TrimSpace(e.Evidence)
-				// Verifiable source evidence check: must not be assistant, must have sender ID,
-				// and evidence must non-trivially (>= 2 runes) exist as a substring in the referenced message content.
-				if srcMsg.Role != "assistant" && srcMsg.SenderID != "" &&
-					evidence != "" && len([]rune(evidence)) >= 2 &&
-					strings.Contains(srcMsg.Content, evidence) {
-					ownerKey = srcMsg.SenderID
-				}
+		if e.IsSelf {
+			// Must be a genuine first-person statement from this speaker.
+			if !isFirstPersonStatement(evidence, srcMsg.Content, srcMsg.Sender) {
+				// Reject ungrounded personal attribution (e.g. cross-speaker claim falsely marked as is_self).
+				continue
 			}
+			// Reject cross-speaker claims that attribute facts about another participant.
+			if isCrossSpeakerClaim(cleanContent, srcMsg.SenderID, snapshot.Messages) {
+				continue
+			}
+			ownerKey = srcMsg.SenderID
 		}
 
 		b := make([]byte, 8)
@@ -664,7 +693,7 @@ func (c *GroupCompactor) distillGroupMemories(
 			OwnerType: memory.OwnerGroup,
 			ScopeType: memory.ScopeGroup,
 			GroupID:   groupID,
-			Content:   e.Content,
+			Content:   cleanContent,
 			Tags:      e.Tags,
 			Source:    memory.SourceDistill,
 			CreatedAt: now,
@@ -682,6 +711,96 @@ func (c *GroupCompactor) distillGroupMemories(
 	}
 
 	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 提炼了 %d 条新记忆 (群: %s)", len(toSave), groupID))
+}
+
+func extractSubstantiveTokens(s string) []string {
+	var tokens []string
+	var currentWord strings.Builder
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			if currentWord.Len() >= 2 {
+				tokens = append(tokens, strings.ToLower(currentWord.String()))
+			}
+			currentWord.Reset()
+			tokens = append(tokens, string(r))
+		} else if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			currentWord.WriteRune(r)
+		} else {
+			if currentWord.Len() >= 2 {
+				tokens = append(tokens, strings.ToLower(currentWord.String()))
+			}
+			currentWord.Reset()
+		}
+	}
+	if currentWord.Len() >= 2 {
+		tokens = append(tokens, strings.ToLower(currentWord.String()))
+	}
+	return tokens
+}
+
+func countSubstantiveTokenOverlap(evidence, content string) (overlap int, totalEvTokens int) {
+	evTokens := extractSubstantiveTokens(evidence)
+	if len(evTokens) == 0 {
+		return 0, 0
+	}
+	contentLower := strings.ToLower(content)
+	contentTokens := make(map[string]bool)
+	for _, ct := range extractSubstantiveTokens(content) {
+		contentTokens[ct] = true
+	}
+
+	seen := make(map[string]bool)
+	for _, token := range evTokens {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		if contentTokens[token] || strings.Contains(contentLower, token) {
+			overlap++
+		}
+	}
+	return overlap, len(seen)
+}
+
+func isCrossSpeakerClaim(content string, currentSenderID string, messages []GroupCompactMessage) bool {
+	contentLower := strings.ToLower(strings.TrimSpace(content))
+	for _, m := range messages {
+		if m.SenderID != "" && m.SenderID != currentSenderID && m.Sender != "" {
+			otherName := strings.ToLower(strings.TrimSpace(m.Sender))
+			if otherName == "" {
+				continue
+			}
+			if strings.HasPrefix(contentLower, otherName) {
+				rem := contentLower[len(otherName):]
+				if len(rem) == 0 {
+					return true
+				}
+				firstRune, _ := utf8.DecodeRuneInString(rem)
+				if unicode.IsSpace(firstRune) || unicode.IsPunct(firstRune) || unicode.Is(unicode.Han, firstRune) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isFirstPersonStatement(evidence, fullContent, senderName string) bool {
+	combined := strings.ToLower(evidence + " " + fullContent)
+	markers := []string{"我", "俺", "咱", "自己", "本人", "在下", "吾", "i ", "i'm", "i've", "i'll", "i'd", "my ", "mine", "me ", "myself"}
+	for _, m := range markers {
+		if strings.Contains(combined, m) {
+			return true
+		}
+	}
+	if senderName != "" {
+		sName := strings.ToLower(strings.TrimSpace(senderName))
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(evidence)), sName) ||
+			strings.HasPrefix(strings.ToLower(strings.TrimSpace(fullContent)), sName) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {

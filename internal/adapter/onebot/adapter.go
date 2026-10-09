@@ -454,32 +454,50 @@ func (a *Adapter) Handler() http.HandlerFunc {
 								role = memory.NormalizeGroupRole(event.Sender.Role)
 							}
 							if a.engine != nil && a.engine.Security != nil {
-								secPlatform := "qq"
-								if wsConn.mock {
-									secPlatform = "mock"
-								}
-								if principal, pErr := security.NewPrincipal(secPlatform, userIDStr); pErr == nil {
-									evalFn := a.engine.Security.EvaluateContext
-									if wsConn.mock {
-										evalFn = a.engine.Security.EvaluateContextDryRun
-									}
-									if nickname != "" {
-										dec := evalFn(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
-											Instance: a.engine.InstanceID,
-											Session:  wsConn.historyKey(event),
-										})
-										if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
-											nickname = ""
+								sec := a.engine.Security
+								if sec.Mode() == security.ControlModeAggressive {
+									if principal, pErr := security.NewPrincipal("qq", userIDStr); pErr == nil {
+										vetter := sec.GetMetadataVetter()
+										sessionKey := wsConn.historyKey(event)
+
+										checkOrDispatch := func(text string, onSafe func(string)) string {
+											if text == "" {
+												return ""
+											}
+											if safe, cached := vetter.Check(text); cached {
+												if safe {
+													return text
+												}
+												return ""
+											}
+											// Not cached: do NOT block receive loop!
+											// Do not persist unvetted values until vetting passes.
+											if vetter.MarkInFlight(text) {
+												textToVet := text
+												a.engine.Go(func() {
+													defer vetter.ClearInFlight(textToVet)
+													ctx, cancel := context.WithTimeout(a.engine.Context(), 5*time.Second)
+													defer cancel()
+													dec := sec.EvaluateContextWithContext(ctx, principal, security.SourcePlatformMeta, textToVet, security.AuditEvent{
+														Instance: a.engine.InstanceID,
+														Session:  sessionKey,
+													})
+													isSafe := !(dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock)
+													vetter.Record(textToVet, isSafe)
+													if isSafe {
+														onSafe(textToVet)
+													}
+												})
+											}
+											return ""
 										}
-									}
-									if card != "" {
-										dec := evalFn(principal, security.SourcePlatformMeta, card, security.AuditEvent{
-											Instance: a.engine.InstanceID,
-											Session:  wsConn.historyKey(event),
+
+										nickname = checkOrDispatch(nickname, func(safeNick string) {
+											_, _ = gStore.ObserveMember(userIDStr, safeNick, "", "", "onebot")
 										})
-										if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
-											card = ""
-										}
+										card = checkOrDispatch(card, func(safeCard string) {
+											_, _ = gStore.ObserveMember(userIDStr, "", safeCard, "", "onebot")
+										})
 									}
 								}
 							}

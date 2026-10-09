@@ -25,10 +25,11 @@ const (
 )
 
 type Controller struct {
-	Access   *AccessStore
-	Watchdog *Watchdog
-	Audit    *AuditStore
-	mode     *atomic.Pointer[ControlMode]
+	Access         *AccessStore
+	Watchdog       *Watchdog
+	Audit          *AuditStore
+	MetadataVetter *MetadataVetter
+	mode           *atomic.Pointer[ControlMode]
 }
 
 func NewController(dataDir string) *Controller {
@@ -38,11 +39,25 @@ func NewController(dataDir string) *Controller {
 	defaultMode := ControlModeSimple
 	modePtr.Store(&defaultMode)
 	return &Controller{
-		Access:   access,
-		Audit:    audit,
-		Watchdog: NewWatchdog(access, audit),
-		mode:     &modePtr,
+		Access:         access,
+		Audit:          audit,
+		Watchdog:       NewWatchdog(access, audit),
+		MetadataVetter: NewMetadataVetter(),
+		mode:           &modePtr,
 	}
+}
+
+var defaultMetadataVetter = NewMetadataVetter()
+
+// GetMetadataVetter returns the controller's metadata vetting cache, or a default instance if nil.
+func (c *Controller) GetMetadataVetter() *MetadataVetter {
+	if c == nil {
+		return defaultMetadataVetter
+	}
+	if c.MetadataVetter == nil {
+		c.MetadataVetter = NewMetadataVetter()
+	}
+	return c.MetadataVetter
 }
 
 // Mode returns the active security control mode. Unset or nil modes default to ControlModeSimple.
@@ -402,6 +417,11 @@ func (c *Controller) EvaluateDryRun(p Principal, stage WatchdogStage, source Wat
 // it is blocked and audited without striking or locking the requesting principal.
 func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	return c.Evaluate(p, StageIngress, source, content, meta)
+}
+
+// EvaluateContextWithContext evaluates indirect context with the provided caller context.
+func (c *Controller) EvaluateContextWithContext(ctx context.Context, p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateWithContext(ctx, p, StageIngress, source, content, meta)
 }
 
 // EvaluateContextDryRun evaluates indirect context in dry-run mode.
