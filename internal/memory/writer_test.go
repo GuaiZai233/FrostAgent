@@ -70,43 +70,69 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 		},
 	}
 
+	idx0 := 0
+	idx1 := 1
+	idx2 := 2
+	idxOut := 99
+
 	extractedEntries := []groupExtractedCandidate{
 		{
 			// 1. Missing / trivial evidence (< 3 runes): must be rejected
-			Summary:  "用户每天喝生椰拿铁",
-			Tags:     []string{"drink"},
-			Evidence: "喝",
-			IsSelf:   true,
+			Summary:        "用户每天喝生椰拿铁",
+			Tags:           []string{"drink"},
+			Evidence:       "喝",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
 		},
 		{
-			// 2. Foreign evidence (not present in any message in this turn): must be rejected
-			Summary:  "用户喜欢在周末打篮球",
-			Tags:     []string{"sport"},
-			Evidence: "周末打篮球",
-			IsSelf:   true,
+			// 2. Foreign evidence (not present in referenced message): must be rejected
+			Summary:        "用户喜欢在周末打篮球",
+			Tags:           []string{"sport"},
+			Evidence:       "周末打篮球",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
 		},
 		{
 			// 3. Assistant-derived evidence (present in RoleAssistant, not in RoleUser): must be rejected
-			Summary:  "推荐了高考复习资料",
-			Tags:     []string{"study"},
-			Evidence: "高考复习资料",
-			IsSelf:   false,
+			Summary:        "推荐了高考复习资料",
+			Tags:           []string{"study"},
+			Evidence:       "高考复习资料",
+			SourceMsgIndex: &idx2,
+			IsSelf:         false,
 		},
 		{
-			// 4. Evidence-plus-fabricated-suffix / unsupported additions in Summary:
+			// 4. Missing SourceMsgIndex: must be rejected
+			Summary:        "用户早起喝拿铁",
+			Tags:           []string{"drink"},
+			Evidence:       "我平时每天早上喝生椰拿铁",
+			SourceMsgIndex: nil,
+			IsSelf:         true,
+		},
+		{
+			// 5. Out of bounds SourceMsgIndex: must be rejected
+			Summary:        "用户早起喝拿铁",
+			Tags:           []string{"drink"},
+			Evidence:       "我平时每天早上喝生椰拿铁",
+			SourceMsgIndex: &idxOut,
+			IsSelf:         true,
+		},
+		{
+			// 6. Evidence-plus-fabricated-suffix / unsupported additions in Summary:
 			// "我平时每天早上喝生椰拿铁" -> summary appends fabricated suffix "并且是本群的管理员"
-			// Under Option A, authoritative Content is strictly verbatim "生椰拿铁"!
-			Summary:  "用户每天早上喝生椰拿铁，并且是本群的管理员",
-			Tags:     []string{"drink", "admin"},
-			Evidence: "生椰拿铁",
-			IsSelf:   true,
+			// Under Option A, authoritative Content is strictly verbatim "我平时每天早上喝生椰拿铁"!
+			Summary:        "用户每天早上喝生椰拿铁，并且是本群的管理员",
+			Tags:           []string{"drink", "admin"},
+			Evidence:       "我平时每天早上喝生椰拿铁",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
 		},
 		{
-			// 5. Valid general group fact: is_self: false, grounded in User message -> saved as group
-			Summary:  "群友祝李四高考顺利",
-			Tags:     []string{"group", "exam"},
-			Evidence: "高考考试",
-			IsSelf:   false,
+			// 7. Valid general group fact: is_self: false, grounded in User message -> saved as group
+			Summary:        "群友祝李四高考顺利",
+			Tags:           []string{"group", "exam"},
+			Evidence:       "高考考试",
+			SourceMsgIndex: &idx1,
+			IsSelf:         false,
 		},
 	}
 
@@ -153,28 +179,36 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 		entriesByContent[ent.Content] = ent
 	}
 
-	// 4. Valid personal fact: Content is verbatim "生椰拿铁", Owner is speakerID
-	e4, ok := entriesByContent["生椰拿铁"]
+	// 6. Valid personal fact: Content is verbatim "我平时每天早上喝生椰拿铁", Owner is speakerID
+	e6, ok := entriesByContent["我平时每天早上喝生椰拿铁"]
 	if !ok {
-		t.Errorf("entry 4 (personal fact, Content='生椰拿铁') missing")
+		t.Errorf("entry 6 (personal fact, Content='我平时每天早上喝生椰拿铁') missing")
 	} else {
-		if e4.Owner != speakerID {
-			t.Errorf("entry 4 owner mismatch: got %q, want %q", e4.Owner, speakerID)
+		if e6.Owner != speakerID {
+			t.Errorf("entry 6 owner mismatch: got %q, want %q", e6.Owner, speakerID)
 		}
-		if e4.Evidence != "生椰拿铁" {
-			t.Errorf("entry 4 evidence mismatch: got %q, want %q", e4.Evidence, "生椰拿铁")
+		if e6.SourceSenderID != speakerID {
+			t.Errorf("entry 6 source sender mismatch: got %q, want %q", e6.SourceSenderID, speakerID)
 		}
-		if e4.Summary != "用户每天早上喝生椰拿铁，并且是本群的管理员" {
-			t.Errorf("entry 4 summary mismatch: got %q", e4.Summary)
+		if e6.Evidence != "我平时每天早上喝生椰拿铁" {
+			t.Errorf("entry 6 evidence mismatch: got %q, want %q", e6.Evidence, "我平时每天早上喝生椰拿铁")
+		}
+		if e6.Summary != "用户每天早上喝生椰拿铁，并且是本群的管理员" {
+			t.Errorf("entry 6 summary mismatch: got %q", e6.Summary)
 		}
 	}
 
-	// 5. Valid group fact: Content is verbatim "高考考试", Owner is GroupOwnerExplicit
-	e5, ok := entriesByContent["高考考试"]
+	// 7. Valid group fact: Content is verbatim "高考考试", Owner is GroupOwnerExplicit
+	e7, ok := entriesByContent["高考考试"]
 	if !ok {
-		t.Errorf("entry 5 (group fact, Content='高考考试') missing")
-	} else if e5.Owner != GroupOwnerExplicit {
-		t.Errorf("entry 5 owner mismatch: got %q, want %q", e5.Owner, GroupOwnerExplicit)
+		t.Errorf("entry 7 (group fact, Content='高考考试') missing")
+	} else {
+		if e7.Owner != GroupOwnerExplicit {
+			t.Errorf("entry 7 owner mismatch: got %q, want %q", e7.Owner, GroupOwnerExplicit)
+		}
+		if e7.SourceSenderID != speakerID {
+			t.Errorf("entry 7 source sender mismatch: got %q, want %q", e7.SourceSenderID, speakerID)
+		}
 	}
 
 	// Rejected and fabricated contents must not exist as authoritative Content
@@ -380,14 +414,14 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 			SenderID:  sharedSpeakerID,
 			Sender:    "Alice",
 			Role:      "user",
-			Content:   "Alice: 我平时每天早上喝生椰拿铁，对花生重度过敏",
+			Content:   "Alice: 我平时每天早上喝生椰拿铁，我对花生重度过敏",
 		},
 	}
 
 	idx0 := 0
 	extractedCandidateJSON, _ := json.Marshal([]groupExtractedCandidate{
 		{
-			Evidence:       "对花生重度过敏",
+			Evidence:       "我对花生重度过敏",
 			Summary:        "Alice自述对花生重度过敏",
 			Tags:           []string{"allergy", "peanut"},
 			SourceMsgIndex: &idx0,
@@ -415,14 +449,17 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 		t.Fatalf("expected exactly 1 entry after turn extraction, got %d", len(entriesAfterTurn))
 	}
 	eTurn := entriesAfterTurn[0]
-	if eTurn.Content != "对花生重度过敏" {
-		t.Errorf("expected Content '对花生重度过敏', got %q", eTurn.Content)
+	if eTurn.Content != "我对花生重度过敏" {
+		t.Errorf("expected Content '我对花生重度过敏', got %q", eTurn.Content)
 	}
-	if eTurn.Evidence != "对花生重度过敏" {
-		t.Errorf("expected Evidence '对花生重度过敏', got %q", eTurn.Evidence)
+	if eTurn.Evidence != "我对花生重度过敏" {
+		t.Errorf("expected Evidence '我对花生重度过敏', got %q", eTurn.Evidence)
 	}
 	if eTurn.SourceMessageID != sharedMessageID {
 		t.Errorf("expected SourceMessageID %q, got %q", sharedMessageID, eTurn.SourceMessageID)
+	}
+	if eTurn.SourceSenderID != sharedSpeakerID {
+		t.Errorf("expected SourceSenderID %q, got %q", sharedSpeakerID, eTurn.SourceSenderID)
 	}
 	if eTurn.Owner != sharedSpeakerID {
 		t.Errorf("expected Owner %q, got %q", sharedSpeakerID, eTurn.Owner)
@@ -434,7 +471,7 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 	// Trigger 2: Passive compact buffer distillation (contains the exact same message and quote, plus extra tag)
 	distillCandidateJSON, _ := json.Marshal([]groupExtractedCandidate{
 		{
-			Evidence:       "对花生重度过敏",
+			Evidence:       "我对花生重度过敏",
 			Summary:        "Alice对花生重度过敏（摘要）",
 			Tags:           []string{"health", "allergy"},
 			SourceMsgIndex: &idx0,
@@ -463,8 +500,11 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 	if eMerged.ID != eTurn.ID {
 		t.Errorf("expected entry ID to be preserved (%q), got %q", eTurn.ID, eMerged.ID)
 	}
-	if eMerged.Content != "对花生重度过敏" {
-		t.Errorf("expected Content '对花生重度过敏', got %q", eMerged.Content)
+	if eMerged.Content != "我对花生重度过敏" {
+		t.Errorf("expected Content '我对花生重度过敏', got %q", eMerged.Content)
+	}
+	if eMerged.SourceSenderID != sharedSpeakerID {
+		t.Errorf("expected SourceSenderID %q, got %q", sharedSpeakerID, eMerged.SourceSenderID)
 	}
 	if eMerged.SourceMessageID != sharedMessageID {
 		t.Errorf("expected SourceMessageID %q, got %q", sharedMessageID, eMerged.SourceMessageID)
@@ -540,5 +580,207 @@ func TestWriter_ExtractGroupMemories_DisabledRoute(t *testing.T) {
 	err := writer.ExtractGroupMemories(context.Background(), groupID, core.RouteContext{}, msgs, SourceExtract, nil)
 	if err != nil {
 		t.Fatalf("expected nil when route is disabled, got %v", err)
+	}
+}
+
+func TestWriter_Finding2_SpeakerAttributionAndInspectableProvenanceRegressions(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := NewStore(storePath)
+	gm := NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockWriterLLM{}
+	writer := NewWriter(store)
+	writer.SetGroupManager(gm)
+	writer.SetLLM(mockLLM, "mock-writer-model")
+
+	groupID := "syn_test_grp_finding2"
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	msgs := []GroupMessage{
+		{
+			MessageID: "msg_alice_1",
+			SenderID:  "mock_u_alice",
+			Sender:    "Alice",
+			Role:      "user",
+			Content:   "Alice: 大家一起加油",
+		},
+		{
+			MessageID: "msg_bob_2",
+			SenderID:  "mock_u_bob",
+			Sender:    "Bob",
+			Role:      "user",
+			Content:   "Bob: 大家一起加油",
+		},
+		{
+			MessageID: "msg_zhangsan_3",
+			SenderID:  "mock_u_zhangsan",
+			Sender:    "Zhangsan",
+			Role:      "user",
+			Content:   "张三: 李四喜欢玩舞萌",
+		},
+		{
+			MessageID: "msg_carol_4",
+			SenderID:  "mock_u_carol",
+			Sender:    "Carol",
+			Role:      "user",
+			Content:   "Carol: 明天下午三点开全组周会",
+		},
+		{
+			MessageID: "msg_bot_5",
+			SenderID:  "mock_u_bot",
+			Sender:    "Bot",
+			Role:      "assistant",
+			Content:   "收到，已记录会议通知",
+		},
+	}
+
+	idx0 := 0
+	idx1 := 1
+	idx2 := 2
+	idx3 := 3
+	idx4 := 4
+	idx99 := 99
+
+	candidates := []groupExtractedCandidate{
+		// 1. Different speakers with identical quotations:
+		// Quoting "大家一起加油", indexed specifically to Bob (idx1)
+		// Must be attributed to Bob (SourceSenderID == mock_u_bob), NOT Alice!
+		{
+			Evidence:       "大家一起加油",
+			Summary:        "Bob说大家一起加油",
+			Tags:           []string{"cheer"},
+			SourceMsgIndex: &idx1,
+			IsSelf:         false,
+		},
+		// 2. Third-party quotation wrongly marked self:
+		// Zhangsan says "李四喜欢玩舞萌", model hallucinates IsSelf: true.
+		// Quoted evidence has no first-person marker, so Owner MUST fall back to GroupOwnerExplicit ("group")!
+		// BUT SourceSenderID must be mock_u_zhangsan (verified speaker preserved).
+		{
+			Evidence:       "李四喜欢玩舞萌",
+			Summary:        "李四喜欢玩舞萌",
+			Tags:           []string{"game"},
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		// 3. Group-owned quote whose actual speaker must remain inspectable:
+		// Carol says "明天下午三点开全组周会", IsSelf: false.
+		// Stored with Owner == "group", but SourceSenderID == mock_u_carol.
+		{
+			Evidence:       "明天下午三点开全组周会",
+			Summary:        "明天下午开全组周会",
+			Tags:           []string{"meeting"},
+			SourceMsgIndex: &idx3,
+			IsSelf:         false,
+		},
+		// 4. Missing index: must be rejected!
+		{
+			Evidence:       "明天下午三点开全组周会",
+			Summary:        "周会通知",
+			SourceMsgIndex: nil,
+			IsSelf:         false,
+		},
+		// 5. Out of bounds index: must be rejected!
+		{
+			Evidence:       "明天下午三点开全组周会",
+			Summary:        "周会通知",
+			SourceMsgIndex: &idx99,
+			IsSelf:         false,
+		},
+		// 6. Assistant role index: must be rejected!
+		{
+			Evidence:       "收到，已记录会议通知",
+			Summary:        "机器人回复",
+			SourceMsgIndex: &idx4,
+			IsSelf:         false,
+		},
+		// 7. Mismatched index: Evidence "明天下午三点开全组周会" belongs to idx3, but index given is idx0 (Alice).
+		// Must be rejected rather than silently scanning other messages!
+		{
+			Evidence:       "明天下午三点开全组周会",
+			Summary:        "周会通知",
+			SourceMsgIndex: &idx0,
+			IsSelf:         false,
+		},
+	}
+
+	candJSON, err := json.Marshal(candidates)
+	if err != nil {
+		t.Fatalf("marshal candidates failed: %v", err)
+	}
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(candJSON), nil
+	}
+
+	route := core.RouteContext{Platform: "onebot", GroupID: groupID}
+	err = writer.ExtractGroupMemories(context.Background(), groupID, route, msgs, SourceExtract, nil)
+	if err != nil {
+		t.Fatalf("ExtractGroupMemories failed: %v", err)
+	}
+
+	saved, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	// Exactly 3 entries should be saved (items 1, 2, 3). Items 4-7 must be rejected.
+	if len(saved) != 3 {
+		t.Fatalf("expected exactly 3 saved entries, got %d", len(saved))
+	}
+
+	byEvidence := make(map[string]MemoryEntry)
+	for _, ent := range saved {
+		byEvidence[ent.Evidence] = ent
+	}
+
+	// 1. Bob's cheer
+	eBob, ok := byEvidence["大家一起加油"]
+	if !ok {
+		t.Fatalf("entry for '大家一起加油' missing")
+	}
+	if eBob.SourceSenderID != "mock_u_bob" {
+		t.Errorf("expected SourceSenderID 'mock_u_bob', got %q", eBob.SourceSenderID)
+	}
+	if eBob.SourceMessageID != "msg_bob_2" {
+		t.Errorf("expected SourceMessageID 'msg_bob_2', got %q", eBob.SourceMessageID)
+	}
+	if eBob.Owner != GroupOwnerExplicit {
+		t.Errorf("expected Owner %q for group cheer, got %q", GroupOwnerExplicit, eBob.Owner)
+	}
+
+	// 2. Zhangsan's third-party quote wrongly marked self
+	eZhang, ok := byEvidence["李四喜欢玩舞萌"]
+	if !ok {
+		t.Fatalf("entry for '李四喜欢玩舞萌' missing")
+	}
+	// Crucial check: Owner must NOT be Zhangsan! Must be conservatively group-owned!
+	if eZhang.Owner != GroupOwnerExplicit {
+		t.Errorf("expected Owner %q (conservative group ownership for third-party quote), got %q", GroupOwnerExplicit, eZhang.Owner)
+	}
+	// Crucial check: SourceSenderID must be Zhangsan (provenance inspectable)!
+	if eZhang.SourceSenderID != "mock_u_zhangsan" {
+		t.Errorf("expected SourceSenderID 'mock_u_zhangsan', got %q", eZhang.SourceSenderID)
+	}
+	if eZhang.SourceMessageID != "msg_zhangsan_3" {
+		t.Errorf("expected SourceMessageID 'msg_zhangsan_3', got %q", eZhang.SourceMessageID)
+	}
+
+	// 3. Carol's meeting announcement
+	eCarol, ok := byEvidence["明天下午三点开全组周会"]
+	if !ok {
+		t.Fatalf("entry for '明天下午三点开全组周会' missing")
+	}
+	if eCarol.Owner != GroupOwnerExplicit {
+		t.Errorf("expected Owner %q, got %q", GroupOwnerExplicit, eCarol.Owner)
+	}
+	if eCarol.SourceSenderID != "mock_u_carol" {
+		t.Errorf("expected SourceSenderID 'mock_u_carol', got %q", eCarol.SourceSenderID)
+	}
+	if eCarol.SourceMessageID != "msg_carol_4" {
+		t.Errorf("expected SourceMessageID 'msg_carol_4', got %q", eCarol.SourceMessageID)
 	}
 }

@@ -101,4 +101,36 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 		unmarshaledImport.GetGroupId() != "mock_group_100" {
 		t.Errorf("ImportMemoriesRequest roundtrip mismatch: %+v", &unmarshaledImport)
 	}
+
+	// 5. MemoryEntry: tags 1-12 standard, tag 13 = evidence, tag 14 = source_message_id, tag 15 = source_sender_id
+	memEntry := &v1.MemoryEntry{
+		Id:              "mem_full_001",
+		Owner:           "group",
+		Content:         "verbatim quote",
+		Tags:            []string{"t1"},
+		Source:          "extract",
+		Visibility:      "group",
+		CreatedAt:       "2026-10-09T00:00:00Z",
+		UpdatedAt:       "2026-10-09T00:00:00Z",
+		AccessCount:     5,
+		Scope:           "group",
+		GroupId:         "mock_grp_100",
+		Summary:         "display summary",
+		Evidence:        "verbatim quote",
+		SourceMessageId: "msg_orig_123",
+		SourceSenderId:  "mock_u_alice",
+	}
+	memData, err := proto.Marshal(memEntry)
+	if err != nil {
+		t.Fatalf("marshal MemoryEntry failed: %v", err)
+	}
+	var unmarshaledMem v1.MemoryEntry
+	if err := proto.Unmarshal(memData, &unmarshaledMem); err != nil {
+		t.Fatalf("unmarshal MemoryEntry failed: %v", err)
+	}
+	if unmarshaledMem.GetEvidence() != "verbatim quote" ||
+		unmarshaledMem.GetSourceMessageId() != "msg_orig_123" ||
+		unmarshaledMem.GetSourceSenderId() != "mock_u_alice" {
+		t.Errorf("MemoryEntry provenance roundtrip mismatch: %+v", &unmarshaledMem)
+	}
 }

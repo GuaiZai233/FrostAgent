@@ -1210,3 +1210,330 @@ func TestGroupSearch_UncappedLateFilterCrowdingDefense(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupStore_Finding1_ManualWritesAndDistinctSourcesRegressions(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "frostagent_finding1_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	groupID := "mock_grp_finding1"
+	gs, err := NewGroupStore(tempDir, groupID)
+	if err != nil {
+		t.Fatalf("NewGroupStore failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// 1. Seed an automatic entry: Owner="group", Content="周六聚会", SourceMessageID="msg-1"
+	autoEntry := MemoryEntry{
+		ID:              "auto-1",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "周六聚会",
+		Evidence:        "周六聚会",
+		SourceMessageID: "msg-1",
+		SourceSenderID:  "mock_u_alice",
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveEntry(&autoEntry); err != nil {
+		t.Fatalf("save auto entry failed: %v", err)
+	}
+
+	// 2. Explicit manual write with identical content & owner: MUST NOT be discarded/merged!
+	manualEntry := MemoryEntry{
+		ID:        "man-1",
+		Owner:     GroupOwnerExplicit,
+		OwnerType: OwnerGroup,
+		ScopeType: ScopeGroup,
+		GroupID:   groupID,
+		Content:   "周六聚会",
+		Source:    SourceManual,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := gs.SaveEntry(&manualEntry); err != nil {
+		t.Fatalf("save manual entry failed: %v", err)
+	}
+
+	// The returned manualEntry.ID must be "man-1" (not swallowed into "auto-1")
+	if manualEntry.ID != "man-1" {
+		t.Errorf("expected manualEntry.ID to remain 'man-1', got %q", manualEntry.ID)
+	}
+
+	all, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 entries (auto + manual), got %d", len(all))
+	}
+
+	// Ensure both IDs exist on disk and can be fetched
+	foundAuto := false
+	foundManual := false
+	for _, e := range all {
+		if e.ID == "auto-1" {
+			foundAuto = true
+			if e.Source != SourceExtract {
+				t.Errorf("expected auto-1 source to be SourceExtract, got %q", e.Source)
+			}
+		}
+		if e.ID == "man-1" {
+			foundManual = true
+			if e.Source != SourceManual {
+				t.Errorf("expected man-1 source to be SourceManual, got %q", e.Source)
+			}
+		}
+	}
+	if !foundAuto || !foundManual {
+		t.Errorf("expected both auto-1 and man-1 on disk: foundAuto=%v, foundManual=%v", foundAuto, foundManual)
+	}
+
+	// 3. Two distinct platform messages with identical group quotes: MUST NOT collapse into one
+	quoteA := MemoryEntry{
+		ID:              "quote-msgA",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "收到大家汇报",
+		Evidence:        "收到大家汇报",
+		SourceMessageID: "msg-101",
+		SourceSenderID:  "mock_u_alice",
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	quoteB := MemoryEntry{
+		ID:              "quote-msgB",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "收到大家汇报",
+		Evidence:        "收到大家汇报",
+		SourceMessageID: "msg-102", // DISTINCT message ID!
+		SourceSenderID:  "mock_u_bob",
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveGroupEntriesConditionallyContext(context.Background(), []MemoryEntry{quoteA, quoteB}, nil); err != nil {
+		t.Fatalf("save distinct quotes failed: %v", err)
+	}
+
+	allAfterQuotes, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	// Total: 2 previous + 2 new distinct quotes = 4 entries
+	if len(allAfterQuotes) != 4 {
+		t.Fatalf("expected 4 entries, got %d (distinct message IDs must not collapse)", len(allAfterQuotes))
+	}
+
+	msgIDMap := make(map[string]MemoryEntry)
+	for _, e := range allAfterQuotes {
+		if e.SourceMessageID != "" {
+			msgIDMap[e.SourceMessageID] = e
+		}
+	}
+	e101, ok101 := msgIDMap["msg-101"]
+	e102, ok102 := msgIDMap["msg-102"]
+	if !ok101 || !ok102 {
+		t.Fatalf("expected both msg-101 and msg-102 to be persisted distinctly")
+	}
+	if e101.SourceSenderID != "mock_u_alice" {
+		t.Errorf("msg-101 sender mismatch: got %q, want 'mock_u_alice'", e101.SourceSenderID)
+	}
+	if e102.SourceSenderID != "mock_u_bob" {
+		t.Errorf("msg-102 sender mismatch: got %q, want 'mock_u_bob'", e102.SourceSenderID)
+	}
+
+	// 4. Same platform message duplicate quote: SHOULD be deduplicated idempotently
+	// and update incoming.ID to existing on-disk ID (no phantom ID!)
+	quoteADup := MemoryEntry{
+		ID:              "quote-msgA-dup",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "收到大家汇报",
+		Evidence:        "收到大家汇报",
+		SourceMessageID: "msg-101", // SAME message ID
+		SourceSenderID:  "mock_u_alice",
+		Source:          SourceDistill,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveEntry(&quoteADup); err != nil {
+		t.Fatalf("save dup quote failed: %v", err)
+	}
+	if quoteADup.ID != quoteA.ID {
+		t.Errorf("expected quoteADup.ID to be updated to existing on-disk ID %q, got %q", quoteA.ID, quoteADup.ID)
+	}
+
+	allAfterDup, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(allAfterDup) != 4 {
+		t.Fatalf("expected still 4 entries after idempotent duplicate, got %d", len(allAfterDup))
+	}
+
+	// 5. Concurrency regression: concurrent saves of distinct and duplicate messages
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+	for i := range 20 {
+		wg.Add(1)
+		msgID := fmt.Sprintf("concurrent-msg-%d", i%5) // 5 distinct message IDs across 20 goroutines
+		go func(workerID int, mID string) {
+			defer wg.Done()
+			e := MemoryEntry{
+				ID:              fmt.Sprintf("conc-entry-%d", workerID),
+				Owner:           GroupOwnerExplicit,
+				OwnerType:       OwnerGroup,
+				ScopeType:       ScopeGroup,
+				GroupID:         groupID,
+				Content:         "并发测试同一内容",
+				Evidence:        "并发测试同一内容",
+				SourceMessageID: mID,
+				SourceSenderID:  fmt.Sprintf("mock_u_worker_%d", workerID),
+				Source:          SourceExtract,
+				CreatedAt:       time.Now(),
+				UpdatedAt:       time.Now(),
+			}
+			if err := gs.SaveEntry(&e); err != nil {
+				errCh <- err
+			}
+		}(i, msgID)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("concurrent SaveEntry error: %v", err)
+	}
+
+	allAfterConc, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	// Previously 4 entries + exactly 5 distinct message IDs = 9 entries total
+	if len(allAfterConc) != 9 {
+		t.Errorf("expected 9 entries after concurrent run (4 existing + 5 distinct message IDs), got %d", len(allAfterConc))
+	}
+}
+
+func TestGroupStore_Finding3_UpdateExtractedEntryReclassification(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "frostagent_finding3_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	groupID := "mock_grp_finding3"
+	gs, err := NewGroupStore(tempDir, groupID)
+	if err != nil {
+		t.Fatalf("NewGroupStore failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// 1. Seed an extracted entry with verbatim quote
+	extEntry := MemoryEntry{
+		ID:              "ext-901",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "我不吃花生",
+		Evidence:        "我不吃花生",
+		SourceMessageID: "msg-alice-999",
+		SourceSenderID:  "mock_u_alice",
+		Tags:            []string{"diet"},
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveEntry(&extEntry); err != nil {
+		t.Fatalf("SaveEntry failed: %v", err)
+	}
+
+	// 2. Web admin edits Content to "我每天吃花生"
+	updateReq := MemoryEntry{
+		ID:      "ext-901",
+		Content: "我每天吃花生",
+		Tags:    []string{"diet", "peanut"},
+	}
+	if err := gs.UpdateEntry(updateReq); err != nil {
+		t.Fatalf("UpdateEntry failed: %v", err)
+	}
+
+	// 3. Verify on disk
+	updated, err := gs.GetByID("ext-901")
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	// Invariant 1: Content is updated to the edited value
+	if updated.Content != "我每天吃花生" {
+		t.Errorf("Content not updated: got %q, want '我每天吃花生'", updated.Content)
+	}
+	// Invariant 2: Source must be reclassified to SourceManual!
+	if updated.Source != SourceManual {
+		t.Errorf("Source not reclassified: got %q, want %q", updated.Source, SourceManual)
+	}
+	// Invariant 3: Original verbatim Evidence remains intact as audit record!
+	if updated.Evidence != "我不吃花生" {
+		t.Errorf("Evidence corrupted: got %q, want '我不吃花生'", updated.Evidence)
+	}
+	// Invariant 4: SourceMessageID remains intact!
+	if updated.SourceMessageID != "msg-alice-999" {
+		t.Errorf("SourceMessageID corrupted: got %q, want 'msg-alice-999'", updated.SourceMessageID)
+	}
+	// Invariant 5: SourceSenderID remains intact!
+	if updated.SourceSenderID != "mock_u_alice" {
+		t.Errorf("SourceSenderID corrupted: got %q, want 'mock_u_alice'", updated.SourceSenderID)
+	}
+	// Invariant 6: Tags updated
+	if len(updated.Tags) != 2 || updated.Tags[1] != "peanut" {
+		t.Errorf("Tags mismatch: got %v", updated.Tags)
+	}
+
+	// 4. Updating only tags on an extracted entry (content unchanged) should NOT reclassify source
+	distillEntry := MemoryEntry{
+		ID:              "distill-902",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "每周三晚开会",
+		Evidence:        "每周三晚开会",
+		SourceMessageID: "msg-meeting-01",
+		SourceSenderID:  "mock_u_bob",
+		Tags:            []string{"meeting"},
+		Source:          SourceDistill,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveEntry(&distillEntry); err != nil {
+		t.Fatalf("SaveEntry distill failed: %v", err)
+	}
+
+	// Update only tags
+	if err := gs.UpdateEntry(MemoryEntry{ID: "distill-902", Content: "每周三晚开会", Tags: []string{"meeting", "weekly"}}); err != nil {
+		t.Fatalf("UpdateEntry tags only failed: %v", err)
+	}
+	updatedDistill, err := gs.GetByID("distill-902")
+	if err != nil {
+		t.Fatalf("GetByID distill failed: %v", err)
+	}
+	if updatedDistill.Source != SourceDistill {
+		t.Errorf("expected Source to remain SourceDistill when content is unchanged, got %q", updatedDistill.Source)
+	}
+}

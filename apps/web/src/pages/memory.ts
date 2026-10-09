@@ -1115,8 +1115,61 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             </div>
           </div>
 
+          ${
+            mem.evidence
+              ? `
+            <div class="p-3 rounded-md border border-border bg-muted/60 text-xs flex flex-col gap-1.5">
+              <div class="flex items-center justify-between text-muted">
+                <span class="font-medium flex items-center gap-1 text-foreground">
+                  ${icon('message_square_quote', 'w-3.5 h-3.5 text-muted')}
+                  <span>权威引述片段 (Evidence)</span>
+                </span>
+                ${
+                  mem.source === 'manual' && mem.evidence !== mem.content
+                    ? '<span class="badge badge-secondary text-[10px] px-1.5 py-0">已人工修订</span>'
+                    : ''
+                }
+              </div>
+              <div class="font-mono text-foreground italic bg-background p-2 rounded border border-border/50 select-all break-words">${escapeHtml(
+                mem.evidence,
+              )}</div>
+              <div class="flex items-center justify-between text-[11px] text-muted flex-wrap gap-1">
+                ${
+                  mem.sourceSenderId
+                    ? `<span>发言人: <strong class="font-mono text-foreground">${escapeHtml(mem.sourceSenderId)}</strong></span>`
+                    : ''
+                }
+                ${
+                  mem.sourceMessageId
+                    ? `<span>消息 ID: <span class="font-mono">${escapeHtml(mem.sourceMessageId)}</span></span>`
+                    : ''
+                }
+              </div>
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            mem.summary
+              ? `
+            <div class="text-xs text-muted bg-muted/40 p-2.5 rounded border border-border/40">
+              <span class="font-medium">展示摘要:</span>
+              <span class="text-foreground ml-1">${escapeHtml(mem.summary)}</span>
+            </div>
+          `
+              : ''
+          }
+
           <div class="form-group">
-            <label class="form-label" for="edit-mem-content">内容</label>
+            <div class="flex items-center justify-between mb-1">
+              <label class="form-label mb-0" for="edit-mem-content">内容</label>
+              ${
+                mem.evidence && mem.source === 'manual' && mem.evidence !== mem.content
+                  ? '<span class="text-[11px] text-muted">（已人工修订，保留原始引述用于审计追溯）</span>'
+                  : ''
+              }
+            </div>
             <textarea id="edit-mem-content" class="textarea text-xs" rows="4">${escapeHtml(mem.content)}</textarea>
           </div>
 

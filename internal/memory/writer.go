@@ -485,49 +485,34 @@ func (w *Writer) parseAndSaveGroupCandidates(
 			continue
 		}
 
-		// 1. Locate source message
-		var srcMsg *GroupMessage
-		if cand.SourceMsgIndex != nil {
-			idx := *cand.SourceMsgIndex
-			if idx >= 0 && idx < len(messages) {
-				candidateMsg := messages[idx]
-				if candidateMsg.Role != "assistant" && candidateMsg.Role != string(core.RoleAssistant) {
-					if _, ok := ValidateEvidence(candidateMsg.Content, rawEvidence); ok {
-						srcMsg = &candidateMsg
-					}
-				}
-			}
+		// 1. Locate source message: require an explicit, valid, and unambiguous source message index.
+		// Reject candidates with missing, out-of-bounds, or assistant-role indices.
+		if cand.SourceMsgIndex == nil {
+			continue
 		}
-
-		// Fallback: search messages for user message containing evidence if SourceMsgIndex was omitted
-		if srcMsg == nil && cand.SourceMsgIndex == nil {
-			for i := range messages {
-				m := &messages[i]
-				if m.Role == "assistant" || m.Role == string(core.RoleAssistant) {
-					continue
-				}
-				if _, ok := ValidateEvidence(m.Content, rawEvidence); ok {
-					srcMsg = m
-					break
-				}
-			}
+		idx := *cand.SourceMsgIndex
+		if idx < 0 || idx >= len(messages) {
+			continue
 		}
-
-		if srcMsg == nil {
+		candidateMsg := messages[idx]
+		if candidateMsg.Role == "assistant" || candidateMsg.Role == string(core.RoleAssistant) {
 			continue
 		}
 
-		validEvidence, ok := ValidateEvidence(srcMsg.Content, rawEvidence)
+		validEvidence, ok := ValidateEvidence(candidateMsg.Content, rawEvidence)
 		if !ok {
 			continue
 		}
+		srcMsg := &candidateMsg
 
-		// 2. Attribution
+		// 2. Attribution:
+		// Conservatively group-own ambiguous cases. Personal ownership (Owner = srcMsg.SenderID)
+		// is granted only when cand.IsSelf is true, SenderID is non-empty, and the quoted evidence
+		// contains a direct first-person self-reference (HasSelfReference).
+		// Otherwise, Owner defaults to GroupOwnerExplicit ("group").
 		ownerKey := GroupOwnerExplicit
-		if cand.IsSelf {
-			if srcMsg.SenderID != "" {
-				ownerKey = srcMsg.SenderID
-			}
+		if cand.IsSelf && srcMsg.SenderID != "" && HasSelfReference(validEvidence) {
+			ownerKey = srcMsg.SenderID
 		}
 
 		// 3. Option A Data Contract:
@@ -553,6 +538,7 @@ func (w *Writer) parseAndSaveGroupCandidates(
 			Summary:         displaySummary,
 			Evidence:        validEvidence,
 			SourceMessageID: srcMsg.MessageID,
+			SourceSenderID:  srcMsg.SenderID,
 			Tags:            SanitizeTags(cand.Tags),
 			Source:          effectiveSource,
 			CreatedAt:       now,

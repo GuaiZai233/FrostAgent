@@ -196,26 +196,30 @@ func (m *MemberProfile) ResolveCallingName() string {
 2. **辅助展示摘要（`Summary`）**：
    - 记录模型提炼出的可读概括与描述性摘要，用于前端面板或人机界面的友好呈现。
    - **禁止篡改**：`Summary` 仅作展示用途，严禁静默覆盖或篡改底层权威的字面 `Content`。
-3. **引述来源与原始消息追踪（`Evidence` & `SourceMessageID`）**：
-   - 每条提炼记忆强制记录并持久化 `Evidence`（引述原文片段）与 `SourceMessageID`（来自底层适配器元数据的原始消息唯一标识），实现具备完整审计链条的事实溯源。
+3. **引述来源与原始消息追踪（`Evidence` & `SourceMessageID` & `SourceSenderID`）**：
+   - 每条提炼记忆强制记录并持久化 `Evidence`（引述原文片段）、`SourceMessageID`（来自底层适配器元数据的原始消息唯一标识）以及 `SourceSenderID`（底层协议注入的可信原始发言人标识），实现具备完整审计链条的事实溯源。
 4. **确定性可证明约束（Provable Invariants）**：
+   - **严格消息索引绑定（Strict Message Index Binding）**：模型提炼候选必须提供合法、明确且不越界的 `source_msg_index`，严格指向包含引述字面子串的用户发言；缺失、越界、或指向助手角色的索引直接拒绝，严禁无索引时静默进行跨消息遍历匹配；
    - **消息源与角色限定**：引述来源必须为 `RoleUser` 消息且 `SenderID` 由底层协议适配器可信注入，绝对拒绝来自 `RoleAssistant`（模型自说自话）或跨对话上下文的外部消息；
    - **精确字面子串匹配**：`evidence` 必须真实作为连续子串存在于原消息内容中（`strings.Contains(srcMsg.Content, evidence)`）；
    - **严格长度与标签边界**：字面引述字符数限定为 $3 \le \text{runes} \le 500$，摘要长度 $\le 500$，每个标签 $\le 50$ 且最多 10 个有效标签；
-   - **发言人归属锚定**：仅当模型判定为个人自述事实（`is_self: true`）且来源消息存在明确的发言人 ID 时，条目 `Owner` 设定为发言人 QQ 号；其余客观事实或非自述陈述统一归属为 `"group"`。
+   - **可信发言人与保守自述归属屏障（`SourceSenderID` & `HasSelfReference`）**：
+     - 无论条目最终归属 `Owner` 为何值，均强制持久化记录底层协议可信的原始发言人 `SourceSenderID`，确保实际发言人在任何情况下均清晰可查；
+     - 个人自述事实（`Owner = srcMsg.SenderID`）绝不单凭大模型不可信的 `is_self: true` 标记，而是强制要求引述字面片段自身必须包含第一人称代词（`HasSelfReference`，覆盖中文“我”、“俺”、“咱”、“自己”、“本人”及英文“i”、“me”、“my”等）。若引述为第三人称传闻或客观陈述，则保守归属于 `"group"`，杜绝主体张冠李戴，而其真实发言人依然完整保存在 `SourceSenderID` 中供检查与溯源。
 
 ### 4.3 跨触发幂等持久化与并发安全（Cross-Trigger Idempotency）
 
 群聊消息可能在实时对话轮次中被提取事实，随后在被动水群累积达到压缩阈值时，同一消息又随历史快照参与滚动压缩提炼。为了防止重复存储冗余记忆，`GroupStore.SaveGroupEntriesConditionallyContext` 在写互斥锁保护下实施了跨触发幂等与元数据融合机制（`isSameGroupMemory`）：
 
-1. **幂等唯一性判定**：
-   - 具有相同的 `Owner`，且满足：
-     - 来源消息 ID（`SourceMessageID`）非空且一致，且字面引述 `Evidence` 或内容 `Content` 完全一致；
-     - 或者权威事实内容 `Content` 字符串完全相同。
-2. **无损元数据融合**：
-   - 当检测到已存在匹配的记忆条目时，跳过新增记录，避免无谓的数据膨胀。
-   - 同时原子合并补充已存条目中缺失的 `SourceMessageID`、`Evidence`、`Summary`，并无损合并两轮提取产生的 `Tags` 集合。
-3. **并发安全与路由隔离**：
+1. **人工录入与跨消息去重边界（Manual Writes & Distinct Source Protection）**：
+   - 去重谓词仅对自动提炼条目（`SourceExtract`, `SourceDistill`, `SourceCompact`）生效；用户手动写入的条目（`SourceManual`）绝不参与去重合并，保障人工录入绝不被意外吞噬或覆盖。
+   - 对于自动提炼条目，必须满足相同的 `Owner`、相同的非空 `SourceMessageID` 以及相同的字面引述/内容；来自不同平台消息（`SourceMessageID` 不同）的发言即使内容相同也作为独立条目保存，真实保留不同消息源的独立引述记录。
+2. **持久化 ID 严格一致性（Preventing Phantom IDs）**：
+   - 在幂等合并已有条目时，将内存中传入对象的 ID 同步更新为磁盘已存条目的持久化 ID（`incoming.ID = existing.ID`），确保 `GroupStore.SaveEntry` 返回的永远是在磁盘上实际存在的真实 ID，杜绝幻影 ID 导致后续更新或删除失败。
+3. **无损元数据融合**：
+   - 当检测到已存在匹配的同一消息提取条目时，跳过新增记录，避免无谓的数据膨胀。
+   - 同时原子合并补充已存条目中缺失的 `SourceMessageID`、`SourceSenderID`、`Evidence`、`Summary`，并无损合并两轮提取产生的 `Tags` 集合。
+4. **并发安全与路由隔离**：
    - 所有读写检查均在各群独立的 `GroupStore` 内存互斥锁内完成，天然杜绝跨协程竞态条件。
    - 提炼执行前执行路由状态核验，已禁用或未授权的群路由立即中止，保障多租户安全。
 
@@ -246,10 +250,11 @@ func (m *MemberProfile) ResolveCallingName() string {
 type MemoryEntry struct {
     ID              string    `json:"id"`
     Owner           string    `json:"owner"`             // 私聊为用户QQ号；群聊中个人自述为发言人QQ，客观事实/第三人传闻为 "group"
-    Content         string    `json:"content"`           // 权威事实内容（在自动提炼下严格等于字面引述 Evidence）
+    Content         string    `json:"content"`           // 权威事实内容（在自动提炼下严格等于字面引述 Evidence；经Web人工修订后可与Evidence相异）
     Summary         string    `json:"summary,omitempty"` // 辅助展示摘要（模型提炼的展示概括，非权威）
-    Evidence        string    `json:"evidence,omitempty"`// 字面引述片段（精确来自于原始用户发言）
-    SourceMessageID string    `json:"source_message_id,omitempty"` // 原始消息唯一ID（溯源与幂等键）
+    Evidence        string    `json:"evidence,omitempty"`// 字面引述片段（精确来自于原始用户发言，人工编辑后保持不可变）
+    SourceMessageID string    `json:"source_message_id,omitempty"` // 原始消息唯一ID（溯源与幂等键，人工编辑后保持不可变）
+    SourceSenderID  string    `json:"source_sender_id,omitempty"`  // 原始发言人平台可信ID（真实发言人追踪，人工编辑后保持不可变）
     Tags            []string  `json:"tags"`              // 检索标签（包含主体、领域等）
     Source          string    `json:"source"`            // "extract" | "manual" | "reflect" | "compact" | "distill"
     CreatedAt       time.Time `json:"created_at"`
@@ -262,8 +267,8 @@ type MemoryEntry struct {
 
 ### 6.1 Protobuf 向前兼容性规范
 - 所有已发布的 Protobuf 字段 Tag 序号严格保持不可变更（例如 `UpdateMemoryRequest` 中的 `id=1, content=2, tags=3, visibility=4`，`MemoryEntry` 消息体中的基础字段 1~11）。
-- 新增字段一律追加在未使用的高位 Tag 编号（如 `summary=12, evidence=13, source_message_id=14`），严格防止客户端二进制反序列化错位与崩溃。
-- **不可变事实与审计追踪**：通过在 Protobuf 与存储模型中固化 `evidence` 与 `source_message_id`，为客户端及 Web 审计提供完整的端到端追溯凭据链。
+- 新增字段一律追加在未使用的高位 Tag 编号（如 `summary=12, evidence=13, source_message_id=14, source_sender_id=15`），严格防止客户端二进制反序列化错位与崩溃。
+- **不可变事实与审计追踪**：通过在 Protobuf 与存储模型中固化 `evidence`、`source_message_id` 与 `source_sender_id`，为客户端及 Web 审计提供完整的端到端追溯凭据链。
 
 ### 6.2 记忆检索与网关后置过滤防挤占（Uncapped Search & Late Filtering）
 - **底层无截断检索**：在智能体交互和 Memory Tool 执行群检索时，`GroupStore.Search` 与 `GroupStore.SearchByTags` 必须传入 `limit = 0` 进行全量无截断候选召回。
@@ -288,3 +293,7 @@ Web 管理面板提供多维度管理界面：
    - 私聊与群聊分别支持导出独立作用域的 JSON 文件。
    - 导入时严格导入到当前选中的作用域，杜绝跨群交叉污染。
    - 支持触发群聊专属记忆反思。
+6. **权威引述不可变与人工修订状态流转（Auditable Provenance on Manual Edits）**：
+   - 当管理员通过 Web UI / ConnectRPC `UpdateMemory` 或 `UpdateEntry` 修改自动提炼条目的 `Content` 时，条目来源 `Source` 自动流转为 `SourceManual`（反映条目已历经人工修订），杜绝修改后的文本被误作自动提炼的权威引述。
+   - 原始底层字面引述 `Evidence`、原始消息 ID `SourceMessageID` 以及可信发言人 `SourceSenderID` 保持完全不可变，作为完整的历史审计追溯链条。
+   - Web 详情弹窗在检测到 `source === 'manual' && evidence !== content` 时，自动呈现“已人工修订”徽章与“事实溯源与审计”卡片，展示当前修订内容与原始引述的对比、原始消息 ID 及可信发言人。

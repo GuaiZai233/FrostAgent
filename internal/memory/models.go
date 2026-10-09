@@ -66,6 +66,7 @@ type MemoryEntry struct {
 	Summary         string     `json:"summary,omitempty"`           // 可选的自然语言展示摘要（不作为权威事实覆盖原文）
 	Evidence        string     `json:"evidence,omitempty"`          // 溯源原始发言字面片段
 	SourceMessageID string     `json:"source_message_id,omitempty"` // 平台源消息唯一 ID
+	SourceSenderID  string     `json:"source_sender_id,omitempty"`  // 平台源消息发送者 ID
 	Tags            []string   `json:"tags"`                        // 标签（用于精确匹配和分类）
 	Source      Source     `json:"source"`                // 来源
 	Visibility  Visibility `json:"visibility,omitempty"`  // 可见性（已废弃）

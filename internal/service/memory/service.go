@@ -165,7 +165,7 @@ func (s *Service) AddMemory(
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		if err := groupStore.Save(entry); err != nil {
+		if err := groupStore.SaveEntry(&entry); err != nil {
 			return connect.NewResponse(&v1.AddMemoryResponse{Error: fmt.Sprintf("save failed: %v", err)}), nil
 		}
 		return connect.NewResponse(&v1.AddMemoryResponse{Memory: toProtoEntry(entry)}), nil
@@ -724,6 +724,7 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		Summary:         e.Summary,
 		Evidence:        e.Evidence,
 		SourceMessageId: e.SourceMessageID,
+		SourceSenderId:  e.SourceSenderID,
 	}
 }
 

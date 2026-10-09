@@ -429,7 +429,8 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	}
 
 	now := time.Now()
-	for _, incoming := range entries {
+	for i := range entries {
+		incoming := &entries[i]
 		incoming.ScopeType = ScopeGroup
 		incoming.GroupID = s.groupID
 		incoming.UpdatedAt = now
@@ -444,7 +445,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 
 		matchedIdx := -1
 		for idx, existing := range brain.Entries {
-			if isSameGroupMemory(existing, incoming) {
+			if isSameGroupMemory(existing, *incoming) {
 				matchedIdx = idx
 				break
 			}
@@ -454,6 +455,9 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 			existing := &brain.Entries[matchedIdx]
 			if existing.SourceMessageID == "" && incoming.SourceMessageID != "" {
 				existing.SourceMessageID = incoming.SourceMessageID
+			}
+			if existing.SourceSenderID == "" && incoming.SourceSenderID != "" {
+				existing.SourceSenderID = incoming.SourceSenderID
 			}
 			if existing.Evidence == "" && incoming.Evidence != "" {
 				existing.Evidence = incoming.Evidence
@@ -465,20 +469,34 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 				existing.Tags = mergeMemoryTags(existing.Tags, incoming.Tags)
 			}
 			existing.UpdatedAt = now
+			incoming.ID = existing.ID
 		} else {
 			if incoming.ID == "" {
 				incoming.ID = generateID()
 			}
-			brain.Entries = append(brain.Entries, incoming)
+			brain.Entries = append(brain.Entries, *incoming)
 		}
 	}
 
 	return s.saveMemoryLocked(brain)
 }
 
+// SaveEntry writes a single memory entry to the group store, updating entry.ID if matched with an existing entry.
+func (s *GroupStore) SaveEntry(entry *MemoryEntry) error {
+	if entry == nil {
+		return errors.New("nil entry")
+	}
+	slice := []MemoryEntry{*entry}
+	if err := s.SaveGroupEntriesConditionallyContext(context.Background(), slice, nil); err != nil {
+		return err
+	}
+	*entry = slice[0]
+	return nil
+}
+
 // Save writes a single memory entry to the group store.
 func (s *GroupStore) Save(entry MemoryEntry) error {
-	return s.SaveGroupEntriesConditionallyContext(context.Background(), []MemoryEntry{entry}, nil)
+	return s.SaveEntry(&entry)
 }
 
 // Search performs a keyword search across group memories.
@@ -572,6 +590,23 @@ func (s *GroupStore) ListAll() ([]MemoryEntry, error) {
 	return brain.Entries, nil
 }
 
+// GetByID returns a memory entry by ID.
+func (s *GroupStore) GetByID(memoryID string) (MemoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	brain, err := s.loadMemoryLocked()
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	for _, entry := range brain.Entries {
+		if entry.ID == memoryID {
+			return entry, nil
+		}
+	}
+	return MemoryEntry{}, fmt.Errorf("memory %s not found in group %s", memoryID, s.groupID)
+}
+
 // Delete removes a memory entry by ID.
 func (s *GroupStore) Delete(memoryID string) error {
 	s.mu.Lock()
@@ -592,6 +627,9 @@ func (s *GroupStore) Delete(memoryID string) error {
 }
 
 // UpdateEntry updates an existing memory entry's content and tags.
+// If an extracted or distilled entry's content is modified, it is explicitly reclassified
+// as SourceManual so that edited content is not misrepresented as an automated source quote,
+// while preserving Evidence, SourceMessageID, and SourceSenderID as historical attribution.
 func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -603,7 +641,12 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 
 	for i, e := range brain.Entries {
 		if e.ID == entry.ID {
-			brain.Entries[i].Content = entry.Content
+			if brain.Entries[i].Content != entry.Content {
+				brain.Entries[i].Content = entry.Content
+				if brain.Entries[i].Source == SourceExtract || brain.Entries[i].Source == SourceDistill {
+					brain.Entries[i].Source = SourceManual
+				}
+			}
 			brain.Entries[i].Tags = entry.Tags
 			brain.Entries[i].UpdatedAt = time.Now()
 			return s.saveMemoryLocked(brain)
@@ -947,12 +990,38 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 }
 
 // isSameGroupMemory determines whether incoming is an idempotent duplicate of an existing memory.
+// It is strictly limited to automatic duplicates of the SAME trusted source identity.
+// Explicit/manual writes and distinct platform messages are never conflated or merged.
 func isSameGroupMemory(existing, incoming MemoryEntry) bool {
+	// 1. Explicit / manual entries must never be deduplicated or merged.
+	if incoming.Source == SourceManual || existing.Source == SourceManual {
+		return false
+	}
+
+	// 2. Must match the same owner.
 	if existing.Owner != incoming.Owner {
 		return false
 	}
-	// 1. If both have SourceMessageID, match by (SourceMessageID + Evidence/Content)
-	if existing.SourceMessageID != "" && incoming.SourceMessageID != "" && existing.SourceMessageID == incoming.SourceMessageID {
+
+	// 3. Distinct nonempty source message IDs represent distinct platform messages
+	// and must never be conflated.
+	if existing.SourceMessageID != "" && incoming.SourceMessageID != "" {
+		if existing.SourceMessageID != incoming.SourceMessageID {
+			return false
+		}
+		// Same SourceMessageID: check that evidence or content matches.
+		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
+			return true
+		}
+		if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
+			return true
+		}
+		return false
+	}
+
+	// 4. When neither has SourceMessageID (e.g. legacy records or synthetic test entries without message IDs),
+	// match only if both are automatic sources and have matching content or evidence.
+	if existing.SourceMessageID == "" && incoming.SourceMessageID == "" {
 		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
 			return true
 		}
@@ -960,14 +1029,7 @@ func isSameGroupMemory(existing, incoming MemoryEntry) bool {
 			return true
 		}
 	}
-	// 2. Exact match on Content
-	if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
-		return true
-	}
-	// 3. Exact match on Evidence
-	if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
-		return true
-	}
+
 	return false
 }
 

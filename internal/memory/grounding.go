@@ -2,6 +2,7 @@ package memory
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -69,4 +70,25 @@ func SanitizeSummary(summary string) string {
 		return string([]rune(sTrim)[:MaxSummaryRunes])
 	}
 	return sTrim
+}
+
+// HasSelfReference checks whether evidence contains an explicit first-person pronoun or marker.
+// Under Option A, personal attribution requires is_self AND direct first-person reference
+// in the quoted text, conservatively falling back to group ownership for ambiguous statements.
+func HasSelfReference(evidence string) bool {
+	for _, marker := range []string{"我", "俺", "咱", "自己", "本人"} {
+		if strings.Contains(evidence, marker) {
+			return true
+		}
+	}
+	lower := strings.ToLower(evidence)
+	for _, field := range strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r)
+	}) {
+		switch field {
+		case "i", "me", "my", "myself", "mine":
+			return true
+		}
+	}
+	return false
 }

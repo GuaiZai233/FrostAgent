@@ -39,6 +39,7 @@ message MemoryEntry {
   string summary = 12;        // optional LLM display summary
   string evidence = 13;       // verbatim source quote
   string source_message_id = 14; // verified source message ID
+  string source_sender_id = 15;  // verified source sender ID
 }
 
 message ListMemoriesRequest {

@@ -1635,7 +1635,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 				Role:      "user",
 				Sender:    "Alice",
 				SenderID:  "syn_user_alice_99",
-				Content:   "Alice drinks matcha latte every morning",
+				Content:   "I drink matcha latte every morning",
 				MessageID: "msg_0",
 				Time:      "10:00:00",
 			},
@@ -1674,10 +1674,10 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 
 	distillOutput := []testDistillEntry{
 		{
-			// 1. Valid first-person evidence: "matcha latte" exists in Msg 0 ("Alice drinks matcha latte every morning"), content is grounded
+			// 1. Valid first-person evidence: "I drink matcha latte" exists in Msg 0 ("I drink matcha latte every morning"), content is grounded
 			Summary:        "Alice drinks matcha latte",
 			Tags:           []string{"drink"},
-			Evidence:       "matcha latte",
+			Evidence:       "I drink matcha latte",
 			SourceMsgIndex: &idx0,
 			IsSelf:         true,
 		},
@@ -1769,16 +1769,19 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		entriesByContent[e.Content] = e
 	}
 
-	// 1. Valid evidence -> Authoritative content is verbatim "matcha latte", attributed to Alice
-	e1, ok := entriesByContent["matcha latte"]
+	// 1. Valid evidence -> Authoritative content is verbatim "I drink matcha latte", attributed to Alice
+	e1, ok := entriesByContent["I drink matcha latte"]
 	if !ok {
-		t.Fatalf("entry 1 missing, expected Content='matcha latte'")
+		t.Fatalf("entry 1 missing, expected Content='I drink matcha latte'")
 	}
 	if e1.Owner != "syn_user_alice_99" {
 		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, "syn_user_alice_99")
 	}
-	if e1.Evidence != "matcha latte" {
-		t.Errorf("entry 1 evidence mismatch: got %q, want %q", e1.Evidence, "matcha latte")
+	if e1.Evidence != "I drink matcha latte" {
+		t.Errorf("entry 1 evidence mismatch: got %q, want %q", e1.Evidence, "I drink matcha latte")
+	}
+	if e1.SourceSenderID != "syn_user_alice_99" {
+		t.Errorf("entry 1 source sender ID mismatch: got %q, want %q", e1.SourceSenderID, "syn_user_alice_99")
 	}
 	if e1.SourceMessageID != "msg_0" {
 		t.Errorf("entry 1 source message ID mismatch: got %q, want %q", e1.SourceMessageID, "msg_0")
@@ -1791,6 +1794,9 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 	}
 	if e5.Owner != memory.GroupOwnerExplicit {
 		t.Errorf("entry 5 general fact owner mismatch: got %q, want %q", e5.Owner, memory.GroupOwnerExplicit)
+	}
+	if e5.SourceSenderID != "syn_user_bob_99" {
+		t.Errorf("entry 5 source sender ID mismatch: got %q, want %q", e5.SourceSenderID, "syn_user_bob_99")
 	}
 	if e5.Evidence != "mountain climbing" {
 		t.Errorf("entry 5 evidence mismatch: got %q, want %q", e5.Evidence, "mountain climbing")
@@ -1859,7 +1865,7 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 			// Model proposes hallucinated suffix / predicate ("而且是本群的管理员") in summary / paraphrase
 			Summary:        "用户平时喜欢玩舞萌DX，而且是本群的管理员",
 			Tags:           []string{"game", "admin"},
-			Evidence:       "玩舞萌DX",
+			Evidence:       "我平时喜欢玩舞萌DX",
 			SourceMsgIndex: &idx0,
 			IsSelf:         true,
 		},
@@ -1887,14 +1893,17 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 
 	// Option A data contract: authoritative content is STRICTLY the verbatim quote!
 	// The hallucinated suffix cannot override the authoritative verbatim quote.
-	if entries[0].Content != "玩舞萌DX" {
-		t.Errorf("expected authoritative content to be verbatim %q, got %q", "玩舞萌DX", entries[0].Content)
+	if entries[0].Content != "我平时喜欢玩舞萌DX" {
+		t.Errorf("expected authoritative content to be verbatim %q, got %q", "我平时喜欢玩舞萌DX", entries[0].Content)
 	}
-	if entries[0].Evidence != "玩舞萌DX" {
-		t.Errorf("expected evidence %q, got %q", "玩舞萌DX", entries[0].Evidence)
+	if entries[0].Evidence != "我平时喜欢玩舞萌DX" {
+		t.Errorf("expected evidence %q, got %q", "我平时喜欢玩舞萌DX", entries[0].Evidence)
 	}
 	if entries[0].SourceMessageID != "msg_0" {
 		t.Errorf("expected source_message_id %q, got %q", "msg_0", entries[0].SourceMessageID)
+	}
+	if entries[0].SourceSenderID != "syn_user_zhangsan_01" {
+		t.Errorf("expected source_sender_id %q, got %q", "syn_user_zhangsan_01", entries[0].SourceSenderID)
 	}
 	if entries[0].Owner != "syn_user_zhangsan_01" {
 		t.Errorf("expected owner to be %q, got %q", "syn_user_zhangsan_01", entries[0].Owner)
