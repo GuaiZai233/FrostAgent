@@ -389,14 +389,15 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 	}
 
 	type itemBatch struct {
-		isGroup     bool
-		groupID     string
-		speakerID   string
-		speakerName string
-		owner       string
-		ownerType   memory.OwnerType
-		route       core.RouteContext
-		messages    []core.ChatMessage
+		isGroup       bool
+		groupID       string
+		speakerID     string
+		speakerName   string
+		owner         string
+		ownerType     memory.OwnerType
+		route         core.RouteContext
+		messages      []core.ChatMessage
+		groupMessages []memory.GroupMessage
 	}
 	groups := make(map[string]*itemBatch)
 	order := make([]string, 0)
@@ -420,6 +421,19 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 				order = append(order, key)
 			}
 			group.messages = append(group.messages, item.Message)
+			sID := ""
+			sName := ""
+			if item.Message.Role == core.RoleUser {
+				sID = item.SpeakerID
+				sName = item.SpeakerName
+			}
+			group.groupMessages = append(group.groupMessages, memory.GroupMessage{
+				MessageID: item.MessageID,
+				SenderID:  sID,
+				Sender:    sName,
+				Role:      string(item.Message.Role),
+				Content:   fmt.Sprintf("%v", item.Message.Content),
+			})
 		} else {
 			if item.Owner == "" {
 				continue
@@ -445,7 +459,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 		}
 		group := groups[key]
 		if group.isGroup {
-			if err := e.MemoryWriter.ExtractGroupTurnWithRouteContext(ctx, group.groupID, group.speakerID, group.speakerName, group.route, group.messages, validator); err != nil {
+			if err := e.MemoryWriter.ExtractGroupMemories(ctx, group.groupID, group.route, group.groupMessages, memory.SourceExtract, validator); err != nil {
 				if errors.Is(err, context.Canceled) || !validator() {
 					return
 				}

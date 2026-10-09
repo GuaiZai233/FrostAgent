@@ -7,8 +7,6 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,6 +104,7 @@ type GroupCompactor struct {
 	persistWake    map[string]chan struct{}
 
 	groupManager *memory.GroupManager
+	memoryWriter *memory.Writer
 }
 
 // SetGroupManager configures the group manager for compact distillation.
@@ -113,6 +112,30 @@ func (c *GroupCompactor) SetGroupManager(gm *memory.GroupManager) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.groupManager = gm
+}
+
+// SetMemoryWriter configures the memory writer for canonical group memory distillation.
+func (c *GroupCompactor) SetMemoryWriter(w *memory.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.memoryWriter = w
+}
+
+// MemoryWriter returns the configured memory writer or constructs a fallback if groupManager is available.
+func (c *GroupCompactor) MemoryWriter() *memory.Writer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.memoryWriter != nil {
+		return c.memoryWriter
+	}
+	if c.groupManager != nil && c.provider != nil && c.model != "" {
+		w := memory.NewWriter(nil)
+		w.Scope = c.Scope
+		w.SetGroupManager(c.groupManager)
+		w.SetLLM(c.provider, c.model)
+		return w
+	}
+	return nil
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -513,27 +536,12 @@ func (c *GroupCompactor) compact(
 	}
 }
 
-type distillMessageItem struct {
-	MsgIndex   int    `json:"msg_index"`
-	SenderName string `json:"sender_name"`
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-}
-
-type distillExtractedEntry struct {
-	Content        string   `json:"content"`
-	Tags           []string `json:"tags"`
-	Evidence       string   `json:"evidence"`
-	SourceMsgIndex *int     `json:"source_msg_index"`
-	IsSelf         bool     `json:"is_self"`
-}
-
 func (c *GroupCompactor) distillGroupMemories(
 	owner string,
 	routeScope modelrouter.Scope,
 	snapshot GroupCompactSnapshot,
 ) {
-	if c == nil || c.groupManager == nil || c.provider == nil || len(snapshot.Messages) == 0 {
+	if c == nil || len(snapshot.Messages) == 0 {
 		return
 	}
 
@@ -545,186 +553,34 @@ func (c *GroupCompactor) distillGroupMemories(
 		return
 	}
 
-	instanceID := ""
-	if c.Scope != nil {
-		instanceID = c.Scope.InstanceID()
-	}
-
-	groupStore, err := c.groupManager.GetGroupStore(groupID)
-	if err != nil {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼获取存储失败: %v", instanceID, groupID, err))
+	writer := c.MemoryWriter()
+	if writer == nil {
 		return
 	}
 
-	existing, _ := groupStore.ListAll()
-	var existingMemoriesStr strings.Builder
-	if len(existing) == 0 {
-		existingMemoriesStr.WriteString("已有群记忆：\n（暂无记录）")
-	} else {
-		existingMemoriesStr.WriteString("已有群记忆：\n")
-		limit := min(len(existing), 50)
-		for i := range limit {
-			fmt.Fprintf(&existingMemoriesStr, "- %s\n", existing[i].Content)
-		}
-	}
-
-	var msgItems []distillMessageItem
+	groupMsgs := make([]memory.GroupMessage, len(snapshot.Messages))
 	for i, m := range snapshot.Messages {
-		name := m.Sender
-		if name == "" {
-			name = "群友"
+		groupMsgs[i] = memory.GroupMessage{
+			MessageID: m.MessageID,
+			SenderID:  m.SenderID,
+			Sender:    m.Sender,
+			Role:      m.Role,
+			Content:   m.Content,
 		}
-		msgItems = append(msgItems, distillMessageItem{
-			MsgIndex:   i,
-			SenderName: name,
-			Role:       m.Role,
-			Content:    m.Content,
-		})
-	}
-	convJSON, err := json.MarshalIndent(msgItems, "", "  ")
-	if err != nil {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] 序列化待提炼消息失败: %v", instanceID, groupID, err))
-		return
 	}
 
-	prompt := strings.Replace(memory.DistillGroupCompactPrompt, "{current_time}", memory.CurrentTimeLabel(time.Now()), 1)
-	prompt = strings.Replace(prompt, "{existing_memories}", existingMemoriesStr.String(), 1)
-	prompt = strings.Replace(prompt, "{conversation}", string(convJSON), 1)
-
-	req := core.ChatRequest{
-		Model: c.model,
-		Messages: []core.ChatMessage{
-			{Role: core.RoleUser, Content: prompt},
-		},
-		MaxTokens:   1024,
-		Temperature: 0.2,
-		Route: core.RouteContext{
-			Platform: routeScope.Platform,
-			GroupID:  routeScope.GroupID,
-		},
+	route := core.RouteContext{
+		Platform: routeScope.Platform,
+		GroupID:  routeScope.GroupID,
 	}
 
-	resp, err := c.provider.Chat(c.Context(), req)
-	if err != nil {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼LLM调用失败: %v", instanceID, groupID, err))
-		return
+	if err := writer.ExtractGroupMemories(c.Context(), groupID, route, groupMsgs, memory.SourceDistill, nil); err != nil {
+		instanceID := ""
+		if c.Scope != nil {
+			instanceID = c.Scope.InstanceID()
+		}
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼失败: %v", instanceID, groupID, err))
 	}
-
-	raw, ok := resp.Message.Content.(string)
-	if !ok {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼返回格式异常", instanceID, groupID))
-		return
-	}
-
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-
-	if raw == "" || raw == "[]" {
-		return
-	}
-
-	var entries []distillExtractedEntry
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼JSON解析失败: %v", instanceID, groupID, err))
-		return
-	}
-
-	now := time.Now()
-	var toSave []memory.MemoryEntry
-	for _, e := range entries {
-		cleanContent := strings.TrimSpace(e.Content)
-		if cleanContent == "" {
-			continue
-		}
-
-		// 1. Every distilled fact must be explicitly anchored to a valid source message in the snapshot.
-		if e.SourceMsgIndex == nil {
-			continue
-		}
-		idx := *e.SourceMsgIndex
-		if idx < 0 || idx >= len(snapshot.Messages) {
-			continue
-		}
-		srcMsg := snapshot.Messages[idx]
-		if srcMsg.Role == "assistant" || srcMsg.SenderID == "" {
-			continue
-		}
-
-		// 2. Evidence validation: must be a non-trivial (>= 3 runes) verbatim substring of the source message.
-		evidence := strings.TrimSpace(e.Evidence)
-		evRunes := []rune(evidence)
-		if len(evRunes) < 3 || !strings.Contains(srcMsg.Content, evidence) {
-			continue
-		}
-
-		// 3. Grounding validation: the proposed content must legitimately derive from the evidence.
-		overlap, totalEvTokens := memory.CountSubstantiveTokenOverlap(evidence, cleanContent)
-		if totalEvTokens == 0 || overlap == 0 || (float64(overlap)/float64(totalEvTokens) < 0.4 && overlap < 2) {
-			continue
-		}
-
-		// 3b. Guard against polarity inversion (e.g. dropping negation "我不是管理员" -> "我是管理员")
-		if memory.HasPolarityInversion(evidence, cleanContent, srcMsg.Content) {
-			continue
-		}
-
-		// 3c. Validate that content does not contain unsupported additions (e.g. fabricated suffixes / predicates).
-		if memory.HasUnsupportedAdditions(cleanContent, srcMsg.Content, srcMsg.Sender) {
-			continue
-		}
-
-		// 4. Attribution validation:
-		ownerKey := memory.GroupOwnerExplicit
-		if e.IsSelf {
-			// Must be a genuine first-person statement from this speaker.
-			if !memory.IsFirstPersonStatement(evidence, cleanContent, srcMsg.Content, srcMsg.Sender) {
-				// Reject ungrounded personal attribution (e.g. cross-speaker claim falsely marked as is_self).
-				continue
-			}
-			// Reject cross-speaker claims that attribute facts about another participant.
-			var otherNames []string
-			for _, m := range snapshot.Messages {
-				if m.SenderID != srcMsg.SenderID && m.Sender != "" {
-					otherNames = append(otherNames, m.Sender)
-				}
-			}
-			if memory.IsCrossSpeakerClaim(cleanContent, otherNames) {
-				continue
-			}
-			ownerKey = srcMsg.SenderID
-		}
-
-		b := make([]byte, 8)
-		rand.Read(b)
-		id := "mem_" + hex.EncodeToString(b)
-
-		toSave = append(toSave, memory.MemoryEntry{
-			ID:        id,
-			Owner:     ownerKey,
-			OwnerType: memory.OwnerGroup,
-			ScopeType: memory.ScopeGroup,
-			GroupID:   groupID,
-			Content:   cleanContent,
-			Tags:      e.Tags,
-			Source:    memory.SourceDistill,
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
-	}
-
-	if len(toSave) == 0 {
-		return
-	}
-
-	if err := groupStore.SaveGroupEntriesConditionallyContext(c.Context(), toSave, nil); err != nil {
-		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼保存失败: %v", instanceID, groupID, err))
-		return
-	}
-
-	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 提炼了 %d 条新记忆 (群: %s)", len(toSave), groupID))
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {

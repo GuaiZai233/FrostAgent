@@ -61,9 +61,12 @@ type MemoryEntry struct {
 	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"，群聊中为发信者QQ自述，或显式 "group"）
 	OwnerType   OwnerType  `json:"owner_type,omitempty"`  // owner 是人还是群（零值兼容老数据）
 	ScopeType   ScopeType  `json:"scope_type,omitempty"`  // 作用域：private 或 group
-	GroupID     string     `json:"group_id,omitempty"`    // 群号（ScopeType == group 时）
-	Content     string     `json:"content"`               // 记忆内容（自然语言）
-	Tags        []string   `json:"tags"`                  // 标签（用于精确匹配和分类）
+	GroupID         string     `json:"group_id,omitempty"`          // 群号（ScopeType == group 时）
+	Content         string     `json:"content"`                     // 记忆内容（Option A 下群聊提取为权威原始发言字面片段）
+	Summary         string     `json:"summary,omitempty"`           // 可选的自然语言展示摘要（不作为权威事实覆盖原文）
+	Evidence        string     `json:"evidence,omitempty"`          // 溯源原始发言字面片段
+	SourceMessageID string     `json:"source_message_id,omitempty"` // 平台源消息唯一 ID
+	Tags            []string   `json:"tags"`                        // 标签（用于精确匹配和分类）
 	Source      Source     `json:"source"`                // 来源
 	Visibility  Visibility `json:"visibility,omitempty"`  // 可见性（已废弃）
 	CreatedAt   time.Time  `json:"created_at"`            // 创建时间

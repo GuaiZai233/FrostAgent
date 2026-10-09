@@ -15,4 +15,5 @@ type PendingExtractionItem struct {
 	SpeakerName string            // 发言者称呼或昵称
 	Route       core.RouteContext // 自动提取模型所使用的群级路由
 	Message     core.ChatMessage  // 消息内容（user 或 assistant）
+	MessageID   string            // 平台消息唯一 ID（用于溯源与幂等）
 }

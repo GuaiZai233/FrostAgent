@@ -128,6 +128,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	)
 	groupCompactor.Scope = scope
 	groupCompactor.SetGroupManager(groupManager)
+	groupCompactor.SetMemoryWriter(writer)
 	if groupCompactMaxBufferSize > 0 {
 		if groupCompactMaxBufferSize < groupCompactBufferSize {
 			scope.Log().Warn(

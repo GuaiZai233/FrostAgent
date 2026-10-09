@@ -312,21 +312,34 @@ func (w *Writer) parseAndSave(
 	return nil
 }
 
-type groupExtractedEntry struct {
-	Content  string   `json:"content"`
-	Tags     []string `json:"tags"`
-	Evidence string   `json:"evidence,omitempty"`
-	IsSelf   bool     `json:"is_self"`
+// GroupMessage represents a message in a group dialogue for memory extraction.
+type GroupMessage struct {
+	MessageID string `json:"message_id,omitempty"`
+	SenderID  string `json:"sender_id,omitempty"`
+	Sender    string `json:"sender,omitempty"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
 }
 
-// ExtractGroupTurnWithRouteContext extracts group memories from a turn with context and validator.
-func (w *Writer) ExtractGroupTurnWithRouteContext(
+type groupExtractedCandidate struct {
+	Content        string   `json:"content,omitempty"`
+	Evidence       string   `json:"evidence"`
+	Summary        string   `json:"summary,omitempty"`
+	Tags           []string `json:"tags"`
+	SourceMsgIndex *int     `json:"source_msg_index,omitempty"`
+	IsSelf         bool     `json:"is_self"`
+}
+
+type groupExtractedEntry = groupExtractedCandidate
+
+// ExtractGroupMemories is the canonical group memory extraction, attribution, and persistence service.
+// Both awakened turn completion and passive compact buffer distillation delegate here.
+func (w *Writer) ExtractGroupMemories(
 	ctx context.Context,
 	groupID string,
-	speakerID string,
-	speakerName string,
 	route core.RouteContext,
-	messages []core.ChatMessage,
+	messages []GroupMessage,
+	source Source,
 	validator func() bool,
 ) error {
 	if ctx == nil {
@@ -342,27 +355,47 @@ func (w *Writer) ExtractGroupTurnWithRouteContext(
 	if validator != nil && !validator() {
 		return errors.New("extraction cancelled or invalidated")
 	}
-	if w.provider == nil || w.model == "" || w.groupManager == nil || groupID == "" {
+	if w.provider == nil || w.model == "" || w.groupManager == nil || groupID == "" || len(messages) == 0 {
 		return nil
 	}
 
-	// Format recent messages for the prompt
-	var conversation strings.Builder
-	for _, msg := range messages {
-		if msg.Role == core.RoleSystem {
-			continue
-		}
-		content := fmt.Sprintf("%v", msg.Content)
-		fmt.Fprintf(&conversation, "[%s]: %s\n", msg.Role, content)
+	groupStore, err := w.groupManager.GetGroupStore(groupID)
+	if err != nil {
+		return err
 	}
 
-	prompt := strings.Replace(extractGroupPrompt, "{conversation}", conversation.String(), 1)
-	prompt = strings.Replace(prompt, "{current_time}", CurrentTimeLabel(time.Now()), 1)
-	if speakerName == "" {
-		speakerName = "群友"
+	existing, _ := groupStore.ListAll()
+	var existingMemoriesStr strings.Builder
+	if len(existing) > 0 {
+		existingMemoriesStr.WriteString("已有群记忆（严禁重复提取）：\n")
+		limit := min(len(existing), 50)
+		for i := range limit {
+			fmt.Fprintf(&existingMemoriesStr, "- %s\n", existing[i].Content)
+		}
 	}
-	prompt = strings.Replace(prompt, "{speaker_name}", speakerName, 1)
-	prompt = strings.Replace(prompt, "{speaker_id}", speakerID, 1)
+
+	var msgItems []map[string]any
+	for i, m := range messages {
+		name := m.Sender
+		if name == "" {
+			name = "群友"
+		}
+		item := map[string]any{
+			"msg_index": i,
+			"sender":    name,
+			"role":      m.Role,
+			"content":   m.Content,
+		}
+		if m.SenderID != "" {
+			item["sender_id"] = m.SenderID
+		}
+		msgItems = append(msgItems, item)
+	}
+	convJSON, _ := json.MarshalIndent(msgItems, "", "  ")
+
+	prompt := strings.Replace(extractGroupPrompt, "{conversation}", string(convJSON), 1)
+	prompt = strings.Replace(prompt, "{current_time}", CurrentTimeLabel(time.Now()), 1)
+	prompt = strings.Replace(prompt, "{existing_memories}", existingMemoriesStr.String(), 1)
 
 	req := core.ChatRequest{
 		Model: w.model,
@@ -370,7 +403,7 @@ func (w *Writer) ExtractGroupTurnWithRouteContext(
 			{Role: core.RoleUser, Content: prompt},
 		},
 		MaxTokens:   1024,
-		Temperature: 0.3,
+		Temperature: 0.2,
 		Route:       route,
 	}
 
@@ -401,16 +434,16 @@ func (w *Writer) ExtractGroupTurnWithRouteContext(
 		return fmt.Errorf("unexpected response type: %T", resp.Message.Content)
 	}
 
-	return w.parseAndSaveGroup(ctx, groupID, speakerID, speakerName, messages, raw, validator)
+	return w.parseAndSaveGroupCandidates(ctx, groupStore, groupID, messages, raw, source, validator)
 }
 
-func (w *Writer) parseAndSaveGroup(
+func (w *Writer) parseAndSaveGroupCandidates(
 	ctx context.Context,
+	groupStore *GroupStore,
 	groupID string,
-	speakerID string,
-	speakerName string,
-	messages []core.ChatMessage,
+	messages []GroupMessage,
 	raw string,
+	source Source,
 	validator func() bool,
 ) error {
 	raw = strings.TrimSpace(raw)
@@ -423,18 +456,9 @@ func (w *Writer) parseAndSaveGroup(
 		return nil
 	}
 
-	var entries []groupExtractedEntry
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+	var candidates []groupExtractedCandidate
+	if err := json.Unmarshal([]byte(raw), &candidates); err != nil {
 		w.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊记忆提取JSON解析失败: %v, raw: %s", err, raw))
-		return err
-	}
-
-	if w == nil || w.groupManager == nil {
-		return nil
-	}
-
-	groupStore, err := w.groupManager.GetGroupStore(groupID)
-	if err != nil {
 		return err
 	}
 
@@ -443,16 +467,9 @@ func (w *Writer) parseAndSaveGroup(
 		return errors.New("extraction cancelled or invalidated")
 	}
 
-	var userMsgs []string
-	for _, msg := range messages {
-		if msg.Role == core.RoleUser {
-			userMsgs = append(userMsgs, fmt.Sprintf("%v", msg.Content))
-		}
-	}
-
 	now := time.Now()
 	var toSave []MemoryEntry
-	for _, e := range entries {
+	for _, cand := range candidates {
 		if ctx != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -462,71 +479,85 @@ func (w *Writer) parseAndSaveGroup(
 		if validator != nil && !validator() {
 			return errors.New("extraction cancelled or invalidated")
 		}
-		cleanContent := strings.TrimSpace(e.Content)
-		if cleanContent == "" {
+
+		rawEvidence := strings.TrimSpace(cand.Evidence)
+		if rawEvidence == "" {
 			continue
 		}
 
-		// Evidence verification:
-		evidence := strings.TrimSpace(e.Evidence)
-		evRunes := []rune(evidence)
-		if len(evRunes) < 3 {
-			// Reject missing or trivial evidence
-			continue
-		}
-
-		// Must match a genuine user message in this turn (rejects missing, foreign, or assistant-derived evidence)
-		var matchedUserMsg string
-		for _, u := range userMsgs {
-			if strings.Contains(u, evidence) {
-				matchedUserMsg = u
-				break
+		// 1. Locate source message
+		var srcMsg *GroupMessage
+		if cand.SourceMsgIndex != nil {
+			idx := *cand.SourceMsgIndex
+			if idx >= 0 && idx < len(messages) {
+				candidateMsg := messages[idx]
+				if candidateMsg.Role != "assistant" && candidateMsg.Role != string(core.RoleAssistant) {
+					if _, ok := ValidateEvidence(candidateMsg.Content, rawEvidence); ok {
+						srcMsg = &candidateMsg
+					}
+				}
 			}
 		}
-		if matchedUserMsg == "" {
-			continue
-		}
 
-		// Substantive token overlap between evidence and content
-		overlap, totalEvTokens := CountSubstantiveTokenOverlap(evidence, cleanContent)
-		if totalEvTokens == 0 || overlap == 0 || (float64(overlap)/float64(totalEvTokens) < 0.4 && overlap < 2) {
-			continue
-		}
-
-		// Guard against polarity inversion (e.g. dropping negation "我不是管理员" -> "我是管理员")
-		if HasPolarityInversion(evidence, cleanContent, matchedUserMsg) {
-			continue
-		}
-
-		// Validate that content does not introduce unsupported additions (fabricated suffix / predicates)
-		if HasUnsupportedAdditions(cleanContent, matchedUserMsg, speakerName) {
-			continue
-		}
-
-		owner := GroupOwnerExplicit
-		if e.IsSelf {
-			if speakerID == "" {
-				continue
+		// Fallback: search messages for user message containing evidence if SourceMsgIndex was omitted
+		if srcMsg == nil && cand.SourceMsgIndex == nil {
+			for i := range messages {
+				m := &messages[i]
+				if m.Role == "assistant" || m.Role == string(core.RoleAssistant) {
+					continue
+				}
+				if _, ok := ValidateEvidence(m.Content, rawEvidence); ok {
+					srcMsg = m
+					break
+				}
 			}
-			if !IsFirstPersonStatement(evidence, cleanContent, matchedUserMsg, speakerName) {
-				continue
-			}
-			owner = speakerID
 		}
 
-		entry := MemoryEntry{
-			ID:        generateID(),
-			Owner:     owner,
-			OwnerType: OwnerGroup,
-			ScopeType: ScopeGroup,
-			GroupID:   groupID,
-			Content:   cleanContent,
-			Tags:      e.Tags,
-			Source:    SourceExtract,
-			CreatedAt: now,
-			UpdatedAt: now,
+		if srcMsg == nil {
+			continue
 		}
-		toSave = append(toSave, entry)
+
+		validEvidence, ok := ValidateEvidence(srcMsg.Content, rawEvidence)
+		if !ok {
+			continue
+		}
+
+		// 2. Attribution
+		ownerKey := GroupOwnerExplicit
+		if cand.IsSelf {
+			if srcMsg.SenderID != "" {
+				ownerKey = srcMsg.SenderID
+			}
+		}
+
+		// 3. Option A Data Contract:
+		// Authoritative Content is strictly the verbatim source quote (validEvidence).
+		// Summary is the optional display description (cand.Summary or cand.Content if different).
+		displaySummary := SanitizeSummary(cand.Summary)
+		if displaySummary == "" && cand.Content != "" && cand.Content != validEvidence {
+			displaySummary = SanitizeSummary(cand.Content)
+		}
+
+		effectiveSource := source
+		if effectiveSource == "" {
+			effectiveSource = SourceExtract
+		}
+
+		toSave = append(toSave, MemoryEntry{
+			ID:              generateID(),
+			Owner:           ownerKey,
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         validEvidence,
+			Summary:         displaySummary,
+			Evidence:        validEvidence,
+			SourceMessageID: srcMsg.MessageID,
+			Tags:            SanitizeTags(cand.Tags),
+			Source:          effectiveSource,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
 	}
 
 	if len(toSave) == 0 {
@@ -541,8 +572,37 @@ func (w *Writer) parseAndSaveGroup(
 		return err
 	}
 
-	w.Log().Info(logs.SYSTEM, fmt.Sprintf("从群聊对话中提取了 %d 条记忆 (群: %s)", len(toSave), groupID))
+	w.Log().Info(logs.SYSTEM, fmt.Sprintf("从群聊中提取了 %d 条记忆 (群: %s)", len(toSave), groupID))
 	return nil
+}
+
+// ExtractGroupTurnWithRouteContext extracts group memories from a turn with context and validator.
+// It adapts legacy ChatMessage arguments to GroupMessage and delegates to ExtractGroupMemories.
+func (w *Writer) ExtractGroupTurnWithRouteContext(
+	ctx context.Context,
+	groupID string,
+	speakerID string,
+	speakerName string,
+	route core.RouteContext,
+	messages []core.ChatMessage,
+	validator func() bool,
+) error {
+	var groupMsgs []GroupMessage
+	for _, m := range messages {
+		sID := ""
+		sName := ""
+		if m.Role == core.RoleUser {
+			sID = speakerID
+			sName = speakerName
+		}
+		groupMsgs = append(groupMsgs, GroupMessage{
+			SenderID: sID,
+			Sender:   sName,
+			Role:     string(m.Role),
+			Content:  fmt.Sprintf("%v", m.Content),
+		})
+	}
+	return w.ExtractGroupMemories(ctx, groupID, route, groupMsgs, SourceExtract, validator)
 }
 
 // GenerateID creates a random hex ID prefixed with "mem_".

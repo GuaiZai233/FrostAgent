@@ -28,53 +28,29 @@ const extractPrompt = `请从以下对话中提取值得长期记住的信息。
 对话内容：
 {conversation}`
 
-// extractGroupPrompt 是发送给 LLM 的群聊模型回合记忆提取提示词。
-const extractGroupPrompt = `请从以下群聊对话中提取值得长期记住的群聊信息。
-当前系统时间：{current_time}
-当前发言成员：{speaker_name}（QQ：{speaker_id}）
-
-返回 JSON 数组，每条包含：
-- content: 自然语言描述（简洁、独立可理解）
-- tags: 关键词标签数组（2-5个），包含主体人名、实体、主题等。固定名称保持完整，不要拆分术语。
-- evidence: 字符串，当前发言成员亲口陈述该事实的原文文字片段（必须直接摘录自用户发言原文，不可臆造）
-- is_self: 布尔值。当且仅当当前发言者亲口明确陈述关于自己（第一人称）的长期事实（如“我喜欢打羽毛球”、“我是程序员”）时为 true。如果涉及他人、转述他人（如“小红说小明喜欢披萨”）、群规、多人关系或客观事实，必须为 false！
-
-事实归属与陈述规范（严格执行）：
-1. 第一人称自述：如果当前发言者明确自述关于自己的长期事实，is_self 设为 true，并在 evidence 中给出原文摘录。
-2. 第三方转述或陈述他人：如果发言者提及他人（例如“小红说小明喜欢披萨”），is_self 必须为 false！content 必须明确归属来源（例如“小红称小明喜欢披萨”），tags 中必须包含涉及的主体人名（如 ["小红", "小明", "披萨"]）。严禁捏造或猜测第三方身份。
-3. 群规与多人关系：群规、活动约定、公共规则、多人互动事实，is_self 必须为 false。
-4. 事实来源约束：只有真实群友明确发言的内容可作为事实依据；不得提取由机器人/助手单方面提出的事实或猜测。
-5. 临时闲聊、即时情绪、一次性请求不得提取。
-
-如果没有任何值得记住的信息，返回空数组 []。
-只返回 JSON，不要其他文字。
-
-对话内容：
-{conversation}`
-
-// DistillGroupCompactPrompt 是在群聊 running compact 滚动压缩时提炼长期记忆的提示词。
-const DistillGroupCompactPrompt = `请从以下一批群聊历史消息中，提炼出值得作为长期群聊记忆保存的重要新事实。
+// extractGroupPrompt 是发送给 LLM 的群聊记忆提取提示词（Option A）。
+const extractGroupPrompt = `请从以下群聊对话中提取值得长期记住的重要新事实。
 当前系统时间：{current_time}
 
 {existing_memories}
 
 返回 JSON 数组，每条包含：
-- content: 自然语言描述（简洁、独立可理解）
-- tags: 关键词标签数组（2-5个）
-- evidence: 字符串，该事实直接对应的原始发言文字片段（必须完全摘录自该消息 content 原文，不可臆造）
-- source_msg_index: 整数，该事实直接来源的消息编号（对应待提炼消息列表中的 msg_index）
-- is_self: 布尔值。当且仅当该条消息的发言成员亲口自述关于自己的第一人称长期事实（如“我擅长写Go代码”）时为 true。如果涉及他人、多人、群规或客观事实，必须为 false。
+- evidence: 字符串，该事实直接对应的原始发言字面片段（必须直接摘录自 user 消息 content 原文，不可臆造，长度至少3个字符）
+- summary: 字符串，可选的自然语言描述或摘要（供人类阅读展示，不可推翻原文引用）
+- tags: 关键词标签数组（2-5个），包含主体人名、实体、主题等
+- source_msg_index: 整数，该事实直接来源的消息编号（对应消息列表中的 msg_index）
+- is_self: 布尔值。当且仅当该条消息的发言成员亲口自述关于自己的第一人称长期事实（如“我喜欢喝咖啡”、“我不吃香菜”）时为 true。如果涉及他人、转述他人、群规、多人关系或客观事实，必须为 false。
 
-提炼与去重规则：
-1. 严禁与上方“已有群记忆”重复！如果事实已被记录，不得再次提取。
-2. 第一人称自述与证据归属：当 is_self 为 true 时，evidence 必须是对应 msg_index 的发言者亲口陈述该事实的原文片段；若证据与原文不符或无法查验，事实归属将被降级为群公共事实。
-3. 转述他人（例如“小张说小李搬家了”）必须标明归属（例如“小张称小李搬家了”），is_self 必须为 false，tags 包含涉及人物。
-4. 群规、公共约定、群内重要公告，is_self 必须为 false。
-5. 忽略临时闲聊、流水账、即时表情、短对话。
-6. 拿不准或无新增长期价值信息时，返回空数组 []。
-7. 只返回符合格式的 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明。
+事实归属与提取规范（严格执行）：
+1. 事实来源约束：只有真实群友（user）明确发言的内容可作为事实依据；不得提取仅由机器人/助手（assistant）提出的内容。
+2. 证据严格一致：evidence 必须是对应消息 content 中的字面原文片段。
+3. 第一人称自述：若且仅若发言者亲口自述关于自己的长期事实，is_self 设为 true。若发言者提及他人、转述他人（例如“小张说小李搬家了”）、群规公约或客观事实，is_self 必须为 false。
+4. 临时闲聊、即时情绪、一次性请求不得提取。拿不准或无新增长期价值信息时，返回空数组 []。
+5. 只返回 JSON 数组，严禁包含任何 Markdown 格式或额外文字。
 
-待提炼的群消息列表（JSON 格式）：
+待提取的群消息列表：
 {conversation}`
 
-const distillGroupCompactPrompt = DistillGroupCompactPrompt
+// DistillGroupCompactPrompt 保持向后兼容，指向统一的群聊记忆提取提示词。
+const DistillGroupCompactPrompt = extractGroupPrompt
+const distillGroupCompactPrompt = extractGroupPrompt

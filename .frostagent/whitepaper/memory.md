@@ -163,40 +163,61 @@ func (m *MemberProfile) ResolveCallingName() string {
 
 ---
 
-## 四、双输入路径提炼架构
+## 四、双触发单一提炼引擎架构与字面引述溯源契约
 
-群聊记忆来源分为两条正交且互补的输入路径：
+群聊记忆提炼由两个正交的触发入口驱动，但共享单一权威的规范化提炼引擎与持久化管线：
 
-### 路径一：实时对话提炼（Turn Extraction）
-1. **全员全消息观测**：群内收到的所有消息（包括未唤醒消息、纯表情、图片）均触发成员发言观测，更新 `last_spoke_at`、`nickname` 与群名称。
-2. **单轮对话提炼触发条件**：
-   - 智能体给出正常文本回复（1 轮对话）。
-   - 智能体主动且成功调用 `stay_silent` 工具（1 轮对话，助手内容记为 `[stay_silent]`）。
-3. **终端静默状态分类（Terminal Silence Classification）**：
-   - 智能体执行结果 `AgentRunResult` 明确区分终端状态：`StaySilentCalled` 与 `SilenceReason`（如 `security_block`、`route_disabled`、`canceled`、`epoch_changed`、`provider_fallback`）。
-   - 仅当真正成功调用 `stay_silent` 时触发提炼，因安全拦截或路由故障导致的静默绝对不触发记忆提取。
-4. **轮次级受信证据与实体谓词锚定（Turn-Scoped Evidence Authentication & Grounding）**：
-   - **受信用户消息约束**：提取出的 `evidence` 必须真实来自于本轮对话的 `RoleUser` 消息，有效字符 $\ge 3$；来自 `RoleAssistant`（模型自说自话）、跨对话外部或缺失证据的条目一律严格拒绝；
-   - **谓词与附加断言防御 (`HasUnsupportedAdditions`)**：剥离通用引导语（“用户”、“发言人”、“自述”等）及发言人称呼后，核验生成事实中的所有实质性词元（汉字单字及 $\ge 2$ 字符单词）是否完全由原用户消息支持。若模型在原句基础上虚构添加谓词或后缀（如原话“我平时喜欢玩舞萌DX”，提炼却添加“并且是本群的管理员”），一律直接拒绝入库；
-   - **极性反转与否定词丢失防御 (`HasPolarityInversion` & `CountNegationMarkers`)**：传统词元子集包含无法防御否定词剥离（如将原话“我不是管理员”或“我不喜欢舞萌”颠倒提炼为“我是管理员”或“我喜欢舞萌”）。系统通过 `CountNegationMarkers` 识别中英文否定谓词（中文“不是”、“不会”、“不能”、“不要”、“不想”、“不喜欢”、“没有”、“并非”、“未”、“非”、“莫”、“别”等，严格过滤“不仅”、“不但”、“不管”等非否定连词；英文 "not", "n't", "never", "without" 等并具备英文词边界保护）。核验引述证据及其封闭分句与生成事实的否定极性，一旦检测到否定标记被丢弃或无中生有添加否定，坚决判定为极性反转并拒绝入库；
-   - **分句限定的第一人称自述验证 (`FindEnclosingClause` & `IsFirstPersonStatement`)**：避免整句宏观匹配“我”导致的非相关分句标记渗透（如发言人张三发言“我今天来打机，李四喜欢玩舞萌”导致李四的喜好被误标为个人记忆）。算法利用标点将消息切分为分句，精确定位包围引述证据的封闭分句（Enclosing Clause）。仅当该分句或证据本身明确具备第一人称指示词（“我”、“俺”、“咱”、“自己”、“本人”或发言人自称）且未指涉第三人时，才允许将记忆归属设置为发言人 QQ 号（`owner = speakerID`）；否则一律不予沉淀为发言人个人记忆。
+### 4.1 双触发入口与职责解耦
 
-### 路径二：滚动压缩提炼（Rolling Compact Distillation）
-1. **快照抓取**：当群聊消息缓冲达到阈值触发滚动压缩时，生成 `GroupCompactSnapshot`。
-2. **防注入消息溯源与可验证发言证据检查（Verifiable Speaker Attribution）**：
-   - 消息以严格 JSON 数组格式（包含 `msg_index`、`sender_name`、`role`、`content`）呈现给模型，杜绝聊天头伪造与提示词注入。
-   - 提炼模型输出必须提供 `source_msg_index`、`is_self` 与 `evidence`（引述发言原文片段）。
-   - 后端执行硬核归属证据与事实锚定验证：
-     1. **消息源合法性**：引用消息索引合法且 `Role != "assistant"`、`SenderID` 非空；
-     2. **非平凡证据子串验证**：`evidence` 必须非空且有效字符数 $\ge 3$，且必须真实作为连续子串存在于原消息内容（`srcMsg.Content`）中；
-     3. **实体/语义重合实质性锚定**：提取证据与生成事实的实质性语义单元（汉字单字或非汉字单词），要求重合单元数 $\ge 2$ 且重合比例 $\ge 40\%$。**凡证据缺失、字符不足、幻觉虚构或证据与事实不相关的提炼条目，一律直接彻底拒绝并丢弃，严禁错误降级沉淀到公有群记忆 `"group"` 中**；
-     4. **极性反转与否定丢失防护 (`HasPolarityInversion`)**：严格比对引述证据所在封闭分句与生成事实的否定极性（`CountNegationMarkers`），严禁丢弃否定词（如“我不是管理员”提炼为“我是管理员”）或引入未经验证的否定断言；
-     5. **杜绝虚构谓词与后缀 (`HasUnsupportedAdditions`)**：严格验证提炼内容除了合法引导词（“用户”、“群成员”、“自述”、“提到”等）与发言人名称外，不可包含任何未经原文支持的实质性词元。彻底杜绝基于真实片段拼凑虚假身份/权限的后缀幻觉；
-     6. **分句限定的第一人称真实自述与跨发言人断言防护**：个人归属（`is_self: true`）必须在证据或包围证据的封闭分句（`FindEnclosingClause`）中直接具备真实第一人称标记（如“我”、“俺”、“咱”、“自己”、“本人”或明确的本人称呼），杜绝整句其他不相关分句的第一人称标记渗透；同时通过 `IsCrossSpeakerClaim` 严格检查，若提炼事实在指涉对话中其他成员（例如 A 发言提及 B 的偏好却伪标为个人事实），一律彻底拒绝入库，防止成员记忆被跨人污染。
-3. **长期记忆区分与网关可达性**：
-   - 滚动压缩生成的是群长期记忆事实，来源标识为 `SourceDistill`（区别于旧版废弃的会话段落总结 `SourceCompact`）。
-   - `Gateway.FilterGroup` 保留 `SourceDistill` 记忆供召回与工具检索，排除废弃的 `SourceCompact` 临时段落。
-4. **降级与容错**：提炼过程失败时以实例 Logger 输出 `WARN` 日志（格式含 `[Instance: <name>]`），绝不阻塞或中断滚动压缩上下文更新流程。
+1. **入口一：实时对话提炼（Turn Extraction）**
+   - **全员全消息观测**：群内收到的所有消息（包括未唤醒消息、纯表情、图片）均触发成员发言观测，更新 `last_spoke_at`、`nickname` 与群名称。
+   - **单轮对话提炼触发条件**：
+     - 智能体给出正常文本回复（1 轮对话）。
+     - 智能体主动且成功调用 `stay_silent` 工具（1 轮对话，助手内容记为 `[stay_silent]`）。
+   - **终端静默状态分类（Terminal Silence Classification）**：
+     - 智能体执行结果 `AgentRunResult` 明确区分终端状态：`StaySilentCalled` 与 `SilenceReason`（如 `security_block`、`route_disabled`、`canceled`、`epoch_changed`、`provider_fallback`）。
+     - 仅当真正成功调用 `stay_silent` 时触发提炼，因安全拦截或路由故障导致的静默绝对不触发记忆提取。
+   - 智能体轮次收集本轮上下文，转换为规范化 `[]GroupMessage` 并携带 `MessageID`，委托给 `Writer.ExtractGroupMemories`。
+
+2. **入口二：滚动压缩被动提炼（Passive Rolling Compact Distillation）**
+   - **快照抓取**：当群聊消息缓冲达到阈值触发滚动压缩时，生成 `GroupCompactSnapshot`。
+   - **职责分离**：`GroupCompactor` 纯粹负责群消息窗口的滚动推进与上下文压缩摘要（`compact` 记忆）；其中的事实提炼逻辑完全解耦并委托给 `MemoryWriter.ExtractGroupMemories`，统一提炼入库为长期记忆事实（来源标识为 `SourceDistill`）。
+   - **降级与容错**：提炼过程失败时以实例 Logger 输出 `WARN` 日志（格式含 `[Instance: <name>]`），绝不阻塞或中断滚动压缩上下文更新流程。
+
+### 4.2 方案 A：字面引述溯源契约（Option A Verbatim Provenance Contract）
+
+早期架构曾尝试基于脆弱的自制语言学分词（`ExtractSubstantiveTokens`）、分句断句（`FindEnclosingClause`）、否定词统计（`CountNegationMarkers`）与谓词增补启发式（`HasUnsupportedAdditions`、`HasPolarityInversion`）进行真实性核验。但在多语言、网络俚语、错别字与多重转折长句场景下，自制 NLU 规则极易造成漏判或误杀。
+
+系统全面重构并采用**字面引述溯源契约（Option A）**，彻底废除不可靠的伪语义 NLU 启发式，代之以数学与物理层面上完全可证明的确定性契约：
+
+1. **权威事实内容（`Content`）**：
+   - 提取入库的记忆条目 `Content` 严格直接绑定为用户原始发言字面截取的引述片段（`validEvidence`）。
+   - **根除语义幻觉**：从根本上杜绝了否定词丢失（例如原话“我不过敏”被模型提炼为“我过敏”）以及虚构谓词/后缀（例如原话“我喜欢打机”被模型虚构附加“而且我是管理员”）等幻觉，因为存储的权威事实正是用户所说出的字面原句。
+2. **辅助展示摘要（`Summary`）**：
+   - 记录模型提炼出的可读概括与描述性摘要，用于前端面板或人机界面的友好呈现。
+   - **禁止篡改**：`Summary` 仅作展示用途，严禁静默覆盖或篡改底层权威的字面 `Content`。
+3. **引述来源与原始消息追踪（`Evidence` & `SourceMessageID`）**：
+   - 每条提炼记忆强制记录并持久化 `Evidence`（引述原文片段）与 `SourceMessageID`（来自底层适配器元数据的原始消息唯一标识），实现具备完整审计链条的事实溯源。
+4. **确定性可证明约束（Provable Invariants）**：
+   - **消息源与角色限定**：引述来源必须为 `RoleUser` 消息且 `SenderID` 由底层协议适配器可信注入，绝对拒绝来自 `RoleAssistant`（模型自说自话）或跨对话上下文的外部消息；
+   - **精确字面子串匹配**：`evidence` 必须真实作为连续子串存在于原消息内容中（`strings.Contains(srcMsg.Content, evidence)`）；
+   - **严格长度与标签边界**：字面引述字符数限定为 $3 \le \text{runes} \le 500$，摘要长度 $\le 500$，每个标签 $\le 50$ 且最多 10 个有效标签；
+   - **发言人归属锚定**：仅当模型判定为个人自述事实（`is_self: true`）且来源消息存在明确的发言人 ID 时，条目 `Owner` 设定为发言人 QQ 号；其余客观事实或非自述陈述统一归属为 `"group"`。
+
+### 4.3 跨触发幂等持久化与并发安全（Cross-Trigger Idempotency）
+
+群聊消息可能在实时对话轮次中被提取事实，随后在被动水群累积达到压缩阈值时，同一消息又随历史快照参与滚动压缩提炼。为了防止重复存储冗余记忆，`GroupStore.SaveGroupEntriesConditionallyContext` 在写互斥锁保护下实施了跨触发幂等与元数据融合机制（`isSameGroupMemory`）：
+
+1. **幂等唯一性判定**：
+   - 具有相同的 `Owner`，且满足：
+     - 来源消息 ID（`SourceMessageID`）非空且一致，且字面引述 `Evidence` 或内容 `Content` 完全一致；
+     - 或者权威事实内容 `Content` 字符串完全相同。
+2. **无损元数据融合**：
+   - 当检测到已存在匹配的记忆条目时，跳过新增记录，避免无谓的数据膨胀。
+   - 同时原子合并补充已存条目中缺失的 `SourceMessageID`、`Evidence`、`Summary`，并无损合并两轮提取产生的 `Tags` 集合。
+3. **并发安全与路由隔离**：
+   - 所有读写检查均在各群独立的 `GroupStore` 内存互斥锁内完成，天然杜绝跨协程竞态条件。
+   - 提炼执行前执行路由状态核验，已禁用或未授权的群路由立即中止，保障多租户安全。
 
 ---
 
@@ -223,22 +244,26 @@ func (m *MemberProfile) ResolveCallingName() string {
 
 ```go
 type MemoryEntry struct {
-    ID          string    `json:"id"`
-    Owner       string    `json:"owner"`        // 私聊为用户QQ号；群聊中个人自述为发言人QQ，客观事实/第三人传闻为 "group"
-    Content     string    `json:"content"`      // 记忆内容客观表述
-    Tags        []string  `json:"tags"`         // 检索标签（包含主体、领域等）
-    Source      string    `json:"source"`       // "extract" | "manual" | "reflect" | "compact" | "distill"
-    CreatedAt   time.Time `json:"created_at"`
-    UpdatedAt   time.Time `json:"updated_at"`
-    AccessCount int       `json:"access_count"`
-    Scope       string    `json:"scope"`        // "private" 或 "group"
-    GroupID     string    `json:"group_id"`     // Scope 为 "group" 时记录群号
+    ID              string    `json:"id"`
+    Owner           string    `json:"owner"`             // 私聊为用户QQ号；群聊中个人自述为发言人QQ，客观事实/第三人传闻为 "group"
+    Content         string    `json:"content"`           // 权威事实内容（在自动提炼下严格等于字面引述 Evidence）
+    Summary         string    `json:"summary,omitempty"` // 辅助展示摘要（模型提炼的展示概括，非权威）
+    Evidence        string    `json:"evidence,omitempty"`// 字面引述片段（精确来自于原始用户发言）
+    SourceMessageID string    `json:"source_message_id,omitempty"` // 原始消息唯一ID（溯源与幂等键）
+    Tags            []string  `json:"tags"`              // 检索标签（包含主体、领域等）
+    Source          string    `json:"source"`            // "extract" | "manual" | "reflect" | "compact" | "distill"
+    CreatedAt       time.Time `json:"created_at"`
+    UpdatedAt       time.Time `json:"updated_at"`
+    AccessCount     int       `json:"access_count"`
+    Scope           string    `json:"scope"`             // "private" 或 "group"
+    GroupID         string    `json:"group_id"`          // Scope 为 "group" 时记录群号
 }
 ```
 
 ### 6.1 Protobuf 向前兼容性规范
-- 所有已发布的 Protobuf 字段 Tag 序号严格保持不可变更（例如 `UpdateMemoryRequest` 中的 `id=1, content=2, tags=3, visibility=4`）。
-- 新增字段一律追加在未使用的高位 Tag 编号（如 `scope=5, group_id=6`），严格防止客户端二进制反序列化错位与崩溃。
+- 所有已发布的 Protobuf 字段 Tag 序号严格保持不可变更（例如 `UpdateMemoryRequest` 中的 `id=1, content=2, tags=3, visibility=4`，`MemoryEntry` 消息体中的基础字段 1~11）。
+- 新增字段一律追加在未使用的高位 Tag 编号（如 `summary=12, evidence=13, source_message_id=14`），严格防止客户端二进制反序列化错位与崩溃。
+- **不可变事实与审计追踪**：通过在 Protobuf 与存储模型中固化 `evidence` 与 `source_message_id`，为客户端及 Web 审计提供完整的端到端追溯凭据链。
 
 ### 6.2 记忆检索与网关后置过滤防挤占（Uncapped Search & Late Filtering）
 - **底层无截断检索**：在智能体交互和 Memory Tool 执行群检索时，`GroupStore.Search` 与 `GroupStore.SearchByTags` 必须传入 `limit = 0` 进行全量无截断候选召回。

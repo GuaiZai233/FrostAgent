@@ -1139,6 +1139,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
+							MessageID:   event.MessageID,
 						},
 						{
 							Owner:       owner,
@@ -1149,6 +1150,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							MessageID:   event.MessageID,
 						},
 					})
 				} else {
@@ -1255,6 +1257,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					SpeakerName: speakerName,
 					Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 					Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
+					MessageID:   event.MessageID,
 				},
 				{
 					Owner:       owner,
@@ -1265,6 +1268,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					SpeakerName: speakerName,
 					Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 					Message:     core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+					MessageID:   event.MessageID,
 				},
 			})
 		} else {

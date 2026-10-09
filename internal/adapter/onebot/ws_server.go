@@ -795,6 +795,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
 					speakerName := senderDisplayName(event)
+					msgID := ""
+					if event.MessageID != 0 {
+						msgID = strconv.FormatInt(int64(event.MessageID), 10)
+					}
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 						{
 							Owner:       owner,
@@ -805,6 +809,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
+							MessageID:   msgID,
 						},
 						{
 							Owner:       owner,
@@ -815,6 +820,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+							MessageID:   msgID,
 						},
 					})
 				} else {
@@ -930,6 +936,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
 					speakerName := senderDisplayName(event)
+					msgID := ""
+					if event.MessageID != 0 {
+						msgID = strconv.FormatInt(int64(event.MessageID), 10)
+					}
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 						{
 							Owner:       owner,
@@ -940,6 +950,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
+							MessageID:   msgID,
 						},
 						{
 							Owner:       owner,
@@ -950,6 +961,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							MessageID:   msgID,
 						},
 					})
 				} else {

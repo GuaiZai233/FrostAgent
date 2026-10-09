@@ -719,8 +719,11 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   e.UpdatedAt.Format(time.RFC3339),
 		AccessCount: int32(e.AccessCount),
-		Scope:       scope,
-		GroupId:     e.GroupID,
+		Scope:           scope,
+		GroupId:         e.GroupID,
+		Summary:         e.Summary,
+		Evidence:        e.Evidence,
+		SourceMessageId: e.SourceMessageID,
 	}
 }
 

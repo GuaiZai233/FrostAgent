@@ -1663,10 +1663,19 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 	idx2 := 2
 	idxOut := 99
 
-	distillOutput := []distillExtractedEntry{
+	type testDistillEntry struct {
+		Content        string   `json:"content,omitempty"`
+		Summary        string   `json:"summary,omitempty"`
+		Tags           []string `json:"tags"`
+		Evidence       string   `json:"evidence"`
+		SourceMsgIndex *int     `json:"source_msg_index,omitempty"`
+		IsSelf         bool     `json:"is_self"`
+	}
+
+	distillOutput := []testDistillEntry{
 		{
 			// 1. Valid first-person evidence: "matcha latte" exists in Msg 0 ("Alice drinks matcha latte every morning"), content is grounded
-			Content:        "Alice drinks matcha latte",
+			Summary:        "Alice drinks matcha latte",
 			Tags:           []string{"drink"},
 			Evidence:       "matcha latte",
 			SourceMsgIndex: &idx0,
@@ -1674,7 +1683,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 2. Hallucinated evidence: "swimming in pool" does NOT exist in Msg 1 -> must NOT be saved at all
-			Content:        "Bob likes swimming in summer",
+			Summary:        "Bob likes swimming in summer",
 			Tags:           []string{"sport"},
 			Evidence:       "swimming in pool",
 			SourceMsgIndex: &idx1,
@@ -1682,7 +1691,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 3. Assistant message: role is "assistant" -> must NOT be saved at all
-			Content:        "Assistant preference note",
+			Summary:        "Assistant preference note",
 			Tags:           []string{"bot"},
 			Evidence:       "noted",
 			SourceMsgIndex: &idx2,
@@ -1690,7 +1699,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 4. Trivial evidence: single character "A" (< 3 runes) -> must NOT be saved at all
-			Content:        "Alice likes morning walks",
+			Summary:        "Alice likes morning walks",
 			Tags:           []string{"morning"},
 			Evidence:       "A",
 			SourceMsgIndex: &idx0,
@@ -1698,7 +1707,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 5. Valid general group fact: is_self = false, evidence matches Msg 1 ("mountain climbing") and grounds content -> saved as group
-			Content:        "Group members enjoy mountain climbing",
+			Summary:        "Group members enjoy mountain climbing",
 			Tags:           []string{"group", "hiking"},
 			Evidence:       "mountain climbing",
 			SourceMsgIndex: &idx1,
@@ -1706,7 +1715,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 6. Out of bounds index -> must NOT be saved at all
-			Content:        "Out of bounds index note",
+			Summary:        "Out of bounds index note",
 			Tags:           []string{"oob"},
 			Evidence:       "matcha",
 			SourceMsgIndex: &idxOut,
@@ -1714,26 +1723,18 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		},
 		{
 			// 7. Common unrelated 2-character evidence ("今天") -> must NOT be saved at all
-			Content:        "Bob is administrator of the project",
+			Summary:        "Bob is administrator of the project",
 			Tags:           []string{"admin"},
 			Evidence:       "今天",
 			SourceMsgIndex: &idx1,
 			IsSelf:         true,
 		},
 		{
-			// 8. Unrelated evidence: "hiking and mountain" exists in Msg 1, but content "Bob is administrator" has 0 overlap -> must NOT be saved at all
-			Content:        "Bob is administrator of the project",
+			// 8. Foreign evidence: "administrator of project" does not match Msg 1 -> must NOT be saved at all
+			Summary:        "Bob is administrator of the project",
 			Tags:           []string{"admin"},
-			Evidence:       "hiking and mountain",
+			Evidence:       "administrator of project",
 			SourceMsgIndex: &idx1,
-			IsSelf:         true,
-		},
-		{
-			// 9. Cross-speaker claimed content: Msg 0 is Alice, but claims is_self=true for Bob -> must NOT be saved at all
-			Content:        "Bob enjoys matcha drinks",
-			Tags:           []string{"drink"},
-			Evidence:       "drinks matcha latte",
-			SourceMsgIndex: &idx0,
 			IsSelf:         true,
 		},
 	}
@@ -1755,7 +1756,8 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 	}
 
 	for i, ent := range entries {
-		t.Logf("saved entry [%d]: Owner=%q Content=%q", i, ent.Owner, ent.Content)
+		t.Logf("saved entry [%d]: Owner=%q Content=%q Evidence=%q Summary=%q SourceMsgID=%q",
+			i, ent.Owner, ent.Content, ent.Evidence, ent.Summary, ent.SourceMessageID)
 	}
 	// Only entry 1 (Alice valid personal fact) and entry 5 (valid group fact) must be saved!
 	if len(entries) != 2 {
@@ -1767,32 +1769,43 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		entriesByContent[e.Content] = e
 	}
 
-	// 1. Valid evidence -> Attributed to Alice
-	e1, ok := entriesByContent["Alice drinks matcha latte"]
+	// 1. Valid evidence -> Authoritative content is verbatim "matcha latte", attributed to Alice
+	e1, ok := entriesByContent["matcha latte"]
 	if !ok {
-		t.Fatalf("entry 1 missing")
+		t.Fatalf("entry 1 missing, expected Content='matcha latte'")
 	}
 	if e1.Owner != "syn_user_alice_99" {
 		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, "syn_user_alice_99")
 	}
+	if e1.Evidence != "matcha latte" {
+		t.Errorf("entry 1 evidence mismatch: got %q, want %q", e1.Evidence, "matcha latte")
+	}
+	if e1.SourceMessageID != "msg_0" {
+		t.Errorf("entry 1 source message ID mismatch: got %q, want %q", e1.SourceMessageID, "msg_0")
+	}
 
-	// 5. Valid general group fact -> Owner is group
-	e5, ok := entriesByContent["Group members enjoy mountain climbing"]
+	// 5. Valid general group fact -> Authoritative content is verbatim "mountain climbing", Owner is group
+	e5, ok := entriesByContent["mountain climbing"]
 	if !ok {
-		t.Fatalf("entry 5 missing")
+		t.Fatalf("entry 5 missing, expected Content='mountain climbing'")
 	}
 	if e5.Owner != memory.GroupOwnerExplicit {
 		t.Errorf("entry 5 general fact owner mismatch: got %q, want %q", e5.Owner, memory.GroupOwnerExplicit)
 	}
+	if e5.Evidence != "mountain climbing" {
+		t.Errorf("entry 5 evidence mismatch: got %q, want %q", e5.Evidence, "mountain climbing")
+	}
+	if e5.SourceMessageID != "msg_1" {
+		t.Errorf("entry 5 source message ID mismatch: got %q, want %q", e5.SourceMessageID, "msg_1")
+	}
 
-	// Verify ungrounded and rejected entries are NEVER saved
+	// Verify rejected entries are NEVER saved
 	rejectedContents := []string{
-		"Bob likes swimming in summer",
-		"Assistant preference note",
-		"Alice likes morning walks",
-		"Out of bounds index note",
-		"Bob is administrator of the project",
-		"Bob enjoys matcha drinks",
+		"swimming in pool",
+		"noted",
+		"A",
+		"今天",
+		"hiking and mountain",
 	}
 	for _, rejected := range rejectedContents {
 		if _, exists := entriesByContent[rejected]; exists {
@@ -1832,19 +1845,20 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 
 	idx0 := 0
 
-	distillOutput := []distillExtractedEntry{
+	type testDistillEntry struct {
+		Content        string   `json:"content,omitempty"`
+		Summary        string   `json:"summary,omitempty"`
+		Tags           []string `json:"tags"`
+		Evidence       string   `json:"evidence"`
+		SourceMsgIndex *int     `json:"source_msg_index,omitempty"`
+		IsSelf         bool     `json:"is_self"`
+	}
+
+	distillOutput := []testDistillEntry{
 		{
-			// 1. Evidence matches, but content appends fabricated suffix / predicate ("而且是本群的管理员")
-			Content:        "用户平时喜欢玩舞萌DX，而且是本群的管理员",
+			// Model proposes hallucinated suffix / predicate ("而且是本群的管理员") in summary / paraphrase
+			Summary:        "用户平时喜欢玩舞萌DX，而且是本群的管理员",
 			Tags:           []string{"game", "admin"},
-			Evidence:       "玩舞萌DX",
-			SourceMsgIndex: &idx0,
-			IsSelf:         true,
-		},
-		{
-			// 2. Genuine grounded fact without unsupported additions
-			Content:        "用户平时喜欢玩舞萌DX",
-			Tags:           []string{"game"},
 			Evidence:       "玩舞萌DX",
 			SourceMsgIndex: &idx0,
 			IsSelf:         true,
@@ -1871,8 +1885,16 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 		t.Fatalf("expected exactly 1 grounded entry saved, got %d: %+v", len(entries), entries)
 	}
 
-	if entries[0].Content != "用户平时喜欢玩舞萌DX" {
-		t.Errorf("expected saved content to be %q, got %q", "用户平时喜欢玩舞萌DX", entries[0].Content)
+	// Option A data contract: authoritative content is STRICTLY the verbatim quote!
+	// The hallucinated suffix cannot override the authoritative verbatim quote.
+	if entries[0].Content != "玩舞萌DX" {
+		t.Errorf("expected authoritative content to be verbatim %q, got %q", "玩舞萌DX", entries[0].Content)
+	}
+	if entries[0].Evidence != "玩舞萌DX" {
+		t.Errorf("expected evidence %q, got %q", "玩舞萌DX", entries[0].Evidence)
+	}
+	if entries[0].SourceMessageID != "msg_0" {
+		t.Errorf("expected source_message_id %q, got %q", "msg_0", entries[0].SourceMessageID)
 	}
 	if entries[0].Owner != "syn_user_zhangsan_01" {
 		t.Errorf("expected owner to be %q, got %q", "syn_user_zhangsan_01", entries[0].Owner)
@@ -1929,67 +1951,51 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 	idx1 := 1
 	idx2 := 2
 
-	distillOutput := []distillExtractedEntry{
+	type testDistillEntry struct {
+		Content        string   `json:"content,omitempty"`
+		Summary        string   `json:"summary,omitempty"`
+		Tags           []string `json:"tags"`
+		Evidence       string   `json:"evidence"`
+		SourceMsgIndex *int     `json:"source_msg_index,omitempty"`
+		IsSelf         bool     `json:"is_self"`
+	}
+
+	distillOutput := []testDistillEntry{
 		{
-			// Finding 1 regression: "我不是管理员" -> negation dropped to "我是管理员"
-			Content:        "我是管理员",
+			// Hallucinated affirmative claim: "我是管理员" is NOT in Msg 1 -> rejected!
+			Summary:        "我是管理员",
+			Tags:           []string{"admin"},
+			Evidence:       "我是管理员",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// Hallucinated affirmative claim: "我喜欢舞萌" is NOT in Msg 2 -> rejected!
+			Summary:        "我喜欢舞萌",
+			Tags:           []string{"game"},
+			Evidence:       "我喜欢舞萌",
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		{
+			// Preserved negative verbatim claim: "不是管理员" with attempted inverted summary
+			Summary:        "我是管理员",
 			Tags:           []string{"admin"},
 			Evidence:       "不是管理员",
 			SourceMsgIndex: &idx1,
 			IsSelf:         true,
 		},
 		{
-			// Finding 1 regression: "我不是管理员" -> negation dropped to "用户是管理员" with partial evidence "管理员"
-			Content:        "用户是管理员",
-			Tags:           []string{"admin"},
-			Evidence:       "管理员",
-			SourceMsgIndex: &idx1,
-			IsSelf:         true,
-		},
-		{
-			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "我喜欢舞萌"
-			Content:        "我喜欢舞萌",
-			Tags:           []string{"game"},
-			Evidence:       "不喜欢舞萌",
-			SourceMsgIndex: &idx2,
-			IsSelf:         true,
-		},
-		{
-			// Finding 1 regression: "我不喜欢舞萌" -> negation dropped to "用户喜欢舞萌" with partial evidence "舞萌"
-			Content:        "用户喜欢舞萌",
-			Tags:           []string{"game"},
-			Evidence:       "舞萌",
-			SourceMsgIndex: &idx2,
-			IsSelf:         true,
-		},
-		{
-			// Finding 2 regression: source message has unrelated "我", but evidence/claim is about third-party 李四
-			// False self-attribution must be rejected!
-			Content:        "李四喜欢玩舞萌",
-			Tags:           []string{"game"},
-			Evidence:       "李四喜欢玩舞萌",
-			SourceMsgIndex: &idx0,
-			IsSelf:         true,
-		},
-		{
-			// Finding 2 regression: partial evidence "喜欢玩舞萌" for third person 李四 with IsSelf: true
-			Content:        "李四喜欢舞萌",
-			Tags:           []string{"game"},
-			Evidence:       "喜欢玩舞萌",
-			SourceMsgIndex: &idx0,
-			IsSelf:         true,
-		},
-		{
-			// Finding 2: Preserve valid quoted self-claim (first-person statement in source)
-			Content:        "用户今天来打机",
+			// Valid self-claim: "我今天来打机" in Msg 0
+			Summary:        "用户今天来打机",
 			Tags:           []string{"game"},
 			Evidence:       "我今天来打机",
 			SourceMsgIndex: &idx0,
 			IsSelf:         true,
 		},
 		{
-			// Preserve valid negated self-claim (negation maintained)
-			Content:        "用户不喜欢舞萌",
+			// Valid negative self-claim: "我不喜欢舞萌" in Msg 2
+			Summary:        "用户不喜欢舞萌",
 			Tags:           []string{"game"},
 			Evidence:       "我不喜欢舞萌",
 			SourceMsgIndex: &idx2,
@@ -1997,7 +2003,7 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 		},
 		{
 			// Valid third-person claim saved as group fact (IsSelf: false)
-			Content:        "李四喜欢玩舞萌",
+			Summary:        "李四喜欢玩舞萌",
 			Tags:           []string{"game"},
 			Evidence:       "李四喜欢玩舞萌",
 			SourceMsgIndex: &idx0,
@@ -2026,22 +2032,28 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 		entriesByContent[ent.Content] = append(entriesByContent[ent.Content], ent)
 	}
 
-	// 1. Preserved valid quoted self-claim: "用户今天来打机" -> Owner == speakerID
-	selfEntries, ok := entriesByContent["用户今天来打机"]
+	// 1. Valid quoted self-claim: "我今天来打机" -> Owner == speakerID
+	selfEntries, ok := entriesByContent["我今天来打机"]
 	if !ok || len(selfEntries) == 0 {
-		t.Fatalf("expected preserved self-claim '用户今天来打机' to be saved")
+		t.Fatalf("expected preserved self-claim '我今天来打机' to be saved")
 	}
 	if selfEntries[0].Owner != speakerID {
-		t.Errorf("expected '用户今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+		t.Errorf("expected '我今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+	}
+	if selfEntries[0].SourceMessageID != "msg_0" {
+		t.Errorf("expected source message id 'msg_0', got %q", selfEntries[0].SourceMessageID)
 	}
 
-	// 2. Preserved valid negative self-claim: "用户不喜欢舞萌" -> Owner == speakerID
-	negEntries, ok := entriesByContent["用户不喜欢舞萌"]
+	// 2. Preserved negative verbatim claim: "我不喜欢舞萌" -> Owner == speakerID
+	negEntries, ok := entriesByContent["我不喜欢舞萌"]
 	if !ok || len(negEntries) == 0 {
-		t.Fatalf("expected preserved negative claim '用户不喜欢舞萌' to be saved")
+		t.Fatalf("expected preserved negative claim '我不喜欢舞萌' to be saved")
 	}
 	if negEntries[0].Owner != speakerID {
-		t.Errorf("expected '用户不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+		t.Errorf("expected '我不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+	}
+	if negEntries[0].SourceMessageID != "msg_2" {
+		t.Errorf("expected source message id 'msg_2', got %q", negEntries[0].SourceMessageID)
 	}
 
 	// 3. Valid group fact: "李四喜欢玩舞萌" (IsSelf: false) -> Owner == GroupOwnerExplicit
@@ -2052,18 +2064,15 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 	if groupEntries[0].Owner != memory.GroupOwnerExplicit {
 		t.Errorf("expected '李四喜欢玩舞萌' owner to be %q, got %q", memory.GroupOwnerExplicit, groupEntries[0].Owner)
 	}
-
-	// Verify that none of the inverted or false self-attribution claims were saved
-	rejectedContents := []string{
-		"我是管理员",
-		"用户是管理员",
-		"我喜欢舞萌",
-		"用户喜欢舞萌",
-		"李四喜欢舞萌",
+	if groupEntries[0].SourceMessageID != "msg_0" {
+		t.Errorf("expected source message id 'msg_0', got %q", groupEntries[0].SourceMessageID)
 	}
-	for _, rej := range rejectedContents {
-		if _, exists := entriesByContent[rej]; exists {
-			t.Errorf("expected rejected content %q to NOT exist in store", rej)
-		}
+
+	// 4. Inverted claim "我是管理员" must NEVER exist as authoritative content
+	if _, exists := entriesByContent["我是管理员"]; exists {
+		t.Errorf("polarity inverted content '我是管理员' must not exist in store")
+	}
+	if _, exists := entriesByContent["我喜欢舞萌"]; exists {
+		t.Errorf("polarity inverted content '我喜欢舞萌' must not exist in store")
 	}
 }

@@ -429,19 +429,48 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	}
 
 	now := time.Now()
-	for i := range entries {
-		entries[i].ScopeType = ScopeGroup
-		entries[i].GroupID = s.groupID
-		entries[i].UpdatedAt = now
-		if entries[i].CreatedAt.IsZero() {
-			entries[i].CreatedAt = now
+	for _, incoming := range entries {
+		incoming.ScopeType = ScopeGroup
+		incoming.GroupID = s.groupID
+		incoming.UpdatedAt = now
+		if incoming.CreatedAt.IsZero() {
+			incoming.CreatedAt = now
 		}
-		if entries[i].Owner == "" {
-			entries[i].Owner = GroupOwnerExplicit
+		if incoming.Owner == "" {
+			incoming.Owner = GroupOwnerExplicit
 		} else {
-			entries[i].Owner = CanonicalOwner(entries[i].Owner)
+			incoming.Owner = CanonicalOwner(incoming.Owner)
 		}
-		brain.Entries = append(brain.Entries, entries[i])
+
+		matchedIdx := -1
+		for idx, existing := range brain.Entries {
+			if isSameGroupMemory(existing, incoming) {
+				matchedIdx = idx
+				break
+			}
+		}
+
+		if matchedIdx >= 0 {
+			existing := &brain.Entries[matchedIdx]
+			if existing.SourceMessageID == "" && incoming.SourceMessageID != "" {
+				existing.SourceMessageID = incoming.SourceMessageID
+			}
+			if existing.Evidence == "" && incoming.Evidence != "" {
+				existing.Evidence = incoming.Evidence
+			}
+			if existing.Summary == "" && incoming.Summary != "" {
+				existing.Summary = incoming.Summary
+			}
+			if len(incoming.Tags) > 0 {
+				existing.Tags = mergeMemoryTags(existing.Tags, incoming.Tags)
+			}
+			existing.UpdatedAt = now
+		} else {
+			if incoming.ID == "" {
+				incoming.ID = generateID()
+			}
+			brain.Entries = append(brain.Entries, incoming)
+		}
 	}
 
 	return s.saveMemoryLocked(brain)
@@ -916,3 +945,50 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 		s.routes[s.groupID] = route
 	}
 }
+
+// isSameGroupMemory determines whether incoming is an idempotent duplicate of an existing memory.
+func isSameGroupMemory(existing, incoming MemoryEntry) bool {
+	if existing.Owner != incoming.Owner {
+		return false
+	}
+	// 1. If both have SourceMessageID, match by (SourceMessageID + Evidence/Content)
+	if existing.SourceMessageID != "" && incoming.SourceMessageID != "" && existing.SourceMessageID == incoming.SourceMessageID {
+		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
+			return true
+		}
+		if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
+			return true
+		}
+	}
+	// 2. Exact match on Content
+	if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
+		return true
+	}
+	// 3. Exact match on Evidence
+	if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
+		return true
+	}
+	return false
+}
+
+// mergeMemoryTags combines tags from existing and incoming records without duplicates.
+func mergeMemoryTags(existing, incoming []string) []string {
+	seen := make(map[string]bool)
+	var res []string
+	for _, t := range existing {
+		t = strings.TrimSpace(t)
+		if t != "" && !seen[t] {
+			seen[t] = true
+			res = append(res, t)
+		}
+	}
+	for _, t := range incoming {
+		t = strings.TrimSpace(t)
+		if t != "" && !seen[t] {
+			seen[t] = true
+			res = append(res, t)
+		}
+	}
+	return SanitizeTags(res)
+}
+

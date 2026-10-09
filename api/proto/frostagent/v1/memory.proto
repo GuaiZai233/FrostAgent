@@ -36,6 +36,9 @@ message MemoryEntry {
   int32 access_count = 9;
   string scope = 10;          // "private" or "group"
   string group_id = 11;       // group id when scope == "group"
+  string summary = 12;        // optional LLM display summary
+  string evidence = 13;       // verbatim source quote
+  string source_message_id = 14; // verified source message ID
 }
 
 message ListMemoriesRequest {

@@ -1,103 +1,112 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 )
 
-func TestCountNegationMarkers(t *testing.T) {
+func TestValidateEvidence(t *testing.T) {
+	srcMsg := "张三: 我平时每天早上喝生椰拿铁，李四明天参加考试。"
+
 	tests := []struct {
-		input    string
-		expected int
+		name     string
+		evidence string
+		wantOK   bool
+		wantVal  string
 	}{
-		{"我不是管理员", 1},
-		{"我是管理员", 0},
-		{"我不喜欢舞萌", 1},
-		{"我喜欢舞萌", 0},
-		{"没有收到通知", 1},
-		{"收到通知", 0},
-		{"不仅喜欢舞萌，而且喜欢打机", 0}, // conjunction "不仅" is not negation
-		{"不但没有迟到，反而早到了", 1},   // "不但" is stripped, "没有" is counted
-		{"I am not an admin", 1},
-		{"I am an admin", 0},
-		{"Assistant says noted and confirmed", 0}, // "noted" must not match "not"
-		{"I don't like music games", 1},
+		{
+			name:     "valid verbatim quote",
+			evidence: "喝生椰拿铁",
+			wantOK:   true,
+			wantVal:  "喝生椰拿铁",
+		},
+		{
+			name:     "valid quote with surrounding spaces",
+			evidence: "  我平时每天早上喝生椰拿铁  ",
+			wantOK:   true,
+			wantVal:  "我平时每天早上喝生椰拿铁",
+		},
+		{
+			name:     "trivial quote less than 3 runes",
+			evidence: "喝",
+			wantOK:   false,
+		},
+		{
+			name:     "two runes quote",
+			evidence: "拿铁",
+			wantOK:   false,
+		},
+		{
+			name:     "foreign quote not in source",
+			evidence: "周末去游泳打球",
+			wantOK:   false,
+		},
+		{
+			name:     "empty quote",
+			evidence: "",
+			wantOK:   false,
+		},
+		{
+			name:     "whitespace only",
+			evidence: "   ",
+			wantOK:   false,
+		},
+		{
+			name:     "oversized quote > 500 runes",
+			evidence: strings.Repeat("长", 501),
+			wantOK:   false,
+		},
 	}
 
 	for _, tt := range tests {
-		got := CountNegationMarkers(tt.input)
-		if got != tt.expected {
-			t.Errorf("CountNegationMarkers(%q) = %d, want %d", tt.input, got, tt.expected)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ValidateEvidence(srcMsg, tt.evidence)
+			if ok != tt.wantOK {
+				t.Errorf("ValidateEvidence(%q) ok = %v, want %v", tt.evidence, ok, tt.wantOK)
+			}
+			if ok && got != tt.wantVal {
+				t.Errorf("ValidateEvidence(%q) = %q, want %q", tt.evidence, got, tt.wantVal)
+			}
+		})
 	}
 }
 
-func TestFindEnclosingClause(t *testing.T) {
-	msg := "我今天来打机，李四喜欢玩舞萌；王五在看书。"
-
-	c1 := FindEnclosingClause(msg, "我今天来打机")
-	if c1 != "我今天来打机" {
-		t.Errorf("expected %q, got %q", "我今天来打机", c1)
+func TestSanitizeTags(t *testing.T) {
+	tags := []string{
+		"  coffee  ",
+		"drink",
+		"coffee", // duplicate
+		"",       // empty
+		"   ",    // empty
+		strings.Repeat("a", 60), // oversized tag
 	}
 
-	c2 := FindEnclosingClause(msg, "李四喜欢玩舞萌")
-	if c2 != "李四喜欢玩舞萌" {
-		t.Errorf("expected %q, got %q", "李四喜欢玩舞萌", c2)
+	sanitized := SanitizeTags(tags)
+	if len(sanitized) != 3 {
+		t.Fatalf("expected 3 sanitized tags, got %d: %+v", len(sanitized), sanitized)
 	}
-
-	c3 := FindEnclosingClause(msg, "玩舞萌")
-	if c3 != "李四喜欢玩舞萌" {
-		t.Errorf("expected %q, got %q", "李四喜欢玩舞萌", c3)
+	if sanitized[0] != "coffee" {
+		t.Errorf("tag 0 mismatch: %q", sanitized[0])
 	}
-}
-
-func TestHasPolarityInversion(t *testing.T) {
-	tests := []struct {
-		evidence  string
-		content   string
-		srcMsg    string
-		inverted  bool
-	}{
-		{"我不是管理员", "我是管理员", "我不是管理员", true},
-		{"管理员", "我是管理员", "我不是管理员", true},
-		{"管理员", "用户是管理员", "我不是管理员", true},
-		{"我不喜欢舞萌", "我喜欢舞萌", "我不喜欢舞萌", true},
-		{"舞萌", "用户喜欢舞萌", "我不喜欢舞萌", true},
-		{"我不是管理员", "用户不是管理员", "我不是管理员", false},
-		{"我不喜欢舞萌", "用户不喜欢舞萌", "我不喜欢舞萌", false},
-		{"我喜欢舞萌", "我不喜欢舞萌", "我喜欢舞萌", true},
-		{"我喜欢舞萌", "用户喜欢舞萌", "我喜欢舞萌", false},
+	if sanitized[1] != "drink" {
+		t.Errorf("tag 1 mismatch: %q", sanitized[1])
 	}
-
-	for _, tt := range tests {
-		got := HasPolarityInversion(tt.evidence, tt.content, tt.srcMsg)
-		if got != tt.inverted {
-			t.Errorf("HasPolarityInversion(%q, %q, %q) = %v, want %v", tt.evidence, tt.content, tt.srcMsg, got, tt.inverted)
-		}
+	if len(sanitized[2]) != MaxTagLength {
+		t.Errorf("tag 2 length not bounded to %d: got %d", MaxTagLength, len(sanitized[2]))
 	}
 }
 
-func TestIsFirstPersonStatement(t *testing.T) {
-	tests := []struct {
-		evidence   string
-		content    string
-		fullMsg    string
-		senderName string
-		want       bool
-	}{
-		// Finding 2 regression: unrelated "我" in message, but evidence/content describes 李四
-		{"李四喜欢玩舞萌", "李四喜欢玩舞萌", "张三: 我今天来打机，李四喜欢玩舞萌", "张三", false},
-		{"喜欢玩舞萌", "李四喜欢舞萌", "张三: 我今天来打机，李四喜欢玩舞萌", "张三", false},
-		// Valid quoted self-claim preserved
-		{"我今天来打机", "用户今天来打机", "张三: 我今天来打机，李四喜欢玩舞萌", "张三", true},
-		{"我平时喜欢喝咖啡", "用户平时喜欢喝咖啡", "张三: 我平时喜欢喝咖啡", "张三", true},
-		{"Alice drinks matcha latte", "Alice drinks matcha latte", "Alice: Alice drinks matcha latte every morning", "Alice", true},
+func TestSanitizeSummary(t *testing.T) {
+	s := "  用户自述每天早上喝生椰拿铁  "
+	got := SanitizeSummary(s)
+	want := "用户自述每天早上喝生椰拿铁"
+	if got != want {
+		t.Errorf("SanitizeSummary = %q, want %q", got, want)
 	}
 
-	for _, tt := range tests {
-		got := IsFirstPersonStatement(tt.evidence, tt.content, tt.fullMsg, tt.senderName)
-		if got != tt.want {
-			t.Errorf("IsFirstPersonStatement(ev=%q, cont=%q, msg=%q, sender=%q) = %v, want %v",
-				tt.evidence, tt.content, tt.fullMsg, tt.senderName, got, tt.want)
-		}
+	oversized := strings.Repeat("字", 600)
+	gotOversized := SanitizeSummary(oversized)
+	if len([]rune(gotOversized)) != MaxSummaryRunes {
+		t.Errorf("expected summary bounded to %d runes, got %d", MaxSummaryRunes, len([]rune(gotOversized)))
 	}
 }
