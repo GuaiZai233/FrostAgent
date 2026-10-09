@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 6
 
 type Backend string
 

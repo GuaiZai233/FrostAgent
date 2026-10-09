@@ -2,6 +2,7 @@ package modelrouter
 
 import (
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/storage"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,24 @@ type Manager struct {
 	secrets          *SecretBackend
 	loadErr          error
 	ReserveEndpoints func([]Endpoint) error
+	db               *storage.DB
+	instanceID       string
+}
+
+func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
+	secrets, secretErr := newSQLSecretBackend(db, instanceID)
+	m := &Manager{Scope: runtimescope.First(scopes), db: db, instanceID: instanceID,
+		active: defaultConfiguration(), secrets: secrets}
+	if secretErr != nil {
+		m.loadErr = secretErr
+	} else if err := m.loadSQL(); err != nil {
+		m.loadErr = err
+	}
+	if secrets != nil {
+		secrets.getenv = m.Getenv
+	}
+	m.draft = cloneConfiguration(m.active)
+	return m
 }
 
 func New(path string, scopes ...*runtimescope.Scope) *Manager {
@@ -265,7 +284,13 @@ func (m *Manager) Publish() (Configuration, error) {
 	if err != nil {
 		return Configuration{}, err
 	}
-	if err := writeAtomic(m.path, cfg); err != nil {
+	var persistErr error
+	if m.db != nil {
+		persistErr = m.writeSQL(cfg)
+	} else {
+		persistErr = writeAtomic(m.path, cfg)
+	}
+	if err := persistErr; err != nil {
 		if rollbackErr := rollbackSecrets(); rollbackErr != nil {
 			return Configuration{}, fmt.Errorf("写入模型路由配置失败: %v；恢复 Secret Backend 失败: %w", err, rollbackErr)
 		}

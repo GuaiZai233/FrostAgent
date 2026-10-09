@@ -34,9 +34,9 @@ var schemaStatements = []string{
 		PRIMARY KEY (instance_id, id)
 	)`,
 	`CREATE TABLE model_secrets (
-		instance_id TEXT NOT NULL, endpoint_id TEXT NOT NULL, secret TEXT NOT NULL,
-		PRIMARY KEY (instance_id, endpoint_id),
-		FOREIGN KEY (instance_id, endpoint_id) REFERENCES model_endpoints(instance_id, id) ON DELETE CASCADE
+		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+		ref TEXT NOT NULL, secret TEXT NOT NULL,
+		PRIMARY KEY (instance_id, ref)
 	)`,
 	`CREATE TABLE models (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -71,7 +71,8 @@ var schemaStatements = []string{
 	)`,
 	`CREATE TABLE dialogues (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
-		position INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+		position INTEGER NOT NULL, id TEXT NOT NULL DEFAULT '', scene TEXT NOT NULL DEFAULT '',
+		relation TEXT NOT NULL DEFAULT '', user_text TEXT NOT NULL DEFAULT '', preferred TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (instance_id, position)
 	)`,
 	`CREATE TABLE memory_entries (

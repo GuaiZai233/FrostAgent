@@ -1,6 +1,8 @@
 package modelrouter
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +28,27 @@ type SecretBackend struct {
 	manualPath string
 	manual     map[string]string
 	draft      map[string]secretMutation
+	db         *storage.DB
+	instanceID string
+}
+
+func newSQLSecretBackend(db *storage.DB, instanceID string) (*SecretBackend, error) {
+	backend := &SecretBackend{db: db, instanceID: instanceID,
+		manual: make(map[string]string), draft: make(map[string]secretMutation)}
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT ref, secret FROM model_secrets
+		WHERE instance_id = ?`), instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ref, value string
+		if err := rows.Scan(&ref, &value); err != nil {
+			return nil, err
+		}
+		backend.manual[ref] = value
+	}
+	return backend, rows.Err()
 }
 
 type manualSecretStore struct {
@@ -341,6 +364,24 @@ func restoreWindowsCredentials(states map[string]credentialState) error {
 }
 
 func (b *SecretBackend) writeManualLocked() error {
+	if b.db != nil {
+		ctx := context.Background()
+		tx, err := b.db.SQL.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM model_secrets WHERE instance_id = ?`), b.instanceID); err != nil {
+			return err
+		}
+		for ref, value := range b.manual {
+			if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO model_secrets(instance_id, ref, secret)
+				VALUES (?, ?, ?)`), b.instanceID, ref, value); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 	return writeJSONAtomic(b.manualPath, manualSecretStore{
 		Version: manualSecretStoreVersion,
 		Secrets: cloneSecretMap(b.manual),
