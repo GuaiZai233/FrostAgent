@@ -252,9 +252,18 @@ func (e *Engine) RunMessagesWithContext(
 						}
 					}
 
+					if groupStore.CatalogStore() != nil {
+						catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
+						if cErr != nil {
+							e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取群记忆主题索引失败: %v", cErr))
+						} else if catalogContext != "" {
+							systemPrompt += "\n\n" + catalogContext
+						}
+					}
+
 					if e.MemoryGateway != nil {
 						lastUserMsg := extractLastUserMessage(messages)
-						raw, sErr := groupStore.Search(lastUserMsg, 20)
+						raw, sErr := groupStore.Search(lastUserMsg, 0)
 						if sErr == nil && len(raw) > 0 {
 							filtered := e.MemoryGateway.FilterGroup(raw)
 							if len(filtered) > 20 {

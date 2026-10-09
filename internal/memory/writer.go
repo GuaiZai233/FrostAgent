@@ -43,10 +43,23 @@ func (w *Writer) SetLLM(provider core.LLMProvider, model string) {
 
 // RememberRoute records the current owner's transient routing scope.
 func (w *Writer) RememberRoute(owner string, route core.RouteContext) {
-	if w == nil || w.store == nil {
+	if w == nil {
 		return
 	}
-	w.store.RememberRoute(owner, route)
+	if w.store != nil {
+		w.store.RememberRoute(owner, route)
+	}
+	if w.groupManager != nil {
+		groupID := route.GroupID
+		if groupID == "" {
+			groupID = extractLegacyGroupID(MemoryEntry{Owner: owner})
+		}
+		if groupID != "" {
+			if gStore, err := w.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+				gStore.RememberRoute(owner, route)
+			}
+		}
+	}
 }
 
 // Write directly saves a memory entry (user explicitly said "remember this").
@@ -300,9 +313,10 @@ func (w *Writer) parseAndSave(
 }
 
 type groupExtractedEntry struct {
-	Content string   `json:"content"`
-	Tags    []string `json:"tags"`
-	IsSelf  bool     `json:"is_self"`
+	Content  string   `json:"content"`
+	Tags     []string `json:"tags"`
+	Evidence string   `json:"evidence,omitempty"`
+	IsSelf   bool     `json:"is_self"`
 }
 
 // ExtractGroupTurnWithRouteContext extracts group memories from a turn with context and validator.

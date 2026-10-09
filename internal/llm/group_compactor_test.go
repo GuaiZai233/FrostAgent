@@ -3,6 +3,7 @@ package llm
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"context"
@@ -1609,5 +1610,186 @@ func TestGroupCompactor_SmallBufferCeiling_StagedCountExceedsMaxBufferSize_Enfor
 	}
 	if s.GroupCompactGeneration() != genBefore+1 {
 		t.Errorf("expected groupCompactGeneration to increment on drop, got %d, expected %d", s.GroupCompactGeneration(), genBefore+1)
+	}
+}
+
+func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_evidence_01"
+	groupID := "syn_test_grp_evidence_01"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	snapshot := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "Alice",
+				SenderID:  "syn_user_alice_99",
+				Content:   "Alice drinks matcha latte every morning",
+				MessageID: "msg_0",
+				Time:      "10:00:00",
+			},
+			{
+				Role:      "user",
+				Sender:    "Bob",
+				SenderID:  "syn_user_bob_99",
+				Content:   "Bob enjoys hiking and mountain climbing",
+				MessageID: "msg_1",
+				Time:      "10:01:00",
+			},
+			{
+				Role:      "assistant",
+				Sender:    "FrostAgent",
+				SenderID:  "bot_id",
+				Content:   "Assistant says noted and confirmed",
+				MessageID: "msg_2",
+				Time:      "10:02:00",
+			},
+		},
+	}
+
+	idx0 := 0
+	idx1 := 1
+	idx2 := 2
+	idxOut := 99
+
+	distillOutput := []distillExtractedEntry{
+		{
+			// Valid evidence: "matcha latte" exists in Msg 0 ("Alice drinks matcha latte every morning")
+			Content:        "Alice drinks matcha latte",
+			Tags:           []string{"drink"},
+			Evidence:       "matcha latte",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// Hallucinated evidence: "swimming" does NOT exist in Msg 1 ("Bob enjoys hiking and mountain climbing")
+			Content:        "Bob likes swimming in summer",
+			Tags:           []string{"sport"},
+			Evidence:       "swimming in pool",
+			SourceMsgIndex: &idx1,
+			IsSelf:         true,
+		},
+		{
+			// Assistant message: role is "assistant", cannot attribute to assistant
+			Content:        "Assistant preference note",
+			Tags:           []string{"bot"},
+			Evidence:       "noted",
+			SourceMsgIndex: &idx2,
+			IsSelf:         true,
+		},
+		{
+			// Trivial evidence: single character "A" (< 2 runes)
+			Content:        "Alice likes morning walks",
+			Tags:           []string{"morning"},
+			Evidence:       "A",
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+		{
+			// General group fact (is_self = false)
+			Content:        "Group holds morning discussions",
+			Tags:           []string{"group"},
+			Evidence:       "matcha",
+			SourceMsgIndex: &idx0,
+			IsSelf:         false,
+		},
+		{
+			// Out of bounds index
+			Content:        "Out of bounds index note",
+			Tags:           []string{"oob"},
+			Evidence:       "matcha",
+			SourceMsgIndex: &idxOut,
+			IsSelf:         true,
+		},
+	}
+
+	rawJSON, err := json.Marshal(distillOutput)
+	if err != nil {
+		t.Fatalf("marshal distill output failed: %v", err)
+	}
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON), nil
+	}
+
+	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != len(distillOutput) {
+		t.Fatalf("expected %d entries saved, got %d", len(distillOutput), len(entries))
+	}
+
+	entriesByContent := make(map[string]memory.MemoryEntry)
+	for _, e := range entries {
+		entriesByContent[e.Content] = e
+	}
+
+	// 1. Valid evidence -> Attributed to Alice
+	e1, ok := entriesByContent["Alice drinks matcha latte"]
+	if !ok {
+		t.Fatalf("entry 1 missing")
+	}
+	if e1.Owner != "syn_user_alice_99" {
+		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, "syn_user_alice_99")
+	}
+
+	// 2. Hallucinated evidence -> Falls back to group
+	e2, ok := entriesByContent["Bob likes swimming in summer"]
+	if !ok {
+		t.Fatalf("entry 2 missing")
+	}
+	if e2.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 2 hallucinated evidence owner mismatch: got %q, want %q", e2.Owner, memory.GroupOwnerExplicit)
+	}
+
+	// 3. Assistant message -> Falls back to group
+	e3, ok := entriesByContent["Assistant preference note"]
+	if !ok {
+		t.Fatalf("entry 3 missing")
+	}
+	if e3.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 3 assistant role owner mismatch: got %q, want %q", e3.Owner, memory.GroupOwnerExplicit)
+	}
+
+	// 4. Trivial evidence (< 2 runes) -> Falls back to group
+	e4, ok := entriesByContent["Alice likes morning walks"]
+	if !ok {
+		t.Fatalf("entry 4 missing")
+	}
+	if e4.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 4 trivial evidence owner mismatch: got %q, want %q", e4.Owner, memory.GroupOwnerExplicit)
+	}
+
+	// 5. General group fact -> Owner is group
+	e5, ok := entriesByContent["Group holds morning discussions"]
+	if !ok {
+		t.Fatalf("entry 5 missing")
+	}
+	if e5.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 5 general fact owner mismatch: got %q, want %q", e5.Owner, memory.GroupOwnerExplicit)
+	}
+
+	// 6. Out of bounds index -> Falls back to group
+	e6, ok := entriesByContent["Out of bounds index note"]
+	if !ok {
+		t.Fatalf("entry 6 missing")
+	}
+	if e6.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 6 out-of-bounds owner mismatch: got %q, want %q", e6.Owner, memory.GroupOwnerExplicit)
 	}
 }

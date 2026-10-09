@@ -119,7 +119,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					if err != nil {
 						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
 					}
-					entries, err := groupStore.SearchByTags(tags, 20)
+					entries, err := groupStore.SearchByTags(tags, 0)
 					if err != nil {
 						return fmt.Sprintf("搜索群记忆失败: %v", err), nil
 					}

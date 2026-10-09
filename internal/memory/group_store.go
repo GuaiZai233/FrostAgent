@@ -238,12 +238,14 @@ func (s *GroupStore) ObserveMember(userID, nickname, card, role, source string) 
 	}
 
 	now := time.Now()
+	cleanNick := SanitizeProfileText(nickname)
+	cleanCard := SanitizeProfileText(card)
 	member, exists := profile.Members[userID]
 	if !exists {
 		member = &MemberProfile{
 			UserID:      userID,
-			Nickname:    strings.TrimSpace(nickname),
-			Card:        strings.TrimSpace(card),
+			Nickname:    cleanNick,
+			Card:        cleanCard,
 			Role:        NormalizeGroupRole(role),
 			Source:      source,
 			CreatedAt:   now,
@@ -254,11 +256,11 @@ func (s *GroupStore) ObserveMember(userID, nickname, card, role, source string) 
 	} else {
 		member.LastSpokeAt = now
 		member.UpdatedAt = now
-		if strings.TrimSpace(nickname) != "" {
-			member.Nickname = strings.TrimSpace(nickname)
+		if cleanNick != "" {
+			member.Nickname = cleanNick
 		}
-		if strings.TrimSpace(card) != "" {
-			member.Card = strings.TrimSpace(card)
+		if cleanCard != "" {
+			member.Card = cleanCard
 		}
 		if r := NormalizeGroupRole(role); r != GroupRoleUnknown {
 			member.Role = r
@@ -276,7 +278,7 @@ func (s *GroupStore) ObserveMember(userID, nickname, card, role, source string) 
 
 // UpdateGroupName updates the persistent group name if non-empty.
 func (s *GroupStore) UpdateGroupName(name string) error {
-	name = strings.TrimSpace(name)
+	name = SanitizeProfileText(name)
 	if name == "" {
 		return nil
 	}
@@ -656,13 +658,31 @@ func (s *GroupStore) ListMergeArchives() ([]MemoryMergeArchive, error) {
 	return brain.MergeArchives, nil
 }
 
+// ApplyReflection applies reflection results (outdated deletion) with optional snapshots.
+func (s *GroupStore) ApplyReflection(
+	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
+) ([]MemoryEntry, []string, error) {
+	applied, err := s.applyReflectionWithMerges(nil, outdatedIDs, snapshots...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return applied.Remaining, applied.RemovedIDs, nil
+}
+
 // applyReflectionWithMerges applies validated merge proposals and deletes outdated entries for this group.
 func (s *GroupStore) applyReflectionWithMerges(
 	merges []validatedMerge,
 	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var snapshotByID map[string]MemoryEntry
+	if len(snapshots) > 0 {
+		snapshotByID = snapshots[0]
+	}
 
 	brain, err := s.loadMemoryLocked()
 	if err != nil {
@@ -761,6 +781,15 @@ func (s *GroupStore) applyReflectionWithMerges(
 			continue
 		}
 		if outdated[entry.ID] {
+			if snapshotByID != nil {
+				snap, ok := snapshotByID[entry.ID]
+				if !ok || !sameMergeSource(entry, snap) {
+					// The entry was concurrently modified (e.g. in UI) while reflection was running.
+					// Preserve it instead of deleting it.
+					remaining = append(remaining, entry)
+					continue
+				}
+			}
 			removedIDs = append(removedIDs, entry.ID)
 			actualOutdated = append(actualOutdated, entry.ID)
 			continue
@@ -860,7 +889,21 @@ func (s *GroupStore) ImportData(data ExportData, overwrite bool) (int, int, erro
 func (s *GroupStore) RouteForOwner(owner string) core.RouteContext {
 	s.routeMu.RLock()
 	defer s.routeMu.RUnlock()
-	return s.routes[CanonicalOwner(owner)]
+	if r, ok := s.routes[CanonicalOwner(owner)]; ok && (r.Platform != "" || r.GroupID != "") {
+		return r
+	}
+	if r, ok := s.routes[GroupOwnerExplicit]; ok && (r.Platform != "" || r.GroupID != "") {
+		return r
+	}
+	if r, ok := s.routes[s.groupID]; ok && (r.Platform != "" || r.GroupID != "") {
+		return r
+	}
+	for _, r := range s.routes {
+		if r.Platform != "" || r.GroupID != "" {
+			return r
+		}
+	}
+	return core.RouteContext{GroupID: s.groupID}
 }
 
 // RememberRoute records the routing context for an owner.
@@ -868,4 +911,8 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 	s.routeMu.Lock()
 	defer s.routeMu.Unlock()
 	s.routes[CanonicalOwner(owner)] = route
+	s.routes[GroupOwnerExplicit] = route
+	if s.groupID != "" {
+		s.routes[s.groupID] = route
+	}
 }

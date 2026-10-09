@@ -405,10 +405,54 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						if r, ok := event.Metadata["role"].(string); ok {
 							role = memory.NormalizeGroupRole(r)
 						}
-						_, _ = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
-						if event.GroupName != "" {
-							_ = gStore.UpdateGroupName(event.GroupName)
+						senderName := event.SenderName
+						senderCard := event.SenderCard
+						groupName := event.GroupName
+						if a.engine.Security != nil {
+							secPlatform := astrBotQQPlatform
+							if c.mock {
+								secPlatform = "mock"
+							}
+							if principal, pErr := security.NewPrincipal(secPlatform, event.UserID); pErr == nil {
+								evalFn := a.engine.Security.EvaluateContext
+								if c.mock {
+									evalFn = a.engine.Security.EvaluateContextDryRun
+								}
+								if senderName != "" {
+									dec := evalFn(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
+										Instance: a.engine.InstanceID,
+										Session:  c.sessionKey(event),
+									})
+									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
+										senderName = ""
+									}
+								}
+								if senderCard != "" {
+									dec := evalFn(principal, security.SourcePlatformMeta, senderCard, security.AuditEvent{
+										Instance: a.engine.InstanceID,
+										Session:  c.sessionKey(event),
+									})
+									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
+										senderCard = ""
+									}
+								}
+								if groupName != "" {
+									dec := evalFn(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+										Instance: a.engine.InstanceID,
+										Session:  c.sessionKey(event),
+									})
+									if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
+										groupName = ""
+									}
+								}
+							}
 						}
+						_, _ = gStore.ObserveMember(event.UserID, senderName, senderCard, string(role), "astrbot")
+						if groupName != "" {
+							_ = gStore.UpdateGroupName(groupName)
+						}
+						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "astrbot", GroupID: event.GroupID})
+						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: "astrbot", GroupID: event.GroupID})
 					}
 				}
 				if isExplicitlyWoken(event, scope) {

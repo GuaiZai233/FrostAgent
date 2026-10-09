@@ -333,9 +333,15 @@ func (s *Store) applyReflectionWithMerges(
 	owner string,
 	merges []validatedMerge,
 	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var snapshotByID map[string]MemoryEntry
+	if len(snapshots) > 0 {
+		snapshotByID = snapshots[0]
+	}
 
 	brain, err := s.load()
 	if err != nil {
@@ -421,6 +427,15 @@ func (s *Store) applyReflectionWithMerges(
 				continue
 			}
 			if outdated[entry.ID] {
+				if snapshotByID != nil {
+					snap, ok := snapshotByID[entry.ID]
+					if !ok || !sameMergeSource(entry, snap) {
+						// Concurrently modified in UI while reflection was running.
+						entry.Owner = canonicalOwner
+						remainingAll = append(remainingAll, entry)
+						continue
+					}
+				}
 				removedIDs = append(removedIDs, entry.ID)
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue

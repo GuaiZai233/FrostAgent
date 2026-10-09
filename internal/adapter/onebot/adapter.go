@@ -453,7 +453,39 @@ func (a *Adapter) Handler() http.HandlerFunc {
 								card = event.Sender.Card
 								role = memory.NormalizeGroupRole(event.Sender.Role)
 							}
+							if a.engine != nil && a.engine.Security != nil {
+								secPlatform := "qq"
+								if wsConn.mock {
+									secPlatform = "mock"
+								}
+								if principal, pErr := security.NewPrincipal(secPlatform, userIDStr); pErr == nil {
+									evalFn := a.engine.Security.EvaluateContext
+									if wsConn.mock {
+										evalFn = a.engine.Security.EvaluateContextDryRun
+									}
+									if nickname != "" {
+										dec := evalFn(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
+											Instance: a.engine.InstanceID,
+											Session:  wsConn.historyKey(event),
+										})
+										if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
+											nickname = ""
+										}
+									}
+									if card != "" {
+										dec := evalFn(principal, security.SourcePlatformMeta, card, security.AuditEvent{
+											Instance: a.engine.InstanceID,
+											Session:  wsConn.historyKey(event),
+										})
+										if dec.IsFailure || dec.Action == security.WatchdogFilter || dec.Action == security.WatchdogBlock {
+											card = ""
+										}
+									}
+								}
+							}
 							_, _ = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
+							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
 						}
 					}
 				}

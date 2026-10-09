@@ -523,6 +523,7 @@ type distillMessageItem struct {
 type distillExtractedEntry struct {
 	Content        string   `json:"content"`
 	Tags           []string `json:"tags"`
+	Evidence       string   `json:"evidence"`
 	SourceMsgIndex *int     `json:"source_msg_index"`
 	IsSelf         bool     `json:"is_self"`
 }
@@ -642,7 +643,12 @@ func (c *GroupCompactor) distillGroupMemories(
 			idx := *e.SourceMsgIndex
 			if idx >= 0 && idx < len(snapshot.Messages) {
 				srcMsg := snapshot.Messages[idx]
-				if srcMsg.Role != "assistant" && srcMsg.SenderID != "" {
+				evidence := strings.TrimSpace(e.Evidence)
+				// Verifiable source evidence check: must not be assistant, must have sender ID,
+				// and evidence must non-trivially (>= 2 runes) exist as a substring in the referenced message content.
+				if srcMsg.Role != "assistant" && srcMsg.SenderID != "" &&
+					evidence != "" && len([]rune(evidence)) >= 2 &&
+					strings.Contains(srcMsg.Content, evidence) {
 					ownerKey = srcMsg.SenderID
 				}
 			}

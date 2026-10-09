@@ -369,7 +369,12 @@ func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEnt
 		}
 	}
 
-	applied, err := groupStore.applyReflectionWithMerges(merges, outdated)
+	snapshotByID := make(map[string]MemoryEntry, len(entries))
+	for _, entry := range entries {
+		snapshotByID[entry.ID] = entry
+	}
+
+	applied, err := groupStore.applyReflectionWithMerges(merges, outdated, snapshotByID)
 	if err != nil {
 		return fmt.Errorf("apply group reflection changes: %w", err)
 	}
@@ -470,7 +475,12 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 		}
 	}
 
-	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated)
+	snapshotByID := make(map[string]MemoryEntry, len(entries))
+	for _, entry := range entries {
+		snapshotByID[entry.ID] = entry
+	}
+
+	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated, snapshotByID)
 	if err != nil {
 		return fmt.Errorf("apply reflection changes: %w", err)
 	}

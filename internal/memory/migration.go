@@ -177,9 +177,12 @@ func MigrateLegacyGroupMemories(
 	for groupID, archives := range groupArchives {
 		gStore, err := groupManager.GetGroupStore(groupID)
 		if err != nil {
-			continue
+			return fmt.Errorf("get group store for %s during archive migration: %w", groupID, err)
 		}
-		existingArchives, _ := gStore.ListMergeArchives()
+		existingArchives, err := gStore.ListMergeArchives()
+		if err != nil {
+			return fmt.Errorf("list existing merge archives for group %s: %w", groupID, err)
+		}
 		seenMerged := make(map[string]bool, len(existingArchives))
 		for _, a := range existingArchives {
 			seenMerged[a.MergedID] = true
@@ -187,7 +190,9 @@ func MigrateLegacyGroupMemories(
 		for _, a := range archives {
 			if !seenMerged[a.MergedID] {
 				seenMerged[a.MergedID] = true
-				_ = gStore.SaveMergeArchive(a)
+				if err := gStore.SaveMergeArchive(a); err != nil {
+					return fmt.Errorf("save migrated merge archive %s to group %s: %w", a.MergedID, groupID, err)
+				}
 			}
 		}
 	}
