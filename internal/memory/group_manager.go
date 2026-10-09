@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,20 +71,6 @@ func (m *GroupManager) GetGroupStore(groupID string) (*GroupStore, error) {
 		return store, nil
 	}
 
-	// Also check if groupID was passed as a safeKey directly and profile exists on disk
-	candidateKey := safeKey
-	groupsDir := filepath.Join(m.baseDir, "groups")
-	if profileData, err := os.ReadFile(filepath.Join(groupsDir, groupID, "profile.json")); err == nil {
-		var p GroupProfile
-		if err := json.Unmarshal(profileData, &p); err == nil && p.GroupID != "" {
-			canon = CanonicalGroupID(p.GroupID)
-			candidateKey = SafeGroupKey(canon)
-			if store, exists = m.groups[candidateKey]; exists {
-				return store, nil
-			}
-		}
-	}
-
 	store, err := NewGroupStore(m.baseDir, canon)
 	if err != nil {
 		if m.scope != nil {
@@ -91,7 +78,7 @@ func (m *GroupManager) GetGroupStore(groupID string) (*GroupStore, error) {
 		}
 		return nil, err
 	}
-	m.groups[candidateKey] = store
+	m.groups[safeKey] = store
 	return store, nil
 }
 
@@ -135,7 +122,7 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 		}
 
 		if resolvedGroupID == "" {
-			resolvedGroupID = dirName
+			continue
 		}
 
 		store, err := m.GetGroupStore(resolvedGroupID)
@@ -173,8 +160,17 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 // DeleteGroup removes persistent storage and cached store for a group.
 func (m *GroupManager) DeleteGroup(groupID string) error {
 	canon := CanonicalGroupID(groupID)
+	if canon == "" {
+		return fmt.Errorf("canonical group_id cannot be empty")
+	}
 	safeKey := SafeGroupKey(canon)
-	groupDir := filepath.Join(m.baseDir, "groups", safeKey)
+	groupsBase := filepath.Clean(filepath.Join(m.baseDir, "groups"))
+	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
+
+	rel, err := filepath.Rel(groupsBase, groupDir)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	}
 
 	m.mu.Lock()
 	delete(m.groups, safeKey)

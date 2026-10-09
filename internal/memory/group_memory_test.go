@@ -390,6 +390,27 @@ func TestGroupManager_SynchronizationAndAliasing(t *testing.T) {
 	if prof.GetMember("mock_u_worker") == nil {
 		t.Errorf("expected member mock_u_worker to be saved")
 	}
+
+	// Verify ListGroups
+	groups, err := gm.ListGroups()
+	if err != nil {
+		t.Fatalf("ListGroups failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0].GroupID != "mock_grp_303" {
+		t.Fatalf("ListGroups mismatch: %+v", groups)
+	}
+
+	// Verify DeleteGroup
+	if err := gm.DeleteGroup("mock_grp_303"); err != nil {
+		t.Fatalf("DeleteGroup failed: %v", err)
+	}
+	groupsAfterDelete, err := gm.ListGroups()
+	if err != nil {
+		t.Fatalf("ListGroups after delete failed: %v", err)
+	}
+	if len(groupsAfterDelete) != 0 {
+		t.Fatalf("expected 0 groups after delete, got %d", len(groupsAfterDelete))
+	}
 }
 
 func TestLegacyGroupMemoriesMigration(t *testing.T) {

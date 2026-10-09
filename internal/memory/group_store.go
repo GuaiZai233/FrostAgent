@@ -109,14 +109,6 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 		return nil, fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
 	}
 
-	// Transparently upgrade legacy directory if it exists and new directory doesn't
-	oldDir := filepath.Join(groupsBase, canon)
-	if _, err := os.Stat(oldDir); err == nil {
-		if _, err := os.Stat(groupDir); os.IsNotExist(err) {
-			_ = os.Rename(oldDir, groupDir)
-		}
-	}
-
 	if err := os.MkdirAll(groupDir, 0755); err != nil {
 		return nil, fmt.Errorf("create group storage dir: %w", err)
 	}
