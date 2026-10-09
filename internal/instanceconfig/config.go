@@ -1,6 +1,8 @@
 package instanceconfig
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
 	"errors"
 	"fmt"
 	"github.com/joho/godotenv"
@@ -35,6 +37,7 @@ var ControlPlaneRestartKeys = map[string]bool{
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
 	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
 }
+
 // SharedKeys can be configured at both global (control plane) and instance scopes.
 var SharedKeys = map[string]bool{
 	"SECURITY_GATEWAY_TIMEOUT":    true,
@@ -51,6 +54,62 @@ type Store struct {
 	raw       string
 	loadErr   error
 	accessErr error
+	db        *storage.DB
+	dbScope   string
+	dbID      string
+}
+
+// OpenDatabase loads application settings exclusively from SQL. Process
+// environment is reserved for database bootstrap and external secret providers.
+func OpenDatabase(db *storage.DB, instanceID string, global bool) (*Store, error) {
+	scope := "instance"
+	if global {
+		scope = "global"
+		instanceID = ""
+	}
+	s := &Store{db: db, dbScope: scope, dbID: instanceID, global: global,
+		values: map[string]string{}, overrides: map[string]string{}}
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT key, value FROM settings
+		WHERE scope = ? AND instance_id = ?`), scope, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		if !allowed(key, global) {
+			return nil, fmt.Errorf("invalid database setting %q", key)
+		}
+		s.values[key] = value
+	}
+	return s, rows.Err()
+}
+
+// InitializeInstanceSettings installs the initial editable settings atomically.
+func InitializeInstanceSettings(db *storage.DB, instanceID string) error {
+	defaults, err := godotenv.Unmarshal(Template)
+	if err != nil {
+		return err
+	}
+	tx, err := db.SQL.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range defaults {
+		if !allowed(key, false) {
+			continue
+		}
+		if _, err := tx.Exec(db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+			VALUES ('instance', ?, ?, ?) ON CONFLICT (scope, instance_id, key) DO NOTHING`),
+			instanceID, key, value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func Open(path string, global bool) (*Store, error) {
@@ -144,6 +203,9 @@ func (s *Store) Snapshot() map[string]string {
 	return v
 }
 func (s *Store) Raw() (string, error) {
+	if s.db != nil {
+		return "", fmt.Errorf("raw .env settings are unavailable with SQL storage")
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.raw, s.accessErr
@@ -154,6 +216,26 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		if strings.ContainsRune(v, 0) {
+			return fmt.Errorf("setting %s contains NUL", k)
+		}
+		if remove {
+			if _, err := s.db.SQL.Exec(s.db.Bind(`DELETE FROM settings WHERE scope = ? AND instance_id = ? AND key = ?`),
+				s.dbScope, s.dbID, k); err != nil {
+				return err
+			}
+			delete(s.values, k)
+			return nil
+		}
+		if _, err := s.db.SQL.Exec(s.db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+			VALUES (?, ?, ?, ?) ON CONFLICT (scope, instance_id, key) DO UPDATE SET value = excluded.value`),
+			s.dbScope, s.dbID, k, v); err != nil {
+			return err
+		}
+		s.values[k] = v
+		return nil
+	}
 	if s.loadErr != nil {
 		return fmt.Errorf("配置文件不可解析，请通过原始 .env 编辑修复: %w", s.loadErr)
 	}
@@ -186,6 +268,9 @@ func (s *Store) Update(k, v string, remove bool) error {
 }
 
 func (s *Store) Replace(raw string) error {
+	if s.db != nil {
+		return fmt.Errorf("raw .env replacement is unavailable with SQL storage")
+	}
 	next, err := godotenv.Unmarshal(raw)
 	if err != nil {
 		return err
