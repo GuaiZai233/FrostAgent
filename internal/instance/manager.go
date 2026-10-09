@@ -13,6 +13,7 @@ import (
 	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
+	"FrostAgent/internal/storage"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -79,9 +80,34 @@ type Manager struct {
 	shutdown         context.Context
 	shutdownCancel   context.CancelFunc
 	closeOnce        sync.Once
+	db               *storage.DB
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
+	return newManager(root, global, dialoguePath, nil)
+}
+
+// NewDatabase starts the control plane with SQL as its only runtime state
+// source. Legacy JSON, dotenv and dialogue YAML files are never read.
+func NewDatabase(root string) (*Manager, error) {
+	db, err := storage.Open(context.Background(), root)
+	if err != nil {
+		return nil, err
+	}
+	global, err := instanceconfig.OpenDatabase(db, "", true)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	m, err := newManager(root, global, "", db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return m, nil
+}
+
+func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB) (*Manager, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -97,7 +123,12 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if dialoguePath == "" {
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs)}
+	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db}
+	if db != nil {
+		m.security = security.NewControllerSQL(db)
+	} else {
+		m.security = security.NewController(abs)
+	}
 	if global != nil {
 		rawTimeout := strings.TrimSpace(global.Get("SECURITY_GATEWAY_TIMEOUT"))
 		if rawTimeout == "" {
@@ -114,24 +145,44 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		mode := security.ParseControlMode(rawMode)
 		m.security.SetMode(mode)
 	}
-	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
-	if err == nil {
-		if err = json.Unmarshal(data, &m.registry); err != nil {
+	if db != nil {
+		records, nextNumber, err := db.LoadInstances(context.Background())
+		if err != nil {
 			return nil, err
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
+		m.registry.NextNumber = nextNumber
+		for _, record := range records {
+			m.registry.Instances = append(m.registry.Instances, Info{ID: record.ID, Name: record.Name,
+				CreatedAt: record.CreatedAt, Enabled: record.Enabled, Deleting: record.Deleting,
+				Error: record.Error, CredentialTargets: record.CredentialTargets})
+		}
+	} else {
+		data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
+		if err == nil {
+			if err = json.Unmarshal(data, &m.registry); err != nil {
+				return nil, err
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	if m.registry.Version != 1 || m.registry.NextNumber < 1 {
 		return nil, fmt.Errorf("无效的实例注册表")
 	}
-	data, err = os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
-	if err == nil {
-		if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
+	if db != nil {
+		m.endpointOwners, err = db.LoadEndpointOwners(context.Background())
+		if err != nil {
 			return nil, err
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
+	} else {
+		data, err := os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
+		if err == nil {
+			if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
+				return nil, err
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	recoveryErrors := make(map[string]error)
 	for index, info := range m.registry.Instances {
@@ -147,8 +198,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			recoveryErrors[info.ID] = err
 			continue
 		}
-		if err := m.recoverCopyTransaction(info.ID); err != nil {
-			recoveryErrors[info.ID] = err
+		if db == nil {
+			if err := m.recoverCopyTransaction(info.ID); err != nil {
+				recoveryErrors[info.ID] = err
+			}
 		}
 	}
 	cfg := billing.LoadConfig(global.Get)
@@ -168,7 +221,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	mux.HandleFunc("/api/v1/actionscat", m.handleDefaultActionsCat)
 	m.general = mux
 	// Retained data directories reserve their endpoint IDs too.
-	paths, err := filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
+	paths := []string{}
+	if db == nil {
+		paths, err = filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -264,10 +320,13 @@ func (m *Manager) ensureInstanceMCP(i *managed) {
 	if i.mcp != nil {
 		return
 	}
-	manager := mcp.NewInactiveManager(
-		mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json")),
-		mcpBuiltinNames,
-	)
+	var configStore *mcp.ConfigStore
+	if m.db != nil {
+		configStore = mcp.NewSQLConfigStore(m.db, i.id)
+	} else {
+		configStore = mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json"))
+	}
+	manager := mcp.NewInactiveManager(configStore, mcpBuiltinNames)
 	if err := manager.Load(); err != nil {
 		i.logger.Warn(logs.SYSTEM, fmt.Sprintf("加载实例 MCP 配置失败: %v", err))
 	}
@@ -284,12 +343,21 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 			return nil, nil, err
 		}
 	}
-	c, openErr := instanceconfig.Open(filepath.Join(configDir, ".env"), false)
+	var c *instanceconfig.Store
+	var openErr error
+	if m.db != nil {
+		c, openErr = instanceconfig.OpenDatabase(m.db, id, false)
+	} else {
+		c, openErr = instanceconfig.Open(filepath.Join(configDir, ".env"), false)
+	}
+	if c == nil {
+		return nil, nil, openErr
+	}
 	if openErr != nil && c.AccessError() != nil {
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security)
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security, m.db)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
@@ -308,12 +376,20 @@ func (m *Manager) reserveEndpointsLocked(owner string, endpoints []modelrouter.E
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(next)
-	if err != nil {
-		return err
-	}
-	if err = instanceconfig.WriteAtomic(filepath.Join(m.root, "endpoint_ids.json"), data, 0600); err != nil {
-		return err
+	if m.db != nil {
+		for id, instanceID := range next {
+			if err := m.db.ReserveEndpoint(context.Background(), id, instanceID); err != nil {
+				return err
+			}
+		}
+	} else {
+		data, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		if err = instanceconfig.WriteAtomic(filepath.Join(m.root, "endpoint_ids.json"), data, 0600); err != nil {
+			return err
+		}
 	}
 	m.endpointOwners = next
 	return nil
@@ -345,11 +421,25 @@ func (m *Manager) nextEndpointOwnersLocked(owner string, endpoints []modelrouter
 	return next, nil
 }
 func (m *Manager) saveLocked() error {
+	if m.db != nil {
+		return fmt.Errorf("SQL instance registry requires an explicit row operation")
+	}
 	data, err := json.MarshalIndent(m.registry, "", "  ")
 	if err != nil {
 		return err
 	}
 	return instanceconfig.WriteAtomic(filepath.Join(m.root, "instances.json"), data, 0600)
+}
+
+func (m *Manager) persistInfoLocked(info Info) error {
+	if m.db == nil {
+		return m.saveLocked()
+	}
+	return m.db.UpdateInstance(context.Background(), storage.InstanceRecord{
+		ID: info.ID, Name: info.Name, CreatedAt: info.CreatedAt,
+		Enabled: info.Enabled, Deleting: info.Deleting, Error: info.Error,
+		CredentialTargets: info.CredentialTargets,
+	})
 }
 func (m *Manager) List() ([]Info, int) {
 	m.mu.RLock()
@@ -408,7 +498,7 @@ func (m *Manager) update(id string, fn func(*Info)) error {
 		if m.registry.Instances[index].ID == id {
 			old := m.registry.Instances[index]
 			fn(&m.registry.Instances[index])
-			if err := m.saveLocked(); err != nil {
+			if err := m.persistInfoLocked(m.registry.Instances[index]); err != nil {
 				m.registry.Instances[index] = old
 				return err
 			}
@@ -469,6 +559,9 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 			return Info{}, err
 		}
 	}
+	if m.db != nil {
+		return m.createDatabaseInstanceLocked(id, name)
+	}
 	if err = os.Mkdir(m.dir(id), 0700); err != nil {
 		return Info{}, err
 	}
@@ -527,6 +620,37 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	logs.General.InfoWithConsoleSummary(logs.SYSTEM, createdLog, createdLog)
 	return info, nil
 }
+
+func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
+	if err := os.Mkdir(m.dir(id), 0700); err != nil {
+		return Info{}, err
+	}
+	info := Info{ID: id, Name: name, CreatedAt: time.Now().UTC()}
+	if err := m.db.CreateInstance(context.Background(), storage.InstanceRecord{
+		ID: id, Name: name, CreatedAt: info.CreatedAt,
+	}, m.registry.NextNumber+1); err != nil {
+		return Info{}, err
+	}
+	m.registry.Instances = append(m.registry.Instances, info)
+	m.registry.NextNumber++
+	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	m.instances[id] = i
+	if err := instanceconfig.InitializeInstanceSettings(m.db, id); err != nil {
+		info.Error = err.Error()
+		m.registry.Instances[len(m.registry.Instances)-1] = info
+		_ = m.persistInfoLocked(info)
+		return info, nil
+	}
+	r, c, err := m.buildFresh(id, i, false, m.dir(id))
+	i.runtime, i.config = r, c
+	if err != nil {
+		info.Error = err.Error()
+		m.registry.Instances[len(m.registry.Instances)-1] = info
+		_ = m.persistInfoLocked(info)
+	}
+	logs.General.InfoWithConsoleSummary(logs.SYSTEM, "创建实例: "+name, "创建实例: "+name)
+	return info, nil
+}
 func (m *Manager) Rename(id, name string) error {
 	name, err := validateName(name)
 	if err != nil {
@@ -558,7 +682,7 @@ func (m *Manager) Rename(id, name string) error {
 		if m.registry.Instances[index].ID == id {
 			old := m.registry.Instances[index].Name
 			m.registry.Instances[index].Name = name
-			if err = m.saveLocked(); err != nil {
+			if err = m.persistInfoLocked(m.registry.Instances[index]); err != nil {
 				m.registry.Instances[index].Name = old
 				return err
 			}
@@ -616,14 +740,17 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err = m.rejectDeleting(id); err != nil {
 		return err
 	}
-	_, transactionErr := os.Stat(transactionPath(m.dir(id)))
-	hadTransaction := transactionErr == nil
-	if transactionErr != nil && !os.IsNotExist(transactionErr) {
-		return transactionErr
-	}
-	if err = m.recoverCopyTransaction(id); err != nil {
-		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return err
+	hadTransaction := false
+	if m.db == nil {
+		_, transactionErr := os.Stat(transactionPath(m.dir(id)))
+		hadTransaction = transactionErr == nil
+		if transactionErr != nil && !os.IsNotExist(transactionErr) {
+			return transactionErr
+		}
+		if err = m.recoverCopyTransaction(id); err != nil {
+			_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+			return err
+		}
 	}
 	list, _ := m.List()
 	for _, info := range list {
@@ -1072,6 +1199,9 @@ func (m *Manager) Close() {
 			}
 			i.mu.Unlock()
 			i.op.Unlock()
+		}
+		if m.db != nil {
+			_ = m.db.Close()
 		}
 	})
 }

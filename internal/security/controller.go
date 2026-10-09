@@ -1,8 +1,9 @@
-﻿package security
+package security
 
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/storage"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,15 @@ func NewController(dataDir string) *Controller {
 		Watchdog: NewWatchdog(access, audit),
 		mode:     &modePtr,
 	}
+}
+
+func NewControllerSQL(db *storage.DB) *Controller {
+	access := NewSQLAccessStore(db)
+	audit := NewSQLAuditStore(db, 1000)
+	var modePtr atomic.Pointer[ControlMode]
+	defaultMode := ControlModeSimple
+	modePtr.Store(&defaultMode)
+	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit), mode: &modePtr}
 }
 
 // Mode returns the active security control mode. Unset or nil modes default to ControlModeSimple.

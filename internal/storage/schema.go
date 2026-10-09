@@ -143,11 +143,17 @@ var schemaStatements = []string{
 		FOREIGN KEY (instance_id, sticker_id) REFERENCES sticker_entries(instance_id, id) ON DELETE CASCADE
 	)`,
 	`CREATE TABLE access_records (
-		principal_key TEXT PRIMARY KEY, state TEXT NOT NULL, record_json TEXT NOT NULL
+		principal_key TEXT PRIMARY KEY, platform TEXT NOT NULL, user_id TEXT NOT NULL,
+		state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', locked_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL, strike_times_json TEXT NOT NULL DEFAULT '[]',
+		last_blocked_hash TEXT NOT NULL DEFAULT '', last_blocked_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE security_audit (
-		id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, instance_id TEXT NOT NULL DEFAULT '',
-		event_json TEXT NOT NULL
+		id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, platform TEXT NOT NULL,
+		user_id TEXT NOT NULL, instance_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+		tool TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL, source TEXT NOT NULL, action TEXT NOT NULL,
+		reason TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
+		encoded INTEGER NOT NULL DEFAULT 0, category TEXT NOT NULL DEFAULT '', risk_level TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE pending_deletions (
 		instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,

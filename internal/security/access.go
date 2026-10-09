@@ -1,6 +1,7 @@
-﻿package security
+package security
 
 import (
+	"FrostAgent/internal/storage"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -75,11 +76,13 @@ type accessFile struct {
 // same data directory observe lock and unlock operations immediately.
 type AccessStore struct {
 	path string
+	db   *storage.DB
 	mu   sync.RWMutex
 }
 
-func NewAccessStore(path string) *AccessStore { return &AccessStore{path: path} }
-func (s *AccessStore) Path() string           { return s.path }
+func NewAccessStore(path string) *AccessStore       { return &AccessStore{path: path} }
+func NewSQLAccessStore(db *storage.DB) *AccessStore { return &AccessStore{db: db} }
+func (s *AccessStore) Path() string                 { return s.path }
 
 func (s *AccessStore) IsLocked(p Principal) (bool, AccessRecord, error) {
 	s.mu.RLock()
@@ -210,6 +213,16 @@ func (s *AccessStore) RecordBlockedSubmission(
 func (s *AccessStore) update(fn func(*accessFile) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		file, err := s.load()
+		if err != nil {
+			return err
+		}
+		if err := fn(&file); err != nil {
+			return err
+		}
+		return s.save(file)
+	}
 	lock, err := acquireFileLock(s.path + ".lock")
 	if err != nil {
 		return err
@@ -227,6 +240,9 @@ func (s *AccessStore) update(fn func(*accessFile) error) error {
 }
 
 func (s *AccessStore) load() (accessFile, error) {
+	if s.db != nil {
+		return s.loadSQL()
+	}
 	file := accessFile{Version: 1, Records: make(map[string]AccessRecord)}
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
@@ -251,6 +267,9 @@ func (s *AccessStore) load() (accessFile, error) {
 }
 
 func (s *AccessStore) save(file accessFile) error {
+	if s.db != nil {
+		return s.saveSQL(file)
+	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode security access store: %w", err)
