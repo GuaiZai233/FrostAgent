@@ -426,6 +426,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 检查单条用户消息输入上限保护
 	if len([]rune(userText)) > 30000 {
 		engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 消息过长 (%d 字)，拒绝处理", event.UserID, len([]rune(userText))))
+		if wakeSignals.Proactive {
+			return
+		}
 		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。")
 		return
 	}
@@ -963,12 +966,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			if wakeSignals.Proactive {
+				engine.TrimSession(session)
+				return
+			}
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			if wakeSignals.Proactive {
+				engine.TrimSession(session)
+				return
+			}
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error())
 			return
 		}

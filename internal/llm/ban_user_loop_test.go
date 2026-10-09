@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/security"
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -488,6 +489,154 @@ func TestProactiveTurnMaxIterationsReachedIsSilent(t *testing.T) {
 		expectedErrMsg := "FrostAgent错误：达到最大迭代次数，未能得出最终答案"
 		if result.Content != expectedErrMsg {
 			t.Fatalf("expected %q, got %q", expectedErrMsg, result.Content)
+		}
+	})
+}
+
+func TestProactiveTurnDisallowsActionsCatTools(t *testing.T) {
+	listActionsExecuted := atomic.Int32{}
+	getRunExecuted := atomic.Int32{}
+	listActionsTool := &mockGenericTool{name: "actionscat_list_actions", executed: &listActionsExecuted}
+	getRunTool := &mockGenericTool{name: "actionscat_get_run", executed: &getRunExecuted}
+
+	t.Run("proactive turn filters schemas and denies execution of ActionsCat tools", func(t *testing.T) {
+		var receivedTools []core.Tool
+		modelCalls := atomic.Int32{}
+		provider := &mockMultiStepProvider{
+			chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				modelCalls.Add(1)
+				receivedTools = req.Tools
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_act_1",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "actionscat_get_run", Arguments: `{"run_id":"run-123"}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		engine := &Engine{
+			MaxIterations: 5,
+			ToolRegistry: map[string]ToolExecutor{
+				"actionscat_list_actions": listActionsTool,
+				"actionscat_get_run":      getRunTool,
+				"memory":                  &mockGenericTool{name: "memory"},
+				StaySilentToolName:        &mockSilentTool{},
+			},
+			Provider: provider,
+		}
+
+		runCtx := RunContext{
+			ActorPlatform: "qq",
+			ActorUserID:   "bystander-user-111",
+			Proactive:     true,
+		}
+
+		result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "unaddressed msg"}}, runCtx)
+
+		// 1. Tool schemas offered to LLM must not contain any actionscat tools
+		for _, tool := range receivedTools {
+			if strings.HasPrefix(tool.Name, "actionscat_") {
+				t.Fatalf("proactive turn should not offer tool %s in model schema", tool.Name)
+			}
+		}
+
+		// 2. ActionsCat tool must not be executed
+		if getRunExecuted.Load() != 0 || listActionsExecuted.Load() != 0 {
+			t.Fatalf("expected 0 execution of actionscat tools, got get_run=%d list_actions=%d", getRunExecuted.Load(), listActionsExecuted.Load())
+		}
+
+		// 3. Immediate silent exit on first iteration
+		if modelCalls.Load() != 1 {
+			t.Fatalf("expected exactly 1 model call on proactive denial fuse, got %d", modelCalls.Load())
+		}
+		if !result.Silent {
+			t.Fatal("expected result.Silent to be true on proactive actionscat tool attempt")
+		}
+		if result.Content != "" {
+			t.Fatalf("expected result.Content to be empty, got %q", result.Content)
+		}
+	})
+
+	t.Run("explicit wake turn allows schema and execution of ActionsCat tools", func(t *testing.T) {
+		listActionsExecuted.Store(0)
+		var receivedTools []core.Tool
+		provider := &mockMultiStepProvider{
+			chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				receivedTools = req.Tools
+				if len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == core.RoleTool {
+					return &core.ChatResponse{
+						Message: core.ChatMessage{
+							Role:    core.RoleAssistant,
+							Content: "成功获取动作列表",
+						},
+					}, nil
+				}
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_act_2",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "actionscat_list_actions", Arguments: `{}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		engine := &Engine{
+			MaxIterations: 5,
+			ToolRegistry: map[string]ToolExecutor{
+				"actionscat_list_actions": listActionsTool,
+				"actionscat_get_run":      getRunTool,
+				"memory":                  &mockGenericTool{name: "memory"},
+			},
+			Provider: provider,
+		}
+
+		runCtx := RunContext{
+			ActorPlatform: "qq",
+			ActorUserID:   "admin-user",
+			Proactive:     false,
+		}
+
+		result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "列出动作"}}, runCtx)
+
+		// 1. Tool schemas offered to LLM must contain actionscat tools
+		foundListActions := false
+		foundGetRun := false
+		for _, tool := range receivedTools {
+			if tool.Name == "actionscat_list_actions" {
+				foundListActions = true
+			}
+			if tool.Name == "actionscat_get_run" {
+				foundGetRun = true
+			}
+		}
+		if !foundListActions || !foundGetRun {
+			t.Fatalf("explicit wake turn must offer actionscat tools, found list=%v, get=%v", foundListActions, foundGetRun)
+		}
+
+		// 2. Tool was executed
+		if listActionsExecuted.Load() != 1 {
+			t.Fatalf("expected actionscat_list_actions executed once, got %d", listActionsExecuted.Load())
+		}
+
+		// 3. Normal reply returned
+		if result.Silent {
+			t.Fatal("expected result.Silent to be false on explicit wake")
+		}
+		if result.Content != "成功获取动作列表" {
+			t.Fatalf("expected '成功获取动作列表', got %q", result.Content)
 		}
 	})
 }

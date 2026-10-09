@@ -1467,6 +1467,294 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 			t.Fatalf("显式唤醒耗尽迭代次数应向群发送最大迭代错误提示，实际: %s", msgStr)
 		}
 	})
+
+	t.Run("unaddressed proactive turn with invalid quote message drops silently without sending group msg", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"quote","message_id":"unobserved-quote-999"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   704,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通群聊触发无效引用"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复引用校验失败时不应向群发送报错消息: %+v", act)
+			}
+		}
+	})
+
+	t.Run("unaddressed proactive turn with invalid media build output drops silently without sending group msg", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"image","path":"/nonexistent/missing_file_123.png"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   705,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通群聊触发无效媒体"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复组装媒体失败时不应向群发送报错消息: %+v", act)
+			}
+		}
+	})
+
+	t.Run("explicit wake turn with invalid quote message sends error notice to group", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"quote","message_id":"unobserved-quote-999"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   706,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 引用不存在的消息"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "引用消息校验失败") {
+			t.Fatalf("显式唤醒引用校验失败应向群发送错误提示，实际: %s", msgStr)
+		}
+	})
+
+	t.Run("explicit wake turn with invalid media build output sends error notice to group", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"image","path":"/nonexistent/missing_file_123.png"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   707,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 发送不存在的图片"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "组装消息失败") {
+			t.Fatalf("显式唤醒组装媒体失败应向群发送错误提示，实际: %s", msgStr)
+		}
+	})
 }
 
 type dummyTestTool struct {

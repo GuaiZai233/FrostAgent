@@ -162,17 +162,18 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
 - **主动回复安全防卫与 Option A 纵深隔离体系 (Proactive Reply Security Isolation & Option A Defense-in-Depth)**：
   主动回复是 Bot 在未被艾特或呼叫的情形下基于概率自发参与群聊互动的机制。发言群友并无唤醒意图，这使得主动回复场景具有独特的安全威胁模型：若大模型因上下文诱导、越狱提示词或幻觉做出破坏性操作，可能误封旁观群友（Bystander Abuse）或向外部产生非预期副作用。根据 PR #162 Maintainer 裁定，系统严格执行 Option A 纵深防御方案：
   - **P1: 主动回复轮次禁用副作用与特权工具（Side-Effect Tool Confinement）**：
-    - **白名单收敛**：主动回复轮次仅允许安全只读与控制类工具（`stay_silent`, `stay_slient`, `memory` 记忆管理, `actionscat_*` 只读工具），严格禁止调用任何特权副作用工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、变异类 ActionsCat 工具以及 MCP 变异工具）；
+    - **白名单收敛**：主动回复轮次仅允许安全只读与控制类工具（`stay_silent`, `stay_slient`, `memory` 记忆管理），严格禁止调用任何特权副作用工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、ActionsCat 工具以及 MCP 变异工具）；ActionsCat 工具因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可检查外部日志与构建，在任意群友触发的未定向轮次中可能导致信息泄露与权限越界，故从主动回复白名单中彻底排除；
     - **Pre-call Schema 过滤**：在向大模型发起请求前，`llm.Engine` 通过 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）检查 `RunContext.Proactive`。若为主动回复轮次，动态过滤工具 Schema（`modelTools`），从源头阻止模型感知和生成副作用工具调用；
-    - **服务端执行入口硬拦截与全量静默熔断**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或任何非白名单工具），`Engine` 服务端调度器立即阻断工具执行并直接返回 `Silent: true`，立即熔断循环，不调用模型、不向会话追加错误消息继续消耗迭代；清除 `Banned` 标记，绝对禁止向 `AccessStore` 写入锁定状态，绝对不向群聊发送任何报错文本；
+    - **服务端执行入口硬拦截与全量静默熔断**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message`、ActionsCat 或任何非白名单工具），`Engine` 服务端调度器立即阻断工具执行并直接返回 `Silent: true`，立即熔断循环，不调用模型、不向会话追加错误消息继续消耗迭代；清除 `Banned` 标记，绝对禁止向 `AccessStore` 写入锁定状态，绝对不向群聊发送任何报错文本；
     - **迭代耗尽静默防打扰**：主动回复轮次若耗尽最大迭代次数，同样以 `Silent: true` 与 `ErrMaxIterationsReached` 终态退出，杜绝将内部迭代耗尽错误文本（`FrostAgent错误：达到最大迭代次数，未能得出最终答案`）发送至未艾特机器人的群聊；
     - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：Maintainer 明确裁定主动回复允许使用记忆系统（记忆作为 Bot 核心认知与人格系统，主动回复享有完整的记忆读写、反思与召回计数更新权限，自动召回、`RecordRecall` / `AccessCount` / `UpdatedAt` 更新及自动记忆提取均允许；撤销在 `memory.write`、`memory.reflect` 和 `RecordRecall` 上的主动回复阻断）。Option A 工具限制严格聚焦于 ActionsCat、命令执行、外部消息发送等外部/特权副作用；
     - **工具实现层二次防御（Defense-in-Depth）**：`ban_user.go` 读取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，绝不调用 `Controller.Lock`，坚决不持久化锁定旁观者。
-  - **P2: 模型输出看门狗阻断静默丢弃与标记透传 (`OutputBlocked`)**：
+  - **P2: 模型输出看门狗阻断与消息组装校验异常静默丢弃 (`OutputBlocked` & Post-Run Formatting Silence)**：
     - 当模型输出在 `StageModelOutput` 检查点被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed）时，`llm.Engine` 记录 `AgentRunResult.OutputBlocked = true` 并透传至适配器层；
+    - **消息渲染与校验异常全量静默丢弃**：在 OneBot 等适配器中，若主动回复轮次产出的结构化消息在后置处理阶段触发入站消息超长检查、引用消息校验（`validateQuoteMessages`）失败或多媒体组装（`BuildOneBotMessage`）失败，系统记录日志并原子回滚会话上下文（`engine.TrimSession`），完全静默丢弃，坚决不向未定向群聊发送 `FrostAgent 错误：...` 等内部错误提示；
     - **适配器差异化安全响应**：
-      - **显式唤醒轮次**：保留完整明确的安全拦截警示，向用户发送标准报错（如 `FrostAgent安全控制：模型输出已拦截。`）；
-      - **主动回复轮次**：平台适配器检测到 `OutputBlocked == true` 或 `Error != nil` 时，执行完全静默丢弃。OneBot 适配器不发送群消息；AstrBot 适配器下发携带 `suppress_llm: true` 的协议级 `noop` 终态控制动作（`Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`），既解锁 Python 插件事件循环并抑制 AstrBot 原生备用 LLM 误触发，又彻底杜绝向群聊发送打扰性的安全报错。
+      - **显式唤醒轮次**：保留完整明确的安全拦截警示与组装错误提示，向用户发送标准报错（如 `FrostAgent安全控制：模型输出已拦截。`、`FrostAgent 错误：引用消息校验失败：...` 等）；
+      - **主动回复轮次**：平台适配器检测到 `OutputBlocked == true`、`Error != nil` 或格式化校验失败时，执行完全静默丢弃。OneBot 适配器不发送群消息；AstrBot 适配器下发携带 `suppress_llm: true` 的协议级 `noop` 终态控制动作（`Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`），既解锁 Python 插件事件循环并抑制 AstrBot 原生备用 LLM 误触发，又彻底杜绝向群聊发送打扰性的安全报错。
 
 该体系的核心不变量是：全局锁定状态在所有适配器 Ingress 阶段（早于群聊压缩、贴纸观察、会话锁、视觉处理及 LLM 调用）和 Engine 执行入口立即生效；被锁定的主体绝对无法进入任何业务流转。
 

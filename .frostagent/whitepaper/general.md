@@ -186,20 +186,20 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - **视觉余额预检旁路**：对于包含图片或引用回复图片的主动消息，同样旁路多模态视觉前置余额检查（`BillingClient.Balance`），杜绝无唤醒意图的群友因余额不足收到打扰性扣费拦截提示；
   - **零账单回执纯净输出**：主动回复产生的实际出站消息绝不追加计费结算回执（如“本次消耗 X 雪花”），保持拟人化日常群友闲聊的纯净体验；
   - **显式唤醒计费边界隔离**：对于群友显式 @ 机器人或通过别名唤醒的对话，继续严格执行完整的预留、扣费结算、余额不足阻断与账单回执追加，两者边界清晰解耦。
-- **执行异常静默丢弃与无打扰容灾 (Silent Error Handling & Zero Group Disturbance)**：
-  - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机或工具执行异常，系统严格执行静默丢弃策略：仅在控制台/日志记录警告日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
+- **执行异常与后置渲染失败静默丢弃机制 (Silent Error Handling & Post-Run Formatting Silence)**：
+  - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机、工具执行异常，或在后置渲染阶段发生单条消息超长、引用消息校验失败（`validateQuoteMessages`）、OneBot 消息组装失败（`BuildOneBotMessage`），系统严格执行静默丢弃策略：仅在控制台/日志记录警告或错误日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向未唤醒群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
   - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
 - **主动回复只读模式与副作用工具强禁闭机制 (Proactive Reply Read-Only Confinement & Side-Effect Prevention, Option A)**：
-  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、或变异类 ActionsCat/MCP 工具）；
+  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
-    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用工具，向模型仅暴露安全只读与控制工具（`stay_silent`、`stay_slient`、`memory` 记忆管理、`actionscat_*` 只读工具），从调用源头消除模型生成变异工具调用的可能；
-    - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 变异操作等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用与外部特权工具，向模型仅暴露控制与记忆工具（`stay_silent`、`stay_slient`、`memory` 记忆管理），从调用源头消除模型生成变异工具调用的可能；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
     - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
-    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异操作）；
+    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；
     - **工具实现层双重校验 (Tool-Level Defense-in-Depth)**：`ban_user` 工具在执行前提取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，坚决不持久化锁定旁观者。
-  - **P2: 模型输出看门狗阻断透传与静默丢弃 (Output Watchdog Gating & Silent Dropping, `OutputBlocked`)**：
+  - **P2: 模型输出看门狗阻断透传、格式化校验与静默丢弃 (Output Watchdog Gating & Formatting Silence, `OutputBlocked`)**：
     - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
-    - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 执行完全静默丢弃（OneBot 不发送群消息；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或报错，同时在显式唤醒轮次中完整保留标准安全警示。
+    - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 以及后置消息组装校验失败（引用校验失败、多媒体消息构建失败、单条消息超长等）执行完全静默丢弃（OneBot 不发送群消息并回滚会话；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或内部格式化错误提示，同时在显式唤醒轮次中完整保留标准安全警示与错误反馈。
 - **Web 控制台可视化滑块、异步串行队列与最后意图优先同步**：
   - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
   - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；

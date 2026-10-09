@@ -84,16 +84,13 @@ type AgentRunResult struct {
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
-// Proactive turns allow terminal silence, final text replies, and allowlisted read-only tools.
-// Mutating tools (ban_user, execute_command, send_message, stickers, actions mutations, etc.) are strictly disallowed.
+// Proactive turns allow terminal silence, final text replies, and the memory subsystem.
+// ActionsCat and other external/privileged/mutating tools are strictly disallowed.
 func IsProactiveAllowedTool(name string) bool {
 	switch name {
 	case StaySilentToolName, StaySlientAliasToolName:
 		return true
 	case "memory":
-		return true
-	case "actionscat_list_actions", "actionscat_get_run", "actionscat_get_build",
-		"actionscat_list_builds", "actionscat_list_schedules", "actionscat_list_matchers":
 		return true
 	default:
 		return false
