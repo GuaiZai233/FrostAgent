@@ -124,7 +124,7 @@ func TestMemoryToolMockWriteDoesNotPersist(t *testing.T) {
 	}
 }
 
-func TestMemoryToolProactiveRestrictions(t *testing.T) {
+func TestMemoryToolProactiveAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "brain.json")
 	store := memory.NewStore(storePath)
@@ -146,40 +146,24 @@ func TestMemoryToolProactiveRestrictions(t *testing.T) {
 		Proactive: true,
 	})
 
-	// 1. write in proactive turn must be blocked
+	// 1. write in proactive turn is permitted per maintainer clarification
 	writeRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"write","content":"proactive note","tags":["test"]}`)
 	if err != nil {
 		t.Fatalf("write unexpected error: %v", err)
 	}
-	if writeRes != "主动回复轮次禁止写入记忆" {
-		t.Fatalf("expected write rejection, got: %s", writeRes)
+	if writeRes != "记忆已写入" {
+		t.Fatalf("expected write success, got: %s", writeRes)
 	}
 	stored, err := store.ListByOwner("proactive_user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) != 0 {
-		t.Fatalf("expected 0 memories stored in proactive turn, got %d", len(stored))
+	if len(stored) != 1 {
+		t.Fatalf("expected 1 memory stored in proactive turn, got %d", len(stored))
 	}
 
-	// 2. reflect in proactive turn must be blocked
-	reflectRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"reflect"}`)
-	if err != nil {
-		t.Fatalf("reflect unexpected error: %v", err)
-	}
-	if reflectRes != "主动回复轮次禁止触发记忆反思重构" {
-		t.Fatalf("expected reflect rejection, got: %s", reflectRes)
-	}
-
-	// 3. Write a memory legitimately outside proactive turn
-	normalCtx := llm.WithRunContext(context.Background(), llm.RunContext{
-		Owner:     "proactive_user",
-		OwnerType: memory.OwnerUser,
-	})
-	_, _ = tool.ExecuteContext(normalCtx, `{"action":"write","content":"Alice loves apples","tags":["apple"]}`)
-
-	// Search in proactive turn should be allowed but not increment AccessCount
-	searchRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"search","tags":["apple"]}`)
+	// 2. Search in proactive turn should be allowed and increment AccessCount
+	searchRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"search","tags":["test"]}`)
 	if err != nil {
 		t.Fatalf("search in proactive turn failed: %v", err)
 	}
@@ -190,9 +174,9 @@ func TestMemoryToolProactiveRestrictions(t *testing.T) {
 	if len(searchResults) != 1 {
 		t.Fatalf("expected 1 search result, got %d", len(searchResults))
 	}
-	// Check AccessCount remains 0 in store
+	// Check AccessCount is incremented to 1 in store
 	storedAfter, _ := store.ListByOwner("proactive_user")
-	if len(storedAfter) != 1 || storedAfter[0].AccessCount != 0 {
-		t.Fatalf("expected AccessCount = 0 for proactive search, got %d", storedAfter[0].AccessCount)
+	if len(storedAfter) != 1 || storedAfter[0].AccessCount != 1 {
+		t.Fatalf("expected AccessCount = 1 for proactive search, got %d", storedAfter[0].AccessCount)
 	}
 }

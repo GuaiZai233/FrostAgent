@@ -343,3 +343,151 @@ func TestProactiveTurnOutputBlockedWatchdog(t *testing.T) {
 		t.Fatal("expected OutputBlocked to be true when classifier has an outage at StageModelOutput")
 	}
 }
+
+type mockGenericTool struct {
+	name     string
+	executed *atomic.Int32
+}
+
+func (m *mockGenericTool) Name() string                 { return m.name }
+func (m *mockGenericTool) Description() string          { return "generic tool" }
+func (m *mockGenericTool) Parameters() map[string]any   { return map[string]any{} }
+func (m *mockGenericTool) Execute(args string) (string, error) {
+	if m.executed != nil {
+		m.executed.Add(1)
+	}
+	return "ok", nil
+}
+
+func TestProactiveTurnDisallowsSideEffectingToolsEarlyExit(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctrl := security.NewController(tmpDir)
+
+	cmdExecuted := atomic.Int32{}
+	cmdTool := &mockGenericTool{name: "execute_command", executed: &cmdExecuted}
+
+	modelCalls := atomic.Int32{}
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			modelCalls.Add(1)
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:       "call_cmd_1",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: "execute_command", Arguments: `{"cmd":"ls"}`},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 5,
+		ToolRegistry: map[string]ToolExecutor{
+			"execute_command": cmdTool,
+		},
+		Security: ctrl,
+		Provider: provider,
+	}
+
+	runCtx := RunContext{
+		ActorPlatform: "qq",
+		ActorUserID:   "bystander-user-789",
+		Proactive:     true,
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, runCtx)
+
+	// 1. Side-effecting tool must not be executed
+	if cmdExecuted.Load() != 0 {
+		t.Fatalf("expected execute_command not executed in proactive turn, got %d", cmdExecuted.Load())
+	}
+
+	// 2. Loop must terminate immediately without calling model again
+	if modelCalls.Load() != 1 {
+		t.Fatalf("expected exactly 1 model call due to early termination, got %d", modelCalls.Load())
+	}
+
+	// 3. Result must terminate silently with empty content
+	if !result.Silent {
+		t.Fatal("expected result.Silent to be true on proactive side-effecting tool call")
+	}
+	if result.Content != "" {
+		t.Fatalf("expected result.Content to be empty, got %q", result.Content)
+	}
+}
+
+func TestProactiveTurnMaxIterationsReachedIsSilent(t *testing.T) {
+	ctrl := security.NewController(t.TempDir())
+
+	memExecuted := atomic.Int32{}
+	memTool := &mockGenericTool{name: "memory", executed: &memExecuted}
+
+	provider := &mockMultiStepProvider{
+		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role: core.RoleAssistant,
+					ToolCalls: []core.ToolCall{
+						{
+							ID:       "call_mem_1",
+							Type:     "function",
+							Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"list"}`},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	engine := &Engine{
+		MaxIterations: 3,
+		ToolRegistry: map[string]ToolExecutor{
+			"memory": memTool,
+		},
+		Security: ctrl,
+		Provider: provider,
+	}
+
+	t.Run("proactive turn exhausting max iterations exits silently", func(t *testing.T) {
+		runCtx := RunContext{
+			ActorPlatform: "qq",
+			ActorUserID:   "user-proactive",
+			Proactive:     true,
+		}
+
+		result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, runCtx)
+
+		if !result.Silent {
+			t.Fatal("expected result.Silent to be true for proactive turn reaching max iterations")
+		}
+		if result.Content != "" {
+			t.Fatalf("expected result.Content to be empty, got %q", result.Content)
+		}
+		if !errors.Is(result.Error, ErrMaxIterationsReached) {
+			t.Fatalf("expected ErrMaxIterationsReached, got %v", result.Error)
+		}
+	})
+
+	t.Run("explicit wake turn exhausting max iterations returns error content", func(t *testing.T) {
+		runCtx := RunContext{
+			ActorPlatform: "qq",
+			ActorUserID:   "user-explicit",
+			Proactive:     false,
+		}
+
+		result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, runCtx)
+
+		if result.Silent {
+			t.Fatal("expected result.Silent to be false for explicit turn reaching max iterations")
+		}
+		expectedErrMsg := "FrostAgent错误：达到最大迭代次数，未能得出最终答案"
+		if result.Content != expectedErrMsg {
+			t.Fatalf("expected %q, got %q", expectedErrMsg, result.Content)
+		}
+	})
+}

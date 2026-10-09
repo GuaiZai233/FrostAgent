@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1208,5 +1209,278 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 			t.Fatalf("显式唤醒 ban_user 应发送封禁拒绝提示，实际: %s", msgStr)
 		}
 	})
+
+	t.Run("unaddressed proactive turn attempting side-effect tool drops silently without sending group msg", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		cmdExecuted := atomic.Int32{}
+		cmdTool := &dummyTestTool{name: "execute_command", executed: &cmdExecuted}
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_cmd_1",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "execute_command", Arguments: `{"cmd":"id"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["execute_command"] = cmdTool
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   701,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通群闲聊触发命令调用"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复尝试调用副作用工具不应向群发送消息: %+v", act)
+			}
+		}
+
+		if cmdExecuted.Load() != 0 {
+			t.Fatalf("主动回复中的副作用工具绝对不可执行，实际执行了 %d 次", cmdExecuted.Load())
+		}
+	})
+
+	t.Run("unaddressed proactive turn exhausting max iterations drops silently without sending group msg", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		provider := &mockLLMProvider{
+			customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_mem_loop",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"list"}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		memTool := &dummyTestTool{name: "memory"}
+
+		engine := newTestEngine(provider)
+		engine.MaxIterations = 2
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["memory"] = memTool
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   702,
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"普通群闲聊导致迭代耗尽"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				t.Fatalf("主动回复耗尽最大迭代次数时不应向群发送报错消息: %+v", act)
+			}
+		}
+	})
+
+	t.Run("explicit wake turn exhausting max iterations sends error notice to group", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		provider := &mockLLMProvider{
+			customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_mem_loop_exp",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"list"}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		memTool := &dummyTestTool{name: "memory"}
+
+		engine := newTestEngine(provider)
+		engine.MaxIterations = 2
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["memory"] = memTool
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   703,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 显式唤醒但导致迭代耗尽"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "达到最大迭代次数") {
+			t.Fatalf("显式唤醒耗尽迭代次数应向群发送最大迭代错误提示，实际: %s", msgStr)
+		}
+	})
+}
+
+type dummyTestTool struct {
+	name     string
+	executed *atomic.Int32
+}
+
+func (d *dummyTestTool) Name() string                 { return d.name }
+func (d *dummyTestTool) Description() string          { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
+func (d *dummyTestTool) Execute(args string) (string, error) {
+	if d.executed != nil {
+		d.executed.Add(1)
+	}
+	return "ok", nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1381,4 +1382,248 @@ func TestAstrBotProactiveSecurityOptionA(t *testing.T) {
 			t.Fatalf("显式唤醒 ban_user 应发送封禁提示，实际=%s", act.Content)
 		}
 	})
+
+	t.Run("unaddressed proactive turn attempting side-effect tool drops silently with suppressed noop", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		cmdExecuted := atomic.Int32{}
+		cmdTool := &dummyTestTool{name: "execute_command", executed: &cmdExecuted}
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_cmd_1",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "execute_command", Arguments: `{"cmd":"id"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["execute_command"] = cmdTool
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_5",
+			Content:     "普通群聊未艾特触发命令",
+			Platform:    "astrbot",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_optA_5" {
+			t.Fatalf("期望 echo=reply_msg_optA_5, 实际=%s", act.Echo)
+		}
+
+		if cmdExecuted.Load() != 0 {
+			t.Fatalf("主动回复中的副作用工具绝对不可执行，实际执行了 %d 次", cmdExecuted.Load())
+		}
+	})
+
+	t.Run("unaddressed proactive turn exhausting max iterations drops silently with suppressed noop", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		provider := &mockLLMProvider{
+			customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_mem_loop_astr",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"list"}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		memTool := &dummyTestTool{name: "memory"}
+
+		engine := newTestEngine(provider)
+		engine.MaxIterations = 2
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["memory"] = memTool
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_6",
+			Content:     "普通群聊导致迭代耗尽",
+			Platform:    "astrbot",
+			IsWake:      false,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "noop" || !act.SuppressLLM {
+			t.Fatalf("期望收到 action=noop 且 suppress_llm=true, 实际=%+v", act)
+		}
+		if act.Echo != "reply_msg_optA_6" {
+			t.Fatalf("期望 echo=reply_msg_optA_6, 实际=%s", act.Echo)
+		}
+	})
+
+	t.Run("explicit wake turn exhausting max iterations sends error message", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+
+		provider := &mockLLMProvider{
+			customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				return &core.ChatResponse{
+					Message: core.ChatMessage{
+						Role: core.RoleAssistant,
+						ToolCalls: []core.ToolCall{
+							{
+								ID:       "call_mem_loop_exp_astr",
+								Type:     "function",
+								Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"list"}`},
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		memTool := &dummyTestTool{name: "memory"}
+
+		engine := newTestEngine(provider)
+		engine.MaxIterations = 2
+		engine.Scope = scope
+		engine.Security = ctrl
+		engine.ToolRegistry["memory"] = memTool
+
+		srv, _, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := Event{
+			Type:        "event",
+			EventType:   "message",
+			MessageType: "group",
+			GroupID:     "10001",
+			UserID:      "20001",
+			MessageID:   "msg_optA_7",
+			Content:     "显式唤醒导致迭代耗尽",
+			Platform:    "astrbot",
+			IsWake:      true,
+			Timestamp:   time.Now().Unix(),
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("序列化事件失败: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("读取动作失败: %v", readErr)
+		}
+		var act Action
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			t.Fatalf("解析动作失败: %v", err)
+		}
+		if act.Action != "send_message" {
+			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
+		}
+		if !strings.Contains(act.Content, "达到最大迭代次数") {
+			t.Fatalf("显式唤醒耗尽迭代次数应向群发送最大迭代错误提示，实际: %s", act.Content)
+		}
+	})
+}
+
+type dummyTestTool struct {
+	name     string
+	executed *atomic.Int32
+}
+
+func (d *dummyTestTool) Name() string                 { return d.name }
+func (d *dummyTestTool) Description() string          { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
+func (d *dummyTestTool) Execute(args string) (string, error) {
+	if d.executed != nil {
+		d.executed.Add(1)
+	}
+	return "ok", nil
 }

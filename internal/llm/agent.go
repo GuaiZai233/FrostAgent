@@ -48,6 +48,9 @@ const (
 	MaxToolOutputBytes   = 65536 // 64KB
 )
 
+// ErrMaxIterationsReached indicates the agent exhausted its allowed iterations without a final response.
+var ErrMaxIterationsReached = errors.New("达到最大迭代次数，未能得出最终答案")
+
 // IsStaySilentTool reports whether the tool name matches stay_silent or its alias stay_slient.
 func IsStaySilentTool(name string) bool {
 	return name == StaySilentToolName || name == StaySlientAliasToolName
@@ -873,19 +876,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if hasRunCtx && runCtx.Proactive && !e.isToolAllowedForProactive(tc.Function.Name) {
 				e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复轮次禁止调用副作用工具 [%s]", tc.Function.Name), "主动回复禁止副作用工具")
-				if tc.Function.Name == security.BanUserToolName {
-					return AgentRunResult{
-						MemoryWritten: memoryWritten,
-						Silent:        true,
-						Usage:         totalUsage,
-					}
+				return AgentRunResult{
+					MemoryWritten: memoryWritten,
+					Silent:        true,
+					Usage:         totalUsage,
 				}
-				messages = append(messages, ChatMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf("FrostAgent错误：主动回复轮次禁止调用工具 %s", tc.Function.Name),
-					ToolCallID: tc.ID,
-				})
-				continue
 			}
 			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
@@ -1018,6 +1013,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				ToolCallID: tc.ID,
 			}
 			messages = append(messages, toolMsg)
+		}
+	}
+	if hasRunCtx && runCtx.Proactive {
+		return AgentRunResult{
+			MemoryWritten: memoryWritten,
+			Silent:        true,
+			Error:         ErrMaxIterationsReached,
+			Usage:         totalUsage,
 		}
 	}
 	return AgentRunResult{

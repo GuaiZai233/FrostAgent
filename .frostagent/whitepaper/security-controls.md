@@ -162,12 +162,12 @@ FrostAgent 将安全控制收束在共享的 `security.Controller`，而不是�
 - **主动回复安全防卫与 Option A 纵深隔离体系 (Proactive Reply Security Isolation & Option A Defense-in-Depth)**：
   主动回复是 Bot 在未被艾特或呼叫的情形下基于概率自发参与群聊互动的机制。发言群友并无唤醒意图，这使得主动回复场景具有独特的安全威胁模型：若大模型因上下文诱导、越狱提示词或幻觉做出破坏性操作，可能误封旁观群友（Bystander Abuse）或向外部产生非预期副作用。根据 PR #162 Maintainer 裁定，系统严格执行 Option A 纵深防御方案：
   - **P1: 主动回复轮次禁用副作用与特权工具（Side-Effect Tool Confinement）**：
-    - **只读白名单收敛**：主动回复轮次仅允许只读与控制类工具（`stay_silent`, `stay_slient`, `memory` 搜索/列表, `actionscat_*` 只读工具），严格禁止调用任何副作用或特权工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、变异类 ActionsCat 工具以及 MCP 变异工具）；
+    - **白名单收敛**：主动回复轮次仅允许安全只读与控制类工具（`stay_silent`, `stay_slient`, `memory` 记忆管理, `actionscat_*` 只读工具），严格禁止调用任何特权副作用工具（包括 `ban_user`、`execute_command`、`send_message`、`send_sticker`、`steal_sticker`、变异类 ActionsCat 工具以及 MCP 变异工具）；
     - **Pre-call Schema 过滤**：在向大模型发起请求前，`llm.Engine` 通过 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）检查 `RunContext.Proactive`。若为主动回复轮次，动态过滤工具 Schema（`modelTools`），从源头阻止模型感知和生成副作用工具调用；
-    - **服务端执行入口硬拦截与静默熔断**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`），`Engine` 服务端调度器立即阻断工具执行并直接返回 `Silent: true`，清除 `Banned` 标记，绝对禁止向 `AccessStore` 写入锁定状态，绝对不向群聊发送任何报错文本；
-    - **工具实现层二次防御（Defense-in-Depth）**：
-      - `ban_user.go` 读取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，绝不调用 `Controller.Lock`；
-      - `memory.go` 严格阻断主动回复轮次的 `write` 写入与 `reflect` 反思重构；而在执行 `search` 检索时，跳过 `RecordRecall` 逻辑（不累加 `AccessCount` 访问计数、不更新召回时间戳），防止自发闲聊污染长期画像。
+    - **服务端执行入口硬拦截与全量静默熔断**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或任何非白名单工具），`Engine` 服务端调度器立即阻断工具执行并直接返回 `Silent: true`，立即熔断循环，不调用模型、不向会话追加错误消息继续消耗迭代；清除 `Banned` 标记，绝对禁止向 `AccessStore` 写入锁定状态，绝对不向群聊发送任何报错文本；
+    - **迭代耗尽静默防打扰**：主动回复轮次若耗尽最大迭代次数，同样以 `Silent: true` 与 `ErrMaxIterationsReached` 终态退出，杜绝将内部迭代耗尽错误文本（`FrostAgent错误：达到最大迭代次数，未能得出最终答案`）发送至未艾特机器人的群聊；
+    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：Maintainer 明确裁定主动回复允许使用记忆系统（记忆作为 Bot 核心认知与人格系统，主动回复享有完整的记忆读写、反思与召回计数更新权限，自动召回、`RecordRecall` / `AccessCount` / `UpdatedAt` 更新及自动记忆提取均允许；撤销在 `memory.write`、`memory.reflect` 和 `RecordRecall` 上的主动回复阻断）。Option A 工具限制严格聚焦于 ActionsCat、命令执行、外部消息发送等外部/特权副作用；
+    - **工具实现层二次防御（Defense-in-Depth）**：`ban_user.go` 读取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，绝不调用 `Controller.Lock`，坚决不持久化锁定旁观者。
   - **P2: 模型输出看门狗阻断静默丢弃与标记透传 (`OutputBlocked`)**：
     - 当模型输出在 `StageModelOutput` 检查点被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed）时，`llm.Engine` 记录 `AgentRunResult.OutputBlocked = true` 并透传至适配器层；
     - **适配器差异化安全响应**：
