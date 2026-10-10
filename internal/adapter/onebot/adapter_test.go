@@ -341,8 +341,19 @@ func TestOneBot_PassiveGroupMessages_NoMetadataLLMCallsAndXMLDefense(t *testing.
 		}
 	}
 
-	// Give time for events to be processed
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the final passive message to reach the compact buffer. This also
+	// ensures the preceding member/profile writes finish before TempDir cleanup.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		snapshot := engine.SessionManager.GetOrCreate("group:777888").SnapshotGroupContext(10, 10000, "")
+		if len(snapshot.RecentStructuredMessages) == 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("processed %d of 5 passive group messages", len(snapshot.RecentStructuredMessages))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// 1. Assert NO metadata-specific security LLM classifier calls occurred on passive chatter
 	if calls := classifierCalled.Load(); calls != 0 {
