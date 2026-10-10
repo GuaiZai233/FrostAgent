@@ -575,15 +575,19 @@ func (c *GroupCompactor) distillGroupMemories(
 		GroupID:  routeScope.GroupID,
 	}
 
+	distillCtx := c.Context()
 	var validator func() bool
 	if session != nil {
-		expectedGen := snapshot.Generation
+		var barrier core.ExtractionCommitBarrier
+		var cleanup func()
+		distillCtx, barrier, cleanup = session.BeginGroupDistillation(distillCtx, snapshot)
+		defer cleanup()
 		validator = func() bool {
-			return session.GroupCompactGeneration() == expectedGen
+			return barrier == nil || barrier.IsValid()
 		}
 	}
 
-	if err := writer.ExtractGroupMemories(c.Context(), groupID, route, groupMsgs, memory.SourceDistill, validator); err != nil {
+	if err := writer.ExtractGroupMemories(distillCtx, groupID, route, groupMsgs, memory.SourceDistill, validator); err != nil {
 		instanceID := ""
 		if c.Scope != nil {
 			instanceID = c.Scope.InstanceID()

@@ -2281,3 +2281,179 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 		t.Errorf("polarity inverted content '我喜欢舞萌' must not exist in store")
 	}
 }
+
+func TestGroupDistillation_RevocationRaceBetweenValidatorCheckAndDiskCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_race_commit"
+	groupID := "syn_test_grp_race_commit"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	session := &SessionContext{}
+	msgA := "我平时喜欢吃草莓蛋糕"
+	msgID_A := "msg_A_001"
+	senderID_A := "syn_user_alice"
+
+	snapshot := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "爱丽丝",
+				SenderID:  senderID_A,
+				Content:   msgA,
+				MessageID: msgID_A,
+				Time:      "10:00:00",
+			},
+		},
+		MessageIDs: []string{msgID_A},
+		Generation: 1,
+	}
+
+	idx0 := 0
+	distillOutput := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝喜欢吃草莓蛋糕",
+			Evidence:       msgA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON, _ := json.Marshal(distillOutput)
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON), nil
+	}
+
+	hookCalled := make(chan struct{})
+	dropDone := make(chan struct{})
+
+	gStore.SetBeforeCommitHook(func() {
+		close(hookCalled)
+		go func() {
+			session.DropGroupCompactMessage(msgID_A, "")
+			close(dropDone)
+		}()
+		// Allow DropGroupCompactMessage to enter and initiate AbortAndWait
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+
+	select {
+	case <-hookCalled:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("expected beforeCommitHook to be called")
+	}
+
+	select {
+	case <-dropDone:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("expected drop to complete after barrier release")
+	}
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("expected zero entries persisted due to revocation race, got %d: %+v", len(entries), entries)
+	}
+}
+
+func TestGroupDistillation_DropStagedUnrelatedMessageDoesNotCancelInflightCommittedExtraction(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_unrelated_drop"
+	groupID := "syn_test_grp_unrelated_drop"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	session := &SessionContext{}
+	msgA := "我平时喜欢弹吉他"
+	msgID_A := "msg_A_001"
+	senderID_A := "syn_user_alice"
+
+	snapshot := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "爱丽丝",
+				SenderID:  senderID_A,
+				Content:   msgA,
+				MessageID: msgID_A,
+				Time:      "10:00:00",
+			},
+		},
+		MessageIDs: []string{msgID_A},
+		Generation: 1,
+	}
+
+	// Staged unrelated message B appended to session buffer
+	guard, _ := session.StageGroupCompactWithGuard("Bob: 随便发一条", 20, "syn_user_bob", nil, "msg_B_002")
+
+	idx0 := 0
+	distillOutput := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝喜欢弹吉他",
+			Evidence:       msgA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON, _ := json.Marshal(distillOutput)
+
+	// In the LLM call for snapshot A, staged message B is dropped concurrently.
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		// Drop staged message B while distillation for snapshot A is in-flight
+		dropped := guard.Drop()
+		if !dropped {
+			t.Errorf("expected guard.Drop() to succeed")
+		}
+		return string(rawJSON), nil
+	}
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected snapshot A memory to successfully persist despite unrelated message B being dropped, got %d entries", len(entries))
+	}
+	if entries[0].Content != msgA {
+		t.Errorf("expected content %q, got %q", msgA, entries[0].Content)
+	}
+	if entries[0].Owner != senderID_A {
+		t.Errorf("expected owner %q, got %q", senderID_A, entries[0].Owner)
+	}
+}

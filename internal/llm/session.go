@@ -273,6 +273,8 @@ type SessionContext struct {
 	prevGroupSummaryGroups  []SummaryGroup
 	lastCommittedMessageIDs []string
 	lastCommittedSenderIDs  []string
+	groupDistillBarriers    map[uint64]*groupDistillationBarrier
+	nextGroupDistillID      uint64
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold    int
 	deliveryFailure        *DeliveryFailure
@@ -529,6 +531,146 @@ func (b *sessionExtractionBarrier) IsTerminated() bool {
 	return b.state == barrierDone || b.state == barrierAborted
 }
 
+type groupDistillationBarrier struct {
+	sess       *SessionContext
+	snapshot   GroupCompactSnapshot
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	state      barrierState
+	aborted    bool
+	done       chan struct{}
+	doneClosed bool
+}
+
+var _ core.ExtractionCommitBarrier = (*groupDistillationBarrier)(nil)
+
+func (b *groupDistillationBarrier) closeDoneLocked() {
+	if !b.doneClosed && b.done != nil {
+		b.doneClosed = true
+		close(b.done)
+	}
+}
+
+func (b *groupDistillationBarrier) IsValid() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.aborted {
+		return false
+	}
+	if b.state != barrierPending && b.state != barrierWriting {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		return false
+	}
+	return true
+}
+
+func (b *groupDistillationBarrier) TryBeginCommit() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending {
+		return false
+	}
+	if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	b.state = barrierWriting
+	return true
+}
+
+func (b *groupDistillationBarrier) EndCommit() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierWriting:
+		b.closeDoneLocked()
+		if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) {
+			b.state = barrierAborted
+		} else {
+			b.state = barrierDone
+		}
+	case barrierPending:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *groupDistillationBarrier) AbortAndWait() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.aborted = true
+	if b.cancel != nil {
+		b.cancel()
+	}
+	if b.state == barrierWriting {
+		ch := b.done
+		b.mu.Unlock()
+		<-ch
+		return
+	}
+	b.state = barrierAborted
+	b.closeDoneLocked()
+	b.mu.Unlock()
+}
+
+// BeginGroupDistillation registers an active distillation barrier for a committed snapshot.
+// The returned context contains the ExtractionCommitBarrier.
+func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snapshot GroupCompactSnapshot) (context.Context, core.ExtractionCommitBarrier, func()) {
+	if s == nil {
+		return parentCtx, nil, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.nextGroupDistillID++
+	id := s.nextGroupDistillID
+
+	barrier := &groupDistillationBarrier{
+		sess:     s,
+		snapshot: snapshot,
+		ctx:      ctx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+	if s.groupDistillBarriers == nil {
+		s.groupDistillBarriers = make(map[uint64]*groupDistillationBarrier)
+	}
+	s.groupDistillBarriers[id] = barrier
+
+	ctxWithBarrier := core.WithExtractionBarrier(ctx, barrier)
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			barrier.EndCommit()
+			cancel()
+			s.mu.Lock()
+			delete(s.groupDistillBarriers, id)
+			s.mu.Unlock()
+		})
+	}
+	return ctxWithBarrier, barrier, cleanup
+}
+
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
 // The returned cleanup function must be called when extraction completes.
 func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Context, uint64, func()) {
@@ -648,6 +790,12 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
 	}
 
+	var groupDistillBarriersToWait []*groupDistillationBarrier
+	for id, b := range s.groupDistillBarriers {
+		groupDistillBarriersToWait = append(groupDistillBarriersToWait, b)
+		delete(s.groupDistillBarriers, id)
+	}
+
 	s.History = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
@@ -670,6 +818,9 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 
 	for _, entry := range barriersToWait {
 		entry.b.AbortAndWait()
+	}
+	for _, b := range groupDistillBarriersToWait {
+		b.AbortAndWait()
 	}
 
 	s.mu.Lock()
@@ -1141,7 +1292,6 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	msgID := strings.TrimSpace(messageID)
 	sndID := strings.TrimSpace(senderID)
@@ -1195,10 +1345,39 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 		dropped = true
 	}
 
-	// Always increment generation to invalidate any in-flight compactor snapshot
+	// Identify which in-flight distillation barriers are affected by the dropped message.
+	// Barriers whose snapshots do not contain this message or sender are unaffected.
+	var barriersToAbort []*groupDistillationBarrier
+	for _, b := range s.groupDistillBarriers {
+		affected := false
+		if msgID != "" {
+			if slices.Contains(b.snapshot.MessageIDs, msgID) {
+				affected = true
+			}
+		} else if sndID != "" {
+			for _, m := range b.snapshot.Messages {
+				if m.SenderID == sndID {
+					affected = true
+					break
+				}
+			}
+		}
+		if affected {
+			barriersToAbort = append(barriersToAbort, b)
+		}
+	}
+
 	s.groupCompactGeneration++
 	s.UpdatedAt = time.Now()
-	return dropped
+	s.mu.Unlock()
+
+	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
+	// if any barrier is actively writing, guaranteeing no stale quote writes persist.
+	for _, b := range barriersToAbort {
+		b.AbortAndWait()
+	}
+
+	return dropped || len(barriersToAbort) > 0
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -1467,8 +1646,15 @@ func (s *SessionContext) SetGroupRunningSummary(summary string) {
 
 // ResetGroupCompact clears summary state and invalidates any in-flight result.
 func (s *SessionContext) ResetGroupCompact() {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var barriersToWait []*groupDistillationBarrier
+	for id, b := range s.groupDistillBarriers {
+		barriersToWait = append(barriersToWait, b)
+		delete(s.groupDistillBarriers, id)
+	}
 
 	s.groupCompactGeneration++
 	s.groupCompactSummary = ""
@@ -1479,6 +1665,11 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.lastCommittedMessageIDs = nil
 	s.lastCommittedSenderIDs = nil
 	s.UpdatedAt = time.Now()
+	s.mu.Unlock()
+
+	for _, b := range barriersToWait {
+		b.AbortAndWait()
+	}
 }
 
 // GroupCompactGeneration returns the current compact generation epoch.

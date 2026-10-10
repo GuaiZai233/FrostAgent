@@ -83,15 +83,16 @@ func SafeGroupKey(groupID string) string {
 // It stores group profile, group memory entries, and group topic catalog
 // in an isolated directory under groups/<safe_group_key>/.
 type GroupStore struct {
-	groupID     string
-	dir         string
-	profilePath string
-	memoryPath  string
-	catalogPath string
-	mu          sync.RWMutex
-	routeMu     sync.RWMutex
-	routes      map[string]core.RouteContext
-	catalog     *CatalogStore
+	groupID          string
+	dir              string
+	profilePath      string
+	memoryPath       string
+	catalogPath      string
+	mu               sync.RWMutex
+	routeMu          sync.RWMutex
+	routes           map[string]core.RouteContext
+	catalog          *CatalogStore
+	beforeCommitHook func()
 }
 
 // NewGroupStore creates a GroupStore for the given groupID under baseDir.
@@ -482,7 +483,28 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		}
 	}
 
+	if s.beforeCommitHook != nil {
+		s.beforeCommitHook()
+	}
+
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if barrier != nil && !barrier.IsValid() {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
+
 	return s.saveMemoryLocked(brain)
+}
+
+// SetBeforeCommitHook sets a test hook invoked right before disk persistence inside SaveGroupEntriesConditionallyContext.
+func (s *GroupStore) SetBeforeCommitHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeCommitHook = hook
 }
 
 // SaveEntry writes a single memory entry to the group store, updating entry.ID if matched with an existing entry.
