@@ -8,6 +8,10 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
+## 数据库
+
+默认使用 `data/frostagent.db`。在“系统设置 > 数据库设置”中可以填写 PostgreSQL 连接地址并立即切换；切换只加载目标数据库已有的数据，不会自动迁移，实例可通过“备份与还原”手动搬迁。数据库选择保存在本地 SQLite 引导表中，连接地址为空时拒绝切换。
+
 # 适配器
 
 ## Websocket
@@ -57,7 +61,7 @@ make build-web    # 仅构建前端
 
 ### 2. 选择数据库
 
-默认使用 SQLite，首次启动会创建 `data/frostagent.db`。若使用 PostgreSQL，请在启动进程前指定 `FROSTAGENT_DB_DRIVER=postgres` 和 PostgreSQL 连接串 `FROSTAGENT_DB_DSN`。这两个环境变量仅用于选择数据库；应用设置在控制台修改并存入 SQL。同一个 PostgreSQL 数据库只允许一个 FrostAgent 进程使用。
+默认使用 SQLite，首次启动会创建 `data/frostagent.db`。在「设置 > 数据库设置」可选择 PostgreSQL 并填写连接地址；空地址会被拒绝。数据库选择保存在本地 SQLite 引导表中，以便连接 PostgreSQL 前读取。切换时连接目标数据库并加载其中已有的设置与实例，不自动迁移数据；需要迁移时请手动使用实例备份与还原功能。同一个 PostgreSQL 数据库只允许一个 FrostAgent 进程使用。
 
 **破坏性更新：**旧版 JSON 和 `.env` 运行数据不再加载，也不会自动迁移；替换旧版本前请自行备份。v1.0 之前，遇到不兼容的 SQL schema 版本可能自动重建并清空数据。在「设置 > 备份与还原」可下载带版本号的实例全量 ZIP、`setting.json` 和 `memory.json`。导出时密钥及凭据来源置空；全量还原会创建一个默认停用的新实例，启用前需重新配置凭据和适配器。
 

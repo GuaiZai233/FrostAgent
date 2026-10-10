@@ -2,6 +2,7 @@ package instance
 
 import (
 	"FrostAgent/internal/billing"
+	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/sandbox"
@@ -13,6 +14,14 @@ import (
 )
 
 func equalSettings(left, right map[string]string) bool { return maps.Equal(left, right) }
+
+func (m *Manager) restoreGlobalSnapshot(previous map[string]string) error {
+	keys := maps.Clone(instanceconfig.GlobalKeys)
+	for key := range instanceconfig.SharedKeys {
+		keys[key] = true
+	}
+	return m.global.ReplaceDatabaseSubset(keys, previous)
+}
 
 // ApplyGlobalSettings refreshes control-plane dependencies and every instance
 // runtime after a committed global setting change. Pending deletions stay paused.

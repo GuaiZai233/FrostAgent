@@ -18,30 +18,23 @@ import (
 )
 
 func run() error {
-	manager, err := instance.NewDatabase("data")
+	gateway, err := newStorageGateway(context.Background(), "data")
 	if err != nil {
 		return err
 	}
-	defer manager.Close()
+	defer gateway.Close()
+	manager, _, generation := gateway.snapshot()
 	global := manager.GlobalConfig()
-	mux := managementMux(manager)
-	listen := global.Get("LISTEN_ADDR")
-	if listen == "" {
-		listen = "127.0.0.1:8080"
-	}
-	wsListen := global.Get("WS_LISTEN_ADDR")
-	if wsListen == "" {
-		wsListen = "127.0.0.1:1234"
-	}
+	mux := managementMux(gateway)
 	wsMux := http.NewServeMux()
-	wsMux.Handle("/instances/", instanceWebSocketHandler(manager))
+	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 	listeners := newListenerSet()
-	desiredHandlers := func() map[string]http.Handler {
-		listen = global.Get("LISTEN_ADDR")
+	desiredHandlers := func(global *instanceconfig.Store) map[string]http.Handler {
+		listen := global.Get("LISTEN_ADDR")
 		if listen == "" {
 			listen = "127.0.0.1:8080"
 		}
-		wsListen = global.Get("WS_LISTEN_ADDR")
+		wsListen := global.Get("WS_LISTEN_ADDR")
 		if wsListen == "" {
 			wsListen = "127.0.0.1:1234"
 		}
@@ -51,7 +44,14 @@ func run() error {
 		}
 		return handlers
 	}
-	if err := listeners.Apply(desiredHandlers()); err != nil {
+	gateway.apply = func(next *instance.Manager) error {
+		if err := listeners.Apply(desiredHandlers(next.GlobalConfig())); err != nil {
+			return err
+		}
+		return next.ApplyGlobalSettings()
+	}
+	manager.SetGlobalApplyHook(func() error { return gateway.apply(manager) })
+	if err := listeners.Apply(desiredHandlers(global)); err != nil {
 		return err
 	}
 	lastApplied := global.Snapshot()
@@ -65,30 +65,40 @@ func run() error {
 	case <-ticker.C:
 	}
 	for ctx.Err() == nil && err == nil {
-		current := global.Snapshot()
-		if !maps.Equal(lastApplied, current) {
-			applyErr := listeners.Apply(desiredHandlers())
-			if applyErr == nil {
-				applyErr = manager.ApplyGlobalSettings()
+		gateway.switchMu.Lock()
+		manager, _, currentGeneration := gateway.snapshot()
+		if manager != nil {
+			global = manager.GlobalConfig()
+			if currentGeneration != generation {
+				generation = currentGeneration
+				lastApplied = global.Snapshot()
+			}
+			current := global.Snapshot()
+			if !maps.Equal(lastApplied, current) {
+				applyErr := listeners.Apply(desiredHandlers(global))
 				if applyErr == nil {
-					lastApplied = current
+					applyErr = manager.ApplyGlobalSettings()
+					if applyErr == nil {
+						lastApplied = current
+					}
+				}
+				if applyErr != nil {
+					logs.General.Warn(logs.SYSTEM, fmt.Sprintf("应用全局设置失败，恢复旧值: %v", applyErr))
+					if rollbackErr := restoreGlobalSettings(global, lastApplied); rollbackErr != nil {
+						err = rollbackErr
+					}
+					if err == nil {
+						err = listeners.Apply(desiredHandlers(global))
+					}
+					if err == nil {
+						err = manager.ApplyGlobalSettings()
+					}
 				}
 			}
-			if applyErr != nil {
-				logs.General.Warn(logs.SYSTEM, fmt.Sprintf("应用全局设置失败，恢复旧值: %v", applyErr))
-				if rollbackErr := restoreGlobalSettings(global, lastApplied); rollbackErr != nil {
-					err = rollbackErr
-					break
-				}
-				if rollbackErr := listeners.Apply(desiredHandlers()); rollbackErr != nil {
-					err = rollbackErr
-					break
-				}
-				if rollbackErr := manager.ApplyGlobalSettings(); rollbackErr != nil {
-					err = rollbackErr
-					break
-				}
-			}
+		}
+		gateway.switchMu.Unlock()
+		if err != nil {
+			break
 		}
 		select {
 		case <-ctx.Done():
@@ -99,7 +109,6 @@ func run() error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	listeners.Close(shutdown)
-	manager.Close()
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -127,8 +136,11 @@ func restoreGlobalSettings(global *instanceconfig.Store, previous map[string]str
 
 func managementMux(manager http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.Handle("/api/storage", manager)
 	mux.Handle("/api/instances", manager)
-	if registry, ok := manager.(*instance.Manager); ok {
+	if gateway, ok := manager.(interface{ SecurityHandler() http.Handler }); ok {
+		mux.Handle("/api/security/", gateway.SecurityHandler())
+	} else if registry, ok := manager.(*instance.Manager); ok {
 		mux.Handle("/api/security/", secsvc.NewWithStore(registry.SecurityController(), registry.ControlPlaneGetenv(), registry.GlobalConfig()))
 	}
 	mux.Handle("/api/instances/", manager)

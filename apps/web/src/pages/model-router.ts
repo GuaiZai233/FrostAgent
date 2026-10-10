@@ -30,7 +30,6 @@ const workloads = [
 
 const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
 const apiKeyStorageManual = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_MANUAL;
-const apiKeyStorageEnv = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_ENV;
 const apiKeyStorageSecretFile = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_SECRET_FILE;
 const apiKeyStorageWindowsCredentialManager = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER;
 
@@ -63,8 +62,6 @@ function endpointAPIKeyStorage(endpoint: ModelEndpoint): ModelAPIKeyStorage {
 function endpointCredentialText(endpoint: ModelEndpoint): string {
   const status = endpoint.apiKeyConfigured ? '已配置' : '未配置';
   switch (endpointAPIKeyStorage(endpoint)) {
-    case apiKeyStorageEnv:
-      return `环境变量：${endpoint.apiKeyRef || 'UPSTREAM_API_KEY'} · ${status}`;
     case apiKeyStorageSecretFile:
       return `secret_file：${endpoint.apiKeyRef} · ${status}`;
     case apiKeyStorageWindowsCredentialManager:
@@ -462,9 +459,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     let keyStorage = endpointAPIKeyStorage(endpoint);
     let secretInput = '';
     let clearSecret = false;
-    let envVarName = keyStorage === apiKeyStorageEnv && endpoint.apiKeyRef
-      ? endpoint.apiKeyRef
-      : 'UPSTREAM_API_KEY';
     let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
     const secretInputField = () => `<div style="position:relative"><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret" style="padding-right:2.5rem"><button type="button" class="btn btn-ghost btn-icon-sm text-muted" id="endpoint-key-reveal" title="短暂显示 API Key" aria-label="短暂显示 API Key" aria-pressed="false" style="position:absolute;right:0.125rem;top:50%;transform:translateY(-50%);width:2rem;height:2rem">${icon('eye', 'w-3.5 h-3.5')}</button></div>`;
     const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
@@ -472,8 +466,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       : '';
     const keyStorageDetails = () => {
       switch (keyStorage) {
-        case apiKeyStorageEnv:
-          return `<p class="form-hint">从进程环境读取外部密钥；这里填写变量名称，导出时不会包含该名称。</p><div class="form-group mt-2"><label class="form-label">环境变量名称</label><input class="input font-mono" id="endpoint-env-var" value="${escapeHtml(envVarName)}"></div>`;
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
@@ -489,7 +481,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="endpoint-name" value="${escapeHtml(endpoint.displayName)}"></div>
         <div class="form-group"><label class="form-label">Base URL</label><input class="input font-mono" id="endpoint-url" value="${escapeHtml(endpoint.baseUrl)}" placeholder="https://example.com/v1"><p class="form-hint text-destructive" id="endpoint-url-warning" style="display:${endpointWarns(endpoint.baseUrl) ? 'block' : 'none'}">这里建议填写 Base URL，也就是不以 /chat/completions 结尾。如果执意继续，很可能引起错误。</p></div>
-        <div class="form-group"><label class="form-label">API Key 存储格式（必选）</label><select class="select" id="endpoint-key-storage" required><option value="${apiKeyStorageManual}" ${keyStorage === apiKeyStorageManual ? 'selected' : ''}>手动填写</option><option value="${apiKeyStorageWindowsCredentialManager}" ${keyStorage === apiKeyStorageWindowsCredentialManager ? 'selected' : ''}>写入 Windows Credential Manager</option><option value="${apiKeyStorageEnv}" ${keyStorage === apiKeyStorageEnv ? 'selected' : ''}>从环境变量读取</option><option value="${apiKeyStorageSecretFile}" ${keyStorage === apiKeyStorageSecretFile ? 'selected' : ''}>secret_file</option></select><div id="endpoint-key-storage-details">${keyStorageDetails()}</div></div>
+        <div class="form-group"><label class="form-label">API Key 存储格式（必选）</label><select class="select" id="endpoint-key-storage" required><option value="${apiKeyStorageManual}" ${keyStorage === apiKeyStorageManual ? 'selected' : ''}>手动填写</option><option value="${apiKeyStorageWindowsCredentialManager}" ${keyStorage === apiKeyStorageWindowsCredentialManager ? 'selected' : ''}>写入 Windows Credential Manager</option><option value="${apiKeyStorageSecretFile}" ${keyStorage === apiKeyStorageSecretFile ? 'selected' : ''}>secret_file</option></select><div id="endpoint-key-storage-details">${keyStorageDetails()}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="endpoint-enabled" ${endpoint.enabled ? 'checked' : ''}>启用 Endpoint</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="endpoint-confirm">保存</button>`,
       onMount: (dialog, close) => {
@@ -500,8 +492,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         const captureStorageValue = () => {
           if (endpointUsesAPIKeyInput(keyStorage)) {
             secretInput = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? secretInput;
-          } else if (keyStorage === apiKeyStorageEnv) {
-            envVarName = dialog.querySelector<HTMLInputElement>('#endpoint-env-var')?.value ?? envVarName;
           } else if (keyStorage === apiKeyStorageSecretFile) {
             secretFile = dialog.querySelector<HTMLInputElement>('#endpoint-secret-file')?.value ?? secretFile;
           }
@@ -557,10 +547,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             toast.error('请填写 Secret 文件路径');
             return;
           }
-          if (keyStorage === apiKeyStorageEnv && !envVarName.trim()) {
-            toast.error('请填写环境变量名称');
-            return;
-          }
           const confirmButton = event.currentTarget as HTMLButtonElement;
           confirmButton.disabled = true;
           confirmButton.setAttribute('aria-busy', 'true');
@@ -570,9 +556,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           endpoint.apiKeySource = keyStorage;
           endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
             ? secretFile.trim()
-            : keyStorage === apiKeyStorageEnv
-              ? envVarName.trim()
-              : keyStorage === apiKeyStorageWindowsCredentialManager
+            : keyStorage === apiKeyStorageWindowsCredentialManager
                 ? `guaitech.frostagent/endpoint/${endpoint.id}`
                 : `endpoint/${endpoint.id}`;
           endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;

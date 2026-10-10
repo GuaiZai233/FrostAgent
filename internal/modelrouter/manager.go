@@ -42,10 +42,6 @@ func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *M
 	} else if err := m.loadSQL(); err != nil {
 		m.loadErr = err
 	}
-	if secrets != nil {
-		// Environment-backed endpoint keys are an explicit external secret source.
-		secrets.getenv = os.Getenv
-	}
 	m.draft = cloneConfiguration(m.active)
 	return m
 }
@@ -190,6 +186,11 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 	if err := validateConfiguration(cfg); err != nil {
 		return err
 	}
+	if m.db != nil {
+		if err := validateSQLSources(cfg); err != nil {
+			return err
+		}
+	}
 	if m.ReserveEndpoints != nil {
 		if err := m.ReserveEndpoints(cfg.Endpoints); err != nil {
 			return err
@@ -279,6 +280,11 @@ func (m *Manager) Publish() (Configuration, error) {
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
 		return Configuration{}, err
+	}
+	if m.db != nil {
+		if err := validateSQLSources(cfg); err != nil {
+			return Configuration{}, err
+		}
 	}
 	cfg.Revision = m.active.Revision + 1
 	rollbackSecrets, err := m.secrets.Apply(m.active, cfg)
@@ -586,6 +592,15 @@ func validateConfiguration(cfg Configuration) error {
 			if err := validateBinding(binding, modelIDs, endpointIDs, true, workload != WorkloadDialogue); err != nil {
 				return fmt.Errorf("group %s/%s %s binding: %w", group.Platform, group.GroupID, workload, err)
 			}
+		}
+	}
+	return nil
+}
+
+func validateSQLSources(cfg Configuration) error {
+	for _, endpoint := range cfg.Endpoints {
+		if endpoint.APIKeySource == APIKeyStorageEnv {
+			return fmt.Errorf("endpoint %q cannot use process environment in SQL storage", endpoint.DisplayName)
 		}
 	}
 	return nil

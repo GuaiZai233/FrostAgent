@@ -25,6 +25,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,6 +75,7 @@ type Manager struct {
 	templateDialogue   string
 	billing            atomic.Pointer[billing.Client]
 	globalApplyMu      sync.Mutex
+	globalApplyHook    func() error
 	mcpGetenv          func(string) string
 	sandbox            *sandbox.ConfigManager
 	security           *security.Controller
@@ -97,6 +99,11 @@ func NewDatabase(root string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewDatabaseWithDB(root, db)
+}
+
+// NewDatabaseWithDB adopts an already connected database for a control plane.
+func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
 	global, err := instanceconfig.OpenDatabase(db, "", true)
 	if err != nil {
 		_ = db.Close()
@@ -470,6 +477,15 @@ func (m *Manager) SecurityController() *security.Controller { return m.security 
 
 // GlobalConfig returns the global configuration store.
 func (m *Manager) GlobalConfig() *instanceconfig.Store { return m.global }
+
+func (m *Manager) SetGlobalApplyHook(hook func() error) { m.globalApplyHook = hook }
+
+func (m *Manager) applyGlobalSettings() error {
+	if m.globalApplyHook != nil {
+		return m.globalApplyHook()
+	}
+	return m.ApplyGlobalSettings()
+}
 
 // ControlPlaneGetenv returns the configuration getter used for control plane authorization.
 func (m *Manager) ControlPlaneGetenv() func(string) string { return m.mcpGetenv }
@@ -1296,6 +1312,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			readOnly = true
 		}
 	}
+	var opUnlock func()
 	if !ws && !stream {
 		var locked bool
 		if readOnly {
@@ -1308,10 +1325,15 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			return
 		}
 		if readOnly {
-			defer i.op.RUnlock()
+			opUnlock = i.op.RUnlock
 		} else {
-			defer i.op.Unlock()
+			opUnlock = i.op.Unlock
 		}
+		defer func() {
+			if opUnlock != nil {
+				opUnlock()
+			}
+		}()
 		if _, err = m.lookup(id); err != nil {
 			http.NotFound(w, r)
 			return
@@ -1346,18 +1368,51 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	urlCopy := *r.URL
 	urlCopy.Path = path
 	req.URL = &urlCopy
-	var before map[string]string
+	var before, globalBefore map[string]string
+	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
 	if !ws && !stream {
 		before = i.config.Snapshot()
 	}
-	rt.Handler.ServeHTTP(w, req)
+	if settingsWrite {
+		globalBefore = m.global.Snapshot()
+	}
+	response := w
+	var buffered *httptest.ResponseRecorder
+	if settingsWrite {
+		buffered = httptest.NewRecorder()
+		response = buffered
+	}
+	rt.Handler.ServeHTTP(response, req)
 	if !ws && !stream {
 		after := i.config.Snapshot()
 		if m.db != nil {
 			if !readOnly && !equalSettings(before, after) {
 				if err := m.reloadSQLRuntimeLocked(i, rt.Scope.Context().Err() == nil, before); err != nil {
 					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
+					if settingsWrite {
+						writeError(w, err)
+					}
+					return
 				}
+			}
+			if settingsWrite {
+				if !equalSettings(globalBefore, m.global.Snapshot()) {
+					opUnlock()
+					opUnlock = nil
+					if err := m.applyGlobalSettings(); err != nil {
+						rollbackErr := m.restoreGlobalSnapshot(globalBefore)
+						if rollbackErr == nil {
+							rollbackErr = m.applyGlobalSettings()
+						}
+						writeError(w, errors.Join(err, rollbackErr))
+						return
+					}
+				}
+				for key, values := range buffered.Header() {
+					w.Header()[key] = append([]string(nil), values...)
+				}
+				w.WriteHeader(buffered.Code)
+				_, _ = w.Write(buffered.Body.Bytes())
 			}
 			return
 		}
@@ -1584,6 +1639,7 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if path == "global/import/settings" && r.Method == http.MethodPost {
+			before := m.global.Snapshot()
 			var data backup.GlobalSettings
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&data); err != nil {
 				writeError(w, err)
@@ -1591,6 +1647,14 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := backup.ImportGlobalSettings(m.global, data); err != nil {
 				writeError(w, err)
+				return
+			}
+			if err := m.applyGlobalSettings(); err != nil {
+				rollbackErr := m.restoreGlobalSnapshot(before)
+				if rollbackErr == nil {
+					rollbackErr = m.applyGlobalSettings()
+				}
+				writeError(w, errors.Join(err, rollbackErr))
 				return
 			}
 			writeJSON(w, map[string]bool{"success": true})

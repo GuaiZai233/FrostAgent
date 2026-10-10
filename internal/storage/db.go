@@ -29,12 +29,21 @@ type DB struct {
 	lock    *sql.Conn
 }
 
+type Config struct {
+	Backend Backend `json:"backend"`
+	DSN     string  `json:"dsn"`
+}
+
 func Open(ctx context.Context, dataDir string) (*DB, error) {
-	backend := Backend(strings.ToLower(strings.TrimSpace(os.Getenv("FROSTAGENT_DB_DRIVER"))))
+	return OpenWithConfig(ctx, dataDir, Config{Backend: SQLite})
+}
+
+func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, error) {
+	backend := Backend(strings.ToLower(strings.TrimSpace(string(config.Backend))))
 	if backend == "" {
 		backend = SQLite
 	}
-	dsn := strings.TrimSpace(os.Getenv("FROSTAGENT_DB_DSN"))
+	dsn := strings.TrimSpace(config.DSN)
 	var driver string
 	switch backend {
 	case SQLite:
@@ -48,7 +57,7 @@ func Open(ctx context.Context, dataDir string) (*DB, error) {
 	case Postgres:
 		driver = "pgx"
 		if dsn == "" {
-			return nil, errors.New("FROSTAGENT_DB_DSN is required for PostgreSQL")
+			return nil, errors.New("PostgreSQL connection address is required")
 		}
 	default:
 		return nil, fmt.Errorf("unsupported database backend %q", backend)

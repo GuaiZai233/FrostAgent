@@ -60,7 +60,7 @@ type Store struct {
 }
 
 // OpenDatabase loads application settings exclusively from SQL. Process
-// environment is reserved for database bootstrap and external secret providers.
+// environment is not used as an application setting source.
 func OpenDatabase(db *storage.DB, instanceID string, global bool) (*Store, error) {
 	scope := "instance"
 	if global {

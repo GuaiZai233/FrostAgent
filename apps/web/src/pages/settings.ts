@@ -9,6 +9,13 @@ export function mountSettingsPage(container: HTMLElement): () => void {
       </header>
 
       <div class="flex flex-col gap-3" style="max-width: 42rem;">
+        <a href="#/settings/storage" class="card p-4 hover-bg transition-colors text-foreground" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none;">
+          <div class="flex items-center gap-3">
+            <span class="text-primary">${icon('server', 'w-4 h-4')}</span>
+            <div><h2 class="text-sm font-semibold">数据库设置</h2><p class="text-xs text-muted mt-0.5">选择 SQLite 或 PostgreSQL 并立即连接</p></div>
+          </div>
+          ${icon('chevron_right', 'w-4 h-4')}
+        </a>
         <a href="#/settings/backup" class="card p-4 hover-bg transition-colors text-foreground" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none;">
           <div class="flex items-center gap-3">
             <span class="text-primary">${icon('download', 'w-4 h-4')}</span>

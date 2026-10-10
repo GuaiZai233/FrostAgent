@@ -103,6 +103,9 @@ func (m *Manager) loadSQL() error {
 	if err := validateConfiguration(cfg); err != nil {
 		return err
 	}
+	if err := validateSQLSources(cfg); err != nil {
+		return err
+	}
 	m.active = cfg
 	return nil
 }

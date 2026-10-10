@@ -52,6 +52,7 @@ var knownEnvVars = map[string]envEntry{
 	"MEMORY_EXTRACT_BATCH_MAX":             {"自动记忆提取的最大累计轮数", false, false, false},
 	"ENABLE_ONEBOT_ADAPTER":                {"是否启用 OneBot WebSocket 适配器", false, true, false},
 	"ONEBOT_WS_PATH":                       {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true, false},
+	"ONEBOT_ACTION_TIMEOUT":                {"OneBot API 动作确认超时时间（默认 10s）", false, false, false},
 	"ENABLE_ASTRBOT_ADAPTER":               {"是否启用 AstrBot WebSocket 适配器", false, true, false},
 	"ASTRBOT_WS_PATH":                      {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true, false},
 	"BILLING_ENABLED":                      {"是否启用 Alcyone 计费", false, true, false},

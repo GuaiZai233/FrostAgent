@@ -3,6 +3,8 @@ package instance
 import (
 	"FrostAgent/internal/backup"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/storage"
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -13,9 +15,12 @@ func TestPostgresSchemaWriteReadAndRestoreSmoke(t *testing.T) {
 	if dsn == "" {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
 	}
-	t.Setenv("FROSTAGENT_DB_DRIVER", "postgres")
-	t.Setenv("FROSTAGENT_DB_DSN", dsn)
-	m, err := NewDatabase(t.TempDir())
+	root := t.TempDir()
+	db, err := storage.OpenWithConfig(context.Background(), root, storage.Config{Backend: storage.Postgres, DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewDatabaseWithDB(root, db)
 	if err != nil {
 		t.Fatal(err)
 	}

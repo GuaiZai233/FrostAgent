@@ -333,7 +333,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             <div>
               <h3 class="text-sm font-bold text-foreground">ActionsCat 服务尚未配置</h3>
               <p class="text-xs text-muted-foreground mt-1 leading-relaxed">
-                当前实例尚未设置 <code class="px-1 py-0.5 rounded bg-muted font-mono">ACTIONSCAT_ENDPOINT</code> 环境变量。配置后即可启用动作执行与沙箱联动。
+                当前实例尚未设置 <code class="px-1 py-0.5 rounded bg-muted font-mono">ACTIONSCAT_ENDPOINT</code>。配置后即可启用动作执行与沙箱联动。
               </p>
             </div>
           </div>

@@ -9,9 +9,8 @@ import (
 )
 
 func TestSQLStorePersistsMemoryAndArchives(t *testing.T) {
-	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
-	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "memory.db"))
-	db, err := storage.Open(context.Background(), t.TempDir())
+	root := t.TempDir()
+	db, err := storage.Open(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +41,7 @@ func TestSQLStorePersistsMemoryAndArchives(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	db, err = storage.Open(context.Background(), t.TempDir())
+	db, err = storage.Open(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}

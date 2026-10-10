@@ -52,10 +52,9 @@ func TestSQLModelRouterPersistsConfigurationAndManualSecret(t *testing.T) {
 	}
 }
 
-func TestSQLModelRouterExplicitEnvSecretSource(t *testing.T) {
+func TestSQLModelRouterRejectsEnvSecretSource(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
 	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "models.db"))
-	t.Setenv("SYNTHETIC_ENDPOINT_SECRET", "synthetic-external-key")
 	db, err := storage.Open(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -65,10 +64,10 @@ func TestSQLModelRouterExplicitEnvSecretSource(t *testing.T) {
 	if err := manager.LoadError(); err != nil {
 		t.Fatal(err)
 	}
-	secret, err := manager.secrets.Resolve(Endpoint{
-		APIKeySource: APIKeyStorageEnv, APIKeyRef: "SYNTHETIC_ENDPOINT_SECRET",
-	})
-	if err != nil || secret != "synthetic-external-key" {
-		t.Fatalf("explicit external secret source failed: %q, %v", secret, err)
+	cfg := manager.Draft()
+	cfg.Endpoints = []Endpoint{{ID: "endpoint-a", DisplayName: "Endpoint", BaseURL: "https://example.com/v1",
+		APIKeySource: APIKeyStorageEnv, APIKeyRef: "SYNTHETIC_ENDPOINT_SECRET"}}
+	if err := manager.SaveDraft(cfg); err == nil {
+		t.Fatal("SQL model endpoint accepted process environment as a secret source")
 	}
 }

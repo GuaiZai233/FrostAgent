@@ -35,6 +35,7 @@ type activeListener struct {
 }
 
 type listenerSet struct {
+	mu     sync.Mutex
 	active map[string]*activeListener
 	errors chan error
 }
@@ -49,7 +50,7 @@ func (s *listenerSet) start(address string, listener net.Listener, handler http.
 	item := &activeListener{listener: listener, server: server, proxy: proxy}
 	go func() {
 		logs.General.Listening(address)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			select {
 			case s.errors <- err:
 			default:
@@ -57,6 +58,15 @@ func (s *listenerSet) start(address string, listener net.Listener, handler http.
 		}
 	}()
 	return item
+}
+
+func retireListener(item *activeListener) {
+	_ = item.listener.Close()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = item.server.Shutdown(ctx)
+	}()
 }
 
 func samePort(a, b string) bool {
@@ -68,6 +78,8 @@ func samePort(a, b string) bool {
 // Apply binds new addresses before retiring old ones. A host change on the
 // same port briefly releases the old listener, then restores it on bind error.
 func (s *listenerSet) Apply(desired map[string]http.Handler) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	staged := make(map[string]net.Listener)
 	released := make(map[string]http.Handler)
 	rollback := func() {
@@ -97,7 +109,7 @@ func (s *listenerSet) Apply(desired map[string]http.Handler) error {
 					old.proxy.mu.RLock()
 					released[oldAddress] = old.proxy.handler
 					old.proxy.mu.RUnlock()
-					_ = old.server.Close()
+					retireListener(old)
 					delete(s.active, oldAddress)
 				}
 			}
@@ -118,7 +130,7 @@ func (s *listenerSet) Apply(desired map[string]http.Handler) error {
 	}
 	for address, current := range s.active {
 		if _, keep := desired[address]; !keep {
-			_ = current.server.Close()
+			retireListener(current)
 			delete(s.active, address)
 		}
 	}
@@ -126,6 +138,8 @@ func (s *listenerSet) Apply(desired map[string]http.Handler) error {
 }
 
 func (s *listenerSet) Close(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for address, current := range s.active {
 		_ = current.server.Shutdown(ctx)
 		delete(s.active, address)

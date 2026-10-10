@@ -10,6 +10,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -397,6 +398,87 @@ func TestSQLInstanceSettingAppliesWithoutManualRestart(t *testing.T) {
 	list, _ := m.List()
 	if len(list) != 1 || list[0].RestartRequired {
 		t.Fatalf("SQL setting still requests manual restart: %#v", list)
+	}
+}
+
+func TestSQLGlobalSettingWaitsForApplyAndRollsBackFailure(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Global Rollback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.global.Update("SECURITY_GATEWAY_TIMEOUT", "12s", false); err != nil {
+		t.Fatal(err)
+	}
+	applyCount := 0
+	m.SetGlobalApplyHook(func() error {
+		applyCount++
+		if applyCount == 1 {
+			return errors.New("synthetic listener failure")
+		}
+		return m.ApplyGlobalSettings()
+	})
+	request := httptest.NewRequest(http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.SettingsService/UpdateEnvVar",
+		strings.NewReader(`{"key":"WS_ALLOWED_ORIGINS","value":"https://trusted.example"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), `"success":true`) {
+		t.Fatalf("failed hot apply reported success: %d %s", response.Code, response.Body.String())
+	}
+	if applyCount != 2 || m.global.Get("WS_ALLOWED_ORIGINS") != "" || m.global.Get("SECURITY_GATEWAY_TIMEOUT") != "12s" {
+		t.Fatalf("global setting was not restored after failed apply: calls=%d value=%q", applyCount, m.global.Get("WS_ALLOWED_ORIGINS"))
+	}
+	request = httptest.NewRequest(http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.SettingsService/UpdateEnvVar",
+		strings.NewReader(`{"key":"WS_ALLOWED_ORIGINS","value":"https://trusted.example"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) ||
+		applyCount != 3 || m.global.Get("WS_ALLOWED_ORIGINS") != "https://trusted.example" {
+		t.Fatalf("successful hot apply did not complete before response: %d %s calls=%d", response.Code, response.Body.String(), applyCount)
+	}
+	originRequest := httptest.NewRequest(http.MethodGet, "http://local.example/ws/frostagent", nil)
+	originRequest.Header.Set("Origin", "https://trusted.example")
+	if !m.instances[info.ID].runtime.Scope.CheckOrigin(originRequest) {
+		t.Fatal("new WebSocket Origin setting did not reach running instance")
+	}
+}
+
+func TestSQLGlobalSettingsImportReportsApplyFailure(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err := m.global.Update("SECURITY_CLASSIFIER_TIMEOUT", "15s", false); err != nil {
+		t.Fatal(err)
+	}
+	applyCount := 0
+	m.SetGlobalApplyHook(func() error {
+		applyCount++
+		if applyCount == 1 {
+			return errors.New("synthetic listener failure")
+		}
+		return m.ApplyGlobalSettings()
+	})
+	data := backup.ExportGlobalSettings(m.global)
+	data.Values["WS_ALLOWED_ORIGINS"] = "https://trusted.example"
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
+	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), `"success":true`) ||
+		applyCount != 2 || m.global.Get("WS_ALLOWED_ORIGINS") != "" || m.global.Get("SECURITY_CLASSIFIER_TIMEOUT") != "15s" {
+		t.Fatalf("failed import was not rolled back: status=%d body=%s calls=%d", response.Code, response.Body.String(), applyCount)
 	}
 }
 
