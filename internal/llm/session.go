@@ -2106,6 +2106,27 @@ func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
 	sm.groupSummaryStore = store
 }
 
+// TransferSessionsTo keeps live conversation state when an instance runtime is
+// rebuilt after a database setting change. The old runtime must be stopped first.
+func (sm *SessionManager) TransferSessionsTo(next *SessionManager) {
+	if sm == nil || next == nil || sm == next {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	for id, session := range sm.sessions {
+		session.SetScope(next.Scope)
+		next.sessions[id] = session
+	}
+	for id, name := range sm.groupNames {
+		next.groupNames[id] = name
+	}
+	sm.sessions = make(map[string]*SessionContext)
+	sm.groupNames = make(map[string]string)
+}
+
 // GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	sessionID = strings.TrimSpace(sessionID)

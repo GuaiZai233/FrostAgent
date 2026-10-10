@@ -135,6 +135,10 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 		r.Stop()
 		r = nil
 	}
+	if buildErr == nil && oldRuntime != nil && oldRuntime.Engine != nil && r != nil && r.Engine != nil {
+		r.Engine.GroupManager.CarrySQLStoresFrom(oldRuntime.Engine.GroupManager)
+		oldRuntime.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
+	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
 	i.mu.Unlock()

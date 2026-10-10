@@ -2,6 +2,7 @@ package instance
 
 import (
 	"FrostAgent/internal/backup"
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
@@ -572,6 +573,13 @@ func TestSQLGlobalSettingsRefreshSharedDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousRuntime := m.instances[info.ID].runtime
+	previousSession := previousRuntime.Engine.SessionManager.GetOrCreate("group:synthetic-group")
+	previousSession.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: "before global change"})
+	previousGroupStore, err := previousRuntime.Engine.GroupManager.GetGroupStore("synthetic-group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousSession.SetGroupStore(previousGroupStore)
 	previousBilling := m.billing.Load()
 	if err := m.global.Update("ALCYONE_TIMEOUT", "8s", false); err != nil {
 		t.Fatal(err)
@@ -584,6 +592,14 @@ func TestSQLGlobalSettingsRefreshSharedDependencies(t *testing.T) {
 	}
 	if m.billing.Load() == previousBilling || m.instances[info.ID].runtime == previousRuntime {
 		t.Fatal("global dependencies or running instance were not refreshed")
+	}
+	currentRuntime := m.instances[info.ID].runtime
+	if session := currentRuntime.Engine.SessionManager.GetOrCreate("group:synthetic-group"); session != previousSession || len(session.Messages()) != 1 || session.Scope() != currentRuntime.Scope {
+		t.Fatal("global setting update lost or failed to rebind the active conversation")
+	}
+	groupStore, err := currentRuntime.Engine.GroupManager.GetGroupStore("synthetic-group")
+	if err != nil || groupStore != previousGroupStore || previousSession.GroupStore() != groupStore {
+		t.Fatalf("group store lock was not retained with the session: %v", err)
 	}
 	if got := m.ControlPlaneGetenv()("MCP_CONTROL_TOKEN"); got != "synthetic-token" {
 		t.Fatal("control-plane token did not change immediately")
@@ -605,6 +621,8 @@ func TestSQLSettingsImportRebuildsActiveInstance(t *testing.T) {
 	if err := m.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	previousSession := m.instances[info.ID].runtime.Engine.SessionManager.GetOrCreate("private:synthetic-user")
+	previousSession.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: "before instance change"})
 	settings, err := backup.ExportSettings(m.db, info.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -622,6 +640,10 @@ func TestSQLSettingsImportRebuildsActiveInstance(t *testing.T) {
 	}
 	if got := m.instances[info.ID].runtime.Engine.EffectiveMaxIterations(); got != 44 {
 		t.Fatalf("imported setting was not applied: %d", got)
+	}
+	currentRuntime := m.instances[info.ID].runtime
+	if session := currentRuntime.Engine.SessionManager.GetOrCreate("private:synthetic-user"); session != previousSession || len(session.Messages()) != 1 || session.Scope() != currentRuntime.Scope {
+		t.Fatal("instance setting update lost or failed to rebind the active conversation")
 	}
 }
 

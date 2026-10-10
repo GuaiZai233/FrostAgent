@@ -102,6 +102,10 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 		err = i.mcp.SetRuntimeActive(true)
 	}
 	if err == nil {
+		if old != nil && old.Engine != nil && r != nil && r.Engine != nil {
+			r.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
+			old.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
+		}
 		i.mu.Lock()
 		i.runtime, i.config = r, c
 		i.mu.Unlock()
@@ -129,6 +133,10 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	if fallbackErr != nil && fallback != nil {
 		fallback.Stop()
 		fallback = nil
+	}
+	if fallbackErr == nil && old != nil && old.Engine != nil && fallback != nil && fallback.Engine != nil {
+		fallback.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
+		old.Engine.SessionManager.TransferSessionsTo(fallback.Engine.SessionManager)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = fallback, fallbackConfig
