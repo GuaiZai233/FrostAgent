@@ -540,7 +540,11 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 		if scope != nil {
 			getenv = scope.Getenv
 		}
-		if proactive.RollGroupWithRand(getenv, event.GroupID, rng, event.Platform) {
+		platform := event.Platform
+		if platform == "" {
+			platform = "astrbot"
+		}
+		if proactive.RollGroupWithRand(getenv, event.GroupID, rng, platform) {
 			if event.Metadata == nil {
 				event.Metadata = make(map[string]any)
 			}

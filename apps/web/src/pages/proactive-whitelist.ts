@@ -279,9 +279,16 @@ export class ProactiveWhitelistSync {
   }
 
   private async executeSave(target: WhitelistState): Promise<void> {
+    // R3: If currently unverified (due to prior write or reload failure), force a full reconciliation
+    // of BOTH keys (switch and group list) to ensure ambiguous partial writes from past attempts
+    // are authoritatively overwritten and synchronized before isUnverified can be cleared.
+    const forceReconciliation = this.isUnverified;
     const desiredSwitch: 'true' | 'false' = target.enabled ? 'true' : 'false';
-    const switchNeedsUpdate = this.explicitSwitch !== desiredSwitch;
-    const groupsChanged = !areGroupArraysEqual(target.groups, this.lastSaved.groups);
+    const switchNeedsUpdate =
+      forceReconciliation || this.explicitSwitch !== desiredSwitch;
+    const groupsChanged =
+      forceReconciliation ||
+      !areGroupArraysEqual(target.groups, this.lastSaved.groups);
 
     // N1: Persist the explicit desired switch BEFORE changes that cross the implicit enable boundary
     // or when the switch state changed, guaranteeing backend invariant is never inverted.

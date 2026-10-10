@@ -273,6 +273,28 @@ func TestGroupWhitelist(t *testing.T) {
 		if IsGroupAllowed(envMulti, "123456", "slack") {
 			t.Errorf("Slack group 123456 must NOT be allowed")
 		}
+
+		// 5. R2: Colon-containing raw group IDs and mismatched prefix/explicit-platform pair
+		envColon := mockEnv(map[string]string{
+			EnvWhitelistEnabled: "true",
+			EnvGroupWhitelist:    "telegram:room:42, telegram:12345",
+		})
+		// Colon-containing raw group ID matches when explicit platform is supplied
+		if !IsGroupAllowed(envColon, "room:42", "telegram") {
+			t.Errorf("R2 regression: expected Telegram group 'room:42' allowed for 'telegram:room:42'")
+		}
+		if IsGroupAllowed(envColon, "room:42", "discord") {
+			t.Errorf("Discord group 'room:42' must NOT match telegram:room:42")
+		}
+		// Mismatched prefix and explicit platform (spoof attempt):
+		// Discord caller sending "telegram:12345" must NOT match "telegram:12345" entry!
+		if IsGroupAllowed(envColon, "telegram:12345", "discord") {
+			t.Errorf("R2 regression: Discord event with groupID 'telegram:12345' must NOT hijack telegram:12345 entry")
+		}
+		// Omitted platform argument fallback allows prefixed identity for backward compatibility
+		if !IsGroupAllowed(envColon, "telegram:12345") {
+			t.Errorf("expected prefixed identity 'telegram:12345' allowed when no platform argument is supplied")
+		}
 	})
 
 	t.Run("ImplicitWhitelistTransitions", func(t *testing.T) {

@@ -165,14 +165,19 @@ func IsGroupAllowed(getenv func(string) string, groupID string, platforms ...str
 
 	platform := ""
 	if len(platforms) > 0 {
-		platform = platforms[0]
+		platform = strings.TrimSpace(platforms[0])
 	}
 
 	targetPlatform := NormalizePlatform(platform)
 	targetGroupID := groupID
-	if p, gid, ok := strings.Cut(groupID, ":"); ok && p != "" {
-		targetPlatform = NormalizePlatform(p)
-		targetGroupID = strings.TrimSpace(gid)
+	// R2: When a platform argument is present, treat groupID as opaque to prevent colons
+	// inside raw group IDs (e.g. "room:42") from overriding the platform identity or faking prefixes.
+	// Only interpret a prefixed identity (e.g. "telegram:123") when no platform is supplied.
+	if platform == "" {
+		if p, gid, ok := strings.Cut(groupID, ":"); ok && p != "" {
+			targetPlatform = NormalizePlatform(p)
+			targetGroupID = strings.TrimSpace(gid)
+		}
 	}
 
 	// Option B platform matching:

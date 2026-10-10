@@ -387,3 +387,62 @@ test('ProactiveWhitelistSync immediately restores lastSaved and sets isUnverifie
   assert.equal(state.isUnverified, true, 'isUnverified flag must be set when write or reload fails');
 });
 
+test('ProactiveWhitelistSync forces full reconciliation of both keys on next save after failed write/reload (R3)', async () => {
+  const callLog: string[] = [];
+  let shouldFailGroupWrite = false;
+
+  const mockApi: WhitelistAPI = {
+    async updateEnvVar({ key, value }) {
+      callLog.push(`${key}=${value}`);
+      if (key === 'PROACTIVE_REPLY_GROUP_WHITELIST' && shouldFailGroupWrite) {
+        // Simulate write applied server-side but response lost / network timeout
+        return { success: false, error: 'Network timeout (response lost)' };
+      }
+      return { success: true };
+    },
+  };
+
+  const sync = new ProactiveWhitelistSync(
+    mockApi,
+    { enabled: true, groups: ['A', 'B'], explicitSwitch: 'true' },
+    {
+      onStateChange: () => {},
+      onError: () => {},
+      onSuccess: () => {},
+      onReloadNeeded: async () => {
+        // Simulate reload failure (e.g. server unreachable)
+        throw new Error('Reload failed: connection reset');
+      },
+    },
+  );
+
+  // 1. User removes 'A'
+  shouldFailGroupWrite = true;
+  await sync.removeGroup('A');
+
+  // After failed write + failed reload:
+  // UI rolled back to ['A', 'B'], isUnverified is true
+  assert.equal(sync.getState().isUnverified, true);
+  assert.deepEqual(sync.getState().groups, ['A', 'B']);
+  assert.equal(sync.getState().enabled, true);
+  assert.deepEqual(callLog, ['PROACTIVE_REPLY_GROUP_WHITELIST=B']);
+
+  // 2. User performs an unrelated toggle (toggles switch OFF)
+  shouldFailGroupWrite = false;
+  await sync.toggleEnabled(false);
+
+  // R3: Because isUnverified was true, executeSave MUST force full reconciliation of BOTH keys:
+  // It must write ENABLE_PROACTIVE_REPLY_WHITELIST=false AND PROACTIVE_REPLY_GROUP_WHITELIST=A, B
+  assert.deepEqual(callLog, [
+    'PROACTIVE_REPLY_GROUP_WHITELIST=B', // original failed write
+    'ENABLE_PROACTIVE_REPLY_WHITELIST=false', // switch written
+    'PROACTIVE_REPLY_GROUP_WHITELIST=A, B',   // group list reconciled!
+  ]);
+
+  // Both keys were reconciled and saved successfully, so isUnverified is now safely cleared
+  assert.equal(sync.getState().isUnverified, false);
+  assert.equal(sync.getState().enabled, false);
+  assert.deepEqual(sync.getState().groups, ['A', 'B']);
+});
+
+

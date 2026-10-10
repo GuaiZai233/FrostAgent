@@ -1795,3 +1795,121 @@ func TestAstrBotIngressMetadataCannotBypassWhitelistGate(t *testing.T) {
 	provider.mu.Unlock()
 }
 
+func TestAstrBotOmittedPlatformCannotMatchQQWhitelist(t *testing.T) {
+	// R1 regression test:
+	// Whitelist only has bare "10001" (QQ family only) and platform-qualified "astrbot:20002".
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+		"PROACTIVE_REPLY_GROUP_WHITELIST":  "10001, astrbot:20002",
+		"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+	})
+
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "AstrBot 白名单专属回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.Scope = scope
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 发送群 10001 消息，但 Platform 为空（省略）。
+	// 在 Option B 下，bare 10001 仅归属于 QQ 家族；AstrBot 缺省 platform 规范化为 "astrbot"，
+	// 绝不能穿透到 QQ 白名单，必须返回 noop 且不调用 LLM！
+	omittedPlatformEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageType: "group",
+		GroupID:     "10001",
+		UserID:      "20001",
+		MessageID:   "msg_omitted_platform_001",
+		Content:     "AstrBot 缺少 platform 字段的闲聊消息",
+		Platform:    "", // omitted
+		IsWake:      false,
+		IsAt:        false,
+		Timestamp:   time.Now().Unix(),
+	}
+	b1, err := json.Marshal(omittedPlatformEvent)
+	if err != nil {
+		t.Fatalf("序列化事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, b1); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, respBytes1, readErr1 := conn.ReadMessage()
+	if readErr1 != nil {
+		t.Fatalf("读取第一轮响应失败: %v", readErr1)
+	}
+	var act1 Action
+	if err := json.Unmarshal(respBytes1, &act1); err != nil {
+		t.Fatalf("解析响应动作失败: %v", err)
+	}
+	if act1.Action != "noop" {
+		t.Fatalf("R1 regression: 省略 platform 的 AstrBot 消息绝不能匹配 QQ bare 白名单，期望 noop，实际收到: %s", act1.Action)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) != 0 {
+		provider.mu.Unlock()
+		t.Fatalf("省略 platform 的 AstrBot 消息匹配 QQ 白名单属于跨平台穿透漏洞，绝不能调用 LLM (实际调用: %d)", len(provider.requests))
+	}
+	provider.mu.Unlock()
+
+	// 2. 发送群 20002 消息（Platform 同样省略），命中 astrbot:20002 白名单，正常触发
+	matchedEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageType: "group",
+		GroupID:     "20002",
+		UserID:      "20001",
+		MessageID:   "msg_omitted_platform_002",
+		Content:     "AstrBot 匹配自身白名单的闲聊消息",
+		Platform:    "", // omitted, normalized to "astrbot"
+		IsWake:      false,
+		IsAt:        false,
+		Timestamp:   time.Now().Unix(),
+	}
+	b2, err := json.Marshal(matchedEvent)
+	if err != nil {
+		t.Fatalf("序列化第二轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, b2); err != nil {
+		t.Fatalf("发送第二轮事件失败: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, respBytes2, readErr2 := conn.ReadMessage()
+	if readErr2 != nil {
+		t.Fatalf("读取第二轮响应失败: %v", readErr2)
+	}
+	var act2 Action
+	if err := json.Unmarshal(respBytes2, &act2); err != nil {
+		t.Fatalf("解析第二轮响应失败: %v", err)
+	}
+	if act2.Action != "send_message" || act2.Content != "AstrBot 白名单专属回复" {
+		t.Fatalf("命中 astrbot 白名单的群消息应正常触发主动回复，实际收到动作: %s, 内容: %s", act2.Action, act2.Content)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) != 1 {
+		provider.mu.Unlock()
+		t.Fatalf("期望 LLM 调用 1 次，实际调用次数: %d", len(provider.requests))
+	}
+	provider.mu.Unlock()
+}
+

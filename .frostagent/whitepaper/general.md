@@ -175,10 +175,12 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 若环境变量未显式配置开关，当 `PROACTIVE_REPLY_GROUP_WHITELIST` 存在非空条目时默认为隐式启用（`len(whitelist) > 0`）；
     - 为了避免在编辑第一个或最后一个群聊时跨越隐式边界（例如移除最后一个群聊导致服务端意外转为全局开放，或在禁用状态下添加群聊导致服务端意外转为白名单硬门禁拦截），控制台同步器（`ProactiveWhitelistSync`）在跨越空/非空边界或开关状态发生变迁时，强制在修改群聊列表**前**先顺序持久化显式开关值（`ENABLE_PROACTIVE_REPLY_WHITELIST=true` 或 `false`），确保后端不变量绝不倒置；
   - **前置硬门禁拦截**：适配器在进行概率随机掷骰前，通过 `proactive.RollGroupWithRand` 检查目标群聊（`proactive.IsGroupAllowed`）。一旦白名单模式启动，任何不在白名单列表（`PROACTIVE_REPLY_GROUP_WHITELIST`）中的群聊直接短路拒绝、永远不触发主动回复随机 Roll 与大模型调用，实现确定性的零出站与零触发保障；
-  - **严格平台隔离与规范化匹配 (Option B Platform Isolation, N2)**：
+  - **严格平台隔离与规范化匹配 (Option B Platform Isolation, N2, R1 & R2)**：
     - 白名单群号列表支持逗号、分号及各类空白符分隔解析（`proactive.ParseGroupWhitelist`），并自动修剪空白、规范化前缀大小写与去重；
     - **QQ 生态特权裸 ID 归一**：中国大陆主流的 QQ/OneBot 生态（`targetPlatform == "qq" || targetPlatform == ""`）保留原生纯数字群号习惯（如 `123456`），纯数字裸 ID 归属严格限定于 QQ 家族，支持 `123456` 以及 `qq:123456`、`onebot:123456`、`aiocqhttp:123456` 互通匹配；
     - **非 QQ 平台强前缀隔离**：非 QQ 平台（Telegram、Discord、AstrBot 等）严格要求携带平台限定前缀（如 `telegram:123456`、`discord:123456`、`astrbot:10001`）。纯数字裸 ID 绝不匹配非 QQ 平台，彻底杜绝跨平台相同数字群号之间的碰撞与意外越权触发；
+    - **缺省平台规范化与会话身份对齐 (R1)**：适配器（AstrBot 等）在入站概率判定（`shouldReplyWithRNG`）时，将缺省未填的 `event.Platform` 规范化为 `"astrbot"`，与其入站会话标识（`sessionKey`）保持完全一致，严禁缺省平台跌落为 QQ 家族身份，杜绝缺少 platform 字段的 AstrBot 事件意外穿透 QQ 裸群号白名单；
+    - **显式平台参数下群号不透明处理 (R2)**：当适配器显式传入平台参数时，`proactive.IsGroupAllowed` 将 `groupID` 视为不透明标识（Opaque Identifier），不再对内部包含冒号的群号（如 `room:42`）进行截断覆盖，既支持如 `telegram:room:42` 的合法冒号群号匹配，又彻底杜绝外部客户端在群号中伪造平台前缀（如 Discord 传入 `telegram:123`）冒充并越权命中其他平台白名单。仅当未显式传入平台参数时，方允许解析带前缀群号用于向后兼容；
   - **入站元数据深度净化 (Ingress Metadata Sanitization)**：适配器（AstrBot 等）在入站最前置阶段自动剥除任何由外部客户端伪造的 `_frostagent_` 保留元数据前缀（如 `_frostagent_should_reply`、`_frostagent_proactive_reply`），防止不受信 payload 绕过白名单门禁与前置意图判定。
 - **跨平台群名称缓存与会话元数据传播 (Cross-Platform Group Name Caching)**：
   - 各适配器（OneBot v11 与 AstrBot）在接收到群聊消息、群资料查询（`get_group_info`）或协议事件（`event.GroupName`）时，将群名称同步记录到 `SessionManager`（`SetGroupName` / `GetGroupName`）与内存活跃 `SessionContext` 中；
@@ -221,7 +223,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - **白名单可视化管理与高可靠同步状态机 (ProactiveWhitelistSync, N1 & N4)**：提供「群聊白名单模式」独立开关、群聊下拉快捷选择栏与手动输入框：
     - 下拉选择栏聚合系统最近活跃会话与持久历史会话，优先展示带群名称缓存的条目（如 `123456（王源粉丝群）`），若尚未更新群名称缓存则展示纯群号（如 `34567`）；
     - 支持手动输入群号添加，界面提供标签（Tags）展示当前已配置的白名单群号及缓存群名，支持一键移除与原子提交环境变量保存（`ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST`），确保白名单管理灵活直观；
-    - **权威回滚与未确认状态标记 (Authoritative Rollback & Unverified State Indicator, N4)**：同步器 `ProactiveWhitelistSync` 严格防范乐观 UI 假阳性与断网状态悬空。一旦底层 API 明确拒绝写入（如权限不足或网络异常），同步器立即在内存中强力回滚至最后已确认保存的快照（`lastSaved` 与 `lastSavedExplicitSwitch`），解除写锁定并置位 `isUnverified = true`。若随后的服务端全量重载（`loadData()`）因链路故障再次失败，界面绝不保留失败的乐观目标态，而是稳定展示最后已确认状态，并伴随明确的 `状态未确认 (已恢复)` 醒目警告提示，指引用户在网络恢复后手动刷新核对。
+    - **权威回滚与未确认状态标记 (Authoritative Rollback & Unverified State Indicator, N4 & R3)**：同步器 `ProactiveWhitelistSync` 严格防范乐观 UI 假阳性与断网状态悬空。一旦底层 API 明确拒绝写入（如权限不足或网络异常），同步器立即在内存中强力回滚至最后已确认保存的快照（`lastSaved` 与 `lastSavedExplicitSwitch`），解除写锁定并置位 `isUnverified = true`。若随后的服务端全量重载（`loadData()`）因链路故障再次失败，界面绝不保留失败的乐观目标态，而是稳定展示最后已确认状态，并伴随明确的 `状态未确认 (已恢复)` 醒目警告提示；
+    - **未确认状态强制双键权威对齐 (Full Reconciliation on Ambiguous Writes, R3)**：当同步器处于未确认状态时，下一次用户写操作（即使仅触发开关变迁或仅修改群聊列表）将强制执行全量对齐（`forceReconciliation = true`，同时触发 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 双键写入），彻底覆盖可能因之前网络丢包导致的服务端不一致中间态。唯有两键均保存成功（或服务端权威全量重载成功）后方可安全清除 `isUnverified` 标识，杜绝单键写入提前消除警告导致的状态隐蔽脱节。
 
 ### 管理员消息指令系统 (Administrator Message Commands System)
 
