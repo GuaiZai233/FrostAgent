@@ -124,3 +124,50 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 		t.Fatalf("future PostgreSQL data was modified: %d, %v", count, err)
 	}
 }
+
+func TestPostgresMigrationLeaseLossStopsWrites(t *testing.T) {
+	ctx := context.Background()
+	config := postgresMigrationConfig(t)
+	first, err := OpenWithConfig(ctx, t.TempDir(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if second, err := OpenWithConfig(ctx, t.TempDir(), config); err == nil {
+		second.Close()
+		t.Fatal("second process acquired an active PostgreSQL lease")
+	}
+	var pid int
+	if err := first.SQL.QueryRow(`SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var terminated bool
+	if err := admin.QueryRowContext(ctx, `SELECT pg_terminate_backend($1)`, pid).Scan(&terminated); err != nil || !terminated {
+		t.Fatalf("terminate lease session: %v, terminated=%v", err, terminated)
+	}
+	second, err := OpenWithConfig(ctx, t.TempDir(), config)
+	if err != nil {
+		t.Fatalf("peer could not acquire released lease: %v", err)
+	}
+	statement := `INSERT INTO settings(scope, instance_id, key, value) VALUES ('global', '', 'synthetic-key', 'value')`
+	if _, err := first.SQL.ExecContext(ctx, statement); err == nil {
+		second.Close()
+		t.Fatal("stale process wrote after losing PostgreSQL lease")
+	}
+	var count int
+	if err := second.SQL.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'synthetic-key'`).Scan(&count); err != nil || count != 0 {
+		second.Close()
+		t.Fatalf("stale write reached PostgreSQL: %d, %v", count, err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.SQL.ExecContext(ctx, statement); err != nil {
+		t.Fatalf("process did not reacquire lease after peer closed: %v", err)
+	}
+}

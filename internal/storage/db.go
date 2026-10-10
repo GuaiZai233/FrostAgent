@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
@@ -26,7 +26,6 @@ const (
 type DB struct {
 	SQL     *sql.DB
 	Backend Backend
-	lock    *sql.Conn
 }
 
 type Config struct {
@@ -62,9 +61,32 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 	default:
 		return nil, fmt.Errorf("unsupported database backend %q", backend)
 	}
-	conn, err := sql.Open(driver, dsn)
-	if err != nil {
-		return nil, err
+	var conn *sql.DB
+	var err error
+	if backend == Postgres {
+		var config *pgx.ConnConfig
+		config, err = pgx.ParseConfig(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("parse PostgreSQL connection address: %w", err)
+		}
+		// All application queries use this one physical connection. Every new
+		// connection must acquire the lease before database/sql can use it, so a
+		// lost backend session cannot reconnect and write without ownership.
+		conn = stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(ctx context.Context, physical *pgx.Conn) error {
+			var acquired bool
+			if err := physical.QueryRow(ctx, "SELECT pg_try_advisory_lock(736417141)").Scan(&acquired); err != nil {
+				return fmt.Errorf("acquire database lease: %w", err)
+			}
+			if !acquired {
+				return errors.New("another FrostAgent process is using this PostgreSQL database")
+			}
+			return nil
+		}))
+	} else {
+		conn, err = sql.Open(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
 	}
 	conn.SetMaxOpenConns(1)
 	conn.SetConnMaxLifetime(0)
@@ -80,21 +102,6 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 				return nil, fmt.Errorf("configure SQLite: %w", err)
 			}
 		}
-	} else {
-		conn.SetMaxOpenConns(2)
-		db.lock, err = conn.Conn(ctx)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
-		var acquired bool
-		if err = db.lock.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(736417141)").Scan(&acquired); err != nil || !acquired {
-			db.Close()
-			if err != nil {
-				return nil, fmt.Errorf("acquire database lease: %w", err)
-			}
-			return nil, errors.New("another FrostAgent process is using this PostgreSQL database")
-		}
 	}
 	if err = db.initSchema(ctx); err != nil {
 		db.Close()
@@ -106,12 +113,6 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 func (d *DB) Close() error {
 	if d == nil {
 		return nil
-	}
-	if d.lock != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, _ = d.lock.ExecContext(ctx, "SELECT pg_advisory_unlock(736417141)")
-		cancel()
-		_ = d.lock.Close()
 	}
 	return d.SQL.Close()
 }
