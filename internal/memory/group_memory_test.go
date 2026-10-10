@@ -1912,3 +1912,133 @@ func TestGroupStore_Finding3_ConflictingOwnershipIdempotency(t *testing.T) {
 		}
 	})
 }
+
+func TestGroupStore_PurgeDistilledEntries(t *testing.T) {
+	tempDir := t.TempDir()
+	groupID := "mock_grp_purge_distill"
+	gs, err := NewGroupStore(tempDir, groupID)
+	if err != nil {
+		t.Fatalf("NewGroupStore failed: %v", err)
+	}
+
+	now := time.Now()
+	senderAlice := "mock_u_alice"
+
+	// 1. Seed entries:
+	// - distillA: SourceDistill, SourceMessageID="msg-alice-01", Owner=senderAlice
+	// - distillB: SourceDistill, SourceMessageID="msg-alice-02", Owner=senderAlice
+	// - extractA: SourceExtract, SourceMessageID="msg-alice-01", Owner=senderAlice
+	// - manualA: SourceManual, Owner=senderAlice
+	distillA := MemoryEntry{
+		ID:              "d-01",
+		Owner:           senderAlice,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "爱丽丝喜欢吃草莓",
+		Evidence:        "爱丽丝喜欢吃草莓",
+		SourceMessageID: "msg-alice-01",
+		SourceSenderID:  senderAlice,
+		Source:          SourceDistill,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	distillB := MemoryEntry{
+		ID:              "d-02",
+		Owner:           senderAlice,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "爱丽丝养了一只白猫",
+		Evidence:        "爱丽丝养了一只白猫",
+		SourceMessageID: "msg-alice-02",
+		SourceSenderID:  senderAlice,
+		Source:          SourceDistill,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	extractA := MemoryEntry{
+		ID:              "e-01",
+		Owner:           senderAlice,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "爱丽丝提到重要规则",
+		Evidence:        "爱丽丝提到重要规则",
+		SourceMessageID: "msg-alice-01",
+		SourceSenderID:  senderAlice,
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	manualA := MemoryEntry{
+		ID:        "m-01",
+		Owner:     senderAlice,
+		OwnerType: OwnerGroup,
+		ScopeType: ScopeGroup,
+		GroupID:   groupID,
+		Content:   "爱丽丝是管理员",
+		Source:    SourceManual,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	for _, e := range []*MemoryEntry{&distillA, &distillB, &extractA, &manualA} {
+		if err := gs.SaveEntry(e); err != nil {
+			t.Fatalf("SaveEntry %s failed: %v", e.ID, err)
+		}
+	}
+
+	// 2. Calling PurgeDistilledEntries with empty string or whitespace does nothing
+	if err := gs.PurgeDistilledEntries(""); err != nil {
+		t.Errorf("PurgeDistilledEntries(\"\") returned error: %v", err)
+	}
+	if err := gs.PurgeDistilledEntries("   "); err != nil {
+		t.Errorf("PurgeDistilledEntries(\"   \") returned error: %v", err)
+	}
+
+	allAfterEmpty, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(allAfterEmpty) != 4 {
+		t.Fatalf("expected all 4 entries preserved after empty messageID purge, got %d", len(allAfterEmpty))
+	}
+
+	// 3. Purge message "msg-alice-01"
+	if err := gs.PurgeDistilledEntries("msg-alice-01"); err != nil {
+		t.Fatalf("PurgeDistilledEntries(\"msg-alice-01\") failed: %v", err)
+	}
+
+	allAfterPurge, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(allAfterPurge) != 3 {
+		t.Fatalf("expected 3 entries remaining (d-01 purged, d-02, e-01, m-01 preserved), got %d: %+v", len(allAfterPurge), allAfterPurge)
+	}
+
+	remainingMap := make(map[string]MemoryEntry)
+	for _, e := range allAfterPurge {
+		remainingMap[e.ID] = e
+	}
+
+	if _, exists := remainingMap["d-01"]; exists {
+		t.Errorf("distillA (d-01) was not purged")
+	}
+	if _, exists := remainingMap["d-02"]; !exists {
+		t.Errorf("distillB (d-02) from same sender was wrongly purged")
+	}
+	if _, exists := remainingMap["e-01"]; !exists {
+		t.Errorf("extractA (e-01) with SourceExtract was wrongly purged")
+	}
+	if _, exists := remainingMap["m-01"]; !exists {
+		t.Errorf("manualA (m-01) was wrongly purged")
+	}
+
+	// 4. Purge on nil store is safe
+	var nilStore *GroupStore
+	if err := nilStore.PurgeDistilledEntries("msg-alice-02"); err != nil {
+		t.Errorf("nilStore.PurgeDistilledEntries failed: %v", err)
+	}
+}

@@ -464,6 +464,9 @@ func (c *GroupCompactor) compact(
 	if groupID == "" && strings.HasPrefix(owner, "group:") {
 		groupID = strings.TrimPrefix(owner, "group:")
 	}
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
 	if session != nil && c.groupManager != nil && groupID != "" {
 		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
 			session.SetGroupStore(gStore)
@@ -580,6 +583,9 @@ func (c *GroupCompactor) distillGroupMemories(
 		return
 	}
 
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
 	if session != nil && c.groupManager != nil {
 		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
 			session.SetGroupStore(gStore)

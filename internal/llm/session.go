@@ -277,8 +277,8 @@ type SessionContext struct {
 	nextGroupDistillID      uint64
 	validCommittedSources   map[uint64]committedSourceInfo
 	revokedMessageIDs       map[string]struct{}
-	revokedSenderIDs        map[string]struct{}
 	groupStore              *memory.GroupStore
+	scope                   *runtimescope.Scope
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold    int
 	deliveryFailure        *DeliveryFailure
@@ -662,22 +662,12 @@ func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snaps
 		}
 	}
 
-	// 2. Snapshot must not contain any explicitly revoked message or sender.
+	// 2. Snapshot must not contain any explicitly revoked message.
 	if !isRevoked && s.revokedMessageIDs != nil {
 		for _, id := range snapshot.MessageIDs {
 			if _, ok := s.revokedMessageIDs[id]; ok {
 				isRevoked = true
 				break
-			}
-		}
-	}
-	if !isRevoked && s.revokedSenderIDs != nil {
-		for _, m := range snapshot.Messages {
-			if m.SenderID != "" {
-				if _, ok := s.revokedSenderIDs[m.SenderID]; ok {
-					isRevoked = true
-					break
-				}
 			}
 		}
 	}
@@ -749,6 +739,26 @@ func (s *SessionContext) GroupStore() *memory.GroupStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.groupStore
+}
+
+// SetScope associates a runtimescope.Scope with this session context.
+func (s *SessionContext) SetScope(scope *runtimescope.Scope) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scope = scope
+}
+
+// Scope returns the associated runtimescope.Scope if any.
+func (s *SessionContext) Scope() *runtimescope.Scope {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scope
 }
 
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
@@ -1425,61 +1435,41 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 		dropped = true
 	}
 
-	// Record revoked message and sender IDs in session state
-	if s.revokedMessageIDs == nil {
-		s.revokedMessageIDs = make(map[string]struct{})
-	}
-	if s.revokedSenderIDs == nil {
-		s.revokedSenderIDs = make(map[string]struct{})
-	}
+	// Record revoked message ID in session state strictly when a valid message ID is provided.
+	// Never blacklist the sender across turns.
 	if msgID != "" {
+		if s.revokedMessageIDs == nil {
+			s.revokedMessageIDs = make(map[string]struct{})
+		}
 		s.revokedMessageIDs[msgID] = struct{}{}
 	}
-	if sndID != "" {
-		s.revokedSenderIDs[sndID] = struct{}{}
-	}
 
-	// Invalidate any committed sources matching the dropped message or sender
-	if s.validCommittedSources != nil {
+	// Invalidate any committed sources matching the dropped message ID.
+	// Never invalidate snapshots containing different messages from the same sender.
+	if msgID != "" && s.validCommittedSources != nil {
 		for seq, src := range s.validCommittedSources {
-			affected := false
-			if msgID != "" && slices.Contains(src.messageIDs, msgID) {
-				affected = true
-			} else if sndID != "" && slices.Contains(src.senderIDs, sndID) {
-				affected = true
-			}
-			if affected {
+			if slices.Contains(src.messageIDs, msgID) {
 				delete(s.validCommittedSources, seq)
 				dropped = true
 			}
 		}
 	}
 
-	// Identify which in-flight distillation barriers are affected by the dropped message.
-	// Barriers whose snapshots do not contain this message or sender are unaffected.
+	// Identify which in-flight distillation barriers are affected by the dropped message ID.
+	// Barriers whose snapshots do not contain this specific message are unaffected.
 	var barriersToAbort []*groupDistillationBarrier
-	for _, b := range s.groupDistillBarriers {
-		affected := false
-		if msgID != "" {
+	if msgID != "" {
+		for _, b := range s.groupDistillBarriers {
 			if slices.Contains(b.snapshot.MessageIDs, msgID) {
-				affected = true
+				barriersToAbort = append(barriersToAbort, b)
 			}
-		} else if sndID != "" {
-			for _, m := range b.snapshot.Messages {
-				if m.SenderID == sndID {
-					affected = true
-					break
-				}
-			}
-		}
-		if affected {
-			barriersToAbort = append(barriersToAbort, b)
 		}
 	}
 
 	s.groupCompactGeneration++
 	s.UpdatedAt = time.Now()
 	store := s.groupStore
+	scope := s.scope
 	s.mu.Unlock()
 
 	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
@@ -1488,9 +1478,14 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 		b.AbortAndWait()
 	}
 
-	// Reconcile and purge any affected distilled records in the group store before returning.
-	if store != nil {
-		_ = store.PurgeDistilledEntries(msgID, sndID)
+	// Reconcile and purge any affected distilled records in the group store before returning,
+	// strictly scoped to this specific message ID. Never purge by sender.
+	if store != nil && msgID != "" {
+		if err := store.PurgeDistilledEntries(msgID); err != nil {
+			if scope != nil && scope.Logger != nil {
+				scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("reconciliation purge failed for message %s: %v", msgID, err))
+			}
+		}
 	}
 
 	return dropped || len(barriersToAbort) > 0
@@ -1801,7 +1796,6 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.lastCommittedSenderIDs = nil
 	s.validCommittedSources = nil
 	s.revokedMessageIDs = nil
-	s.revokedSenderIDs = nil
 	s.UpdatedAt = time.Now()
 	s.mu.Unlock()
 
@@ -2030,6 +2024,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		UpdatedAt:           time.Now(),
 		epoch:               1,
 		groupCompactSummary: summary,
+		scope:               sm.Scope,
 	}
 	sm.sessions[canonicalID] = session
 	return session
