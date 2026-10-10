@@ -258,6 +258,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		var wsConn *wsConnection
 		if a.engine != nil {
 			wsConn = newWSConnection(conn, a.engine.Scope)
+			wsConn.engine = a.engine
 			wsConn.Scope = a.engine.Scope
 		} else {
 			wsConn = newWSConnection(conn)
@@ -363,7 +364,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-				isExplicitlyWoken(event, a.engine, routing) {
+				isWoken(event, a.engine, routing) {
 				secPlatform := "onebot"
 				if wsConn.mock {
 					secPlatform = "mock"
@@ -552,7 +553,7 @@ func (a *Adapter) CloseConnections() {
 	}
 }
 
-func isExplicitlyWoken(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
+func isWoken(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
 	if event.MessageType == "private" {
 		return true
 	}
@@ -569,6 +570,25 @@ func isExplicitlyWoken(event model.OneBotEvent, engine *llm.Engine, routings ...
 		wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
 	}
 	return wakeSignals.Any()
+}
+
+func isExplicitlyWoken(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	if engine != nil && engine.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return false
+	}
+	var wakeSignals GroupWakeSignals
+	if len(routings) > 0 && routings[0].Derived {
+		wakeSignals = routings[0].WakeSignals
+	} else if engine != nil {
+		wakeSignals = DetectGroupWakeSignals(event, engine.Scope)
+	}
+	return wakeSignals.Explicit()
 }
 
 func shouldSendSecurityDirectReply(event model.OneBotEvent, engine *llm.Engine, routings ...EventRouting) bool {

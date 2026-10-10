@@ -13,7 +13,7 @@ func buildResponseContext(
 	wakeSignals GroupWakeSignals,
 	quotedAlias bool,
 ) string {
-	triggers := make([]string, 0, 3)
+	triggers := make([]string, 0, 4)
 	if event.MessageType == "private" {
 		triggers = append(triggers, "private_message")
 	} else {
@@ -22,6 +22,9 @@ func buildResponseContext(
 		}
 		if wakeSignals.Alias {
 			triggers = append(triggers, "alias")
+		}
+		if wakeSignals.Proactive {
+			triggers = append(triggers, "proactive")
 		}
 		if quotedAlias {
 			triggers = append(triggers, "quoted_alias")

@@ -47,6 +47,14 @@ const (
 	MaxToolOutputBytes   = 65536 // 64KB
 )
 
+// ErrMaxIterationsReached indicates the agent exhausted its allowed iterations without a final response.
+var ErrMaxIterationsReached = errors.New("达到最大迭代次数，未能得出最终答案")
+
+// IsStaySilentTool reports whether the tool name matches stay_silent.
+func IsStaySilentTool(name string) bool {
+	return name == StaySilentToolName
+}
+
 func truncateRunes(value string, limit int) string {
 	if limit <= 0 {
 		return ""
@@ -62,7 +70,8 @@ func truncateRunes(value string, limit int) string {
 // agent loop. Silent is true when the model successfully invokes the terminal
 // stay_silent tool or returns the standalone internal silence marker. Provider
 // failures never set it. Banned is true when the turn was terminated by an
-// autonomous ban action (ban_user tool).
+// autonomous ban action (ban_user tool). OutputBlocked is true when the final
+// answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
 	Content          string
 	MemoryWritten    bool
@@ -70,8 +79,35 @@ type AgentRunResult struct {
 	StaySilentCalled bool
 	SilenceReason    string // "stay_silent", "security_block", "route_disabled", "canceled", "epoch_changed", "provider_fallback"
 	Banned           bool
+	OutputBlocked    bool
 	Usage            core.Usage
 	Error            error
+}
+
+// IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
+// Proactive turns allow terminal silence, final text replies, and the memory subsystem.
+// ActionsCat and other external/privileged/mutating tools are strictly disallowed.
+func IsProactiveAllowedTool(name string) bool {
+	switch name {
+	case StaySilentToolName:
+		return true
+	case "memory":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) isToolAllowedForProactive(name string) bool {
+	if IsProactiveAllowedTool(name) {
+		return true
+	}
+	if tool, exists := e.findToolExecutor(name); exists {
+		if pa, ok := tool.(interface{ IsProactiveAllowed() bool }); ok {
+			return pa.IsProactiveAllowed()
+		}
+	}
+	return false
 }
 
 // Engine 结构体，用于管理智能体的执行
@@ -645,6 +681,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
 		modelTools := e.EffectiveTools()
+		if hasRunCtx && runCtx.Proactive {
+			var proactiveTools []core.Tool
+			for _, t := range modelTools {
+				if e.isToolAllowedForProactive(t.Name) {
+					proactiveTools = append(proactiveTools, t)
+				}
+			}
+			modelTools = proactiveTools
+		}
 
 		coreMsgs := convertToCoreMessages(messages)
 		if hasRunCtx && runCtx.SecurityNotice != "" {
@@ -881,16 +926,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
+			outputBlocked := false
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
+					outputBlocked = true
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					contentStr = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
 				} else {
 					contentStr = "FrostAgent安全控制：模型输出已拦截。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
+					outputBlocked = true
 				}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
@@ -907,6 +955,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
+				OutputBlocked: outputBlocked,
 				Usage:         totalUsage,
 			}
 		}
@@ -926,6 +975,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		for _, tc := range responseMsg.ToolCalls {
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
+			}
+			if hasRunCtx && runCtx.Proactive && !e.isToolAllowedForProactive(tc.Function.Name) {
+				e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复轮次禁止调用副作用工具 [%s]", tc.Function.Name), "主动回复禁止副作用工具")
+				return AgentRunResult{
+					MemoryWritten: memoryWritten,
+					Silent:        true,
+					Usage:         totalUsage,
+				}
 			}
 			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
@@ -964,6 +1021,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
+						if hasRunCtx && runCtx.Proactive {
+							return AgentRunResult{
+								MemoryWritten: memoryWritten,
+								Silent:        true,
+								Usage:         totalUsage,
+							}
+						}
 						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
 						return AgentRunResult{
 							Content:       security.RejectGatewayMsg,
@@ -976,7 +1040,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				} else {
 					toolSucceeded = true
 					toolResult = res
-					if tc.Function.Name == StaySilentToolName {
+					if IsStaySilentTool(tc.Function.Name) {
 						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
 						return AgentRunResult{
 							MemoryWritten:    memoryWritten,
@@ -1055,6 +1119,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			messages = append(messages, toolMsg)
 		}
 	}
+	if hasRunCtx && runCtx.Proactive {
+		return AgentRunResult{
+			MemoryWritten: memoryWritten,
+			Silent:        true,
+			Error:         ErrMaxIterationsReached,
+			Usage:         totalUsage,
+		}
+	}
 	return AgentRunResult{
 		Content:       "FrostAgent错误：达到最大迭代次数，未能得出最终答案",
 		MemoryWritten: memoryWritten,
@@ -1084,7 +1156,7 @@ func staySilentConflict(toolCalls []ToolCall) string {
 		return ""
 	}
 	for _, toolCall := range toolCalls {
-		if toolCall.Function.Name == StaySilentToolName {
+		if IsStaySilentTool(toolCall.Function.Name) {
 			return "工具调用冲突：stay_silent 必须单独调用，不能与其他工具同时使用；请重新选择要执行的动作"
 		}
 	}

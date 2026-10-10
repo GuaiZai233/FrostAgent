@@ -19,8 +19,8 @@ export function mountSettingsPage(container: HTMLElement): () => void {
               ${icon('server', 'w-4 h-4')}
             </div>
             <div style="min-width: 0;">
-              <h2 class="text-sm font-semibold text-foreground">Bot 服务端设置</h2>
-              <p class="text-xs text-muted mt-0.5">修改服务端环境变量、群聊响应策略与原始 .env 配置</p>
+              <h2 class="text-sm font-semibold text-foreground">Bot 行为与服务端设置</h2>
+              <p class="text-xs text-muted mt-0.5">配置主动回复概率、群聊响应策略、服务端环境变量与原始 .env</p>
             </div>
           </div>
           <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">

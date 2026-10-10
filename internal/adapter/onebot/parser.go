@@ -3,6 +3,7 @@ package onebot
 import (
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/model"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
 	"strconv"
@@ -18,22 +19,57 @@ const (
 // group message to enter the LLM response path. The fields are descriptive
 // context only and do not establish a priority between at and alias matches.
 type GroupWakeSignals struct {
-	AtBot bool
-	Alias bool
+	AtBot     bool
+	Alias     bool
+	Proactive bool
+}
+
+// Explicit reports whether the bot was explicitly addressed (via at or alias/name).
+func (s GroupWakeSignals) Explicit() bool {
+	return s.AtBot || s.Alias
 }
 
 // Any reports whether at least one direct group wake signal was detected.
 func (s GroupWakeSignals) Any() bool {
-	return s.AtBot || s.Alias
+	return s.AtBot || s.Alias || s.Proactive
 }
 
-// DetectGroupWakeSignals evaluates the OneBot at segment and configured
-// literal names once so routing and response-context generation use the same
-// decision.
+// DetectGroupWakeSignals evaluates the OneBot at segment, configured
+// literal names, and proactive reply probability once so routing and
+// response-context generation use the same decision.
 func DetectGroupWakeSignals(event model.OneBotEvent, scopes ...*runtimescope.Scope) GroupWakeSignals {
+	return DetectGroupWakeSignalsWithRNG(event, nil, scopes...)
+}
+
+// DetectGroupWakeSignalsWithRNG evaluates group wake signals using an optional RNG function.
+func DetectGroupWakeSignalsWithRNG(event model.OneBotEvent, rng func() float64, scopes ...*runtimescope.Scope) GroupWakeSignals {
+	atBot := IsMentionedBot(event)
+	alias := IsBotNameMentioned(event, scopes...)
+	if atBot || alias || event.MessageType != "group" {
+		return GroupWakeSignals{
+			AtBot: atBot,
+			Alias: alias,
+		}
+	}
+	scope := runtimescope.First(scopes)
+	if scope != nil && scope.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return GroupWakeSignals{
+			AtBot: atBot,
+			Alias: alias,
+		}
+	}
+	var getenv func(string) string
+	if scope != nil {
+		getenv = scope.Getenv
+	}
+	groupIDStr := ""
+	if event.GroupID != 0 {
+		groupIDStr = strconv.FormatInt(event.GroupID, 10)
+	}
 	return GroupWakeSignals{
-		AtBot: IsMentionedBot(event),
-		Alias: IsBotNameMentioned(event, scopes...),
+		AtBot:     atBot,
+		Alias:     alias,
+		Proactive: proactive.RollGroupWithRand(getenv, groupIDStr, rng, "onebot"),
 	}
 }
 

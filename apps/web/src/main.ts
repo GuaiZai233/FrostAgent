@@ -260,6 +260,11 @@ function initAppShell(): void {
     mountBackendSettingsPage,
   );
   router.register(
+    '/settings/behavior',
+    'Bot 行为设置',
+    mountBackendSettingsPage,
+  );
+  router.register(
     '/settings/frontend',
     '网页端外观设置',
     mountFrontendSettingsPage,

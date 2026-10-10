@@ -341,26 +341,27 @@ func TestOneBot_PassiveGroupMessages_NoMetadataLLMCallsAndXMLDefense(t *testing.
 		}
 	}
 
-	// Give time for events to be processed
-	time.Sleep(100 * time.Millisecond)
-
-	// 1. Assert NO metadata-specific security LLM classifier calls occurred on passive chatter
-	if calls := classifierCalled.Load(); calls != 0 {
-		t.Errorf("expected 0 security classifier calls for passive group chatter, got %d", calls)
+	// 1. Assert member profile was observed and stored
+	var mem *memory.MemberProfile
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		if gStore, err := gm.GetGroupStore("777888"); err == nil {
+			if prof, err := gStore.GetProfile(); err == nil {
+				if m := prof.GetMember("888999"); m != nil {
+					mem = m
+					break
+				}
+			}
+		}
 	}
-
-	// 2. Assert member profile was observed and stored
-	gStore, err := gm.GetGroupStore("777888")
-	if err != nil {
-		t.Fatalf("get group store: %v", err)
-	}
-	prof, err := gStore.GetProfile()
-	if err != nil {
-		t.Fatalf("get profile: %v", err)
-	}
-	mem := prof.GetMember("888999")
 	if mem == nil {
 		t.Fatalf("expected member 888999 to be observed")
+	}
+
+	// 2. Assert NO metadata-specific security LLM classifier calls occurred on passive chatter
+	if calls := classifierCalled.Load(); calls != 0 {
+		t.Errorf("expected 0 security classifier calls for passive group chatter, got %d", calls)
 	}
 
 	// 3. Assert MemberContextPrompt XML escapes all untrusted delimiters so it cannot break out of <member_context>
