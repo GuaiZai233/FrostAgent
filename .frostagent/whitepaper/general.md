@@ -158,7 +158,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
        - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（`adapters/astrbot_plugin_frostagent/main.py`）将非纯文本段（At、Face、Record、Image 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）、`has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他特殊组件）以及 `has_media_content`（是否存在图片/表情等多媒体结构，无论附件是否成功下载/转换 Base64），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser`、`@Bot + Face` 以及媒体转换失败时的 `@Bot + Image` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
        - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
 - **共存与独立控制**：
-  - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
+  - 支持通过实例数据库设置（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
 ### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
 
@@ -166,13 +166,13 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 - **入站概率 Roll 与触发唤醒抽象 (Probability Roll & Inbound Wake Signal)**：
   - 各适配器（OneBot v11 与 AstrBot）在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true` 或 AstrBot 元数据 `_frostagent_proactive_reply: true`），作为有效唤醒信号进入主处理管线；
-  - 概率由实例环境变量 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
+  - 概率由实例数据库设置 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
   - 若群聊配置了 `GROUP_REPLY_ON_MENTION=false`（群聊不回复），则主动回复与被提及回复一并受到总开关压制，保证行为策略的一致性。
 - **群聊白名单入站门禁与零触发保障 (Group Whitelist Ingress Gate & Zero-Trigger Guarantee)**：
-  - 为了支持精准控制主动回复的生效范围、杜绝非预期群聊中的自发插嘴，FrostAgent 引入了群聊白名单机制（由实例环境变量 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 控制）；
+  - 为了支持精准控制主动回复的生效范围、杜绝非预期群聊中的自发插嘴，FrostAgent 引入了群聊白名单机制（由实例数据库设置 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 控制）；
   - **白名单激活判定与显隐式边界管理 (N1 & N3)**：
     - 当显式设置 `ENABLE_PROACTIVE_REPLY_WHITELIST=true` 时开启白名单模式，显式设置 `false` 时完全关闭；在前端与后端判定中严格对齐 Go 语言标准 `strings.EqualFold`（仅接受 `true`/`false`，不兼容 `1/0/yes/no/on/off` 等歧义别名，非法或未设置时平滑回退至隐式判定）；
-    - 若环境变量未显式配置开关，当 `PROACTIVE_REPLY_GROUP_WHITELIST` 存在非空条目时默认为隐式启用（`len(whitelist) > 0`）；
+    - 若实例设置未显式配置开关，当 `PROACTIVE_REPLY_GROUP_WHITELIST` 存在非空条目时默认为隐式启用（`len(whitelist) > 0`）；
     - 为了避免在编辑第一个或最后一个群聊时跨越隐式边界（例如移除最后一个群聊导致服务端意外转为全局开放，或在禁用状态下添加群聊导致服务端意外转为白名单硬门禁拦截），控制台同步器（`ProactiveWhitelistSync`）在跨越空/非空边界或开关状态发生变迁时，强制在修改群聊列表**前**先顺序持久化显式开关值（`ENABLE_PROACTIVE_REPLY_WHITELIST=true` 或 `false`），确保后端不变量绝不倒置；
   - **前置硬门禁拦截**：适配器在进行概率随机掷骰前，通过 `proactive.RollGroupWithRand` 检查目标群聊（`proactive.IsGroupAllowed`）。一旦白名单模式启动，任何不在白名单列表（`PROACTIVE_REPLY_GROUP_WHITELIST`）中的群聊直接短路拒绝、永远不触发主动回复随机 Roll 与大模型调用，实现确定性的零出站与零触发保障；
   - **严格平台隔离与规范化匹配 (Option B Platform Isolation, N2, R1 & R2)**：
@@ -222,7 +222,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 开启时强制校验范围严格限制在 `[0.01, 1.00]`，通过 `ProactiveSettingsSync` 异步串行任务队列调度写操作，连续拖动滑块时自动折叠中间态实现最后意图优先（Last-Intent-Wins），网络保存中锁死控件交互，在本地突变发生与完成时使在途陈旧读取失效（Invalidate Pre-Edit Loads），并在保存失败时主动退出写保护并重载权威真实服务端状态，防御乱序陈旧数据覆盖；
   - **白名单可视化管理与高可靠同步状态机 (ProactiveWhitelistSync, N1 & N4)**：提供「群聊白名单模式」独立开关、群聊下拉快捷选择栏与手动输入框：
     - 下拉选择栏聚合系统最近活跃会话与持久历史会话，优先展示带群名称缓存的条目（如 `123456（王源粉丝群）`），若尚未更新群名称缓存则展示纯群号（如 `34567`）；
-    - 支持手动输入群号添加，界面提供标签（Tags）展示当前已配置的白名单群号及缓存群名，支持一键移除与原子提交环境变量保存（`ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST`），确保白名单管理灵活直观；
+    - 支持手动输入群号添加，界面提供标签（Tags）展示当前已配置的白名单群号及缓存群名，支持一键移除并将 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 保存至数据库，确保白名单管理灵活直观；
     - **权威回滚与未确认状态标记 (Authoritative Rollback & Unverified State Indicator, N4 & R3)**：同步器 `ProactiveWhitelistSync` 严格防范乐观 UI 假阳性与断网状态悬空。一旦底层 API 明确拒绝写入（如权限不足或网络异常），同步器立即在内存中强力回滚至最后已确认保存的快照（`lastSaved` 与 `lastSavedExplicitSwitch`），解除写锁定并置位 `isUnverified = true`。若随后的服务端全量重载（`loadData()`）因链路故障再次失败，界面绝不保留失败的乐观目标态，而是稳定展示最后已确认状态，并伴随明确的 `状态未确认 (已恢复)` 醒目警告提示；
     - **未确认状态强制双键权威对齐 (Full Reconciliation on Ambiguous Writes, R3)**：当同步器处于未确认状态时，下一次用户写操作（即使仅触发开关变迁或仅修改群聊列表）将强制执行全量对齐（`forceReconciliation = true`，同时触发 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 双键写入），彻底覆盖可能因之前网络丢包导致的服务端不一致中间态。唯有两键均保存成功（或服务端权威全量重载成功）后方可安全清除 `isUnverified` 标识，杜绝单键写入提前消除警告导致的状态隐蔽脱节。
 
