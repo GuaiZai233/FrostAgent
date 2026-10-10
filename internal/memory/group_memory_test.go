@@ -1537,3 +1537,378 @@ func TestGroupStore_Finding3_UpdateExtractedEntryReclassification(t *testing.T) 
 		t.Errorf("expected Source to remain SourceDistill when content is unchanged, got %q", updatedDistill.Source)
 	}
 }
+
+func TestGroupStore_Finding2_AdminCorrectionNotUndoneByReextraction(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "frostagent_finding2_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	groupID := "mock_grp_finding2"
+	gs, err := NewGroupStore(tempDir, groupID)
+	if err != nil {
+		t.Fatalf("NewGroupStore failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// 1. 模拟初次由 LLM 从群消息自动提取的记录
+	extEntry := MemoryEntry{
+		ID:              "ext-f2-01",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "我不吃花生",
+		Evidence:        "我不吃花生",
+		SourceMessageID: "msg-f2-100",
+		SourceSenderID:  "mock_u_alice",
+		Tags:            []string{"diet"},
+		Source:          SourceExtract,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := gs.SaveEntry(&extEntry); err != nil {
+		t.Fatalf("SaveEntry extEntry failed: %v", err)
+	}
+
+	// 2. 管理员在 Web 控制台进行人工修正（Content 改为 "我每天吃花生"，增加标签 "correction"）
+	updateReq := MemoryEntry{
+		ID:      "ext-f2-01",
+		Content: "我每天吃花生",
+		Tags:    []string{"diet", "correction"},
+	}
+	if err := gs.UpdateEntry(updateReq); err != nil {
+		t.Fatalf("UpdateEntry failed: %v", err)
+	}
+
+	// 验证修改后：Source 转为 manual，保留原始消息元数据
+	corrected, err := gs.GetByID("ext-f2-01")
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if corrected.Content != "我每天吃花生" || corrected.Source != SourceManual {
+		t.Fatalf("unexpected state after UpdateEntry: %+v", corrected)
+	}
+
+	// 3. 后续 Compact 滚动压缩再次处理原始平台消息 msg-f2-100，尝试重复提取原字面片段
+	reExtracted := MemoryEntry{
+		ID:              "re-extract-999",
+		Owner:           GroupOwnerExplicit,
+		OwnerType:       OwnerGroup,
+		ScopeType:       ScopeGroup,
+		GroupID:         groupID,
+		Content:         "我不吃花生",
+		Evidence:        "我不吃花生",
+		SourceMessageID: "msg-f2-100",
+		SourceSenderID:  "mock_u_alice",
+		Tags:            []string{"diet", "auto_compact"},
+		Source:          SourceDistill,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	if err := gs.SaveEntry(&reExtracted); err != nil {
+		t.Fatalf("SaveEntry reExtracted failed: %v", err)
+	}
+
+	// 4. 验证不变量：
+	// - 总记录数严格为 1，没有产生陈旧引用的副本
+	all, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
+	}
+
+	saved := all[0]
+	// - 管理员人工修正的内容未被覆盖
+	if saved.Content != "我每天吃花生" {
+		t.Errorf("admin content was overwritten by re-extraction: got %q, want '我每天吃花生'", saved.Content)
+	}
+	// - 来源仍然为 SourceManual
+	if saved.Source != SourceManual {
+		t.Errorf("admin Source was overwritten: got %q, want %q", saved.Source, SourceManual)
+	}
+	// - 原始不可变证据保留
+	if saved.Evidence != "我不吃花生" {
+		t.Errorf("immutable Evidence corrupted: got %q", saved.Evidence)
+	}
+	// - 标签正常合并
+	hasAutoTag := false
+	hasCorrectionTag := false
+	for _, tg := range saved.Tags {
+		if tg == "auto_compact" {
+			hasAutoTag = true
+		}
+		if tg == "correction" {
+			hasCorrectionTag = true
+		}
+	}
+	if !hasAutoTag || !hasCorrectionTag {
+		t.Errorf("tags should be merged, got: %v", saved.Tags)
+	}
+
+	// 5. 并发回归测试：20 个 goroutine 并发尝试以原始陈旧引用重提取该消息
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+	for i := range 20 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			candidate := MemoryEntry{
+				Owner:           GroupOwnerExplicit,
+				OwnerType:       OwnerGroup,
+				ScopeType:       ScopeGroup,
+				GroupID:         groupID,
+				Content:         "我不吃花生",
+				Evidence:        "我不吃花生",
+				SourceMessageID: "msg-f2-100",
+				SourceSenderID:  "mock_u_alice",
+				Tags:            []string{"diet", fmt.Sprintf("race_%d", idx)},
+				Source:          SourceDistill,
+			}
+			if err := gs.SaveEntry(&candidate); err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent SaveEntry failed: %v", err)
+	}
+
+	// 并发结束后再次验证：总条目依然为 1，管理员内容与 SourceManual 绝不丢失
+	allAfterRace, err := gs.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll after race failed: %v", err)
+	}
+	if len(allAfterRace) != 1 {
+		t.Fatalf("expected 1 entry after race, got %d: %+v", len(allAfterRace), allAfterRace)
+	}
+	if allAfterRace[0].Content != "我每天吃花生" || allAfterRace[0].Source != SourceManual {
+		t.Fatalf("admin correction corrupted under concurrency: %+v", allAfterRace[0])
+	}
+}
+
+func TestGroupStore_Finding3_ConflictingOwnershipIdempotency(t *testing.T) {
+	// Scenario 1: Turn extraction (Owner="mock_u_alice") followed by Compact distillation (Owner="group")
+	t.Run("TurnThenCompact_ResolvesToGroup", func(t *testing.T) {
+		tempDir := t.TempDir()
+		groupID := "mock_grp_f3_s1"
+		gs, err := NewGroupStore(tempDir, groupID)
+		if err != nil {
+			t.Fatalf("NewGroupStore failed: %v", err)
+		}
+
+		turnEntry := MemoryEntry{
+			Owner:           "mock_u_alice",
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-100",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceExtract,
+		}
+		if err := gs.SaveEntry(&turnEntry); err != nil {
+			t.Fatalf("SaveEntry turnEntry failed: %v", err)
+		}
+
+		compactEntry := MemoryEntry{
+			Owner:           GroupOwnerExplicit,
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-100",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceDistill,
+		}
+		if err := gs.SaveEntry(&compactEntry); err != nil {
+			t.Fatalf("SaveEntry compactEntry failed: %v", err)
+		}
+
+		all, err := gs.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(all) != 1 {
+			t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
+		}
+		// 保守确定性冲突消解：降级为 group，但 source_sender_id 依旧为真实发言者
+		if all[0].Owner != GroupOwnerExplicit {
+			t.Errorf("expected Owner to resolve to %q, got %q", GroupOwnerExplicit, all[0].Owner)
+		}
+		if all[0].SourceSenderID != "mock_u_alice" {
+			t.Errorf("expected SourceSenderID to remain %q, got %q", "mock_u_alice", all[0].SourceSenderID)
+		}
+	})
+
+	// Scenario 2: Compact distillation (Owner="group") followed by Turn extraction (Owner="mock_u_alice")
+	t.Run("CompactThenTurn_ResolvesToGroup", func(t *testing.T) {
+		tempDir := t.TempDir()
+		groupID := "mock_grp_f3_s2"
+		gs, err := NewGroupStore(tempDir, groupID)
+		if err != nil {
+			t.Fatalf("NewGroupStore failed: %v", err)
+		}
+
+		compactEntry := MemoryEntry{
+			Owner:           GroupOwnerExplicit,
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-200",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceDistill,
+		}
+		if err := gs.SaveEntry(&compactEntry); err != nil {
+			t.Fatalf("SaveEntry compactEntry failed: %v", err)
+		}
+
+		turnEntry := MemoryEntry{
+			Owner:           "mock_u_alice",
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-200",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceExtract,
+		}
+		if err := gs.SaveEntry(&turnEntry); err != nil {
+			t.Fatalf("SaveEntry turnEntry failed: %v", err)
+		}
+
+		all, err := gs.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(all) != 1 {
+			t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
+		}
+		if all[0].Owner != GroupOwnerExplicit {
+			t.Errorf("expected Owner to resolve to %q regardless of arrival order, got %q", GroupOwnerExplicit, all[0].Owner)
+		}
+		if all[0].SourceSenderID != "mock_u_alice" {
+			t.Errorf("expected SourceSenderID to remain %q, got %q", "mock_u_alice", all[0].SourceSenderID)
+		}
+	})
+
+	// Scenario 3: Concurrent opposite extractions race
+	t.Run("ConcurrentOppositeExtractions_ResolvesToGroup", func(t *testing.T) {
+		tempDir := t.TempDir()
+		groupID := "mock_grp_f3_s3"
+		gs, err := NewGroupStore(tempDir, groupID)
+		if err != nil {
+			t.Fatalf("NewGroupStore failed: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		errCh := make(chan error, 20)
+		for i := range 20 {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				owner := "mock_u_alice"
+				src := SourceExtract
+				if idx%2 == 0 {
+					owner = GroupOwnerExplicit
+					src = SourceDistill
+				}
+				candidate := MemoryEntry{
+					Owner:           owner,
+					OwnerType:       OwnerGroup,
+					ScopeType:       ScopeGroup,
+					GroupID:         groupID,
+					Content:         "我喜欢玩舞萌DX",
+					Evidence:        "我喜欢玩舞萌DX",
+					SourceMessageID: "msg-f3-300",
+					SourceSenderID:  "mock_u_alice",
+					Source:          src,
+				}
+				if err := gs.SaveEntry(&candidate); err != nil {
+					errCh <- err
+				}
+			}(i)
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatalf("concurrent SaveEntry failed: %v", err)
+		}
+
+		all, err := gs.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(all) != 1 {
+			t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
+		}
+		if all[0].Owner != GroupOwnerExplicit {
+			t.Errorf("expected Owner to resolve to %q under concurrency, got %q", GroupOwnerExplicit, all[0].Owner)
+		}
+		if all[0].SourceSenderID != "mock_u_alice" {
+			t.Errorf("expected SourceSenderID to remain %q, got %q", "mock_u_alice", all[0].SourceSenderID)
+		}
+	})
+
+	// Scenario 4: Both extractions agree on personal owner
+	t.Run("AgreedOwnership_PreservesOwner", func(t *testing.T) {
+		tempDir := t.TempDir()
+		groupID := "mock_grp_f3_s4"
+		gs, err := NewGroupStore(tempDir, groupID)
+		if err != nil {
+			t.Fatalf("NewGroupStore failed: %v", err)
+		}
+
+		e1 := MemoryEntry{
+			Owner:           "mock_u_alice",
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-400",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceExtract,
+		}
+		if err := gs.SaveEntry(&e1); err != nil {
+			t.Fatalf("SaveEntry e1 failed: %v", err)
+		}
+
+		e2 := MemoryEntry{
+			Owner:           "mock_u_alice",
+			OwnerType:       OwnerGroup,
+			ScopeType:       ScopeGroup,
+			GroupID:         groupID,
+			Content:         "我喜欢玩舞萌DX",
+			Evidence:        "我喜欢玩舞萌DX",
+			SourceMessageID: "msg-f3-400",
+			SourceSenderID:  "mock_u_alice",
+			Source:          SourceDistill,
+		}
+		if err := gs.SaveEntry(&e2); err != nil {
+			t.Fatalf("SaveEntry e2 failed: %v", err)
+		}
+
+		all, err := gs.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(all) != 1 {
+			t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
+		}
+		if all[0].Owner != "mock_u_alice" {
+			t.Errorf("expected Owner to remain %q when agreed, got %q", "mock_u_alice", all[0].Owner)
+		}
+	})
+}

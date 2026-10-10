@@ -84,17 +84,18 @@ func SafeGroupKey(groupID string) string {
 // It stores group profile, group memory entries, and group topic catalog
 // in an isolated directory under groups/<safe_group_key>/.
 type GroupStore struct {
-	groupID     string
-	platform    string
-	sql         *sqlBrainStore
-	dir         string
-	profilePath string
-	memoryPath  string
-	catalogPath string
-	mu          sync.RWMutex
-	routeMu     sync.RWMutex
-	routes      map[string]core.RouteContext
-	catalog     *CatalogStore
+	groupID          string
+	platform         string
+	sql              *sqlBrainStore
+	dir              string
+	profilePath      string
+	memoryPath       string
+	catalogPath      string
+	mu               sync.RWMutex
+	routeMu          sync.RWMutex
+	routes           map[string]core.RouteContext
+	catalog          *CatalogStore
+	beforeCommitHook func()
 }
 
 // NewGroupStore creates a GroupStore for the given groupID under baseDir.
@@ -482,6 +483,10 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 
 		if matchedIdx >= 0 {
 			existing := &brain.Entries[matchedIdx]
+			if existing.Source != SourceManual && existing.Owner != incoming.Owner {
+				existing.Owner = GroupOwnerExplicit
+				existing.OwnerType = OwnerGroup
+			}
 			if existing.SourceMessageID == "" && incoming.SourceMessageID != "" {
 				existing.SourceMessageID = incoming.SourceMessageID
 			}
@@ -507,7 +512,86 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		}
 	}
 
+	// Initial pre-commit verification before hook
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if barrier != nil && !barrier.IsValid() {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
+
+	// Test hook executes AFTER initial successful checks pass (deterministic regression test b)
+	if s.beforeCommitHook != nil {
+		s.beforeCommitHook()
+	}
+
+	// Final verification immediately before durable disk persistence
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if barrier != nil && !barrier.IsValid() {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
+
 	return s.saveMemoryLocked(brain)
+}
+
+// PurgeDistilledEntries removes any distilled group memories matching messageID (if non-empty)
+// or senderID (if non-empty and messageID is empty). Historical manual entries are preserved.
+func (s *GroupStore) PurgeDistilledEntries(messageID, senderID string) error {
+	if s == nil {
+		return nil
+	}
+	msgID := strings.TrimSpace(messageID)
+	sndID := strings.TrimSpace(senderID)
+	if msgID == "" && sndID == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.loadMemoryLocked()
+	if err != nil {
+		return err
+	}
+
+	var remaining []MemoryEntry
+	removed := false
+	for _, entry := range brain.Entries {
+		if entry.Source == SourceDistill {
+			if msgID != "" && entry.SourceMessageID == msgID {
+				removed = true
+				continue
+			}
+			if msgID == "" && sndID != "" {
+				if entry.SourceSenderID == sndID || entry.Owner == sndID {
+					removed = true
+					continue
+				}
+			}
+		}
+		remaining = append(remaining, entry)
+	}
+
+	if removed {
+		brain.Entries = remaining
+		return s.saveMemoryLocked(brain)
+	}
+	return nil
+}
+
+// SetBeforeCommitHook sets a test hook invoked right before disk persistence inside SaveGroupEntriesConditionallyContext.
+func (s *GroupStore) SetBeforeCommitHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeCommitHook = hook
 }
 
 // SaveEntry writes a single memory entry to the group store, updating entry.ID if matched with an existing entry.
@@ -1022,35 +1106,36 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 // It is strictly limited to automatic duplicates of the SAME trusted source identity.
 // Explicit/manual writes and distinct platform messages are never conflated or merged.
 func isSameGroupMemory(existing, incoming MemoryEntry) bool {
-	// 1. Explicit / manual entries must never be deduplicated or merged.
-	if incoming.Source == SourceManual || existing.Source == SourceManual {
+	// 1. Explicit / manual incoming additions must never be deduplicated or merged.
+	if incoming.Source == SourceManual {
 		return false
 	}
 
-	// 2. Must match the same owner.
-	if existing.Owner != incoming.Owner {
+	// 2. Pure manual existing entry (no source message ID) must never match automatic incoming.
+	if existing.Source == SourceManual && existing.SourceMessageID == "" {
 		return false
 	}
 
-	// 3. Distinct nonempty source message IDs represent distinct platform messages
-	// and must never be conflated.
+	// 3. Match by trusted SourceMessageID and Evidence/Content regardless of Owner.
 	if existing.SourceMessageID != "" && incoming.SourceMessageID != "" {
 		if existing.SourceMessageID != incoming.SourceMessageID {
 			return false
 		}
-		// Same SourceMessageID: check that evidence or content matches.
-		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
-			return true
-		}
-		if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
+		if (existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence) ||
+			(existing.Evidence != "" && incoming.Content != "" && existing.Evidence == incoming.Content) ||
+			(existing.Content != "" && incoming.Evidence != "" && existing.Content == incoming.Evidence) ||
+			(existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content) {
 			return true
 		}
 		return false
 	}
 
 	// 4. When neither has SourceMessageID (e.g. legacy records or synthetic test entries without message IDs),
-	// match only if both are automatic sources and have matching content or evidence.
+	// match only if both are automatic sources, have matching owner, and have matching content or evidence.
 	if existing.SourceMessageID == "" && incoming.SourceMessageID == "" {
+		if existing.Source == SourceManual || existing.Owner != incoming.Owner {
+			return false
+		}
 		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
 			return true
 		}
