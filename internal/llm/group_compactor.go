@@ -163,6 +163,7 @@ func NewGroupCompactor(
 	}
 	maxBufferSize := max(bufferSize*10, DefaultGroupCompactMaxBufferSize)
 	return &GroupCompactor{
+		Scope:             runtimescope.New(nil, nil, nil),
 		provider:          provider,
 		store:             store,
 		model:             model,
@@ -415,6 +416,18 @@ func (c *GroupCompactor) StopTimers() {
 	defer c.mu.Unlock()
 	for key := range c.scheduled {
 		c.cancelScheduledLocked(key)
+	}
+}
+
+// Close stops any scheduled timers, cancels in-flight work and waits for all compactor goroutines to exit.
+func (c *GroupCompactor) Close() {
+	if c == nil {
+		return
+	}
+	c.StopTimers()
+	if c.Scope != nil {
+		c.Cancel()
+		c.Wait()
 	}
 }
 func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, routeScope modelrouter.Scope, delay time.Duration) {
@@ -736,6 +749,12 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 }
 
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
+	defer func() {
+		c.mu.Lock()
+		c.persistActive[owner] = false
+		delete(c.persistWake, owner)
+		c.mu.Unlock()
+	}()
 	for {
 		if c.Context().Err() != nil {
 			return
@@ -743,8 +762,6 @@ func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 		c.mu.Lock()
 		target := c.pendingPersist[owner]
 		if target == nil {
-			c.persistActive[owner] = false
-			delete(c.persistWake, owner)
 			c.mu.Unlock()
 			return
 		}
