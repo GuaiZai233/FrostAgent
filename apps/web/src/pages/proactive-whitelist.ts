@@ -9,27 +9,40 @@ export interface WhitelistAPI {
 export interface WhitelistState {
   enabled: boolean;
   groups: string[];
+  explicitSwitch?: 'true' | 'false' | null;
 }
 
 export interface WhitelistSyncListener {
-  onStateChange: (state: WhitelistState & { isSaving: boolean }) => void;
+  onStateChange: (
+    state: WhitelistState & { isSaving: boolean; isUnverified: boolean },
+  ) => void;
   onError: (err: Error) => void;
   onSuccess: (msg: string) => void;
   onReloadNeeded: () => Promise<void>;
 }
 
+export function parseExplicitWhitelistSwitch(
+  raw: string | undefined | null,
+): 'true' | 'false' | null {
+  if (raw === undefined || raw === null) return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'true') return 'true';
+  if (trimmed === 'false') return 'false';
+  return null;
+}
+
 export function isWhitelistEnabled(
-  enabledVal: string | undefined,
+  enabledVal: string | undefined | null,
   groupCount: number,
 ): boolean {
   if (enabledVal === undefined || enabledVal === null) {
     return groupCount > 0;
   }
   const norm = enabledVal.trim().toLowerCase();
-  if (norm === 'true' || norm === '1' || norm === 'yes' || norm === 'on') {
+  if (norm === 'true') {
     return true;
   }
-  if (norm === 'false' || norm === '0' || norm === 'no' || norm === 'off') {
+  if (norm === 'false') {
     return false;
   }
   return groupCount > 0;
@@ -85,7 +98,10 @@ export class ProactiveWhitelistSync {
   private listeners: WhitelistSyncListener;
   private current: WhitelistState;
   private lastSaved: WhitelistState;
+  private explicitSwitch: 'true' | 'false' | null = null;
+  private lastSavedExplicitSwitch: 'true' | 'false' | null = null;
   private isSaving = false;
+  private isUnverified = false;
   private pendingTarget: WhitelistState | null = null;
   private opPromise: Promise<void> = Promise.resolve();
   private loadSeqCounter = 0;
@@ -106,14 +122,17 @@ export class ProactiveWhitelistSync {
       enabled: initial.enabled,
       groups: [...initial.groups],
     };
+    this.explicitSwitch = initial.explicitSwitch ?? null;
+    this.lastSavedExplicitSwitch = initial.explicitSwitch ?? null;
     this.listeners = listeners;
   }
 
-  getState(): WhitelistState & { isSaving: boolean } {
+  getState(): WhitelistState & { isSaving: boolean; isUnverified: boolean } {
     return {
       enabled: this.current.enabled,
       groups: [...this.current.groups],
       isSaving: this.isSaving,
+      isUnverified: this.isUnverified,
     };
   }
 
@@ -129,6 +148,7 @@ export class ProactiveWhitelistSync {
     enabled: boolean,
     groups: string[],
     seq: number,
+    explicitSwitch?: 'true' | 'false' | null,
   ): boolean {
     if (seq < this.minValidLoadSeq || seq < this.latestAcceptedLoadSeq) {
       return false; // Stale load response
@@ -138,6 +158,9 @@ export class ProactiveWhitelistSync {
       // Don't overwrite active user edits while save is in flight
       return false;
     }
+    this.explicitSwitch = explicitSwitch !== undefined ? explicitSwitch : null;
+    this.lastSavedExplicitSwitch = this.explicitSwitch;
+    this.isUnverified = false;
     this.current = {
       enabled,
       groups: [...groups],
@@ -224,17 +247,27 @@ export class ProactiveWhitelistSync {
           enabled: target.enabled,
           groups: [...target.groups],
         };
+        this.lastSavedExplicitSwitch = this.explicitSwitch;
+        this.isUnverified = false;
         this.invalidatePreEditLoads();
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        // Definite rejected writes: restore last known-confirmed saved state immediately (N4)
+        this.current = {
+          enabled: this.lastSaved.enabled,
+          groups: [...this.lastSaved.groups],
+        };
+        this.explicitSwitch = this.lastSavedExplicitSwitch;
         this.pendingTarget = null;
         this.isSaving = false;
+        this.isUnverified = true;
         this.listeners.onStateChange(this.getState());
         this.listeners.onError(error);
         try {
           await this.listeners.onReloadNeeded();
         } catch {
-          // ignore reload error
+          // Transport failure prevented confirming server state;
+          // UI visibly retains unverified state with lastSaved restored
         }
         return;
       }
@@ -246,18 +279,22 @@ export class ProactiveWhitelistSync {
   }
 
   private async executeSave(target: WhitelistState): Promise<void> {
-    const toggleChanged = target.enabled !== this.lastSaved.enabled;
+    const desiredSwitch: 'true' | 'false' = target.enabled ? 'true' : 'false';
+    const switchNeedsUpdate = this.explicitSwitch !== desiredSwitch;
     const groupsChanged = !areGroupArraysEqual(target.groups, this.lastSaved.groups);
 
-    if (toggleChanged) {
+    // N1: Persist the explicit desired switch BEFORE changes that cross the implicit enable boundary
+    // or when the switch state changed, guaranteeing backend invariant is never inverted.
+    if (switchNeedsUpdate) {
       const res = await this.api.updateEnvVar({
         key: 'ENABLE_PROACTIVE_REPLY_WHITELIST',
-        value: target.enabled ? 'true' : 'false',
+        value: desiredSwitch,
         isSecret: false,
       });
       if (!res.success) {
         throw new Error(res.error || '更新白名单开关失败');
       }
+      this.explicitSwitch = desiredSwitch;
     }
 
     if (groupsChanged) {
@@ -272,6 +309,7 @@ export class ProactiveWhitelistSync {
       }
     }
 
+    const toggleChanged = target.enabled !== this.lastSaved.enabled;
     if (toggleChanged && groupsChanged) {
       this.listeners.onSuccess(
         target.enabled

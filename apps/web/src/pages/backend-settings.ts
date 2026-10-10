@@ -57,6 +57,7 @@ import {
   parseWhitelistGroups,
   formatGroupOption,
   isWhitelistEnabled,
+  parseExplicitWhitelistSwitch,
   ProactiveWhitelistSync,
 } from './proactive-whitelist';
 
@@ -422,6 +423,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     const state = whitelistSync.getState();
     const enabled = state.enabled;
     const groups = state.groups;
+    const isUnverified = state.isUnverified;
 
     proactiveWhitelistCb.checked = enabled;
     proactiveWhitelistCb.disabled = isSaving;
@@ -431,12 +433,18 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
     proactiveWhitelistStatusText.textContent = isSaving
       ? '保存中...'
-      : enabled
-        ? '已启用'
-        : '已停用';
-    proactiveWhitelistStatusText.className = enabled
-      ? 'text-xs font-medium text-primary'
-      : 'text-xs font-medium text-muted';
+      : isUnverified
+        ? '状态未确认 (已恢复)'
+        : enabled
+          ? '已启用'
+          : '已停用';
+    proactiveWhitelistStatusText.className = isSaving
+      ? 'text-xs font-medium text-muted'
+      : isUnverified
+        ? 'text-xs font-medium text-warning'
+        : enabled
+          ? 'text-xs font-medium text-primary'
+          : 'text-xs font-medium text-muted';
 
     // Update select options
     const currentSelected = proactiveWhitelistSelect.value;
@@ -507,7 +515,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         toast.success(msg);
       },
       onReloadNeeded: async () => {
-        await loadData();
+        const ok = await loadData();
+        if (!ok) {
+          throw new Error('重新加载配置失败');
+        }
       },
     },
   );
@@ -597,6 +608,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         whitelistEnStr,
         parsedWhitelistGroups.length,
       );
+      const serverExplicitSwitch = parseExplicitWhitelistSwitch(whitelistEnStr);
 
       groupMentionCb.checked = groupReplyOnMention;
       groupAtCb.checked = enableAtOther;
@@ -606,14 +618,17 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         serverWhitelistEnabled,
         parsedWhitelistGroups,
         whitelistLoadSeq,
+        serverExplicitSwitch,
       );
+      return true;
     } catch (err) {
-      if (isUnmounted) return;
+      if (isUnmounted) return false;
       toast.error(
         '加载环境变量失败: ' +
           (err instanceof Error ? err.message : String(err)),
       );
       envVars = [];
+      return false;
     } finally {
       if (!isUnmounted) {
         loading = false;

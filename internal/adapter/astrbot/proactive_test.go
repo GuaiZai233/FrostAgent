@@ -1672,7 +1672,7 @@ func TestSanitizeIngressMetadata(t *testing.T) {
 func TestAstrBotIngressMetadataCannotBypassWhitelistGate(t *testing.T) {
 	scope := newTestScopeWithEnv(t, map[string]string{
 		"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
-		"PROACTIVE_REPLY_GROUP_WHITELIST":  "10001",
+		"PROACTIVE_REPLY_GROUP_WHITELIST":  "10001, astrbot:10001",
 		"PROACTIVE_REPLY_PROBABILITY":      "1.00",
 	})
 

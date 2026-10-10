@@ -89,6 +89,7 @@ func RollWithRand(getenv func(string) string, rng func() float64) bool {
 }
 
 // ParseGroupWhitelist parses a comma-, newline-, semicolon-, or whitespace-delimited group ID string into a set.
+// It normalizes platform prefixes if present (e.g. "Telegram:123" -> "telegram:123").
 func ParseGroupWhitelist(raw string) map[string]struct{} {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -102,6 +103,10 @@ func ParseGroupWhitelist(raw string) map[string]struct{} {
 		item = strings.TrimSpace(item)
 		if item != "" {
 			result[item] = struct{}{}
+			if p, gid, ok := strings.Cut(item, ":"); ok && p != "" {
+				normP := NormalizePlatform(p)
+				result[normP+":"+strings.TrimSpace(gid)] = struct{}{}
+			}
 		}
 	}
 	return result
@@ -141,8 +146,9 @@ func NormalizePlatform(platform string) string {
 // IsGroupAllowed checks if the given group ID (and optional platform) is permitted to trigger proactive reply.
 // When whitelist mode is disabled, all groups are allowed (returns true).
 // Once whitelist mode is enabled:
-// - Non-QQ platform groups match platform-qualified entries (e.g. "telegram:123") or bare legacy entries ("123").
 // - QQ/OneBot groups match bare entries ("123") or "qq:123" / "onebot:123" / "aiocqhttp:123".
+// - Non-QQ platform groups (Telegram, Discord, etc.) strictly require platform-qualified entries ("platform:group_id").
+// - Bare IDs in the whitelist are strictly isolated to the QQ family (Option B).
 // - Empty whitelist under enabled mode rejects all groups.
 func IsGroupAllowed(getenv func(string) string, groupID string, platforms ...string) bool {
 	if !IsWhitelistEnabled(getenv) {
@@ -165,36 +171,30 @@ func IsGroupAllowed(getenv func(string) string, groupID string, platforms ...str
 	targetPlatform := NormalizePlatform(platform)
 	targetGroupID := groupID
 	if p, gid, ok := strings.Cut(groupID, ":"); ok && p != "" {
-		if targetPlatform == "" || targetPlatform == "qq" {
-			targetPlatform = NormalizePlatform(p)
-		}
+		targetPlatform = NormalizePlatform(p)
 		targetGroupID = strings.TrimSpace(gid)
 	}
 
-	// 1. Direct match with raw groupID
-	if _, ok := whitelist[groupID]; ok {
-		return true
-	}
-
-	// 2. Bare groupID match (e.g. "123456")
-	// If the whitelist has bare "123456", it matches QQ groups and bare legacy entries
-	if _, ok := whitelist[targetGroupID]; ok {
-		return true
-	}
-
-	// 3. Platform-qualified match
-	if targetPlatform != "" {
-		if targetPlatform == "qq" {
-			for _, alias := range []string{"qq", "onebot", "aiocqhttp"} {
-				if _, ok := whitelist[alias+":"+targetGroupID]; ok {
-					return true
-				}
-			}
-		} else {
-			if _, ok := whitelist[targetPlatform+":"+targetGroupID]; ok {
+	// Option B platform matching:
+	// 1. QQ family (targetPlatform == "qq" or targetPlatform == ""):
+	//    Accept bare ID (targetGroupID), or "qq:" / "onebot:" / "aiocqhttp:" aliases.
+	if targetPlatform == "qq" || targetPlatform == "" {
+		if _, ok := whitelist[targetGroupID]; ok {
+			return true
+		}
+		for _, alias := range []string{"qq", "onebot", "aiocqhttp"} {
+			if _, ok := whitelist[alias+":"+targetGroupID]; ok {
 				return true
 			}
 		}
+		return false
+	}
+
+	// 2. Non-QQ platforms (e.g. telegram, discord):
+	//    Strictly require platform-qualified match (e.g. "telegram:123", "discord:123").
+	//    Bare IDs and other platforms' entries MUST NOT match.
+	if _, ok := whitelist[targetPlatform+":"+targetGroupID]; ok {
+		return true
 	}
 
 	return false

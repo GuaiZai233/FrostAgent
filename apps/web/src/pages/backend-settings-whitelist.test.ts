@@ -14,23 +14,15 @@ test('isWhitelistEnabled normalizes boolean strings case-insensitively with whit
   assert.equal(isWhitelistEnabled('true', 0), true);
   assert.equal(isWhitelistEnabled('TRUE', 0), true);
   assert.equal(isWhitelistEnabled('  True  ', 0), true);
-  assert.equal(isWhitelistEnabled('1', 0), true);
-  assert.equal(isWhitelistEnabled('yes', 0), true);
-  assert.equal(isWhitelistEnabled('YES', 0), true);
-  assert.equal(isWhitelistEnabled('on', 0), true);
-  assert.equal(isWhitelistEnabled('ON', 0), true);
+  assert.equal(isWhitelistEnabled('TrUe', 0), true);
 
   // Falsy values must strictly disable even if whitelist has groups
   assert.equal(isWhitelistEnabled('false', 5), false);
   assert.equal(isWhitelistEnabled('FALSE', 5), false);
   assert.equal(isWhitelistEnabled('  False  ', 5), false);
-  assert.equal(isWhitelistEnabled('0', 5), false);
-  assert.equal(isWhitelistEnabled('no', 5), false);
-  assert.equal(isWhitelistEnabled('NO', 5), false);
-  assert.equal(isWhitelistEnabled('off', 5), false);
-  assert.equal(isWhitelistEnabled('OFF', 5), false);
+  assert.equal(isWhitelistEnabled('FaLsE', 5), false);
 
-  // Unset / empty fallback to groupCount > 0
+  // Unset / empty or non-boolean fallback to groupCount > 0 (matching Go strings.EqualFold)
   assert.equal(isWhitelistEnabled(undefined, 2), true);
   assert.equal(isWhitelistEnabled(undefined, 0), false);
   assert.equal(isWhitelistEnabled('', 3), true);
@@ -38,6 +30,21 @@ test('isWhitelistEnabled normalizes boolean strings case-insensitively with whit
   assert.equal(isWhitelistEnabled('   ', 1), true);
   assert.equal(isWhitelistEnabled('   ', 0), false);
   assert.equal(isWhitelistEnabled('other_value', 2), true);
+  assert.equal(isWhitelistEnabled('other_value', 0), false);
+
+  // Non-boolean aliases (1/0/yes/no/on/off) are unsupported by Go and fall back to groupCount > 0 (N3)
+  assert.equal(isWhitelistEnabled('1', 2), true);
+  assert.equal(isWhitelistEnabled('1', 0), false);
+  assert.equal(isWhitelistEnabled('0', 2), true);
+  assert.equal(isWhitelistEnabled('0', 0), false);
+  assert.equal(isWhitelistEnabled('yes', 2), true);
+  assert.equal(isWhitelistEnabled('yes', 0), false);
+  assert.equal(isWhitelistEnabled('no', 2), true);
+  assert.equal(isWhitelistEnabled('no', 0), false);
+  assert.equal(isWhitelistEnabled('on', 2), true);
+  assert.equal(isWhitelistEnabled('on', 0), false);
+  assert.equal(isWhitelistEnabled('off', 2), true);
+  assert.equal(isWhitelistEnabled('off', 0), false);
 });
 
 test('groupIdFromSessionId extracts bare IDs for QQ/OneBot and platform-qualified IDs for non-QQ', () => {
@@ -171,7 +178,7 @@ test('ProactiveWhitelistSync serializes rapid concurrent removals and prevents r
 
   const sync = new ProactiveWhitelistSync(
     mockApi,
-    { enabled: true, groups: ['A', 'B'] },
+    { enabled: true, groups: ['A', 'B'], explicitSwitch: 'true' },
     {
       onStateChange: () => {},
       onError: () => {},
@@ -273,3 +280,110 @@ test('ProactiveWhitelistSync rejects pre-edit loads arriving after mutation comp
   assert.equal(applied, false, 'Pre-edit load must be rejected');
   assert.deepEqual(sync.getState().groups, ['100', '200']);
 });
+
+test('ProactiveWhitelistSync persists explicit switch before group list across implicit boundaries (N1 Repro A & B)', async () => {
+  // Repro A: switch unset (null), groups=['A'], enabled=true
+  // Removing 'A' must write ENABLE_PROACTIVE_REPLY_WHITELIST=true BEFORE PROACTIVE_REPLY_GROUP_WHITELIST=
+  const callLogA: string[] = [];
+  const mockApiA: WhitelistAPI = {
+    async updateEnvVar({ key, value }) {
+      callLogA.push(`${key}=${value}`);
+      return { success: true };
+    },
+  };
+
+  const syncA = new ProactiveWhitelistSync(
+    mockApiA,
+    { enabled: true, groups: ['A'], explicitSwitch: null },
+    {
+      onStateChange: () => {},
+      onError: () => {},
+      onSuccess: () => {},
+      onReloadNeeded: async () => {},
+    },
+  );
+
+  await syncA.removeGroup('A');
+
+  assert.deepEqual(callLogA, [
+    'ENABLE_PROACTIVE_REPLY_WHITELIST=true',
+    'PROACTIVE_REPLY_GROUP_WHITELIST=',
+  ]);
+  assert.deepEqual(syncA.getState().groups, []);
+  assert.equal(syncA.getState().enabled, true);
+
+  // Repro B: switch unset (null), groups=[], enabled=false
+  // Adding 'B' while disabled must write ENABLE_PROACTIVE_REPLY_WHITELIST=false BEFORE PROACTIVE_REPLY_GROUP_WHITELIST=B
+  const callLogB: string[] = [];
+  const mockApiB: WhitelistAPI = {
+    async updateEnvVar({ key, value }) {
+      callLogB.push(`${key}=${value}`);
+      return { success: true };
+    },
+  };
+
+  const syncB = new ProactiveWhitelistSync(
+    mockApiB,
+    { enabled: false, groups: [], explicitSwitch: null },
+    {
+      onStateChange: () => {},
+      onError: () => {},
+      onSuccess: () => {},
+      onReloadNeeded: async () => {},
+    },
+  );
+
+  await syncB.addGroup('B');
+
+  assert.deepEqual(callLogB, [
+    'ENABLE_PROACTIVE_REPLY_WHITELIST=false',
+    'PROACTIVE_REPLY_GROUP_WHITELIST=B',
+  ]);
+  assert.deepEqual(syncB.getState().groups, ['B']);
+  assert.equal(syncB.getState().enabled, false);
+});
+
+test('ProactiveWhitelistSync immediately restores lastSaved and sets isUnverified on write failure even when reload fails (N4)', async () => {
+  let reloadAttempts = 0;
+  let reportedError: Error | null = null;
+
+  const mockApi: WhitelistAPI = {
+    async updateEnvVar({ key }) {
+      if (key === 'PROACTIVE_REPLY_GROUP_WHITELIST') {
+        return { success: false, error: 'Network partition' };
+      }
+      return { success: true };
+    },
+  };
+
+  const sync = new ProactiveWhitelistSync(
+    mockApi,
+    { enabled: true, groups: ['100', '200'] },
+    {
+      onStateChange: () => {},
+      onError: (err) => {
+        reportedError = err;
+      },
+      onSuccess: () => {},
+      onReloadNeeded: async () => {
+        reloadAttempts++;
+        throw new Error('Transport down: fetch failed');
+      },
+    },
+  );
+
+  await sync.removeGroup('100');
+
+  // Must have caught the error
+  assert.ok(reportedError);
+  assert.match((reportedError as Error).message, /Network partition/);
+  assert.equal(reloadAttempts, 1);
+
+  // Optimistic edit must be rolled back to lastSaved state immediately
+  const state = sync.getState();
+  assert.deepEqual(state.groups, ['100', '200'], 'Groups should be rolled back to lastSaved');
+  assert.equal(state.enabled, true);
+  assert.equal(state.isSaving, false);
+  assert.equal(state.isUnverified, true, 'isUnverified flag must be set when write or reload fails');
+});
+
