@@ -1510,6 +1510,18 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
 		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[1] == "backup" && r.Method == http.MethodGet {
+			data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", mediaType)
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(data)
+			return
+		}
 		if len(parts) == 2 && parts[1] == "backup" && r.Method == http.MethodGet {
 			data, err := m.InstanceZIP(parts[0])
 			if err != nil {

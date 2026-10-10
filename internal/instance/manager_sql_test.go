@@ -164,3 +164,30 @@ func TestSQLInstanceSettingAppliesWithoutManualRestart(t *testing.T) {
 		t.Fatalf("SQL setting still requests manual restart: %#v", list)
 	}
 }
+
+func TestSQLQuickBackupHTTP(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Quick Backup")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create instance: %#v, %v", info, err)
+	}
+	for _, part := range []struct{ path, mediaType string }{
+		{"settings", "application/json"},
+		{"memories", "application/json"},
+		{"summaries", "application/json"},
+		{"stickers", "application/zip"},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/api/instances/"+info.ID+"/backup/"+part.path, nil)
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), part.mediaType) || response.Body.Len() == 0 {
+			t.Fatalf("quick backup %s: code=%d type=%s body=%s", part.path, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+	}
+}

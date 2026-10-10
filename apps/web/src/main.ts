@@ -21,6 +21,7 @@ import { mountActionsCatPage } from './pages/actionscat';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
+import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
@@ -285,6 +286,7 @@ function initAppShell(): void {
     '/actionscat',
     '/chat',
     '/settings/backend',
+    '/settings/backup',
     '/settings/commands',
     '/model-router',
   ];
@@ -299,6 +301,7 @@ function initAppShell(): void {
     mountActionsCatPage,
     mountChatPage,
     mountBackendSettingsPage,
+    mountBackupRestorePage,
     mountCommandSettingsPage,
     mountModelRouterPage,
   ];

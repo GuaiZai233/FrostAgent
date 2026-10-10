@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"archive/zip"
 	"bytes"
@@ -51,33 +52,65 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 			return nil, err
 		}
 	}
-	seen := make(map[string]bool, len(stickers.Entries))
-	for _, entry := range stickers.Entries {
+	if err := addStickerFiles(writer, stickers.Entries, imageDir); err != nil {
+		writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func BuildStickerZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+	stickers, err := ExportStickers(db, instanceID, imageDir)
+	if err != nil {
+		return nil, err
+	}
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	manifest := Manifest{FormatVersion: FormatVersion, Kind: "stickers", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
+	if err := addJSON(writer, "manifest.json", manifest); err != nil {
+		writer.Close()
+		return nil, err
+	}
+	if err := addJSON(writer, "sticker/metadata.json", stickers); err != nil {
+		writer.Close()
+		return nil, err
+	}
+	if err := addStickerFiles(writer, stickers.Entries, imageDir); err != nil {
+		writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func addStickerFiles(writer *zip.Writer, entries []sticker.Entry, imageDir string) error {
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
 		name := entry.FileName
 		if name == "" || name == "." || name == ".." || filepath.Base(name) != name ||
 			strings.ContainsAny(name, `/\`) {
-			writer.Close()
-			return nil, fmt.Errorf("invalid sticker filename %q", name)
+			return fmt.Errorf("invalid sticker filename %q", name)
 		}
 		if seen[strings.ToLower(name)] {
-			writer.Close()
-			return nil, fmt.Errorf("duplicate sticker filename %q", name)
+			return fmt.Errorf("duplicate sticker filename %q", name)
 		}
 		seen[strings.ToLower(name)] = true
 		path := filepath.Join(imageDir, name)
 		info, err := os.Lstat(path)
 		if err != nil {
-			writer.Close()
-			return nil, fmt.Errorf("read sticker %q: %w", name, err)
+			return fmt.Errorf("read sticker %q: %w", name, err)
 		}
 		if !info.Mode().IsRegular() {
-			writer.Close()
-			return nil, fmt.Errorf("sticker %q is not a regular file", name)
+			return fmt.Errorf("sticker %q is not a regular file", name)
 		}
 		file, err := os.Open(path)
 		if err != nil {
-			writer.Close()
-			return nil, err
+			return err
 		}
 		member, err := writer.Create("sticker/files/" + name)
 		if err == nil {
@@ -85,18 +118,13 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		}
 		closeErr := file.Close()
 		if err != nil {
-			writer.Close()
-			return nil, err
+			return err
 		}
 		if closeErr != nil {
-			writer.Close()
-			return nil, closeErr
+			return closeErr
 		}
 	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
 func addJSON(writer *zip.Writer, name string, value any) error {

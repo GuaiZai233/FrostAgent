@@ -3,8 +3,10 @@ package instance
 import (
 	"FrostAgent/internal/backup"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -28,6 +30,48 @@ func (m *Manager) InstanceZIP(id string) ([]byte, error) {
 		return nil, err
 	}
 	return backup.BuildInstanceZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"))
+}
+
+func (m *Manager) InstancePart(id, part string) (data []byte, mediaType, fileName string, err error) {
+	if m.db == nil {
+		return nil, "", "", fmt.Errorf("instance export requires SQL storage")
+	}
+	i, err := m.lookup(id)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if !i.op.TryRLock() {
+		return nil, "", "", ErrBusy
+	}
+	defer i.op.RUnlock()
+	if m.shutdown.Err() != nil {
+		return nil, "", "", ErrClosing
+	}
+	var value any
+	switch part {
+	case "settings":
+		value, err = backup.ExportSettings(m.db, i.id)
+		fileName = "setting.json"
+	case "memories":
+		value, err = backup.ExportMemories(m.db, i.id)
+		fileName = "memory.json"
+	case "summaries":
+		value, err = backup.ExportSummaries(m.db, i.id)
+		fileName = "group_summaries.json"
+	case "stickers":
+		data, err = backup.BuildStickerZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"))
+		return data, "application/zip", "stickers.zip", err
+	default:
+		return nil, "", "", fs.ErrNotExist
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	data, err = json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, "", "", err
+	}
+	return append(data, '\n'), "application/json", fileName, nil
 }
 
 func (m *Manager) PrepareDeletion(id string) error {
