@@ -2299,6 +2299,7 @@ func TestGroupDistillation_RevocationRaceBetweenValidatorCheckAndDiskCommit(t *t
 	}
 
 	session := &SessionContext{}
+	session.SetGroupStore(gStore)
 	msgA := "我平时喜欢吃草莓蛋糕"
 	msgID_A := "msg_A_001"
 	senderID_A := "syn_user_alice"
@@ -2314,8 +2315,13 @@ func TestGroupDistillation_RevocationRaceBetweenValidatorCheckAndDiskCommit(t *t
 				Time:      "10:00:00",
 			},
 		},
-		MessageIDs: []string{msgID_A},
-		Generation: 1,
+		MessageIDs:      []string{msgID_A},
+		ThroughSequence: 1,
+		Generation:      0,
+	}
+
+	if !session.CommitGroupCompact(snapshot, "爱丽丝喜欢吃草莓蛋糕总结") {
+		t.Fatalf("CommitGroupCompact failed")
 	}
 
 	idx0 := 0
@@ -2392,6 +2398,7 @@ func TestGroupDistillation_DropStagedUnrelatedMessageDoesNotCancelInflightCommit
 	}
 
 	session := &SessionContext{}
+	session.SetGroupStore(gStore)
 	msgA := "我平时喜欢弹吉他"
 	msgID_A := "msg_A_001"
 	senderID_A := "syn_user_alice"
@@ -2407,8 +2414,13 @@ func TestGroupDistillation_DropStagedUnrelatedMessageDoesNotCancelInflightCommit
 				Time:      "10:00:00",
 			},
 		},
-		MessageIDs: []string{msgID_A},
-		Generation: 1,
+		MessageIDs:      []string{msgID_A},
+		ThroughSequence: 1,
+		Generation:      0,
+	}
+
+	if !session.CommitGroupCompact(snapshot, "爱丽丝喜欢弹吉他总结") {
+		t.Fatalf("CommitGroupCompact failed")
 	}
 
 	// Staged unrelated message B appended to session buffer
@@ -2455,5 +2467,249 @@ func TestGroupDistillation_DropStagedUnrelatedMessageDoesNotCancelInflightCommit
 	}
 	if entries[0].Owner != senderID_A {
 		t.Errorf("expected owner %q, got %q", senderID_A, entries[0].Owner)
+	}
+}
+
+func TestGroupDistillation_RevocationBetweenSummaryCommitAndBarrierRegistration(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	owner := "group:syn_test_grp_window_a"
+	groupID := "syn_test_grp_window_a"
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 1, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	session := &SessionContext{
+		ConversationID: owner,
+	}
+	session.SetGroupStore(gStore)
+
+	msgA := "我平时喜欢吃草莓蛋糕"
+	msgID_A := "msg_A_001"
+	senderID_A := "syn_user_alice"
+
+	session.AppendGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderID_A,
+		Content:   msgA,
+		MessageID: msgID_A,
+		Time:      "10:00:00",
+	}, 10)
+
+	summaryText := "爱丽丝喜欢吃草莓蛋糕总结"
+	idx0 := 0
+	distillOutput := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝喜欢吃草莓蛋糕",
+			Evidence:       msgA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON, _ := json.Marshal(distillOutput)
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		prompt := req.Messages[0].Content.(string)
+		if strings.Contains(prompt, "待压缩的群消息记录") {
+			return summaryText, nil
+		}
+		if strings.Contains(prompt, "待提取的群消息列表") {
+			return string(rawJSON), nil
+		}
+		return "", errors.New("unexpected prompt")
+	}
+
+	hookExecuted := false
+	compactor.SetAfterSummaryCommitHook(func() {
+		hookExecuted = true
+		// Revoke A after summary commit but before distillation barrier registration (Window A)
+		dropped := session.DropGroupCompactMessage(msgID_A, "")
+		if !dropped {
+			t.Errorf("expected DropGroupCompactMessage to return true")
+		}
+	})
+
+	doneCh := make(chan struct{})
+	snapshot, ready := session.SnapshotGroupCompact(1)
+	if !ready {
+		t.Fatalf("expected SnapshotGroupCompact to be ready")
+	}
+
+	compactor.compact(session, owner, modelrouter.Scope{GroupID: groupID}, snapshot, 0, func(err error) {
+		close(doneCh)
+	})
+
+	select {
+	case <-doneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("compactor timed out")
+	}
+
+	if !hookExecuted {
+		t.Fatalf("expected afterSummaryCommitHook to be executed")
+	}
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries in store after Window A revocation, got %d: %+v", len(entries), entries)
+	}
+}
+
+func TestGroupDistillation_WindowA_UnrelatedSnapshotRemainsValidAndCommits(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+
+	mockLLM := &mockCompactorLLM{}
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 10, 10*time.Millisecond)
+	compactor.SetGroupManager(gm)
+
+	owner := "group:syn_test_grp_unrelated_b"
+	groupID := "syn_test_grp_unrelated_b"
+
+	gStore, err := gm.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	session := &SessionContext{
+		ConversationID: owner,
+	}
+	session.SetGroupStore(gStore)
+
+	msgA := "这是消息A"
+	msgID_A := "msg_A_001"
+	senderID_A := "syn_user_alice"
+
+	snapshotA := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "爱丽丝",
+				SenderID:  senderID_A,
+				Content:   msgA,
+				MessageID: msgID_A,
+				Time:      "10:00:00",
+			},
+		},
+		MessageIDs:      []string{msgID_A},
+		ThroughSequence: 1,
+		Generation:      0,
+	}
+
+	msgB := "我平时喜欢打羽毛球"
+	msgID_B := "msg_B_002"
+	senderID_B := "syn_user_bob"
+
+	snapshotB := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "鲍勃",
+				SenderID:  senderID_B,
+				Content:   msgB,
+				MessageID: msgID_B,
+				Time:      "10:01:00",
+			},
+		},
+		MessageIDs:      []string{msgID_B},
+		ThroughSequence: 2,
+		Generation:      0,
+	}
+
+	// Commit snapshot A and snapshot B
+	if !session.CommitGroupCompact(snapshotA, "总结A") {
+		t.Fatalf("CommitGroupCompact A failed")
+	}
+	if !session.CommitGroupCompact(snapshotB, "总结B") {
+		t.Fatalf("CommitGroupCompact B failed")
+	}
+
+	// Now drop message A (unrelated to snapshot B)
+	dropped := session.DropGroupCompactMessage(msgID_A, "")
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage A to succeed")
+	}
+
+	idx0 := 0
+	distillOutputB := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "鲍勃爱打羽毛球",
+			Evidence:       msgB,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON_B, _ := json.Marshal(distillOutputB)
+
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON_B), nil
+	}
+
+	// Distill snapshot B: must proceed and succeed because B was not revoked
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshotB)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 entry from snapshot B, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Content != msgB {
+		t.Errorf("expected content %q, got %q", msgB, entries[0].Content)
+	}
+	if entries[0].Owner != senderID_B {
+		t.Errorf("expected owner %q, got %q", senderID_B, entries[0].Owner)
+	}
+
+	// Now attempt to distill revoked snapshot A: must be rejected and produce 0 extra entries
+	distillOutputA := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝的消息A",
+			Evidence:       msgA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON_A, _ := json.Marshal(distillOutputA)
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON_A), nil
+	}
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshotA)
+
+	entriesAfterA, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(entriesAfterA) != 1 {
+		t.Fatalf("expected still exactly 1 entry (snapshot A rejected), got %d: %+v", len(entriesAfterA), entriesAfterA)
 	}
 }

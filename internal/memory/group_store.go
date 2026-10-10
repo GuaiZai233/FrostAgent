@@ -483,10 +483,23 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		}
 	}
 
+	// Initial pre-commit verification before hook
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if barrier != nil && !barrier.IsValid() {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
+
+	// Test hook executes AFTER initial successful checks pass (deterministic regression test b)
 	if s.beforeCommitHook != nil {
 		s.beforeCommitHook()
 	}
 
+	// Final verification immediately before durable disk persistence
 	if ctx != nil && ctx.Err() != nil {
 		return ErrConditionFailed
 	}
@@ -498,6 +511,51 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	}
 
 	return s.saveMemoryLocked(brain)
+}
+
+// PurgeDistilledEntries removes any distilled group memories matching messageID (if non-empty)
+// or senderID (if non-empty and messageID is empty). Historical manual entries are preserved.
+func (s *GroupStore) PurgeDistilledEntries(messageID, senderID string) error {
+	if s == nil {
+		return nil
+	}
+	msgID := strings.TrimSpace(messageID)
+	sndID := strings.TrimSpace(senderID)
+	if msgID == "" && sndID == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	brain, err := s.loadMemoryLocked()
+	if err != nil {
+		return err
+	}
+
+	var remaining []MemoryEntry
+	removed := false
+	for _, entry := range brain.Entries {
+		if entry.Source == SourceDistill {
+			if msgID != "" && entry.SourceMessageID == msgID {
+				removed = true
+				continue
+			}
+			if msgID == "" && sndID != "" {
+				if entry.SourceSenderID == sndID || entry.Owner == sndID {
+					removed = true
+					continue
+				}
+			}
+		}
+		remaining = append(remaining, entry)
+	}
+
+	if removed {
+		brain.Entries = remaining
+		return s.saveMemoryLocked(brain)
+	}
+	return nil
 }
 
 // SetBeforeCommitHook sets a test hook invoked right before disk persistence inside SaveGroupEntriesConditionallyContext.

@@ -275,6 +275,10 @@ type SessionContext struct {
 	lastCommittedSenderIDs  []string
 	groupDistillBarriers    map[uint64]*groupDistillationBarrier
 	nextGroupDistillID      uint64
+	validCommittedSources   map[uint64]committedSourceInfo
+	revokedMessageIDs       map[string]struct{}
+	revokedSenderIDs        map[string]struct{}
+	groupStore              *memory.GroupStore
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold    int
 	deliveryFailure        *DeliveryFailure
@@ -531,6 +535,12 @@ func (b *sessionExtractionBarrier) IsTerminated() bool {
 	return b.state == barrierDone || b.state == barrierAborted
 }
 
+type committedSourceInfo struct {
+	sequence   uint64
+	messageIDs []string
+	senderIDs  []string
+}
+
 type groupDistillationBarrier struct {
 	sess       *SessionContext
 	snapshot   GroupCompactSnapshot
@@ -640,6 +650,55 @@ func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snaps
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Validate snapshot against session-owned committed source state.
+	// 1. Snapshot must have been committed via CommitGroupCompact.
+	srcInfo, valid := s.validCommittedSources[snapshot.ThroughSequence]
+	isRevoked := !valid
+
+	// If source sequence matches, also verify message IDs align.
+	if valid && len(srcInfo.messageIDs) > 0 && len(snapshot.MessageIDs) > 0 {
+		if srcInfo.messageIDs[0] != snapshot.MessageIDs[0] {
+			isRevoked = true
+		}
+	}
+
+	// 2. Snapshot must not contain any explicitly revoked message or sender.
+	if !isRevoked && s.revokedMessageIDs != nil {
+		for _, id := range snapshot.MessageIDs {
+			if _, ok := s.revokedMessageIDs[id]; ok {
+				isRevoked = true
+				break
+			}
+		}
+	}
+	if !isRevoked && s.revokedSenderIDs != nil {
+		for _, m := range snapshot.Messages {
+			if m.SenderID != "" {
+				if _, ok := s.revokedSenderIDs[m.SenderID]; ok {
+					isRevoked = true
+					break
+				}
+			}
+		}
+	}
+
+	if isRevoked {
+		ctx, cancel := context.WithCancel(parentCtx)
+		cancel()
+		barrier := &groupDistillationBarrier{
+			sess:       s,
+			snapshot:   snapshot,
+			ctx:        ctx,
+			cancel:     cancel,
+			state:      barrierAborted,
+			aborted:    true,
+			done:       make(chan struct{}),
+			doneClosed: true,
+		}
+		close(barrier.done)
+		return ctx, barrier, func() {}
+	}
+
 	ctx, cancel := context.WithCancel(parentCtx)
 	s.nextGroupDistillID++
 	id := s.nextGroupDistillID
@@ -665,10 +724,31 @@ func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snaps
 			cancel()
 			s.mu.Lock()
 			delete(s.groupDistillBarriers, id)
+			delete(s.validCommittedSources, snapshot.ThroughSequence)
 			s.mu.Unlock()
 		})
 	}
 	return ctxWithBarrier, barrier, cleanup
+}
+
+// SetGroupStore associates a GroupStore with this session context for reconciliation.
+func (s *SessionContext) SetGroupStore(store *memory.GroupStore) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupStore = store
+}
+
+// GroupStore returns the associated GroupStore if any.
+func (s *SessionContext) GroupStore() *memory.GroupStore {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupStore
 }
 
 // BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
@@ -1345,6 +1425,36 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 		dropped = true
 	}
 
+	// Record revoked message and sender IDs in session state
+	if s.revokedMessageIDs == nil {
+		s.revokedMessageIDs = make(map[string]struct{})
+	}
+	if s.revokedSenderIDs == nil {
+		s.revokedSenderIDs = make(map[string]struct{})
+	}
+	if msgID != "" {
+		s.revokedMessageIDs[msgID] = struct{}{}
+	}
+	if sndID != "" {
+		s.revokedSenderIDs[sndID] = struct{}{}
+	}
+
+	// Invalidate any committed sources matching the dropped message or sender
+	if s.validCommittedSources != nil {
+		for seq, src := range s.validCommittedSources {
+			affected := false
+			if msgID != "" && slices.Contains(src.messageIDs, msgID) {
+				affected = true
+			} else if sndID != "" && slices.Contains(src.senderIDs, sndID) {
+				affected = true
+			}
+			if affected {
+				delete(s.validCommittedSources, seq)
+				dropped = true
+			}
+		}
+	}
+
 	// Identify which in-flight distillation barriers are affected by the dropped message.
 	// Barriers whose snapshots do not contain this message or sender are unaffected.
 	var barriersToAbort []*groupDistillationBarrier
@@ -1369,12 +1479,18 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 
 	s.groupCompactGeneration++
 	s.UpdatedAt = time.Now()
+	store := s.groupStore
 	s.mu.Unlock()
 
 	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
 	// if any barrier is actively writing, guaranteeing no stale quote writes persist.
 	for _, b := range barriersToAbort {
 		b.AbortAndWait()
+	}
+
+	// Reconcile and purge any affected distilled records in the group store before returning.
+	if store != nil {
+		_ = store.PurgeDistilledEntries(msgID, sndID)
 	}
 
 	return dropped || len(barriersToAbort) > 0
@@ -1580,6 +1696,25 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 	s.lastCommittedMessageIDs = snapshot.MessageIDs
 	s.lastCommittedSenderIDs = senderIDs
 
+	if s.validCommittedSources == nil {
+		s.validCommittedSources = make(map[uint64]committedSourceInfo)
+	}
+	s.validCommittedSources[snapshot.ThroughSequence] = committedSourceInfo{
+		sequence:   snapshot.ThroughSequence,
+		messageIDs: append([]string(nil), snapshot.MessageIDs...),
+		senderIDs:  append([]string(nil), senderIDs...),
+	}
+	if len(s.validCommittedSources) > 32 {
+		var seqs []uint64
+		for seq := range s.validCommittedSources {
+			seqs = append(seqs, seq)
+		}
+		slices.Sort(seqs)
+		for i := 0; i < len(seqs)-32; i++ {
+			delete(s.validCommittedSources, seqs[i])
+		}
+	}
+
 	s.groupCompactSummary = summary
 
 	var firstID, lastID string
@@ -1664,6 +1799,9 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.prevGroupSummaryGroups = nil
 	s.lastCommittedMessageIDs = nil
 	s.lastCommittedSenderIDs = nil
+	s.validCommittedSources = nil
+	s.revokedMessageIDs = nil
+	s.revokedSenderIDs = nil
 	s.UpdatedAt = time.Now()
 	s.mu.Unlock()
 

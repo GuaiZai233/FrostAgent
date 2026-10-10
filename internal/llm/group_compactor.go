@@ -105,6 +105,15 @@ type GroupCompactor struct {
 
 	groupManager *memory.GroupManager
 	memoryWriter *memory.Writer
+
+	afterSummaryCommitHook func()
+}
+
+// SetAfterSummaryCommitHook configures a hook invoked right after summary commit before distillation barrier registration.
+func (c *GroupCompactor) SetAfterSummaryCommitHook(hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.afterSummaryCommitHook = hook
 }
 
 // SetGroupManager configures the group manager for compact distillation.
@@ -451,6 +460,15 @@ func (c *GroupCompactor) compact(
 	onComplete ...func(err error),
 ) {
 	succeeded := false
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if session != nil && c.groupManager != nil && groupID != "" {
+		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+			session.SetGroupStore(gStore)
+		}
+	}
 	defer func() {
 		c.mu.Lock()
 		key := session.ConversationID
@@ -528,6 +546,14 @@ func (c *GroupCompactor) compact(
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
+
+	c.mu.Lock()
+	afterHook := c.afterSummaryCommitHook
+	c.mu.Unlock()
+	if afterHook != nil {
+		afterHook()
+	}
+
 	c.distillGroupMemories(session, owner, routeScope, snapshot)
 	for _, cb := range onComplete {
 		if cb != nil {
@@ -552,6 +578,12 @@ func (c *GroupCompactor) distillGroupMemories(
 	}
 	if groupID == "" {
 		return
+	}
+
+	if session != nil && c.groupManager != nil {
+		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+			session.SetGroupStore(gStore)
+		}
 	}
 
 	writer := c.MemoryWriter()
