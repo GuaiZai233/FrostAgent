@@ -45,7 +45,7 @@ func TestSQLGroupsIsolatePlatformsAndShareQQAliases(t *testing.T) {
 	if err := qq.Save(MemoryEntry{ID: "distilled-a", Owner: "user-a", Content: "accepted history", Source: SourceDistill, SourceSenderID: "user-a", SourceMessageID: "accepted-message", CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := qq.PurgeDistilledEntries("", "user-a"); err != nil {
+	if err := qq.PurgeDistilledEntries(""); err != nil {
 		t.Fatal(err)
 	}
 	accepted, err := qq.ListAll()

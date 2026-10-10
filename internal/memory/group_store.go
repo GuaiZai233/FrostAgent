@@ -542,21 +542,14 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	return s.saveMemoryLocked(brain)
 }
 
-// PurgeDistilledEntries removes any distilled group memories matching messageID (if non-empty)
-// or senderID (if non-empty and messageID is empty). Historical manual entries are preserved.
-func (s *GroupStore) PurgeDistilledEntries(messageID, senderID string) error {
+// PurgeDistilledEntries removes any distilled group memories matching messageID.
+// It never purges entries by senderID alone, preserving historical memories and manual edits.
+func (s *GroupStore) PurgeDistilledEntries(messageID string) error {
 	if s == nil {
 		return nil
 	}
 	msgID := strings.TrimSpace(messageID)
-	sndID := strings.TrimSpace(senderID)
-	// SQL turns stay staged until delivery or an intentional silent result. An
-	// unconfirmed turn without a message ID cannot have produced distilled rows;
-	// deleting by sender would remove previously accepted history.
-	if s.sql != nil && msgID == "" {
-		return nil
-	}
-	if msgID == "" && sndID == "" {
+	if msgID == "" {
 		return nil
 	}
 
@@ -571,17 +564,9 @@ func (s *GroupStore) PurgeDistilledEntries(messageID, senderID string) error {
 	var remaining []MemoryEntry
 	removed := false
 	for _, entry := range brain.Entries {
-		if entry.Source == SourceDistill {
-			if msgID != "" && entry.SourceMessageID == msgID {
-				removed = true
-				continue
-			}
-			if msgID == "" && sndID != "" {
-				if entry.SourceSenderID == sndID || entry.Owner == sndID {
-					removed = true
-					continue
-				}
-			}
+		if entry.Source == SourceDistill && entry.SourceMessageID == msgID {
+			removed = true
+			continue
 		}
 		remaining = append(remaining, entry)
 	}

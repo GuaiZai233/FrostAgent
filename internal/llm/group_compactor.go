@@ -465,6 +465,9 @@ func (c *GroupCompactor) compact(
 	if groupID == "" && strings.HasPrefix(owner, "group:") {
 		groupID = strings.TrimPrefix(owner, "group:")
 	}
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
 	defer func() {
 		c.mu.Lock()
 		key := session.ConversationID
@@ -609,6 +612,9 @@ func (c *GroupCompactor) distillGroupMemories(
 		return
 	}
 
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
 	if err := c.bindGroupStore(session, routeScope, groupID); err != nil {
 		c.Log().Error(logs.SYSTEM, fmt.Sprintf("群记忆存储不可用 (%s): %v", groupID, err))
 		if c.store != nil && c.store.IsDatabase() && c.Scope != nil {

@@ -2484,7 +2484,7 @@ func TestGroupDistillation_RevocationRaceBetweenValidatorCheckAndDiskCommit(t *t
 	gStore.SetBeforeCommitHook(func() {
 		close(hookCalled)
 		go func() {
-			session.DropGroupCompactMessage(msgID_A, "")
+			session.DropGroupCompactMessage(msgID_A, senderID_A)
 			close(dropDone)
 		}()
 		// Allow DropGroupCompactMessage to enter and initiate AbortAndWait
@@ -2669,7 +2669,7 @@ func TestGroupDistillation_RevocationBetweenSummaryCommitAndBarrierRegistration(
 	compactor.SetAfterSummaryCommitHook(func() {
 		hookExecuted = true
 		// Revoke A after summary commit but before distillation barrier registration (Window A)
-		dropped := session.DropGroupCompactMessage(msgID_A, "")
+		dropped := session.DropGroupCompactMessage(msgID_A, senderID_A)
 		if !dropped {
 			t.Errorf("expected DropGroupCompactMessage to return true")
 		}
@@ -2775,7 +2775,7 @@ func TestGroupDistillation_WindowA_UnrelatedSnapshotRemainsValidAndCommits(t *te
 	}
 
 	// Now drop message A (unrelated to snapshot B)
-	dropped := session.DropGroupCompactMessage(msgID_A, "")
+	dropped := session.DropGroupCompactMessage(msgID_A, senderID_A)
 	if !dropped {
 		t.Fatalf("expected DropGroupCompactMessage A to succeed")
 	}
@@ -2845,5 +2845,268 @@ func TestGroupDistillation_WindowA_UnrelatedSnapshotRemainsValidAndCommits(t *te
 	}
 	if len(entriesAfterA) != 1 {
 		t.Fatalf("expected still exactly 1 entry (snapshot A rejected), got %d: %+v", len(entriesAfterA), entriesAfterA)
+	}
+}
+
+func TestGroupDistillation_SameSenderDistinctMessages_RevocationOfTurnBDoesNotInvalidateAOrC(t *testing.T) {
+	tempDir := t.TempDir()
+	groupID := "grp_same_sender_101"
+	owner := "group:" + groupID
+	gManager := memory.NewGroupManager(tempDir, nil)
+	gStore, err := gManager.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	mockLLM := &mockCompactorLLM{}
+	writer := memory.NewWriter(nil)
+	writer.SetGroupManager(gManager)
+	writer.SetLLM(mockLLM, "mock-model")
+
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 1, 100*time.Millisecond)
+	compactor.SetGroupManager(gManager)
+	compactor.SetMemoryWriter(writer)
+
+	session := &SessionContext{
+		ConversationID: owner,
+		groupStore:     gStore,
+	}
+
+	senderAlice := "syn_user_alice"
+	msgA := "我平时喜欢吃草莓"
+	msgID_A := "msg_alice_001"
+
+	snapshotA := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "爱丽丝",
+				SenderID:  senderAlice,
+				Content:   msgA,
+				MessageID: msgID_A,
+				Time:      "10:00:00",
+			},
+		},
+		MessageIDs:      []string{msgID_A},
+		ThroughSequence: 1,
+		Generation:      0,
+	}
+
+	// 1. Commit snapshot A
+	if !session.CommitGroupCompact(snapshotA, "总结A") {
+		t.Fatalf("CommitGroupCompact A failed")
+	}
+
+	// 2. A later wake turn B from the SAME sender Alice triggers ban_user or reply failure
+	msgID_B := "msg_alice_002"
+	session.StageGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "这是一条被丢弃的消息B",
+		MessageID: msgID_B,
+	}, 50, "")
+	dropped := session.DropGroupCompactMessage(msgID_B, senderAlice)
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage B to succeed")
+	}
+
+	// 3. Snapshot A must remain valid in session-owned committed state
+	idx0 := 0
+	distillOutputA := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝喜欢吃草莓",
+			Evidence:       msgA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON_A, _ := json.Marshal(distillOutputA)
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON_A), nil
+	}
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshotA)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected snapshot A to commit 1 entry despite turn B being dropped, got %d", len(entries))
+	}
+	if entries[0].Content != msgA || entries[0].Owner != senderAlice {
+		t.Errorf("unexpected entry from snapshot A: %+v", entries[0])
+	}
+
+	// 4. Future turn C from the SAME sender Alice must also succeed and not be blacklisted
+	msgC := "我周末喜欢骑自行车"
+	msgID_C := "msg_alice_003"
+	snapshotC := GroupCompactSnapshot{
+		Messages: []GroupCompactMessage{
+			{
+				Role:      "user",
+				Sender:    "爱丽丝",
+				SenderID:  senderAlice,
+				Content:   msgC,
+				MessageID: msgID_C,
+				Time:      "10:05:00",
+			},
+		},
+		MessageIDs:      []string{msgID_C},
+		ThroughSequence: 2,
+		Generation:      session.GroupCompactGeneration(),
+	}
+
+	if !session.CommitGroupCompact(snapshotC, "总结C") {
+		t.Fatalf("CommitGroupCompact C failed")
+	}
+
+	distillOutputC := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "爱丽丝喜欢骑自行车",
+			Evidence:       msgC,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON_C, _ := json.Marshal(distillOutputC)
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON_C), nil
+	}
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshotC)
+
+	entriesAfterC, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(entriesAfterC) != 2 {
+		t.Fatalf("expected both snapshot A and C to persist (2 entries), got %d: %+v", len(entriesAfterC), entriesAfterC)
+	}
+
+	// Verify no entries from revoked turn B exist
+	for _, entry := range entriesAfterC {
+		if entry.SourceMessageID == msgID_B {
+			t.Errorf("revoked message B was found in group store: %+v", entry)
+		}
+	}
+}
+
+func TestGroupDistillation_DropNoIDTurnDoesNotEraseHistoricalMemoriesOfSender(t *testing.T) {
+	tempDir := t.TempDir()
+	groupID := "grp_noid_survive_202"
+	owner := "group:" + groupID
+	gManager := memory.NewGroupManager(tempDir, nil)
+	gStore, err := gManager.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	senderAlice := "syn_user_alice"
+
+	// 1. Seed older SourceDistill and manual memories for Alice from historical turns
+	hist1 := &memory.MemoryEntry{
+		ID:              "mem_hist_01",
+		Owner:           senderAlice,
+		SourceSenderID:  senderAlice,
+		SourceMessageID: "msg_hist_001",
+		Source:          memory.SourceDistill,
+		Content:         "爱丽丝喜欢喝热红茶",
+		Summary:         "爱丽丝喜欢红茶",
+		CreatedAt:       time.Now().Add(-1 * time.Hour),
+		UpdatedAt:       time.Now().Add(-1 * time.Hour),
+	}
+	hist2 := &memory.MemoryEntry{
+		ID:              "mem_hist_02",
+		Owner:           senderAlice,
+		SourceSenderID:  senderAlice,
+		SourceMessageID: "msg_hist_002",
+		Source:          memory.SourceDistill,
+		Content:         "爱丽丝养了一只白猫",
+		Summary:         "爱丽丝养白猫",
+		CreatedAt:       time.Now().Add(-30 * time.Minute),
+		UpdatedAt:       time.Now().Add(-30 * time.Minute),
+	}
+	manualEntry := &memory.MemoryEntry{
+		ID:        "mem_manual_01",
+		Owner:     senderAlice,
+		Source:    memory.SourceManual,
+		Content:   "爱丽丝是前端工程师",
+		CreatedAt: time.Now().Add(-10 * time.Minute),
+		UpdatedAt: time.Now().Add(-10 * time.Minute),
+	}
+
+	if err := gStore.SaveEntry(hist1); err != nil {
+		t.Fatalf("SaveEntry hist1 failed: %v", err)
+	}
+	if err := gStore.SaveEntry(hist2); err != nil {
+		t.Fatalf("SaveEntry hist2 failed: %v", err)
+	}
+	if err := gStore.SaveEntry(manualEntry); err != nil {
+		t.Fatalf("SaveEntry manualEntry failed: %v", err)
+	}
+
+	initialEntries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(initialEntries) != 3 {
+		t.Fatalf("expected 3 seeded entries, got %d", len(initialEntries))
+	}
+
+	// 2. Setup session with gStore and stage a fresh turn from Alice that has NO message ID
+	session := &SessionContext{
+		ConversationID: owner,
+		groupStore:     gStore,
+	}
+
+	stagedItem := GroupCompactMessage{
+		Role:     "user",
+		Sender:   "爱丽丝",
+		SenderID: senderAlice,
+		Content:  "没有消息ID的新发言",
+		// MessageID is deliberately empty
+	}
+	session.StageGroupCompactMessage(stagedItem, 50, "")
+
+	// 3. Drop the failed fresh turn with empty messageID and sender Alice
+	dropped := session.DropGroupCompactMessage("", senderAlice)
+	if !dropped {
+		t.Fatalf("expected DropGroupCompactMessage to drop staged message")
+	}
+
+	// 4. Verify historical SourceDistill and manual memories in GroupStore are 100% preserved
+	entriesAfter, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll after drop failed: %v", err)
+	}
+	if len(entriesAfter) != 3 {
+		t.Fatalf("expected all 3 historical entries to survive, got %d: %+v", len(entriesAfter), entriesAfter)
+	}
+
+	entryMap := make(map[string]memory.MemoryEntry)
+	for _, e := range entriesAfter {
+		entryMap[e.ID] = e
+	}
+
+	if _, ok := entryMap[hist1.ID]; !ok {
+		t.Errorf("historical entry 1 (%s) was deleted!", hist1.ID)
+	}
+	if _, ok := entryMap[hist2.ID]; !ok {
+		t.Errorf("historical entry 2 (%s) was deleted!", hist2.ID)
+	}
+	if _, ok := entryMap[manualEntry.ID]; !ok {
+		t.Errorf("manual entry (%s) was deleted!", manualEntry.ID)
 	}
 }
