@@ -68,7 +68,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					if engine.GroupManager == nil {
 						return "群记忆功能未启用", nil
 					}
-					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
 						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
 					}
@@ -115,7 +115,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					if engine.GroupManager == nil {
 						return "群记忆功能未启用", nil
 					}
-					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
 						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
 					}
@@ -171,7 +171,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					if engine.GroupManager == nil {
 						return "群记忆功能未启用", nil
 					}
-					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
 						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
 					}

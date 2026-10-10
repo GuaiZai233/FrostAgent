@@ -400,7 +400,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.MessageType == "group" && !c.mock {
 				if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
-					if gStore, err := a.engine.GroupManager.GetGroupStore(event.GroupID); err == nil {
+					if gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID); err == nil {
 						role := memory.GroupRoleUnknown
 						if r, ok := event.Metadata["role"].(string); ok {
 							role = memory.NormalizeGroupRole(r)

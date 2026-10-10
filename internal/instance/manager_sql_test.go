@@ -62,6 +62,39 @@ func TestDatabaseManagerIgnoresLegacyFilesAndRecoversInstance(t *testing.T) {
 	}
 }
 
+func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	source, err := m.Create("Source")
+	if err != nil || source.Error != "" {
+		t.Fatalf("create source: %#v, %v", source, err)
+	}
+	target, err := m.Create("Target")
+	if err != nil || target.Error != "" {
+		t.Fatalf("create target: %#v, %v", target, err)
+	}
+	if err := m.instances[source.ID].config.Update("BOT_NAME", "Copied Bot", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.instances[source.ID].config.Update("UPSTREAM_API_KEY", "source-secret", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Copy(target.ID, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.instances[target.ID].config.Get("BOT_NAME"); got != "Copied Bot" {
+		t.Fatalf("non-secret setting was not copied: %q", got)
+	}
+	if got := m.instances[target.ID].config.Get("UPSTREAM_API_KEY"); got == "source-secret" {
+		t.Fatal("source secret was copied")
+	}
+}
+
 func TestPendingDeletionSurvivesRestartAndRemovesAllInstanceData(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
 	t.Setenv("FROSTAGENT_DB_DSN", "")

@@ -241,7 +241,7 @@ func (e *Engine) RunMessagesWithContext(
 			senderID := runContext.ActorUserID
 
 			if e.GroupManager != nil && groupID != "" {
-				groupStore, gErr := e.GroupManager.GetGroupStore(groupID)
+				groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 				if gErr == nil && groupStore != nil {
 					profile, pErr := groupStore.GetProfile()
 					var senderProfile *memory.MemberProfile

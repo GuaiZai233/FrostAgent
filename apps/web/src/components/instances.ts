@@ -172,7 +172,7 @@ export async function openQuickConfig(): Promise<void> {
     const data = await instanceState.refresh();
     await openDialog({
       title: '将复用的实例配置',
-      description: '一旦选择，现有配置将完全被选中的实例覆盖！',
+      description: '一旦选择，现有配置将完全被选中的实例覆盖；密钥及凭据来源不会复制。',
       bodyHtml: `<select class="select" id="instance-copy-source"><option value="">请选择实例</option>${data.instances
         .filter((i) => i.id !== target.id)
         .map(
@@ -181,7 +181,7 @@ export async function openQuickConfig(): Promise<void> {
         )
         .join(
           '',
-        )}</select><p class="text-xs text-muted">仅复用 Settings 与已发布的模型配置。被覆盖的实例必须先停用。</p>`,
+        )}</select><p class="text-xs text-muted">复用设置、模型、MCP 与对话配置。密钥请重新设置。</p>`,
       footerHtml:
         '<button class="btn btn-primary" id="instance-copy-confirm">覆盖配置</button>',
       onMount(dialog, close) {

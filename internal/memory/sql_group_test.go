@@ -28,6 +28,10 @@ func TestSQLGroupsIsolatePlatformsAndShareQQAliases(t *testing.T) {
 	if err != nil || alias != qq {
 		t.Fatalf("QQ aliases did not share a store: %v", err)
 	}
+	astrbot, err := manager.GetGroupStoreForPlatform("aiocqhttp", "test-group")
+	if err != nil || astrbot != qq {
+		t.Fatalf("AstrBot QQ alias did not share a store: %v", err)
+	}
 	other, err := manager.GetGroupStoreForPlatform("discord", "test-group")
 	if err != nil || other == qq {
 		t.Fatalf("platforms shared a store: %v", err)

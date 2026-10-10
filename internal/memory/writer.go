@@ -55,7 +55,7 @@ func (w *Writer) RememberRoute(owner string, route core.RouteContext) {
 			groupID = extractLegacyGroupID(MemoryEntry{Owner: owner})
 		}
 		if groupID != "" {
-			if gStore, err := w.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+			if gStore, err := w.groupManager.GetGroupStoreForPlatform(route.Platform, groupID); err == nil && gStore != nil {
 				gStore.RememberRoute(owner, route)
 			}
 		}
@@ -359,7 +359,7 @@ func (w *Writer) ExtractGroupMemories(
 		return nil
 	}
 
-	groupStore, err := w.groupManager.GetGroupStore(groupID)
+	groupStore, err := w.groupManager.GetGroupStoreForPlatform(route.Platform, groupID)
 	if err != nil {
 		return err
 	}

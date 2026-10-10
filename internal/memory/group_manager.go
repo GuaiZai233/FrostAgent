@@ -62,10 +62,7 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 		return nil, fmt.Errorf("group_id cannot be empty")
 	}
 
-	platform = strings.ToLower(strings.TrimSpace(platform))
-	if platform == "" {
-		return nil, fmt.Errorf("platform cannot be empty")
-	}
+	platform = CanonicalPlatform(platform)
 	canon := CanonicalGroupID(strings.TrimPrefix(groupID, platform+":group:"))
 	if canon == "" {
 		return nil, fmt.Errorf("canonical group_id cannot be empty")

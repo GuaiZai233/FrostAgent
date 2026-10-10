@@ -2,6 +2,7 @@ package instance
 
 import (
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"FrostAgent/internal/backup"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
@@ -984,7 +985,18 @@ func (m *Manager) Delete(id string, all bool) error {
 
 func (m *Manager) Copy(target, source string) error {
 	if m.db != nil {
-		return fmt.Errorf("instance copy requires the SQL import workflow")
+		if target == source {
+			return fmt.Errorf("不能复用自身")
+		}
+		data, _, _, err := m.InstancePart(source, "settings")
+		if err != nil {
+			return err
+		}
+		var settings backup.Settings
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+		return m.ImportSettings(target, settings)
 	}
 	if target == source {
 		return fmt.Errorf("不能复用自身")
