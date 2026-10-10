@@ -47,12 +47,12 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 		if member.UncompressedSize64 > MaxInstanceZIPBytes-total {
 			return decoded, fmt.Errorf("instance ZIP expands beyond size limit")
 		}
-		total += member.UncompressedSize64
+		remaining := uint64(MaxInstanceZIPBytes) - total
 		stream, err := member.Open()
 		if err != nil {
 			return decoded, err
 		}
-		data, err := io.ReadAll(io.LimitReader(stream, MaxInstanceZIPBytes+1))
+		data, err := io.ReadAll(io.LimitReader(stream, int64(remaining)+1))
 		closeErr := stream.Close()
 		if err != nil {
 			return decoded, err
@@ -60,9 +60,10 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 		if closeErr != nil {
 			return decoded, closeErr
 		}
-		if len(data) > MaxInstanceZIPBytes {
-			return decoded, fmt.Errorf("ZIP member %q exceeds size limit", name)
+		if uint64(len(data)) > remaining {
+			return decoded, fmt.Errorf("instance ZIP expands beyond size limit")
 		}
+		total += uint64(len(data))
 		files[name] = data
 	}
 	for _, name := range []string{"manifest.json", "setting.json", "memory.json", "group_summaries.json", "sticker/metadata.json"} {

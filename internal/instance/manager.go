@@ -1529,6 +1529,36 @@ func writeError(w http.ResponseWriter, err error) {
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
+		if path == "global/backup/security" && r.Method == http.MethodGet {
+			state, err := backup.ExportGlobalSecurity(m.db)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			data, err := json.MarshalIndent(state, "", "  ")
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", `attachment; filename="global-security.json"`)
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(append(data, '\n'))
+			return
+		}
+		if path == "global/import/security" && r.Method == http.MethodPost {
+			var state backup.GlobalSecurity
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&state); err != nil {
+				writeError(w, err)
+				return
+			}
+			if err := backup.ImportGlobalSecurity(m.db, state); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
 		if path == "global/backup/settings" && r.Method == http.MethodGet {
 			data, err := json.MarshalIndent(backup.ExportGlobalSettings(m.global), "", "  ")
 			if err != nil {

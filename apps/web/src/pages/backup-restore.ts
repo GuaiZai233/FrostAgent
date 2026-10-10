@@ -34,6 +34,13 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         <button id="global-import-button" class="btn btn-outline mt-3" disabled>导入全局设置</button>
       </article>
       <article class="card p-5 mt-4">
+        <h2 class="card-title text-base">全局访问锁与审计</h2>
+        <p class="text-sm text-muted mt-1">单独备份全局访问状态和安全审计记录。导入会替换当前记录。</p>
+        <a href="/api/instances/global/backup/security" download="global-security.json" class="btn btn-outline mt-4">下载访问与审计 JSON</a>
+        <input id="security-import-file" class="input mt-4" type="file" accept=".json,application/json" />
+        <button id="security-import-button" class="btn btn-outline mt-3" disabled>导入访问与审计</button>
+      </article>
+      <article class="card p-5 mt-4">
         <h2 class="card-title text-base">快速导入设置</h2>
         <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。</p>
         <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
@@ -69,6 +76,24 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         toast.error('导入全局设置失败: ' + String(error));
       } finally {
         globalButton.disabled = false;
+      }
+    })();
+  };
+  const securityFile = container.querySelector<HTMLInputElement>('#security-import-file')!;
+  const securityButton = container.querySelector<HTMLButtonElement>('#security-import-button')!;
+  securityFile.onchange = () => { securityButton.disabled = !securityFile.files?.length; };
+  securityButton.onclick = () => {
+    void (async () => {
+      const file = securityFile.files?.[0];
+      if (!file) return;
+      securityButton.disabled = true;
+      try {
+        await instanceRequest('/global/import/security', JSON.parse(await file.text()));
+        toast.success('全局访问与审计记录已导入');
+      } catch (error) {
+        toast.error('导入全局访问与审计失败: ' + String(error));
+      } finally {
+        securityButton.disabled = false;
       }
     })();
   };

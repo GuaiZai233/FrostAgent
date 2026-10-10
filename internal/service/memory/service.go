@@ -308,10 +308,10 @@ func (s *Service) GetMemoryStats(
 			byOwner[e.Owner]++
 		}
 		return connect.NewResponse(&v1.GetMemoryStatsResponse{
-			Total:           int32(len(entries)),
-			GroupChatCount:  int32(len(entries)),
-			GroupCount:      1,
-			ByOwner:         byOwner,
+			Total:          int32(len(entries)),
+			GroupChatCount: int32(len(entries)),
+			GroupCount:     1,
+			ByOwner:        byOwner,
 		}), nil
 	}
 
@@ -711,15 +711,15 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		scope = string(memory.ScopePrivate)
 	}
 	return &v1.MemoryEntry{
-		Id:          e.ID,
-		Owner:       e.Owner,
-		Content:     e.Content,
-		Tags:        e.Tags,
-		Source:      string(e.Source),
-		Visibility:  string(e.Visibility),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   e.UpdatedAt.Format(time.RFC3339),
-		AccessCount: int32(e.AccessCount),
+		Id:              e.ID,
+		Owner:           e.Owner,
+		Content:         e.Content,
+		Tags:            e.Tags,
+		Source:          string(e.Source),
+		Visibility:      string(e.Visibility),
+		CreatedAt:       e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       e.UpdatedAt.Format(time.RFC3339),
+		AccessCount:     int32(e.AccessCount),
 		Scope:           scope,
 		GroupId:         e.GroupID,
 		Summary:         e.Summary,
