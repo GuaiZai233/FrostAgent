@@ -95,6 +95,47 @@ func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestGlobalSettingsBackupImportIsRedactedAndAtomic(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err := m.global.Update("LISTEN_ADDR", "127.0.0.1:9191", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.global.Update("ALCYONE_SERVICE_TOKEN", "synthetic-secret", false); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/instances/global/backup/settings", nil)
+	response := httptest.NewRecorder()
+	m.api(response, req)
+	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("synthetic-secret")) {
+		t.Fatalf("unsafe global export: %d, %s", response.Code, response.Body.String())
+	}
+	var exported backup.GlobalSettings
+	if err := json.Unmarshal(response.Body.Bytes(), &exported); err != nil {
+		t.Fatal(err)
+	}
+	exported.Values["LISTEN_ADDR"] = "127.0.0.1:9292"
+	if err := backup.ImportGlobalSettings(m.global, exported); err != nil {
+		t.Fatal(err)
+	}
+	if m.global.Get("LISTEN_ADDR") != "127.0.0.1:9292" || m.global.Get("ALCYONE_SERVICE_TOKEN") != "synthetic-secret" {
+		t.Fatal("global import lost a non-secret or overwrote a secret")
+	}
+	exported.Values["LISTEN_ADDR"] = "127.0.0.1:9393"
+	exported.Values["UNCLASSIFIED"] = "value"
+	if err := backup.ImportGlobalSettings(m.global, exported); err == nil {
+		t.Fatal("invalid global key was accepted")
+	}
+	if m.global.Get("LISTEN_ADDR") != "127.0.0.1:9292" {
+		t.Fatal("failed global import changed settings")
+	}
+}
+
 func TestPendingDeletionSurvivesRestartAndRemovesAllInstanceData(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
 	t.Setenv("FROSTAGENT_DB_DSN", "")

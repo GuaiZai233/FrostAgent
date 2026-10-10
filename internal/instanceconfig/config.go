@@ -267,6 +267,54 @@ func (s *Store) Update(k, v string, remove bool) error {
 	return nil
 }
 
+// ReplaceDatabaseSubset atomically replaces only the selected SQL settings.
+// Other keys, including secrets, keep their current values.
+func (s *Store) ReplaceDatabaseSubset(keys map[string]bool, values map[string]string) error {
+	if s.db == nil {
+		return fmt.Errorf("SQL settings are unavailable")
+	}
+	for key := range keys {
+		if !allowed(key, s.global) {
+			return fmt.Errorf("字段 %s 不属于此配置", key)
+		}
+	}
+	for key, value := range values {
+		if !keys[key] || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid imported setting %s", key)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx := context.Background()
+	tx, err := s.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key := range keys {
+		if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM settings WHERE scope = ? AND instance_id = ? AND key = ?`),
+			s.dbScope, s.dbID, key); err != nil {
+			return err
+		}
+		if value, exists := values[key]; exists {
+			if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+				VALUES (?, ?, ?, ?)`), s.dbScope, s.dbID, key, value); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for key := range keys {
+		delete(s.values, key)
+	}
+	for key, value := range values {
+		s.values[key] = value
+	}
+	return nil
+}
+
 func (s *Store) Replace(raw string) error {
 	if s.db != nil {
 		return fmt.Errorf("raw .env replacement is unavailable with SQL storage")

@@ -32,6 +32,7 @@ var knownEnvVars = map[string]envEntry{
 	"WS_LISTEN_ADDR":              {"WebSocket 监听地址", false, true, false},
 	"HTTP_ALLOWED_ORIGINS":        {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true, false},
 	"WS_ALLOWED_ORIGINS":          {"允许的 WebSocket Origin", false, true, false},
+	"SECURITY_CONTROL_MODE":       {"全局安全控制模式", false, false, false},
 	"SYSTEM_PROMPT":               {"系统提示词", false, false, true},
 	"DIALOGUE_PATH":               {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true, false},
 	"MAX_CONTEXT_MESSAGES":        {"最多保留的消息数", false, false, false},

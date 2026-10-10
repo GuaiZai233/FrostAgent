@@ -55,11 +55,11 @@ make build-api    # 构建后端和嵌入的前端
 make build-web    # 仅构建前端
 ```
 
-### 2. 配置环境变量
+### 2. 选择数据库
 
-复制 `.env.example` 为 `.env`，其中只保存 Control Plane 的监听地址、允许的 Origin 和共享 Alcyone 上游。Bot 配置与系统提示词独立保存于 `data/instance_<实例ID>/.env`。
+默认使用 SQLite，首次启动会创建 `data/frostagent.db`。若使用 PostgreSQL，请在启动进程前指定 `FROSTAGENT_DB_DRIVER=postgres` 和 PostgreSQL 连接串 `FROSTAGENT_DB_DSN`。这两个环境变量仅用于选择数据库；应用设置在控制台修改并存入 SQL。同一个 PostgreSQL 数据库只允许一个 FrostAgent 进程使用。
 
-> **升级与兼容性说明（破坏性变更）**：早期版本中 `SYSTEM_PROMPT` 曾定义在根目录 `.env` 中全局共享。本次更新已将系统提示词彻底下沉为实例级配置（`data/instance_<实例ID>/.env`）。存量根级 `.env` 或进程环境变量中的 `SYSTEM_PROMPT` 将被主动忽略，且**不会**隐式迁移或回填至存量实例中；已有实例升级后若未在自身配置中指定 `SYSTEM_PROMPT`，将不再回退到旧的全局提示词，需在控制台「设置」或对应实例的 `.env` 中单独配置。新建实例将由模板自动赋予默认系统提示词。
+**破坏性更新：**旧版 JSON 和 `.env` 运行数据不再加载，也不会自动迁移；替换旧版本前请自行备份。v1.0 之前，遇到不兼容的 SQL schema 版本可能自动重建并清空数据。在「设置 > 备份与还原」可下载带版本号的实例全量 ZIP、`setting.json` 和 `memory.json`。导出时密钥及凭据来源置空；全量还原会创建一个默认停用的新实例，启用前需重新配置凭据和适配器。
 
 ### 3. 启动服务
 
@@ -67,7 +67,7 @@ make build-web    # 仅构建前端
 go run ./cmd/app
 ```
 
-打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。刷新页面后需要重新选择实例。各实例的配置（含系统提示词）、记忆、会话、表情包、日志和人设预设示例对话彼此完全隔离（新建实例时从 `eval/dialogue/dialogue.yml` 模板初始化，之后独立保存于 `data/instance_<实例ID>/dialogue.yml` 并支持热更新与克隆）。
+打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。设置、记忆、模型路由、MCP、示例对话、贴图元数据和群摘要存入 SQL；贴图图片字节仍在实例文件目录中。设置修改后自动应用，无需手动重启进程。
 
 ## 许可证
 

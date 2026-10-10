@@ -1529,6 +1529,31 @@ func writeError(w http.ResponseWriter, err error) {
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
+		if path == "global/backup/settings" && r.Method == http.MethodGet {
+			data, err := json.MarshalIndent(backup.ExportGlobalSettings(m.global), "", "  ")
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", `attachment; filename="global-setting.json"`)
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(append(data, '\n'))
+			return
+		}
+		if path == "global/import/settings" && r.Method == http.MethodPost {
+			var data backup.GlobalSettings
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&data); err != nil {
+				writeError(w, err)
+				return
+			}
+			if err := backup.ImportGlobalSettings(m.global, data); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
 		if path == "restore" && r.Method == http.MethodPost {
 			m.handleInstanceRestore(w, r)
 			return

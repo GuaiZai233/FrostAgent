@@ -55,11 +55,11 @@ make build-api    # Build backend with embedded frontend
 make build-web    # Build frontend only
 ```
 
-### 2. Configure Environment Variables
+### 2. Choose a database
 
-Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed origins, and shared Alcyone upstream). Each instance owns its bot settings and system prompt under `data/instance_<instance-id>/.env`.
+SQLite is the default. FrostAgent creates `data/frostagent.db` on first start. To use PostgreSQL, set `FROSTAGENT_DB_DRIVER=postgres` and `FROSTAGENT_DB_DSN` to a PostgreSQL connection string before starting the process. These two variables only choose the database; all application settings are edited in the dashboard and stored in SQL. Only one FrostAgent process may use a PostgreSQL database at a time.
 
-> **Upgrade Notice (Breaking Change)**: In previous versions, `SYSTEM_PROMPT` was defined globally in the root `.env`. System prompts are now strictly isolated per instance (`data/instance_<instance-id>/.env`). Legacy shared `SYSTEM_PROMPT` values from the root `.env` or process environment are intentionally discarded and will **not** be implicitly backfilled into existing instances. If an existing instance does not have `SYSTEM_PROMPT` configured, it will not fall back to the old shared prompt; configure it in the dashboard Settings or in the instance's `.env`. Newly created instances automatically receive the template default prompt.
+**Breaking change:** JSON and `.env` runtime storage are no longer loaded or migrated. Back up existing data before replacing an earlier version. Before v1.0, an incompatible SQL schema version may be rebuilt and lose stored data. The dashboard's **Settings > Backup & Restore** page downloads a versioned per-instance ZIP, `setting.json`, and `memory.json`. Exports omit secrets and credential sources. A full ZIP restore creates a new disabled instance; configure credentials and adapters before enabling it.
 
 ### 3. Start the Service
 
@@ -67,7 +67,7 @@ Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed ori
 go run ./cmd/app
 ```
 
-Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings (including system prompt), memory, sessions, stickers, logs and persona dialogue examples (initialized from template `eval/dialogue/dialogue.yml` and isolated per instance at `data/instance_<instance-id>/dialogue.yml`).
+Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
 
 ## License
 

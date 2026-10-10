@@ -1,4 +1,5 @@
 import { createInstanceAPI } from '../api/client';
+import { instanceState } from '../instance-state';
 import { SessionInfo } from '@frostagent/proto';
 import {
   escapeHtml,
@@ -30,10 +31,13 @@ export function mountSessionsPage(container: HTMLElement): () => void {
           <h1 class="page-title">会话管理</h1>
           <p class="page-description">查看与管理 Bot 参与的所有私聊及群聊会话状态</p>
         </div>
+        <div class="flex items-center gap-2">
+        <a class="btn btn-outline btn-sm" href="/api/instances/${instanceState.selected!.id}/backup/summaries" download="group_summaries.json">下载群摘要备份</a>
         <button class="btn btn-outline btn-sm" id="sessions-refresh-btn">
           ${icon('refresh', 'w-3.5 h-3.5')}
           <span>刷新</span>
         </button>
+        </div>
       </header>
 
       <div class="card table-card overflow-hidden">

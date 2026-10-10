@@ -473,14 +473,14 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     const keyStorageDetails = () => {
       switch (keyStorage) {
         case apiKeyStorageEnv:
-          return `<p class="form-hint">编辑 .env 文件或在当前 shell 会话中临时指定。</p><div class="form-group mt-2"><label class="form-label">环境变量名称</label><input class="input font-mono" id="endpoint-env-var" value="${escapeHtml(envVarName)}"></div>`;
+          return `<p class="form-hint">从进程环境读取外部密钥；这里填写变量名称，导出时不会包含该名称。</p><div class="form-group mt-2"><label class="form-label">环境变量名称</label><input class="input font-mono" id="endpoint-env-var" value="${escapeHtml(envVarName)}"></div>`;
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
           return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
         case apiKeyStorageManual:
         default:
-          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router_secrets.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
+          return `<p class="form-hint">手动填写的密钥保存在数据库中，导出备份时会置空。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
       }
     };
     void openDialog({

@@ -14,6 +14,7 @@ const globalKeys = new Set([
   'ADMIN_TOKEN',
   'ALLOW_REMOTE_MCP_MANAGEMENT',
   'MCP_ENFORCE_LOCAL_TOKEN',
+  'SECURITY_CONTROL_MODE',
 ]);
 const booleanKeys = new Set([
   'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG',
@@ -21,6 +22,7 @@ const booleanKeys = new Set([
   'SANDBOX_ENABLED', 'ALLOW_REMOTE_MCP_MANAGEMENT', 'MCP_ENFORCE_LOCAL_TOKEN',
 ]);
 import { createInstanceAPI } from '../api/client';
+import { instanceState } from '../instance-state';
 import { EnvVar } from '@frostagent/proto';
 import { escapeHtml, maskSecret } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -61,6 +63,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <a class="btn btn-outline btn-sm" href="/api/instances/${instanceState.selected!.id}/backup/settings" download="setting.json">下载设置备份</a>
           <button class="btn btn-outline btn-icon-sm" id="backend-refresh-btn" title="刷新">
             ${icon('refresh', 'w-3.5 h-3.5')}
           </button>

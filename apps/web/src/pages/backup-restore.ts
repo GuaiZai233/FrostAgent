@@ -27,6 +27,13 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         </div>
       </article>
       <article class="card p-5 mt-4">
+        <h2 class="card-title text-base">全局设置</h2>
+        <p class="text-sm text-muted mt-1">全局设置单独备份；密钥与凭据来源置空，导入时保留当前密钥。</p>
+        <a href="/api/instances/global/backup/settings" download="global-setting.json" class="btn btn-outline mt-4">下载全局设置 JSON</a>
+        <input id="global-import-file" class="input mt-4" type="file" accept=".json,application/json" />
+        <button id="global-import-button" class="btn btn-outline mt-3" disabled>导入全局设置</button>
+      </article>
+      <article class="card p-5 mt-4">
         <h2 class="card-title text-base">快速导入设置</h2>
         <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。</p>
         <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
@@ -47,6 +54,24 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       </article>
     </div>`;
   const fileInput = container.querySelector<HTMLInputElement>('#settings-import-file')!;
+  const globalFile = container.querySelector<HTMLInputElement>('#global-import-file')!;
+  const globalButton = container.querySelector<HTMLButtonElement>('#global-import-button')!;
+  globalFile.onchange = () => { globalButton.disabled = !globalFile.files?.length; };
+  globalButton.onclick = () => {
+    void (async () => {
+      const file = globalFile.files?.[0];
+      if (!file) return;
+      globalButton.disabled = true;
+      try {
+        await instanceRequest('/global/import/settings', JSON.parse(await file.text()));
+        toast.success('全局设置已导入，正在自动应用');
+      } catch (error) {
+        toast.error('导入全局设置失败: ' + String(error));
+      } finally {
+        globalButton.disabled = false;
+      }
+    })();
+  };
   const importButton = container.querySelector<HTMLButtonElement>('#settings-import-button')!;
   fileInput.onchange = () => { importButton.disabled = !fileInput.files?.length; };
   importButton.onclick = () => {
