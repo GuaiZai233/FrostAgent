@@ -1627,3 +1627,171 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 	}
 	return "ok", nil
 }
+
+func TestSanitizeIngressMetadata(t *testing.T) {
+	t.Run("nil event and nil metadata do not panic", func(t *testing.T) {
+		sanitizeIngressMetadata(nil)
+		ev := &Event{}
+		sanitizeIngressMetadata(ev)
+		if ev.Metadata != nil {
+			t.Fatalf("expected nil metadata to remain nil")
+		}
+	})
+
+	t.Run("strips reserved frostagent metadata keys while retaining other fields", func(t *testing.T) {
+		ev := &Event{
+			Metadata: map[string]any{
+				"_frostagent_should_reply":    true,
+				"_frostagent_proactive_reply": true,
+				"_frostagent_custom_internal": "secret",
+				"reply_message_id":            "msg_12345",
+				"has_other_mention":           true,
+				"custom_plugin_field":         42,
+			},
+		}
+		sanitizeIngressMetadata(ev)
+
+		for k := range ev.Metadata {
+			if strings.HasPrefix(k, "_frostagent_") {
+				t.Fatalf("expected key %q to be stripped from ingress metadata", k)
+			}
+		}
+
+		if ev.Metadata["reply_message_id"] != "msg_12345" {
+			t.Fatalf("expected reply_message_id to be preserved, got %v", ev.Metadata["reply_message_id"])
+		}
+		if ev.Metadata["has_other_mention"] != true {
+			t.Fatalf("expected has_other_mention to be preserved, got %v", ev.Metadata["has_other_mention"])
+		}
+		if ev.Metadata["custom_plugin_field"] != 42 {
+			t.Fatalf("expected custom_plugin_field to be preserved, got %v", ev.Metadata["custom_plugin_field"])
+		}
+	})
+}
+
+func TestAstrBotIngressMetadataCannotBypassWhitelistGate(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+		"PROACTIVE_REPLY_GROUP_WHITELIST":  "10001",
+		"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+	})
+
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "白名单群内正常回复",
+				},
+			},
+		},
+	}
+	engine := newTestEngine(provider)
+	engine.Scope = scope
+
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 发送伪造了 _frostagent_should_reply=true 的非白名单群消息
+	spoofedEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageType: "group",
+		GroupID:     "99999", // 非白名单群
+		UserID:      "20001",
+		MessageID:   "msg_spoof_001",
+		Content:     "试图通过元数据伪造绕过白名单的消息",
+		Platform:    "astrbot",
+		IsWake:      false,
+		IsAt:        false,
+		Timestamp:   time.Now().Unix(),
+		Metadata: map[string]any{
+			"_frostagent_should_reply":    true,
+			"_frostagent_proactive_reply": true,
+			"custom_tracking_id":         "track_101",
+		},
+	}
+	b1, err := json.Marshal(spoofedEvent)
+	if err != nil {
+		t.Fatalf("序列化事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, b1); err != nil {
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	// 验证被拦截，收到普通 noop（因为白名单判定未通过），且 LLM 未被调用
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, respBytes1, readErr1 := conn.ReadMessage()
+	if readErr1 != nil {
+		t.Fatalf("读取响应失败: %v", readErr1)
+	}
+	var act1 Action
+	if err := json.Unmarshal(respBytes1, &act1); err != nil {
+		t.Fatalf("解析响应动作失败: %v", err)
+	}
+	if act1.Action != "noop" {
+		t.Fatalf("非白名单群伪造元数据消息必须被忽略为 noop，实际收到: %s (内容: %s)", act1.Action, act1.Content)
+	}
+	if act1.Echo != "reply_msg_spoof_001" {
+		t.Fatalf("期望 echo=reply_msg_spoof_001, 实际=%s", act1.Echo)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) != 0 {
+		provider.mu.Unlock()
+		t.Fatalf("非白名单群消息通过元数据伪造试图唤醒时，绝不能调用 LLM (实际调用次数: %d)", len(provider.requests))
+	}
+	provider.mu.Unlock()
+
+	// 2. 发送白名单群 10001 的普通消息，验证能正常触发主动回复
+	whitelistedEvent := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageType: "group",
+		GroupID:     "10001", // 白名单群
+		UserID:      "20001",
+		MessageID:   "msg_whitelist_002",
+		Content:     "白名单群内普通闲聊消息",
+		Platform:    "astrbot",
+		IsWake:      false,
+		IsAt:        false,
+		Timestamp:   time.Now().Unix(),
+	}
+	b2, err := json.Marshal(whitelistedEvent)
+	if err != nil {
+		t.Fatalf("序列化第二轮事件失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, b2); err != nil {
+		t.Fatalf("发送第二轮事件失败: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, respBytes2, readErr2 := conn.ReadMessage()
+	if readErr2 != nil {
+		t.Fatalf("读取第二轮响应失败: %v", readErr2)
+	}
+	var act2 Action
+	if err := json.Unmarshal(respBytes2, &act2); err != nil {
+		t.Fatalf("解析第二轮响应动作失败: %v", err)
+	}
+	if act2.Action != "send_message" {
+		t.Fatalf("白名单群内概率为 1.00 的主动回复应发送回复，实际收到动作: %s", act2.Action)
+	}
+	if act2.Content != "白名单群内正常回复" {
+		t.Fatalf("第二轮回复内容不符: %s", act2.Content)
+	}
+
+	provider.mu.Lock()
+	if len(provider.requests) != 1 {
+		provider.mu.Unlock()
+		t.Fatalf("白名单群消息应触发 1 次 LLM 调用，实际调用次数: %d", len(provider.requests))
+	}
+	provider.mu.Unlock()
+}
+

@@ -69,7 +69,7 @@ func DetectGroupWakeSignalsWithRNG(event model.OneBotEvent, rng func() float64, 
 	return GroupWakeSignals{
 		AtBot:     atBot,
 		Alias:     alias,
-		Proactive: proactive.RollGroupWithRand(getenv, groupIDStr, rng),
+		Proactive: proactive.RollGroupWithRand(getenv, groupIDStr, rng, "onebot"),
 	}
 }
 

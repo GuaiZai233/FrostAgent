@@ -172,7 +172,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 为了支持精准控制主动回复的生效范围、杜绝非预期群聊中的自发插嘴，FrostAgent 引入了群聊白名单机制（由实例环境变量 `ENABLE_PROACTIVE_REPLY_WHITELIST` 与 `PROACTIVE_REPLY_GROUP_WHITELIST` 控制）；
   - **白名单激活判定**：当显式设置 `ENABLE_PROACTIVE_REPLY_WHITELIST=true` 时开启白名单模式（显式设置 `false` 则关闭）；若未显式配置开关，当 `PROACTIVE_REPLY_GROUP_WHITELIST` 存在非空条目时默认启用；
   - **前置硬门禁拦截**：适配器在进行概率随机掷骰前，通过 `proactive.RollGroupWithRand` 检查目标群聊（`proactive.IsGroupAllowed`）。一旦白名单模式启动，任何不在白名单列表（`PROACTIVE_REPLY_GROUP_WHITELIST`）中的群聊直接短路拒绝、永远不触发主动回复随机 Roll 与大模型调用，实现确定性的零出站与零触发保障；
-  - **跨平台多格式解析**：白名单群号列表支持逗号、分号及各类空白符分隔解析（`proactive.ParseGroupWhitelist`），并自动修剪空白与去重。
+  - **跨平台多格式解析与平台身份规范化 (Option B)**：白名单群号列表支持逗号、分号及各类空白符分隔解析（`proactive.ParseGroupWhitelist`），并自动修剪空白与去重。对于中国大陆主流的 QQ/OneBot 生态，统一保留原生纯纯数字群号习惯（如 `123456`），平台协议（`onebot`、`qq`、`aiocqhttp`）自动归一为 QQ 身份；对于多平台混用环境（Telegram、Discord 等），采用 `platform:group_id` 前缀区分，并兼容纯群号历史回退匹配；
+  - **入站元数据深度净化 (Ingress Metadata Sanitization)**：适配器（AstrBot 等）在入站最前置阶段自动剥除任何由外部客户端伪造的 `_frostagent_` 保留元数据前缀（如 `_frostagent_should_reply`、`_frostagent_proactive_reply`），防止不受信 payload 绕过白名单门禁与前置意图判定。
 - **跨平台群名称缓存与会话元数据传播 (Cross-Platform Group Name Caching)**：
   - 各适配器（OneBot v11 与 AstrBot）在接收到群聊消息、群资料查询（`get_group_info`）或协议事件（`event.GroupName`）时，将群名称同步记录到 `SessionManager`（`SetGroupName` / `GetGroupName`）与内存活跃 `SessionContext` 中；
   - 控制平面 API（`botstatus.Service.GetSessions`）在返回会话列表时携带 `group_name` 字段（Protobuf `frostagent.v1.SessionInfo.group_name`），不仅涵盖当前内存中的活跃群聊，还包含由持久化群聊纪要存储（`GroupSummaryStore`）还原的持久会话，实现全平台统一的群聊名称回显。

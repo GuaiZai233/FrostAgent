@@ -1,9 +1,59 @@
+export interface WhitelistAPI {
+  updateEnvVar: (params: {
+    key: string;
+    value: string;
+    isSecret: boolean;
+  }) => Promise<{ success: boolean; error?: string }>;
+}
+
+export interface WhitelistState {
+  enabled: boolean;
+  groups: string[];
+}
+
+export interface WhitelistSyncListener {
+  onStateChange: (state: WhitelistState & { isSaving: boolean }) => void;
+  onError: (err: Error) => void;
+  onSuccess: (msg: string) => void;
+  onReloadNeeded: () => Promise<void>;
+}
+
+export function isWhitelistEnabled(
+  enabledVal: string | undefined,
+  groupCount: number,
+): boolean {
+  if (enabledVal === undefined || enabledVal === null) {
+    return groupCount > 0;
+  }
+  const norm = enabledVal.trim().toLowerCase();
+  if (norm === 'true' || norm === '1' || norm === 'yes' || norm === 'on') {
+    return true;
+  }
+  if (norm === 'false' || norm === '0' || norm === 'no' || norm === 'off') {
+    return false;
+  }
+  return groupCount > 0;
+}
+
 export function groupIdFromSessionId(sessionId: string): string {
   const lower = sessionId.toLowerCase();
   if (lower.startsWith('group:')) return sessionId.slice('group:'.length);
   const marker = ':group:';
   const index = lower.lastIndexOf(marker);
-  return index >= 0 ? sessionId.slice(index + marker.length) : '';
+  if (index < 0) return '';
+  const prefix = sessionId.slice(0, index).toLowerCase();
+  const rawId = sessionId.slice(index + marker.length);
+  // Normalize QQ/OneBot platforms to bare IDs
+  if (
+    prefix === 'onebot' ||
+    prefix === 'qq' ||
+    prefix === 'aiocqhttp' ||
+    prefix === ''
+  ) {
+    return rawId;
+  }
+  // Keep platform-qualified identity for other platforms (e.g. telegram, discord)
+  return `${prefix}:${rawId}`;
 }
 
 export function parseWhitelistGroups(raw: string): string[] {
@@ -20,4 +70,220 @@ export function formatGroupOption(groupId: string, groupName?: string): string {
     return `${groupId}（${groupName.trim()}）`;
   }
   return groupId;
+}
+
+function areGroupArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+export class ProactiveWhitelistSync {
+  private api: WhitelistAPI;
+  private listeners: WhitelistSyncListener;
+  private current: WhitelistState;
+  private lastSaved: WhitelistState;
+  private isSaving = false;
+  private pendingTarget: WhitelistState | null = null;
+  private opPromise: Promise<void> = Promise.resolve();
+  private loadSeqCounter = 0;
+  private minValidLoadSeq = 0;
+  private latestAcceptedLoadSeq = 0;
+
+  constructor(
+    api: WhitelistAPI,
+    initial: WhitelistState,
+    listeners: WhitelistSyncListener,
+  ) {
+    this.api = api;
+    this.current = {
+      enabled: initial.enabled,
+      groups: [...initial.groups],
+    };
+    this.lastSaved = {
+      enabled: initial.enabled,
+      groups: [...initial.groups],
+    };
+    this.listeners = listeners;
+  }
+
+  getState(): WhitelistState & { isSaving: boolean } {
+    return {
+      enabled: this.current.enabled,
+      groups: [...this.current.groups],
+      isSaving: this.isSaving,
+    };
+  }
+
+  nextLoadSeq(): number {
+    return ++this.loadSeqCounter;
+  }
+
+  private invalidatePreEditLoads(): void {
+    this.minValidLoadSeq = this.loadSeqCounter + 1;
+  }
+
+  applyServerConfig(
+    enabled: boolean,
+    groups: string[],
+    seq: number,
+  ): boolean {
+    if (seq < this.minValidLoadSeq || seq < this.latestAcceptedLoadSeq) {
+      return false; // Stale load response
+    }
+    this.latestAcceptedLoadSeq = seq;
+    if (this.isSaving || this.pendingTarget !== null) {
+      // Don't overwrite active user edits while save is in flight
+      return false;
+    }
+    this.current = {
+      enabled,
+      groups: [...groups],
+    };
+    this.lastSaved = {
+      enabled,
+      groups: [...groups],
+    };
+    this.listeners.onStateChange(this.getState());
+    return true;
+  }
+
+  async toggleEnabled(enabled: boolean): Promise<void> {
+    const baseGroups = this.pendingTarget !== null
+      ? this.pendingTarget.groups
+      : this.current.groups;
+    return this.setTarget({
+      enabled,
+      groups: [...baseGroups],
+    });
+  }
+
+  async addGroup(groupId: string): Promise<void> {
+    const trimmed = groupId.trim();
+    if (!trimmed) return;
+    const base = this.pendingTarget !== null ? this.pendingTarget : this.current;
+    if (base.groups.includes(trimmed)) return;
+    return this.setTarget({
+      enabled: base.enabled,
+      groups: [...base.groups, trimmed],
+    });
+  }
+
+  async removeGroup(groupId: string): Promise<void> {
+    const trimmed = groupId.trim();
+    const base = this.pendingTarget !== null ? this.pendingTarget : this.current;
+    if (!base.groups.includes(trimmed)) return;
+    return this.setTarget({
+      enabled: base.enabled,
+      groups: base.groups.filter((g) => g !== trimmed),
+    });
+  }
+
+  async setTarget(target: WhitelistState): Promise<void> {
+    const nextTarget: WhitelistState = {
+      enabled: target.enabled,
+      groups: [...target.groups],
+    };
+
+    this.invalidatePreEditLoads();
+
+    // Optimistically update current state and notify UI
+    this.current = {
+      enabled: nextTarget.enabled,
+      groups: [...nextTarget.groups],
+    };
+    this.pendingTarget = nextTarget;
+    this.listeners.onStateChange(this.getState());
+
+    if (this.isSaving) {
+      return this.opPromise;
+    }
+
+    this.opPromise = this.drainPending();
+    return this.opPromise;
+  }
+
+  private async drainPending(): Promise<void> {
+    this.isSaving = true;
+    this.listeners.onStateChange(this.getState());
+
+    while (this.pendingTarget !== null) {
+      const target = this.pendingTarget;
+      this.pendingTarget = null;
+      this.listeners.onStateChange(this.getState());
+
+      try {
+        await this.executeSave(target);
+        this.current = {
+          enabled: target.enabled,
+          groups: [...target.groups],
+        };
+        this.lastSaved = {
+          enabled: target.enabled,
+          groups: [...target.groups],
+        };
+        this.invalidatePreEditLoads();
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.pendingTarget = null;
+        this.isSaving = false;
+        this.listeners.onStateChange(this.getState());
+        this.listeners.onError(error);
+        try {
+          await this.listeners.onReloadNeeded();
+        } catch {
+          // ignore reload error
+        }
+        return;
+      }
+    }
+
+    this.isSaving = false;
+    this.invalidatePreEditLoads();
+    this.listeners.onStateChange(this.getState());
+  }
+
+  private async executeSave(target: WhitelistState): Promise<void> {
+    const toggleChanged = target.enabled !== this.lastSaved.enabled;
+    const groupsChanged = !areGroupArraysEqual(target.groups, this.lastSaved.groups);
+
+    if (toggleChanged) {
+      const res = await this.api.updateEnvVar({
+        key: 'ENABLE_PROACTIVE_REPLY_WHITELIST',
+        value: target.enabled ? 'true' : 'false',
+        isSecret: false,
+      });
+      if (!res.success) {
+        throw new Error(res.error || '更新白名单开关失败');
+      }
+    }
+
+    if (groupsChanged) {
+      const groupsStr = target.groups.join(', ');
+      const res = await this.api.updateEnvVar({
+        key: 'PROACTIVE_REPLY_GROUP_WHITELIST',
+        value: groupsStr,
+        isSecret: false,
+      });
+      if (!res.success) {
+        throw new Error(res.error || '更新白名单群聊列表失败');
+      }
+    }
+
+    if (toggleChanged && groupsChanged) {
+      this.listeners.onSuccess(
+        target.enabled
+          ? '已开启白名单模式并更新群聊列表'
+          : '已停用白名单模式并更新群聊列表',
+      );
+    } else if (toggleChanged) {
+      this.listeners.onSuccess(
+        target.enabled ? '已开启主动回复群聊白名单模式' : '已停用主动回复群聊白名单模式',
+      );
+    } else if (groupsChanged) {
+      this.listeners.onSuccess('白名单群聊列表已更新');
+    }
+  }
 }

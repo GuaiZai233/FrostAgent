@@ -39,7 +39,7 @@ var allowedOrigins []string
 func init() {
 	env := os.Getenv("WS_ALLOWED_ORIGINS")
 	if env != "" {
-		for _, o := range strings.Split(env, ",") {
+		for o := range strings.SplitSeq(env, ",") {
 			if trimmed := strings.TrimSpace(o); trimmed != "" {
 				allowedOrigins = append(allowedOrigins, trimmed)
 			}
@@ -540,7 +540,7 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 		if scope != nil {
 			getenv = scope.Getenv
 		}
-		if proactive.RollGroupWithRand(getenv, event.GroupID, rng) {
+		if proactive.RollGroupWithRand(getenv, event.GroupID, rng, event.Platform) {
 			if event.Metadata == nil {
 				event.Metadata = make(map[string]any)
 			}

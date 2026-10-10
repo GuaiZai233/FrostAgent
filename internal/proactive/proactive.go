@@ -126,11 +126,25 @@ func IsWhitelistEnabled(getenv func(string) string) bool {
 	return len(whitelist) > 0
 }
 
-// IsGroupAllowed checks if the given group ID is permitted to trigger proactive reply.
+// NormalizePlatform canonicalizes messaging platform identifiers.
+// OneBot, aiocqhttp, and qq aliases are normalized to "qq".
+func NormalizePlatform(platform string) string {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	switch p {
+	case "onebot", "aiocqhttp", "qq":
+		return "qq"
+	default:
+		return p
+	}
+}
+
+// IsGroupAllowed checks if the given group ID (and optional platform) is permitted to trigger proactive reply.
 // When whitelist mode is disabled, all groups are allowed (returns true).
-// Once whitelist mode is enabled, only groups present in the whitelist are allowed.
-// If whitelist mode is enabled and the whitelist is empty, no groups are allowed (returns false).
-func IsGroupAllowed(getenv func(string) string, groupID string) bool {
+// Once whitelist mode is enabled:
+// - Non-QQ platform groups match platform-qualified entries (e.g. "telegram:123") or bare legacy entries ("123").
+// - QQ/OneBot groups match bare entries ("123") or "qq:123" / "onebot:123" / "aiocqhttp:123".
+// - Empty whitelist under enabled mode rejects all groups.
+func IsGroupAllowed(getenv func(string) string, groupID string, platforms ...string) bool {
 	if !IsWhitelistEnabled(getenv) {
 		return true
 	}
@@ -142,19 +156,59 @@ func IsGroupAllowed(getenv func(string) string, groupID string) bool {
 	if len(whitelist) == 0 {
 		return false
 	}
-	_, ok := whitelist[groupID]
-	return ok
+
+	platform := ""
+	if len(platforms) > 0 {
+		platform = platforms[0]
+	}
+
+	targetPlatform := NormalizePlatform(platform)
+	targetGroupID := groupID
+	if p, gid, ok := strings.Cut(groupID, ":"); ok && p != "" {
+		if targetPlatform == "" || targetPlatform == "qq" {
+			targetPlatform = NormalizePlatform(p)
+		}
+		targetGroupID = strings.TrimSpace(gid)
+	}
+
+	// 1. Direct match with raw groupID
+	if _, ok := whitelist[groupID]; ok {
+		return true
+	}
+
+	// 2. Bare groupID match (e.g. "123456")
+	// If the whitelist has bare "123456", it matches QQ groups and bare legacy entries
+	if _, ok := whitelist[targetGroupID]; ok {
+		return true
+	}
+
+	// 3. Platform-qualified match
+	if targetPlatform != "" {
+		if targetPlatform == "qq" {
+			for _, alias := range []string{"qq", "onebot", "aiocqhttp"} {
+				if _, ok := whitelist[alias+":"+targetGroupID]; ok {
+					return true
+				}
+			}
+		} else {
+			if _, ok := whitelist[targetPlatform+":"+targetGroupID]; ok {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // RollGroup evaluates whether an inbound group message hits the proactive reply probability and satisfies whitelist rules.
-func RollGroup(getenv func(string) string, groupID string) bool {
-	return RollGroupWithRand(getenv, groupID, rand.Float64)
+func RollGroup(getenv func(string) string, groupID string, platforms ...string) bool {
+	return RollGroupWithRand(getenv, groupID, rand.Float64, platforms...)
 }
 
 // RollGroupWithRand evaluates whether an inbound group message hits using a custom RNG function and group whitelist check.
 // Once whitelist mode is active, non-whitelist groups never trigger proactive reply.
-func RollGroupWithRand(getenv func(string) string, groupID string, rng func() float64) bool {
-	if !IsGroupAllowed(getenv, groupID) {
+func RollGroupWithRand(getenv func(string) string, groupID string, rng func() float64, platforms ...string) bool {
+	if !IsGroupAllowed(getenv, groupID, platforms...) {
 		return false
 	}
 	return RollWithRand(getenv, rng)

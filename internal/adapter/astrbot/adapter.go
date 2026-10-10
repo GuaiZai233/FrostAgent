@@ -317,6 +317,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
+			sanitizeIngressMetadata(&event)
 			var warningNotice string
 			var scope *runtimescope.Scope
 			if a.engine != nil {
@@ -494,4 +495,17 @@ func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
 	}
 	return isExplicitWake(&event, scopes...)
 }
+
+// sanitizeIngressMetadata strips reserved internal routing metadata keys from untrusted inbound payloads.
+func sanitizeIngressMetadata(event *Event) {
+	if event == nil || event.Metadata == nil {
+		return
+	}
+	for k := range event.Metadata {
+		if strings.HasPrefix(k, "_frostagent_") {
+			delete(event.Metadata, k)
+		}
+	}
+}
+
 
