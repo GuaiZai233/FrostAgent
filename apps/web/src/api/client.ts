@@ -38,6 +38,13 @@ import {
   type ExportMemoriesResponse,
   type ImportMemoriesResponse,
   type TriggerReflectionResponse,
+  type ListGroupsResponse,
+  type GetGroupProfileResponse,
+  type UpdateGroupProfileResponse,
+  type UpdateMemberProfileResponse,
+  type GroupSummary,
+  type GroupProfile,
+  type MemberProfile,
   type ModelRouterConfiguration,
   type GetStateResponse,
   type SaveDraftResponse,
@@ -64,7 +71,7 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
-export type { MCPServerInfo, MCPToolInfo };
+export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
 
 const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
 
@@ -538,6 +545,7 @@ const authInterceptor: Interceptor = (next) => async (req) => {
 };
 
 export function createInstanceAPI() {
+  let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
   const transport = createConnectTransport({
@@ -750,33 +758,44 @@ export function createInstanceAPI() {
     },
 
     // Memory
+    setMemoryPlatform(platform: string): void { memoryPlatform = platform; },
     listMemories(
       pageSize: number,
       pageToken = '',
       owner = '',
+      scope = '',
+      groupId = '',
     ): Promise<ListMemoriesResponse> {
       return memoryClient.listMemories({
         pagination: { pageSize, pageToken },
         owner,
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
-    deleteMemory(id: string): Promise<DeleteMemoryResponse> {
-      return memoryClient.deleteMemory({ id });
+    deleteMemory(id: string, scope = '', groupId = ''): Promise<DeleteMemoryResponse> {
+      return memoryClient.deleteMemory({ id, scope, groupId, platform: memoryPlatform });
     },
 
-    getMemoryStats(): Promise<GetMemoryStatsResponse> {
-      return memoryClient.getMemoryStats({});
+    getMemoryStats(scope = '', groupId = ''): Promise<GetMemoryStatsResponse> {
+      return memoryClient.getMemoryStats({ scope, groupId, platform: memoryPlatform });
     },
 
     searchMemories(
       query: string,
       pageSize: number,
       pageToken = '',
+      scope = '',
+      groupId = '',
     ): Promise<SearchMemoriesResponse> {
       return memoryClient.searchMemories({
         query,
         pagination: { pageSize, pageToken },
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
@@ -784,38 +803,65 @@ export function createInstanceAPI() {
       owner: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<AddMemoryResponse> {
-      return memoryClient.addMemory({ owner, content, tags, visibility });
+      return memoryClient.addMemory({ owner, content, tags, scope, groupId, platform: memoryPlatform });
     },
 
     updateMemory(
       id: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<UpdateMemoryResponse> {
       return memoryClient.updateMemory({
         id,
         content,
         tags,
-        visibility,
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
-    exportMemories(): Promise<ExportMemoriesResponse> {
-      return memoryClient.exportMemories({});
+    exportMemories(scope = '', groupId = ''): Promise<ExportMemoriesResponse> {
+      return memoryClient.exportMemories({ scope, groupId, platform: memoryPlatform });
     },
 
     importMemories(
       jsonContent: string,
       overwrite: boolean,
+      scope = '',
+      groupId = '',
     ): Promise<ImportMemoriesResponse> {
-      return memoryClient.importMemories({ jsonContent, overwrite });
+      return memoryClient.importMemories({ jsonContent, overwrite, scope, groupId, platform: memoryPlatform });
     },
 
-    triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
-      return memoryClient.triggerReflection({ owner });
+    triggerMemoryReflection(owner = '', scope = '', groupId = ''): Promise<TriggerReflectionResponse> {
+      return memoryClient.triggerReflection({ owner, scope, groupId, platform: memoryPlatform });
+    },
+
+    listGroups(): Promise<ListGroupsResponse> {
+      return memoryClient.listGroups({});
+    },
+
+    getGroupProfile(groupId: string): Promise<GetGroupProfileResponse> {
+      return memoryClient.getGroupProfile({ groupId, platform: memoryPlatform });
+    },
+
+    updateGroupProfile(groupId: string, groupName: string): Promise<UpdateGroupProfileResponse> {
+      return memoryClient.updateGroupProfile({ groupId, groupName, platform: memoryPlatform });
+    },
+
+    updateMemberProfile(
+      groupId: string,
+      userId: string,
+      preferredName: string,
+      aliases: string[],
+    ): Promise<UpdateMemberProfileResponse> {
+      return memoryClient.updateMemberProfile({ groupId, userId, preferredName, aliases, platform: memoryPlatform });
     },
 
     // Dialogue Examples

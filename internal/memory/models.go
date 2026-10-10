@@ -2,7 +2,7 @@ package memory
 
 import "time"
 
-// Visibility 控制记忆条目的可见范围。
+// Visibility 控制记忆条目的可见范围（已废弃：仅保留用于兼容历史 brain.json 数据反序列化）。
 type Visibility string
 
 const (
@@ -10,6 +10,21 @@ const (
 	VisibilityPrivate Visibility = "private"
 	// VisibilityPublic 所有人可见，如公共知识、项目信息等。
 	VisibilityPublic Visibility = "public"
+)
+
+// ScopeType 标识记忆的作用域类型（私聊或群聊）。
+type ScopeType string
+
+const (
+	// ScopePrivate 私聊作用域（按用户严格隔离）。
+	ScopePrivate ScopeType = "private"
+	// ScopeGroup 群聊作用域（按群严格独立持久化）。
+	ScopeGroup ScopeType = "group"
+)
+
+const (
+	// GroupOwnerExplicit 是群聊中涉及第三方、群规、多人关系或无法归属个人的条目的显式 owner 标识值。
+	GroupOwnerExplicit = "group"
 )
 
 // OwnerType 区分 owner 是「单个用户」还是「某个群」——两套 owner 体系互不干扰：
@@ -34,19 +49,27 @@ const (
 	SourceManual Source = "manual"
 	// SourceReflect 由反思系统生成。
 	SourceReflect Source = "reflect"
-	// SourceCompact 标记旧版本写入 brain.json 的群聊总结；新总结不再写入记忆。
+	// SourceCompact 标记旧版本写入 brain.json 的群聊总结（已废弃：新总结不再写入记忆）。
 	SourceCompact Source = "compact"
+	// SourceDistill 由后台从滚动压缩快照中提炼的群聊长期记忆。
+	SourceDistill Source = "distill"
 )
 
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
 	ID          string     `json:"id"`                    // 唯一标识
-	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"，群聊则为 "group:<群号>"）
-	OwnerType   OwnerType  `json:"owner_type"`            // owner 是人还是群（零值兼容老数据）
-	Content     string     `json:"content"`               // 记忆内容（自然语言）
-	Tags        []string   `json:"tags"`                  // 标签（用于精确匹配和分类）
+	Owner       string     `json:"owner"`                 // 归属者（如 "frost"、"alice"，群聊中为发信者QQ自述，或显式 "group"）
+	OwnerType   OwnerType  `json:"owner_type,omitempty"`  // owner 是人还是群（零值兼容老数据）
+	ScopeType   ScopeType  `json:"scope_type,omitempty"`  // 作用域：private 或 group
+	GroupID         string     `json:"group_id,omitempty"`          // 群号（ScopeType == group 时）
+	Content         string     `json:"content"`                     // 记忆内容（Option A 下群聊提取为权威原始发言字面片段）
+	Summary         string     `json:"summary,omitempty"`           // 可选的自然语言展示摘要（不作为权威事实覆盖原文）
+	Evidence        string     `json:"evidence,omitempty"`          // 溯源原始发言字面片段
+	SourceMessageID string     `json:"source_message_id,omitempty"` // 平台源消息唯一 ID
+	SourceSenderID  string     `json:"source_sender_id,omitempty"`  // 平台源消息发送者 ID
+	Tags            []string   `json:"tags"`                        // 标签（用于精确匹配和分类）
 	Source      Source     `json:"source"`                // 来源
-	Visibility  Visibility `json:"visibility"`            // 可见性
+	Visibility  Visibility `json:"visibility,omitempty"`  // 可见性（已废弃）
 	CreatedAt   time.Time  `json:"created_at"`            // 创建时间
 	UpdatedAt   time.Time  `json:"updated_at"`            // 最后访问/更新时间
 	AccessCount int        `json:"access_count"`          // 被召回次数

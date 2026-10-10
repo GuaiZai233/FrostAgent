@@ -1,6 +1,7 @@
 package dialogue
 
 import (
+	"FrostAgent/internal/storage"
 	"context"
 	"fmt"
 	"os"
@@ -27,10 +28,20 @@ func WithLogger(logger *logs.Store) Option {
 
 // Service implements frostagent.v1.DialogueServiceHandler.
 type Service struct {
-	mu       sync.RWMutex
-	filePath string
-	engine   *llm.Engine
-	logger   *logs.Store
+	mu         sync.RWMutex
+	filePath   string
+	engine     *llm.Engine
+	logger     *logs.Store
+	db         *storage.DB
+	instanceID string
+}
+
+func NewSQL(db *storage.DB, instanceID string, engine *llm.Engine, opts ...Option) *Service {
+	s := &Service{db: db, instanceID: instanceID, engine: engine}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // New creates a new DialogueService.
@@ -66,7 +77,13 @@ func (s *Service) ListDialogues(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	examples, err := llm.LoadDialogueExamples(s.filePath)
+	var examples []llm.DialogueExample
+	var err error
+	if s.db != nil {
+		examples, err = LoadExamplesSQL(s.db, s.instanceID)
+	} else {
+		examples, err = llm.LoadDialogueExamples(s.filePath)
+	}
 	if err != nil && !os.IsNotExist(err) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read dialogue file: %w", err))
 	}
@@ -114,18 +131,20 @@ func (s *Service) SaveDialogues(
 		})
 	}
 
-	data, err := yaml.Marshal(examples)
-	if err != nil {
-		return connect.NewResponse(&v1.SaveDialoguesResponse{
-			Success: false,
-			Error:   fmt.Sprintf("marshal YAML: %v", err),
-		}), nil
+	var saveErr error
+	if s.db != nil {
+		saveErr = SaveExamplesSQL(s.db, s.instanceID, examples)
+	} else {
+		data, err := yaml.Marshal(examples)
+		if err != nil {
+			return connect.NewResponse(&v1.SaveDialoguesResponse{Success: false, Error: fmt.Sprintf("marshal YAML: %v", err)}), nil
+		}
+		saveErr = s.atomicWriteFile(data)
 	}
-
-	if err := s.atomicWriteFile(data); err != nil {
+	if saveErr != nil {
 		return connect.NewResponse(&v1.SaveDialoguesResponse{
 			Success: false,
-			Error:   fmt.Sprintf("write file: %v", err),
+			Error:   fmt.Sprintf("保存示例对话失败: %v", saveErr),
 		}), nil
 	}
 
@@ -146,6 +165,9 @@ func (s *Service) GetRawDialogueFile(
 	ctx context.Context,
 	req *connect.Request[v1.GetRawDialogueFileRequest],
 ) (*connect.Response[v1.GetRawDialogueFileResponse], error) {
+	if s.db != nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("raw dialogue YAML editor has been removed"))
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -171,6 +193,9 @@ func (s *Service) UpdateRawDialogueFile(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateRawDialogueFileRequest],
 ) (*connect.Response[v1.UpdateRawDialogueFileResponse], error) {
+	if s.db != nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("raw dialogue YAML editor has been removed"))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -237,6 +262,10 @@ func (s *Service) Prompt() string {
 	defer s.mu.RUnlock()
 	if s.engine != nil {
 		return s.engine.PersonaDialogue()
+	}
+	if s.db != nil {
+		p, _ := LoadPromptSQL(s.db, s.instanceID)
+		return p
 	}
 	p, _ := llm.LoadDialoguePrompt(s.filePath)
 	return p

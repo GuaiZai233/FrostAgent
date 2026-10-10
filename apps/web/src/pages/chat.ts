@@ -113,7 +113,7 @@ export function mountChatPage(container: HTMLElement): () => void {
       <div class="card p-3 border-border flex items-center gap-2.5 text-xs text-muted" style="background-color: var(--secondary);">
         <span class="text-primary flex items-center">${icon('info', 'w-4 h-4')}</span>
         <span>
-          <strong>断电全丢模式 (Mock Adapter)</strong>：当前通信通过 <code class="font-mono">?mock=true</code> 连接。对话绝不写入长期记忆库 (<code class="font-mono">brain.json</code>)，不触发群聊总结落盘，不偷取表情包。
+          <strong>断电全丢模式 (Mock Adapter)</strong>：当前通信通过 <code class="font-mono">?mock=true</code> 连接。对话绝不写入长期记忆库，不触发群聊总结落盘，不偷取表情包。
         </span>
       </div>
 

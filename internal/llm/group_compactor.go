@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
@@ -101,6 +102,49 @@ type GroupCompactor struct {
 	pendingPersist map[string]*pendingPersistRecord
 	persistActive  map[string]bool
 	persistWake    map[string]chan struct{}
+
+	groupManager *memory.GroupManager
+	memoryWriter *memory.Writer
+
+	afterSummaryCommitHook func()
+}
+
+// SetAfterSummaryCommitHook configures a hook invoked right after summary commit before distillation barrier registration.
+func (c *GroupCompactor) SetAfterSummaryCommitHook(hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.afterSummaryCommitHook = hook
+}
+
+// SetGroupManager configures the group manager for compact distillation.
+func (c *GroupCompactor) SetGroupManager(gm *memory.GroupManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.groupManager = gm
+}
+
+// SetMemoryWriter configures the memory writer for canonical group memory distillation.
+func (c *GroupCompactor) SetMemoryWriter(w *memory.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.memoryWriter = w
+}
+
+// MemoryWriter returns the configured memory writer or constructs a fallback if groupManager is available.
+func (c *GroupCompactor) MemoryWriter() *memory.Writer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.memoryWriter != nil {
+		return c.memoryWriter
+	}
+	if c.groupManager != nil && c.provider != nil && c.model != "" {
+		w := memory.NewWriter(nil)
+		w.Scope = c.Scope
+		w.SetGroupManager(c.groupManager)
+		w.SetLLM(c.provider, c.model)
+		return w
+	}
+	return nil
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -416,13 +460,21 @@ func (c *GroupCompactor) compact(
 	onComplete ...func(err error),
 ) {
 	succeeded := false
+	retryOnFailure := true
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
 	defer func() {
 		c.mu.Lock()
 		key := session.ConversationID
 		delete(c.inflight, key)
 		lastRun := c.lastRun[key]
 
-		if session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
+		if (succeeded || retryOnFailure) && session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
 			var delay time.Duration
 			if succeeded {
 				delay = c.minInterval - time.Since(lastRun)
@@ -440,6 +492,18 @@ func (c *GroupCompactor) compact(
 		}
 		c.mu.Unlock()
 	}()
+	if err := c.bindGroupStore(session, routeScope, groupID); err != nil {
+		retryOnFailure = false
+		if c.store != nil && c.store.IsDatabase() && c.Scope != nil {
+			c.Scope.Cancel()
+		}
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(err)
+			}
+		}
+		return
+	}
 
 	conversation := formatGroupCompactInput(snapshot)
 	request := core.ChatRequest{
@@ -479,7 +543,26 @@ func (c *GroupCompactor) compact(
 		return
 	}
 
-	if !session.CommitGroupCompact(snapshot, summary) {
+	var persist func() (bool, error)
+	if c.store != nil && c.store.IsDatabase() {
+		persist = func() (bool, error) { return c.store.Upsert(owner, summary, storeGeneration) }
+	}
+	committed, persistErr := session.CommitGroupCompactWithPersistence(snapshot, summary, persist)
+	if persistErr != nil {
+		retryOnFailure = false
+		compErr := fmt.Errorf("persist group summary: %w", persistErr)
+		c.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊 running compact 持久化失败 (%s): %v", owner, compErr))
+		if c.Scope != nil {
+			c.Scope.Cancel()
+		}
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(compErr)
+			}
+		}
+		return
+	}
+	if !committed {
 		c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
 		compErr := errors.New("compaction aborted due to session reset or change")
 		for _, cb := range onComplete {
@@ -492,12 +575,111 @@ func (c *GroupCompactor) compact(
 	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 
-	c.queuePersistence(owner, summary, storeGeneration)
+	if persist == nil {
+		c.queuePersistence(owner, summary, storeGeneration)
+	}
+
+	c.mu.Lock()
+	afterHook := c.afterSummaryCommitHook
+	c.mu.Unlock()
+	if afterHook != nil {
+		afterHook()
+	}
+
+	c.distillGroupMemories(session, owner, routeScope, snapshot)
 	for _, cb := range onComplete {
 		if cb != nil {
 			cb(nil)
 		}
 	}
+}
+
+func (c *GroupCompactor) distillGroupMemories(
+	session *SessionContext,
+	owner string,
+	routeScope modelrouter.Scope,
+	snapshot GroupCompactSnapshot,
+) {
+	if c == nil || len(snapshot.Messages) == 0 {
+		return
+	}
+
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if groupID == "" {
+		return
+	}
+
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
+	if err := c.bindGroupStore(session, routeScope, groupID); err != nil {
+		c.Log().Error(logs.SYSTEM, fmt.Sprintf("群记忆存储不可用 (%s): %v", groupID, err))
+		if c.store != nil && c.store.IsDatabase() && c.Scope != nil {
+			c.Scope.Cancel()
+		}
+		return
+	}
+
+	writer := c.MemoryWriter()
+	if writer == nil {
+		return
+	}
+
+	groupMsgs := make([]memory.GroupMessage, len(snapshot.Messages))
+	for i, m := range snapshot.Messages {
+		groupMsgs[i] = memory.GroupMessage{
+			MessageID: m.MessageID,
+			SenderID:  m.SenderID,
+			Sender:    m.Sender,
+			Role:      m.Role,
+			Content:   m.Content,
+		}
+	}
+
+	route := core.RouteContext{
+		Platform: routeScope.Platform,
+		GroupID:  routeScope.GroupID,
+	}
+
+	distillCtx := c.Context()
+	var validator func() bool
+	if session != nil {
+		var barrier core.ExtractionCommitBarrier
+		var cleanup func()
+		distillCtx, barrier, cleanup = session.BeginGroupDistillation(distillCtx, snapshot)
+		defer cleanup()
+		validator = func() bool {
+			return barrier == nil || barrier.IsValid()
+		}
+	}
+
+	if err := writer.ExtractGroupMemories(distillCtx, groupID, route, groupMsgs, memory.SourceDistill, validator); err != nil {
+		instanceID := ""
+		if c.Scope != nil {
+			instanceID = c.Scope.InstanceID()
+		}
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼失败: %v", instanceID, groupID, err))
+		if errors.Is(err, memory.ErrStorageUnavailable) && c.Scope != nil {
+			c.Scope.Cancel()
+		}
+	}
+}
+
+func (c *GroupCompactor) bindGroupStore(session *SessionContext, routeScope modelrouter.Scope, groupID string) error {
+	if session == nil || c.groupManager == nil || groupID == "" {
+		return nil
+	}
+	store, err := c.groupManager.GetGroupStoreForPlatform(routeScope.Platform, groupID)
+	if err != nil {
+		return err
+	}
+	if store != nil {
+		session.SetGroupStore(store)
+	}
+	return nil
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {
@@ -537,9 +719,9 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 // RollbackPersistence synchronizes persistence state with a rolled-back clean summary.
 // If cleanSummary is non-empty, it replaces any pending record and updates the on-disk store.
 // If cleanSummary is empty, it removes any pending record and deletes the record from the on-disk store.
-func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) {
+func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) error {
 	if c == nil || owner == "" {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -549,6 +731,19 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 		storeGeneration = c.store.Generation(owner)
 	}
 	cleanSummary = strings.TrimSpace(cleanSummary)
+	if c.store != nil && c.store.IsDatabase() {
+		if cleanSummary == "" {
+			return c.store.Delete(owner)
+		}
+		applied, err := c.store.Upsert(owner, cleanSummary, storeGeneration)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return errors.New("group summary rollback was invalidated")
+		}
+		return nil
+	}
 	if cleanSummary == "" {
 		delete(c.pendingPersist, owner)
 		if c.store != nil {
@@ -561,7 +756,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 			default:
 			}
 		}
-		return
+		return nil
 	}
 
 	c.pendingPersist[owner] = &pendingPersistRecord{
@@ -577,7 +772,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 		case wakeCh <- struct{}{}:
 		default:
 		}
-		return
+		return nil
 	}
 
 	if c.store != nil {
@@ -587,11 +782,11 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 				c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结回滚持久化 (%s)", owner))
 			}
 			delete(c.pendingPersist, owner)
-			return
+			return nil
 		}
 	} else {
 		delete(c.pendingPersist, owner)
-		return
+		return nil
 	}
 
 	// Upsert failed; launch worker to retry in background.
@@ -599,6 +794,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 	wakeCh := make(chan struct{}, 1)
 	c.persistWake[owner] = wakeCh
 	c.Go(func() { c.persistWorker(owner, wakeCh) })
+	return nil
 }
 
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {

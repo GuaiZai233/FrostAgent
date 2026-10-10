@@ -1,8 +1,9 @@
-﻿package security
+package security
 
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/storage"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,16 @@ type Controller struct {
 	mode     *atomic.Pointer[ControlMode]
 }
 
+// WithStateLock serializes whole-state restore with access mutations and audit
+// appends performed through this process-wide controller.
+func (c *Controller) WithStateLock(fn func() error) error {
+	c.Access.mu.Lock()
+	defer c.Access.mu.Unlock()
+	c.Audit.mu.Lock()
+	defer c.Audit.mu.Unlock()
+	return fn()
+}
+
 func NewController(dataDir string) *Controller {
 	access := NewAccessStore(filepath.Join(dataDir, "security_access.json"))
 	audit := NewAuditStore(filepath.Join(dataDir, "security_audit.jsonl"), 1000)
@@ -43,6 +54,15 @@ func NewController(dataDir string) *Controller {
 		Watchdog: NewWatchdog(access, audit),
 		mode:     &modePtr,
 	}
+}
+
+func NewControllerSQL(db *storage.DB) *Controller {
+	access := NewSQLAccessStore(db)
+	audit := NewSQLAuditStore(db, 1000)
+	var modePtr atomic.Pointer[ControlMode]
+	defaultMode := ControlModeSimple
+	modePtr.Store(&defaultMode)
+	return &Controller{Access: access, Audit: audit, Watchdog: NewWatchdog(access, audit), mode: &modePtr}
 }
 
 // Mode returns the active security control mode. Unset or nil modes default to ControlModeSimple.
@@ -402,6 +422,11 @@ func (c *Controller) EvaluateDryRun(p Principal, stage WatchdogStage, source Wat
 // it is blocked and audited without striking or locking the requesting principal.
 func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	return c.Evaluate(p, StageIngress, source, content, meta)
+}
+
+// EvaluateContextWithContext evaluates indirect context with the provided caller context.
+func (c *Controller) EvaluateContextWithContext(ctx context.Context, p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateWithContext(ctx, p, StageIngress, source, content, meta)
 }
 
 // EvaluateContextDryRun evaluates indirect context in dry-run mode.

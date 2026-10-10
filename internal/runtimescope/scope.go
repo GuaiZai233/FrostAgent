@@ -13,20 +13,45 @@ import (
 )
 
 type Scope struct {
-	Config  *instanceconfig.Store
-	Global  *instanceconfig.Store
-	Logger  *logs.Store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	stopped bool
-	wg      sync.WaitGroup
+	Config     *instanceconfig.Store
+	Global     *instanceconfig.Store
+	Logger     *logs.Store
+	instanceID string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	stopped    bool
+	wg         sync.WaitGroup
 }
 
 func New(config, global *instanceconfig.Store, logger *logs.Store) *Scope {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scope{Config: config, Global: global, Logger: logger, ctx: ctx, cancel: cancel}
 }
+func (s *Scope) InstanceID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.instanceID != "" {
+		return s.instanceID
+	}
+	if s.Config != nil {
+		return s.Config.Get("INSTANCE_ID")
+	}
+	return ""
+}
+
+func (s *Scope) SetInstanceID(id string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.instanceID = id
+	s.mu.Unlock()
+}
+
 func (s *Scope) Context() context.Context {
 	if s == nil {
 		return context.Background()
@@ -53,6 +78,9 @@ func (s *Scope) Getenv(k string) string {
 			if v := s.Global.Get(k); strings.TrimSpace(v) != "" {
 				return v
 			}
+		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return ""
 		}
 		return os.Getenv(k)
 	}
@@ -145,6 +173,9 @@ func (s *Scope) LookupEnv(k string) (string, bool) {
 			if v, ok := s.Global.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
 				return v, true
 			}
+		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return "", false
 		}
 		return os.LookupEnv(k)
 	}

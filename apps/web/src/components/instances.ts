@@ -28,9 +28,9 @@ export async function openInstanceManagement(): Promise<void> {
               .map(
                 (item) => `
       <article class="card p-3 instance-item">
-       <button class="btn btn-ghost instance-select" data-id="${item.id}">
+       <button class="btn btn-ghost instance-select" data-id="${item.id}" ${item.deleting ? 'disabled' : ''}>
         <span class="instance-dot ${item.enabled ? 'on' : 'off'}" aria-label="${item.enabled ? '已启用' : '已停用'}"></span>
-        <span class="text-left"><strong>${escapeHtml(item.name)}</strong><br><small class="font-mono text-muted">${item.id}</small></span>
+        <span class="text-left"><strong>${escapeHtml(item.name)}</strong><br><small class="font-mono text-muted">${item.id}${item.deleting ? ' · 待确认删除' : ''}</small></span>
        </button>
        <button class="btn btn-ghost btn-icon-sm" data-rename="${item.id}" aria-label="重命名 ${escapeHtml(item.name)}">✎</button>
        <button class="btn btn-ghost btn-icon-sm instance-delete" data-delete="${item.id}" aria-label="删除 ${escapeHtml(item.name)}">×</button>
@@ -123,32 +123,45 @@ async function nameDialog(item?: InstanceInfo): Promise<void> {
   });
 }
 async function deleteDialog(item: InstanceInfo): Promise<void> {
+  const pendingBody = `
+    <p class="text-sm">此实例已暂停。确认删除会永久移除设置、记忆、摘要和贴图。</p>
+    <a class="btn btn-outline mt-3" href="/api/instances/${item.id}/backup" download="frostagent-${item.id}.zip">下载一键全量备份 ZIP</a>
+    <p class="text-xs text-muted mt-2">备份中的密钥已置空；还原后需重新配置。下载后请确认文件可用。</p>
+    <label class="flex items-center gap-2 text-sm mt-4"><input type="checkbox" class="checkbox" id="instance-delete-ack">我确认删除此实例的全部数据</label>`;
   await openDialog({
-    title: '确定删除实例？一切配置不可恢复！',
+    title: item.deleting ? '确认删除实例' : '删除实例前请先备份',
     description: item.name + ' (' + item.id + ')',
-    bodyHtml:
-      '<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="instance-delete-all">删除此实例的所有数据</label>',
-    footerHtml:
-      '<button class="btn btn-outline dialog-close-btn">取消</button><button class="btn btn-destructive" id="instance-confirm-delete">删除</button>',
+    bodyHtml: item.deleting ? pendingBody : '<p class="text-sm">删除实例会永久移除所有设置、记忆、摘要、贴图及相关数据。下一步会先暂停实例，并提供完整备份下载链接。</p>',
+    footerHtml: item.deleting
+      ? '<button class="btn btn-outline" id="instance-cancel-delete">取消删除</button><button class="btn btn-destructive" id="instance-confirm-delete" disabled>永久删除</button>'
+      : '<button class="btn btn-outline dialog-close-btn">保留实例</button><button class="btn btn-destructive" id="instance-prepare-delete">暂停并准备备份</button>',
     onMount(dialog, close) {
-      dialog.querySelector<HTMLButtonElement>(
-        '#instance-confirm-delete',
-      )!.onclick = () => {
-        void (async () => {
-          try {
-            await instanceRequest('/' + item.id + '/delete', {
-              all: dialog.querySelector<HTMLInputElement>(
-                '#instance-delete-all',
-              )!.checked,
-            });
+      const bindPending = () => {
+        const confirm = dialog.querySelector<HTMLButtonElement>('#instance-confirm-delete')!;
+        dialog.querySelector<HTMLInputElement>('#instance-delete-ack')!.onchange = (event) => {
+          confirm.disabled = !(event.currentTarget as HTMLInputElement).checked;
+        };
+        dialog.querySelector<HTMLButtonElement>('#instance-cancel-delete')!.onclick = () => {
+          void instanceRequest('/' + item.id + '/delete/cancel', {}).then(close).catch((err) => toast.error(String(err)));
+        };
+        confirm.onclick = () => {
+          void instanceRequest('/' + item.id + '/delete/confirm', {}).then(() => {
             close();
-            if (instanceState.selected?.id === item.id)
-              instanceState.select(null);
-          } catch (err) {
-            toast.error(String(err));
-          }
-        })();
+            if (instanceState.selected?.id === item.id) instanceState.select(null);
+          }).catch((err) => toast.error(String(err)));
+        };
       };
+      if (item.deleting) {
+        bindPending();
+      } else {
+        dialog.querySelector<HTMLButtonElement>('#instance-prepare-delete')!.onclick = () => {
+          void instanceRequest('/' + item.id + '/delete/prepare', {}).then(() => {
+            dialog.querySelector('.dialog-body')!.innerHTML = pendingBody;
+            dialog.querySelector('.dialog-footer')!.innerHTML = '<button class="btn btn-outline" id="instance-cancel-delete">取消删除</button><button class="btn btn-destructive" id="instance-confirm-delete" disabled>永久删除</button>';
+            bindPending();
+          }).catch((err) => toast.error(String(err)));
+        };
+      }
     },
   });
 }
@@ -159,7 +172,7 @@ export async function openQuickConfig(): Promise<void> {
     const data = await instanceState.refresh();
     await openDialog({
       title: '将复用的实例配置',
-      description: '一旦选择，现有配置将完全被选中的实例覆盖！',
+      description: '一旦选择，现有配置将完全被选中的实例覆盖；密钥及凭据来源不会复制。',
       bodyHtml: `<select class="select" id="instance-copy-source"><option value="">请选择实例</option>${data.instances
         .filter((i) => i.id !== target.id)
         .map(
@@ -168,7 +181,7 @@ export async function openQuickConfig(): Promise<void> {
         )
         .join(
           '',
-        )}</select><p class="text-xs text-muted">仅复用 Settings 与已发布的模型配置。被覆盖的实例必须先停用。</p>`,
+        )}</select><p class="text-xs text-muted">复用设置、模型、MCP 与对话配置。密钥请重新设置。</p>`,
       footerHtml:
         '<button class="btn btn-primary" id="instance-copy-confirm">覆盖配置</button>',
       onMount(dialog, close) {

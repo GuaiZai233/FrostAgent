@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
@@ -409,6 +410,31 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MessageType == "group" && !c.mock {
+				if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
+					gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
+					if err == nil && gStore != nil {
+						role := memory.GroupRoleUnknown
+						if r, ok := event.Metadata["role"].(string); ok {
+							role = memory.NormalizeGroupRole(r)
+						}
+						_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+						if err == nil && event.GroupName != "" {
+							err = gStore.UpdateGroupName(event.GroupName)
+						}
+						if err == nil {
+							routeScope := astrBotRouteScope(event)
+							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+							gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						}
+					}
+					if err != nil {
+						a.engine.PauseOnStorageError(err)
+						if turn != nil {
+							turn.Done()
+						}
+						continue
+					}
+				}
 				if isExplicitlyWoken(event, scope) {
 					guard := stageGroupCompactMessage(event, a.engine)
 					if turn != nil {
@@ -507,5 +533,3 @@ func sanitizeIngressMetadata(event *Event) {
 		}
 	}
 }
-
-

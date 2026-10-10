@@ -1,10 +1,58 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestListenerSwitchPreservesCurrentHTTPResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAddress := listener.Addr().String()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newAddress := probe.Addr().String()
+	probe.Close()
+	listeners := newListenerSet()
+	defer listeners.Close(context.Background())
+	listeners.active[oldAddress] = listeners.start(oldAddress, listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		err := listeners.Apply(map[string]http.Handler{
+			newAddress: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("switch completed"))
+	}))
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Get("http://" + oldAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || string(body) != "switch completed" {
+		t.Fatalf("switch terminated the active response: %d %q, %v", response.StatusCode, body, err)
+	}
+	response, err = client.Get("http://" + newAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("new listener status = %d", response.StatusCode)
+	}
+}
 
 func TestAdapterListenerDoesNotExposeManagement(t *testing.T) {
 	handler := instanceWebSocketHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))

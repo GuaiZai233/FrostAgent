@@ -2,6 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ var (
 // All memories are stored in a single brain.json file.
 type Store struct {
 	path    string
+	sql     *sqlBrainStore
 	mu      sync.RWMutex
 	routeMu sync.RWMutex
 	routes  map[string]core.RouteContext
@@ -34,8 +36,26 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
+// NewSQLStore creates an instance-scoped private memory store.
+func NewSQLStore(db *storage.DB, instanceID string) *Store {
+	return &Store{sql: &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopePrivate}}
+}
+
+func (s *Store) ListMergeArchives() ([]MemoryMergeArchive, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	brain, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return append([]MemoryMergeArchive(nil), brain.MergeArchives...), nil
+}
+
 // load reads the brain data from disk.
 func (s *Store) load() (*BrainData, error) {
+	if s.sql != nil {
+		return s.sql.load()
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -55,6 +75,9 @@ func (s *Store) load() (*BrainData, error) {
 
 // save writes the brain data to disk.
 func (s *Store) save(brain *BrainData) error {
+	if s.sql != nil {
+		return s.sql.save(brain)
+	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal brain: %w", err)
@@ -99,11 +122,6 @@ func (s *Store) SaveEntriesConditionallyContext(
 		defer barrier.EndCommit()
 	}
 
-	brain, err := s.load()
-	if err != nil {
-		return err
-	}
-
 	now := time.Now()
 	for i := range entries {
 		entries[i].UpdatedAt = now
@@ -117,9 +135,15 @@ func (s *Store) SaveEntriesConditionallyContext(
 			entries[i].OwnerType = OwnerUser
 		}
 		entries[i].Owner = CanonicalOwner(entries[i].Owner)
-		brain.Entries = append(brain.Entries, entries[i])
 	}
-
+	if s.sql != nil {
+		return s.sql.appendEntries(entries)
+	}
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+	brain.Entries = append(brain.Entries, entries...)
 	return s.save(brain)
 }
 
@@ -333,9 +357,15 @@ func (s *Store) applyReflectionWithMerges(
 	owner string,
 	merges []validatedMerge,
 	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var snapshotByID map[string]MemoryEntry
+	if len(snapshots) > 0 {
+		snapshotByID = snapshots[0]
+	}
 
 	brain, err := s.load()
 	if err != nil {
@@ -421,6 +451,15 @@ func (s *Store) applyReflectionWithMerges(
 				continue
 			}
 			if outdated[entry.ID] {
+				if snapshotByID != nil {
+					snap, ok := snapshotByID[entry.ID]
+					if !ok || !sameMergeSource(entry, snap) {
+						// Concurrently modified in UI while reflection was running.
+						entry.Owner = canonicalOwner
+						remainingAll = append(remainingAll, entry)
+						continue
+					}
+				}
 				removedIDs = append(removedIDs, entry.ID)
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
@@ -534,6 +573,9 @@ func (s *Store) IncrementAccessCount(memoryIDs ...string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.sql.incrementAccessCounts(memoryIDs)
+	}
 
 	brain, err := s.load()
 	if err != nil {

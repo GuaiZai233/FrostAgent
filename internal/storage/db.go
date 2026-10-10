@@ -1,0 +1,135 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	_ "modernc.org/sqlite"
+)
+
+const SchemaVersion = 9
+
+type Backend string
+
+const (
+	SQLite   Backend = "sqlite"
+	Postgres Backend = "postgres"
+)
+
+type DB struct {
+	SQL     *sql.DB
+	Backend Backend
+}
+
+type Config struct {
+	Backend Backend `json:"backend"`
+	DSN     string  `json:"dsn"`
+}
+
+func Open(ctx context.Context, dataDir string) (*DB, error) {
+	return OpenWithConfig(ctx, dataDir, Config{Backend: SQLite})
+}
+
+func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, error) {
+	backend := Backend(strings.ToLower(strings.TrimSpace(string(config.Backend))))
+	if backend == "" {
+		backend = SQLite
+	}
+	dsn := strings.TrimSpace(config.DSN)
+	var driver string
+	switch backend {
+	case SQLite:
+		driver = "sqlite"
+		// The Web selector cannot choose a SQLite path. Keep the file within
+		// the configured data directory even for direct OpenWithConfig callers.
+		dsn = filepath.Join(dataDir, "frostagent.db")
+		if err := os.MkdirAll(filepath.Dir(dsn), 0700); err != nil {
+			return nil, fmt.Errorf("create database directory: %w", err)
+		}
+	case Postgres:
+		driver = "pgx"
+		if dsn == "" {
+			return nil, errors.New("PostgreSQL connection address is required")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported database backend %q", backend)
+	}
+	var conn *sql.DB
+	var err error
+	if backend == Postgres {
+		var config *pgx.ConnConfig
+		config, err = pgx.ParseConfig(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("parse PostgreSQL connection address: %w", err)
+		}
+		// All application queries use this one physical connection. Every new
+		// connection must acquire the lease before database/sql can use it, so a
+		// lost backend session cannot reconnect and write without ownership.
+		conn = stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(ctx context.Context, physical *pgx.Conn) error {
+			var acquired bool
+			if err := physical.QueryRow(ctx, "SELECT pg_try_advisory_lock(736417141)").Scan(&acquired); err != nil {
+				return fmt.Errorf("acquire database lease: %w", err)
+			}
+			if !acquired {
+				return errors.New("another FrostAgent process is using this PostgreSQL database")
+			}
+			return nil
+		}))
+	} else {
+		conn, err = sql.Open(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
+	}
+	conn.SetMaxOpenConns(1)
+	conn.SetConnMaxLifetime(0)
+	if err = conn.PingContext(ctx); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("connect database: %w", err)
+	}
+	db := &DB{SQL: conn, Backend: backend}
+	if backend == SQLite {
+		for _, pragma := range []string{"PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL", "PRAGMA busy_timeout = 10000"} {
+			if _, err = conn.ExecContext(ctx, pragma); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("configure SQLite: %w", err)
+			}
+		}
+	}
+	if err = db.initSchema(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func (d *DB) Close() error {
+	if d == nil {
+		return nil
+	}
+	return d.SQL.Close()
+}
+
+func (d *DB) Bind(query string) string {
+	if d.Backend != Postgres {
+		return query
+	}
+	var out strings.Builder
+	n := 0
+	for _, char := range query {
+		if char == '?' {
+			n++
+			fmt.Fprintf(&out, "$%d", n)
+		} else {
+			out.WriteRune(char)
+		}
+	}
+	return out.String()
+}

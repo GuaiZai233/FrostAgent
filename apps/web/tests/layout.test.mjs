@@ -20,6 +20,7 @@ const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
 );
+assert.doesNotMatch(backendSettings, /edit-env-secret-cb/, 'setting secrecy is fixed by the server registry');
 const components = await readFile(
   new URL('../src/styles/components.css', import.meta.url),
   'utf8',
@@ -84,14 +85,11 @@ assert.match(
 const globalSettings = backendSettings.match(
   /const globalKeys = new Set\(\[([\s\S]*?)\]\);/,
 )?.[1];
-const controlPlaneRestartSettings = backendSettings.match(
-  /const controlPlaneRestartKeys = new Set\(\[([\s\S]*?)\]\);/,
-)?.[1];
 assert.ok(globalSettings?.includes("'SANDBOX_ENABLED'"));
-assert.equal(
-  controlPlaneRestartSettings?.includes("'SANDBOX_ENABLED'"),
-  false,
-  'SANDBOX_ENABLED must be shown as a hot Control Plane setting',
+assert.doesNotMatch(
+  backendSettings,
+  /controlPlaneRestartKeys|restartRequired/,
+  'the SQL settings page must not show manual restart state',
 );
 assert.equal(
   globalSettings?.includes("'SYSTEM_PROMPT'"),

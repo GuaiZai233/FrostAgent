@@ -21,6 +21,8 @@ import { mountActionsCatPage } from './pages/actionscat';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
+import { mountStorageSettingsPage } from './pages/storage-settings';
+import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
@@ -254,6 +256,7 @@ function initAppShell(): void {
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
+  router.register('/settings/storage', '数据库设置', mountStorageSettingsPage);
   router.register(
     '/settings/backend',
     'Bot 服务端设置',
@@ -290,6 +293,7 @@ function initAppShell(): void {
     '/actionscat',
     '/chat',
     '/settings/backend',
+    '/settings/backup',
     '/settings/commands',
     '/model-router',
   ];
@@ -304,6 +308,7 @@ function initAppShell(): void {
     mountActionsCatPage,
     mountChatPage,
     mountBackendSettingsPage,
+    mountBackupRestorePage,
     mountCommandSettingsPage,
     mountModelRouterPage,
   ];

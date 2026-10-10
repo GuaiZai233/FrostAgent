@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/memory.proto.
  */
 export const file_frostagent_v1_memory: GenFile = /*@__PURE__*/
-  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSKpAQoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAkSEgoKdXBkYXRlZF9hdBgIIAEoCRIUCgxhY2Nlc3NfY291bnQYCSABKAUiUwoTTGlzdE1lbW9yaWVzUmVxdWVzdBINCgVvd25lchgBIAEoCRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInMKFExpc3RNZW1vcmllc1Jlc3BvbnNlEiwKCG1lbW9yaWVzGAEgAygLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uIlUKFVNlYXJjaE1lbW9yaWVzUmVxdWVzdBINCgVxdWVyeRgBIAEoCRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInUKFlNlYXJjaE1lbW9yaWVzUmVzcG9uc2USLAoIbWVtb3JpZXMYASADKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Ei0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iVAoQQWRkTWVtb3J5UmVxdWVzdBINCgVvd25lchgBIAEoCRIPCgdjb250ZW50GAIgASgJEgwKBHRhZ3MYAyADKAkSEgoKdmlzaWJpbGl0eRgEIAEoCSJOChFBZGRNZW1vcnlSZXNwb25zZRIqCgZtZW1vcnkYASABKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Eg0KBWVycm9yGAIgASgJIlQKE1VwZGF0ZU1lbW9yeVJlcXVlc3QSCgoCaWQYASABKAkSDwoHY29udGVudBgCIAEoCRIMCgR0YWdzGAMgAygJEhIKCnZpc2liaWxpdHkYBCABKAkiNgoUVXBkYXRlTWVtb3J5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSIhChNEZWxldGVNZW1vcnlSZXF1ZXN0EgoKAmlkGAEgASgJIjYKFERlbGV0ZU1lbW9yeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiFwoVR2V0TWVtb3J5U3RhdHNSZXF1ZXN0IsoBChZHZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEg0KBXRvdGFsGAEgASgFEhQKDHB1YmxpY19jb3VudBgCIAEoBRIVCg1wcml2YXRlX2NvdW50GAMgASgFEkQKCGJ5X293bmVyGAQgAygLMjIuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlLkJ5T3duZXJFbnRyeRouCgxCeU93bmVyRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgFOgI4ASIXChVFeHBvcnRNZW1vcmllc1JlcXVlc3QiPQoWRXhwb3J0TWVtb3JpZXNSZXNwb25zZRIUCgxqc29uX2NvbnRlbnQYASABKAkSDQoFZXJyb3IYAiABKAkiQAoVSW1wb3J0TWVtb3JpZXNSZXF1ZXN0EhQKDGpzb25fY29udGVudBgBIAEoCRIRCglvdmVyd3JpdGUYAiABKAgiSgoWSW1wb3J0TWVtb3JpZXNSZXNwb25zZRIQCghpbXBvcnRlZBgBIAEoBRIPCgdza2lwcGVkGAIgASgFEg0KBWVycm9yGAMgASgJIikKGFRyaWdnZXJSZWZsZWN0aW9uUmVxdWVzdBINCgVvd25lchgBIAEoCSKeAQoZVHJpZ2dlclJlZmxlY3Rpb25SZXNwb25zZRIPCgdzdGFydGVkGAEgASgIEg8KB3J1bm5pbmcYAiABKAgSDQoFb3duZXIYAyABKAkSEgoKc3RhcnRlZF9hdBgEIAEoCRIZChFsYXN0X2NvbXBsZXRlZF9hdBgFIAEoCRISCgpsYXN0X2Vycm9yGAYgASgJEg0KBWVycm9yGAcgASgJMs4GCg1NZW1vcnlTZXJ2aWNlElcKDExpc3RNZW1vcmllcxIiLmZyb3N0YWdlbnQudjEuTGlzdE1lbW9yaWVzUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuTGlzdE1lbW9yaWVzUmVzcG9uc2USXQoOU2VhcmNoTWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLlNlYXJjaE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuU2VhcmNoTWVtb3JpZXNSZXNwb25zZRJOCglBZGRNZW1vcnkSHy5mcm9zdGFnZW50LnYxLkFkZE1lbW9yeVJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLkFkZE1lbW9yeVJlc3BvbnNlElcKDFVwZGF0ZU1lbW9yeRIiLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtb3J5UmVxdWVzdBojLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtb3J5UmVzcG9uc2USVwoMRGVsZXRlTWVtb3J5EiIuZnJvc3RhZ2VudC52MS5EZWxldGVNZW1vcnlSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5EZWxldGVNZW1vcnlSZXNwb25zZRJdCg5HZXRNZW1vcnlTdGF0cxIkLmZyb3N0YWdlbnQudjEuR2V0TWVtb3J5U3RhdHNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1Jlc3BvbnNlEl0KDkV4cG9ydE1lbW9yaWVzEiQuZnJvc3RhZ2VudC52MS5FeHBvcnRNZW1vcmllc1JlcXVlc3QaJS5mcm9zdGFnZW50LnYxLkV4cG9ydE1lbW9yaWVzUmVzcG9uc2USXQoOSW1wb3J0TWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLkltcG9ydE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuSW1wb3J0TWVtb3JpZXNSZXNwb25zZRJmChFUcmlnZ2VyUmVmbGVjdGlvbhInLmZyb3N0YWdlbnQudjEuVHJpZ2dlclJlZmxlY3Rpb25SZXF1ZXN0GiguZnJvc3RhZ2VudC52MS5UcmlnZ2VyUmVmbGVjdGlvblJlc3BvbnNlYgZwcm90bzM", [file_frostagent_v1_common]);
+  fileDesc("Chpmcm9zdGFnZW50L3YxL21lbW9yeS5wcm90bxINZnJvc3RhZ2VudC52MSKiAgoLTWVtb3J5RW50cnkSCgoCaWQYASABKAkSDQoFb3duZXIYAiABKAkSDwoHY29udGVudBgDIAEoCRIMCgR0YWdzGAQgAygJEg4KBnNvdXJjZRgFIAEoCRISCgp2aXNpYmlsaXR5GAYgASgJEhIKCmNyZWF0ZWRfYXQYByABKAkSEgoKdXBkYXRlZF9hdBgIIAEoCRIUCgxhY2Nlc3NfY291bnQYCSABKAUSDQoFc2NvcGUYCiABKAkSEAoIZ3JvdXBfaWQYCyABKAkSDwoHc3VtbWFyeRgMIAEoCRIQCghldmlkZW5jZRgNIAEoCRIZChFzb3VyY2VfbWVzc2FnZV9pZBgOIAEoCRIYChBzb3VyY2Vfc2VuZGVyX2lkGA8gASgJIoYBChNMaXN0TWVtb3JpZXNSZXF1ZXN0Eg0KBW93bmVyGAEgASgJEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24SDQoFc2NvcGUYAyABKAkSEAoIZ3JvdXBfaWQYBCABKAkSEAoIcGxhdGZvcm0YBSABKAkicwoUTGlzdE1lbW9yaWVzUmVzcG9uc2USLAoIbWVtb3JpZXMYASADKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Ei0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iiAEKFVNlYXJjaE1lbW9yaWVzUmVxdWVzdBINCgVxdWVyeRgBIAEoCRItCgpwYWdpbmF0aW9uGAIgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEg0KBXNjb3BlGAMgASgJEhAKCGdyb3VwX2lkGAQgASgJEhAKCHBsYXRmb3JtGAUgASgJInUKFlNlYXJjaE1lbW9yaWVzUmVzcG9uc2USLAoIbWVtb3JpZXMYASADKAsyGi5mcm9zdGFnZW50LnYxLk1lbW9yeUVudHJ5Ei0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24ihwEKEEFkZE1lbW9yeVJlcXVlc3QSDQoFb3duZXIYASABKAkSDwoHY29udGVudBgCIAEoCRIMCgR0YWdzGAMgAygJEhIKCnZpc2liaWxpdHkYBCABKAkSDQoFc2NvcGUYBSABKAkSEAoIZ3JvdXBfaWQYBiABKAkSEAoIcGxhdGZvcm0YByABKAkiTgoRQWRkTWVtb3J5UmVzcG9uc2USKgoGbWVtb3J5GAEgASgLMhouZnJvc3RhZ2VudC52MS5NZW1vcnlFbnRyeRINCgVlcnJvchgCIAEoCSKHAQoTVXBkYXRlTWVtb3J5UmVxdWVzdBIKCgJpZBgBIAEoCRIPCgdjb250ZW50GAIgASgJEgwKBHRhZ3MYAyADKAkSEgoKdmlzaWJpbGl0eRgEIAEoCRINCgVzY29wZRgFIAEoCRIQCghncm91cF9pZBgGIAEoCRIQCghwbGF0Zm9ybRgHIAEoCSI2ChRVcGRhdGVNZW1vcnlSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIlQKE0RlbGV0ZU1lbW9yeVJlcXVlc3QSCgoCaWQYASABKAkSDQoFc2NvcGUYAiABKAkSEAoIZ3JvdXBfaWQYAyABKAkSEAoIcGxhdGZvcm0YBCABKAkiNgoURGVsZXRlTWVtb3J5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJKChVHZXRNZW1vcnlTdGF0c1JlcXVlc3QSDQoFc2NvcGUYASABKAkSEAoIZ3JvdXBfaWQYAiABKAkSEAoIcGxhdGZvcm0YAyABKAkilQIKFkdldE1lbW9yeVN0YXRzUmVzcG9uc2USDQoFdG90YWwYASABKAUSFAoMcHVibGljX2NvdW50GAIgASgFEhUKDXByaXZhdGVfY291bnQYAyABKAUSRAoIYnlfb3duZXIYBCADKAsyMi5mcm9zdGFnZW50LnYxLkdldE1lbW9yeVN0YXRzUmVzcG9uc2UuQnlPd25lckVudHJ5EhoKEnByaXZhdGVfY2hhdF9jb3VudBgFIAEoBRIYChBncm91cF9jaGF0X2NvdW50GAYgASgFEhMKC2dyb3VwX2NvdW50GAcgASgFGi4KDEJ5T3duZXJFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAU6AjgBIkoKFUV4cG9ydE1lbW9yaWVzUmVxdWVzdBINCgVzY29wZRgBIAEoCRIQCghncm91cF9pZBgCIAEoCRIQCghwbGF0Zm9ybRgDIAEoCSI9ChZFeHBvcnRNZW1vcmllc1Jlc3BvbnNlEhQKDGpzb25fY29udGVudBgBIAEoCRINCgVlcnJvchgCIAEoCSJzChVJbXBvcnRNZW1vcmllc1JlcXVlc3QSFAoManNvbl9jb250ZW50GAEgASgJEhEKCW92ZXJ3cml0ZRgCIAEoCBINCgVzY29wZRgDIAEoCRIQCghncm91cF9pZBgEIAEoCRIQCghwbGF0Zm9ybRgFIAEoCSJKChZJbXBvcnRNZW1vcmllc1Jlc3BvbnNlEhAKCGltcG9ydGVkGAEgASgFEg8KB3NraXBwZWQYAiABKAUSDQoFZXJyb3IYAyABKAkiXAoYVHJpZ2dlclJlZmxlY3Rpb25SZXF1ZXN0Eg0KBW93bmVyGAEgASgJEg0KBXNjb3BlGAIgASgJEhAKCGdyb3VwX2lkGAMgASgJEhAKCHBsYXRmb3JtGAQgASgJIp4BChlUcmlnZ2VyUmVmbGVjdGlvblJlc3BvbnNlEg8KB3N0YXJ0ZWQYASABKAgSDwoHcnVubmluZxgCIAEoCBINCgVvd25lchgDIAEoCRISCgpzdGFydGVkX2F0GAQgASgJEhkKEWxhc3RfY29tcGxldGVkX2F0GAUgASgJEhIKCmxhc3RfZXJyb3IYBiABKAkSDQoFZXJyb3IYByABKAkihgEKDEdyb3VwU3VtbWFyeRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEhQKDG1lbWJlcl9jb3VudBgDIAEoBRIUCgxtZW1vcnlfY291bnQYBCABKAUSEgoKdXBkYXRlZF9hdBgFIAEoCRIQCghwbGF0Zm9ybRgGIAEoCSITChFMaXN0R3JvdXBzUmVxdWVzdCJBChJMaXN0R3JvdXBzUmVzcG9uc2USKwoGZ3JvdXBzGAEgAygLMhsuZnJvc3RhZ2VudC52MS5Hcm91cFN1bW1hcnki3AEKDU1lbWJlclByb2ZpbGUSDwoHdXNlcl9pZBgBIAEoCRIQCghuaWNrbmFtZRgCIAEoCRIMCgRjYXJkGAMgASgJEgwKBHJvbGUYBCABKAkSFgoOcHJlZmVycmVkX25hbWUYBSABKAkSDwoHYWxpYXNlcxgGIAMoCRIUCgxjYWxsaW5nX25hbWUYByABKAkSDgoGc291cmNlGAggASgJEhIKCmNyZWF0ZWRfYXQYCSABKAkSEgoKdXBkYXRlZF9hdBgKIAEoCRIVCg1sYXN0X3Nwb2tlX2F0GAsgASgJIncKDEdyb3VwUHJvZmlsZRIQCghncm91cF9pZBgBIAEoCRISCgpncm91cF9uYW1lGAIgASgJEi0KB21lbWJlcnMYAyADKAsyHC5mcm9zdGFnZW50LnYxLk1lbWJlclByb2ZpbGUSEgoKdXBkYXRlZF9hdBgEIAEoCSI8ChZHZXRHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJEhAKCHBsYXRmb3JtGAIgASgJIlYKF0dldEdyb3VwUHJvZmlsZVJlc3BvbnNlEiwKB3Byb2ZpbGUYASABKAsyGy5mcm9zdGFnZW50LnYxLkdyb3VwUHJvZmlsZRINCgVlcnJvchgCIAEoCSJTChlVcGRhdGVHcm91cFByb2ZpbGVSZXF1ZXN0EhAKCGdyb3VwX2lkGAEgASgJEhIKCmdyb3VwX25hbWUYAiABKAkSEAoIcGxhdGZvcm0YAyABKAkiPAoaVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJ6ChpVcGRhdGVNZW1iZXJQcm9maWxlUmVxdWVzdBIQCghncm91cF9pZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEhYKDnByZWZlcnJlZF9uYW1lGAMgASgJEg8KB2FsaWFzZXMYBCADKAkSEAoIcGxhdGZvcm0YBSABKAkiPQobVXBkYXRlTWVtYmVyUHJvZmlsZVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAky3AkKDU1lbW9yeVNlcnZpY2USVwoMTGlzdE1lbW9yaWVzEiIuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5MaXN0TWVtb3JpZXNSZXNwb25zZRJdCg5TZWFyY2hNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuU2VhcmNoTWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5TZWFyY2hNZW1vcmllc1Jlc3BvbnNlEk4KCUFkZE1lbW9yeRIfLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVxdWVzdBogLmZyb3N0YWdlbnQudjEuQWRkTWVtb3J5UmVzcG9uc2USVwoMVXBkYXRlTWVtb3J5EiIuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5VcGRhdGVNZW1vcnlSZXNwb25zZRJXCgxEZWxldGVNZW1vcnkSIi5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRlbGV0ZU1lbW9yeVJlc3BvbnNlEl0KDkdldE1lbW9yeVN0YXRzEiQuZnJvc3RhZ2VudC52MS5HZXRNZW1vcnlTdGF0c1JlcXVlc3QaJS5mcm9zdGFnZW50LnYxLkdldE1lbW9yeVN0YXRzUmVzcG9uc2USXQoORXhwb3J0TWVtb3JpZXMSJC5mcm9zdGFnZW50LnYxLkV4cG9ydE1lbW9yaWVzUmVxdWVzdBolLmZyb3N0YWdlbnQudjEuRXhwb3J0TWVtb3JpZXNSZXNwb25zZRJdCg5JbXBvcnRNZW1vcmllcxIkLmZyb3N0YWdlbnQudjEuSW1wb3J0TWVtb3JpZXNSZXF1ZXN0GiUuZnJvc3RhZ2VudC52MS5JbXBvcnRNZW1vcmllc1Jlc3BvbnNlEmYKEVRyaWdnZXJSZWZsZWN0aW9uEicuZnJvc3RhZ2VudC52MS5UcmlnZ2VyUmVmbGVjdGlvblJlcXVlc3QaKC5mcm9zdGFnZW50LnYxLlRyaWdnZXJSZWZsZWN0aW9uUmVzcG9uc2USUQoKTGlzdEdyb3VwcxIgLmZyb3N0YWdlbnQudjEuTGlzdEdyb3Vwc1JlcXVlc3QaIS5mcm9zdGFnZW50LnYxLkxpc3RHcm91cHNSZXNwb25zZRJgCg9HZXRHcm91cFByb2ZpbGUSJS5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlcXVlc3QaJi5mcm9zdGFnZW50LnYxLkdldEdyb3VwUHJvZmlsZVJlc3BvbnNlEmkKElVwZGF0ZUdyb3VwUHJvZmlsZRIoLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVxdWVzdBopLmZyb3N0YWdlbnQudjEuVXBkYXRlR3JvdXBQcm9maWxlUmVzcG9uc2USbAoTVXBkYXRlTWVtYmVyUHJvZmlsZRIpLmZyb3N0YWdlbnQudjEuVXBkYXRlTWVtYmVyUHJvZmlsZVJlcXVlc3QaKi5mcm9zdGFnZW50LnYxLlVwZGF0ZU1lbWJlclByb2ZpbGVSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * MemoryEntry mirrors the internal memory model for the UI.
@@ -46,6 +46,8 @@ export type MemoryEntry = Message<"frostagent.v1.MemoryEntry"> & {
   source: string;
 
   /**
+   * deprecated
+   *
    * @generated from field: string visibility = 6;
    */
   visibility: string;
@@ -64,6 +66,48 @@ export type MemoryEntry = Message<"frostagent.v1.MemoryEntry"> & {
    * @generated from field: int32 access_count = 9;
    */
   accessCount: number;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 10;
+   */
+  scope: string;
+
+  /**
+   * group id when scope == "group"
+   *
+   * @generated from field: string group_id = 11;
+   */
+  groupId: string;
+
+  /**
+   * optional LLM display summary
+   *
+   * @generated from field: string summary = 12;
+   */
+  summary: string;
+
+  /**
+   * verbatim source quote
+   *
+   * @generated from field: string evidence = 13;
+   */
+  evidence: string;
+
+  /**
+   * verified source message ID
+   *
+   * @generated from field: string source_message_id = 14;
+   */
+  sourceMessageId: string;
+
+  /**
+   * verified source sender ID
+   *
+   * @generated from field: string source_sender_id = 15;
+   */
+  sourceSenderId: string;
 };
 
 /**
@@ -88,6 +132,25 @@ export type ListMemoriesRequest = Message<"frostagent.v1.ListMemoriesRequest"> &
    * @generated from field: frostagent.v1.Pagination pagination = 2;
    */
   pagination?: Pagination | undefined;
+
+  /**
+   * "private" or "group" (empty = "private")
+   *
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 4;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 5;
+   */
+  platform: string;
 };
 
 /**
@@ -132,6 +195,25 @@ export type SearchMemoriesRequest = Message<"frostagent.v1.SearchMemoriesRequest
    * @generated from field: frostagent.v1.Pagination pagination = 2;
    */
   pagination?: Pagination | undefined;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 4;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 5;
+   */
+  platform: string;
 };
 
 /**
@@ -183,11 +265,30 @@ export type AddMemoryRequest = Message<"frostagent.v1.AddMemoryRequest"> & {
   tags: string[];
 
   /**
-   * "public" or "private" (default private)
+   * deprecated
    *
    * @generated from field: string visibility = 4;
    */
   visibility: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 5;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 6;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 7;
+   */
+  platform: string;
 };
 
 /**
@@ -239,9 +340,30 @@ export type UpdateMemoryRequest = Message<"frostagent.v1.UpdateMemoryRequest"> &
   tags: string[];
 
   /**
+   * deprecated
+   *
    * @generated from field: string visibility = 4;
    */
   visibility: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 5;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 6;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 7;
+   */
+  platform: string;
 };
 
 /**
@@ -281,6 +403,25 @@ export type DeleteMemoryRequest = Message<"frostagent.v1.DeleteMemoryRequest"> &
    * @generated from field: string id = 1;
    */
   id: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 2;
+   */
+  scope: string;
+
+  /**
+   * required when scope == "group"
+   *
+   * @generated from field: string group_id = 3;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 4;
+   */
+  platform: string;
 };
 
 /**
@@ -316,6 +457,24 @@ export const DeleteMemoryResponseSchema: GenMessage<DeleteMemoryResponse> = /*@_
  * @generated from message frostagent.v1.GetMemoryStatsRequest
  */
 export type GetMemoryStatsRequest = Message<"frostagent.v1.GetMemoryStatsRequest"> & {
+  /**
+   * "private", "group", or empty
+   *
+   * @generated from field: string scope = 1;
+   */
+  scope: string;
+
+  /**
+   * group id when scope == "group"
+   *
+   * @generated from field: string group_id = 2;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 3;
+   */
+  platform: string;
 };
 
 /**
@@ -335,11 +494,15 @@ export type GetMemoryStatsResponse = Message<"frostagent.v1.GetMemoryStatsRespon
   total: number;
 
   /**
+   * deprecated, always 0
+   *
    * @generated from field: int32 public_count = 2;
    */
   publicCount: number;
 
   /**
+   * deprecated, always 0
+   *
    * @generated from field: int32 private_count = 3;
    */
   privateCount: number;
@@ -348,6 +511,21 @@ export type GetMemoryStatsResponse = Message<"frostagent.v1.GetMemoryStatsRespon
    * @generated from field: map<string, int32> by_owner = 4;
    */
   byOwner: { [key: string]: number };
+
+  /**
+   * @generated from field: int32 private_chat_count = 5;
+   */
+  privateChatCount: number;
+
+  /**
+   * @generated from field: int32 group_chat_count = 6;
+   */
+  groupChatCount: number;
+
+  /**
+   * @generated from field: int32 group_count = 7;
+   */
+  groupCount: number;
 };
 
 /**
@@ -361,6 +539,22 @@ export const GetMemoryStatsResponseSchema: GenMessage<GetMemoryStatsResponse> = 
  * @generated from message frostagent.v1.ExportMemoriesRequest
  */
 export type ExportMemoriesRequest = Message<"frostagent.v1.ExportMemoriesRequest"> & {
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 1;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string group_id = 2;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 3;
+   */
+  platform: string;
 };
 
 /**
@@ -411,6 +605,23 @@ export type ImportMemoriesRequest = Message<"frostagent.v1.ImportMemoriesRequest
    * @generated from field: bool overwrite = 2;
    */
   overwrite: boolean;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string group_id = 4;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 5;
+   */
+  platform: string;
 };
 
 /**
@@ -457,6 +668,23 @@ export type TriggerReflectionRequest = Message<"frostagent.v1.TriggerReflectionR
    * @generated from field: string owner = 1;
    */
   owner: string;
+
+  /**
+   * "private" or "group"
+   *
+   * @generated from field: string scope = 2;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string group_id = 3;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 4;
+   */
+  platform: string;
 };
 
 /**
@@ -516,6 +744,333 @@ export type TriggerReflectionResponse = Message<"frostagent.v1.TriggerReflection
  */
 export const TriggerReflectionResponseSchema: GenMessage<TriggerReflectionResponse> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_memory, 18);
+
+/**
+ * Group and Member Profile models
+ *
+ * @generated from message frostagent.v1.GroupSummary
+ */
+export type GroupSummary = Message<"frostagent.v1.GroupSummary"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string group_name = 2;
+   */
+  groupName: string;
+
+  /**
+   * @generated from field: int32 member_count = 3;
+   */
+  memberCount: number;
+
+  /**
+   * @generated from field: int32 memory_count = 4;
+   */
+  memoryCount: number;
+
+  /**
+   * @generated from field: string updated_at = 5;
+   */
+  updatedAt: string;
+
+  /**
+   * @generated from field: string platform = 6;
+   */
+  platform: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GroupSummary.
+ * Use `create(GroupSummarySchema)` to create a new message.
+ */
+export const GroupSummarySchema: GenMessage<GroupSummary> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 19);
+
+/**
+ * @generated from message frostagent.v1.ListGroupsRequest
+ */
+export type ListGroupsRequest = Message<"frostagent.v1.ListGroupsRequest"> & {
+};
+
+/**
+ * Describes the message frostagent.v1.ListGroupsRequest.
+ * Use `create(ListGroupsRequestSchema)` to create a new message.
+ */
+export const ListGroupsRequestSchema: GenMessage<ListGroupsRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 20);
+
+/**
+ * @generated from message frostagent.v1.ListGroupsResponse
+ */
+export type ListGroupsResponse = Message<"frostagent.v1.ListGroupsResponse"> & {
+  /**
+   * @generated from field: repeated frostagent.v1.GroupSummary groups = 1;
+   */
+  groups: GroupSummary[];
+};
+
+/**
+ * Describes the message frostagent.v1.ListGroupsResponse.
+ * Use `create(ListGroupsResponseSchema)` to create a new message.
+ */
+export const ListGroupsResponseSchema: GenMessage<ListGroupsResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 21);
+
+/**
+ * @generated from message frostagent.v1.MemberProfile
+ */
+export type MemberProfile = Message<"frostagent.v1.MemberProfile"> & {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId: string;
+
+  /**
+   * @generated from field: string nickname = 2;
+   */
+  nickname: string;
+
+  /**
+   * @generated from field: string card = 3;
+   */
+  card: string;
+
+  /**
+   * @generated from field: string role = 4;
+   */
+  role: string;
+
+  /**
+   * @generated from field: string preferred_name = 5;
+   */
+  preferredName: string;
+
+  /**
+   * @generated from field: repeated string aliases = 6;
+   */
+  aliases: string[];
+
+  /**
+   * resolved calling name
+   *
+   * @generated from field: string calling_name = 7;
+   */
+  callingName: string;
+
+  /**
+   * @generated from field: string source = 8;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string created_at = 9;
+   */
+  createdAt: string;
+
+  /**
+   * @generated from field: string updated_at = 10;
+   */
+  updatedAt: string;
+
+  /**
+   * @generated from field: string last_spoke_at = 11;
+   */
+  lastSpokeAt: string;
+};
+
+/**
+ * Describes the message frostagent.v1.MemberProfile.
+ * Use `create(MemberProfileSchema)` to create a new message.
+ */
+export const MemberProfileSchema: GenMessage<MemberProfile> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 22);
+
+/**
+ * @generated from message frostagent.v1.GroupProfile
+ */
+export type GroupProfile = Message<"frostagent.v1.GroupProfile"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string group_name = 2;
+   */
+  groupName: string;
+
+  /**
+   * @generated from field: repeated frostagent.v1.MemberProfile members = 3;
+   */
+  members: MemberProfile[];
+
+  /**
+   * @generated from field: string updated_at = 4;
+   */
+  updatedAt: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GroupProfile.
+ * Use `create(GroupProfileSchema)` to create a new message.
+ */
+export const GroupProfileSchema: GenMessage<GroupProfile> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 23);
+
+/**
+ * @generated from message frostagent.v1.GetGroupProfileRequest
+ */
+export type GetGroupProfileRequest = Message<"frostagent.v1.GetGroupProfileRequest"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string platform = 2;
+   */
+  platform: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GetGroupProfileRequest.
+ * Use `create(GetGroupProfileRequestSchema)` to create a new message.
+ */
+export const GetGroupProfileRequestSchema: GenMessage<GetGroupProfileRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 24);
+
+/**
+ * @generated from message frostagent.v1.GetGroupProfileResponse
+ */
+export type GetGroupProfileResponse = Message<"frostagent.v1.GetGroupProfileResponse"> & {
+  /**
+   * @generated from field: frostagent.v1.GroupProfile profile = 1;
+   */
+  profile?: GroupProfile | undefined;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GetGroupProfileResponse.
+ * Use `create(GetGroupProfileResponseSchema)` to create a new message.
+ */
+export const GetGroupProfileResponseSchema: GenMessage<GetGroupProfileResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 25);
+
+/**
+ * @generated from message frostagent.v1.UpdateGroupProfileRequest
+ */
+export type UpdateGroupProfileRequest = Message<"frostagent.v1.UpdateGroupProfileRequest"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string group_name = 2;
+   */
+  groupName: string;
+
+  /**
+   * @generated from field: string platform = 3;
+   */
+  platform: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateGroupProfileRequest.
+ * Use `create(UpdateGroupProfileRequestSchema)` to create a new message.
+ */
+export const UpdateGroupProfileRequestSchema: GenMessage<UpdateGroupProfileRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 26);
+
+/**
+ * @generated from message frostagent.v1.UpdateGroupProfileResponse
+ */
+export type UpdateGroupProfileResponse = Message<"frostagent.v1.UpdateGroupProfileResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateGroupProfileResponse.
+ * Use `create(UpdateGroupProfileResponseSchema)` to create a new message.
+ */
+export const UpdateGroupProfileResponseSchema: GenMessage<UpdateGroupProfileResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 27);
+
+/**
+ * @generated from message frostagent.v1.UpdateMemberProfileRequest
+ */
+export type UpdateMemberProfileRequest = Message<"frostagent.v1.UpdateMemberProfileRequest"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string user_id = 2;
+   */
+  userId: string;
+
+  /**
+   * @generated from field: string preferred_name = 3;
+   */
+  preferredName: string;
+
+  /**
+   * @generated from field: repeated string aliases = 4;
+   */
+  aliases: string[];
+
+  /**
+   * @generated from field: string platform = 5;
+   */
+  platform: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateMemberProfileRequest.
+ * Use `create(UpdateMemberProfileRequestSchema)` to create a new message.
+ */
+export const UpdateMemberProfileRequestSchema: GenMessage<UpdateMemberProfileRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 28);
+
+/**
+ * @generated from message frostagent.v1.UpdateMemberProfileResponse
+ */
+export type UpdateMemberProfileResponse = Message<"frostagent.v1.UpdateMemberProfileResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateMemberProfileResponse.
+ * Use `create(UpdateMemberProfileResponseSchema)` to create a new message.
+ */
+export const UpdateMemberProfileResponseSchema: GenMessage<UpdateMemberProfileResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_memory, 29);
 
 /**
  * MemoryService provides memory management for the web UI.
@@ -594,6 +1149,40 @@ export const MemoryService: GenService<{
     methodKind: "unary";
     input: typeof TriggerReflectionRequestSchema;
     output: typeof TriggerReflectionResponseSchema;
+  },
+  /**
+   * Group profile and member management
+   *
+   * @generated from rpc frostagent.v1.MemoryService.ListGroups
+   */
+  listGroups: {
+    methodKind: "unary";
+    input: typeof ListGroupsRequestSchema;
+    output: typeof ListGroupsResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.GetGroupProfile
+   */
+  getGroupProfile: {
+    methodKind: "unary";
+    input: typeof GetGroupProfileRequestSchema;
+    output: typeof GetGroupProfileResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.UpdateGroupProfile
+   */
+  updateGroupProfile: {
+    methodKind: "unary";
+    input: typeof UpdateGroupProfileRequestSchema;
+    output: typeof UpdateGroupProfileResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.MemoryService.UpdateMemberProfile
+   */
+  updateMemberProfile: {
+    methodKind: "unary";
+    input: typeof UpdateMemberProfileRequestSchema;
+    output: typeof UpdateMemberProfileResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_frostagent_v1_memory, 0);

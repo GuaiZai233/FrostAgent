@@ -354,4 +354,3 @@ func TestGroupWhitelist(t *testing.T) {
 		}
 	})
 }
-

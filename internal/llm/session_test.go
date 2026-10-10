@@ -89,6 +89,18 @@ func TestSessionManagerSingleCanonicalEntry(t *testing.T) {
 	}
 }
 
+func TestPendingExtractionThresholdFollowsHotSettings(t *testing.T) {
+	session := NewSessionManager().GetOrCreate("private:synthetic-user")
+	item := memory.PendingExtractionItem{Owner: "synthetic-user"}
+	if _, ready := session.EnqueuePendingTurn([]memory.PendingExtractionItem{item}, 10, 10); ready {
+		t.Fatal("first turn unexpectedly completed the old batch")
+	}
+	batch, ready := session.EnqueuePendingTurn([]memory.PendingExtractionItem{item}, 2, 2)
+	if !ready || len(batch.Items) != 2 || session.PendingTurnCount() != 0 {
+		t.Fatalf("new batch threshold did not apply to the active session: ready=%t, items=%d", ready, len(batch.Items))
+	}
+}
+
 func TestSessionManagerCrossAliasResetCompact(t *testing.T) {
 	sm := NewSessionManager()
 
@@ -976,4 +988,3 @@ func TestExtractionLifecycle_MultiRouteBatchAbortsRemainingGroupsOnReset(t *test
 		}
 	}
 }
-

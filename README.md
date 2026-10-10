@@ -55,11 +55,11 @@ make build-api    # Build backend with embedded frontend
 make build-web    # Build frontend only
 ```
 
-### 2. Configure Environment Variables
+### 2. Choose a database
 
-Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed origins, and shared Alcyone upstream). Each instance owns its bot settings and system prompt under `data/instance_<instance-id>/.env`.
+SQLite is the default. FrostAgent creates `data/frostagent.db` on first start. Open **Settings > Database Settings** to choose PostgreSQL and enter its connection address; an empty address is rejected. The selection is kept in the local SQLite bootstrap table so it can be read before connecting to PostgreSQL. Switching connects to the target database and loads its existing settings and instances without migrating data. Use the instance backup and restore tools to move data manually. Only one FrostAgent process may use a PostgreSQL database at a time.
 
-> **Upgrade Notice (Breaking Change)**: In previous versions, `SYSTEM_PROMPT` was defined globally in the root `.env`. System prompts are now strictly isolated per instance (`data/instance_<instance-id>/.env`). Legacy shared `SYSTEM_PROMPT` values from the root `.env` or process environment are intentionally discarded and will **not** be implicitly backfilled into existing instances. If an existing instance does not have `SYSTEM_PROMPT` configured, it will not fall back to the old shared prompt; configure it in the dashboard Settings or in the instance's `.env`. Newly created instances automatically receive the template default prompt.
+**Breaking change:** JSON and `.env` runtime storage are no longer loaded or migrated. Back up existing data before replacing an earlier version. SQL schemas from the v7 baseline upgrade through ordered, non-destructive migrations; a database from a newer binary or before v7 is rejected without modification. The dashboard's **Settings > Backup & Restore** page downloads a versioned per-instance ZIP, `setting.json`, and `memory.json`. ZIP exports are limited to 512 MiB of expanded data and 512 MiB of archive bytes. Exports omit secrets and credential sources. A full ZIP restore creates a new disabled instance; configure credentials and adapters before enabling it.
 
 ### 3. Start the Service
 
@@ -67,7 +67,7 @@ Copy `.env.example` to `.env` for Control Plane settings (listeners, allowed ori
 go run ./cmd/app
 ```
 
-Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Refreshing the dashboard requires selecting an instance again. Each instance has independent settings (including system prompt), memory, sessions, stickers, logs and persona dialogue examples (initialized from template `eval/dialogue/dialogue.yml` and isolated per instance at `data/instance_<instance-id>/dialogue.yml`).
+Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure its model router, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
 
 ## License
 

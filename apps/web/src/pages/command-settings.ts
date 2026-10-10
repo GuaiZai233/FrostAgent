@@ -66,7 +66,7 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
             </div>
             <p class="text-xs text-muted leading-relaxed mt-1">
               支持符号前缀（如 <code>/</code>、<code>!</code>）或单词前缀（如 <code>execute</code>）。<br/>
-              单词前缀必须以空格与指令名称分隔；符号前缀支持紧贴或空格分隔。保存后持久化于当前实例的 <code>.env</code> 文件中并立即生效。
+              单词前缀必须以空格与指令名称分隔；符号前缀支持紧贴或空格分隔。保存后持久化于当前实例的数据库设置中并立即生效。
             </p>
           </div>
         </article>
