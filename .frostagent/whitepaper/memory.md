@@ -197,8 +197,10 @@ func (m *MemberProfile) ResolveCallingName() string {
          3. `GroupStore.SaveGroupEntriesConditionallyContext` 在写锁内、执行物理磁盘写入前，强制重新核验 `barrier.IsValid()`、`ctx.Err()` 与 `validator()`。一旦发现屏障已被撤销，立即返回 `ErrConditionFailed` 中止持久化并触发 deferred `EndCommit()` 解除等待，彻底根除校验与落盘之间的 TOCTOU 竞态条件；
          4. **存储层事后对账清洗与持久化不变量保护（Post-Revocation Store Reconciliation & Durable Invariants）**：为杜绝任何极端时序下的撤销事实残留，`DropGroupCompactMessage` 在 `b.AbortAndWait()` 解除等待后，主动调用关联 `GroupStore.PurgeDistilledEntries(messageID)`。该清理严格限定于非空 `messageID`，从底层持久化存储中清理该具体消息的 `SourceDistill` 提炼条目。**严禁在缺失消息 ID 时回退到按发言人删除持久化记录**，确保早前已入库的历史长期记忆与管理员人工编辑事实零损坏；若物理清洗发生 I/O 异常，通过会话作用域日志（`scope.Log().Warn`）显式上报，杜绝静默失败；
          5. 会话重置（`ResetSession`、`ResetGroupCompact`）时统一中止并等待所有在途屏障，并清空源提交与撤销注册表，实现完全的生命周期安全保障。
-     - **缺失消息 ID 的有限丢弃（Bounded Turn Discard for Missing Message IDs）**：
-       - 若单轮交互失败且由于平台限制等原因缺失消息 ID（`messageID == ""`），失败仅归属于当前尚未落盘的暂存轮次（`groupCompactBuffer` 中处于 `staged` 状态的内存条目）。`DropGroupCompactMessage` 仅丢弃内存缓冲区中的该未提交轮次，绝不对底层持久化 `GroupStore` 进行无差别的发言人清理，完美兼顾未落盘轮次丢弃与历史持久化记忆安全性；
+     - **基于严格槽位序号绑定的暂存守卫与缺失消息 ID 安全隔离（Sequence-Bound Slot Guard & Safe Fallback for ID-less Turns）**：
+       - 为防御并发唤醒轮次在缺失平台消息 ID（`messageID == ""`）时的误提交与误清理，系统将 `StagedGroupCompactGuard` 严格绑定到单调自增的内部缓冲槽位序号（`sequence uint64`）；
+       - **单槽位精确晋升（Slot-Scoped Promote）**：当无平台 ID 的唤醒轮次 A 成功结束调用 `guardA.Promote()` 时，底层通过 `PromoteGroupCompactSlot(guard.sequence, "")` 严格仅将 `sequence == guard.sequence` 的暂存条目标记为已提交（`staged = false`），绝不波及并发到达且处于暂存等待状态的轮次 B；直接调用 `PromoteGroupCompactMessage("")` 强制返回 `false` 并拒绝任何晋升，彻底杜绝未验证轮次被泛化晋升进入压缩快照或记忆提炼；
+       - **单槽位精确丢弃与已提交闲聊保护（Slot-Scoped Drop & Unrelated Chatter Preservation）**：当无平台 ID 的唤醒轮次 B 失败或被封禁调用 `guardB.Drop()` 时，底层通过 `DropGroupCompactSlot(guard.sequence, "", senderID)` 仅移除该特定序号槽位，绝不根据发言人全量过滤。同发言人早前的正常被动水群闲聊（已提交条目）以及该发言人并发处于暂存队列的其他轮次获得 100% 完整保留；在无守卫降级回退场景下（`DropGroupCompactMessage("", senderID)`），清理亦严格限制为该发言人最新的一条暂存条目，绝不删除已提交记录，且绝不向底层持久化 `GroupStore` 发起任何无差别的发言人清理；
      - **避免无关消息误伤（Unrelated-Source False Cancellation Protection）**：
        - `DropGroupCompactMessage` 区分作用域，仅对快照包含该消息的在途屏障执行中止；
        - 若会话缓冲区中仅被丢弃了无关的预存消息 B（Staged Message），由于快照 A 不包含消息 B，快照 A 对应的提炼屏障不受任何影响，避免了因代际全局递增导致无关在途已提交批次提炼被误杀的问题。

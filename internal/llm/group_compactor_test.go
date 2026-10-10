@@ -3110,3 +3110,383 @@ func TestGroupDistillation_DropNoIDTurnDoesNotEraseHistoricalMemoriesOfSender(t 
 		t.Errorf("manual entry (%s) was deleted!", manualEntry.ID)
 	}
 }
+
+func TestStagedGroupCompact_TwoSimultaneousIDLessWakeTurns_PromoteADoesNotCommitPendingB_AndBExcludedFromDistillation(t *testing.T) {
+	tempDir := t.TempDir()
+	groupID := "grp_simul_noid_301"
+	owner := "group:" + groupID
+	gManager := memory.NewGroupManager(tempDir, nil)
+	gStore, err := gManager.GetGroupStore(groupID)
+	if err != nil {
+		t.Fatalf("GetGroupStore failed: %v", err)
+	}
+
+	mockLLM := &mockCompactorLLM{}
+	writer := memory.NewWriter(nil)
+	writer.SetGroupManager(gManager)
+	writer.SetLLM(mockLLM, "mock-model")
+
+	compactor := NewGroupCompactor(mockLLM, nil, "mock-model", 1, 100*time.Millisecond)
+	compactor.SetGroupManager(gManager)
+	compactor.SetMemoryWriter(writer)
+
+	session := &SessionContext{
+		ConversationID: owner,
+		groupStore:     gStore,
+	}
+
+	senderA := "syn_user_alice"
+	senderB := "syn_user_bob"
+	msgTextA := "爱丽丝提到了今天天气很好"
+	msgTextB := "鲍勃发送了一条即将被拒绝的恶意指令"
+
+	// 1. Both wake turns A and B arrive without platform message IDs and are staged into buffer
+	guardA, _ := session.StageGroupCompactWithGuard(
+		GroupCompactMessage{
+			Role:      "user",
+			Sender:    "爱丽丝",
+			SenderID:  senderA,
+			Content:   msgTextA,
+			MessageID: "", // empty platform ID
+			Time:      "12:00:00",
+		},
+		50,
+		senderA,
+		nil,
+		"",
+	)
+	guardB, _ := session.StageGroupCompactWithGuard(
+		GroupCompactMessage{
+			Role:      "user",
+			Sender:    "鲍勃",
+			SenderID:  senderB,
+			Content:   msgTextB,
+			MessageID: "", // empty platform ID
+			Time:      "12:00:01",
+		},
+		50,
+		senderB,
+		nil,
+		"",
+	)
+
+	if guardA == nil || guardB == nil {
+		t.Fatalf("expected non-nil guards for staged turns")
+	}
+	if guardA.Sequence() == guardB.Sequence() {
+		t.Fatalf("guards must have distinct sequences: %d vs %d", guardA.Sequence(), guardB.Sequence())
+	}
+
+	// 2. Turn A finishes successfully and calls guardA.Promote()
+	promotedA := guardA.Promote()
+	if !promotedA {
+		t.Fatalf("expected guardA.Promote() to succeed")
+	}
+
+	// Verify buffer state: A is committed, while B MUST still be staged!
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 2 {
+		t.Fatalf("expected 2 items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].staged {
+		t.Errorf("expected item 0 (turn A) to be unstaged/committed")
+	}
+	if !session.groupCompactBuffer[1].staged {
+		t.Errorf("CRITICAL BUG: item 1 (turn B) was prematurely committed by turn A's promote!")
+	}
+	session.mu.Unlock()
+
+	// 3. Verify SnapshotGroupCompact: only turn A is eligible!
+	// Snapshot with bufferSize=1 must only return turn A
+	snapshotA, ok := session.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("expected SnapshotGroupCompact(1) to succeed for turn A")
+	}
+	if len(snapshotA.Messages) != 1 {
+		t.Fatalf("expected snapshot to contain exactly 1 message, got %d", len(snapshotA.Messages))
+	}
+	if snapshotA.Messages[0].Content != msgTextA {
+		t.Errorf("snapshot contained wrong message: %+v", snapshotA.Messages[0])
+	}
+
+	// Snapshot requiring 2 messages must fail because contiguous unstaged items stop before turn B
+	_, ok2 := session.SnapshotGroupCompact(2)
+	if ok2 {
+		t.Errorf("SnapshotGroupCompact(2) should fail while turn B is still staged!")
+	}
+
+	// 4. Commit snapshot A and distill memories for snapshot A
+	if !session.CommitGroupCompact(snapshotA, "今天天气很好") {
+		t.Fatalf("CommitGroupCompact A failed")
+	}
+
+	idx0 := 0
+	distillOutputA := []struct {
+		Summary        string `json:"summary"`
+		Evidence       string `json:"evidence"`
+		SourceMsgIndex *int   `json:"source_msg_index"`
+		IsSelf         bool   `json:"is_self"`
+	}{
+		{
+			Summary:        "今天天气晴朗",
+			Evidence:       msgTextA,
+			SourceMsgIndex: &idx0,
+			IsSelf:         true,
+		},
+	}
+	rawJSON_A, _ := json.Marshal(distillOutputA)
+	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+		return string(rawJSON_A), nil
+	}
+
+	compactor.distillGroupMemories(session, owner, modelrouter.Scope{GroupID: groupID}, snapshotA)
+
+	entries, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry in group store from turn A, got %d", len(entries))
+	}
+	if entries[0].SourceSenderID != senderA || entries[0].Content != msgTextA {
+		t.Errorf("unexpected entry from turn A: %+v", entries[0])
+	}
+
+	// Turn A was committed into summary; buffer currently holds only uncommitted staged Turn B
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("expected 1 item in buffer before drop B, got %d", len(session.groupCompactBuffer))
+	}
+	if !session.groupCompactBuffer[0].staged || session.groupCompactBuffer[0].message.Content != msgTextB {
+		t.Errorf("expected staged turn B in buffer, got: %+v", session.groupCompactBuffer[0])
+	}
+	session.mu.Unlock()
+
+	// 5. Turn B fails or is banned: guardB.Drop() is called
+	droppedB := guardB.Drop()
+	if !droppedB {
+		t.Fatalf("expected guardB.Drop() to succeed")
+	}
+
+	// Buffer must now be empty (Turn A was summarized, Turn B was dropped)
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 0 {
+		t.Fatalf("expected 0 items in buffer after drop B, got %d", len(session.groupCompactBuffer))
+	}
+	session.mu.Unlock()
+
+	// Running summary from Turn A must remain completely intact
+	if session.GroupRunningSummary() != "今天天气很好" {
+		t.Errorf("expected running summary to be preserved, got %q", session.GroupRunningSummary())
+	}
+
+	// Verify group store still has only Turn A, and Turn B never leaked
+	entriesAfterDrop, err := gStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(entriesAfterDrop) != 1 {
+		t.Fatalf("expected still exactly 1 entry, got %d", len(entriesAfterDrop))
+	}
+	if entriesAfterDrop[0].Content == msgTextB {
+		t.Errorf("rejected turn B leaked into group store!")
+	}
+}
+
+func TestStagedGroupCompact_CommittedPassiveChatterPlusFailedIDLessWakeTurn_FromSameSender_PreservesCommitted(t *testing.T) {
+	session := &SessionContext{}
+	senderAlice := "syn_user_alice"
+
+	msgPassive := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "普通的被动闲聊A",
+		MessageID: "",
+		Time:      "14:00:00",
+	}
+	// 1. Append committed passive chatter from Alice
+	session.AppendGroupCompactMessage(msgPassive, 50, "")
+
+	// 2. Alice sends a wake turn B without message ID that gets staged
+	msgWake := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "失败的唤醒词B",
+		MessageID: "",
+		Time:      "14:00:05",
+	}
+	guardB, _ := session.StageGroupCompactWithGuard(msgWake, 50, senderAlice, nil, "")
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 2 {
+		t.Fatalf("expected 2 items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	session.mu.Unlock()
+
+	// 3. Turn B fails or is banned: guardB.Drop() is called
+	dropped := guardB.Drop()
+	if !dropped {
+		t.Fatalf("expected guardB.Drop() to succeed")
+	}
+
+	// 4. Verify Alice's committed passive chatter A is 100% preserved
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("CRITICAL BUG: committed message A was purged by dropping turn B! buffer len: %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].message.Content != msgPassive.Content {
+		t.Errorf("expected preserved message to be %q, got %q", msgPassive.Content, session.groupCompactBuffer[0].message.Content)
+	}
+	if session.groupCompactBuffer[0].staged {
+		t.Errorf("expected preserved message to remain committed (unstaged)")
+	}
+	session.mu.Unlock()
+
+	// 5. Test fallback path with DropGroupCompactMessage("", senderAlice)
+	msgPassive2 := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "普通的被动闲聊C",
+		MessageID: "",
+		Time:      "14:00:10",
+	}
+	session.AppendGroupCompactMessage(msgPassive2, 50, "")
+
+	msgWake2 := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "失败的唤醒词D",
+		MessageID: "",
+		Time:      "14:00:15",
+	}
+	session.StageGroupCompactMessage(msgWake2, 50, "")
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 3 {
+		t.Fatalf("expected 3 items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	session.mu.Unlock()
+
+	// Call fallback DropGroupCompactMessage("", senderAlice)
+	droppedFallback := session.DropGroupCompactMessage("", senderAlice)
+	if !droppedFallback {
+		t.Fatalf("expected DropGroupCompactMessage to drop staged entry")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 2 {
+		t.Fatalf("expected 2 committed items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].message.Content != msgPassive.Content ||
+		session.groupCompactBuffer[1].message.Content != msgPassive2.Content {
+		t.Errorf("committed messages were corrupted: %+v", session.groupCompactBuffer)
+	}
+	session.mu.Unlock()
+}
+
+func TestStagedGroupCompact_IndependentConcurrentIDLessTurns_FromSameSender_DropOnePreservesOther(t *testing.T) {
+	session := &SessionContext{}
+	senderAlice := "syn_user_alice"
+
+	msgA := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "并发唤醒发言A",
+		MessageID: "",
+		Time:      "15:00:00",
+	}
+	msgB := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "并发唤醒发言B",
+		MessageID: "",
+		Time:      "15:00:01",
+	}
+
+	guardA, _ := session.StageGroupCompactWithGuard(msgA, 50, senderAlice, nil, "")
+	guardB, _ := session.StageGroupCompactWithGuard(msgB, 50, senderAlice, nil, "")
+
+	// Drop turn B
+	droppedB := guardB.Drop()
+	if !droppedB {
+		t.Fatalf("expected guardB.Drop() to succeed")
+	}
+
+	// Verify turn A is preserved as staged
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("expected exactly 1 item in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].message.Content != msgA.Content {
+		t.Errorf("expected preserved turn A, got %+v", session.groupCompactBuffer[0])
+	}
+	if !session.groupCompactBuffer[0].staged {
+		t.Errorf("turn A must still be staged")
+	}
+	session.mu.Unlock()
+
+	// Now promote turn A
+	promotedA := guardA.Promote()
+	if !promotedA {
+		t.Fatalf("expected guardA.Promote() to succeed")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("expected 1 item in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].staged {
+		t.Errorf("turn A must be unstaged after promote")
+	}
+	session.mu.Unlock()
+
+	snap, ok := session.SnapshotGroupCompact(1)
+	if !ok || len(snap.Messages) != 1 || snap.Messages[0].Content != msgA.Content {
+		t.Errorf("expected snapshot with turn A, got ok=%v, snap=%+v", ok, snap)
+	}
+}
+
+func TestPromoteGroupCompactMessage_EmptyMessageID_ReturnsFalseAndPromotesNothing(t *testing.T) {
+	session := &SessionContext{}
+
+	session.StageGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  "syn_user_alice",
+		Content:   "待定发言A",
+		MessageID: "",
+	}, 50, "")
+
+	session.StageGroupCompactMessage(GroupCompactMessage{
+		Role:      "user",
+		Sender:    "鲍勃",
+		SenderID:  "syn_user_bob",
+		Content:   "待定发言B",
+		MessageID: "",
+	}, 50, "")
+
+	// Direct call to PromoteGroupCompactMessage("") must return false and promote nothing
+	promoted := session.PromoteGroupCompactMessage("")
+	if promoted {
+		t.Errorf("PromoteGroupCompactMessage(\"\") should return false")
+	}
+
+	session.mu.Lock()
+	for i, item := range session.groupCompactBuffer {
+		if !item.staged {
+			t.Errorf("item %d was prematurely promoted by empty messageID!", i)
+		}
+	}
+	session.mu.Unlock()
+
+	_, ok := session.SnapshotGroupCompact(1)
+	if ok {
+		t.Errorf("SnapshotGroupCompact(1) should fail when all items are staged")
+	}
+}
