@@ -48,9 +48,9 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 	switch backend {
 	case SQLite:
 		driver = "sqlite"
-		if dsn == "" {
-			dsn = filepath.Join(dataDir, "frostagent.db")
-		}
+		// The Web selector cannot choose a SQLite path. Keep the file within
+		// the configured data directory even for direct OpenWithConfig callers.
+		dsn = filepath.Join(dataDir, "frostagent.db")
 		if err := os.MkdirAll(filepath.Dir(dsn), 0700); err != nil {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}

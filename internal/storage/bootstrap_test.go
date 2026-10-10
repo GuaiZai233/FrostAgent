@@ -2,8 +2,28 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestSQLiteOpenIgnoresCustomDSN(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "unexpected.db")
+	db, err := OpenWithConfig(context.Background(), root, Config{Backend: SQLite, DSN: outside})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "frostagent.db")); err != nil {
+		t.Fatalf("local SQLite database was not created: %v", err)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("custom SQLite path was used: %v", err)
+	}
+}
 
 func TestBootstrapKeepsDatabaseSelectionAcrossSchemaRebuild(t *testing.T) {
 	ctx := context.Background()
