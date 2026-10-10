@@ -271,7 +271,17 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	} else {
 		logs.General.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
-	m.mcpGetenv = global.Get
+	if db != nil {
+		m.mcpGetenv = global.Get
+	} else {
+		mcpEnvironment := map[string]string{
+			"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
+			"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
+			"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
+			"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
+		}
+		m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
+	}
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
 		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
@@ -1318,6 +1328,14 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	rt.Handler.ServeHTTP(w, req)
 	if !ws && !stream {
 		after := i.config.Snapshot()
+		if m.db != nil {
+			if !readOnly && !equalSettings(before, after) {
+				if err := m.reloadSQLRuntimeLocked(i, rt.Scope.Context().Err() == nil, before); err != nil {
+					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
+				}
+			}
+			return
+		}
 		pending := false
 		for k := range instanceconfig.InstanceRestartKeys {
 			if before[k] != after[k] {

@@ -78,6 +78,19 @@ var knownEnvVars = map[string]envEntry{
 	"ACTIONSCAT_DISPATCH_TOKEN":   {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},
 }
 
+// ExportableValueKeys lists classified non-secret setting values. Unknown
+// keys remain blank in setting.json until explicitly classified.
+func ExportableValueKeys() map[string]bool {
+	keys := make(map[string]bool)
+	for key, entry := range knownEnvVars {
+		if !entry.IsSecret && key != "DIALOGUE_PATH" && key != "BRAIN_PATH" &&
+			key != "ONEBOT_WS_PATH" && key != "ASTRBOT_WS_PATH" {
+			keys[key] = true
+		}
+	}
+	return keys
+}
+
 // SandboxManager propagates atomic Control Plane sandbox configuration updates.
 type SandboxManager interface {
 	ApplySnapshot(cfg sandbox.Config)

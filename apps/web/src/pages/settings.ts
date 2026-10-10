@@ -20,7 +20,7 @@ export function mountSettingsPage(container: HTMLElement): () => void {
             </div>
             <div style="min-width: 0;">
               <h2 class="text-sm font-semibold text-foreground">Bot 服务端设置</h2>
-              <p class="text-xs text-muted mt-0.5">修改服务端环境变量、群聊响应策略与原始 .env 配置</p>
+              <p class="text-xs text-muted mt-0.5">修改数据库中的服务端设置与群聊响应策略</p>
             </div>
           </div>
           <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">

@@ -5,7 +5,6 @@ export interface InstanceInfo {
   enabled: boolean;
   deleting?: boolean;
   error?: string;
-  restart_required?: boolean;
 }
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();

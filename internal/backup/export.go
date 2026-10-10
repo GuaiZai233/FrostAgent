@@ -7,30 +7,12 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/service/dialogue"
+	settingsservice "FrostAgent/internal/service/settings"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"fmt"
 	"net/url"
 )
-
-// These fields have an explicit non-secret value contract. Uncatalogued
-// settings retain their names but export empty values until classified.
-var exportableSettingValues = map[string]bool{
-	"BOT_NAME": true, "BOT_ALIASES": true, "ADMIN_QQ_IDS": true,
-	"SYSTEM_PROMPT": true, "MAX_CONTEXT_MESSAGES": true, "MAX_CONTEXT_CHARS": true,
-	"MEMORY_REFLECTION_TIMEOUT": true, "ENABLE_AT_IN_GROUP_MSG": true,
-	"GROUP_REPLY_ON_MENTION": true, "ENABLE_REPLY_IN_GROUP_MSG": true,
-	"GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true,
-	"GROUP_COMPACT_MIN_INTERVAL": true, "GROUP_RAW_CONTEXT_MAX_CHARS": true,
-	"MEMORY_EXTRACT_BATCH_MIN": true, "MEMORY_EXTRACT_BATCH_MAX": true,
-	"BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true,
-	"BILLING_SAFETY_MULTIPLIER":            true,
-	"BILLING_PROMPT_PRICE_PER_MILLION":     true,
-	"BILLING_COMPLETION_PRICE_PER_MILLION": true,
-	"AGENT_MAX_ITERATIONS":                 true,
-	"ENABLE_ONEBOT_ADAPTER":                true, "ENABLE_ASTRBOT_ADAPTER": true,
-	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
-}
 
 func ExportSettings(db *storage.DB, instanceID string) (Settings, error) {
 	result := Settings{FormatVersion: FormatVersion, SecretNotice: SecretNotice}
@@ -39,6 +21,7 @@ func ExportSettings(db *storage.DB, instanceID string) (Settings, error) {
 		return result, err
 	}
 	result.Values = config.Snapshot()
+	exportableSettingValues := settingsservice.ExportableValueKeys()
 	for key := range result.Values {
 		if !exportableSettingValues[key] {
 			result.Values[key] = ""

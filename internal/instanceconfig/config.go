@@ -344,7 +344,7 @@ func WriteAtomicDurable(path string, data []byte, mode os.FileMode) (committed b
 // SyncDirectory makes a newly created child entry durable where supported.
 func SyncDirectory(path string) error { return syncDirectory(path) }
 
-const Template = `# Instance settings. Restart-required fields take effect after disabling/enabling.
+const Template = `# Default values for new SQL instances.
 UPSTREAM_API_KEY=
 BOT_NAME=霜降狐
 BOT_ALIASES=霜降,FrostAgent

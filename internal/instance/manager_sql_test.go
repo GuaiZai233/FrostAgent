@@ -1,8 +1,11 @@
 package instance
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,5 +129,38 @@ func TestPendingDeletionCanBeCancelled(t *testing.T) {
 	}
 	if m.instances[info.ID].runtime == nil {
 		t.Fatal("management runtime was not restored")
+	}
+}
+
+func TestSQLInstanceSettingAppliesWithoutManualRestart(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Hot Settings")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create instance: %#v, %v", info, err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost,
+		"/instances/"+info.ID+"/frostagent.v1.SettingsService/UpdateEnvVar",
+		strings.NewReader(`{"key":"AGENT_MAX_ITERATIONS","value":"60"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+		t.Fatalf("setting update failed: %d %s", response.Code, response.Body.String())
+	}
+	if got := m.instances[info.ID].runtime.Engine.EffectiveMaxIterations(); got != 60 {
+		t.Fatalf("setting was not applied to running instance: got %d", got)
+	}
+	list, _ := m.List()
+	if len(list) != 1 || list[0].RestartRequired {
+		t.Fatalf("SQL setting still requests manual restart: %#v", list)
 	}
 }

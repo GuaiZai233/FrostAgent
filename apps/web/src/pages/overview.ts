@@ -153,7 +153,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 <article class="card p-3.5 flex flex-col gap-2"><p class="text-xs text-muted font-medium">是否启用</p><label class="instance-toggle"><input type="checkbox" role="switch" aria-label="是否启用" id="instance-enabled" ${instance?.enabled ? "checked" : ""}><span></span></label></article>
  </section>
  ${instance?.error ? `<p class="text-sm text-destructive">${escapeHtml(instance.error)}</p>` : ""}
- ${instance?.restart_required ? `<p class="text-sm text-warning">需要重启实例后生效</p>` : ""}
 
         <!-- Tools Capability Section -->
         <section class="flex flex-col gap-3">
