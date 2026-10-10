@@ -1518,6 +1518,10 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
 		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[1] == "import" && parts[2] == "settings" && r.Method == http.MethodPost {
+			m.handleSettingsImport(w, r, parts[0])
+			return
+		}
 		if len(parts) == 3 && parts[1] == "backup" && r.Method == http.MethodGet {
 			data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
 			if err != nil {

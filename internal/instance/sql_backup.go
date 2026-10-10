@@ -2,11 +2,13 @@ package instance
 
 import (
 	"FrostAgent/internal/backup"
+	"FrostAgent/internal/logs"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 )
@@ -72,6 +74,82 @@ func (m *Manager) InstancePart(id, part string) (data []byte, mediaType, fileNam
 		return nil, "", "", err
 	}
 	return append(data, '\n'), "application/json", fileName, nil
+}
+
+func (m *Manager) ImportSettings(id string, data backup.Settings) error {
+	if m.db == nil {
+		return fmt.Errorf("setting import requires SQL storage")
+	}
+	i, err := m.lookup(id)
+	if err != nil {
+		return err
+	}
+	if !i.op.TryLock() {
+		return ErrBusy
+	}
+	defer i.op.Unlock()
+	if err := m.rejectDeleting(i.id); err != nil {
+		return err
+	}
+	list, _ := m.List()
+	enabled := false
+	for _, info := range list {
+		if info.ID == i.id {
+			enabled = info.Enabled
+			break
+		}
+	}
+	i.mu.Lock()
+	oldRuntime, oldMCP := i.runtime, i.mcp
+	i.runtime, i.mcp = nil, nil
+	i.mu.Unlock()
+	if oldRuntime != nil {
+		oldRuntime.Stop()
+	}
+	if oldMCP != nil {
+		_ = oldMCP.Close()
+	}
+	importErr := backup.ImportSettings(m.db, i.id, data)
+	if importErr == nil {
+		owners, err := m.db.LoadEndpointOwners(context.Background())
+		if err != nil {
+			importErr = err
+		} else {
+			m.endpointMu.Lock()
+			m.endpointOwners = owners
+			m.endpointMu.Unlock()
+		}
+	}
+	r, c, buildErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	if buildErr == nil && enabled && i.mcp != nil {
+		buildErr = i.mcp.SetRuntimeActive(true)
+	}
+	if buildErr != nil && r != nil {
+		r.Stop()
+		r = nil
+	}
+	i.mu.Lock()
+	i.runtime, i.config = r, c
+	i.mu.Unlock()
+	if buildErr != nil {
+		_ = m.update(i.id, func(info *Info) { info.Enabled = false; info.Error = buildErr.Error() })
+		i.logger.Error(logs.SYSTEM, fmt.Sprintf("导入设置后重建实例失败: %v", buildErr))
+	}
+	return errors.Join(importErr, buildErr)
+}
+
+func (m *Manager) handleSettingsImport(w http.ResponseWriter, r *http.Request, id string) {
+	var data backup.Settings
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20))
+	if err := decoder.Decode(&data); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := m.ImportSettings(id, data); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"success": true})
 }
 
 func (m *Manager) PrepareDeletion(id string) error {

@@ -1,5 +1,6 @@
-import { instanceState } from '../instance-state';
+import { instanceState, instanceRequest } from '../instance-state';
 import { icon } from '../components/icons';
+import { toast } from '../components/toast';
 
 export function mountBackupRestorePage(container: HTMLElement): () => void {
   const id = instanceState.selected!.id;
@@ -25,6 +26,31 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
           <a href="${base}/summaries" download="group_summaries.json" class="btn btn-outline">摘要 JSON</a>
         </div>
       </article>
+      <article class="card p-5 mt-4">
+        <h2 class="card-title text-base">快速导入设置</h2>
+        <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。</p>
+        <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
+        <button id="settings-import-button" class="btn btn-outline mt-3" disabled>导入 setting.json</button>
+      </article>
     </div>`;
+  const fileInput = container.querySelector<HTMLInputElement>('#settings-import-file')!;
+  const importButton = container.querySelector<HTMLButtonElement>('#settings-import-button')!;
+  fileInput.onchange = () => { importButton.disabled = !fileInput.files?.length; };
+  importButton.onclick = () => {
+    void (async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      importButton.disabled = true;
+      try {
+        const contents = JSON.parse(await file.text());
+        await instanceRequest(`/${id}/import/settings`, contents);
+        toast.success('设置已导入；请重新配置密钥');
+      } catch (error) {
+        toast.error('导入设置失败: ' + String(error));
+      } finally {
+        importButton.disabled = false;
+      }
+    })();
+  };
   return () => {};
 }

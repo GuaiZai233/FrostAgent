@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/storage"
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -34,6 +35,13 @@ func SaveExamplesSQL(db *storage.DB, instanceID string, examples []llm.DialogueE
 		return err
 	}
 	defer tx.Rollback()
+	if err := WriteExamplesTx(ctx, db, tx, instanceID, examples); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func WriteExamplesTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, examples []llm.DialogueExample) error {
 	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM dialogues WHERE instance_id = ?`), instanceID); err != nil {
 		return err
 	}
@@ -49,7 +57,7 @@ func SaveExamplesSQL(db *storage.DB, instanceID string, examples []llm.DialogueE
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func LoadPromptSQL(db *storage.DB, instanceID string) (string, error) {

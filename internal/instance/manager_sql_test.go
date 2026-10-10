@@ -1,6 +1,9 @@
 package instance
 
 import (
+	"FrostAgent/internal/backup"
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -223,5 +226,40 @@ func TestSQLGlobalSettingsRefreshSharedDependencies(t *testing.T) {
 	}
 	if got := m.ControlPlaneGetenv()("MCP_CONTROL_TOKEN"); got != "synthetic-token" {
 		t.Fatal("control-plane token did not change immediately")
+	}
+}
+
+func TestSQLSettingsImportRebuildsActiveInstance(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Import Settings")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create instance: %#v, %v", info, err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := backup.ExportSettings(m.db, info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Values["AGENT_MAX_ITERATIONS"] = "44"
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/instances/"+info.ID+"/import/settings", bytes.NewReader(data))
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+		t.Fatalf("settings import failed: %d %s", response.Code, response.Body.String())
+	}
+	if got := m.instances[info.ID].runtime.Engine.EffectiveMaxIterations(); got != 44 {
+		t.Fatalf("imported setting was not applied: %d", got)
 	}
 }

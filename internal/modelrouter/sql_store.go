@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"FrostAgent/internal/storage"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -113,8 +114,41 @@ func (m *Manager) writeSQL(cfg Configuration) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := writeConfigurationTx(ctx, m.db, tx, m.instanceID, cfg); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// WriteImportedConfigurationTx restores a shareable model configuration with
+// empty secrets inside the caller's transaction.
+func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg Configuration) error {
+	for i := range cfg.Endpoints {
+		cfg.Endpoints[i].APIKeySource = ""
+		cfg.Endpoints[i].APIKeyRef = ""
+		cfg.Endpoints[i].APIKeyConfigured = false
+	}
+	normalizeConfiguration(&cfg)
+	if err := validateConfiguration(cfg); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM endpoint_ids WHERE instance_id = ?`), instanceID); err != nil {
+		return err
+	}
+	for _, endpoint := range cfg.Endpoints {
+		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO endpoint_ids(id, instance_id) VALUES (?, ?)`), endpoint.ID, instanceID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM model_secrets WHERE instance_id = ?`), instanceID); err != nil {
+		return err
+	}
+	return writeConfigurationTx(ctx, db, tx, instanceID, cfg)
+}
+
+func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg Configuration) error {
 	for _, table := range []string{"models", "model_bindings", "model_endpoints", "model_revisions"} {
-		if _, err := tx.ExecContext(ctx, m.db.Bind(`DELETE FROM `+table+` WHERE instance_id = ?`), m.instanceID); err != nil {
+		if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM `+table+` WHERE instance_id = ?`), instanceID); err != nil {
 			return err
 		}
 	}
@@ -123,9 +157,9 @@ func (m *Manager) writeSQL(cfg Configuration) error {
 		if endpoint.Enabled {
 			enabled = 1
 		}
-		if _, err := tx.ExecContext(ctx, m.db.Bind(`INSERT INTO model_endpoints
+		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_endpoints
 			(instance_id, id, display_name, base_url, api_key_source, api_key_ref, enabled, position)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), m.instanceID, endpoint.ID, endpoint.DisplayName,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), instanceID, endpoint.ID, endpoint.DisplayName,
 			endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, position); err != nil {
 			return err
 		}
@@ -139,33 +173,33 @@ func (m *Manager) writeSQL(cfg Configuration) error {
 		if model.Enabled {
 			enabled = 1
 		}
-		if _, err := tx.ExecContext(ctx, m.db.Bind(`INSERT INTO models
+		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO models
 			(instance_id, id, display_name, endpoint_id, upstream_model, enabled, capabilities, position)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), m.instanceID, model.ID, model.DisplayName,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), instanceID, model.ID, model.DisplayName,
 			model.EndpointID, model.UpstreamModel, enabled, string(capabilities), position); err != nil {
 			return err
 		}
 	}
 	for workload, binding := range cfg.GlobalBindings {
-		if _, err := tx.ExecContext(ctx, m.db.Bind(`INSERT INTO model_bindings
+		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_bindings
 			(instance_id, platform, group_id, workload, mode, model_id)
-			VALUES (?, '', '', ?, ?, ?)`), m.instanceID, workload, binding.Mode, binding.ModelID); err != nil {
+			VALUES (?, '', '', ?, ?, ?)`), instanceID, workload, binding.Mode, binding.ModelID); err != nil {
 			return err
 		}
 	}
 	for _, override := range cfg.GroupOverrides {
 		for workload, binding := range override.Bindings {
-			if _, err := tx.ExecContext(ctx, m.db.Bind(`INSERT INTO model_bindings
+			if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_bindings
 				(instance_id, platform, group_id, workload, mode, model_id)
-				VALUES (?, ?, ?, ?, ?, ?)`), m.instanceID, override.Platform, override.GroupID,
+				VALUES (?, ?, ?, ?, ?, ?)`), instanceID, override.Platform, override.GroupID,
 				workload, binding.Mode, binding.ModelID); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, m.db.Bind(`INSERT INTO model_revisions(instance_id, revision)
-		VALUES (?, ?)`), m.instanceID, cfg.Revision); err != nil {
+	if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_revisions(instance_id, revision)
+		VALUES (?, ?)`), instanceID, cfg.Revision); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }

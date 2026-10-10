@@ -3,10 +3,12 @@ package mcp
 import (
 	"FrostAgent/internal/storage"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -211,7 +213,46 @@ func (s *ConfigStore) saveSQL(cfg *Config) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM mcp_servers WHERE instance_id = ?`), s.instanceID); err != nil {
+	if err := writeConfigTx(ctx, s.db, tx, s.instanceID, cfg); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// WriteImportedConfigTx saves a redacted MCP configuration as one part of a
+// caller-owned settings transaction.
+func WriteImportedConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg *Config) error {
+	seen := make(map[string]bool)
+	for i := range cfg.Servers {
+		server := &cfg.Servers[i]
+		if strings.TrimSpace(server.ID) == "" || strings.TrimSpace(server.Name) == "" || strings.Contains(server.ID, "__") {
+			return fmt.Errorf("invalid MCP server id or name")
+		}
+		if seen[server.ID] {
+			return fmt.Errorf("duplicate MCP server id %q", server.ID)
+		}
+		seen[server.ID] = true
+		switch server.Transport.Type {
+		case TransportStdio:
+			if strings.TrimSpace(server.Transport.Command) == "" {
+				return fmt.Errorf("MCP server %q has no command", server.ID)
+			}
+		case TransportStreamableHTTP, TransportSSE:
+			if !strings.HasPrefix(server.Transport.URL, "http://") && !strings.HasPrefix(server.Transport.URL, "https://") {
+				return fmt.Errorf("MCP server %q has no HTTP URL", server.ID)
+			}
+		default:
+			return fmt.Errorf("MCP server %q has unsupported transport", server.ID)
+		}
+		server.Transport.Env = nil
+		server.Transport.Headers = nil
+		server.Transport.Args = nil
+	}
+	return writeConfigTx(ctx, db, tx, instanceID, cfg)
+}
+
+func writeConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg *Config) error {
+	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM mcp_servers WHERE instance_id = ?`), instanceID); err != nil {
 		return err
 	}
 	for position, server := range cfg.Servers {
@@ -231,10 +272,10 @@ func (s *ConfigStore) saveSQL(cfg *Config) error {
 		if server.Enabled {
 			enabled = 1
 		}
-		if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO mcp_servers
+		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO mcp_servers
 			(instance_id, id, name, enabled, transport_type, command, working_dir, url,
 			args_json, env_json, headers_json, position)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), s.instanceID, server.ID, server.Name,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), instanceID, server.ID, server.Name,
 			enabled, server.Transport.Type, server.Transport.Command, server.Transport.WorkingDir,
 			server.Transport.URL, string(args), string(env), string(headers), position); err != nil {
 			return err
@@ -244,12 +285,12 @@ func (s *ConfigStore) saveSQL(cfg *Config) error {
 			if policy.Enabled {
 				enabled = 1
 			}
-			if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO mcp_tool_policies
+			if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO mcp_tool_policies
 				(instance_id, server_id, tool_name, enabled) VALUES (?, ?, ?, ?)`),
-				s.instanceID, server.ID, name, enabled); err != nil {
+				instanceID, server.ID, name, enabled); err != nil {
 				return err
 			}
 		}
 	}
-	return tx.Commit()
+	return nil
 }
