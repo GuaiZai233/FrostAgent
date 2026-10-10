@@ -160,6 +160,50 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **共存与独立控制**：
   - 支持通过环境变量（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
 
+### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
+
+为了让智能体在群聊场景中具备像真实群友一样自发参与讨论的互动能力，同时避免被动全量响应造成的 Token 浪费与群友打扰，FrostAgent 引入了基于概率触发与大模型主动静默研判的双重主动回复架构：
+
+- **入站概率 Roll 与触发唤醒抽象 (Probability Roll & Inbound Wake Signal)**：
+  - 各适配器（OneBot v11 与 AstrBot）在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true` 或 AstrBot 元数据 `_frostagent_proactive_reply: true`），作为有效唤醒信号进入主处理管线；
+  - 概率由实例环境变量 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
+  - 若群聊配置了 `GROUP_REPLY_ON_MENTION=false`（群聊不回复），则主动回复与被提及回复一并受到总开关压制，保证行为策略的一致性。
+- **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
+  - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
+  - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。`
+  - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
+- **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
+  - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
+  - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
+  - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
+- **入站安全审查 Fail-Closed 与主动静默丢弃 (Security Gating & Silent Dropping)**：
+  - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞；
+  - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。在 AstrBot 适配器中，静默丢弃同样下发携带 `suppress_llm: true` 的协议级 `noop` 控制动作，在杜绝向群发送可见消息的同时，可靠抑制 AstrBot 原生兜底 LLM；普通未唤醒的群聊闲聊背景消息则保持原有的无抑制 `noop`（`suppress_llm: false`），完整保持客户端原生事件传播链。
+- **主动回复计费完全豁免与免费策略 (Billing Exemption for Proactive Turns)**：
+  - **免计费与零预留/结算保证**：主动回复属于 Bot 自发参与互动的探索性行为，发言群友并无明确唤醒意图。因此系统严格规定主动回复完全免费，即使触发大模型深度思考与工具调用（无论大模型最终决定参与发言还是调用 `stay_silent` 工具放弃插嘴），各适配器（OneBot v11 与 AstrBot）均不初始化 `BillingRunState`（`billingState = nil`），彻底旁路 `ReserveLLM` 资金预留与 `CommitLLM` 扣费结算；
+  - **视觉余额预检旁路**：对于包含图片或引用回复图片的主动消息，同样旁路多模态视觉前置余额检查（`BillingClient.Balance`），杜绝无唤醒意图的群友因余额不足收到打扰性扣费拦截提示；
+  - **零账单回执纯净输出**：主动回复产生的实际出站消息绝不追加计费结算回执（如“本次消耗 X 雪花”），保持拟人化日常群友闲聊的纯净体验；
+  - **显式唤醒计费边界隔离**：对于群友显式 @ 机器人或通过别名唤醒的对话，继续严格执行完整的预留、扣费结算、余额不足阻断与账单回执追加，两者边界清晰解耦。
+- **执行异常与后置渲染失败静默丢弃机制 (Silent Error Handling & Post-Run Formatting Silence)**：
+  - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机、工具执行异常，或在后置渲染阶段发生单条消息超长、引用消息校验失败（`validateQuoteMessages`）、OneBot 消息组装失败（`BuildOneBotMessage`），系统严格执行静默丢弃策略：仅在控制台/日志记录警告或错误日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向未唤醒群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
+  - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
+- **主动回复只读模式与副作用工具强禁闭机制 (Proactive Reply Read-Only Confinement & Side-Effect Prevention, Option A)**：
+  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
+  - **P1: 三层纵深防御与全量副作用即时静默熔断**：
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用与外部特权工具，向模型仅暴露控制与记忆工具（`stay_silent`、`memory` 记忆管理），从调用源头消除模型生成变异工具调用的可能；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
+    - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
+    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；
+    - **工具实现层双重校验 (Tool-Level Defense-in-Depth)**：`ban_user` 工具在执行前提取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，坚决不持久化锁定旁观者。
+  - **P2: 模型输出看门狗阻断透传、格式化校验与静默丢弃 (Output Watchdog Gating & Formatting Silence, `OutputBlocked`)**：
+    - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
+    - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 以及后置消息组装校验失败（引用校验失败、多媒体消息构建失败、单条消息超长等）执行完全静默丢弃（OneBot 不发送群消息并回滚会话；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或内部格式化错误提示，同时在显式唤醒轮次中完整保留标准安全警示与错误反馈。
+- **Web 控制台可视化滑块、异步串行队列与最后意图优先同步**：
+  - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
+  - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；
+  - 开启时强制校验范围严格限制在 `[0.01, 1.00]`，通过 `ProactiveSettingsSync` 异步串行任务队列调度写操作，连续拖动滑块时自动折叠中间态实现最后意图优先（Last-Intent-Wins），网络保存中锁死控件交互，在本地突变发生与完成时使在途陈旧读取失效（Invalidate Pre-Edit Loads），并在保存失败时主动退出写保护并重载权威真实服务端状态，防御乱序陈旧数据覆盖。
+
 ### 管理员消息指令系统 (Administrator Message Commands System)
 
 为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：

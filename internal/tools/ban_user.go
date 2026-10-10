@@ -62,6 +62,9 @@ func NewBanUserTool(ctrl *security.Controller) Tool {
 			if !ok {
 				return "", errors.New("ban_user: missing run context")
 			}
+			if runCtx.Proactive {
+				return "", errors.New("ban_user: 主动回复轮次禁止封禁用户")
+			}
 
 			actorUserID := strings.TrimSpace(runCtx.ActorUserID)
 			actorPlatform := strings.TrimSpace(runCtx.ActorPlatform)

@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
@@ -469,7 +470,40 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	return result
 }
 
-func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+func shouldReply(event *Event, scopes ...*runtimescope.Scope) bool {
+	return shouldReplyWithRNG(event, nil, scopes...)
+}
+
+func isExplicitWake(event *Event, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	scope := runtimescope.First(scopes)
+	if scope != nil && scope.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return false
+	}
+	if event.IsWake || event.IsAt {
+		return true
+	}
+	if isBotNameMentioned(event.Content, scope) {
+		return true
+	}
+	if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+		return true
+	}
+	return false
+}
+
+func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
 	if event.Metadata != nil {
 		if val, ok := event.Metadata["_frostagent_should_reply"]; ok {
 			if b, ok := val.(bool); ok {
@@ -491,7 +525,21 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 		if isBotNameMentioned(event.Content, scope) {
 			return true
 		}
-		return slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) })
+		if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+			return true
+		}
+		var getenv func(string) string
+		if scope != nil {
+			getenv = scope.Getenv
+		}
+		if proactive.RollWithRand(getenv, rng) {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any)
+			}
+			event.Metadata["_frostagent_proactive_reply"] = true
+			return true
+		}
+		return false
 	}
 	return true
 }
@@ -603,7 +651,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		platform = "astrbot"
 	}
 
-	if !shouldReply(event, engine.Scope) {
+	if !shouldReply(&event, engine.Scope) {
 		engine.Log().Debug(
 			logs.WEBSOCKET,
 			fmt.Sprintf(
@@ -721,7 +769,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		} else {
 			// 计费检查 (视觉处理前检查)
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
-			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
 				bCancel()
@@ -935,6 +983,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
+	if isProactiveReply(&event) {
+		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
+
 	var (
 		replyText            string
 		receiptText          string
@@ -944,7 +996,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
@@ -1073,6 +1125,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,
 			Mock:          conn.mock,
+			Proactive:     isProactiveReply(&event),
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -1093,7 +1146,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			_ = sendDirectReply(event, conn, runResult.Content)
+			if isProactiveReply(&event) {
+				_ = sendTerminalNoopWithSuppress(event, conn)
+			} else {
+				_ = sendDirectReply(event, conn, runResult.Content)
+			}
 			return
 		}
 
@@ -1110,6 +1167,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				billingState.LastBalanceMinor,
 				billingState.WelcomeGranted,
 			)
+		}
+
+		if isProactiveReply(&event) && (runResult.Error != nil || runResult.OutputBlocked) {
+			engine.TrimSession(session)
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.sessionKey(event), runResult.Error, runResult.OutputBlocked))
+			_ = sendTerminalNoopWithSuppress(event, conn)
+			return
 		}
 
 		if runResult.Silent {
@@ -1173,6 +1237,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
+			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
 		}
 
@@ -1331,7 +1396,23 @@ func astrBotRouteScope(event Event) modelrouter.Scope {
 	return scope
 }
 
+func isProactiveReply(event *Event) bool {
+	if event == nil || event.Metadata == nil {
+		return false
+	}
+	v, ok := event.Metadata["_frostagent_proactive_reply"].(bool)
+	return ok && v
+}
+
 func sendTerminalNoop(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, isProactiveReply(&event))
+}
+
+func sendTerminalNoopWithSuppress(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, true)
+}
+
+func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) error {
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
@@ -1340,11 +1421,12 @@ func sendTerminalNoop(event Event, conn *wsConn) error {
 		platform = "astrbot"
 	}
 	return conn.WriteJSON(Action{
-		Type:      "action",
-		Action:    "noop",
-		Platform:  platform,
-		SessionID: conn.sessionKey(event),
-		Echo:      "reply_" + event.MessageID,
+		Type:        "action",
+		Action:      "noop",
+		SuppressLLM: suppressLLM,
+		Platform:    platform,
+		SessionID:   conn.sessionKey(event),
+		Echo:        "reply_" + event.MessageID,
 	})
 }
 

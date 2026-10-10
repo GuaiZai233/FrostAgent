@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"archive/zip"
@@ -479,6 +480,44 @@ func TestSQLGlobalSettingsImportReportsApplyFailure(t *testing.T) {
 	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), `"success":true`) ||
 		applyCount != 2 || m.global.Get("WS_ALLOWED_ORIGINS") != "" || m.global.Get("SECURITY_CLASSIFIER_TIMEOUT") != "15s" {
 		t.Fatalf("failed import was not rolled back: status=%d body=%s calls=%d", response.Code, response.Body.String(), applyCount)
+	}
+}
+
+func TestSQLProactiveSettingsApplyAndExport(t *testing.T) {
+	t.Setenv("PROACTIVE_REPLY_PROBABILITY", "1")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Proactive SQL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range []struct{ key, value string }{
+		{"PROACTIVE_REPLY_PROBABILITY", "0.25"},
+		{"ENABLE_PROACTIVE_REPLY", "true"},
+	} {
+		body, _ := json.Marshal(map[string]string{"key": setting.key, "value": setting.value})
+		request := httptest.NewRequest(http.MethodPost,
+			"/instances/"+info.ID+"/frostagent.v1.SettingsService/UpdateEnvVar", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+			t.Fatalf("update %s: %d %s", setting.key, response.Code, response.Body.String())
+		}
+	}
+	if got := proactive.GetProbability(m.instances[info.ID].runtime.Scope.Getenv); got != 0.25 {
+		t.Fatalf("running instance used process environment or stale proactive settings: %v", got)
+	}
+	exported, err := backup.ExportSettings(m.db, info.ID)
+	if err != nil || exported.Values["PROACTIVE_REPLY_PROBABILITY"] != "0.25" ||
+		exported.Values["ENABLE_PROACTIVE_REPLY"] != "true" {
+		t.Fatalf("proactive SQL settings were not exported: %#v, %v", exported.Values, err)
 	}
 }
 

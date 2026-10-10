@@ -44,6 +44,8 @@ var knownEnvVars = map[string]envEntry{
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
+	"PROACTIVE_REPLY_PROBABILITY":          {"主动回复触发概率（0.01~1.00，0 为关闭）", false, false, false},
+	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
 	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},

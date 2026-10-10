@@ -26,6 +26,7 @@ import (
 
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/security"
 
 	"github.com/gorilla/websocket"
@@ -262,7 +263,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, notice)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, wakeSignals, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -284,12 +285,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, notice)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, GroupWakeSignals{}, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -336,7 +337,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// Fast-fail once before downloading or processing either current or quoted images.
-	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 		bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 		bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
 		bCancel()
@@ -425,6 +426,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 检查单条用户消息输入上限保护
 	if len([]rune(userText)) > 30000 {
 		engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 消息过长 (%d 字)，拒绝处理", event.UserID, len([]rune(userText))))
+		if wakeSignals.Proactive {
+			return
+		}
 		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。")
 		return
 	}
@@ -642,6 +646,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
+	if wakeSignals.Proactive {
+		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
+
 	// 4. Call the agent engine with history
 	var (
 		replyText   string
@@ -657,7 +665,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if engine != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
 			billingState = &llm.BillingRunState{
 				Platform:      "qq",
@@ -867,6 +875,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			RouteSnapshot:  routeSnapshot,
 			SecurityNotice: notice,
 			Mock:           conn.mock,
+			Proactive:      wakeSignals.Proactive,
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -891,7 +900,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 				}
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+			if !wakeSignals.Proactive {
+				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+			}
 			return
 		}
 
@@ -910,6 +921,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				billingState.LastBalanceMinor,
 				billingState.WelcomeGranted,
 			)
+		}
+
+		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
+			engine.TrimSession(session)
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
+			return
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It
@@ -1033,12 +1050,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			if wakeSignals.Proactive {
+				engine.TrimSession(session)
+				return
+			}
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			if wakeSignals.Proactive {
+				engine.TrimSession(session)
+				return
+			}
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error())
 			return
 		}

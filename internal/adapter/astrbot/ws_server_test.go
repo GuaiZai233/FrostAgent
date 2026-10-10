@@ -237,6 +237,24 @@ func TestAstrBotReplySilentTurnDoesNotAddAssistantHistory(t *testing.T) {
 		t.Fatal("静默轮次不应写入 AssistantSilentMarker")
 	}
 
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("设置读取超时失败: %v", err)
+	}
+	_, firstRespBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取第一轮静默终态控制帧失败: %v", err)
+	}
+	var firstAction Action
+	if err := json.Unmarshal(firstRespBytes, &firstAction); err != nil {
+		t.Fatalf("解析第一轮静默动作失败: %v", err)
+	}
+	if firstAction.Action != "noop" || !firstAction.SuppressLLM {
+		t.Fatalf("期望第一轮静默返回 action=noop 且 suppress_llm=true, 实际=%+v", firstAction)
+	}
+	if firstAction.Echo != "reply_msg_silent_1" {
+		t.Fatalf("期望第一轮 echo=reply_msg_silent_1, 实际=%s", firstAction.Echo)
+	}
+
 	secondEvent, err := json.Marshal(privateEvent("msg_silent_2", "第二轮请回复"))
 	if err != nil {
 		t.Fatalf("序列化第二轮事件失败: %v", err)

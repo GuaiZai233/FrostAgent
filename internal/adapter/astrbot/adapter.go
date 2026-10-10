@@ -328,10 +328,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					continue
 				}
-				pristineShouldReply = shouldReply(event, scope)
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
+				pristineShouldReply = shouldReply(&event, scope)
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 			}
 
@@ -345,6 +345,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
+					if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				}
 				var decision security.WatchdogDecision
@@ -366,8 +369,12 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					msg := a.engine.Security.RejectMessage(principal, decision)
-					_ = sendDirectReply(event, c, msg)
+					if isExplicitWake(&event, scope) {
+						msg := a.engine.Security.RejectMessage(principal, decision)
+						_ = sendDirectReply(event, c, msg)
+					} else if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
@@ -385,6 +392,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				(event.MessageType == "group" || event.MessageType == "private") {
 				routeSnapshot = a.engine.ModelRouter.Snapshot()
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
+					if isProactiveReply(&event) {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				}
 			}
@@ -446,6 +456,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if turn != nil {
 					turn.Done()
 				}
+				if isProactiveReply(&event) {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
 			}
 		}
 	}
@@ -505,5 +518,5 @@ func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
 	if event.MessageType != "group" {
 		return false
 	}
-	return shouldReply(event, scopes...)
+	return isExplicitWake(&event, scopes...)
 }

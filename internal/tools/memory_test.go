@@ -123,3 +123,60 @@ func TestMemoryToolMockWriteDoesNotPersist(t *testing.T) {
 		t.Fatalf("expected 0 stored memories for mock session, got %d", len(stored))
 	}
 }
+
+func TestMemoryToolProactiveAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "brain.json")
+	store := memory.NewStore(storePath)
+	reader := memory.NewReader(store, 5)
+	gateway := memory.NewGateway()
+	writer := memory.NewWriter(store)
+
+	engine := &llm.Engine{
+		MemoryReader:  reader,
+		MemoryWriter:  writer,
+		MemoryGateway: gateway,
+	}
+
+	tool := NewMemoryTool(engine)
+
+	proactiveCtx := llm.WithRunContext(context.Background(), llm.RunContext{
+		Owner:     "proactive_user",
+		OwnerType: memory.OwnerUser,
+		Proactive: true,
+	})
+
+	// 1. write in proactive turn is permitted per maintainer clarification
+	writeRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"write","content":"proactive note","tags":["test"]}`)
+	if err != nil {
+		t.Fatalf("write unexpected error: %v", err)
+	}
+	if writeRes != "记忆已写入" {
+		t.Fatalf("expected write success, got: %s", writeRes)
+	}
+	stored, err := store.ListByOwner("proactive_user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("expected 1 memory stored in proactive turn, got %d", len(stored))
+	}
+
+	// 2. Search in proactive turn should be allowed and increment AccessCount
+	searchRes, err := tool.ExecuteContext(proactiveCtx, `{"action":"search","tags":["test"]}`)
+	if err != nil {
+		t.Fatalf("search in proactive turn failed: %v", err)
+	}
+	var searchResults []memory.MemoryEntry
+	if err := json.Unmarshal([]byte(searchRes), &searchResults); err != nil {
+		t.Fatalf("failed to unmarshal search response: %v", err)
+	}
+	if len(searchResults) != 1 {
+		t.Fatalf("expected 1 search result, got %d", len(searchResults))
+	}
+	// Check AccessCount is incremented to 1 in store
+	storedAfter, _ := store.ListByOwner("proactive_user")
+	if len(storedAfter) != 1 || storedAfter[0].AccessCount != 1 {
+		t.Fatalf("expected AccessCount = 1 for proactive search, got %d", storedAfter[0].AccessCount)
+	}
+}
