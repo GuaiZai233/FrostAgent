@@ -158,9 +158,11 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 
 	// 1. Add active session in sessionManager
 	activeSession := sessionManager.GetOrCreate("aiocqhttp:group:100001")
+	activeSession.SetGroupName("王源粉丝群")
 	activeSession.AppendGroupCompactMessage("User (123): hello", 20)
 
-	// 2. Add durable group summary
+	// 2. Add durable group summary and cached group name
+	sessionManager.SetGroupName("astrbot:group:999999", "AstrBot测试群")
 	if _, err := store.Upsert("astrbot:group:999999", "persisted summary for astrbot", 0); err != nil {
 		t.Fatalf("failed to upsert summary: %v", err)
 	}
@@ -188,6 +190,9 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	if aiocqhttpSession.Platform != "aiocqhttp" {
 		t.Errorf("expected platform 'aiocqhttp', got %q", aiocqhttpSession.Platform)
 	}
+	if aiocqhttpSession.GroupName != "王源粉丝群" {
+		t.Errorf("expected group name '王源粉丝群', got %q", aiocqhttpSession.GroupName)
+	}
 
 	// Verify astrbot persisted group session
 	astrbotSession, ok := sessionMap["astrbot:group:999999"]
@@ -196,6 +201,9 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	}
 	if astrbotSession.Platform != "astrbot" {
 		t.Errorf("expected platform 'astrbot', got %q", astrbotSession.Platform)
+	}
+	if astrbotSession.GroupName != "AstrBot测试群" {
+		t.Errorf("expected group name 'AstrBot测试群', got %q", astrbotSession.GroupName)
 	}
 	if astrbotSession.GroupSummary != "persisted summary for astrbot" {
 		t.Errorf("expected group summary 'persisted summary for astrbot', got %q", astrbotSession.GroupSummary)

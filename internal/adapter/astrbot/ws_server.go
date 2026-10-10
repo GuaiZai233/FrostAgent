@@ -39,7 +39,7 @@ var allowedOrigins []string
 func init() {
 	env := os.Getenv("WS_ALLOWED_ORIGINS")
 	if env != "" {
-		for _, o := range strings.Split(env, ",") {
+		for o := range strings.SplitSeq(env, ",") {
 			if trimmed := strings.TrimSpace(o); trimmed != "" {
 				allowedOrigins = append(allowedOrigins, trimmed)
 			}
@@ -212,6 +212,10 @@ func captureGroupCompactText(event Event, text string, engine *llm.Engine) {
 		return
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	if event.GroupName != "" {
+		session.SetGroupName(event.GroupName)
+		engine.SessionManager.SetGroupName(sessionKey(event), event.GroupName)
+	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
@@ -250,6 +254,10 @@ func stageGroupCompactText(event Event, text string, engine *llm.Engine) *llm.St
 		return nil
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	if event.GroupName != "" {
+		session.SetGroupName(event.GroupName)
+		engine.SessionManager.SetGroupName(sessionKey(event), event.GroupName)
+	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
@@ -532,7 +540,11 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 		if scope != nil {
 			getenv = scope.Getenv
 		}
-		if proactive.RollWithRand(getenv, rng) {
+		platform := event.Platform
+		if platform == "" {
+			platform = "astrbot"
+		}
+		if proactive.RollGroupWithRand(getenv, event.GroupID, rng, platform) {
 			if event.Metadata == nil {
 				event.Metadata = make(map[string]any)
 			}
@@ -832,6 +844,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return
 		}
 		session = engine.SessionManager.GetOrCreate(conn.sessionKey(event))
+		if session != nil && event.GroupName != "" {
+			session.SetGroupName(event.GroupName)
+			engine.SessionManager.SetGroupName(conn.sessionKey(event), event.GroupName)
+		}
 		if session != nil && session.Epoch() != startEpoch {
 			return
 		}

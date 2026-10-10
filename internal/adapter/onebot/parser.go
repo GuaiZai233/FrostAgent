@@ -62,10 +62,14 @@ func DetectGroupWakeSignalsWithRNG(event model.OneBotEvent, rng func() float64, 
 	if scope != nil {
 		getenv = scope.Getenv
 	}
+	groupIDStr := ""
+	if event.GroupID != 0 {
+		groupIDStr = strconv.FormatInt(event.GroupID, 10)
+	}
 	return GroupWakeSignals{
 		AtBot:     atBot,
 		Alias:     alias,
-		Proactive: proactive.RollWithRand(getenv, rng),
+		Proactive: proactive.RollGroupWithRand(getenv, groupIDStr, rng, "onebot"),
 	}
 }
 

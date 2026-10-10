@@ -86,6 +86,21 @@ func (c *wsConnection) groupName(groupID int64) string {
 	return ""
 }
 
+// cachedGroupName returns the cached group name if valid without triggering a network request.
+func (c *wsConnection) cachedGroupName(groupID int64) string {
+	if c == nil || groupID == 0 {
+		return ""
+	}
+	c.groupMu.Lock()
+	defer c.groupMu.Unlock()
+	if cached, ok := c.groupCache[groupID]; ok {
+		if time.Now().Before(cached.ExpiresAt) {
+			return cached.Name
+		}
+	}
+	return ""
+}
+
 // handleAPIResponse consumes OneBot action responses before the event decoder,
 // dispatching awaited lookups and logging failures from fire-and-forget actions.
 func (c *wsConnection) handleAPIResponse(raw []byte) bool {
@@ -147,6 +162,10 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 			logs.WEBSOCKET,
 			fmt.Sprintf("群名称缓存已更新: group=%d name=%q", pending.GroupID, name),
 		)
+		if c.engine != nil && c.engine.SessionManager != nil {
+			canonicalID := fmt.Sprintf("group:%d", pending.GroupID)
+			c.engine.SessionManager.SetGroupName(canonicalID, name)
+		}
 	} else {
 		c.Log().Warn(
 			logs.WEBSOCKET,
