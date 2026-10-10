@@ -10,9 +10,39 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestZIPExportRejectsExpandedContentOverLimit(t *testing.T) {
+	var output bytes.Buffer
+	writer := zip.NewWriter(&output)
+	budget := zipBudget{limit: 8}
+	if err := addJSON(writer, &budget, "small.json", "12345678"); err == nil {
+		t.Fatal("JSON larger than restore limit was exported")
+	}
+	if budget.expanded != 0 {
+		t.Fatalf("rejected JSON consumed budget: %d", budget.expanded)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	imageDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(imageDir, "image.png"), []byte("12345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	writer = zip.NewWriter(&output)
+	budget = zipBudget{limit: 4}
+	if err := addStickerFiles(writer, &budget, []sticker.Entry{{FileName: "image.png"}}, imageDir); err == nil {
+		t.Fatal("image larger than restore limit was exported")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")

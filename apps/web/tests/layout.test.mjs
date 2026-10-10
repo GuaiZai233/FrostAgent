@@ -20,6 +20,7 @@ const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
 );
+assert.doesNotMatch(backendSettings, /edit-env-secret-cb/, 'setting secrecy is fixed by the server registry');
 const components = await readFile(
   new URL('../src/styles/components.css', import.meta.url),
   'utf8',

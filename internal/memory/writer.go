@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var ErrStorageUnavailable = errors.New("memory storage unavailable")
+
 // Writer handles memory writing.
 type Writer struct {
 	*runtimescope.Scope
@@ -305,6 +307,9 @@ func (w *Writer) parseAndSave(
 			return errors.New("extraction cancelled or invalidated")
 		}
 		w.Log().Error(logs.SYSTEM, fmt.Sprintf("记忆保存失败: %v", err))
+		if w.store != nil && w.store.sql != nil {
+			return fmt.Errorf("%w: save private memories: %w", ErrStorageUnavailable, err)
+		}
 		return err
 	}
 
@@ -361,10 +366,13 @@ func (w *Writer) ExtractGroupMemories(
 
 	groupStore, err := w.groupManager.GetGroupStoreForPlatform(route.Platform, groupID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: load group store: %w", ErrStorageUnavailable, err)
 	}
 
-	existing, _ := groupStore.ListAll()
+	existing, err := groupStore.ListAll()
+	if err != nil {
+		return fmt.Errorf("%w: read existing group memories: %w", ErrStorageUnavailable, err)
+	}
 	var existingMemoriesStr strings.Builder
 	if len(existing) > 0 {
 		existingMemoriesStr.WriteString("已有群记忆（严禁重复提取）：\n")
@@ -555,7 +563,7 @@ func (w *Writer) parseAndSaveGroupCandidates(
 			return errors.New("extraction cancelled or invalidated")
 		}
 		w.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊记忆保存失败 (群 %s): %v", groupID, err))
-		return err
+		return fmt.Errorf("%w: save group memories: %w", ErrStorageUnavailable, err)
 	}
 
 	w.Log().Info(logs.SYSTEM, fmt.Sprintf("从群聊中提取了 %d 条记忆 (群: %s)", len(toSave), groupID))

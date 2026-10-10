@@ -51,3 +51,24 @@ func TestSQLModelRouterPersistsConfigurationAndManualSecret(t *testing.T) {
 		t.Fatalf("manual secret was not recovered: %v", err)
 	}
 }
+
+func TestSQLModelRouterExplicitEnvSecretSource(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "models.db"))
+	t.Setenv("SYNTHETIC_ENDPOINT_SECRET", "synthetic-external-key")
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager := NewSQL(db, "test-instance")
+	if err := manager.LoadError(); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := manager.secrets.Resolve(Endpoint{
+		APIKeySource: APIKeyStorageEnv, APIKeyRef: "SYNTHETIC_ENDPOINT_SECRET",
+	})
+	if err != nil || secret != "synthetic-external-key" {
+		t.Fatalf("explicit external secret source failed: %q, %v", secret, err)
+	}
+}

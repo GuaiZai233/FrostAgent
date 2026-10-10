@@ -59,7 +59,7 @@ make build-web    # Build frontend only
 
 SQLite is the default. FrostAgent creates `data/frostagent.db` on first start. To use PostgreSQL, set `FROSTAGENT_DB_DRIVER=postgres` and `FROSTAGENT_DB_DSN` to a PostgreSQL connection string before starting the process. These two variables only choose the database; all application settings are edited in the dashboard and stored in SQL. Only one FrostAgent process may use a PostgreSQL database at a time.
 
-**Breaking change:** JSON and `.env` runtime storage are no longer loaded or migrated. Back up existing data before replacing an earlier version. Before v1.0, an incompatible SQL schema version may be rebuilt and lose stored data. The dashboard's **Settings > Backup & Restore** page downloads a versioned per-instance ZIP, `setting.json`, and `memory.json`. Exports omit secrets and credential sources. A full ZIP restore creates a new disabled instance; configure credentials and adapters before enabling it.
+**Breaking change:** JSON and `.env` runtime storage are no longer loaded or migrated. Back up existing data before replacing an earlier version. Before v1.0, an incompatible SQL schema version may be rebuilt and lose stored data. The dashboard's **Settings > Backup & Restore** page downloads a versioned per-instance ZIP, `setting.json`, and `memory.json`. ZIP exports are limited to 512 MiB of expanded data and 512 MiB of archive bytes. Exports omit secrets and credential sources. A full ZIP restore creates a new disabled instance; configure credentials and adapters before enabling it.
 
 ### 3. Start the Service
 

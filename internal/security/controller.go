@@ -32,6 +32,16 @@ type Controller struct {
 	mode     *atomic.Pointer[ControlMode]
 }
 
+// WithStateLock serializes whole-state restore with access mutations and audit
+// appends performed through this process-wide controller.
+func (c *Controller) WithStateLock(fn func() error) error {
+	c.Access.mu.Lock()
+	defer c.Access.mu.Unlock()
+	c.Audit.mu.Lock()
+	defer c.Audit.mu.Unlock()
+	return fn()
+}
+
 func NewController(dataDir string) *Controller {
 	access := NewAccessStore(filepath.Join(dataDir, "security_access.json"))
 	audit := NewAuditStore(filepath.Join(dataDir, "security_audit.jsonl"), 1000)

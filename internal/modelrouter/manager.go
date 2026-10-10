@@ -43,7 +43,8 @@ func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *M
 		m.loadErr = err
 	}
 	if secrets != nil {
-		secrets.getenv = m.Getenv
+		// Environment-backed endpoint keys are an explicit external secret source.
+		secrets.getenv = os.Getenv
 	}
 	m.draft = cloneConfiguration(m.active)
 	return m

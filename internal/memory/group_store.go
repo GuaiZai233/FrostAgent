@@ -550,6 +550,12 @@ func (s *GroupStore) PurgeDistilledEntries(messageID, senderID string) error {
 	}
 	msgID := strings.TrimSpace(messageID)
 	sndID := strings.TrimSpace(senderID)
+	// SQL turns stay staged until delivery or an intentional silent result. An
+	// unconfirmed turn without a message ID cannot have produced distilled rows;
+	// deleting by sender would remove previously accepted history.
+	if s.sql != nil && msgID == "" {
+		return nil
+	}
 	if msgID == "" && sndID == "" {
 		return nil
 	}

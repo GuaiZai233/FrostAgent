@@ -460,14 +460,10 @@ func (c *GroupCompactor) compact(
 	onComplete ...func(err error),
 ) {
 	succeeded := false
+	retryOnFailure := true
 	groupID := routeScope.GroupID
 	if groupID == "" && strings.HasPrefix(owner, "group:") {
 		groupID = strings.TrimPrefix(owner, "group:")
-	}
-	if session != nil && c.groupManager != nil && groupID != "" {
-		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
-			session.SetGroupStore(gStore)
-		}
 	}
 	defer func() {
 		c.mu.Lock()
@@ -475,7 +471,7 @@ func (c *GroupCompactor) compact(
 		delete(c.inflight, key)
 		lastRun := c.lastRun[key]
 
-		if session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
+		if (succeeded || retryOnFailure) && session.GroupCompactReady(c.bufferSize) && c.scheduled[key] == nil {
 			var delay time.Duration
 			if succeeded {
 				delay = c.minInterval - time.Since(lastRun)
@@ -493,6 +489,18 @@ func (c *GroupCompactor) compact(
 		}
 		c.mu.Unlock()
 	}()
+	if err := c.bindGroupStore(session, routeScope, groupID); err != nil {
+		retryOnFailure = false
+		if c.store != nil && c.store.IsDatabase() && c.Scope != nil {
+			c.Scope.Cancel()
+		}
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(err)
+			}
+		}
+		return
+	}
 
 	conversation := formatGroupCompactInput(snapshot)
 	request := core.ChatRequest{
@@ -532,7 +540,26 @@ func (c *GroupCompactor) compact(
 		return
 	}
 
-	if !session.CommitGroupCompact(snapshot, summary) {
+	var persist func() (bool, error)
+	if c.store != nil && c.store.IsDatabase() {
+		persist = func() (bool, error) { return c.store.Upsert(owner, summary, storeGeneration) }
+	}
+	committed, persistErr := session.CommitGroupCompactWithPersistence(snapshot, summary, persist)
+	if persistErr != nil {
+		retryOnFailure = false
+		compErr := fmt.Errorf("persist group summary: %w", persistErr)
+		c.Log().Error(logs.SYSTEM, fmt.Sprintf("群聊 running compact 持久化失败 (%s): %v", owner, compErr))
+		if c.Scope != nil {
+			c.Scope.Cancel()
+		}
+		for _, cb := range onComplete {
+			if cb != nil {
+				cb(compErr)
+			}
+		}
+		return
+	}
+	if !committed {
 		c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃被删除操作失效的群聊 running compact (%s)", owner))
 		compErr := errors.New("compaction aborted due to session reset or change")
 		for _, cb := range onComplete {
@@ -545,7 +572,9 @@ func (c *GroupCompactor) compact(
 	c.Log().Info(logs.SYSTEM, fmt.Sprintf("群聊 running compact 已更新 (%s, %d 条新消息)", owner, len(snapshot.Messages)))
 	succeeded = true
 
-	c.queuePersistence(owner, summary, storeGeneration)
+	if persist == nil {
+		c.queuePersistence(owner, summary, storeGeneration)
+	}
 
 	c.mu.Lock()
 	afterHook := c.afterSummaryCommitHook
@@ -580,10 +609,12 @@ func (c *GroupCompactor) distillGroupMemories(
 		return
 	}
 
-	if session != nil && c.groupManager != nil {
-		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
-			session.SetGroupStore(gStore)
+	if err := c.bindGroupStore(session, routeScope, groupID); err != nil {
+		c.Log().Error(logs.SYSTEM, fmt.Sprintf("群记忆存储不可用 (%s): %v", groupID, err))
+		if c.store != nil && c.store.IsDatabase() && c.Scope != nil {
+			c.Scope.Cancel()
 		}
+		return
 	}
 
 	writer := c.MemoryWriter()
@@ -625,7 +656,24 @@ func (c *GroupCompactor) distillGroupMemories(
 			instanceID = c.Scope.InstanceID()
 		}
 		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼失败: %v", instanceID, groupID, err))
+		if errors.Is(err, memory.ErrStorageUnavailable) && c.Scope != nil {
+			c.Scope.Cancel()
+		}
 	}
+}
+
+func (c *GroupCompactor) bindGroupStore(session *SessionContext, routeScope modelrouter.Scope, groupID string) error {
+	if session == nil || c.groupManager == nil || groupID == "" {
+		return nil
+	}
+	store, err := c.groupManager.GetGroupStoreForPlatform(routeScope.Platform, groupID)
+	if err != nil {
+		return err
+	}
+	if store != nil {
+		session.SetGroupStore(store)
+	}
+	return nil
 }
 
 func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration uint64) {
@@ -665,9 +713,9 @@ func (c *GroupCompactor) queuePersistence(owner, summary string, storeGeneration
 // RollbackPersistence synchronizes persistence state with a rolled-back clean summary.
 // If cleanSummary is non-empty, it replaces any pending record and updates the on-disk store.
 // If cleanSummary is empty, it removes any pending record and deletes the record from the on-disk store.
-func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) {
+func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) error {
 	if c == nil || owner == "" {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -677,6 +725,19 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 		storeGeneration = c.store.Generation(owner)
 	}
 	cleanSummary = strings.TrimSpace(cleanSummary)
+	if c.store != nil && c.store.IsDatabase() {
+		if cleanSummary == "" {
+			return c.store.Delete(owner)
+		}
+		applied, err := c.store.Upsert(owner, cleanSummary, storeGeneration)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return errors.New("group summary rollback was invalidated")
+		}
+		return nil
+	}
 	if cleanSummary == "" {
 		delete(c.pendingPersist, owner)
 		if c.store != nil {
@@ -689,7 +750,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 			default:
 			}
 		}
-		return
+		return nil
 	}
 
 	c.pendingPersist[owner] = &pendingPersistRecord{
@@ -705,7 +766,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 		case wakeCh <- struct{}{}:
 		default:
 		}
-		return
+		return nil
 	}
 
 	if c.store != nil {
@@ -715,11 +776,11 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 				c.Log().Info(logs.SYSTEM, fmt.Sprintf("已丢弃删除后的群聊总结回滚持久化 (%s)", owner))
 			}
 			delete(c.pendingPersist, owner)
-			return
+			return nil
 		}
 	} else {
 		delete(c.pendingPersist, owner)
-		return
+		return nil
 	}
 
 	// Upsert failed; launch worker to retry in background.
@@ -727,6 +788,7 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 	wakeCh := make(chan struct{}, 1)
 	c.persistWake[owner] = wakeCh
 	c.Go(func() { c.persistWorker(owner, wakeCh) })
+	return nil
 }
 
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {

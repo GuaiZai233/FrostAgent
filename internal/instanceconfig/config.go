@@ -160,6 +160,7 @@ func Open(path string, global bool) (*Store, error) {
 }
 func (s *Store) AccessError() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.accessErr }
 func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
+func (s *Store) IsDatabase() bool   { return s != nil && s.db != nil }
 
 func allowed(k string, global bool) bool {
 	if !keyPattern.MatchString(k) {

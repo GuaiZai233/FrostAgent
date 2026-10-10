@@ -368,7 +368,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if pErr == nil {
 						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 							Instance: engine.InstanceID,
-							Session: conn.historyKey(event),
+							Session:  conn.historyKey(event),
 						})
 						if decision.IsFailure {
 							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 当前图片描述因安全审查服务异常被隔离剔除: %s", event.UserID, decision.SafeSummary))
@@ -395,7 +395,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if pErr == nil {
 					decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session: conn.historyKey(event),
+						Session:  conn.historyKey(event),
 					})
 					if decision.IsFailure {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
@@ -450,7 +450,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if pErr == nil {
 					decision := evalCtx(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session: conn.historyKey(event),
+						Session:  conn.historyKey(event),
 					})
 					if decision.IsFailure {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群名称 [%s] 因安全审查服务异常被隔离剔除: %s", groupName, decision.SafeSummary))
@@ -496,7 +496,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if nickname, ok := sender["nickname"].(string); ok && nickname != "" {
 					decision := evalCtx(principal, security.SourcePlatformMeta, nickname, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session: conn.historyKey(event),
+						Session:  conn.historyKey(event),
 					})
 					if decision.IsFailure || decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者昵称 [%s] 包含风险内容或审查异常，已被安全机制隔离剔除", nickname))
@@ -506,7 +506,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if card, ok := sender["card"].(string); ok && card != "" {
 					decision := evalCtx(principal, security.SourcePlatformMeta, card, security.AuditEvent{
 						Instance: engine.InstanceID,
-						Session: conn.historyKey(event),
+						Session:  conn.historyKey(event),
 					})
 					if decision.IsFailure || decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("发送者群名片 [%s] 包含风险内容或审查异常，已被安全机制隔离剔除", card))
@@ -569,7 +569,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if pErr == nil {
 				decision := evalCtx(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.historyKey(event),
+					Session:  conn.historyKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 摘要因安全审查服务异常被隔离剔除: %s", event.GroupID, decision.SafeSummary))
@@ -596,7 +596,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if pErr == nil {
 				decision := evalCtx(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.historyKey(event),
+					Session:  conn.historyKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("群 [%d] 最近历史消息因安全审查服务异常被隔离剔除: %s", event.GroupID, decision.SafeSummary))
@@ -624,7 +624,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if pErr == nil {
 				decision := evalCtx(principal, security.SourceUserQuote, replyContext.Prompt, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.historyKey(event),
+					Session:  conn.historyKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息 (reply_context) 因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
@@ -866,7 +866,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			RouteScope:     routeScope,
 			RouteSnapshot:  routeSnapshot,
 			SecurityNotice: notice,
-			Mock:          conn.mock,
+			Mock:           conn.mock,
 		})
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
@@ -881,13 +881,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					if turn != nil && turn.StagedGuard() != nil {
-						turn.StagedGuard().Drop()
-					} else {
-						session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+					var guard *llm.StagedGroupCompactGuard
+					if turn != nil {
+						guard = turn.StagedGuard()
 					}
+					engine.DropRejectedGroupMessage(session, guard, msgID, strconv.FormatInt(event.UserID, 10))
 					if engine != nil && engine.GroupCompactor != nil {
-						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
+						engine.PauseOnStorageError(engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary()))
 					}
 				}
 			}
@@ -1124,11 +1124,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if event.MessageID != 0 {
 				msgID = strconv.FormatInt(int64(event.MessageID), 10)
 			}
-			if turn != nil && turn.StagedGuard() != nil {
-				turn.StagedGuard().Drop()
-			} else {
-				session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
+			var guard *llm.StagedGroupCompactGuard
+			if turn != nil {
+				guard = turn.StagedGuard()
 			}
+			engine.DropRejectedGroupMessage(session, guard, msgID, strconv.FormatInt(event.UserID, 10))
 		}
 		reason := strings.TrimSpace(ackResp.Wording)
 		if reason == "" {

@@ -36,6 +36,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
+	budget := zipBudget{limit: MaxInstanceZIPBytes}
 	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	for _, file := range []struct {
 		name string
@@ -47,17 +48,20 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},
 	} {
-		if err := addJSON(writer, file.name, file.data); err != nil {
+		if err := addJSON(writer, &budget, file.name, file.data); err != nil {
 			writer.Close()
 			return nil, err
 		}
 	}
-	if err := addStickerFiles(writer, stickers.Entries, imageDir); err != nil {
+	if err := addStickerFiles(writer, &budget, stickers.Entries, imageDir); err != nil {
 		writer.Close()
 		return nil, err
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
+	}
+	if buffer.Len() > MaxInstanceZIPBytes {
+		return nil, fmt.Errorf("instance ZIP exceeds size limit")
 	}
 	return buffer.Bytes(), nil
 }
@@ -69,26 +73,43 @@ func BuildStickerZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error
 	}
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
+	budget := zipBudget{limit: MaxInstanceZIPBytes}
 	manifest := Manifest{FormatVersion: FormatVersion, Kind: "stickers", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
-	if err := addJSON(writer, "manifest.json", manifest); err != nil {
+	if err := addJSON(writer, &budget, "manifest.json", manifest); err != nil {
 		writer.Close()
 		return nil, err
 	}
-	if err := addJSON(writer, "sticker/metadata.json", stickers); err != nil {
+	if err := addJSON(writer, &budget, "sticker/metadata.json", stickers); err != nil {
 		writer.Close()
 		return nil, err
 	}
-	if err := addStickerFiles(writer, stickers.Entries, imageDir); err != nil {
+	if err := addStickerFiles(writer, &budget, stickers.Entries, imageDir); err != nil {
 		writer.Close()
 		return nil, err
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
+	if buffer.Len() > MaxInstanceZIPBytes {
+		return nil, fmt.Errorf("sticker ZIP exceeds size limit")
+	}
 	return buffer.Bytes(), nil
 }
 
-func addStickerFiles(writer *zip.Writer, entries []sticker.Entry, imageDir string) error {
+type zipBudget struct {
+	limit    uint64
+	expanded uint64
+}
+
+func (b *zipBudget) reserve(size uint64) error {
+	if size > b.limit-b.expanded {
+		return fmt.Errorf("ZIP expands beyond size limit")
+	}
+	b.expanded += size
+	return nil
+}
+
+func addStickerFiles(writer *zip.Writer, budget *zipBudget, entries []sticker.Entry, imageDir string) error {
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		name := entry.FileName
@@ -108,13 +129,20 @@ func addStickerFiles(writer *zip.Writer, entries []sticker.Entry, imageDir strin
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("sticker %q is not a regular file", name)
 		}
+		if info.Size() < 0 || uint64(info.Size()) > budget.limit-budget.expanded {
+			return fmt.Errorf("sticker %q exceeds ZIP size limit", name)
+		}
 		file, err := os.Open(path)
 		if err != nil {
 			return err
 		}
 		member, err := writer.Create("sticker/files/" + name)
 		if err == nil {
-			_, err = io.Copy(member, file)
+			var copied int64
+			copied, err = io.Copy(member, io.LimitReader(file, int64(budget.limit-budget.expanded)+1))
+			if err == nil {
+				err = budget.reserve(uint64(copied))
+			}
 		}
 		closeErr := file.Close()
 		if err != nil {
@@ -127,9 +155,12 @@ func addStickerFiles(writer *zip.Writer, entries []sticker.Entry, imageDir strin
 	return nil
 }
 
-func addJSON(writer *zip.Writer, name string, value any) error {
+func addJSON(writer *zip.Writer, budget *zipBudget, name string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := budget.reserve(uint64(len(data) + 1)); err != nil {
 		return err
 	}
 	member, err := writer.Create(name)

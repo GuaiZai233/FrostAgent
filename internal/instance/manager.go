@@ -173,6 +173,11 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		return nil, fmt.Errorf("无效的实例注册表")
 	}
 	if db != nil {
+		if err := m.recoverDeletionStages(); err != nil {
+			return nil, fmt.Errorf("recover interrupted instance deletion: %w", err)
+		}
+	}
+	if db != nil {
 		m.endpointOwners, err = db.LoadEndpointOwners(context.Background())
 		if err != nil {
 			return nil, err
@@ -1530,7 +1535,12 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
 		if path == "global/backup/security" && r.Method == http.MethodGet {
-			state, err := backup.ExportGlobalSecurity(m.db)
+			var state backup.GlobalSecurity
+			err := m.security.WithStateLock(func() error {
+				var exportErr error
+				state, exportErr = backup.ExportGlobalSecurity(m.db)
+				return exportErr
+			})
 			if err != nil {
 				writeError(w, err)
 				return
@@ -1552,7 +1562,9 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 				writeError(w, err)
 				return
 			}
-			if err := backup.ImportGlobalSecurity(m.db, state); err != nil {
+			if err := m.security.WithStateLock(func() error {
+				return backup.ImportGlobalSecurity(m.db, state)
+			}); err != nil {
 				writeError(w, err)
 				return
 			}

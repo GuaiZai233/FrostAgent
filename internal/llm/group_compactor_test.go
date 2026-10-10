@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,133 @@ type mockCompactorLLM struct {
 	failCount    int // number of initial calls to fail
 	customReply  func(req core.ChatRequest) (string, error)
 	receivedReqs []core.ChatRequest
+}
+
+func TestGroupCompactorBindsPlatformScopedSQLStore(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "groups.db"))
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	manager := memory.NewSQLGroupManager(db, "test-instance", nil)
+	qq, err := manager.GetGroupStoreForPlatform("qq", "shared-group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	telegram, err := manager.GetGroupStoreForPlatform("telegram", "shared-group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactor := NewGroupCompactor(nil, nil, "", 1, time.Second)
+	compactor.SetGroupManager(manager)
+	session := &SessionContext{ConversationID: "telegram:group:shared-group"}
+	session.SetGroupStore(qq)
+	compactor.distillGroupMemories(session, "group:shared-group",
+		modelrouter.Scope{Platform: "telegram", GroupID: "shared-group"},
+		GroupCompactSnapshot{Messages: []GroupCompactMessage{{Role: "user", Content: "test"}}})
+	if session.GroupStore() != telegram {
+		t.Fatal("non-QQ group compaction bound the QQ memory store")
+	}
+}
+
+func TestSQLGroupCompactPersistsBeforePublishing(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "summaries.db"))
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := groupsummary.NewSQLStore(db, "test-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "group:test-group"
+	session := &SessionContext{ConversationID: owner}
+	session.AppendGroupCompactMessage(GroupCompactMessage{Role: "user", MessageID: "message-1", Content: "hello"}, 10)
+	compactor := NewGroupCompactor(&mockCompactorLLM{customReply: func(core.ChatRequest) (string, error) {
+		return "durable summary", nil
+	}}, store, "test-model", 1, time.Hour)
+	compactor.Scope = runtimescope.New(nil, nil, nil)
+	store.SetSaveHook(func(map[string]groupsummary.Record) error { return errors.New("database unavailable") })
+	completed := make(chan error, 1)
+	if err := compactor.ForceCompact(session, owner, modelrouter.Scope{}, func(err error) { completed <- err }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-completed:
+		if err == nil {
+			t.Fatal("SQL write failure was reported as a successful compact")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for failed compact")
+	}
+	if session.GroupRunningSummary() != "" || session.GroupCompactBufferCount() != 1 || compactor.HasPendingPersistence(owner) {
+		t.Fatal("failed SQL write exposed or queued an unpersisted summary")
+	}
+	if _, admitted := compactor.Scope.Enter(); admitted {
+		t.Fatal("failed SQL summary write did not pause the runtime")
+	}
+	compactor.Scope = runtimescope.New(nil, nil, nil)
+	store.SetSaveHook(nil)
+	if err := compactor.ForceCompact(session, owner, modelrouter.Scope{}, func(err error) { completed <- err }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for durable compact")
+	}
+	reopened, err := groupsummary.NewSQLStore(db, "test-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok, err := reopened.Get(owner)
+	if err != nil || !ok || record.Summary != "durable summary" {
+		t.Fatalf("completed summary was not durable: %#v, %t, %v", record, ok, err)
+	}
+}
+
+func TestSQLGroupDistillationReadFailurePausesRuntime(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "memory.db"))
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	manager := memory.NewSQLGroupManager(db, "test-instance", nil)
+	if _, err := manager.GetGroupStoreForPlatform("qq", "test-group"); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := groupsummary.NewSQLStore(db, "test-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactor := NewGroupCompactor(&mockCompactorLLM{}, summaries, "test-model", 1, time.Second)
+	compactor.Scope = runtimescope.New(nil, nil, nil)
+	compactor.SetGroupManager(manager)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compactor.distillGroupMemories(nil, "group:test-group", modelrouter.Scope{Platform: "qq", GroupID: "test-group"},
+		GroupCompactSnapshot{Messages: []GroupCompactMessage{{Role: "user", MessageID: "message-1", Content: "hello"}}})
+	if _, admitted := compactor.Scope.Enter(); admitted {
+		t.Fatal("SQL memory read failure did not pause the runtime")
+	}
 }
 
 func (m *mockCompactorLLM) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -1392,6 +1520,9 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		if len(entries) != 0 {
 			t.Fatalf("expected 0 entries persisted after ban rollback during distillation, got %d: %+v", len(entries), entries)
 		}
+		if err := compactor.DrainPersistence(owner, 3*time.Second); err != nil {
+			t.Fatalf("drain persistence: %v", err)
+		}
 	})
 
 	t.Run("ResetSessionDuringDistillation", func(t *testing.T) {
@@ -1478,6 +1609,9 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		}
 		if len(entries) != 0 {
 			t.Fatalf("expected 0 entries persisted after ResetGroupCompact during distillation, got %d: %+v", len(entries), entries)
+		}
+		if err := compactor.DrainPersistence(owner, 3*time.Second); err != nil {
+			t.Fatalf("drain persistence: %v", err)
 		}
 	})
 }

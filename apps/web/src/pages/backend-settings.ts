@@ -256,10 +256,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                     />
                   `
                   }
-                  <label class="flex items-center gap-1.5 cursor-pointer text-xs select-none shrink-0" style="white-space: nowrap; flex-shrink: 0; margin-top: 0.25rem;">
-                    <input type="checkbox" id="edit-env-secret-cb" class="checkbox" ${editingIsSecret ? 'checked' : ''} />
-                    <span class="text-muted">敏感</span>
-                  </label>
                 </div>
               </td>
               <td class="align-top" style="text-align: right;">
@@ -334,9 +330,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       const editInput = tbody.querySelector<HTMLInputElement | HTMLTextAreaElement>(
         '#edit-env-val-input',
       );
-      const editSecretCb = tbody.querySelector<HTMLInputElement>(
-        '#edit-env-secret-cb',
-      );
       const saveInlineBtn =
         tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
       const cancelInlineBtn =
@@ -349,13 +342,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       }
       editInput?.addEventListener('input', () => {
         editingValue = editInput.value;
-      });
-      editSecretCb?.addEventListener('change', () => {
-        editingIsSecret = editSecretCb.checked;
-        if (editInput) {
-          editingValue = editInput.value;
-        }
-        renderTable();
       });
 
       saveInlineBtn?.addEventListener('click', async () => {

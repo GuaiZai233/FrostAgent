@@ -75,9 +75,17 @@ type accessFile struct {
 // Reads reload the atomic file so separate FrostAgent processes sharing the
 // same data directory observe lock and unlock operations immediately.
 type AccessStore struct {
-	path string
-	db   *storage.DB
-	mu   sync.RWMutex
+	path           string
+	db             *storage.DB
+	mu             sync.RWMutex
+	beforeSaveHook func()
+}
+
+// SetBeforeSaveHook supports deterministic concurrent restore tests.
+func (s *AccessStore) SetBeforeSaveHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeSaveHook = hook
 }
 
 func NewAccessStore(path string) *AccessStore       { return &AccessStore{path: path} }
@@ -220,6 +228,9 @@ func (s *AccessStore) update(fn func(*accessFile) error) error {
 		}
 		if err := fn(&file); err != nil {
 			return err
+		}
+		if s.beforeSaveHook != nil {
+			s.beforeSaveHook()
 		}
 		return s.save(file)
 	}

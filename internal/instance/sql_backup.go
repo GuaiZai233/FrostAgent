@@ -95,6 +95,9 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	if err := m.rejectDeleting(i.id); err != nil {
 		return err
 	}
+	if err := backup.RemapEndpointIDsForImport(m.db, &data, i.id); err != nil {
+		return err
+	}
 	list, _ := m.List()
 	enabled := false
 	for _, info := range list {
@@ -438,11 +441,27 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 			return err
 		}
 	}
-	if err := os.RemoveAll(m.dir(i.id)); err != nil {
+	stage, err := m.createDeletionStage(i.id)
+	if err != nil {
 		return err
 	}
+	stagedInstance := filepath.Join(stage, "instance")
+	staged := false
+	if _, err := os.Lstat(m.dir(i.id)); err == nil {
+		if err := os.Rename(m.dir(i.id), stagedInstance); err != nil {
+			return errors.Join(err, m.removeDeletionStage(stage))
+		}
+		staged = true
+	} else if !os.IsNotExist(err) {
+		return errors.Join(err, m.removeDeletionStage(stage))
+	}
 	if err := m.db.ConfirmDeletion(context.Background(), i.id); err != nil {
-		return err
+		if staged {
+			if rollbackErr := os.Rename(stagedInstance, m.dir(i.id)); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("restore staged instance directory: %w", rollbackErr))
+			}
+		}
+		return errors.Join(err, m.removeDeletionStage(stage))
 	}
 	m.mu.Lock()
 	for n, info := range m.registry.Instances {
@@ -462,6 +481,9 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 	m.endpointMu.Unlock()
 	if m.security != nil {
 		m.security.RemoveInstanceProvider(i.id)
+	}
+	if err := m.removeDeletionStage(stage); err != nil {
+		logs.Warn(logs.SYSTEM, fmt.Sprintf("实例 %s 已从数据库删除，但隔离文件等待下次启动清理: %v", i.id, err))
 	}
 	return nil
 }

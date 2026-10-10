@@ -280,8 +280,8 @@ type SessionContext struct {
 	revokedSenderIDs        map[string]struct{}
 	groupStore              *memory.GroupStore
 	pendingTurns            [][]memory.PendingExtractionItem
-	extractionThreshold    int
-	deliveryFailure        *DeliveryFailure
+	extractionThreshold     int
+	deliveryFailure         *DeliveryFailure
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
@@ -1312,13 +1312,19 @@ func (g *StagedGroupCompactGuard) Promote() bool {
 
 // Drop permanently removes the staged message and invalidates in-flight compaction snapshots.
 func (g *StagedGroupCompactGuard) Drop() bool {
+	dropped, _ := g.DropChecked()
+	return dropped
+}
+
+// DropChecked reports a failed durable purge to the caller.
+func (g *StagedGroupCompactGuard) DropChecked() (bool, error) {
 	if g == nil || !g.finalized.CompareAndSwap(false, true) {
-		return false
+		return false, nil
 	}
 	if g.session != nil {
-		return g.session.DropGroupCompactMessage(g.messageID, g.senderID)
+		return g.session.DropGroupCompactMessageChecked(g.messageID, g.senderID)
 	}
-	return false
+	return false, nil
 }
 
 // Done ensures the staged message is finalized exactly once. If neither Promote nor Drop
@@ -1368,8 +1374,15 @@ func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize 
 // Note: Cleanup is scoped strictly to the specified messageID to avoid dropping historical
 // clean batches with mixed senders.
 func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) bool {
+	dropped, _ := s.DropGroupCompactMessageChecked(messageID, senderID)
+	return dropped
+}
+
+// DropGroupCompactMessageChecked also reports failure to purge already
+// distilled entries, so SQL callers can stop processing the affected scope.
+func (s *SessionContext) DropGroupCompactMessageChecked(messageID, senderID string) (bool, error) {
 	if s == nil {
-		return false
+		return false, nil
 	}
 	s.mu.Lock()
 
@@ -1490,10 +1503,12 @@ func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) boo
 
 	// Reconcile and purge any affected distilled records in the group store before returning.
 	if store != nil {
-		_ = store.PurgeDistilledEntries(msgID, sndID)
+		if err := store.PurgeDistilledEntries(msgID, sndID); err != nil {
+			return dropped || len(barriersToAbort) > 0, fmt.Errorf("purge distilled group memory: %w", err)
+		}
 	}
 
-	return dropped || len(barriersToAbort) > 0
+	return dropped || len(barriersToAbort) > 0, nil
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -1672,15 +1687,30 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 // CommitGroupCompact replaces the running summary and removes only raw
 // messages included in snapshot. It rejects results invalidated by deletion.
 func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) bool {
+	committed, _ := s.CommitGroupCompactWithPersistence(snapshot, summary, nil)
+	return committed
+}
+
+// CommitGroupCompactWithPersistence keeps a SQL summary durable before it is
+// visible to readers or removed from the raw-message buffer.
+func (s *SessionContext) CommitGroupCompactWithPersistence(
+	snapshot GroupCompactSnapshot, summary string, persist func() (bool, error),
+) (bool, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return false
+		return false, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snapshot.Generation != s.groupCompactGeneration {
-		return false
+		return false, nil
+	}
+	if persist != nil {
+		applied, err := persist()
+		if err != nil || !applied {
+			return false, err
+		}
 	}
 
 	// Stash previous clean state for potential rollback upon subsequent ban
@@ -1750,7 +1780,7 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 		s.groupCompactBuffer = remaining
 	}
 	s.UpdatedAt = time.Now()
-	return true
+	return true, nil
 }
 
 // GroupRunningSummary returns the latest completed group summary.

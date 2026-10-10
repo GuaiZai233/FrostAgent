@@ -25,6 +25,18 @@ func mustNew(t *testing.T, envPath string) *Service {
 	return svc
 }
 
+func TestSQLExportableSettingsIncludeCompactAndBillingPrices(t *testing.T) {
+	keys := ExportableValueKeys()
+	for _, key := range []string{
+		"GROUP_COMPACT_MAX_BUFFER_SIZE", "BILLING_PROMPT_PRICE_PER_MILLION",
+		"BILLING_COMPLETION_PRICE_PER_MILLION",
+	} {
+		if !keys[key] {
+			t.Fatalf("non-secret SQL setting %s is not exportable", key)
+		}
+	}
+}
+
 func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 	t.Setenv("UPSTREAM_API_KEY", "sk-secret-key-123456789")
 	t.Setenv("BOT_NAME", "FrostFox")

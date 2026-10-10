@@ -52,8 +52,8 @@ func (d *DB) CancelDeletion(ctx context.Context, instanceID string) error {
 	return tx.Commit()
 }
 
-// ConfirmDeletion removes SQL-owned instance data only after the caller has
-// safely removed its filesystem directory. A missing pending marker is fatal.
+// ConfirmDeletion removes SQL-owned instance data after the caller has staged
+// its filesystem directory for rollback. A missing pending marker is fatal.
 func (d *DB) ConfirmDeletion(ctx context.Context, instanceID string) error {
 	tx, err := d.SQL.BeginTx(ctx, nil)
 	if err != nil {

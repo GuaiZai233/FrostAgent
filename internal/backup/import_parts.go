@@ -141,3 +141,45 @@ func RemapEndpointIDsForInstance(settings *Settings, prefix string) error {
 	}
 	return nil
 }
+
+// RemapEndpointIDsForImport preserves IDs already owned by the target and
+// rewrites IDs owned by other instances before replacing the target's router.
+func RemapEndpointIDsForImport(db *storage.DB, settings *Settings, target string) error {
+	owners, err := db.LoadEndpointOwners(context.Background())
+	if err != nil {
+		return err
+	}
+	original := make(map[string]bool, len(settings.ModelRouter.Endpoints))
+	for _, endpoint := range settings.ModelRouter.Endpoints {
+		if endpoint.ID == "" || original[endpoint.ID] {
+			return fmt.Errorf("empty or duplicate model endpoint ID %q", endpoint.ID)
+		}
+		original[endpoint.ID] = true
+	}
+	used := make(map[string]bool, len(original))
+	refs := make(map[string]string, len(original))
+	for i := range settings.ModelRouter.Endpoints {
+		endpoint := &settings.ModelRouter.Endpoints[i]
+		oldID := endpoint.ID
+		if owner, exists := owners[oldID]; exists && owner != target {
+			base := target + "-" + oldID
+			endpoint.ID = base
+			for suffix := 2; used[endpoint.ID] || (original[endpoint.ID] && endpoint.ID != oldID) ||
+				(owners[endpoint.ID] != "" && owners[endpoint.ID] != target); suffix++ {
+				endpoint.ID = fmt.Sprintf("%s-%d", base, suffix)
+			}
+		}
+		if used[endpoint.ID] {
+			return fmt.Errorf("duplicate remapped endpoint ID %q", endpoint.ID)
+		}
+		used[endpoint.ID] = true
+		refs[oldID] = endpoint.ID
+	}
+	for i := range settings.ModelRouter.Models {
+		model := &settings.ModelRouter.Models[i]
+		if next, ok := refs[model.EndpointID]; ok {
+			model.EndpointID = next
+		}
+	}
+	return nil
+}

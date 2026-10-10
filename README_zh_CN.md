@@ -12,7 +12,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 ## Websocket
 
-在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot` (端口取决于环境变量中的`WS_LISTEN_ADDR`)。
+在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
 
 ## 与 ActionsCat 协同
 

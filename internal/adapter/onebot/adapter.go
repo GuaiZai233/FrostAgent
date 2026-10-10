@@ -332,14 +332,23 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				groupIDStr := strconv.FormatInt(event.GroupID, 10)
 				userIDStr := strconv.FormatInt(event.UserID, 10)
 				if groupIDStr != "" && userIDStr != "" {
-					if gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr); err == nil {
+					gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
+					if err != nil {
+						a.engine.PauseOnStorageError(err)
+						continue
+					}
+					if gStore != nil {
 						switch event.NoticeType {
 						case "group_admin":
 							if event.SubType == "set" {
-								_ = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleAdmin)
+								err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleAdmin)
 							} else if event.SubType == "unset" {
-								_ = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleMember)
+								err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleMember)
 							}
+						}
+						if err != nil {
+							a.engine.PauseOnStorageError(err)
+							continue
 						}
 					}
 				}
@@ -444,7 +453,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
 					if groupIDStr != "" && userIDStr != "" {
-						if gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr); err == nil {
+						gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
+						if err == nil && gStore != nil {
 							nickname := ""
 							card := ""
 							role := memory.GroupRoleUnknown
@@ -453,9 +463,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 								card = event.Sender.Card
 								role = memory.NormalizeGroupRole(event.Sender.Role)
 							}
-							_, _ = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
-							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
-							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+							_, err = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
+							if err == nil {
+								gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+								gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+							}
+						}
+						if err != nil {
+							a.engine.PauseOnStorageError(err)
+							if turn != nil {
+								turn.Done()
+							}
+							continue
 						}
 					}
 				}
@@ -613,4 +632,3 @@ func validateOutboundMediaURL(rawURL string) error {
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
 }
-

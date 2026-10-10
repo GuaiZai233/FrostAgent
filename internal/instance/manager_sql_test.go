@@ -4,6 +4,8 @@ import (
 	"FrostAgent/internal/backup"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"archive/zip"
 	"bytes"
@@ -17,6 +19,61 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGlobalSecurityRestoreSerializesAccessMutation(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	principal, err := security.NewPrincipal("qq", "synthetic-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := make(chan struct{})
+	release := make(chan struct{})
+	m.security.Access.SetBeforeSaveHook(func() {
+		close(loaded)
+		<-release
+	})
+	mutationDone := make(chan error, 1)
+	go func() { mutationDone <- m.security.Access.Lock(principal, "synthetic reason") }()
+	select {
+	case <-loaded:
+	case <-time.After(3 * time.Second):
+		t.Fatal("access mutation did not reach save boundary")
+	}
+	body, err := json.Marshal(backup.GlobalSecurity{FormatVersion: backup.FormatVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/security", bytes.NewReader(body)))
+		responseDone <- response
+	}()
+	select {
+	case response := <-responseDone:
+		t.Fatalf("restore crossed in-flight access mutation: %d %s", response.Code, response.Body.String())
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
+	}
+	response := <-responseDone
+	if response.Code != http.StatusOK {
+		t.Fatalf("restore failed: %d %s", response.Code, response.Body.String())
+	}
+	m.security.Access.SetBeforeSaveHook(nil)
+	locked, _, err := m.security.Access.IsLocked(principal)
+	if err != nil || locked {
+		t.Fatalf("stale mutation overwrote restored security state: %t, %v", locked, err)
+	}
+}
 
 func TestDatabaseManagerIgnoresLegacyFilesAndRecoversInstance(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
@@ -84,6 +141,15 @@ func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
 	if err := m.instances[source.ID].config.Update("UPSTREAM_API_KEY", "source-secret", false); err != nil {
 		t.Fatal(err)
 	}
+	sourceSettings, err := backup.ExportSettings(m.db, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceSettings.ModelRouter.Endpoints = []modelrouter.Endpoint{{ID: "source-endpoint", DisplayName: "Source", BaseURL: "https://example.invalid/v1", Enabled: true}}
+	sourceSettings.ModelRouter.Models = []modelrouter.Model{{ID: "source-model", DisplayName: "Source Model", EndpointID: "source-endpoint", UpstreamModel: "synthetic-model", Enabled: true}}
+	if err := backup.ImportSettings(m.db, source.ID, sourceSettings); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Copy(target.ID, source.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +158,22 @@ func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
 	}
 	if got := m.instances[target.ID].config.Get("UPSTREAM_API_KEY"); got == "source-secret" {
 		t.Fatal("source secret was copied")
+	}
+	copied, err := backup.ExportSettings(m.db, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied.ModelRouter.Endpoints) != 1 || copied.ModelRouter.Endpoints[0].ID == "source-endpoint" ||
+		len(copied.ModelRouter.Models) != 1 || copied.ModelRouter.Models[0].EndpointID != copied.ModelRouter.Endpoints[0].ID {
+		t.Fatalf("copied endpoint references were not remapped: %#v", copied.ModelRouter)
+	}
+	if err := m.ImportSettings(target.ID, copied); err != nil {
+		t.Fatalf("reimporting target settings changed its own endpoint ID: %v", err)
+	}
+	reimported, err := backup.ExportSettings(m.db, target.ID)
+	if err != nil || len(reimported.ModelRouter.Endpoints) != 1 ||
+		reimported.ModelRouter.Endpoints[0].ID != copied.ModelRouter.Endpoints[0].ID {
+		t.Fatalf("same-instance settings import did not preserve endpoint identity: %#v, %v", reimported.ModelRouter, err)
 	}
 }
 
@@ -185,6 +267,76 @@ func TestPendingDeletionSurvivesRestartAndRemovesAllInstanceData(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "instance_"+info.ID)); !os.IsNotExist(err) {
 		t.Fatalf("instance directory remains: %v", err)
+	}
+}
+
+func TestFailedSQLDeletionRestoresStickerFilesAndPendingBackup(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	root := t.TempDir()
+	m, err := NewDatabase(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Create("Pending With Sticker")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create: %#v, %v", info, err)
+	}
+	imageDir := filepath.Join(root, "instance_"+info.ID, "sticker")
+	stickers, err := sticker.NewSQLStore(m.db, info.ID, imageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := []byte{0x89, 'P', 'N', 'G', 1, 2, 3}
+	if err := stickers.Add("synthetic-sticker", "image.png", image); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PrepareDeletion(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ConfirmDeletion(info.ID); err == nil {
+		t.Fatal("closed database accepted deletion")
+	}
+	if got, err := os.ReadFile(filepath.Join(imageDir, "image.png")); err != nil || !bytes.Equal(got, image) {
+		t.Fatalf("failed SQL deletion lost sticker bytes: %v", err)
+	}
+	m.Close()
+	m, err = NewDatabase(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { m.Close() }()
+	list, _ := m.List()
+	if len(list) != 1 || !list[0].Deleting {
+		t.Fatalf("pending deletion was not recovered: %#v", list)
+	}
+	archive, err := m.InstanceZIP(info.ID)
+	if err != nil || len(archive) == 0 {
+		t.Fatalf("pending backup was lost: %v", err)
+	}
+	if !bytes.Contains(archive, []byte("image.png")) {
+		t.Fatal("pending backup omitted sticker image")
+	}
+	stage, err := m.createDeletionStage(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(m.dir(info.ID), filepath.Join(stage, "instance")); err != nil {
+		t.Fatal(err)
+	}
+	m.Close()
+	m, err = NewDatabase(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(imageDir, "image.png")); err != nil || !bytes.Equal(got, image) {
+		t.Fatalf("restart did not recover staged sticker bytes: %v", err)
+	}
+	if _, err := os.Stat(stage); !os.IsNotExist(err) {
+		t.Fatalf("recovered deletion stage remains: %v", err)
 	}
 }
 

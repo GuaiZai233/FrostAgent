@@ -749,7 +749,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					if pErr == nil {
 						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
 							Instance: engine.InstanceID,
-							Session: conn.sessionKey(event),
+							Session:  conn.sessionKey(event),
 						})
 						if decision.IsFailure {
 							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
@@ -812,7 +812,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if senderName != "" {
 				decision := evalCtx(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
@@ -827,7 +827,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if groupName != "" {
 				decision := evalCtx(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
@@ -889,7 +889,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if pErr == nil {
 				decision := evalCtx(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
@@ -916,7 +916,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if pErr == nil {
 				decision := evalCtx(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session: conn.sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
 				if decision.IsFailure {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
@@ -1083,13 +1083,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if session != nil {
 				session.DropLastMessage()
 				if event.MessageType == "group" {
-					if turn != nil && turn.StagedGuard() != nil {
-						turn.StagedGuard().Drop()
-					} else {
-						session.DropGroupCompactMessage(event.MessageID, event.UserID)
+					var guard *llm.StagedGroupCompactGuard
+					if turn != nil {
+						guard = turn.StagedGuard()
 					}
+					engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
 					if engine != nil && engine.GroupCompactor != nil {
-						engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary())
+						engine.PauseOnStorageError(engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary()))
 					}
 				}
 			}
@@ -1203,11 +1203,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if sendErr != nil {
 		if session != nil {
 			if event.MessageType == "group" {
-				if turn != nil && turn.StagedGuard() != nil {
-					turn.StagedGuard().Drop()
-				} else {
-					session.DropGroupCompactMessage(event.MessageID, event.UserID)
+				var guard *llm.StagedGroupCompactGuard
+				if turn != nil {
+					guard = turn.StagedGuard()
 				}
+				engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
 			}
 			session.SetDeliveryFailure(llm.DeliveryFailure{
 				Platform: platform,

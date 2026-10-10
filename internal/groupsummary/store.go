@@ -41,6 +41,8 @@ type Store struct {
 	saveHook    func(records map[string]Record) error
 }
 
+func (s *Store) IsDatabase() bool { return s != nil && s.db != nil }
+
 // NewStore loads the summary file. A malformed file blocks writes for the
 // lifetime of this Store so recoverable data is never overwritten.
 func NewStore(path string) (*Store, error) {

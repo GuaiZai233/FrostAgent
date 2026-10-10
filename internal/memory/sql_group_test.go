@@ -42,6 +42,16 @@ func TestSQLGroupsIsolatePlatformsAndShareQQAliases(t *testing.T) {
 	if err := qq.Save(MemoryEntry{ID: "entry-a", Owner: "user-a", Content: "qq memory", Source: SourceManual, CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
+	if err := qq.Save(MemoryEntry{ID: "distilled-a", Owner: "user-a", Content: "accepted history", Source: SourceDistill, SourceSenderID: "user-a", SourceMessageID: "accepted-message", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := qq.PurgeDistilledEntries("", "user-a"); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := qq.ListAll()
+	if err != nil || len(accepted) != 2 {
+		t.Fatalf("missing message ID removed accepted SQL history: %#v, %v", accepted, err)
+	}
 	profile, err := qq.GetProfile()
 	if err != nil || len(profile.Members) != 1 || profile.Members["user-a"].Nickname != "Example" {
 		t.Fatalf("group member was not stored: %#v, %v", profile, err)
