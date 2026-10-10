@@ -32,6 +32,19 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
         <button id="settings-import-button" class="btn btn-outline mt-3" disabled>导入 setting.json</button>
       </article>
+      <article class="card p-5 mt-4">
+        <h2 class="card-title text-base">快速导入记忆</h2>
+        <p class="text-sm text-muted mt-1">按 ID 合并记忆和归档，同 ID 跳过，现有群档案优先。不同 ID 的相同内容可能重复，导入后请到记忆管理页面人工查重。</p>
+        <input id="memory-import-file" class="input mt-4" type="file" accept=".json,application/json" />
+        <button id="memory-import-button" class="btn btn-outline mt-3" disabled>合并导入 memory.json</button>
+      </article>
+      <article class="card p-5 mt-4">
+        <h2 class="card-title text-base">全量还原为新实例</h2>
+        <p class="text-sm text-muted mt-1">选择 FrostAgent 全量 ZIP 后创建一个全新实例。还原后的实例默认停用，重新配置密钥和适配器后再启用。</p>
+        <input id="restore-instance-name" class="input mt-4" type="text" maxlength="32" placeholder="新实例名称（留空自动命名）" />
+        <input id="restore-instance-file" class="input mt-3" type="file" accept=".zip,application/zip" />
+        <button id="restore-instance-button" class="btn btn-outline mt-3" disabled>还原为新实例</button>
+      </article>
     </div>`;
   const fileInput = container.querySelector<HTMLInputElement>('#settings-import-file')!;
   const importButton = container.querySelector<HTMLButtonElement>('#settings-import-button')!;
@@ -49,6 +62,51 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         toast.error('导入设置失败: ' + String(error));
       } finally {
         importButton.disabled = false;
+      }
+    })();
+  };
+  const memoryFile = container.querySelector<HTMLInputElement>('#memory-import-file')!;
+  const memoryButton = container.querySelector<HTMLButtonElement>('#memory-import-button')!;
+  memoryFile.onchange = () => { memoryButton.disabled = !memoryFile.files?.length; };
+  memoryButton.onclick = () => {
+    void (async () => {
+      const file = memoryFile.files?.[0];
+      if (!file) return;
+      memoryButton.disabled = true;
+      try {
+        const contents = JSON.parse(await file.text());
+        const result = await instanceRequest<{ imported: number; skipped: number }>(`/${id}/import/memories`, contents);
+        toast.success(`导入 ${result.imported} 条，跳过 ${result.skipped} 条；请检查不同 ID 的重复内容`);
+      } catch (error) {
+        toast.error('导入记忆失败: ' + String(error));
+      } finally {
+        memoryButton.disabled = false;
+      }
+    })();
+  };
+  const restoreFile = container.querySelector<HTMLInputElement>('#restore-instance-file')!;
+  const restoreName = container.querySelector<HTMLInputElement>('#restore-instance-name')!;
+  const restoreButton = container.querySelector<HTMLButtonElement>('#restore-instance-button')!;
+  restoreFile.onchange = () => { restoreButton.disabled = !restoreFile.files?.length; };
+  restoreButton.onclick = () => {
+    void (async () => {
+      const file = restoreFile.files?.[0];
+      if (!file) return;
+      restoreButton.disabled = true;
+      try {
+        const name = restoreName.value.trim();
+        const response = await fetch(`/api/instances/restore?name=${encodeURIComponent(name)}`, {
+          method: 'POST', body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || response.statusText);
+        await instanceState.refresh();
+        instanceState.select(result);
+        toast.success('已创建停用的新实例；请重新配置密钥和适配器');
+      } catch (error) {
+        toast.error('全量还原失败: ' + String(error));
+      } finally {
+        restoreButton.disabled = false;
       }
     })();
   };

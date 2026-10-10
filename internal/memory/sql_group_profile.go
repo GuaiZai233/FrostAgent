@@ -70,6 +70,14 @@ func (s *GroupStore) saveSQLProfile(profile *GroupProfile) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.saveSQLProfileTx(ctx, tx, profile); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *GroupStore) saveSQLProfileTx(ctx context.Context, tx *sql.Tx, profile *GroupProfile) error {
+	b := s.sql
 	profile.UpdatedAt = time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO group_profiles
 		(instance_id, platform, group_id, group_name, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -104,5 +112,5 @@ func (s *GroupStore) saveSQLProfile(profile *GroupProfile) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

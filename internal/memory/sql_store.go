@@ -3,6 +3,7 @@ package memory
 import (
 	"FrostAgent/internal/storage"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -113,6 +114,13 @@ func (b sqlBrainStore) save(brain *BrainData) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := b.saveTx(ctx, tx, brain); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (b sqlBrainStore) saveTx(ctx context.Context, tx *sql.Tx, brain *BrainData) error {
 	args := []any{b.instanceID, b.scope, b.platform, b.groupID}
 	for _, table := range []string{"memory_entries", "memory_merge_archives"} {
 		if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM `+table+` WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ?`), args...); err != nil {
@@ -157,5 +165,5 @@ func (b sqlBrainStore) save(brain *BrainData) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

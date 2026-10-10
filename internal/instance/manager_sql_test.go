@@ -2,14 +2,20 @@ package instance
 
 import (
 	"FrostAgent/internal/backup"
+	"FrostAgent/internal/groupsummary"
+	"FrostAgent/internal/memory"
+	"FrostAgent/internal/sticker"
+	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDatabaseManagerIgnoresLegacyFilesAndRecoversInstance(t *testing.T) {
@@ -261,5 +267,181 @@ func TestSQLSettingsImportRebuildsActiveInstance(t *testing.T) {
 	}
 	if got := m.instances[info.ID].runtime.Engine.EffectiveMaxIterations(); got != 44 {
 		t.Fatalf("imported setting was not applied: %d", got)
+	}
+}
+
+func TestSQLMemoryImportMergesThroughHTTP(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Memory Import")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create instance: %#v, %v", info, err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	data := backup.Memories{FormatVersion: backup.FormatVersion,
+		PrivateEntries: []memory.MemoryEntry{{ID: "synthetic-memory", Owner: "synthetic-user",
+			Content: "synthetic fact", Source: memory.Source("manual"), CreatedAt: now, UpdatedAt: now}}}
+	for run := 0; run < 2; run++ {
+		body, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/instances/"+info.ID+"/import/memories", bytes.NewReader(body))
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("memory import %d failed: %d %s", run, response.Code, response.Body.String())
+		}
+		if run == 1 && !strings.Contains(response.Body.String(), `"skipped":1`) {
+			t.Fatalf("duplicate memory ID was not skipped: %s", response.Body.String())
+		}
+	}
+	exported, err := backup.ExportMemories(m.db, info.ID)
+	if err != nil || len(exported.PrivateEntries) != 1 {
+		t.Fatalf("memory merge did not persist exactly one entry: %#v, %v", exported, err)
+	}
+}
+
+func TestSQLFullZIPRestoresNewDisabledInstance(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	root := t.TempDir()
+	m, err := NewDatabase(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	source, err := m.Create("Source")
+	if err != nil || source.Error != "" {
+		t.Fatalf("create source: %#v, %v", source, err)
+	}
+	if err := m.instances[source.ID].config.Update("BOT_NAME", "Restorable Bot", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.instances[source.ID].config.Update("UPSTREAM_API_KEY", "synthetic-secret", false); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := memory.NewSQLStore(m.db, source.ID).Save(memory.MemoryEntry{
+		ID: "synthetic-memory", Owner: "synthetic-user", Content: "remember this",
+		Source: memory.Source("manual"), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := groupsummary.NewSQLStore(m.db, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := summaries.Upsert("group:123", "synthetic summary", 0); err != nil {
+		t.Fatal(err)
+	}
+	imageDir := filepath.Join(root, "instance_"+source.ID, "sticker")
+	stickers, err := sticker.NewSQLStore(m.db, source.ID, imageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := []byte{0x89, 'P', 'N', 'G', 1, 2, 3}
+	if err := stickers.Add("synthetic-sticker", "picture.png", image); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := m.InstanceZIP(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := m.RestoreInstanceZIP("Restored", archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ID == source.ID || restored.Enabled || restored.Name != "Restored" {
+		t.Fatalf("restore target identity/state is wrong: %#v", restored)
+	}
+	if got := m.instances[restored.ID].config.Get("BOT_NAME"); got != "Restorable Bot" {
+		t.Fatalf("setting not restored: %q", got)
+	}
+	if got := m.instances[restored.ID].config.Get("UPSTREAM_API_KEY"); got != "" {
+		t.Fatalf("secret was copied into restored instance: %q", got)
+	}
+	memories, err := backup.ExportMemories(m.db, restored.ID)
+	if err != nil || len(memories.PrivateEntries) != 1 {
+		t.Fatalf("memory not restored: %#v, %v", memories, err)
+	}
+	groupSummaries, err := backup.ExportSummaries(m.db, restored.ID)
+	if err != nil || len(groupSummaries.Records) != 1 {
+		t.Fatalf("summary not restored: %#v, %v", groupSummaries, err)
+	}
+	storedImage, err := os.ReadFile(filepath.Join(root, "instance_"+restored.ID, "sticker", "picture.png"))
+	if err != nil || !bytes.Equal(storedImage, image) {
+		t.Fatalf("sticker image not restored: %v", err)
+	}
+}
+
+func TestSQLFullZIPFailureRemovesNewInstance(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	source, err := m.Create("Source")
+	if err != nil || source.Error != "" {
+		t.Fatalf("create source: %#v, %v", source, err)
+	}
+	archive, err := m.InstanceZIP(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tampered bytes.Buffer
+	writer := zip.NewWriter(&tampered)
+	for _, member := range reader.File {
+		stream, err := member.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(stream)
+		stream.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if member.Name == "setting.json" {
+			var settings backup.Settings
+			if err := json.Unmarshal(data, &settings); err != nil {
+				t.Fatal(err)
+			}
+			settings.ModelRouter.Version = 99
+			data, err = json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := writer.Create(member.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := out.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RestoreInstanceZIP("Failed Restore", tampered.Bytes()); err == nil {
+		t.Fatal("invalid settings were restored")
+	}
+	list, _ := m.List()
+	if len(list) != 1 || list[0].ID != source.ID {
+		t.Fatalf("failed restore left a partial instance: %#v", list)
 	}
 }
