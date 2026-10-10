@@ -25,7 +25,7 @@ func TestSQLiteOpenIgnoresCustomDSN(t *testing.T) {
 	}
 }
 
-func TestBootstrapKeepsDatabaseSelectionAcrossSchemaRebuild(t *testing.T) {
+func TestBootstrapKeepsDatabaseSelectionAcrossSchemaMigration(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	bootstrap, err := OpenBootstrap(ctx, root)
@@ -46,9 +46,7 @@ func TestBootstrapKeepsDatabaseSelectionAcrossSchemaRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.SQL.ExecContext(ctx, `UPDATE schema_meta SET version = 0 WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
+	prepareOldSchema(t, db, 7)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}

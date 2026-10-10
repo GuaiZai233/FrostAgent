@@ -11,6 +11,36 @@ permissions:
   contents: read
 
 jobs:
+  postgres-migrations:
+    name: PostgreSQL Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: frostagent
+          POSTGRES_PASSWORD: synthetic-test-password
+          POSTGRES_DB: frostagent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U frostagent -d frostagent_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: 'go.sum'
+      - name: Test PostgreSQL migrations
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/storage -run '^TestPostgresMigration' -count=1 -v
+
   ci:
     runs-on: ubuntu-latest
 

@@ -43,6 +43,12 @@ make vet          # Go 静态分析
 make ci           # 完整检查 (build + test + lint + vet)
 ```
 
+## SQL Schema Migration
+
+- `internal/storage/schema.go` 中的 v7 建表语句是不可变基线。今后每次改变数据库结构或持久化格式，都在 `migrations` 末尾追加连续编号的步骤，并更新 `SchemaVersion`；不得修改已发布的步骤来升级旧库。
+- 每一步的结构与数据转换、`schema_meta` 版本推进必须在同一事务提交。程序只执行缺失步骤，迁移失败则停止 Runtime 启动；未来版本和 v7 以前的 SQL Schema 原样保留并拒绝加载。管理员放弃旧库时，应显式创建另一个数据库，不能通过启动时自动删表实现。
+- 每个 Schema PR 都要验证已填充的上一版 SQLite 和真实 PostgreSQL 数据库：实例与密钥等业务数据保留、跨版本顺序升级、重复启动幂等、失败回滚后可重试、未来版本拒绝且不改库。CI 的 `PostgreSQL Migrations` job 提供一次性 PostgreSQL 服务，测试不能仅因缺少 DSN 而跳过。
+
 ## 清理
 
 ```bash

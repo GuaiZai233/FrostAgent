@@ -5,9 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
-// schemaStatements describe the SQL-owned state. JSON is retained only for
+// schemaStatements are the immutable v7 baseline. JSON is retained only for
 // fields whose shape is intentionally user-defined, such as MCP transport
 // parameters and setting values.
 var schemaStatements = []string{
@@ -161,47 +162,111 @@ var schemaStatements = []string{
 	)`,
 }
 
-var tables = []string{
-	"pending_deletions", "security_audit", "access_records", "sticker_keywords", "sticker_entries",
-	"group_summaries", "memory_catalogs", "group_members", "group_profiles",
-	"memory_merge_archives", "memory_tags", "memory_entries", "dialogues",
-	"mcp_tool_policies", "mcp_servers", "model_bindings", "models", "model_secrets",
-	"model_endpoints", "model_revisions", "settings", "endpoint_ids", "counters", "instances",
+// A migration is applied once in its own transaction. Released entries must
+// never be edited; append a new version for every later schema change.
+type migration struct {
+	version    int
+	statements []string
+}
+
+var migrations = []migration{
+	{8, []string{
+		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, scope_type, platform, group_id, source_message_id)`,
+	}},
+	{9, []string{
+		`CREATE INDEX security_audit_occurred_idx ON security_audit(occurred_at DESC, id DESC)`,
+	}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
-	if _, err := d.SQL.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_meta (
-		id INTEGER PRIMARY KEY, version INTEGER NOT NULL
-	)`); err != nil {
-		return fmt.Errorf("create schema metadata: %w", err)
-	}
 	var version int
-	err := d.SQL.QueryRowContext(ctx, "SELECT version FROM schema_meta WHERE id = 1").Scan(&version)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err := d.SQL.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingSchemaTable(err) {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if err == nil && version == SchemaVersion {
-		return nil
+	if errors.Is(err, sql.ErrNoRows) || isMissingSchemaTable(err) {
+		return d.createSchema(ctx)
 	}
-	// Before v1.0, an incompatible SQL schema is deliberately rebuilt. Keep the
-	// version write and every table mutation in one transaction.
+	if version > SchemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, SchemaVersion)
+	}
+	if version < 7 {
+		return fmt.Errorf("database schema version %d predates the v7 SQL baseline", version)
+	}
+	for _, step := range migrations {
+		if step.version <= version {
+			continue
+		}
+		if step.version != version+1 {
+			return fmt.Errorf("missing migration from schema version %d", version)
+		}
+		if err := d.applyMigration(ctx, step); err != nil {
+			return err
+		}
+		version = step.version
+	}
+	if version != SchemaVersion {
+		return fmt.Errorf("missing migration from schema version %d", version)
+	}
+	return nil
+}
+
+func (d *DB) createSchema(ctx context.Context) error {
 	tx, err := d.SQL.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for _, table := range tables {
-		if _, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
-			return fmt.Errorf("drop incompatible table %s: %w", table, err)
-		}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_meta (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`); err != nil {
+		return fmt.Errorf("create schema metadata: %w", err)
 	}
 	for _, statement := range schemaStatements {
-		if _, err = tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("create schema: %w", err)
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("create v7 schema: %w", err)
 		}
 	}
-	if _, err = tx.ExecContext(ctx, d.Bind("INSERT INTO schema_meta(id, version) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET version = excluded.version"), SchemaVersion); err != nil {
+	for _, step := range migrations {
+		for _, statement := range step.statements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("create schema v%d: %w", step.version, err)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version) VALUES (1, ?)`), SchemaVersion); err != nil {
 		return fmt.Errorf("write schema version: %w", err)
 	}
 	return tx.Commit()
+}
+
+func (d *DB) applyMigration(ctx context.Context, step migration) error {
+	tx, err := d.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil {
+		return fmt.Errorf("read schema version for migration: %w", err)
+	}
+	if version != step.version-1 {
+		return fmt.Errorf("expected schema version %d before migration v%d, got %d", step.version-1, step.version, version)
+	}
+	for _, statement := range step.statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply schema migration v%d: %w", step.version, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, d.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), step.version); err != nil {
+		return fmt.Errorf("advance schema version to %d: %w", step.version, err)
+	}
+	return tx.Commit()
+}
+
+func isMissingSchemaTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "no such table: schema_meta") ||
+		strings.Contains(message, `relation "schema_meta" does not exist`)
 }
