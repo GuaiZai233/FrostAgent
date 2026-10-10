@@ -191,3 +191,37 @@ func TestSQLQuickBackupHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestSQLGlobalSettingsRefreshSharedDependencies(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Global Hot")
+	if err != nil || info.Error != "" {
+		t.Fatalf("create instance: %#v, %v", info, err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	previousRuntime := m.instances[info.ID].runtime
+	previousBilling := m.billing.Load()
+	if err := m.global.Update("ALCYONE_TIMEOUT", "8s", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.global.Update("MCP_CONTROL_TOKEN", "synthetic-token", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApplyGlobalSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if m.billing.Load() == previousBilling || m.instances[info.ID].runtime == previousRuntime {
+		t.Fatal("global dependencies or running instance were not refreshed")
+	}
+	if got := m.ControlPlaneGetenv()("MCP_CONTROL_TOKEN"); got != "synthetic-token" {
+		t.Fatal("control-plane token did not change immediately")
+	}
+}

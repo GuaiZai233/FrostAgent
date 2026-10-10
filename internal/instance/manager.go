@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -63,24 +64,25 @@ type managed struct {
 	mcp     *mcp.Manager
 }
 type Manager struct {
-	mu               sync.RWMutex
-	root             string
-	global           *instanceconfig.Store
-	wsListenAddr     string
-	registry         registry
-	instances        map[string]*managed
-	templateDialogue string
-	billing          *billing.Client
-	mcpGetenv        func(string) string
-	sandbox          *sandbox.ConfigManager
-	security         *security.Controller
-	endpointMu       sync.Mutex
-	endpointOwners   map[string]string
-	general          http.Handler
-	shutdown         context.Context
-	shutdownCancel   context.CancelFunc
-	closeOnce        sync.Once
-	db               *storage.DB
+	mu                 sync.RWMutex
+	root               string
+	global             *instanceconfig.Store
+	legacyWSListenAddr string
+	registry           registry
+	instances          map[string]*managed
+	templateDialogue   string
+	billing            atomic.Pointer[billing.Client]
+	globalApplyMu      sync.Mutex
+	mcpGetenv          func(string) string
+	sandbox            *sandbox.ConfigManager
+	security           *security.Controller
+	endpointMu         sync.Mutex
+	endpointOwners     map[string]string
+	general            http.Handler
+	shutdown           context.Context
+	shutdownCancel     context.CancelFunc
+	closeOnce          sync.Once
+	db                 *storage.DB
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
@@ -116,14 +118,14 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		return nil, err
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	wsListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
-	if wsListenAddr == "" {
-		wsListenAddr = "127.0.0.1:1234"
-	}
 	if dialoguePath == "" {
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db}
+	legacyWSListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
+	if legacyWSListenAddr == "" {
+		legacyWSListenAddr = "127.0.0.1:1234"
+	}
+	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db}
 	if db != nil {
 		m.security = security.NewControllerSQL(db)
 	} else {
@@ -209,7 +211,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	if base == "" {
 		base = billing.DefaultAlcyoneBaseURL
 	}
-	m.billing = billing.NewClient(base, cfg.ServiceToken, cfg.Timeout)
+	m.billing.Store(billing.NewClient(base, cfg.ServiceToken, cfg.Timeout))
 	mux := http.NewServeMux()
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
@@ -361,7 +363,13 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security, m.db)
+	wsListenAddr := strings.TrimSpace(m.global.Get("WS_LISTEN_ADDR"))
+	if m.db == nil {
+		wsListenAddr = m.legacyWSListenAddr
+	} else if wsListenAddr == "" {
+		wsListenAddr = "127.0.0.1:1234"
+	}
+	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security, m.db)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}

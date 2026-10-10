@@ -3,10 +3,12 @@ package main
 import (
 	"FrostAgent/internal/frontend"
 	"FrostAgent/internal/instance"
+	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	secsvc "FrostAgent/internal/service/security"
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,30 +35,94 @@ func run() error {
 	}
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(manager))
-	servers := []*http.Server{{Addr: listen, Handler: corsMiddleware(mux, global.Get), ReadHeaderTimeout: 10 * time.Second}}
-	if wsListen != listen {
-		servers = append(servers, &http.Server{Addr: wsListen, Handler: wsMux, ReadHeaderTimeout: 10 * time.Second})
+	listeners := newListenerSet()
+	desiredHandlers := func() map[string]http.Handler {
+		listen = global.Get("LISTEN_ADDR")
+		if listen == "" {
+			listen = "127.0.0.1:8080"
+		}
+		wsListen = global.Get("WS_LISTEN_ADDR")
+		if wsListen == "" {
+			wsListen = "127.0.0.1:1234"
+		}
+		handlers := map[string]http.Handler{listen: corsMiddleware(mux, global.Get)}
+		if wsListen != listen {
+			handlers[wsListen] = wsMux
+		}
+		return handlers
 	}
+	if err := listeners.Apply(desiredHandlers()); err != nil {
+		return err
+	}
+	lastApplied := global.Snapshot()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	errs := make(chan error, len(servers))
-	for _, server := range servers {
-		go func() { logs.General.Listening(server.Addr); errs <- server.ListenAndServe() }()
-	}
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
 	select {
 	case <-ctx.Done():
-	case err = <-errs:
+	case err = <-listeners.errors:
+	case <-ticker.C:
 	}
-	manager.Close()
+	for ctx.Err() == nil && err == nil {
+		current := global.Snapshot()
+		if !maps.Equal(lastApplied, current) {
+			applyErr := listeners.Apply(desiredHandlers())
+			if applyErr == nil {
+				applyErr = manager.ApplyGlobalSettings()
+				if applyErr == nil {
+					lastApplied = current
+				}
+			}
+			if applyErr != nil {
+				logs.General.Warn(logs.SYSTEM, fmt.Sprintf("应用全局设置失败，恢复旧值: %v", applyErr))
+				if rollbackErr := restoreGlobalSettings(global, lastApplied); rollbackErr != nil {
+					err = rollbackErr
+					break
+				}
+				if rollbackErr := listeners.Apply(desiredHandlers()); rollbackErr != nil {
+					err = rollbackErr
+					break
+				}
+				if rollbackErr := manager.ApplyGlobalSettings(); rollbackErr != nil {
+					err = rollbackErr
+					break
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case err = <-listeners.errors:
+		case <-ticker.C:
+		}
+	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, server := range servers {
-		_ = server.Shutdown(shutdown)
-	}
+	listeners.Close(shutdown)
+	manager.Close()
 	if err == http.ErrServerClosed {
 		return nil
 	}
 	return err
+}
+
+func restoreGlobalSettings(global *instanceconfig.Store, previous map[string]string) error {
+	current := global.Snapshot()
+	for key := range current {
+		if _, exists := previous[key]; !exists {
+			if err := global.Update(key, "", true); err != nil {
+				return err
+			}
+		}
+	}
+	for key, value := range previous {
+		if current[key] != value {
+			if err := global.Update(key, value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func managementMux(manager http.Handler) *http.ServeMux {
