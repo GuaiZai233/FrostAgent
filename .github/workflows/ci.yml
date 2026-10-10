@@ -51,7 +51,7 @@ jobs:
         run: make ci
 
       - name: Run concurrency and race regressions
-        run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
+        run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/memory/... ./internal/groupsummary/... ./internal/modelrouter/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
 
   windows-smoke:
     name: Windows Smoke
