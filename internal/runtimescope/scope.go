@@ -13,20 +13,45 @@ import (
 )
 
 type Scope struct {
-	Config  *instanceconfig.Store
-	Global  *instanceconfig.Store
-	Logger  *logs.Store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	stopped bool
-	wg      sync.WaitGroup
+	Config     *instanceconfig.Store
+	Global     *instanceconfig.Store
+	Logger     *logs.Store
+	instanceID string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	stopped    bool
+	wg         sync.WaitGroup
 }
 
 func New(config, global *instanceconfig.Store, logger *logs.Store) *Scope {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scope{Config: config, Global: global, Logger: logger, ctx: ctx, cancel: cancel}
 }
+func (s *Scope) InstanceID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.instanceID != "" {
+		return s.instanceID
+	}
+	if s.Config != nil {
+		return s.Config.Get("INSTANCE_ID")
+	}
+	return ""
+}
+
+func (s *Scope) SetInstanceID(id string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.instanceID = id
+	s.mu.Unlock()
+}
+
 func (s *Scope) Context() context.Context {
 	if s == nil {
 		return context.Background()

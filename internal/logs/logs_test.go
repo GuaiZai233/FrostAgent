@@ -207,3 +207,45 @@ func TestStore_SetMaxBytesRetroactiveEviction(t *testing.T) {
 		t.Fatalf("expected older entries to be evicted, got %d entries", len(snap))
 	}
 }
+
+func TestWarnRetainsDiagnosticContentInConsole(t *testing.T) {
+	store := New("inst_fox", "霜降实例", 5)
+	diagMsg := "记忆子系统警告: 群 123456 记忆提取超时，已自动降级处理: " + strings.Repeat("详细诊断信息-", 20)
+	var output string
+	output = captureConsole(t, func() {
+		store.Warn(SYSTEM, diagMsg)
+	})
+
+	if !strings.Contains(output, "(Instance: 霜降实例)") {
+		t.Fatalf("expected instance label in output, got: %s", output)
+	}
+	if !strings.Contains(output, "[WARN][SYSTEM]") {
+		t.Fatalf("expected [WARN][SYSTEM] in output, got: %s", output)
+	}
+	if strings.Contains(output, "] ...") {
+		t.Fatalf("WARN output must not be masked with '...', got: %s", output)
+	}
+	if !strings.Contains(output, diagMsg) {
+		t.Fatalf("expected full diagnostic message without severe truncation, got: %s", output)
+	}
+
+	snap := store.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(snap))
+	}
+	consoleFormatted := Console(snap[0])
+	if strings.Contains(consoleFormatted, "] ...") {
+		t.Fatalf("Console(entry) for WARN must not be masked with '...', got: %s", consoleFormatted)
+	}
+	if !strings.Contains(consoleFormatted, diagMsg) {
+		t.Fatalf("Console(entry) must retain full diagnostic content, got: %s", consoleFormatted)
+	}
+
+	// Verify INFO still masks content with "..."
+	infoOutput := captureConsole(t, func() {
+		store.Info(SYSTEM, "sensitive internal info")
+	})
+	if !strings.HasSuffix(strings.TrimSpace(infoOutput), "] ...") {
+		t.Fatalf("INFO console output must remain masked with '...', got: %s", infoOutput)
+	}
+}

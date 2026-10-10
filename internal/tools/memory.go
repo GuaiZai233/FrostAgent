@@ -9,6 +9,7 @@ import (
 
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 )
 
 // NewMemoryTool creates a tool that manages the current request's memory owner.
@@ -53,6 +54,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return "无法获取当前用户信息", nil
 			}
 			currentUser := runContext.Owner
+			groupID := runContext.RouteScope.GroupID
 
 			switch params.Action {
 			case "write":
@@ -61,6 +63,31 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				if params.Content == "" {
 					return "写入记忆需要提供 content 参数", nil
+				}
+				if groupID != "" {
+					if engine.GroupManager == nil {
+						return "群记忆功能未启用", nil
+					}
+					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					if err != nil {
+						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+					}
+					entry := memory.MemoryEntry{
+						ID:        memory.GenerateID(),
+						Owner:     memory.GroupOwnerExplicit,
+						OwnerType: memory.OwnerGroup,
+						ScopeType: memory.ScopeGroup,
+						GroupID:   groupID,
+						Content:   params.Content,
+						Tags:      params.Tags,
+						Source:    memory.SourceManual,
+						CreatedAt: time.Now(),
+						UpdatedAt: time.Now(),
+					}
+					if err := groupStore.Save(entry); err != nil {
+						return fmt.Sprintf("写入群记忆失败: %v", err), nil
+					}
+					return "群记忆已写入", nil
 				}
 				if engine.MemoryWriter == nil {
 					return "记忆写入功能未启用", nil
@@ -83,6 +110,36 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				if len(tags) > 6 {
 					return "搜索最多支持 6 个不同的 tags 标签", nil
+				}
+				if groupID != "" {
+					if engine.GroupManager == nil {
+						return "群记忆功能未启用", nil
+					}
+					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					if err != nil {
+						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+					}
+					entries, err := groupStore.SearchByTags(tags, 0)
+					if err != nil {
+						return fmt.Sprintf("搜索群记忆失败: %v", err), nil
+					}
+					filtered := engine.MemoryGateway.FilterGroup(entries)
+					filtered = engine.MemoryReader.Limit(filtered)
+					if len(filtered) == 0 {
+						return "未找到相关群记忆", nil
+					}
+					if !runContext.Mock {
+						if err := groupStore.RecordRecall(filtered); err != nil {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新群记忆召回次数失败: %v", err))
+						}
+						now := time.Now()
+						for i := range filtered {
+							filtered[i].AccessCount++
+							filtered[i].UpdatedAt = now
+						}
+					}
+					result, _ := json.Marshal(filtered)
+					return string(result), nil
 				}
 				if engine.MemoryReader == nil {
 					return "记忆搜索功能未启用", nil
@@ -110,6 +167,26 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return string(result), nil
 
 			case "list":
+				if groupID != "" {
+					if engine.GroupManager == nil {
+						return "群记忆功能未启用", nil
+					}
+					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
+					if err != nil {
+						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+					}
+					entries, err := groupStore.ListAll()
+					if err != nil {
+						return fmt.Sprintf("列出群记忆失败: %v", err), nil
+					}
+					filtered := engine.MemoryGateway.FilterGroup(entries)
+					filtered = engine.MemoryReader.Limit(filtered)
+					if len(filtered) == 0 {
+						return "当前群还没有任何记忆", nil
+					}
+					result, _ := json.Marshal(filtered)
+					return string(result), nil
+				}
 				if engine.MemoryGateway == nil {
 					return "记忆功能未启用", nil
 				}
@@ -126,6 +203,9 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return string(result), nil
 
 			case "reflect":
+				if groupID != "" {
+					return "群聊暂不支持记忆反思整理", nil
+				}
 				if runContext.Mock {
 					return "模拟会话模式下禁用记忆反思重构", nil
 				}

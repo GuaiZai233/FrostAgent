@@ -4,6 +4,7 @@ import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"encoding/json"
@@ -101,6 +102,49 @@ type GroupCompactor struct {
 	pendingPersist map[string]*pendingPersistRecord
 	persistActive  map[string]bool
 	persistWake    map[string]chan struct{}
+
+	groupManager *memory.GroupManager
+	memoryWriter *memory.Writer
+
+	afterSummaryCommitHook func()
+}
+
+// SetAfterSummaryCommitHook configures a hook invoked right after summary commit before distillation barrier registration.
+func (c *GroupCompactor) SetAfterSummaryCommitHook(hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.afterSummaryCommitHook = hook
+}
+
+// SetGroupManager configures the group manager for compact distillation.
+func (c *GroupCompactor) SetGroupManager(gm *memory.GroupManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.groupManager = gm
+}
+
+// SetMemoryWriter configures the memory writer for canonical group memory distillation.
+func (c *GroupCompactor) SetMemoryWriter(w *memory.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.memoryWriter = w
+}
+
+// MemoryWriter returns the configured memory writer or constructs a fallback if groupManager is available.
+func (c *GroupCompactor) MemoryWriter() *memory.Writer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.memoryWriter != nil {
+		return c.memoryWriter
+	}
+	if c.groupManager != nil && c.provider != nil && c.model != "" {
+		w := memory.NewWriter(nil)
+		w.Scope = c.Scope
+		w.SetGroupManager(c.groupManager)
+		w.SetLLM(c.provider, c.model)
+		return w
+	}
+	return nil
 }
 
 // NewGroupCompactor creates a durable running summary compactor.
@@ -119,6 +163,7 @@ func NewGroupCompactor(
 	}
 	maxBufferSize := max(bufferSize*10, DefaultGroupCompactMaxBufferSize)
 	return &GroupCompactor{
+		Scope:             runtimescope.New(nil, nil, nil),
 		provider:          provider,
 		store:             store,
 		model:             model,
@@ -373,6 +418,18 @@ func (c *GroupCompactor) StopTimers() {
 		c.cancelScheduledLocked(key)
 	}
 }
+
+// Close stops any scheduled timers, cancels in-flight work and waits for all compactor goroutines to exit.
+func (c *GroupCompactor) Close() {
+	if c == nil {
+		return
+	}
+	c.StopTimers()
+	if c.Scope != nil {
+		c.Cancel()
+		c.Wait()
+	}
+}
 func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, routeScope modelrouter.Scope, delay time.Duration) {
 	key := session.ConversationID
 	if c.Context().Err() != nil || c.scheduled[key] != nil {
@@ -416,6 +473,18 @@ func (c *GroupCompactor) compact(
 	onComplete ...func(err error),
 ) {
 	succeeded := false
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
+	if session != nil && c.groupManager != nil && groupID != "" {
+		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+			session.SetGroupStore(gStore)
+		}
+	}
 	defer func() {
 		c.mu.Lock()
 		key := session.ConversationID
@@ -493,10 +562,88 @@ func (c *GroupCompactor) compact(
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
+
+	c.mu.Lock()
+	afterHook := c.afterSummaryCommitHook
+	c.mu.Unlock()
+	if afterHook != nil {
+		afterHook()
+	}
+
+	c.distillGroupMemories(session, owner, routeScope, snapshot)
 	for _, cb := range onComplete {
 		if cb != nil {
 			cb(nil)
 		}
+	}
+}
+
+func (c *GroupCompactor) distillGroupMemories(
+	session *SessionContext,
+	owner string,
+	routeScope modelrouter.Scope,
+	snapshot GroupCompactSnapshot,
+) {
+	if c == nil || len(snapshot.Messages) == 0 {
+		return
+	}
+
+	groupID := routeScope.GroupID
+	if groupID == "" && strings.HasPrefix(owner, "group:") {
+		groupID = strings.TrimPrefix(owner, "group:")
+	}
+	if groupID == "" {
+		return
+	}
+
+	if session != nil && c.Scope != nil {
+		session.SetScope(c.Scope)
+	}
+	if session != nil && c.groupManager != nil {
+		if gStore, err := c.groupManager.GetGroupStore(groupID); err == nil && gStore != nil {
+			session.SetGroupStore(gStore)
+		}
+	}
+
+	writer := c.MemoryWriter()
+	if writer == nil {
+		return
+	}
+
+	groupMsgs := make([]memory.GroupMessage, len(snapshot.Messages))
+	for i, m := range snapshot.Messages {
+		groupMsgs[i] = memory.GroupMessage{
+			MessageID: m.MessageID,
+			SenderID:  m.SenderID,
+			Sender:    m.Sender,
+			Role:      m.Role,
+			Content:   m.Content,
+		}
+	}
+
+	route := core.RouteContext{
+		Platform: routeScope.Platform,
+		GroupID:  routeScope.GroupID,
+	}
+
+	distillCtx := c.Context()
+	var validator func() bool
+	if session != nil {
+		var barrier core.ExtractionCommitBarrier
+		var cleanup func()
+		distillCtx, barrier, cleanup = session.BeginGroupDistillation(distillCtx, snapshot)
+		defer cleanup()
+		validator = func() bool {
+			return barrier == nil || barrier.IsValid()
+		}
+	}
+
+	if err := writer.ExtractGroupMemories(distillCtx, groupID, route, groupMsgs, memory.SourceDistill, validator); err != nil {
+		instanceID := ""
+		if c.Scope != nil {
+			instanceID = c.Scope.InstanceID()
+		}
+		c.Log().Warn(logs.SYSTEM, fmt.Sprintf("[Instance: %s] 群 [%s] running compact 记忆提炼失败: %v", instanceID, groupID, err))
 	}
 }
 
@@ -602,6 +749,12 @@ func (c *GroupCompactor) RollbackPersistence(owner string, cleanSummary string) 
 }
 
 func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
+	defer func() {
+		c.mu.Lock()
+		c.persistActive[owner] = false
+		delete(c.persistWake, owner)
+		c.mu.Unlock()
+	}()
 	for {
 		if c.Context().Err() != nil {
 			return
@@ -609,8 +762,6 @@ func (c *GroupCompactor) persistWorker(owner string, wakeCh chan struct{}) {
 		c.mu.Lock()
 		target := c.pendingPersist[owner]
 		if target == nil {
-			c.persistActive[owner] = false
-			delete(c.persistWake, owner)
 			c.mu.Unlock()
 			return
 		}

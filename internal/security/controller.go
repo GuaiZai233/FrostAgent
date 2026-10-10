@@ -404,6 +404,11 @@ func (c *Controller) EvaluateContext(p Principal, source WatchdogSource, content
 	return c.Evaluate(p, StageIngress, source, content, meta)
 }
 
+// EvaluateContextWithContext evaluates indirect context with the provided caller context.
+func (c *Controller) EvaluateContextWithContext(ctx context.Context, p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
+	return c.EvaluateWithContext(ctx, p, StageIngress, source, content, meta)
+}
+
 // EvaluateContextDryRun evaluates indirect context in dry-run mode.
 func (c *Controller) EvaluateContextDryRun(p Principal, source WatchdogSource, content string, meta AuditEvent) WatchdogDecision {
 	return c.EvaluateDryRun(p, StageIngress, source, content, meta)
