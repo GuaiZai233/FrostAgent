@@ -453,6 +453,10 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 
 		if matchedIdx >= 0 {
 			existing := &brain.Entries[matchedIdx]
+			if existing.Source != SourceManual && existing.Owner != incoming.Owner {
+				existing.Owner = GroupOwnerExplicit
+				existing.OwnerType = OwnerGroup
+			}
 			if existing.SourceMessageID == "" && incoming.SourceMessageID != "" {
 				existing.SourceMessageID = incoming.SourceMessageID
 			}
@@ -993,35 +997,36 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 // It is strictly limited to automatic duplicates of the SAME trusted source identity.
 // Explicit/manual writes and distinct platform messages are never conflated or merged.
 func isSameGroupMemory(existing, incoming MemoryEntry) bool {
-	// 1. Explicit / manual entries must never be deduplicated or merged.
-	if incoming.Source == SourceManual || existing.Source == SourceManual {
+	// 1. Explicit / manual incoming additions must never be deduplicated or merged.
+	if incoming.Source == SourceManual {
 		return false
 	}
 
-	// 2. Must match the same owner.
-	if existing.Owner != incoming.Owner {
+	// 2. Pure manual existing entry (no source message ID) must never match automatic incoming.
+	if existing.Source == SourceManual && existing.SourceMessageID == "" {
 		return false
 	}
 
-	// 3. Distinct nonempty source message IDs represent distinct platform messages
-	// and must never be conflated.
+	// 3. Match by trusted SourceMessageID and Evidence/Content regardless of Owner.
 	if existing.SourceMessageID != "" && incoming.SourceMessageID != "" {
 		if existing.SourceMessageID != incoming.SourceMessageID {
 			return false
 		}
-		// Same SourceMessageID: check that evidence or content matches.
-		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
-			return true
-		}
-		if existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content {
+		if (existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence) ||
+			(existing.Evidence != "" && incoming.Content != "" && existing.Evidence == incoming.Content) ||
+			(existing.Content != "" && incoming.Evidence != "" && existing.Content == incoming.Evidence) ||
+			(existing.Content != "" && incoming.Content != "" && existing.Content == incoming.Content) {
 			return true
 		}
 		return false
 	}
 
 	// 4. When neither has SourceMessageID (e.g. legacy records or synthetic test entries without message IDs),
-	// match only if both are automatic sources and have matching content or evidence.
+	// match only if both are automatic sources, have matching owner, and have matching content or evidence.
 	if existing.SourceMessageID == "" && incoming.SourceMessageID == "" {
+		if existing.Source == SourceManual || existing.Owner != incoming.Owner {
+			return false
+		}
 		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {
 			return true
 		}

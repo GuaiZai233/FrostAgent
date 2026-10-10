@@ -1286,6 +1286,202 @@ func TestGroupCompactor_Race_CommitFirstThenBanRollback_EmptyInitialSummary(t *t
 	}
 }
 
+func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
+	t.Run("BanRollbackDuringDistillation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		storePath := filepath.Join(tmpDir, "group_summaries.json")
+		store, err := groupsummary.NewStore(storePath)
+		if err != nil {
+			t.Fatalf("create group summary store: %v", err)
+		}
+		gm := memory.NewGroupManager(tmpDir, nil)
+
+		mockLLM := &mockCompactorLLM{}
+		owner := "group:syn_test_grp_distill_ban"
+		groupID := "syn_test_grp_distill_ban"
+		compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+		compactor.SetGroupManager(gm)
+
+		gStore, err := gm.GetGroupStore(groupID)
+		if err != nil {
+			t.Fatalf("GetGroupStore failed: %v", err)
+		}
+
+		s := &SessionContext{
+			ConversationID: owner,
+		}
+		cleanInitialSummary := "Clean summary v1"
+		s.SetGroupRunningSummary(cleanInitialSummary)
+		_, _ = store.Upsert(owner, cleanInitialSummary, 0)
+
+		s.AppendGroupCompactMessage(GroupCompactMessage{
+			Role:      "user",
+			Sender:    "Attacker",
+			SenderID:  "syn_user_attacker_01",
+			Content:   "I drink matcha latte every day",
+			MessageID: "syn_msg_attack_01",
+			Time:      "14:00:00",
+		}, 10)
+
+		pollutedSummary := "Polluted summary containing exploit"
+		distillJSON := `[{"source_msg_index": 0, "is_self": true, "evidence": "I drink matcha latte", "summary": "drinks matcha"}]`
+
+		distillStarted := make(chan struct{})
+		distillResume := make(chan struct{})
+
+		mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+			prompt := req.Messages[0].Content.(string)
+			// Stage 1: Summary compaction prompt
+			if strings.Contains(prompt, "待压缩的群消息记录") {
+				return pollutedSummary, nil
+			}
+			// Stage 2: Distillation prompt
+			if strings.Contains(prompt, "待提取的群消息列表") {
+				close(distillStarted)
+				<-distillResume
+				return distillJSON, nil
+			}
+			return "", errors.New("unexpected prompt")
+		}
+
+		compactorDone := make(chan error, 1)
+		err = compactor.ForceCompact(s, owner, modelrouter.Scope{GroupID: groupID}, func(err error) {
+			compactorDone <- err
+		})
+		if err != nil {
+			t.Fatalf("ForceCompact failed: %v", err)
+		}
+
+		// 等待第二阶段（记忆提炼 LLM 调用）在途挂起
+		select {
+		case <-distillStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for distillation stage to start")
+		}
+
+		// 验证 Stage 1 summary commit 已发生
+		if s.GroupRunningSummary() != pollutedSummary {
+			t.Fatalf("expected running summary to be temporarily committed, got: %s", s.GroupRunningSummary())
+		}
+
+		// 在提炼 LLM 在途期间触发用户封禁回滚
+		dropped := s.DropGroupCompactMessage("syn_msg_attack_01", "syn_user_attacker_01")
+		if !dropped {
+			t.Fatalf("expected DropGroupCompactMessage to drop polluted message and rollback")
+		}
+
+		// 释放提炼 LLM 返回
+		close(distillResume)
+
+		select {
+		case <-compactorDone:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for compactor to complete")
+		}
+
+		// 1. 验证总结回滚行为完好
+		if got := s.GroupRunningSummary(); got != cleanInitialSummary {
+			t.Fatalf("expected running summary to rollback to %q, got %q", cleanInitialSummary, got)
+		}
+
+		// 2. 验证记忆提炼被代际屏障拦截，零条记忆持久化到磁盘
+		entries, err := gStore.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected 0 entries persisted after ban rollback during distillation, got %d: %+v", len(entries), entries)
+		}
+	})
+
+	t.Run("ResetSessionDuringDistillation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		storePath := filepath.Join(tmpDir, "group_summaries.json")
+		store, err := groupsummary.NewStore(storePath)
+		if err != nil {
+			t.Fatalf("create group summary store: %v", err)
+		}
+		gm := memory.NewGroupManager(tmpDir, nil)
+
+		mockLLM := &mockCompactorLLM{}
+		owner := "group:syn_test_grp_distill_reset"
+		groupID := "syn_test_grp_distill_reset"
+		compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+		compactor.SetGroupManager(gm)
+
+		gStore, err := gm.GetGroupStore(groupID)
+		if err != nil {
+			t.Fatalf("GetGroupStore failed: %v", err)
+		}
+
+		s := &SessionContext{
+			ConversationID: owner,
+		}
+		s.AppendGroupCompactMessage(GroupCompactMessage{
+			Role:      "user",
+			Sender:    "Alice",
+			SenderID:  "syn_user_alice_01",
+			Content:   "I drink matcha latte every day",
+			MessageID: "syn_msg_alice_01",
+			Time:      "14:00:00",
+		}, 10)
+
+		summary := "Summary of Alice drinking matcha"
+		distillJSON := `[{"source_msg_index": 0, "is_self": true, "evidence": "I drink matcha latte", "summary": "drinks matcha"}]`
+
+		distillStarted := make(chan struct{})
+		distillResume := make(chan struct{})
+
+		mockLLM.customReply = func(req core.ChatRequest) (string, error) {
+			prompt := req.Messages[0].Content.(string)
+			if strings.Contains(prompt, "待压缩的群消息记录") {
+				return summary, nil
+			}
+			if strings.Contains(prompt, "待提取的群消息列表") {
+				close(distillStarted)
+				<-distillResume
+				return distillJSON, nil
+			}
+			return "", errors.New("unexpected prompt")
+		}
+
+		compactorDone := make(chan error, 1)
+		err = compactor.ForceCompact(s, owner, modelrouter.Scope{GroupID: groupID}, func(err error) {
+			compactorDone <- err
+		})
+		if err != nil {
+			t.Fatalf("ForceCompact failed: %v", err)
+		}
+
+		select {
+		case <-distillStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for distillation stage to start")
+		}
+
+		// 会话重置
+		s.ResetGroupCompact()
+
+		// 释放提炼 LLM 返回
+		close(distillResume)
+
+		select {
+		case <-compactorDone:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for compactor to complete")
+		}
+
+		// 验证提炼结果被丢弃，未写入记忆库
+		entries, err := gStore.ListAll()
+		if err != nil {
+			t.Fatalf("ListAll failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected 0 entries persisted after ResetGroupCompact during distillation, got %d: %+v", len(entries), entries)
+		}
+	})
+}
+
 func TestGroupCompactor_MixedSender_DropMessageDoesNotRollbackHistoricalMixedBatches(t *testing.T) {
 	mockLLM := &mockCompactorLLM{}
 	tmpDir := t.TempDir()
@@ -1748,7 +1944,7 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 		return string(rawJSON), nil
 	}
 
-	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+	compactor.distillGroupMemories(nil, owner, modelrouter.Scope{GroupID: groupID}, snapshot)
 
 	entries, err := gStore.ListAll()
 	if err != nil {
@@ -1880,7 +2076,7 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 		return string(rawJSON), nil
 	}
 
-	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+	compactor.distillGroupMemories(nil, owner, modelrouter.Scope{GroupID: groupID}, snapshot)
 
 	entries, err := gStore.ListAll()
 	if err != nil {
@@ -2029,7 +2225,7 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 		return string(rawJSON), nil
 	}
 
-	compactor.distillGroupMemories(owner, modelrouter.Scope{GroupID: groupID}, snapshot)
+	compactor.distillGroupMemories(nil, owner, modelrouter.Scope{GroupID: groupID}, snapshot)
 
 	entries, err := gStore.ListAll()
 	if err != nil {

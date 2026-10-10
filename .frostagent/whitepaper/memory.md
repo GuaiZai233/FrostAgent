@@ -183,6 +183,7 @@ func (m *MemberProfile) ResolveCallingName() string {
    - **快照抓取**：当群聊消息缓冲达到阈值触发滚动压缩时，生成 `GroupCompactSnapshot`。
    - **职责分离**：`GroupCompactor` 纯粹负责群消息窗口的滚动推进与上下文压缩摘要（`compact` 记忆）；其中的事实提炼逻辑完全解耦并委托给 `MemoryWriter.ExtractGroupMemories`，统一提炼入库为长期记忆事实（来源标识为 `SourceDistill`）。
    - **降级与容错**：提炼过程失败时以实例 Logger 输出 `WARN` 日志（格式含 `[Instance: <name>]`），绝不阻塞或中断滚动压缩上下文更新流程。
+   - **会话压缩代际校验屏障（Session Compact Generation Barrier）**：滚动压缩分为两阶段执行：第一阶段生成并提交运行摘要（`CommitGroupCompact`），第二阶段异步进行记忆提炼（`ExtractGroupMemories`）。为防止在提炼模型调用在途期间发生用户封禁（`DropGroupCompactMessage` 触发回滚）或会话重置（`ResetGroupCompact`）导致已被撤销的消息事实仍被持久化，向 Writer 注入闭包校验器 `validator = func() bool { return session.GroupCompactGeneration() == snapshot.Generation }`。在提炼模型调用前后、候选解析阶段以及 `GroupStore.SaveGroupEntriesConditionallyContext` 写锁保护下均执行代际核验；任何代际不一致均原子中止提炼（返回 `ErrConditionFailed`），确保与压缩摘要回滚行为严格一致，零脏数据落盘。
 
 ### 4.2 方案 A：字面引述溯源契约（Option A Verbatim Provenance Contract）
 
@@ -211,15 +212,18 @@ func (m *MemberProfile) ResolveCallingName() string {
 
 群聊消息可能在实时对话轮次中被提取事实，随后在被动水群累积达到压缩阈值时，同一消息又随历史快照参与滚动压缩提炼。为了防止重复存储冗余记忆，`GroupStore.SaveGroupEntriesConditionallyContext` 在写互斥锁保护下实施了跨触发幂等与元数据融合机制（`isSameGroupMemory`）：
 
-1. **人工录入与跨消息去重边界（Manual Writes & Distinct Source Protection）**：
-   - 去重谓词仅对自动提炼条目（`SourceExtract`, `SourceDistill`, `SourceCompact`）生效；用户手动写入的条目（`SourceManual`）绝不参与去重合并，保障人工录入绝不被意外吞噬或覆盖。
-   - 对于自动提炼条目，必须满足相同的 `Owner`、相同的非空 `SourceMessageID` 以及相同的字面引述/内容；来自不同平台消息（`SourceMessageID` 不同）的发言即使内容相同也作为独立条目保存，真实保留不同消息源的独立引述记录。
-2. **持久化 ID 严格一致性（Preventing Phantom IDs）**：
+1. **双层源标识与管理员人工修正保护（Admin Edit Protection Against Stale Re-Extraction）**：
+   - **纯手工新增条目（`SourceManual` 且 `SourceMessageID == ""`）**：由管理员直接添加的独立事实记录，绝不与任何自动提取记录合并或去重，永远独立持久化。
+   - **人工修正条目（`SourceManual` 且 `SourceMessageID != ""`）**：当管理员修改自动提炼条目的内容时，来源流转为 `SourceManual`，但保留原有的 `SourceMessageID`、`Evidence` 与 `SourceSenderID`。后续滚动压缩再次提取相同平台消息时，可信消息标识与引述证据准确匹配该记录，执行元数据融合但绝对不覆盖管理员的人工修改（`existing.Content` 保持不变，`existing.Source` 保持 `SourceManual`），彻底杜绝陈旧原文被重新引入产生双份冲突。
+2. **解耦模型分类的物理溯源去重与保守确定性归属冲突消解（Deterministic Ownership Conflict Resolution）**：
+   - 自动条目去重完全基于可信的物理平台消息 `SourceMessageID` 与字面引述 `Evidence`（或内容），不再受大模型不可靠的归属分类（`Owner`）差异影响。
+   - 当实时对话提取与滚动压缩提炼对同一条消息的同一引述产生相反的归属分类时（例如 Turn 提取认为 `is_self: true` 归属发言者，Compact 提炼认为 `is_self: false` 归属 `"group"`），系统在写锁内实施**保守且确定性的冲突消解策略**：自动条目之间的归属冲突统一回退消解为 `GroupOwnerExplicit`（`"group"`，`OwnerType = OwnerGroup`），无论两种触发的执行先后顺序或并发竞争情况如何，均保证生成全局一致、保守的群归属事实，同时底层可信的实际发言人 `SourceSenderID` 永久保留供检查与溯源。
+3. **持久化 ID 严格一致性（Preventing Phantom IDs）**：
    - 在幂等合并已有条目时，将内存中传入对象的 ID 同步更新为磁盘已存条目的持久化 ID（`incoming.ID = existing.ID`），确保 `GroupStore.SaveEntry` 返回的永远是在磁盘上实际存在的真实 ID，杜绝幻影 ID 导致后续更新或删除失败。
-3. **无损元数据融合**：
+4. **无损元数据融合**：
    - 当检测到已存在匹配的同一消息提取条目时，跳过新增记录，避免无谓的数据膨胀。
    - 同时原子合并补充已存条目中缺失的 `SourceMessageID`、`SourceSenderID`、`Evidence`、`Summary`，并无损合并两轮提取产生的 `Tags` 集合。
-4. **并发安全与路由隔离**：
+5. **并发安全与路由隔离**：
    - 所有读写检查均在各群独立的 `GroupStore` 内存互斥锁内完成，天然杜绝跨协程竞态条件。
    - 提炼执行前执行路由状态核验，已禁用或未授权的群路由立即中止，保障多租户安全。
 

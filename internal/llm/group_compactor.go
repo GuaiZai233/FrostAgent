@@ -528,7 +528,7 @@ func (c *GroupCompactor) compact(
 	succeeded = true
 
 	c.queuePersistence(owner, summary, storeGeneration)
-	c.distillGroupMemories(owner, routeScope, snapshot)
+	c.distillGroupMemories(session, owner, routeScope, snapshot)
 	for _, cb := range onComplete {
 		if cb != nil {
 			cb(nil)
@@ -537,6 +537,7 @@ func (c *GroupCompactor) compact(
 }
 
 func (c *GroupCompactor) distillGroupMemories(
+	session *SessionContext,
 	owner string,
 	routeScope modelrouter.Scope,
 	snapshot GroupCompactSnapshot,
@@ -574,7 +575,15 @@ func (c *GroupCompactor) distillGroupMemories(
 		GroupID:  routeScope.GroupID,
 	}
 
-	if err := writer.ExtractGroupMemories(c.Context(), groupID, route, groupMsgs, memory.SourceDistill, nil); err != nil {
+	var validator func() bool
+	if session != nil {
+		expectedGen := snapshot.Generation
+		validator = func() bool {
+			return session.GroupCompactGeneration() == expectedGen
+		}
+	}
+
+	if err := writer.ExtractGroupMemories(c.Context(), groupID, route, groupMsgs, memory.SourceDistill, validator); err != nil {
 		instanceID := ""
 		if c.Scope != nil {
 			instanceID = c.Scope.InstanceID()
