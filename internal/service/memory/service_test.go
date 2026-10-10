@@ -8,6 +8,7 @@ import (
 
 	v1 "FrostAgent/gen/proto/frostagent/v1"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/storage"
 
 	"connectrpc.com/connect"
 )
@@ -20,6 +21,43 @@ func setupTestService(t *testing.T) (*Service, string, *memory.GroupManager) {
 	gm := memory.NewGroupManager(tmpDir, nil)
 	svc := New(store, gm, nil)
 	return svc, tmpDir, gm
+}
+
+func TestSQLServiceKeepsSameGroupIDSeparateAcrossPlatforms(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "memory.db"))
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	gm := memory.NewSQLGroupManager(db, "test-instance", nil)
+	for _, platform := range []string{"qq", "telegram"} {
+		store, err := gm.GetGroupStoreForPlatform(platform, "shared-id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(memory.MemoryEntry{ID: platform + "-entry", Owner: memory.GroupOwnerExplicit,
+			Content: platform + " memory", Source: memory.SourceManual, CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := New(memory.NewSQLStore(db, "test-instance"), gm, nil)
+	listed, err := svc.ListGroups(context.Background(), connect.NewRequest(&v1.ListGroupsRequest{}))
+	if err != nil || len(listed.Msg.Groups) != 2 {
+		t.Fatalf("platform groups not listed separately: %#v, %v", listed, err)
+	}
+	for _, platform := range []string{"qq", "telegram"} {
+		response, err := svc.ListMemories(context.Background(), connect.NewRequest(&v1.ListMemoriesRequest{
+			Scope: "group", GroupId: "shared-id", Platform: platform,
+		}))
+		if err != nil || len(response.Msg.Memories) != 1 || response.Msg.Memories[0].Content != platform+" memory" {
+			t.Fatalf("wrong %s memory: %#v, %v", platform, response, err)
+		}
+	}
 }
 
 func TestService_Finding1_AddMemory_ManualNotDiscardedAndPersisted(t *testing.T) {

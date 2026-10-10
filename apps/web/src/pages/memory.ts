@@ -1,4 +1,5 @@
 import { createInstanceAPI } from '../api/client';
+import { instanceState } from '../instance-state';
 import {
   MemoryEntry,
   GetMemoryStatsResponse,
@@ -26,6 +27,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
   // Group state
   let groups: GroupSummary[] = [];
   let selectedGroupId = '';
+  let selectedGroupPlatform = '';
   let selectedGroupProfile: GroupProfile | null = null;
   let loadingProfile = false;
 
@@ -48,6 +50,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             <p class="page-description">管理 Bot 隔离化长期记忆、群聊档案与成员称呼</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap" id="memory-header-actions">
+            <a class="btn btn-outline" href="/api/instances/${instanceState.selected!.id}/backup/memories" download="memory.json">下载记忆备份</a>
+            <a class="btn btn-outline" href="#/settings/backup">快速导入</a>
             <div class="flex items-center gap-1" style="width: 13rem;">
               <input
                 type="search"
@@ -235,7 +239,10 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
     const groupSelect = container.querySelector<HTMLSelectElement>('#group-select');
     groupSelect?.addEventListener('change', () => {
-      selectedGroupId = groupSelect.value;
+      const selected = groups[Number(groupSelect.value)];
+      selectedGroupId = selected?.groupId || '';
+      selectedGroupPlatform = selected?.platform || '';
+      api.setMemoryPlatform(selectedGroupPlatform);
       tokenStack.reset();
       selectedIds.clear();
       void loadGroupProfileAndMemories();
@@ -293,11 +300,10 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       const res = await api.listGroups();
       if (isUnmounted) return;
       groups = res.groups || [];
-      if (!selectedGroupId && groups.length > 0) {
-        selectedGroupId = groups[0].groupId;
-      } else if (selectedGroupId && !groups.some((g) => g.groupId === selectedGroupId)) {
-        selectedGroupId = groups.length > 0 ? groups[0].groupId : '';
-      }
+      const selected = groups.find((g) => g.groupId === selectedGroupId && g.platform === selectedGroupPlatform) || groups[0];
+      selectedGroupId = selected?.groupId || '';
+      selectedGroupPlatform = selected?.platform || '';
+      api.setMemoryPlatform(selectedGroupPlatform);
       renderGroupSelector();
       if (selectedGroupId) {
         await loadGroupProfileAndMemories();
@@ -324,9 +330,9 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     groupSelect.disabled = false;
     groupSelect.innerHTML = groups
       .map(
-        (g) => `
-        <option value="${escapeHtml(g.groupId)}" ${g.groupId === selectedGroupId ? 'selected' : ''}>
-          ${escapeHtml(g.groupName ? `${g.groupName} (${g.groupId})` : `群 ${g.groupId}`)} · ${g.memberCount} 人 · ${g.memoryCount} 条
+        (g, index) => `
+        <option value="${index}" ${g.groupId === selectedGroupId && g.platform === selectedGroupPlatform ? 'selected' : ''}>
+          ${escapeHtml(g.platform || 'qq')} · ${escapeHtml(g.groupName ? `${g.groupName} (${g.groupId})` : `群 ${g.groupId}`)} · ${g.memberCount} 人 · ${g.memoryCount} 条
         </option>
       `,
       )
@@ -463,7 +469,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       return;
     }
 
-    const currentGroupSummary = groups.find((g) => g.groupId === selectedGroupId);
+    const currentGroupSummary = groups.find((g) => g.groupId === selectedGroupId && g.platform === selectedGroupPlatform);
     const groupName =
       selectedGroupProfile?.groupName || currentGroupSummary?.groupName || '未命名群聊';
     const memberCount =
