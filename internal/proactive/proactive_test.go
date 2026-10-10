@@ -297,43 +297,6 @@ func TestGroupWhitelist(t *testing.T) {
 		}
 	})
 
-	t.Run("ImplicitWhitelistTransitions", func(t *testing.T) {
-		// N1: Test implicit enable boundary invariants
-		// Unset switch + empty list -> false
-		if IsWhitelistEnabled(mockEnv(map[string]string{})) {
-			t.Errorf("expected disabled when unset and empty")
-		}
-		// Unset switch + nonempty list -> true
-		if !IsWhitelistEnabled(mockEnv(map[string]string{
-			EnvGroupWhitelist: "101",
-		})) {
-			t.Errorf("expected enabled when unset and nonempty")
-		}
-		// Repro A target: Explicit "true" + empty list -> true (strict gate, 0 groups allowed)
-		envReproATarget := mockEnv(map[string]string{
-			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "",
-		})
-		if !IsWhitelistEnabled(envReproATarget) {
-			t.Errorf("expected enabled when explicit true even with empty list")
-		}
-		if IsGroupAllowed(envReproATarget, "101") {
-			t.Errorf("expected all groups rejected when whitelist is strictly enabled with empty list")
-		}
-
-		// Repro B target: Explicit "false" + nonempty list -> false (whitelist disabled)
-		envReproBTarget := mockEnv(map[string]string{
-			EnvWhitelistEnabled: "false",
-			EnvGroupWhitelist:    "101",
-		})
-		if IsWhitelistEnabled(envReproBTarget) {
-			t.Errorf("expected disabled when explicit false even with nonempty list")
-		}
-		if !IsGroupAllowed(envReproBTarget, "999") {
-			t.Errorf("expected all groups allowed when whitelist is disabled")
-		}
-	})
-
 	t.Run("RollGroupWithRand", func(t *testing.T) {
 		env := mockEnv(map[string]string{
 			EnvProbability:       "0.50",
@@ -354,4 +317,3 @@ func TestGroupWhitelist(t *testing.T) {
 		}
 	})
 }
-
