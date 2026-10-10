@@ -2944,12 +2944,12 @@ func TestGroupDistillation_DropNoIDTurnDoesNotEraseHistoricalMemoriesOfSender(t 
 		Content:  "没有消息ID的新发言",
 		// MessageID is deliberately empty
 	}
-	session.StageGroupCompactMessage(stagedItem, 50, "")
+	guard, _ := session.StageGroupCompactWithGuard(stagedItem, 50, senderAlice, nil, "")
 
-	// 3. Drop the failed fresh turn with empty messageID and sender Alice
-	dropped := session.DropGroupCompactMessage("", senderAlice)
+	// 3. Drop the failed fresh turn with empty messageID and sender Alice via guard
+	dropped := guard.Drop()
 	if !dropped {
-		t.Fatalf("expected DropGroupCompactMessage to drop staged message")
+		t.Fatalf("expected guard.Drop to drop staged message")
 	}
 
 	// 4. Verify historical SourceDistill and manual memories in GroupStore are 100% preserved
@@ -3229,7 +3229,7 @@ func TestStagedGroupCompact_CommittedPassiveChatterPlusFailedIDLessWakeTurn_From
 		MessageID: "",
 		Time:      "14:00:15",
 	}
-	session.StageGroupCompactMessage(msgWake2, 50, "")
+	guardD, _ := session.StageGroupCompactWithGuard(msgWake2, 50, senderAlice, nil, "")
 
 	session.mu.Lock()
 	if len(session.groupCompactBuffer) != 3 {
@@ -3237,10 +3237,15 @@ func TestStagedGroupCompact_CommittedPassiveChatterPlusFailedIDLessWakeTurn_From
 	}
 	session.mu.Unlock()
 
-	// Call fallback DropGroupCompactMessage("", senderAlice)
+	// Call fallback DropGroupCompactMessage("", senderAlice) - must NOT guess or drop anything!
 	droppedFallback := session.DropGroupCompactMessage("", senderAlice)
-	if !droppedFallback {
-		t.Fatalf("expected DropGroupCompactMessage to drop staged entry")
+	if droppedFallback {
+		t.Fatalf("expected DropGroupCompactMessage without sequence or messageID to return false and not drop staged entry")
+	}
+
+	// Now drop via guardD
+	if !guardD.Drop() {
+		t.Fatalf("expected guardD.Drop() to succeed")
 	}
 
 	session.mu.Lock()
@@ -3354,5 +3359,166 @@ func TestPromoteGroupCompactMessage_EmptyMessageID_ReturnsFalseAndPromotesNothin
 	_, ok := session.SnapshotGroupCompact(1)
 	if ok {
 		t.Errorf("SnapshotGroupCompact(1) should fail when all items are staged")
+	}
+}
+
+func TestStagedGroupCompact_TwoDistinctSequencesSameMessageID_EachGuardAffectsOnlyOwnSlot(t *testing.T) {
+	session := &SessionContext{}
+	senderAlice := "syn_user_alice"
+	senderBob := "syn_user_bob"
+	sharedMessageID := "dup_msg_id_1001"
+
+	msgA := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "来自爱丽丝的发言A",
+		MessageID: sharedMessageID,
+		Time:      "16:00:00",
+	}
+	msgB := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "鲍勃",
+		SenderID:  senderBob,
+		Content:   "来自鲍勃的发言B",
+		MessageID: sharedMessageID,
+		Time:      "16:00:01",
+	}
+
+	guardA, _ := session.StageGroupCompactWithGuard(msgA, 50, senderAlice, nil, sharedMessageID)
+	guardB, _ := session.StageGroupCompactWithGuard(msgB, 50, senderBob, nil, sharedMessageID)
+
+	if guardA.Sequence() == 0 || guardB.Sequence() == 0 {
+		t.Fatalf("expected nonzero sequence for both guards, got A=%d, B=%d", guardA.Sequence(), guardB.Sequence())
+	}
+	if guardA.Sequence() == guardB.Sequence() {
+		t.Fatalf("expected distinct sequences, got %d for both", guardA.Sequence())
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 2 {
+		t.Fatalf("expected 2 items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if !session.groupCompactBuffer[0].staged || !session.groupCompactBuffer[1].staged {
+		t.Fatalf("both items must initially be staged")
+	}
+	session.mu.Unlock()
+
+	// 1. Promote turn A only.
+	// Because sequence > 0, Promote must match strictly on sequence, NOT on shared messageID.
+	// Slot B must remain staged!
+	if !guardA.Promote() {
+		t.Fatalf("expected guardA.Promote() to succeed")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 2 {
+		t.Fatalf("expected 2 items in buffer, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].staged {
+		t.Errorf("expected slot A to be promoted (staged=false)")
+	}
+	if !session.groupCompactBuffer[1].staged {
+		t.Errorf("CRITICAL BUG: slot B was prematurely promoted by guardA sharing messageID %q", sharedMessageID)
+	}
+	session.mu.Unlock()
+
+	// Snapshot must not be ready because slot B is still staged barrier.
+	if snap, ready := session.SnapshotGroupCompact(2); ready || len(snap.Messages) > 0 {
+		t.Errorf("expected SnapshotGroupCompact to be blocked by staged slot B, got ready=%v, len=%d", ready, len(snap.Messages))
+	}
+
+	// 2. Drop turn B only.
+	// Because sequence > 0, Drop must match strictly on slot B's sequence, NOT on shared messageID.
+	// Slot A must survive and remain committed!
+	if !guardB.Drop() {
+		t.Fatalf("expected guardB.Drop() to succeed")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("expected exactly 1 item in buffer after dropping B, got %d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].sequence != guardA.Sequence() {
+		t.Errorf("expected remaining item to be slot A (seq %d), got seq %d", guardA.Sequence(), session.groupCompactBuffer[0].sequence)
+	}
+	if session.groupCompactBuffer[0].staged {
+		t.Errorf("remaining slot A should be committed (staged=false)")
+	}
+	if session.groupCompactBuffer[0].message.Content != msgA.Content {
+		t.Errorf("remaining item content mismatch: expected %q, got %q", msgA.Content, session.groupCompactBuffer[0].message.Content)
+	}
+	session.mu.Unlock()
+
+	// Now snapshot must succeed and contain only slot A.
+	snap, ok := session.SnapshotGroupCompact(1)
+	if !ok {
+		t.Fatalf("expected SnapshotGroupCompact to succeed after dropping barrier B")
+	}
+	if len(snap.Messages) != 1 || snap.Messages[0].Content != msgA.Content {
+		t.Errorf("expected snapshot to contain slot A, got %+v", snap.Messages)
+	}
+}
+
+func TestStagedGroupCompact_UnstagedTurnSendFailure_DoesNotDropConcurrentNoIDStagedTurnOfSameUser(t *testing.T) {
+	session := &SessionContext{}
+	senderAlice := "syn_user_alice"
+
+	// Sender Alice concurrently has an in-flight legitimate wake turn B (staged, with empty message ID)
+	msgB := GroupCompactMessage{
+		Role:      "user",
+		Sender:    "爱丽丝",
+		SenderID:  senderAlice,
+		Content:   "Alice legitimate wake turn B",
+		MessageID: "",
+		Time:      "16:10:00",
+	}
+	guardB, _ := session.StageGroupCompactWithGuard(msgB, 50, senderAlice, nil, "")
+	seqB := guardB.Sequence()
+	if seqB == 0 {
+		t.Fatalf("expected nonzero sequence for turn B")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 || !session.groupCompactBuffer[0].staged {
+		t.Fatalf("expected 1 staged item in buffer for turn B")
+	}
+	session.mu.Unlock()
+
+	// Turn A is an unstaged turn from the same user (e.g. mention-only / empty content, stage returned nil guard).
+	// Turn A fails to send, triggering the fallback DropGroupCompactMessage("", senderAlice).
+	// When sequence == 0 && msgID == "", DropGroupCompactSlot must return false and NOT touch/guess any buffer item!
+	droppedFallback := session.DropGroupCompactMessage("", senderAlice)
+	if droppedFallback {
+		t.Errorf("expected DropGroupCompactMessage(\"\", sender) to return false and not drop anything")
+	}
+
+	// Turn B must completely survive and remain staged
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 {
+		t.Fatalf("CRITICAL BUG: turn A send failure dropped turn B! buffer length=%d", len(session.groupCompactBuffer))
+	}
+	if session.groupCompactBuffer[0].sequence != seqB {
+		t.Errorf("expected surviving item to be turn B (seq %d), got seq %d", seqB, session.groupCompactBuffer[0].sequence)
+	}
+	if !session.groupCompactBuffer[0].staged {
+		t.Errorf("turn B must still be staged")
+	}
+	session.mu.Unlock()
+
+	// Turn B completes successfully and promotes
+	if !guardB.Promote() {
+		t.Fatalf("expected guardB.Promote() to succeed")
+	}
+
+	session.mu.Lock()
+	if len(session.groupCompactBuffer) != 1 || session.groupCompactBuffer[0].staged {
+		t.Fatalf("expected turn B to be committed in buffer")
+	}
+	session.mu.Unlock()
+
+	snap, ok := session.SnapshotGroupCompact(1)
+	if !ok || len(snap.Messages) != 1 || snap.Messages[0].Content != msgB.Content {
+		t.Errorf("expected snapshot with turn B, got ok=%v, snap=%+v", ok, snap)
 	}
 }

@@ -760,7 +760,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				if turn != nil && turn.StagedGuard() != nil {
 					turn.StagedGuard().Promote()
-				} else {
+				} else if msgID != "" {
 					session.PromoteGroupCompactMessage(msgID)
 				}
 				botReply := extractBotReplyText(replyText)
@@ -883,7 +883,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Drop()
-					} else {
+					} else if msgID != "" {
 						session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
 					}
 					if engine != nil && engine.GroupCompactor != nil {
@@ -924,7 +924,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				if turn != nil && turn.StagedGuard() != nil {
 					turn.StagedGuard().Promote()
-				} else {
+				} else if msgID != "" {
 					session.PromoteGroupCompactMessage(msgID)
 				}
 				if engine != nil && engine.GroupCompactor != nil && !conn.mock {
@@ -1002,7 +1002,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Promote()
-					} else {
+					} else if msgID != "" {
 						session.PromoteGroupCompactMessage(msgID)
 					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
@@ -1126,7 +1126,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			if turn != nil && turn.StagedGuard() != nil {
 				turn.StagedGuard().Drop()
-			} else {
+			} else if msgID != "" {
 				session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
 			}
 		}

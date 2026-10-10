@@ -2897,3 +2897,104 @@ func TestAstrBot_GroupCompact_DeliveryFailure_DropsStagedSlot(t *testing.T) {
 		t.Fatalf("期望投递失败后无快照，实际: ok=%v msgs=%+v", ok, snap.Messages)
 	}
 }
+
+func TestAstrBot_GroupCompact_UnstagedTurnSendFailure_DoesNotDropConcurrentNoIDStagedTurnOfSameUser(t *testing.T) {
+	conn, _, cleanup := setupTestAstrBotWS(t)
+	defer cleanup()
+	// 关闭连接使后续 sendDirectReply 失败
+	conn.Close()
+
+	engine := newTestEngine(&mockLLMProvider{
+		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			return &core.ChatResponse{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "测试回复",
+				},
+			}, nil
+		},
+	})
+	tmpDir := t.TempDir()
+	store, err := groupsummary.NewStore(filepath.Join(tmpDir, "group_summaries.json"))
+	if err != nil {
+		t.Fatalf("failed to create summary store: %v", err)
+	}
+	engine.GroupCompactor = llm.NewGroupCompactor(&mockLLMProvider{}, store, "mock-model", 10, 10*time.Second)
+	engine.GroupCompactor.SetMaxBufferSize(100)
+
+	senderAlice := "usr-alice-concurrent-001"
+	groupKey := "grp-concurrent-no-id-001"
+
+	// 1. 同一用户 Alice 先有一个正在处理中的合法唤醒轮次 B（无平台 MessageID，但成功 staged 到 buffer）
+	eventB := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "",
+		UserID:      senderAlice,
+		SenderName:  "Alice",
+		GroupID:     groupKey,
+		GroupName:   "ConcurrentNoIDGroup",
+		Content:     "Alice valid staged question B",
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	sess := engine.SessionManager.GetOrCreate(sessionKey(eventB))
+	guardB := stageGroupCompactMessage(eventB, engine)
+	if guardB == nil {
+		t.Fatalf("expected guardB to be non-nil for event with text content")
+	}
+
+	// 验证轮次 B 处于 staged 状态
+	initialBuf := sess.GroupCompactBufferMessages()
+	if len(initialBuf) != 1 || initialBuf[0].Content != eventB.Content {
+		t.Fatalf("expected 1 staged message in buffer for turn B, got %+v", initialBuf)
+	}
+
+	// 2. Alice 发送了一个仅包含纯 @mention 无文本的唤醒消息 A（未 staged，guard 为 nil，且 MessageID 为空）
+	eventA := Event{
+		Type:        "event",
+		EventType:   "message",
+		MessageID:   "",
+		UserID:      senderAlice,
+		SenderName:  "Alice",
+		GroupID:     groupKey,
+		GroupName:   "ConcurrentNoIDGroup",
+		Content:     "   ", // 纯空白/无可见文本 -> stage 返回 nil
+		Platform:    "astrbot",
+		MessageType: "group",
+		IsWake:      true,
+		Timestamp:   time.Now().Unix(),
+	}
+	turnA := sess.ReserveTurn()
+	guardA := stageGroupCompactMessage(eventA, engine)
+	if guardA != nil {
+		t.Fatalf("expected guardA to be nil for empty-content mention turn")
+	}
+	turnA.AttachStagedGuard(guardA)
+
+	// 轮次 A 发送失败 (conn 已关闭)
+	processEvent(conn, eventA, engine, turnA, nil)
+
+	// 3. 核心断言：未 staged 的轮次 A 发生投递失败时，严禁通过 senderID 瞎猜并丢弃用户 Alice 的其他待定轮次 B！
+	midBuf := sess.GroupCompactBufferMessages()
+	if len(midBuf) != 1 || midBuf[0].Content != eventB.Content {
+		t.Fatalf("CRITICAL REGRESSION: unstaged turn A delivery failure dropped turn B! buf: %+v", midBuf)
+	}
+
+	// 4. 轮次 B 最终正常完成并 promote
+	if !guardB.Promote() {
+		t.Fatalf("expected guardB.Promote() to succeed")
+	}
+	// turnB finished
+
+	finalBuf := sess.GroupCompactBufferMessages()
+	if len(finalBuf) != 1 || finalBuf[0].Content != eventB.Content {
+		t.Fatalf("expected turn B to remain committed in buffer, got: %+v", finalBuf)
+	}
+	snap, ok := sess.SnapshotGroupCompact(1)
+	if !ok || len(snap.Messages) != 1 || snap.Messages[0].Content != eventB.Content {
+		t.Fatalf("expected snapshot to succeed with turn B, got ok=%v snap=%+v", ok, snap)
+	}
+}

@@ -1190,6 +1190,11 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 	return bufLen
 }
 
+// StageGroupCompactSlot appends one visible group message marked as staged and returns both the assigned sequence and buffer length.
+func (s *SessionContext) StageGroupCompactSlot(item any, maxBufferSize int, messageID ...string) (uint64, int) {
+	return s.appendGroupCompactInternal(item, true, maxBufferSize, messageID...)
+}
+
 // StageGroupCompactMessage appends one visible group message to the running
 // compact buffer marked as staged (not eligible for compactor snapshot until promoted).
 // It preserves ingress arrival ordering while isolating unconfirmed wake turns.
@@ -1280,7 +1285,7 @@ func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBu
 // StagedGroupCompactGuard guarantees exactly-once finalization for staged group compact sequence slots.
 type StagedGroupCompactGuard struct {
 	session   *SessionContext
-	sequence  uint64
+	sequences []uint64
 	messageID string
 	senderID  string
 	onPromote func()
@@ -1289,21 +1294,43 @@ type StagedGroupCompactGuard struct {
 
 // NewStagedGroupCompactGuard creates a guard that guarantees exactly-once finalization of a staged sequence slot.
 func (s *SessionContext) NewStagedGroupCompactGuard(sequence uint64, messageID, senderID string, onPromote func()) *StagedGroupCompactGuard {
+	var seqs []uint64
+	if sequence > 0 {
+		seqs = []uint64{sequence}
+	}
 	return &StagedGroupCompactGuard{
 		session:   s,
-		sequence:  sequence,
+		sequences: seqs,
 		messageID: strings.TrimSpace(messageID),
 		senderID:  strings.TrimSpace(senderID),
 		onPromote: onPromote,
 	}
 }
 
-// Sequence returns the internal buffer sequence bound to this guard slot.
+// Sequence returns the primary internal buffer sequence bound to this guard slot.
 func (g *StagedGroupCompactGuard) Sequence() uint64 {
-	if g == nil {
+	if g == nil || len(g.sequences) == 0 {
 		return 0
 	}
-	return g.sequence
+	return g.sequences[0]
+}
+
+// AddSequence binds an additional buffer slot (such as an intermediate assistant response) to this guard.
+func (g *StagedGroupCompactGuard) AddSequence(seq uint64) {
+	if g == nil || seq == 0 {
+		return
+	}
+	if !slices.Contains(g.sequences, seq) {
+		g.sequences = append(g.sequences, seq)
+	}
+}
+
+// Sequences returns all internal buffer sequences bound to this guard.
+func (g *StagedGroupCompactGuard) Sequences() []uint64 {
+	if g == nil {
+		return nil
+	}
+	return append([]uint64(nil), g.sequences...)
 }
 
 // MessageID returns the upstream message ID bound to this guard slot.
@@ -1341,7 +1368,11 @@ func (g *StagedGroupCompactGuard) Promote() bool {
 	}
 	promoted := false
 	if g.session != nil {
-		promoted = g.session.PromoteGroupCompactSlot(g.sequence, g.messageID)
+		for _, seq := range g.sequences {
+			if g.session.PromoteGroupCompactSlot(seq, g.messageID) {
+				promoted = true
+			}
+		}
 	}
 	if g.onPromote != nil {
 		g.onPromote()
@@ -1354,10 +1385,15 @@ func (g *StagedGroupCompactGuard) Drop() bool {
 	if g == nil || !g.finalized.CompareAndSwap(false, true) {
 		return false
 	}
+	dropped := false
 	if g.session != nil {
-		return g.session.DropGroupCompactSlot(g.sequence, g.messageID, g.senderID)
+		for _, seq := range g.sequences {
+			if g.session.DropGroupCompactSlot(seq, g.messageID, g.senderID) {
+				dropped = true
+			}
+		}
 	}
-	return false
+	return dropped
 }
 
 // Done ensures the staged message is finalized exactly once. If neither Promote nor Drop
@@ -1370,7 +1406,7 @@ func (g *StagedGroupCompactGuard) Done() {
 }
 
 // PromoteGroupCompactSlot marks a specific staged message slot as committed.
-// If sequence > 0, it targets the exact slot matching sequence and staged == true.
+// If sequence > 0, it targets strictly the exact slot matching sequence and staged == true.
 // If sequence == 0 and messageID != "", it targets staged items matching messageID.
 // If both sequence is 0 and messageID is empty, it returns false to ensure unverified
 // staged messages are never prematurely committed.
@@ -1393,9 +1429,6 @@ func (s *SessionContext) PromoteGroupCompactSlot(sequence uint64, messageID stri
 		}
 		if sequence > 0 {
 			if s.groupCompactBuffer[i].sequence == sequence {
-				s.groupCompactBuffer[i].staged = false
-				promoted = true
-			} else if msgID != "" && s.groupCompactBuffer[i].message.MessageID == msgID {
 				s.groupCompactBuffer[i].staged = false
 				promoted = true
 			}
@@ -1427,10 +1460,12 @@ func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize 
 	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
 }
 
-// DropGroupCompactSlot removes group compact messages matching sequence (if > 0),
-// messageID (if non-empty), or uncommitted staged items of senderID (if sequence == 0 and messageID is empty).
+// DropGroupCompactSlot removes group compact messages matching sequence (if > 0)
+// or messageID (if sequence == 0 and messageID is non-empty).
 // When sequence > 0, it removes strictly the exact staged slot without touching committed
-// messages or other staged turns from the same sender.
+// messages or other staged turns, even if they share the same upstream message ID.
+// When sequence == 0 and messageID is empty, it returns false and never guesses or deletes
+// any buffer items.
 // It increments groupCompactGeneration to invalidate any in-flight compaction snapshot.
 // If messageID is non-empty, it also rolls back summaries polluted by messageID, records
 // messageID revocation, invalidates associated snapshot sources, aborts in-flight distillation barriers,
@@ -1442,7 +1477,11 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 	s.mu.Lock()
 
 	msgID := strings.TrimSpace(messageID)
-	sndID := strings.TrimSpace(senderID)
+	if sequence == 0 && msgID == "" {
+		s.mu.Unlock()
+		return false
+	}
+
 	dropped := false
 
 	if len(s.groupCompactBuffer) > 0 {
@@ -1453,35 +1492,11 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 					dropped = true
 					continue
 				}
-				if msgID != "" && item.message.MessageID == msgID {
-					dropped = true
-					continue
-				}
 				filtered = append(filtered, item)
 			}
 		} else if msgID != "" {
 			for _, item := range s.groupCompactBuffer {
 				if item.message.MessageID == msgID {
-					dropped = true
-					continue
-				}
-				filtered = append(filtered, item)
-			}
-		} else if sndID != "" {
-			// Sequence == 0 and messageID == "":
-			// Scope cleanup strictly to UNCOMMITTED staged entries from this sender.
-			// NEVER purge committed messages from the buffer!
-			// To avoid dropping independent concurrent staged wake turns from the same sender,
-			// only drop the most recent staged entry for senderID.
-			lastStagedIdx := -1
-			for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
-				if s.groupCompactBuffer[i].staged && s.groupCompactBuffer[i].message.SenderID == sndID {
-					lastStagedIdx = i
-					break
-				}
-			}
-			for i, item := range s.groupCompactBuffer {
-				if i == lastStagedIdx {
 					dropped = true
 					continue
 				}
@@ -1576,9 +1591,8 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 	return dropped || len(barriersToAbort) > 0
 }
 
-// DropGroupCompactMessage removes group compact messages matching messageID (if non-empty)
-// or the most recent uncommitted staged entry of senderID (if messageID is empty).
-// Unrelated committed messages from the sender are strictly preserved.
+// DropGroupCompactMessage removes group compact messages matching messageID (if non-empty).
+// If messageID is empty, it returns false and never guesses or deletes any buffer items.
 func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) bool {
 	return s.DropGroupCompactSlot(0, messageID, senderID)
 }
