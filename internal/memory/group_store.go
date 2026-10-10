@@ -255,6 +255,9 @@ func (s *GroupStore) ObserveMember(userID, nickname, card, role, source string) 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.observeSQLMember(userID, nickname, card, role, source)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -309,6 +312,9 @@ func (s *GroupStore) UpdateGroupName(name string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLGroupName(name)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -331,6 +337,9 @@ func (s *GroupStore) UpdateMemberRole(userID string, role GroupRole) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLMemberFields(userID, role, "", nil, true)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -360,6 +369,9 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLMemberFields(userID, "", preferredName, aliases, false)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -459,6 +471,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	}
 
 	now := time.Now()
+	changedIDs := make(map[string]struct{}, len(entries))
 	for i := range entries {
 		incoming := &entries[i]
 		incoming.ScopeType = ScopeGroup
@@ -510,6 +523,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 			}
 			brain.Entries = append(brain.Entries, *incoming)
 		}
+		changedIDs[incoming.ID] = struct{}{}
 	}
 
 	// Initial pre-commit verification before hook
@@ -539,6 +553,20 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		return ErrConditionFailed
 	}
 
+	if s.sql != nil {
+		changed := make([]MemoryEntry, 0, len(changedIDs))
+		seenIDs := make(map[string]struct{}, len(brain.Entries))
+		for _, entry := range brain.Entries {
+			if _, duplicate := seenIDs[entry.ID]; duplicate {
+				return fmt.Errorf("duplicate memory ID %s", entry.ID)
+			}
+			seenIDs[entry.ID] = struct{}{}
+			if _, ok := changedIDs[entry.ID]; ok {
+				changed = append(changed, entry)
+			}
+		}
+		return s.sql.upsertEntries(changed)
+	}
 	return s.saveMemoryLocked(brain)
 }
 
@@ -763,6 +791,9 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 func (s *GroupStore) IncrementAccessCount(memoryIDs ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.sql.incrementAccessCounts(memoryIDs)
+	}
 
 	brain, err := s.loadMemoryLocked()
 	if err != nil {

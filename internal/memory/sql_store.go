@@ -61,28 +61,31 @@ func (b sqlBrainStore) load() (*BrainData, error) {
 		return nil, err
 	}
 	rows.Close()
+	entryIndex := make(map[string]int, len(brain.Entries))
 	for i := range brain.Entries {
-		entry := &brain.Entries[i]
-		tags, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT tag FROM memory_tags
-			WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? AND memory_id = ? ORDER BY tag`),
-			b.instanceID, b.scope, b.platform, b.groupID, entry.ID)
-		if err != nil {
-			return nil, err
-		}
-		for tags.Next() {
-			var tag string
-			if err := tags.Scan(&tag); err != nil {
-				tags.Close()
-				return nil, err
-			}
-			entry.Tags = append(entry.Tags, tag)
-		}
-		if err := tags.Err(); err != nil {
+		entryIndex[brain.Entries[i].ID] = i
+	}
+	tags, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT memory_id, tag FROM memory_tags
+		WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? ORDER BY memory_id, tag`),
+		b.instanceID, b.scope, b.platform, b.groupID)
+	if err != nil {
+		return nil, err
+	}
+	for tags.Next() {
+		var id, tag string
+		if err := tags.Scan(&id, &tag); err != nil {
 			tags.Close()
 			return nil, err
 		}
-		tags.Close()
+		if i, ok := entryIndex[id]; ok {
+			brain.Entries[i].Tags = append(brain.Entries[i].Tags, tag)
+		}
 	}
+	if err := tags.Err(); err != nil {
+		tags.Close()
+		return nil, err
+	}
+	tags.Close()
 	archives, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT merged_id, owner, merged_at, sources_json
 		FROM memory_merge_archives WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? ORDER BY merged_at, merged_id`),
 		b.instanceID, b.scope, b.platform, b.groupID)
@@ -116,6 +119,95 @@ func (b sqlBrainStore) save(brain *BrainData) error {
 	defer tx.Rollback()
 	if err := b.saveTx(ctx, tx, brain); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func (b sqlBrainStore) incrementAccessCounts(memoryIDs []string) error {
+	ids := make(map[string]struct{}, len(memoryIDs))
+	for _, id := range memoryIDs {
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	tx, err := b.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for id := range ids {
+		if _, err := tx.ExecContext(ctx, b.db.Bind(`UPDATE memory_entries
+			SET access_count = access_count + 1, updated_at = ?
+			WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? AND id = ?`),
+			now, b.instanceID, b.scope, b.platform, b.groupID, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (b sqlBrainStore) appendEntries(entries []MemoryEntry) error {
+	return b.writeEntries(entries, false)
+}
+
+func (b sqlBrainStore) upsertEntries(entries []MemoryEntry) error {
+	return b.writeEntries(entries, true)
+}
+
+func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
+	ctx := context.Background()
+	tx, err := b.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, entry := range entries {
+		if entry.ID == "" {
+			return fmt.Errorf("memory ID cannot be empty")
+		}
+		merged, err := json.Marshal(entry.MergedFrom)
+		if err != nil {
+			return err
+		}
+		if update {
+			if _, err = tx.ExecContext(ctx, b.db.Bind(`DELETE FROM memory_tags
+				WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? AND memory_id = ?`),
+				b.instanceID, b.scope, b.platform, b.groupID, entry.ID); err != nil {
+				return err
+			}
+		}
+		query := `INSERT INTO memory_entries (
+			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
+			source_message_id, source_sender_id, source, visibility, created_at, updated_at, access_count, merged_from_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		if update {
+			query += ` ON CONFLICT (instance_id, scope_type, platform, group_id, id) DO UPDATE SET
+				owner = excluded.owner, owner_type = excluded.owner_type, content = excluded.content,
+				summary = excluded.summary, evidence = excluded.evidence,
+				source_message_id = excluded.source_message_id, source_sender_id = excluded.source_sender_id,
+				source = excluded.source, visibility = excluded.visibility,
+				created_at = excluded.created_at, updated_at = excluded.updated_at,
+				access_count = excluded.access_count, merged_from_json = excluded.merged_from_json`
+		}
+		if _, err = tx.ExecContext(ctx, b.db.Bind(query), b.instanceID, b.scope, b.platform, b.groupID,
+			entry.ID, entry.Owner, entry.OwnerType, entry.Content, entry.Summary, entry.Evidence,
+			entry.SourceMessageID, entry.SourceSenderID, entry.Source, entry.Visibility,
+			entry.CreatedAt.UTC().Format(time.RFC3339Nano), entry.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			entry.AccessCount, string(merged)); err != nil {
+			return err
+		}
+		for _, tag := range entry.Tags {
+			if _, err = tx.ExecContext(ctx, b.db.Bind(`INSERT INTO memory_tags
+				(instance_id, scope_type, platform, group_id, memory_id, tag) VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT DO NOTHING`), b.instanceID, b.scope, b.platform, b.groupID, entry.ID, tag); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit()
 }

@@ -50,6 +50,21 @@ func NewSQLGroupManager(db *storage.DB, instanceID string, scope *runtimescope.S
 	return &GroupManager{db: db, instanceID: instanceID, scope: scope, groups: make(map[string]*GroupStore)}
 }
 
+// CarrySQLStoresFrom preserves per-group locks shared with live sessions when a
+// runtime is rebuilt over the same instance database.
+func (m *GroupManager) CarrySQLStoresFrom(old *GroupManager) {
+	if m == nil || old == nil || m == old || m.db == nil || m.db != old.db || m.instanceID != old.instanceID {
+		return
+	}
+	old.mu.RLock()
+	defer old.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, store := range old.groups {
+		m.groups[key] = store
+	}
+}
+
 // GetGroupStore returns the GroupStore for groupID, loading or creating it on demand.
 // GroupID is canonicalized and hashed through SafeGroupKey to guarantee that distinct
 // representations of the same group share the exact same underlying GroupStore instance and mutex.

@@ -40,6 +40,10 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/storage -run '^TestPostgresMigration' -count=1 -v
+      - name: Test PostgreSQL memory writes
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/memory -run '^TestPostgresMemoryHotpaths$' -count=1 -v
 
   ci:
     runs-on: ubuntu-latest

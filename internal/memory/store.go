@@ -122,11 +122,6 @@ func (s *Store) SaveEntriesConditionallyContext(
 		defer barrier.EndCommit()
 	}
 
-	brain, err := s.load()
-	if err != nil {
-		return err
-	}
-
 	now := time.Now()
 	for i := range entries {
 		entries[i].UpdatedAt = now
@@ -140,9 +135,15 @@ func (s *Store) SaveEntriesConditionallyContext(
 			entries[i].OwnerType = OwnerUser
 		}
 		entries[i].Owner = CanonicalOwner(entries[i].Owner)
-		brain.Entries = append(brain.Entries, entries[i])
 	}
-
+	if s.sql != nil {
+		return s.sql.appendEntries(entries)
+	}
+	brain, err := s.load()
+	if err != nil {
+		return err
+	}
+	brain.Entries = append(brain.Entries, entries...)
 	return s.save(brain)
 }
 
@@ -572,6 +573,9 @@ func (s *Store) IncrementAccessCount(memoryIDs ...string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.sql.incrementAccessCounts(memoryIDs)
+	}
 
 	brain, err := s.load()
 	if err != nil {
