@@ -500,6 +500,8 @@ func TestSQLProactiveSettingsApplyAndExport(t *testing.T) {
 	for _, setting := range []struct{ key, value string }{
 		{"PROACTIVE_REPLY_PROBABILITY", "0.25"},
 		{"ENABLE_PROACTIVE_REPLY", "true"},
+		{"PROACTIVE_REPLY_GROUP_WHITELIST", "synthetic-group"},
+		{"ENABLE_PROACTIVE_REPLY_WHITELIST", "true"},
 	} {
 		body, _ := json.Marshal(map[string]string{"key": setting.key, "value": setting.value})
 		request := httptest.NewRequest(http.MethodPost,
@@ -514,9 +516,15 @@ func TestSQLProactiveSettingsApplyAndExport(t *testing.T) {
 	if got := proactive.GetProbability(m.instances[info.ID].runtime.Scope.Getenv); got != 0.25 {
 		t.Fatalf("running instance used process environment or stale proactive settings: %v", got)
 	}
+	if scope := m.instances[info.ID].runtime.Scope.Getenv; !proactive.IsGroupAllowed(scope, "synthetic-group", "qq") ||
+		proactive.IsGroupAllowed(scope, "another-group", "qq") {
+		t.Fatal("running instance did not apply proactive whitelist settings")
+	}
 	exported, err := backup.ExportSettings(m.db, info.ID)
 	if err != nil || exported.Values["PROACTIVE_REPLY_PROBABILITY"] != "0.25" ||
-		exported.Values["ENABLE_PROACTIVE_REPLY"] != "true" {
+		exported.Values["ENABLE_PROACTIVE_REPLY"] != "true" ||
+		exported.Values["PROACTIVE_REPLY_GROUP_WHITELIST"] != "synthetic-group" ||
+		exported.Values["ENABLE_PROACTIVE_REPLY_WHITELIST"] != "true" {
 		t.Fatalf("proactive SQL settings were not exported: %#v, %v", exported.Values, err)
 	}
 }

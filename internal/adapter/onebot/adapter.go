@@ -258,6 +258,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		var wsConn *wsConnection
 		if a.engine != nil {
 			wsConn = newWSConnection(conn, a.engine.Scope)
+			wsConn.engine = a.engine
 			wsConn.Scope = a.engine.Scope
 		} else {
 			wsConn = newWSConnection(conn)

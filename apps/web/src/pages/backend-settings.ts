@@ -19,6 +19,7 @@ const globalKeys = new Set([
 const booleanKeys = new Set([
   'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG',
   'ENABLE_ONEBOT_ADAPTER', 'ENABLE_ASTRBOT_ADAPTER', 'BILLING_ENABLED', 'ENABLE_PROACTIVE_REPLY',
+  'ENABLE_PROACTIVE_REPLY_WHITELIST',
   'SANDBOX_ENABLED', 'ALLOW_REMOTE_MCP_MANAGEMENT', 'MCP_ENFORCE_LOCAL_TOKEN',
 ]);
 import { createInstanceAPI } from '../api/client';
@@ -29,6 +30,14 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { confirmDialog } from '../components/confirm';
 import { ProactiveSettingsSync } from './proactive-settings-sync';
+import {
+  groupIdFromSessionId,
+  parseWhitelistGroups,
+  formatGroupOption,
+  isWhitelistEnabled,
+  parseExplicitWhitelistSwitch,
+  ProactiveWhitelistSync,
+} from './proactive-whitelist';
 
 function configurationBadges(key: string): string {
   const ownership = globalKeys.has(key)
@@ -52,6 +61,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let enableReplyOther = false;
   let proactiveReplyEnabled = false;
   let proactiveReplyProbability = 0.05;
+  let proactiveWhitelistEnabled = false;
+  let proactiveWhitelistGroups: string[] = [];
+  const sessionGroupMap = new Map<string, string>();
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -141,6 +153,52 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                 <span>精度 0.01 ~ 1.00，开启后最低 0.01，支持滑块或手动输入</span>
                 <span>1.00 (100%)</span>
               </div>
+
+              <!-- Whitelist Mode Section -->
+              <div class="pt-3 mt-1 border-t border-border/60 flex flex-col gap-2.5">
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-semibold text-foreground">群聊白名单模式</span>
+                    <span class="text-[11px] text-muted font-mono">(ENABLE_PROACTIVE_REPLY_WHITELIST)</span>
+                  </div>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <span class="text-xs font-medium text-muted" id="proactive-whitelist-status-text">已停用</span>
+                    <input type="checkbox" id="proactive-whitelist-cb" class="checkbox" />
+                  </label>
+                </div>
+                <p class="text-[11px] text-muted">
+                  启用白名单模式后，仅白名单内的群聊才会触发主动回复；非白名单中的群永远不触发自动回复。
+                </p>
+
+                <div class="flex flex-col gap-2 pt-1" id="proactive-whitelist-controls">
+                  <!-- Add Group Input & Select Bar -->
+                  <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <select id="proactive-whitelist-select" class="input input-sm text-xs flex-1 min-w-[200px]">
+                      <option value="">-- 从最近会话选择群聊 --</option>
+                    </select>
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                      <input
+                        type="text"
+                        id="proactive-whitelist-input"
+                        class="input input-sm text-xs font-mono flex-1 sm:w-44"
+                        placeholder="或手动输入群号"
+                      />
+                      <button type="button" id="proactive-whitelist-add-btn" class="btn btn-secondary btn-sm text-xs shrink-0 flex items-center gap-1">
+                        ${icon('plus', 'w-3 h-3')}
+                        <span>添加群</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Tag List of Whitelisted Groups -->
+                  <div class="flex flex-col gap-1.5">
+                    <span class="text-[11px] font-medium text-muted">已配置白名单群：</span>
+                    <div id="proactive-whitelist-tags" class="flex flex-wrap gap-1.5 min-h-[1.75rem] items-center p-2 rounded bg-background border border-border">
+                      <span class="text-[11px] text-muted">暂无白名单群聊</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -225,6 +283,24 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     '#proactive-reply-prob-display',
   )!;
 
+  const proactiveWhitelistCb =
+    container.querySelector<HTMLInputElement>('#proactive-whitelist-cb')!;
+  const proactiveWhitelistStatusText = container.querySelector<HTMLElement>(
+    '#proactive-whitelist-status-text',
+  )!;
+  const proactiveWhitelistSelect = container.querySelector<HTMLSelectElement>(
+    '#proactive-whitelist-select',
+  )!;
+  const proactiveWhitelistInput = container.querySelector<HTMLInputElement>(
+    '#proactive-whitelist-input',
+  )!;
+  const proactiveWhitelistAddBtn = container.querySelector<HTMLButtonElement>(
+    '#proactive-whitelist-add-btn',
+  )!;
+  const proactiveWhitelistTags = container.querySelector<HTMLElement>(
+    '#proactive-whitelist-tags',
+  )!;
+
   const groupMentionCb =
     container.querySelector<HTMLInputElement>('#group-mention-cb')!;
   const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
@@ -263,7 +339,112 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     proactiveReplyControls.style.opacity = !enabled || isSaving ? '0.55' : '1';
     proactiveReplyControls.style.pointerEvents =
       enabled && !isSaving ? 'auto' : 'none';
+    updateWhitelistUI(isSaving);
   }
+
+  function updateWhitelistUI(isSaving = false) {
+    const state = whitelistSync.getState();
+    const enabled = state.enabled;
+    const groups = state.groups;
+    const isUnverified = state.isUnverified;
+
+    proactiveWhitelistCb.checked = enabled;
+    proactiveWhitelistCb.disabled = isSaving;
+    proactiveWhitelistSelect.disabled = isSaving;
+    proactiveWhitelistInput.disabled = isSaving;
+    proactiveWhitelistAddBtn.disabled = isSaving;
+
+    proactiveWhitelistStatusText.textContent = isSaving
+      ? '保存中...'
+      : isUnverified
+        ? '状态未确认 (已恢复)'
+        : enabled
+          ? '已启用'
+          : '已停用';
+    proactiveWhitelistStatusText.className = isSaving
+      ? 'text-xs font-medium text-muted'
+      : isUnverified
+        ? 'text-xs font-medium text-warning'
+        : enabled
+          ? 'text-xs font-medium text-primary'
+          : 'text-xs font-medium text-muted';
+
+    // Update select options
+    const currentSelected = proactiveWhitelistSelect.value;
+    const optionsHtml = ['<option value="">-- 从最近会话选择群聊 --</option>'];
+    for (const [gid, gname] of sessionGroupMap.entries()) {
+      const label = formatGroupOption(gid, gname);
+      optionsHtml.push(
+        `<option value="${escapeHtml(gid)}">${escapeHtml(label)}</option>`,
+      );
+    }
+    proactiveWhitelistSelect.innerHTML = optionsHtml.join('');
+    if (sessionGroupMap.has(currentSelected)) {
+      proactiveWhitelistSelect.value = currentSelected;
+    }
+
+    // Render tags
+    if (groups.length === 0) {
+      proactiveWhitelistTags.innerHTML =
+        '<span class="text-[11px] text-muted">白名单为空（开启状态下所有群聊均不会触发主动回复）</span>';
+    } else {
+      proactiveWhitelistTags.innerHTML = groups
+        .map((gid) => {
+          const cachedName = sessionGroupMap.get(gid);
+          const label = formatGroupOption(gid, cachedName);
+          return `
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono">
+              <span>${escapeHtml(label)}</span>
+              <button
+                type="button"
+                class="text-muted hover:text-danger ml-0.5 transition-colors cursor-pointer proactive-remove-group-btn"
+                data-group-id="${escapeHtml(gid)}"
+                title="移除群号"
+                ${isSaving ? 'disabled' : ''}
+              >&times;</button>
+            </span>
+          `;
+        })
+        .join('');
+
+      proactiveWhitelistTags
+        .querySelectorAll<HTMLButtonElement>('.proactive-remove-group-btn')
+        .forEach((btn) => {
+          btn.disabled = isSaving;
+          btn.addEventListener('click', () => {
+            if (isSaving) return;
+            const gid = btn.dataset.groupId;
+            if (gid) {
+              void whitelistSync.removeGroup(gid);
+            }
+          });
+        });
+    }
+  }
+
+  const whitelistSync = new ProactiveWhitelistSync(
+    api,
+    { enabled: proactiveWhitelistEnabled, groups: proactiveWhitelistGroups },
+    {
+      onStateChange: (state) => {
+        proactiveWhitelistEnabled = state.enabled;
+        proactiveWhitelistGroups = state.groups;
+        updateWhitelistUI(state.isSaving);
+      },
+      onError: (err) => {
+        toast.error('白名单更新失败: ' + err.message);
+      },
+      onSuccess: (msg) => {
+        toast.success(msg);
+      },
+      onReloadNeeded: async () => {
+        const ok = await loadData();
+        if (!ok) {
+          throw new Error('重新加载配置失败');
+        }
+      },
+    },
+  );
 
   const proactiveSync = new ProactiveSettingsSync(
     api,
@@ -289,13 +470,29 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   async function loadData() {
     if (isUnmounted) return;
     const loadSeq = proactiveSync.nextLoadSeq();
+    const whitelistLoadSeq = whitelistSync.nextLoadSeq();
     loading = true;
     renderTable();
 
     try {
-      const vars = await api.listEnvVars();
+      const [vars, sessionsResp] = await Promise.all([
+        api.listEnvVars(),
+        api.getSessions(100).catch(() => ({ sessions: [] })),
+      ]);
       if (isUnmounted) return;
       envVars = vars;
+
+      sessionGroupMap.clear();
+      for (const sess of sessionsResp.sessions || []) {
+        const gid = groupIdFromSessionId(sess.sessionId);
+        if (gid) {
+          if (sess.groupName) {
+            sessionGroupMap.set(gid, sess.groupName);
+          } else if (!sessionGroupMap.has(gid)) {
+            sessionGroupMap.set(gid, '');
+          }
+        }
+      }
 
       const getVal = (k: string) => vars.find((v) => v.key === k)?.value ?? '';
       groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
@@ -324,17 +521,34 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         serverProb = 0.05;
       }
 
+      const whitelistEnStr = getVal('ENABLE_PROACTIVE_REPLY_WHITELIST');
+      const whitelistGroupsStr = getVal('PROACTIVE_REPLY_GROUP_WHITELIST');
+      const parsedWhitelistGroups = parseWhitelistGroups(whitelistGroupsStr);
+      const serverWhitelistEnabled = isWhitelistEnabled(
+        whitelistEnStr,
+        parsedWhitelistGroups.length,
+      );
+      const serverExplicitSwitch = parseExplicitWhitelistSwitch(whitelistEnStr);
+
       groupMentionCb.checked = groupReplyOnMention;
       groupAtCb.checked = enableAtOther;
       groupReplyCb.checked = enableReplyOther;
       proactiveSync.applyServerConfig(serverEnabled, serverProb, loadSeq);
+      whitelistSync.applyServerConfig(
+        serverWhitelistEnabled,
+        parsedWhitelistGroups,
+        whitelistLoadSeq,
+        serverExplicitSwitch,
+      );
+      return true;
     } catch (err) {
-      if (isUnmounted) return;
+      if (isUnmounted) return false;
       toast.error(
         '加载设置失败: ' +
           (err instanceof Error ? err.message : String(err)),
       );
       envVars = [];
+      return false;
     } finally {
       if (!isUnmounted) {
         loading = false;
@@ -697,6 +911,40 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       proactiveReplyNumber.blur();
     }
   });
+  // Whitelist mode event handlers
+  proactiveWhitelistCb.addEventListener('change', () => {
+    void whitelistSync.toggleEnabled(proactiveWhitelistCb.checked);
+  });
+
+  proactiveWhitelistSelect.addEventListener('change', () => {
+    if (proactiveWhitelistSelect.value) {
+      proactiveWhitelistInput.value = proactiveWhitelistSelect.value;
+    }
+  });
+
+  proactiveWhitelistAddBtn.addEventListener('click', () => {
+    const val =
+      proactiveWhitelistInput.value.trim() || proactiveWhitelistSelect.value;
+    if (val) {
+      proactiveWhitelistInput.value = '';
+      proactiveWhitelistSelect.value = '';
+      void whitelistSync.addGroup(val);
+    }
+  });
+
+  proactiveWhitelistInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val =
+        proactiveWhitelistInput.value.trim() || proactiveWhitelistSelect.value;
+      if (val) {
+        proactiveWhitelistInput.value = '';
+        proactiveWhitelistSelect.value = '';
+        void whitelistSync.addGroup(val);
+      }
+    }
+  });
+
   refreshBtn.addEventListener('click', () => void loadData());
 
   void loadData();

@@ -86,6 +86,7 @@ var nextConnGeneration uint64
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	*runtimescope.Scope
+	engine              *llm.Engine
 	conn                *websocket.Conn
 	generation          string
 	stealer             *sticker.Stealer
@@ -185,6 +186,9 @@ func HandleWS(engine *llm.Engine) http.HandlerFunc {
 func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, args ...any) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
+	}
+	if conn != nil && conn.engine == nil && engine != nil {
+		conn.engine = engine
 	}
 	var startEpoch uint64
 	if turn != nil {
@@ -446,9 +450,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if event.MessageType != "" {
 		contextMap["message_type"] = event.MessageType
 	}
+	var groupName string
 	if event.GroupID != 0 {
 		contextMap["group_id"] = event.GroupID
-		if groupName := conn.groupName(event.GroupID); groupName != "" {
+		if conn != nil {
+			groupName = conn.groupName(event.GroupID)
+		}
+		if groupName != "" {
 			if engine != nil && engine.Security != nil {
 				principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 				if pErr == nil {
@@ -532,6 +540,17 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			return
 		}
 		session = engine.SessionManager.GetOrCreate(conn.historyKey(event))
+		if session != nil && event.GroupID != 0 {
+			if groupName != "" {
+				session.SetGroupName(groupName)
+				engine.SessionManager.SetGroupName(conn.historyKey(event), groupName)
+			} else if conn != nil {
+				if cachedName := conn.cachedGroupName(event.GroupID); cachedName != "" {
+					session.SetGroupName(cachedName)
+					engine.SessionManager.SetGroupName(conn.historyKey(event), cachedName)
+				}
+			}
+		}
 		if session != nil && session.Epoch() != startEpoch {
 			return
 		}
