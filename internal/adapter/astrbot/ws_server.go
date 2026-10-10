@@ -297,7 +297,7 @@ func stageGroupCompactMessage(event Event, engine *llm.Engine) *llm.StagedGroupC
 	return stageGroupCompactText(event, visibleText, engine)
 }
 
-func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string) {
+func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string, turn *llm.SessionTurn) {
 	replyText = strings.TrimSpace(replyText)
 	if session == nil || engine == nil || replyText == "" {
 		return
@@ -311,7 +311,7 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
-	session.StageGroupCompactMessage(
+	seq, _ := session.StageGroupCompactSlot(
 		llm.GroupCompactMessage{
 			Role:      "assistant",
 			Sender:    botName,
@@ -322,6 +322,9 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 		maxBufferSize,
 		messageID,
 	)
+	if turn != nil && turn.StagedGuard() != nil && seq > 0 {
+		turn.StagedGuard().AddSequence(seq)
+	}
 }
 
 func astrBotVisibleText(event Event) string {
@@ -1113,7 +1116,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 				if event.MessageType == "group" && !conn.mock {
-					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID)
+					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, turn)
 				}
 			}
 			return nil
@@ -1198,7 +1201,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if session != nil {
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Promote()
-					} else {
+					} else if event.MessageID != "" {
 						session.PromoteGroupCompactMessage(event.MessageID)
 					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
@@ -1313,7 +1316,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if session != nil {
 			if turn != nil && turn.StagedGuard() != nil {
 				turn.StagedGuard().Promote()
-			} else {
+			} else if event.MessageID != "" {
 				session.PromoteGroupCompactMessage(event.MessageID)
 			}
 		}
