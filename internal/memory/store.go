@@ -547,7 +547,7 @@ func buildMergedEntry(
 	}
 }
 
-// UpdateEntry replaces an existing memory entry in-place, preserving its ID and CreatedAt.
+// UpdateEntry replaces editable fields while preserving identity and provenance.
 func (s *Store) UpdateEntry(updated MemoryEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -560,7 +560,16 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 	for i, entry := range brain.Entries {
 		if entry.ID == updated.ID {
 			updated.Owner = entry.Owner
+			updated.OwnerType = entry.OwnerType
+			updated.ScopeType = entry.ScopeType
+			updated.GroupID = entry.GroupID
+			updated.Summary = entry.Summary
+			updated.Evidence = entry.Evidence
+			updated.SourceMedia = entry.SourceMedia
+			updated.SourceMessageID = entry.SourceMessageID
+			updated.SourceSenderID = entry.SourceSenderID
 			updated.Source = entry.Source
+			updated.Visibility = entry.Visibility
 			updated.CreatedAt = entry.CreatedAt
 			updated.AccessCount = entry.AccessCount
 			updated.MergedFrom = slices.Clone(entry.MergedFrom)
