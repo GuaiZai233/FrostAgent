@@ -179,6 +179,7 @@ var migrations = []migration{
 	{10, []string{
 		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
 	}},
+	{11, providerSchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
@@ -224,6 +225,16 @@ func (d *DB) createSchema(ctx context.Context) error {
 		return fmt.Errorf("create schema metadata: %w", err)
 	}
 	for _, statement := range schemaStatements {
+		retired := false
+		for _, table := range []string{"endpoint_ids", "model_endpoints", "model_secrets", "models"} {
+			if strings.HasPrefix(statement, "CREATE TABLE "+table+" (") {
+				retired = true
+				break
+			}
+		}
+		if retired {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("create v7 schema: %w", err)
 		}
@@ -257,6 +268,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	for _, statement := range step.statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply schema migration v%d: %w", step.version, err)
+		}
+	}
+	if step.version == 11 {
+		if err := d.migrateProviders(ctx, tx); err != nil {
+			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, d.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), step.version); err != nil {

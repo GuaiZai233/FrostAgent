@@ -416,6 +416,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if a.engine != nil && a.engine.ModelRouter != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				routeSnapshot = a.engine.ModelRouter.Snapshot()
+				if err := routeSnapshot.LoadError(); err != nil {
+					a.engine.PauseOnStorageError(err)
+					continue
+				}
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
 					if isProactiveReply(&event) {
 						_ = sendTerminalNoopWithSuppress(event, c)

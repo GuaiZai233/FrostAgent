@@ -17,7 +17,14 @@ import (
 const configurationVersion = 1
 
 type Snapshot struct {
-	config Configuration
+	config      Configuration
+	err         error
+	credentials map[string]snapshotCredential
+}
+
+type snapshotCredential struct {
+	value string
+	err   error
 }
 
 type Manager struct {
@@ -34,6 +41,8 @@ type Manager struct {
 }
 
 func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
+	db.ModelRouterMu.RLock()
+	defer db.ModelRouterMu.RUnlock()
 	secrets, secretErr := newSQLSecretBackend(db, instanceID)
 	m := &Manager{Scope: runtimescope.First(scopes), db: db, instanceID: instanceID,
 		active: defaultConfiguration(), secrets: secrets}
@@ -164,24 +173,60 @@ func (m *Manager) LoadError() error {
 }
 
 func (m *Manager) Active() Configuration {
+	if m.db != nil {
+		return m.sqlActive()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneConfiguration(m.active)
 }
 
+// ActiveChecked reports failures from this read instead of returning cached state.
+func (m *Manager) ActiveChecked() (Configuration, error) {
+	if m.db != nil {
+		return m.sqlSnapshot()
+	}
+	return m.Active(), m.LoadError()
+}
+
+// State reads the active configuration and draft at one catalog revision.
+func (m *Manager) State() (Configuration, Configuration, error) {
+	if m.db != nil {
+		m.db.ModelRouterMu.RLock()
+		defer m.db.ModelRouterMu.RUnlock()
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.loadErr = m.loadSQL()
+		if m.instanceID != "" {
+			m.draft.Endpoints, m.draft.Models = m.active.Endpoints, m.active.Models
+		}
+		return cloneConfiguration(m.active), cloneConfiguration(m.draft), m.loadErr
+	}
+	return m.Active(), m.Draft(), m.LoadError()
+}
+
 func (m *Manager) Draft() Configuration {
+	if m.db != nil {
+		return m.sqlDraft()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneConfiguration(m.draft)
 }
 
 func (m *Manager) Snapshot() *Snapshot {
+	if m.db != nil {
+		return m.sqlRuntimeSnapshot()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return &Snapshot{config: cloneConfiguration(m.active)}
 }
 
 func (m *Manager) SaveDraft(cfg Configuration) error {
+	if m.db != nil {
+		return m.saveSQLDraft(cfg)
+	}
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
 		return err
@@ -229,6 +274,9 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 }
 
 func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error) {
+	if m.db != nil && m.instanceID != "" {
+		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
+	}
 	if strings.TrimSpace(apiKey) == "" {
 		return false, fmt.Errorf("API Key 为空；留空表示保留原 Secret")
 	}
@@ -247,6 +295,9 @@ func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error
 }
 
 func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
+	if m.db != nil && m.instanceID != "" {
+		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
@@ -266,6 +317,9 @@ func (m *Manager) HasDraftSecretChanges() bool {
 }
 
 func (m *Manager) DiscardDraft() Configuration {
+	if m.db != nil {
+		return m.discardSQLDraft()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.draft = cloneConfiguration(m.active)
@@ -274,6 +328,9 @@ func (m *Manager) DiscardDraft() Configuration {
 }
 
 func (m *Manager) Publish() (Configuration, error) {
+	if m.db != nil {
+		return m.publishSQL()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cfg := cloneConfiguration(m.draft)
@@ -318,7 +375,17 @@ func (s *Snapshot) Resolve(workload Workload, scope Scope) (Target, error) {
 	if s == nil {
 		return Target{}, fmt.Errorf("model router snapshot is unavailable")
 	}
+	if s.err != nil {
+		return Target{}, s.err
+	}
 	return resolveConfiguration(s.config, workload, scope)
+}
+
+func (s *Snapshot) LoadError() error {
+	if s == nil {
+		return fmt.Errorf("model router snapshot is unavailable")
+	}
+	return s.err
 }
 
 func (s *Snapshot) IsDisabled(workload Workload, scope Scope) bool {
@@ -328,6 +395,9 @@ func (s *Snapshot) IsDisabled(workload Workload, scope Scope) bool {
 
 func (m *Manager) Effective(scope Scope) []EffectiveBinding {
 	snapshot := m.Snapshot()
+	if snapshot.err != nil {
+		return nil
+	}
 	result := make([]EffectiveBinding, 0, len(Workloads))
 	for _, workload := range Workloads {
 		binding, inherited := effectiveBinding(snapshot.config, workload, scope)

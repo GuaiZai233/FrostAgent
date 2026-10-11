@@ -59,12 +59,18 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	if err != nil {
 		return nil, err
 	}
-	apiKey, err := resolveEndpointAPIKey(p.manager.secrets, Endpoint{
-		ID:           target.EndpointID,
-		DisplayName:  target.EndpointDisplayName,
-		APIKeySource: target.APIKeySource,
-		APIKeyRef:    target.APIKeyRef,
-	})
+	var apiKey string
+	if snapshot.credentials != nil {
+		credential := snapshot.credentials[target.EndpointID]
+		apiKey, err = credential.value, credential.err
+	} else {
+		apiKey, err = resolveEndpointAPIKey(p.manager.secrets, Endpoint{
+			ID:           target.EndpointID,
+			DisplayName:  target.EndpointDisplayName,
+			APIKeySource: target.APIKeySource,
+			APIKeyRef:    target.APIKeyRef,
+		})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", target.EndpointDisplayName, err)
 	}

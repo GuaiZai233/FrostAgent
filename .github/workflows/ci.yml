@@ -39,7 +39,11 @@ jobs:
       - name: Test PostgreSQL migrations
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/storage -run '^TestPostgresMigration' -count=1 -v
+        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v
+      - name: Test shared providers on PostgreSQL
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/modelrouter -run '^TestSharedCatalogAndIsolatedRoutes$' -count=1 -v
       - name: Test PostgreSQL memory writes
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable

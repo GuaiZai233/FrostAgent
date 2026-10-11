@@ -26,7 +26,7 @@ import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
-import { mountModelRouterPage } from './pages/model-router';
+import { mountModelRouterPage, mountProvidersPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
 // Initialize Theme
@@ -34,7 +34,8 @@ themeManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
-  { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
+  { path: '/providers', label: '模型供应商', iconName: 'sliders' },
+  { path: '/model-router', label: '实例模型路由', iconName: 'sliders' },
   { path: '/sessions', label: '会话管理', iconName: 'forum' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人设对话', iconName: 'chat' },
@@ -277,7 +278,8 @@ function initAppShell(): void {
     '指令设置',
     mountCommandSettingsPage,
   );
-  router.register('/model-router', '模型路由器', mountModelRouterPage);
+  router.register('/providers', '模型供应商', mountProvidersPage);
+  router.register('/model-router', '实例模型路由', mountModelRouterPage);
   // Security is a control-plane page and must remain available without an instance.
   router.register('/security', '安全控制', mountSecurityPage);
 

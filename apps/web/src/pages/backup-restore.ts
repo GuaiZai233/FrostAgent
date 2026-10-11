@@ -10,7 +10,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       <header class="pb-1">
         <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置">${icon('arrow_left', 'w-4 h-4')}</a>
         <h1 class="page-title">备份与还原</h1>
-        <p class="page-description">当前实例的备份会直接下载到浏览器。密钥不会包含在导出文件中。</p>
+        <p class="page-description">当前实例的备份会直接下载到浏览器。密钥不会包含在导出文件中；只包含当前实例引用的共享供应商与模型。</p>
       </header>
       <article class="card p-5 mt-4">
         <h2 class="card-title text-base">一键全量备份</h2>
@@ -42,7 +42,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       </article>
       <article class="card p-5 mt-4">
         <h2 class="card-title text-base">快速导入设置</h2>
-        <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。</p>
+        <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。相同的共享供应商将复用已有凭据；定义冲突时新增供应商并置空密钥，不覆盖其他实例使用的配置。</p>
         <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
         <button id="settings-import-button" class="btn btn-outline mt-3" disabled>导入 setting.json</button>
       </article>
@@ -54,7 +54,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       </article>
       <article class="card p-5 mt-4">
         <h2 class="card-title text-base">全量还原为新实例</h2>
-        <p class="text-sm text-muted mt-1">选择 FrostAgent 全量 ZIP 后创建一个全新实例。还原后的实例默认停用，重新配置密钥和适配器后再启用。</p>
+        <p class="text-sm text-muted mt-1">选择 FrostAgent 全量 ZIP 后创建一个全新实例。还原后的实例默认停用，检查共享供应商凭据和适配器后再启用。</p>
         <input id="restore-instance-name" class="input mt-4" type="text" maxlength="32" placeholder="新实例名称（留空自动命名）" />
         <input id="restore-instance-file" class="input mt-3" type="file" accept=".zip,application/zip" />
         <button id="restore-instance-button" class="btn btn-outline mt-3" disabled>还原为新实例</button>
@@ -107,7 +107,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       try {
         const contents = JSON.parse(await file.text());
         await instanceRequest(`/${id}/import/settings`, contents);
-        toast.success('设置已导入；请重新配置密钥');
+        toast.success('设置已导入；请检查新增供应商的密钥');
       } catch (error) {
         toast.error('导入设置失败: ' + String(error));
       } finally {
@@ -152,7 +152,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         if (!response.ok) throw new Error(result.error || response.statusText);
         await instanceState.refresh();
         instanceState.select(result);
-        toast.success('已创建停用的新实例；请重新配置密钥和适配器');
+        toast.success('已创建停用的新实例；请检查供应商凭据和适配器');
       } catch (error) {
         toast.error('全量还原失败: ' + String(error));
       } finally {

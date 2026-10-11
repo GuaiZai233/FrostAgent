@@ -114,36 +114,3 @@ func (d *DB) UpdateInstance(ctx context.Context, record InstanceRecord) error {
 	}
 	return nil
 }
-
-func (d *DB) LoadEndpointOwners(ctx context.Context) (map[string]string, error) {
-	rows, err := d.SQL.QueryContext(ctx, `SELECT id, instance_id FROM endpoint_ids`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	owners := make(map[string]string)
-	for rows.Next() {
-		var id, owner string
-		if err := rows.Scan(&id, &owner); err != nil {
-			return nil, err
-		}
-		owners[id] = owner
-	}
-	return owners, rows.Err()
-}
-
-func (d *DB) ReserveEndpoint(ctx context.Context, id, instanceID string) error {
-	_, err := d.SQL.ExecContext(ctx, d.Bind(`INSERT INTO endpoint_ids(id, instance_id)
-		VALUES (?, ?) ON CONFLICT (id) DO NOTHING`), id, instanceID)
-	if err != nil {
-		return err
-	}
-	var owner string
-	if err := d.SQL.QueryRowContext(ctx, d.Bind(`SELECT instance_id FROM endpoint_ids WHERE id = ?`), id).Scan(&owner); err != nil {
-		return err
-	}
-	if owner != instanceID {
-		return fmt.Errorf("endpoint ID %s belongs to another instance", id)
-	}
-	return nil
-}

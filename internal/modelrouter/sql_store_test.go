@@ -18,20 +18,28 @@ func TestSQLModelRouterPersistsConfigurationAndManualSecret(t *testing.T) {
 	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewSQL(db, "test-instance")
+	manager := NewSQL(db, "")
 	if err := manager.LoadError(); err != nil {
 		t.Fatal(err)
 	}
 	cfg := manager.Draft()
 	cfg.Endpoints = []Endpoint{{ID: "endpoint-a", DisplayName: "Endpoint", BaseURL: "https://example.com/v1", Enabled: true}}
 	cfg.Models = []Model{{ID: "model-a", DisplayName: "Model", EndpointID: "endpoint-a", UpstreamModel: "model-a", Enabled: true}}
-	cfg.GlobalBindings[WorkloadDialogue] = Binding{Mode: BindingModel, ModelID: "model-a"}
-	cfg.GroupOverrides = []GroupOverride{{Platform: "qq", GroupID: "test-group",
-		Bindings: map[Workload]Binding{WorkloadDialogue: {Mode: BindingDisabled}}}}
 	if err := manager.SaveDraft(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.SetDraftEndpointSecret("endpoint-a", "synthetic-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	manager = NewSQL(db, "test-instance")
+	cfg = manager.Draft()
+	cfg.GlobalBindings[WorkloadDialogue] = Binding{Mode: BindingModel, ModelID: "model-a"}
+	cfg.GroupOverrides = []GroupOverride{{Platform: "qq", GroupID: "test-group",
+		Bindings: map[Workload]Binding{WorkloadDialogue: {Mode: BindingDisabled}}}}
+	if err := manager.SaveDraft(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.Publish(); err != nil {
@@ -60,7 +68,7 @@ func TestSQLModelRouterRejectsEnvSecretSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	manager := NewSQL(db, "test-instance")
+	manager := NewSQL(db, "")
 	if err := manager.LoadError(); err != nil {
 		t.Fatal(err)
 	}

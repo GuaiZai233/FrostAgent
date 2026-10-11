@@ -22,13 +22,14 @@ func (s *Service) GetState(
 	context.Context,
 	*connect.Request[v1.GetStateRequest],
 ) (*connect.Response[v1.GetStateResponse], error) {
+	active, draft, err := s.manager.State()
 	loadError := ""
-	if err := s.manager.LoadError(); err != nil {
+	if err != nil {
 		loadError = err.Error()
 	}
 	return connect.NewResponse(&v1.GetStateResponse{
-		Active:                configurationToProto(s.manager.Active()),
-		Draft:                 configurationToProto(s.manager.Draft()),
+		Active:                configurationToProto(active),
+		Draft:                 configurationToProto(draft),
 		LoadError:             loadError,
 		HasDraftSecretChanges: s.manager.HasDraftSecretChanges(),
 	}), nil

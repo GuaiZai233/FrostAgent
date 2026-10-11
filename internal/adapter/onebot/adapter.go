@@ -464,6 +464,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				routeSnapshot = a.engine.ModelRouter.Snapshot()
+				if err := routeSnapshot.LoadError(); err != nil {
+					a.engine.PauseOnStorageError(err)
+					continue
+				}
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event)) {
 					continue
 				}

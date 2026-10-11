@@ -544,7 +544,7 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-export function createInstanceAPI() {
+export function createInstanceAPI(options: { globalModelCatalog?: boolean } = {}) {
   let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
@@ -597,7 +597,9 @@ export function createInstanceAPI() {
 
   const modelRouterClient: Client<typeof ModelRouterService> = createClient(
     ModelRouterService,
-    transport,
+    options.globalModelCatalog
+      ? createConnectTransport({ baseUrl: window.location.origin, interceptors: [authInterceptor] })
+      : transport,
   );
 
   const dialogueClient: Client<typeof DialogueService> = createClient(

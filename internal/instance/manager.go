@@ -14,6 +14,7 @@ import (
 	"FrostAgent/internal/security"
 	logsvc "FrostAgent/internal/service/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
+	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/storage"
 	"bytes"
 	"context"
@@ -198,12 +199,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 			return nil, fmt.Errorf("recover interrupted instance deletion: %w", err)
 		}
 	}
-	if db != nil {
-		m.endpointOwners, err = db.LoadEndpointOwners(context.Background())
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	if db == nil {
 		data, err := os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
 		if err == nil {
 			if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
@@ -240,6 +236,10 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	}
 	m.billing.Store(billing.NewClient(base, cfg.ServiceToken, cfg.Timeout))
 	mux := http.NewServeMux()
+	if db != nil {
+		path, handler := pbconnect.NewModelRouterServiceHandler(routersvc.New(modelrouter.NewSQL(db, "")))
+		mux.Handle(path, handler)
+	}
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
@@ -391,7 +391,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 	}
 	m.ensureInstanceMCP(i)
 	r, err := m.buildRuntime(m, i, c, configDir, enabled)
-	if err == nil {
+	if err == nil && m.db == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
 	return r, c, errors.Join(openErr, err)
@@ -409,13 +409,7 @@ func (m *Manager) reserveEndpointsLocked(owner string, endpoints []modelrouter.E
 	if err != nil {
 		return err
 	}
-	if m.db != nil {
-		for id, instanceID := range next {
-			if err := m.db.ReserveEndpoint(context.Background(), id, instanceID); err != nil {
-				return err
-			}
-		}
-	} else {
+	{
 		data, err := json.Marshal(next)
 		if err != nil {
 			return err

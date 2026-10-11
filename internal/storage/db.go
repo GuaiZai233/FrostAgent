@@ -8,13 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 type Backend string
 
@@ -24,8 +25,10 @@ const (
 )
 
 type DB struct {
-	SQL     *sql.DB
-	Backend Backend
+	// ModelRouterMu serializes shared catalog, credentials and route snapshots.
+	ModelRouterMu sync.RWMutex
+	SQL           *sql.DB
+	Backend       Backend
 }
 
 type Config struct {

@@ -5,7 +5,6 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,9 +94,6 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	if err := m.rejectDeleting(i.id); err != nil {
 		return err
 	}
-	if err := backup.RemapEndpointIDsForImport(m.db, &data, i.id); err != nil {
-		return err
-	}
 	list, _ := m.List()
 	enabled := false
 	for _, info := range list {
@@ -117,16 +113,6 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 		_ = oldMCP.Close()
 	}
 	importErr := backup.ImportSettings(m.db, i.id, data)
-	if importErr == nil {
-		owners, err := m.db.LoadEndpointOwners(context.Background())
-		if err != nil {
-			importErr = err
-		} else {
-			m.endpointMu.Lock()
-			m.endpointOwners = owners
-			m.endpointMu.Unlock()
-		}
-	}
 	r, c, buildErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
 	if buildErr == nil && enabled && i.mcp != nil {
 		buildErr = i.mcp.SetRuntimeActive(true)
@@ -243,9 +229,6 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	}
 	i.op.Lock()
 	defer i.op.Unlock()
-	if err := backup.RemapEndpointIDsForInstance(&decoded.Settings, info.ID); err != nil {
-		return Info{}, err
-	}
 	if err := backup.ImportSettings(m.db, info.ID, decoded.Settings); err != nil {
 		return Info{}, err
 	}
@@ -279,13 +262,6 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	i.mu.Lock()
 	i.runtime, i.config = runtime, config
 	i.mu.Unlock()
-	owners, err := m.db.LoadEndpointOwners(context.Background())
-	if err != nil {
-		return Info{}, err
-	}
-	m.endpointMu.Lock()
-	m.endpointOwners = owners
-	m.endpointMu.Unlock()
 	return info, nil
 }
 
@@ -406,40 +382,6 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 	if err := safeTree(m.dir(i.id)); err != nil {
 		return err
 	}
-	changes := make([]modelrouter.CredentialChange, 0)
-	seenTargets := make(map[string]bool)
-	addTarget := func(target string) {
-		if target != "" && !seenTargets[target] {
-			seenTargets[target] = true
-			changes = append(changes, modelrouter.CredentialChange{Target: target})
-		}
-	}
-	m.mu.RLock()
-	for _, info := range m.registry.Instances {
-		if info.ID == i.id {
-			for _, target := range info.CredentialTargets {
-				addTarget(target)
-			}
-			break
-		}
-	}
-	m.mu.RUnlock()
-	m.endpointMu.Lock()
-	for endpointID, owner := range m.endpointOwners {
-		if owner == i.id {
-			addTarget(modelrouter.CredentialTarget(endpointID))
-		}
-	}
-	m.endpointMu.Unlock()
-	rollbackCredentials, err := modelrouter.ApplyCredentials(changes)
-	if err != nil {
-		return errors.Join(err, rollbackCredentials())
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, rollbackCredentials())
-		}
-	}()
 	if i.mcp != nil {
 		if err := i.mcp.Close(); err != nil {
 			return err
@@ -476,13 +418,6 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 	}
 	delete(m.instances, i.id)
 	m.mu.Unlock()
-	m.endpointMu.Lock()
-	for endpointID, owner := range m.endpointOwners {
-		if owner == i.id {
-			delete(m.endpointOwners, endpointID)
-		}
-	}
-	m.endpointMu.Unlock()
 	if m.security != nil {
 		m.security.RemoveInstanceProvider(i.id)
 	}

@@ -152,3 +152,14 @@ assert.equal(
 console.log(
   'PASS: stale instance continuations and log responses are rejected',
 );
+
+instanceState.select(null);
+await createInstanceAPI({ globalModelCatalog: true }).getModelRouterState();
+assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/GetState');
+await assert.rejects(createInstanceAPI().getModelRouterState(), /请先选择实例/);
+instanceState.select(a);
+await createInstanceAPI().getModelRouterState();
+assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/GetState');
+await createInstanceAPI({ globalModelCatalog: true }).publishModelRouter();
+assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/Publish');
+console.log('PASS: shared providers use the root API and instance routes require a selected instance');

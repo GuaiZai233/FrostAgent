@@ -15,8 +15,10 @@ import (
 
 // ImportSettings replaces all classified non-secret settings and the exported
 // router, MCP, and dialogue configuration in one SQL transaction. Secrets in
-// an uploaded file are ignored; model endpoint credentials are cleared.
+// an uploaded file are ignored; existing shared credentials remain untouched.
 func ImportSettings(db *storage.DB, instanceID string, data Settings) error {
+	db.ModelRouterMu.Lock()
+	defer db.ModelRouterMu.Unlock()
 	if err := ValidateFormat(data.FormatVersion); err != nil {
 		return err
 	}

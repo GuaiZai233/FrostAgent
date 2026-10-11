@@ -29,10 +29,11 @@ func ExportSettings(db *storage.DB, instanceID string) (Settings, error) {
 	}
 
 	router := modelrouter.NewSQL(db, instanceID)
-	if err := router.LoadError(); err != nil {
+	routing, err := router.ActiveChecked()
+	if err != nil {
 		return result, err
 	}
-	result.ModelRouter = router.Active()
+	result.ModelRouter = modelrouter.ReferencedConfiguration(routing)
 	for i := range result.ModelRouter.Endpoints {
 		endpoint := &result.ModelRouter.Endpoints[i]
 		endpoint.APIKeySource = ""

@@ -43,15 +43,15 @@ func postgresMigrationConfig(t *testing.T) Config {
 
 func TestPostgresMigrationPreservesData(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9} {
+	for _, previous := range []int{7, 8, 9, 10} {
 		t.Run(fmt.Sprint(previous), func(t *testing.T) {
 			config := postgresMigrationConfig(t)
 			db, err := OpenWithConfig(ctx, t.TempDir(), config)
 			if err != nil {
 				t.Fatal(err)
 			}
-			populateMigrationFixture(t, db)
 			prepareOldSchema(t, db, previous)
+			populateMigrationFixture(t, db)
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -84,8 +84,8 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	populateMigrationFixture(t, db)
 	prepareOldSchema(t, db, 7)
+	populateMigrationFixture(t, db)
 	if err := db.applyMigration(ctx, migration{8, []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, source_message_id)`,
 		`THIS IS NOT SQL`,

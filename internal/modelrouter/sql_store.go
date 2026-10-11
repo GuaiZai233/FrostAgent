@@ -11,13 +11,17 @@ import (
 func (m *Manager) loadSQL() error {
 	ctx := context.Background()
 	cfg := defaultConfiguration()
-	err := m.db.SQL.QueryRowContext(ctx, m.db.Bind(`SELECT revision FROM model_revisions
-		WHERE instance_id = ?`), m.instanceID).Scan(&cfg.Revision)
+	var err error
+	if m.instanceID == "" {
+		err = m.db.SQL.QueryRowContext(ctx, `SELECT revision FROM provider_revision WHERE id = 1`).Scan(&cfg.Revision)
+	} else {
+		err = m.db.SQL.QueryRowContext(ctx, m.db.Bind(`SELECT revision FROM model_revisions WHERE instance_id = ?`), m.instanceID).Scan(&cfg.Revision)
+	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	rows, err := m.db.SQL.QueryContext(ctx, m.db.Bind(`SELECT id, display_name, base_url,
-		api_key_source, api_key_ref, enabled FROM model_endpoints WHERE instance_id = ? ORDER BY position, id`), m.instanceID)
+		api_key_source, api_key_ref, enabled FROM provider_endpoints ORDER BY position, id`))
 	if err != nil {
 		return err
 	}
@@ -32,7 +36,6 @@ func (m *Manager) loadSQL() error {
 		}
 		endpoint.APIKeySource = APIKeyStorage(source)
 		endpoint.Enabled = enabled != 0
-		endpoint.APIKeyConfigured = m.secrets.Configured(endpoint)
 		cfg.Endpoints = append(cfg.Endpoints, endpoint)
 	}
 	if err := rows.Err(); err != nil {
@@ -40,8 +43,25 @@ func (m *Manager) loadSQL() error {
 		return err
 	}
 	rows.Close()
+	for i := range cfg.Endpoints {
+		e := &cfg.Endpoints[i]
+		if e.APIKeySource == APIKeyStorageManual {
+			value, err := m.secrets.Resolve(*e)
+			if err != nil {
+				return err
+			}
+			e.APIKeyConfigured = value != ""
+		} else if e.APIKeySource == APIKeyStorageWindowsCredentialManager {
+			// An unused Windows provider must not prevent other instances from
+			// loading on hosts without Windows Credential Manager.
+			value, err := m.secrets.Resolve(*e)
+			e.APIKeyConfigured = err == nil && value != ""
+		} else {
+			e.APIKeyConfigured = e.APIKeyRef != ""
+		}
+	}
 	rows, err = m.db.SQL.QueryContext(ctx, m.db.Bind(`SELECT id, display_name, endpoint_id,
-		upstream_model, enabled, capabilities FROM models WHERE instance_id = ? ORDER BY position, id`), m.instanceID)
+		upstream_model, enabled, capabilities FROM provider_models ORDER BY position, id`))
 	if err != nil {
 		return err
 	}
@@ -100,7 +120,7 @@ func (m *Manager) loadSQL() error {
 		cfg.GroupOverrides = append(cfg.GroupOverrides, *override)
 	}
 	normalizeConfiguration(&cfg)
-	if err := validateConfiguration(cfg); err != nil {
+	if err := validateStoredConfiguration(cfg); err != nil {
 		return err
 	}
 	if err := validateSQLSources(cfg); err != nil {
@@ -110,76 +130,9 @@ func (m *Manager) loadSQL() error {
 	return nil
 }
 
-func (m *Manager) writeSQL(cfg Configuration) error {
-	ctx := context.Background()
-	tx, err := m.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := writeConfigurationTx(ctx, m.db, tx, m.instanceID, cfg); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// WriteImportedConfigurationTx restores a shareable model configuration with
-// empty secrets inside the caller's transaction.
-func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg Configuration) error {
-	for i := range cfg.Endpoints {
-		cfg.Endpoints[i].APIKeySource = ""
-		cfg.Endpoints[i].APIKeyRef = ""
-		cfg.Endpoints[i].APIKeyConfigured = false
-	}
-	normalizeConfiguration(&cfg)
-	if err := validateConfiguration(cfg); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM endpoint_ids WHERE instance_id = ?`), instanceID); err != nil {
-		return err
-	}
-	for _, endpoint := range cfg.Endpoints {
-		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO endpoint_ids(id, instance_id) VALUES (?, ?)`), endpoint.ID, instanceID); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM model_secrets WHERE instance_id = ?`), instanceID); err != nil {
-		return err
-	}
-	return writeConfigurationTx(ctx, db, tx, instanceID, cfg)
-}
-
 func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg Configuration) error {
-	for _, table := range []string{"models", "model_bindings", "model_endpoints", "model_revisions"} {
+	for _, table := range []string{"model_bindings", "model_revisions"} {
 		if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM `+table+` WHERE instance_id = ?`), instanceID); err != nil {
-			return err
-		}
-	}
-	for position, endpoint := range cfg.Endpoints {
-		enabled := 0
-		if endpoint.Enabled {
-			enabled = 1
-		}
-		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_endpoints
-			(instance_id, id, display_name, base_url, api_key_source, api_key_ref, enabled, position)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), instanceID, endpoint.ID, endpoint.DisplayName,
-			endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, position); err != nil {
-			return err
-		}
-	}
-	for position, model := range cfg.Models {
-		capabilities, err := json.Marshal(model.Capabilities)
-		if err != nil {
-			return err
-		}
-		enabled := 0
-		if model.Enabled {
-			enabled = 1
-		}
-		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO models
-			(instance_id, id, display_name, endpoint_id, upstream_model, enabled, capabilities, position)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), instanceID, model.ID, model.DisplayName,
-			model.EndpointID, model.UpstreamModel, enabled, string(capabilities), position); err != nil {
 			return err
 		}
 	}

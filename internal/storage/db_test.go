@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ func populateMigrationFixture(t *testing.T, db *DB) {
 	for _, statement := range []string{
 		`INSERT INTO instances(id, name, created_at, enabled) VALUES ('synthetic-instance', 'Synthetic', 'now', 0)`,
 		`INSERT INTO settings(scope, instance_id, key, value) VALUES ('instance', 'synthetic-instance', 'UPSTREAM_API_KEY', 'synthetic-secret')`,
-		`INSERT INTO model_secrets(instance_id, ref, secret) VALUES ('synthetic-instance', 'endpoint', 'synthetic-model-secret')`,
+		fixtureSecretInsert(db),
 		`INSERT INTO memory_entries(instance_id, scope_type, platform, group_id, id, owner, content, source, created_at, updated_at) VALUES ('synthetic-instance', 'group', 'qq', 'synthetic-group', 'memory-1', 'synthetic-owner', 'remembered', 'manual', 'now', 'now')`,
 		`INSERT INTO group_profiles(instance_id, platform, group_id, updated_at) VALUES ('synthetic-instance', 'qq', 'synthetic-group', 'now')`,
 		`INSERT INTO group_members(instance_id, platform, group_id, user_id, created_at, updated_at) VALUES ('synthetic-instance', 'qq', 'synthetic-group', 'synthetic-user', 'now', 'now')`,
@@ -31,7 +32,7 @@ func assertMigrationFixture(t *testing.T, db *DB) {
 	for _, item := range []struct{ query, want string }{
 		{`SELECT name FROM instances WHERE id = 'synthetic-instance'`, "Synthetic"},
 		{`SELECT value FROM settings WHERE key = 'UPSTREAM_API_KEY'`, "synthetic-secret"},
-		{`SELECT secret FROM model_secrets WHERE ref = 'endpoint'`, "synthetic-model-secret"},
+		{`SELECT secret FROM ` + fixtureSecretTable(db) + ` WHERE ref = 'endpoint'`, "synthetic-model-secret"},
 		{`SELECT content FROM memory_entries WHERE id = 'memory-1'`, "remembered"},
 		{`SELECT user_id FROM group_members WHERE user_id = 'synthetic-user'`, "synthetic-user"},
 		{`SELECT state FROM access_records WHERE principal_key = 'synthetic-principal'`, "locked"},
@@ -44,8 +45,38 @@ func assertMigrationFixture(t *testing.T, db *DB) {
 	}
 }
 
+func fixtureSecretTable(db *DB) string {
+	var version int
+	_ = db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id = 1`).Scan(&version)
+	if version >= 11 {
+		return "provider_secrets"
+	}
+	return "model_secrets"
+}
+func fixtureSecretInsert(db *DB) string {
+	if fixtureSecretTable(db) == "provider_secrets" {
+		return `INSERT INTO provider_secrets(ref, secret) VALUES ('endpoint', 'synthetic-model-secret')`
+	}
+	return `INSERT INTO model_secrets(instance_id, ref, secret) VALUES ('synthetic-instance', 'endpoint', 'synthetic-model-secret')`
+}
+
+// Only used on fresh disposable test databases to reconstruct historical schemas.
 func prepareOldSchema(t *testing.T, db *DB, version int) {
 	t.Helper()
+	for _, table := range []string{"provider_models", "provider_endpoints", "provider_secrets", "provider_revision"} {
+		if _, err := db.SQL.Exec(`DROP TABLE ` + table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, statement := range schemaStatements {
+		for _, table := range []string{"endpoint_ids", "model_endpoints", "model_secrets", "models"} {
+			if strings.HasPrefix(statement, "CREATE TABLE "+table+" (") {
+				if _, err := db.SQL.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
 	if version <= 9 {
 		if _, err := db.SQL.Exec(`ALTER TABLE memory_entries DROP COLUMN source_media`); err != nil {
 			t.Fatal(err)
@@ -68,15 +99,15 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 
 func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9} {
+	for _, previous := range []int{7, 8, 9, 10} {
 		t.Run(strconv.Itoa(previous), func(t *testing.T) {
 			root := t.TempDir()
 			db, err := Open(ctx, root)
 			if err != nil {
 				t.Fatal(err)
 			}
-			populateMigrationFixture(t, db)
 			prepareOldSchema(t, db, previous)
+			populateMigrationFixture(t, db)
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -146,8 +177,8 @@ func TestSQLiteFailedMigrationRollsBackAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	populateMigrationFixture(t, db)
 	prepareOldSchema(t, db, 7)
+	populateMigrationFixture(t, db)
 	err = db.applyMigration(context.Background(), migration{8, []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, source_message_id)`,
 		`THIS IS NOT SQL`,

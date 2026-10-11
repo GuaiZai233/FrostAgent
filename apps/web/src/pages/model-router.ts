@@ -95,12 +95,16 @@ function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
   return `${model.displayName} · ${endpoint?.displayName || '未知 Endpoint'} · ${model.upstreamModel}`;
 }
 
-export function mountModelRouterPage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+export function mountProvidersPage(container: HTMLElement): () => void {
+  return mountModelRouterPage(container, true);
+}
+
+export function mountModelRouterPage(container: HTMLElement, catalog = false): () => void {
+  const api = createInstanceAPI({ globalModelCatalog: catalog });
   let unmounted = false;
   let loading = true;
   let busy = false;
-  let tab: 'endpoints' | 'models' | 'global' | 'groups' = 'endpoints';
+  let tab: 'endpoints' | 'models' | 'global' | 'groups' = catalog ? 'endpoints' : 'global';
   let activeConfiguration = create(ModelRouterConfigurationSchema, { version: 1 });
   let draft = cloneConfiguration(activeConfiguration);
   let loadError = '';
@@ -120,7 +124,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       hasDraftSecretChanges = state.hasDraftSecretChanges;
       loading = false;
       render();
-      openRequestedGroup();
+      if (!catalog) openRequestedGroup();
     } catch (err) {
       if (unmounted) return;
       loading = false;
@@ -166,7 +170,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       activeConfiguration = cloneConfiguration(response.active);
       draft = cloneConfiguration(response.active);
       hasDraftSecretChanges = false;
-      toast.success('模型路由配置已发布');
+      toast.success(catalog ? '共享模型供应商已发布，所有实例即时生效' : '实例模型路由已发布');
     } catch (err) {
       toast.error('发布配置失败: ' + errorText(err));
     } finally {
@@ -208,7 +212,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       <div class="page-container fade-in">
         <header class="page-header">
           <div>
-            <h1 class="page-title">模型路由器</h1>
+            <h1 class="page-title">${catalog ? '模型供应商' : '实例模型路由'}</h1>
+            <p class="text-xs text-muted">${catalog ? '供应商、密钥和模型目录由所有实例共享。每个实例单独选择使用的模型。' : '此处仅修改当前实例的默认模型与群覆盖。<a href="#/providers" class="text-primary">管理共享模型供应商</a>'}</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
@@ -218,7 +223,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
 
         ${
           loadError
-            ? `<div class="card p-3 badge-destructive"><strong>配置文件加载失败：</strong>${escapeHtml(loadError)}。原文件不会被自动覆盖；保存并发布新配置后才能恢复。</div>`
+            ? `<div class="card p-3 badge-destructive"><strong>数据库配置加载失败：</strong>${escapeHtml(loadError)}。请恢复数据库连接后刷新页面。</div>`
             : ''
         }
 
@@ -229,10 +234,9 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         }
 
         <div class="tabs" role="tablist">
-          ${tabButton('endpoints', 'Endpoint Accounts')}
-          ${tabButton('models', 'Models')}
-          ${tabButton('global', '全局路由')}
-          ${tabButton('groups', '群覆盖')}
+          ${catalog
+            ? tabButton('endpoints', '供应商') + tabButton('models', '模型目录')
+            : tabButton('global', '实例默认路由') + tabButton('groups', '群覆盖')}
         </div>
 
         <section id="router-tab-content">${renderTab()}</section>
@@ -263,7 +267,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function renderEndpoints(): string {
     return `
       <div class="flex items-center justify-between gap-3 mb-3">
-        <div><h2 class="text-base font-semibold">Endpoint Accounts</h2><p class="text-xs text-muted">一个 Endpoint 可以承载多个模型；空 Key 表示无鉴权。</p></div>
+        <div><h2 class="text-base font-semibold">共享模型供应商</h2><p class="text-xs text-muted">一个 Endpoint 可以承载多个模型；空 Key 表示无鉴权。</p></div>
         <button class="btn btn-primary btn-sm" id="add-endpoint">${icon('plus', 'w-3.5 h-3.5')} 新增 Endpoint</button>
       </div>
       <div class="card table-card overflow-hidden">
@@ -322,7 +326,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
 
   function renderGlobalBindings(): string {
     return `
-      <div class="mb-3"><h2 class="text-base font-semibold">全局六槽配置</h2><p class="text-xs text-muted">私聊和没有群级 diff 的群使用这些默认值。</p></div>
+      <div class="mb-3"><h2 class="text-base font-semibold">实例默认模型</h2><p class="text-xs text-muted">私聊和没有群级 diff 的群使用这些默认值。</p></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(19rem,1fr));gap:.75rem">
         ${workloads.map((workload) => {
           const binding = bindingFor(draft.globalBindings, workload.value);
@@ -332,7 +336,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               <strong class="text-sm">${workload.label}</strong>
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -341,7 +345,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function renderGroups(): string {
     return `
       <div class="flex items-center justify-between gap-3 mb-3">
-        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于全局配置的 diff；群列表入口同时复用会话管理。</p></div>
+        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于实例默认配置的差异；群列表入口同时复用会话管理。</p></div>
         <button class="btn btn-primary btn-sm" id="add-group">${icon('plus', 'w-3.5 h-3.5')} 手动添加</button>
       </div>
       <div class="card table-card overflow-hidden"><div class="table-container"><table class="table">
@@ -365,7 +369,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function bindingOptions(
     binding: ModelBinding | undefined,
     allowInherit: boolean,
-    inheritLabel = '继承全局',
+    inheritLabel = '继承实例默认',
     allowDisabled = true,
     allowFollowDialogue = false,
   ): string {
@@ -723,11 +727,11 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       : create(GroupModelOverrideSchema, { platform: platform || 'onebot', groupId, bindings: [] });
     void openDialog({
       title: '群级模型配置',
-      description: '仅保存相对于全局配置的 diff。',
+      description: '仅保存相对于实例默认配置的差异。',
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {

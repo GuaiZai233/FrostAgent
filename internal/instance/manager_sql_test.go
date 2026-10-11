@@ -150,6 +150,7 @@ func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
 	}
 	sourceSettings.ModelRouter.Endpoints = []modelrouter.Endpoint{{ID: "source-endpoint", DisplayName: "Source", BaseURL: "https://example.invalid/v1", Enabled: true}}
 	sourceSettings.ModelRouter.Models = []modelrouter.Model{{ID: "source-model", DisplayName: "Source Model", EndpointID: "source-endpoint", UpstreamModel: "synthetic-model", Enabled: true}}
+	sourceSettings.ModelRouter.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "source-model"}
 	if err := backup.ImportSettings(m.db, source.ID, sourceSettings); err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +167,9 @@ func TestSQLCopyReplacesSettingsWithoutSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(copied.ModelRouter.Endpoints) != 1 || copied.ModelRouter.Endpoints[0].ID == "source-endpoint" ||
+	if len(copied.ModelRouter.Endpoints) != 1 || copied.ModelRouter.Endpoints[0].ID != "source-endpoint" ||
 		len(copied.ModelRouter.Models) != 1 || copied.ModelRouter.Models[0].EndpointID != copied.ModelRouter.Endpoints[0].ID {
-		t.Fatalf("copied endpoint references were not remapped: %#v", copied.ModelRouter)
+		t.Fatalf("copied instance did not reuse shared provider: %#v", copied.ModelRouter)
 	}
 	if err := m.ImportSettings(target.ID, copied); err != nil {
 		t.Fatalf("reimporting target settings changed its own endpoint ID: %v", err)
