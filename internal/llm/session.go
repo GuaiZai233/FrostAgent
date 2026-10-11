@@ -21,13 +21,14 @@ import (
 
 // GroupCompactMessage represents a structured group chat message for compaction and prompt inspection.
 type GroupCompactMessage struct {
-	Role      string `json:"role"`                 // "user" | "assistant"
-	Sender    string `json:"sender,omitempty"`     // Display name or nick
-	SenderID  string `json:"sender_id,omitempty"`  // User ID or bot ID
-	Content   string `json:"content"`              // Message body (opaque payload)
-	MessageID string `json:"message_id,omitempty"` // Message ID for deduplication
-	Time      string `json:"time,omitempty"`       // Timestamp string e.g. "15:04:05"
-	raw       string `json:"-"`                    // Preserved raw string if ingested from text
+	Role             string `json:"role"`                        // "user" | "assistant"
+	Sender           string `json:"sender,omitempty"`            // Display name or nick
+	SenderID         string `json:"sender_id,omitempty"`         // User ID or bot ID
+	Content          string `json:"content"`                     // Message body (opaque payload)
+	ImageDescription string `json:"image_description,omitempty"` // Vision output kept separate from user text.
+	MessageID        string `json:"message_id,omitempty"`        // Message ID for deduplication
+	Time             string `json:"time,omitempty"`              // Timestamp string e.g. "15:04:05"
+	raw              string `json:"-"`                           // Preserved raw string if ingested from text
 }
 
 // FormatDisplay renders the message as a single-line display string.
@@ -35,21 +36,25 @@ func (m GroupCompactMessage) FormatDisplay() string {
 	if m.raw != "" {
 		return m.raw
 	}
+	body := m.Content
+	if m.ImageDescription != "" {
+		body += " 【图片识别结果】：" + m.ImageDescription
+	}
 	if m.Role == "assistant" {
 		botName := m.Sender
 		if botName == "" {
 			botName = "霜降"
 		}
-		return fmt.Sprintf("[assistant] %s: %s", botName, m.Content)
+		return fmt.Sprintf("[assistant] %s: %s", botName, body)
 	}
 	sender := m.Sender
 	if sender == "" {
 		sender = "user"
 	}
 	if m.SenderID != "" {
-		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, m.Content)
+		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, body)
 	}
-	return fmt.Sprintf("[user] %s: %s", sender, m.Content)
+	return fmt.Sprintf("[user] %s: %s", sender, body)
 }
 
 // ParseGroupCompactMessage parses a text line into a GroupCompactMessage while preserving the raw text.
@@ -1337,6 +1342,27 @@ func (g *StagedGroupCompactGuard) Sequence() uint64 {
 	return g.sequences[0]
 }
 
+// SetImageDescription attaches adapter-produced vision output to this guard's
+// exact staged user slot. A dropped, promoted, or evicted slot cannot be revived.
+func (g *StagedGroupCompactGuard) SetImageDescription(description string) bool {
+	if g == nil || g.session == nil || g.Sequence() == 0 || description == "" {
+		return false
+	}
+	g.session.mu.Lock()
+	defer g.session.mu.Unlock()
+	if g.finalized.Load() {
+		return false
+	}
+	for i := range g.session.groupCompactBuffer {
+		item := &g.session.groupCompactBuffer[i]
+		if item.sequence == g.Sequence() && item.staged && item.message.Role == "user" {
+			item.message.ImageDescription = description
+			return true
+		}
+	}
+	return false
+}
+
 // AddSequence binds an additional buffer slot (such as an intermediate assistant response) to this guard.
 func (g *StagedGroupCompactGuard) AddSequence(seq uint64) {
 	if g == nil || seq == 0 {
@@ -1692,6 +1718,10 @@ func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, m
 				contentRunes := []rune(message.Content)
 				if maxChars < len(contentRunes) {
 					message.Content = string(contentRunes[:maxChars])
+				}
+				remaining := max(0, maxChars-len([]rune(message.Content)))
+				if imageRunes := []rune(message.ImageDescription); len(imageRunes) > remaining {
+					message.ImageDescription = string(imageRunes[:remaining])
 				}
 				message.raw = ""
 				selected = append(selected, message)

@@ -187,22 +187,35 @@ type SetActiveBuildReq struct {
 
 // Schedule represents a deterministic cron schedule that triggers an Action.
 type Schedule struct {
-	ID        string     `json:"id"`
-	ActionID  string     `json:"action_id"`
-	CronExpr  string     `json:"cron_expr"`
-	Timezone  string     `json:"timezone"`
-	NextRunAt time.Time  `json:"next_run_at"`
-	LastRunAt *time.Time `json:"last_run_at,omitempty"`
-	Enabled   bool       `json:"enabled"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID              string           `json:"id"`
+	ActionID        string           `json:"action_id"`
+	CronExpr        string           `json:"cron_expr"`
+	Timezone        string           `json:"timezone"`
+	NextRunAt       time.Time        `json:"next_run_at"`
+	LastRunAt       *time.Time       `json:"last_run_at,omitempty"`
+	Enabled         bool             `json:"enabled"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	DeliveryContext *DeliveryContext `json:"delivery_context,omitempty"`
+}
+
+// DeliveryContext carries trusted conversation routing for a schedule trigger.
+type DeliveryContext struct {
+	Platform    string `json:"platform"`
+	AdapterID   string `json:"adapter_id,omitempty"`
+	MessageType string `json:"message_type"`
+	TargetID    string `json:"target_id"`
+	SessionID   string `json:"session_id,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
+	GroupID     string `json:"group_id,omitempty"`
 }
 
 // CreateScheduleReq represents the request to register a new schedule trigger.
 type CreateScheduleReq struct {
-	CronExpr string `json:"cron_expr"`
-	Timezone string `json:"timezone,omitempty"`
-	Enabled  bool   `json:"enabled"`
+	CronExpr        string           `json:"cron_expr"`
+	Timezone        string           `json:"timezone,omitempty"`
+	Enabled         bool             `json:"enabled"`
+	DeliveryContext *DeliveryContext `json:"delivery_context,omitempty"`
 }
 
 // Matcher represents a deterministic message pattern rule that triggers an Action.

@@ -112,7 +112,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               </span>
             </div>
           </div>
-          <p class="page-description">智能体核心服务运行状态与已挂载工具能力</p>
           <p class="text-xs text-muted">实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span></p>
           <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(oneBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(oneBotURL)}">复制</a><br>AstrBot: ${escapeHtml(astrBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(astrBotURL)}">复制</a></p>
         </header>

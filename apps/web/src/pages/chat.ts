@@ -89,9 +89,7 @@ export function mountChatPage(container: HTMLElement): () => void {
               <span id="connection-status-text">${getStatusText(connectionStatus)}</span>
             </span>
           </div>
-          <p class="page-description">
-            模拟上游协议帧直连实例模型大脑进行对话调试。会话完全隔离，断电全丢。
-          </p>
+          <p class="text-xs text-muted mt-1">此模式通信断电全丢，无持久化</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline btn-sm" id="btn-reconnect">
@@ -108,14 +106,6 @@ export function mountChatPage(container: HTMLElement): () => void {
           </button>
         </div>
       </header>
-
-      <!-- Mock & Ephemeral Warning Banner -->
-      <div class="card p-3 border-border flex items-center gap-2.5 text-xs text-muted" style="background-color: var(--secondary);">
-        <span class="text-primary flex items-center">${icon('info', 'w-4 h-4')}</span>
-        <span>
-          <strong>断电全丢模式 (Mock Adapter)</strong>：当前通信通过 <code class="font-mono">?mock=true</code> 连接。对话绝不写入长期记忆库，不触发群聊总结落盘，不偷取表情包。
-        </span>
-      </div>
 
       <!-- Config Card -->
       <div class="card p-4 flex flex-col gap-3.5">

@@ -29,7 +29,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">MCP 服务器</h1>
-          <p class="page-description">连接外部 MCP Server，为 Agent 动态扩展工具能力</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline" id="mcp-refresh-btn" title="刷新服务器列表">

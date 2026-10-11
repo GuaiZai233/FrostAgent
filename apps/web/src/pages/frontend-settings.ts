@@ -38,7 +38,6 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">网页端设置</h1>
-            <p class="page-description">自定义 FrostAgent 网页端视觉风格与服务端访问凭据</p>
           </div>
         </header>
 

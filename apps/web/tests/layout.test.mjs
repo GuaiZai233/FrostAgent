@@ -16,6 +16,14 @@ const overview = await readFile(
   new URL('../src/pages/overview.ts', import.meta.url),
   'utf8',
 );
+const chat = await readFile(
+  new URL('../src/pages/chat.ts', import.meta.url),
+  'utf8',
+);
+const promptPage = await readFile(
+  new URL('../src/pages/prompt.ts', import.meta.url),
+  'utf8',
+);
 const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
@@ -82,6 +90,36 @@ assert.match(
   'overview copy action does not call copyToClipboard',
 );
 
+assert.match(
+  chat,
+  /<h1 class="page-title">直接对话<\/h1>[\s\S]*?<p class="text-xs text-muted mt-1">此模式通信断电全丢，无持久化<\/p>/,
+  'direct chat must show the ephemeral-mode subtitle below its title',
+);
+assert.equal(
+  chat.includes('断电全丢模式 (Mock Adapter)'),
+  false,
+  'direct chat must not render the redundant ephemeral-mode info card',
+);
+
+for (const removedSampleToken of [
+  'SAMPLE_GROUP_PROMPT',
+  'prompt-load-sample-btn',
+  'prompt-empty-load-sample-btn',
+  '示例 Prompt',
+  'brand-icon',
+]) {
+  assert.equal(
+    promptPage.includes(removedSampleToken),
+    false,
+    `prompt page must not retain sample UI: ${removedSampleToken}`,
+  );
+}
+assert.match(
+  promptPage,
+  /<h3 class="text-sm font-semibold text-foreground mb-1">请选择群聊会话<\/h3>\s*<p class="text-xs max-w-sm mb-4">从左侧选择/,
+  'prompt page empty state must retain its session-selection guidance',
+);
+
 const globalSettings = backendSettings.match(
   /const globalKeys = new Set\(\[([\s\S]*?)\]\);/,
 )?.[1];
@@ -117,6 +155,35 @@ assert.match(
   /\.env-table\s+td\s*{[^}]*overflow-wrap:\s*anywhere;/,
   '.env-table cells must have overflow-wrap: anywhere for responsive wrapping',
 );
+
+assert.match(
+  backendSettings,
+  /id="proactive-reply-cb"\s+role="switch"\s+aria-label="主动回复"/,
+  'proactive reply control must use an accessible switch',
+);
+assert.match(
+  backendSettings,
+  /id="proactive-whitelist-cb"\s+role="switch"\s+aria-label="群聊白名单模式"/,
+  'proactive whitelist control must use an accessible switch',
+);
+assert.match(
+  components,
+  /\.toggle-switch span\s*{[^}]*border-radius:\s*2rem;/,
+  'toggle switch track must use a rounded pill shape',
+);
+for (const removedText of [
+  '未被唤醒的入站群聊消息先 roll 概率；触发后由模型研判值得插嘴则回复，否则调用 stay_silent 静默',
+  '精度 0.01 ~ 1.00，开启后最低 0.01，支持滑块或手动输入',
+  '(ENABLE_PROACTIVE_REPLY_WHITELIST)',
+  '已启用',
+  '已停用',
+]) {
+  assert.equal(
+    backendSettings.includes(removedText),
+    false,
+    `backend settings must not render removed text: ${removedText}`,
+  );
+}
 
 // Cascade regression check: ensure .table.env-table td resolves to vertical-align: top
 function computeSpecificity(selector) {

@@ -74,7 +74,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">Bot 服务端设置</h1>
-            <p class="page-description">设置保存在数据库中，修改后自动应用。</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -102,13 +101,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                 <span class="text-primary flex items-center">${icon('sparkles', 'w-4 h-4')}</span>
                 <div>
                   <h3 class="text-xs font-semibold text-foreground">主动回复</h3>
-                  <p class="text-[11px] text-muted mt-0.5">未被唤醒的入站群聊消息先 roll 概率；触发后由模型研判值得插嘴则回复，否则调用 stay_silent 静默</p>
                 </div>
               </div>
-              <label class="flex items-center gap-2 cursor-pointer">
-                <span class="text-xs font-medium text-muted" id="proactive-reply-status-text">已停用</span>
-                <input type="checkbox" id="proactive-reply-cb" class="checkbox" />
-              </label>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-muted" id="proactive-reply-status-text" aria-live="polite" style="display: none;"></span>
+                <label class="toggle-switch" title="主动回复">
+                  <input type="checkbox" id="proactive-reply-cb" role="switch" aria-label="主动回复" />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
             </div>
 
             <div class="p-3 bg-muted/40 rounded-lg border border-border flex flex-col gap-2.5" id="proactive-reply-controls" style="transition: opacity 0.2s ease;">
@@ -150,7 +151,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
               <div class="flex items-center justify-between text-[11px] text-muted mt-0.5">
                 <span>0.01 (1%)</span>
-                <span>精度 0.01 ~ 1.00，开启后最低 0.01，支持滑块或手动输入</span>
                 <span>1.00 (100%)</span>
               </div>
 
@@ -159,12 +159,14 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                 <div class="flex items-center justify-between flex-wrap gap-2">
                   <div class="flex items-center gap-1.5">
                     <span class="text-xs font-semibold text-foreground">群聊白名单模式</span>
-                    <span class="text-[11px] text-muted font-mono">(ENABLE_PROACTIVE_REPLY_WHITELIST)</span>
                   </div>
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <span class="text-xs font-medium text-muted" id="proactive-whitelist-status-text">已停用</span>
-                    <input type="checkbox" id="proactive-whitelist-cb" class="checkbox" />
-                  </label>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium text-muted" id="proactive-whitelist-status-text" aria-live="polite" style="display: none;"></span>
+                    <label class="toggle-switch" title="群聊白名单模式">
+                      <input type="checkbox" id="proactive-whitelist-cb" role="switch" aria-label="群聊白名单模式" />
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
                 </div>
                 <p class="text-[11px] text-muted">
                   启用白名单模式后，仅白名单内的群聊才会触发主动回复；非白名单中的群永远不触发自动回复。
@@ -316,14 +318,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   ) {
     proactiveReplyCb.checked = enabled;
     proactiveReplyCb.disabled = isSaving;
-    proactiveReplyStatusText.textContent = isSaving
-      ? '保存中...'
-      : enabled
-        ? '已启用'
-        : '已停用';
-    proactiveReplyStatusText.className = enabled
-      ? 'text-xs font-medium text-primary'
-      : 'text-xs font-medium text-muted';
+    proactiveReplyStatusText.textContent = isSaving ? '保存中...' : '';
+    proactiveReplyStatusText.style.display = isSaving ? 'inline' : 'none';
+    proactiveReplyStatusText.className = 'text-xs font-medium text-muted';
 
     const clampedProb = Math.min(
       1.0,
@@ -357,17 +354,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     proactiveWhitelistStatusText.textContent = isSaving
       ? '保存中...'
       : isUnverified
-        ? '状态未确认 (已恢复)'
-        : enabled
-          ? '已启用'
-          : '已停用';
+        ? '状态未确认（已恢复）'
+        : '';
+    proactiveWhitelistStatusText.style.display =
+      isSaving || isUnverified ? 'inline' : 'none';
     proactiveWhitelistStatusText.className = isSaving
       ? 'text-xs font-medium text-muted'
       : isUnverified
         ? 'text-xs font-medium text-warning'
-        : enabled
-          ? 'text-xs font-medium text-primary'
-          : 'text-xs font-medium text-muted';
+        : 'text-xs font-medium text-muted';
 
     // Update select options
     const currentSelected = proactiveWhitelistSelect.value;

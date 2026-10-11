@@ -176,6 +176,9 @@ var migrations = []migration{
 	{9, []string{
 		`CREATE INDEX security_audit_occurred_idx ON security_audit(occurred_at DESC, id DESC)`,
 	}},
+	{10, []string{
+		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
+	}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

@@ -1170,6 +1170,10 @@ func TestGroupCompactor_Race_SnapshotInFlightThenBan(t *testing.T) {
 
 	owner := "group:syn_test_grp_race_01"
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+	t.Cleanup(func() {
+		_ = compactor.DrainPersistence(owner, 2*time.Second)
+		compactor.Close()
+	})
 
 	s := &SessionContext{
 		ConversationID: owner,
@@ -1257,6 +1261,10 @@ func TestGroupCompactor_Race_CommitFirstThenBanRollback(t *testing.T) {
 
 	owner := "group:syn_test_grp_race_02"
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+	t.Cleanup(func() {
+		_ = compactor.DrainPersistence(owner, 2*time.Second)
+		compactor.Close()
+	})
 
 	s := &SessionContext{
 		ConversationID: owner,
@@ -1351,6 +1359,10 @@ func TestGroupCompactor_Race_CommitFirstThenBanRollback_EmptyInitialSummary(t *t
 
 	owner := "group:syn_test_grp_race_03"
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+	t.Cleanup(func() {
+		_ = compactor.DrainPersistence(owner, 2*time.Second)
+		compactor.Close()
+	})
 
 	s := &SessionContext{
 		ConversationID: owner,
@@ -1428,6 +1440,10 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		owner := "group:syn_test_grp_distill_ban"
 		groupID := "syn_test_grp_distill_ban"
 		compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+		t.Cleanup(func() {
+			_ = compactor.DrainPersistence(owner, 2*time.Second)
+			compactor.Close()
+		})
 		compactor.SetGroupManager(gm)
 
 		gStore, err := gm.GetGroupStore(groupID)
@@ -1497,6 +1513,7 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		if !dropped {
 			t.Fatalf("expected DropGroupCompactMessage to drop polluted message and rollback")
 		}
+		compactor.RollbackPersistence(owner, s.GroupRunningSummary())
 
 		// 释放提炼 LLM 返回
 		close(distillResume)
@@ -1505,6 +1522,10 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		case <-compactorDone:
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for compactor to complete")
+		}
+
+		if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+			t.Fatalf("failed to drain persistence after rollback: %v", err)
 		}
 
 		// 1. 验证总结回滚行为完好
@@ -1538,6 +1559,10 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		owner := "group:syn_test_grp_distill_reset"
 		groupID := "syn_test_grp_distill_reset"
 		compactor := NewGroupCompactor(mockLLM, store, "mock-model", 1, 10*time.Millisecond)
+		t.Cleanup(func() {
+			_ = compactor.DrainPersistence(owner, 2*time.Second)
+			compactor.Close()
+		})
 		compactor.SetGroupManager(gm)
 
 		gStore, err := gm.GetGroupStore(groupID)
@@ -1592,6 +1617,7 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 
 		// 会话重置
 		s.ResetGroupCompact()
+		compactor.RollbackPersistence(owner, "")
 
 		// 释放提炼 LLM 返回
 		close(distillResume)
@@ -1600,6 +1626,10 @@ func TestGroupCompactor_DistillationInvalidationOnBanOrReset(t *testing.T) {
 		case <-compactorDone:
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for compactor to complete")
+		}
+
+		if err := compactor.DrainPersistence(owner, 2*time.Second); err != nil {
+			t.Fatalf("failed to drain persistence after reset: %v", err)
 		}
 
 		// 验证提炼结果被丢弃，未写入记忆库
@@ -1627,6 +1657,10 @@ func TestGroupCompactor_MixedSender_DropMessageDoesNotRollbackHistoricalMixedBat
 
 	owner := "group:syn_test_grp_mixed_01"
 	compactor := NewGroupCompactor(mockLLM, store, "mock-model", 3, 10*time.Millisecond)
+	t.Cleanup(func() {
+		_ = compactor.DrainPersistence(owner, 2*time.Second)
+		compactor.Close()
+	})
 
 	s := &SessionContext{
 		ConversationID: owner,

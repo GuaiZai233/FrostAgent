@@ -1,5 +1,6 @@
 import { createInstanceAPI } from '../api/client';
 import { instanceState } from '../instance-state';
+import { memoryDisplayContent, memoryEvidenceText } from './memory-display';
 import {
   MemoryEntry,
   GetMemoryStatsResponse,
@@ -47,7 +48,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
         <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
           <div>
             <h1 class="page-title">记忆管理</h1>
-            <p class="page-description">管理 Bot 隔离化长期记忆、群聊档案与成员称呼</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap" id="memory-header-actions">
             <a class="btn btn-outline" href="/api/instances/${instanceState.selected!.id}/backup/memories" download="memory.json">下载记忆备份</a>
@@ -724,6 +724,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             : '<span class="text-muted text-xs">-</span>';
 
         const isGroupOwner = mem.owner === 'group';
+        const displayContent = memoryDisplayContent(mem);
         const ownerDisplay = isGroupOwner ? '群整体 (group)' : mem.owner;
 
         return `
@@ -743,8 +744,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               </button>
             </td>
             <td class="memory-content-cell">
-              <button type="button" class="memory-content-preview" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
-                ${escapeHtml(mem.content)}
+              <button type="button" class="memory-content-preview" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(displayContent)}">
+                ${escapeHtml(displayContent)}
               </button>
             </td>
             <td>${tagsHtml}</td>
@@ -1122,7 +1123,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
           </div>
 
           ${
-            mem.evidence
+            mem.evidence || mem.sourceMedia === 'image'
               ? `
             <div class="p-3 rounded-md border border-border bg-muted/60 text-xs flex flex-col gap-1.5">
               <div class="flex items-center justify-between text-muted">
@@ -1137,12 +1138,12 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                 }
               </div>
               <div class="font-mono text-foreground italic bg-background p-2 rounded border border-border/50 select-all break-words">${escapeHtml(
-                mem.evidence,
+                memoryEvidenceText(mem),
               )}</div>
               <div class="flex items-center justify-between text-[11px] text-muted flex-wrap gap-1">
                 ${
                   mem.sourceSenderId
-                    ? `<span>发言人: <strong class="font-mono text-foreground">${escapeHtml(mem.sourceSenderId)}</strong></span>`
+                    ? `<span>${mem.sourceMedia === 'image' ? '发图者' : '发言人'}: <strong class="font-mono text-foreground">${escapeHtml(mem.sourceSenderId)}</strong></span>`
                     : ''
                 }
                 ${
@@ -1299,23 +1300,16 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               <span class="text-muted">群身份:</span>
               <span class="ml-1 text-foreground">${escapeHtml(member.role)}</span>
             </div>
-            <div class="col-span-2 pt-1 border-t border-border/50">
-              <span class="text-muted">当前生效称呼:</span>
-              <span class="ml-1 font-semibold text-primary">${escapeHtml(member.callingName || '群友')}</span>
-              <span class="text-[11px] text-muted ml-1">(解析优先级: 优先称呼 > 昵称 > 群友)</span>
-            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="edit-member-pref">优先称呼 (Preferred Name)</label>
-            <input id="edit-member-pref" class="input text-xs" value="${escapeHtml(member.preferredName || '')}" placeholder="例如: 霜霜、小明" />
-            <p class="text-[11px] text-muted mt-1">最高优先级称呼。留空时将自动退化至群昵称或“群友”，群名片绝不会被用作称呼。</p>
+            <label class="form-label" for="edit-member-pref">优先称呼</label>
+            <input id="edit-member-pref" class="input text-xs" value="${escapeHtml(member.preferredName || '')}" />
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="edit-member-aliases">别名 (Aliases，逗号分隔)</label>
-            <input id="edit-member-aliases" class="input text-xs" value="${escapeHtml((member.aliases || []).join(', '))}" placeholder="例如: 狐狸, 霜降, 呆毛" />
-            <p class="text-[11px] text-muted mt-1">该群员的其他常见称呼与绰号，用于模型在群聊中识别对话主体。</p>
+            <label class="form-label" for="edit-member-aliases">别名（逗号分隔）</label>
+            <input id="edit-member-aliases" class="input text-xs" value="${escapeHtml((member.aliases || []).join(', '))}" />
           </div>
         </div>
       `,

@@ -31,6 +31,8 @@ func TestMemoryImportRestoresProfilesArchivesAndMergeSkipsIDs(t *testing.T) {
 	now := time.Now().UTC()
 	private := testMemory("private-a", "", "private fact")
 	group := testMemory("group-a", "123", "group fact")
+	private.SourceMedia = memory.SourceMediaImage
+	group.SourceMedia = memory.SourceMediaImage
 	profile := &memory.GroupProfile{GroupID: "123", GroupName: "Existing Name",
 		Members: map[string]*memory.MemberProfile{"synthetic-user": {
 			UserID: "synthetic-user", Nickname: "Original", CreatedAt: now, UpdatedAt: now,
@@ -58,6 +60,10 @@ func TestMemoryImportRestoresProfilesArchivesAndMergeSkipsIDs(t *testing.T) {
 	}
 	if qq.Profile == nil || qq.Profile.GroupName != "Existing Name" || len(qq.Archives) != 1 {
 		t.Fatalf("group profile or archive was lost: %#v", qq)
+	}
+	if exported.PrivateEntries[0].SourceMedia != memory.SourceMediaImage || len(qq.Entries) != 1 ||
+		qq.Entries[0].SourceMedia != memory.SourceMediaImage || qq.Archives[0].Sources[0].SourceMedia != memory.SourceMediaImage {
+		t.Fatalf("backup lost image evidence source: private=%#v group=%#v", exported.PrivateEntries, qq)
 	}
 	data.Groups = data.Groups[:1]
 	data.Groups[0].Profile.GroupName = "Imported Name"

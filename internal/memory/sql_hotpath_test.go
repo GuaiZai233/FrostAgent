@@ -71,7 +71,7 @@ func runSQLHotpathTest(t *testing.T, db *storage.DB, sqliteTriggers bool) {
 	}
 	private := NewSQLStore(db, "test-instance")
 	for _, id := range []string{"memory-a", "memory-b"} {
-		entry := MemoryEntry{ID: id, Owner: "user-a", Content: id, Source: SourceManual, CreatedAt: time.Now()}
+		entry := MemoryEntry{ID: id, Owner: "user-a", Content: id, Source: SourceManual, SourceMedia: SourceMediaImage, CreatedAt: time.Now()}
 		if err := private.Save(entry); err != nil {
 			t.Fatal(err)
 		}
@@ -122,6 +122,38 @@ func runSQLHotpathTest(t *testing.T, db *storage.DB, sqliteTriggers bool) {
 		var count int
 		if err := db.SQL.QueryRow(query).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("recall count %q = %d, %v", query, count, err)
+		}
+	}
+	for _, scope := range []ScopeType{ScopePrivate, ScopeGroup} {
+		store := sqlBrainStore{db: db, instanceID: "test-instance", scope: scope}
+		if scope == ScopeGroup {
+			store.platform, store.groupID = "qq", "test-group"
+		}
+		loaded, err := store.load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var entry MemoryEntry
+		for _, candidate := range loaded.Entries {
+			if candidate.ID == "memory-a" {
+				entry = candidate
+			}
+		}
+		if entry.SourceMedia != SourceMediaImage {
+			t.Fatalf("%s lost image evidence source: %#v", scope, entry)
+		}
+		entry.SourceMedia = ""
+		if err := store.upsertEntries([]MemoryEntry{entry}); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err = store.load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range loaded.Entries {
+			if candidate.ID == entry.ID && candidate.SourceMedia != "" {
+				t.Fatalf("%s did not update evidence source: %#v", scope, candidate)
+			}
 		}
 	}
 	profile, err := group.GetProfile()

@@ -21,10 +21,10 @@ func TestSQLStorePersistsMemoryAndArchives(t *testing.T) {
 	store := NewSQLStore(db, "test-instance")
 	now := time.Now().UTC().Round(0)
 	brain := &BrainData{
-		Entries: []MemoryEntry{{ID: "memory-a", Owner: "test-user", Content: "example", Source: SourceManual,
+		Entries: []MemoryEntry{{ID: "memory-a", Owner: "test-user", Content: "example", Source: SourceManual, SourceMedia: SourceMediaImage,
 			Tags: []string{"first", "second"}, CreatedAt: now, UpdatedAt: now, MergedFrom: []string{"old-a"}}},
 		MergeArchives: []MemoryMergeArchive{{MergedID: "memory-a", Owner: "test-user", MergedAt: now,
-			Sources: []MemoryEntry{{ID: "old-a", Owner: "test-user", Content: "old", CreatedAt: now}}}},
+			Sources: []MemoryEntry{{ID: "old-a", Owner: "test-user", Content: "old", SourceMedia: SourceMediaImage, CreatedAt: now}}}},
 	}
 	if err := store.save(brain); err != nil {
 		t.Fatal(err)
@@ -35,7 +35,8 @@ func TestSQLStorePersistsMemoryAndArchives(t *testing.T) {
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].ID != "memory-a" || len(loaded.Entries[0].Tags) != 2 ||
 		len(loaded.Entries[0].MergedFrom) != 1 || len(loaded.MergeArchives) != 1 ||
-		loaded.MergeArchives[0].Sources[0].Content != "old" {
+		loaded.MergeArchives[0].Sources[0].Content != "old" || loaded.Entries[0].SourceMedia != SourceMediaImage ||
+		loaded.MergeArchives[0].Sources[0].SourceMedia != SourceMediaImage {
 		t.Fatalf("incomplete SQL round trip: %#v", loaded)
 	}
 	if err := db.Close(); err != nil {
@@ -47,7 +48,7 @@ func TestSQLStorePersistsMemoryAndArchives(t *testing.T) {
 	}
 	defer db.Close()
 	loaded, err = NewSQLStore(db, "test-instance").load()
-	if err != nil || len(loaded.Entries) != 1 || len(loaded.MergeArchives) != 1 {
+	if err != nil || len(loaded.Entries) != 1 || len(loaded.MergeArchives) != 1 || loaded.Entries[0].SourceMedia != SourceMediaImage {
 		t.Fatalf("memory was not durable: %#v, %v", loaded, err)
 	}
 }

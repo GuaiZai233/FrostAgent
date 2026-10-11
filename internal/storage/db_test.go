@@ -46,6 +46,11 @@ func assertMigrationFixture(t *testing.T, db *DB) {
 
 func prepareOldSchema(t *testing.T, db *DB, version int) {
 	t.Helper()
+	if version <= 9 {
+		if _, err := db.SQL.Exec(`ALTER TABLE memory_entries DROP COLUMN source_media`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if version <= 8 {
 		if _, err := db.SQL.Exec(`DROP INDEX security_audit_occurred_idx`); err != nil {
 			t.Fatal(err)
@@ -61,9 +66,9 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 	}
 }
 
-func TestSQLiteMigratesPopulatedV7AndV8(t *testing.T) {
+func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8} {
+	for _, previous := range []int{7, 8, 9} {
 		t.Run(strconv.Itoa(previous), func(t *testing.T) {
 			root := t.TempDir()
 			db, err := Open(ctx, root)
@@ -81,6 +86,10 @@ func TestSQLiteMigratesPopulatedV7AndV8(t *testing.T) {
 					t.Fatalf("startup %d: %v", start, err)
 				}
 				assertMigrationFixture(t, db)
+				var media string
+				if err := db.SQL.QueryRow(`SELECT source_media FROM memory_entries WHERE id = 'memory-1'`).Scan(&media); err != nil || media != "" {
+					t.Fatalf("migrated text evidence source = %q, %v", media, err)
+				}
 				var got int
 				if err := db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id = 1`).Scan(&got); err != nil || got != SchemaVersion {
 					t.Fatalf("schema version = %d, %v", got, err)

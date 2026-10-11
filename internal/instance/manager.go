@@ -65,6 +65,9 @@ type managed struct {
 	logger  *logs.Store
 	mcp     *mcp.Manager
 }
+
+type runtimeBuilder func(*Manager, *managed, *instanceconfig.Store, string, bool) (*Runtime, error)
+
 type Manager struct {
 	mu                 sync.RWMutex
 	root               string
@@ -86,10 +89,11 @@ type Manager struct {
 	shutdownCancel     context.CancelFunc
 	closeOnce          sync.Once
 	db                 *storage.DB
+	buildRuntime       runtimeBuilder
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
-	return newManager(root, global, dialoguePath, nil)
+	return newManager(root, global, dialoguePath, nil, buildManagedRuntime)
 }
 
 // NewDatabase starts the control plane with SQL as its only runtime state
@@ -109,7 +113,7 @@ func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	m, err := newManager(root, global, "", db)
+	m, err := newManager(root, global, "", db, buildManagedRuntime)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -117,7 +121,17 @@ func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
 	return m, nil
 }
 
-func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB) (*Manager, error) {
+func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, configDir string, enabled bool) (*Runtime, error) {
+	wsListenAddr := strings.TrimSpace(m.global.Get("WS_LISTEN_ADDR"))
+	if m.db == nil {
+		wsListenAddr = m.legacyWSListenAddr
+	} else if wsListenAddr == "" {
+		wsListenAddr = "127.0.0.1:1234"
+	}
+	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
+}
+
+func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB, builder runtimeBuilder) (*Manager, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -133,7 +147,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	if legacyWSListenAddr == "" {
 		legacyWSListenAddr = "127.0.0.1:1234"
 	}
-	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db}
+	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
 	if db != nil {
 		m.security = security.NewControllerSQL(db)
 	} else {
@@ -306,7 +320,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 			m.registry.Instances[index].Error = pathError.Error()
 			continue
 		}
-		if info.Deleting {
+		if info.Deleting || info.Enabled {
 			continue
 		}
 		r, c, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
@@ -376,13 +390,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	wsListenAddr := strings.TrimSpace(m.global.Get("WS_LISTEN_ADDR"))
-	if m.db == nil {
-		wsListenAddr = m.legacyWSListenAddr
-	} else if wsListenAddr == "" {
-		wsListenAddr = "127.0.0.1:1234"
-	}
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security, m.db)
+	r, err := m.buildRuntime(m, i, c, configDir, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}

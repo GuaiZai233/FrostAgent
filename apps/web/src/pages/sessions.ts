@@ -29,7 +29,6 @@ export function mountSessionsPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">会话管理</h1>
-          <p class="page-description">查看与管理 Bot 参与的所有私聊及群聊会话状态</p>
         </div>
         <div class="flex items-center gap-2">
         <a class="btn btn-outline btn-sm" href="/api/instances/${instanceState.selected!.id}/backup/summaries" download="group_summaries.json">下载群摘要备份</a>

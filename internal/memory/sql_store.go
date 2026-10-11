@@ -22,7 +22,7 @@ type sqlBrainStore struct {
 func (b sqlBrainStore) load() (*BrainData, error) {
 	ctx := context.Background()
 	rows, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT id, owner, owner_type, content, summary, evidence,
-		source_message_id, source_sender_id, source, visibility, created_at, updated_at,
+		source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at,
 		access_count, merged_from_json FROM memory_entries
 		WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? ORDER BY created_at, id`),
 		b.instanceID, b.scope, b.platform, b.groupID)
@@ -34,7 +34,7 @@ func (b sqlBrainStore) load() (*BrainData, error) {
 		var entry MemoryEntry
 		var ownerType, source, visibility, createdAt, updatedAt, merged string
 		if err := rows.Scan(&entry.ID, &entry.Owner, &ownerType, &entry.Content, &entry.Summary,
-			&entry.Evidence, &entry.SourceMessageID, &entry.SourceSenderID, &source, &visibility,
+			&entry.Evidence, &entry.SourceMessageID, &entry.SourceSenderID, &entry.SourceMedia, &source, &visibility,
 			&createdAt, &updatedAt, &entry.AccessCount, &merged); err != nil {
 			rows.Close()
 			return nil, err
@@ -183,20 +183,20 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 		}
 		query := `INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source, visibility, created_at, updated_at, access_count, merged_from_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if update {
 			query += ` ON CONFLICT (instance_id, scope_type, platform, group_id, id) DO UPDATE SET
 				owner = excluded.owner, owner_type = excluded.owner_type, content = excluded.content,
 				summary = excluded.summary, evidence = excluded.evidence,
 				source_message_id = excluded.source_message_id, source_sender_id = excluded.source_sender_id,
-				source = excluded.source, visibility = excluded.visibility,
+				source_media = excluded.source_media, source = excluded.source, visibility = excluded.visibility,
 				created_at = excluded.created_at, updated_at = excluded.updated_at,
 				access_count = excluded.access_count, merged_from_json = excluded.merged_from_json`
 		}
 		if _, err = tx.ExecContext(ctx, b.db.Bind(query), b.instanceID, b.scope, b.platform, b.groupID,
 			entry.ID, entry.Owner, entry.OwnerType, entry.Content, entry.Summary, entry.Evidence,
-			entry.SourceMessageID, entry.SourceSenderID, entry.Source, entry.Visibility,
+			entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia, entry.Source, entry.Visibility,
 			entry.CreatedAt.UTC().Format(time.RFC3339Nano), entry.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			entry.AccessCount, string(merged)); err != nil {
 			return err
@@ -229,10 +229,10 @@ func (b sqlBrainStore) saveTx(ctx context.Context, tx *sql.Tx, brain *BrainData)
 		}
 		if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source, visibility, created_at, updated_at, access_count, merged_from_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			b.instanceID, b.scope, b.platform, b.groupID, entry.ID, entry.Owner, entry.OwnerType,
-			entry.Content, entry.Summary, entry.Evidence, entry.SourceMessageID, entry.SourceSenderID,
+			entry.Content, entry.Summary, entry.Evidence, entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia,
 			entry.Source, entry.Visibility, entry.CreatedAt.UTC().Format(time.RFC3339Nano),
 			entry.UpdatedAt.UTC().Format(time.RFC3339Nano), entry.AccessCount, string(merged)); err != nil {
 			return err

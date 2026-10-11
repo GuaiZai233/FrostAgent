@@ -726,6 +726,7 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		Evidence:        e.Evidence,
 		SourceMessageId: e.SourceMessageID,
 		SourceSenderId:  e.SourceSenderID,
+		SourceMedia:     e.SourceMedia,
 	}
 }
 

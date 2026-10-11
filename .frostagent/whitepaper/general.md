@@ -9,6 +9,12 @@
 
 ## FrostAgent 的组成
 
+### 并发回归验证
+
+每次面向 main 的 PR 和 main 推送，Linux CI 都运行 `go test -race`，覆盖实例生命周期、安全服务、LLM（含会话与群聊压缩）、记忆存储与反思、群摘要存储、模型路由，以及 OneBot / AstrBot 适配器。检测命令与包列表以 `.github/workflows/ci.yml` 的 `Run concurrency and race regressions` 步骤为准，单包超时为 300 秒。
+
+Race detector 只能发现本次测试实际执行路径中的 Go 共享内存竞争；未触发的并发时序、逻辑竞态、跨进程或数据库竞争、Python 插件以及真实平台网络行为仍需专项或集成验证。Windows Smoke 继续执行普通测试；不据此宣称 Windows 上的竞态检测已通过。
+
 ### 记忆系统
 
 这是此框架的核心——以至于，Agent可以通过与人类的交流、主人的对话自行写入和管理记忆，从而达到进化迭代的效果。
