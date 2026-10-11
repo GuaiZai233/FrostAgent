@@ -5,7 +5,6 @@ export function mountSettingsPage(container: HTMLElement): () => void {
     <div class="page-container fade-in">
       <header class="pb-1">
         <h1 class="page-title">系统设置</h1>
-        <p class="page-description">配置 FrostAgent 后端参数与网页外观主题</p>
       </header>
 
       <div class="flex flex-col gap-3" style="max-width: 42rem;">

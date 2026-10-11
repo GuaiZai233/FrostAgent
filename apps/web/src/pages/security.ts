@@ -45,7 +45,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">安全控制</h1>
-          <p class="page-description">配置全局安全审查策略与管理被锁定的用户。</p>
         </div>
         <button class="btn btn-outline btn-sm" id="security-refresh">
           ${icon('refresh', 'w-3.5 h-3.5')} 刷新

@@ -45,7 +45,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
         <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
           <div>
             <h1 class="page-title">记忆管理</h1>
-            <p class="page-description">管理 Bot 隔离化长期记忆、群聊档案与成员称呼</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap" id="memory-header-actions">
             <div class="flex items-center gap-1" style="width: 13rem;">
@@ -1293,23 +1292,16 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               <span class="text-muted">群身份:</span>
               <span class="ml-1 text-foreground">${escapeHtml(member.role)}</span>
             </div>
-            <div class="col-span-2 pt-1 border-t border-border/50">
-              <span class="text-muted">当前生效称呼:</span>
-              <span class="ml-1 font-semibold text-primary">${escapeHtml(member.callingName || '群友')}</span>
-              <span class="text-[11px] text-muted ml-1">(解析优先级: 优先称呼 > 昵称 > 群友)</span>
-            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="edit-member-pref">优先称呼 (Preferred Name)</label>
-            <input id="edit-member-pref" class="input text-xs" value="${escapeHtml(member.preferredName || '')}" placeholder="例如: 霜霜、小明" />
-            <p class="text-[11px] text-muted mt-1">最高优先级称呼。留空时将自动退化至群昵称或“群友”，群名片绝不会被用作称呼。</p>
+            <label class="form-label" for="edit-member-pref">优先称呼</label>
+            <input id="edit-member-pref" class="input text-xs" value="${escapeHtml(member.preferredName || '')}" />
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="edit-member-aliases">别名 (Aliases，逗号分隔)</label>
-            <input id="edit-member-aliases" class="input text-xs" value="${escapeHtml((member.aliases || []).join(', '))}" placeholder="例如: 狐狸, 霜降, 呆毛" />
-            <p class="text-[11px] text-muted mt-1">该群员的其他常见称呼与绰号，用于模型在群聊中识别对话主体。</p>
+            <label class="form-label" for="edit-member-aliases">别名（逗号分隔）</label>
+            <input id="edit-member-aliases" class="input text-xs" value="${escapeHtml((member.aliases || []).join(', '))}" />
           </div>
         </div>
       `,

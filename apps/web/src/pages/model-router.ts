@@ -212,7 +212,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <header class="page-header">
           <div>
             <h1 class="page-title">模型路由器</h1>
-            <p class="page-description">可视化管理 OpenAI 兼容 Endpoint、模型和群级路由</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>

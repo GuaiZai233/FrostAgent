@@ -31,7 +31,6 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">指令设置</h1>
-            <p class="page-description">配置当前实例的管理员消息指令前缀，并查看实时动态指令语法示例。</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
