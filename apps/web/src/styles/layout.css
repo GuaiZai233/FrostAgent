@@ -270,12 +270,6 @@
   line-height: 1.25;
 }
 
-.page-description {
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
-  margin-top: 0.1875rem;
-}
-
 @media (max-width: 768px) {
   .app-layout {
     flex-direction: column;

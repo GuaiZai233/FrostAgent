@@ -1,6 +1,15 @@
 package core
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// IncomingDispatcher forwards eligible transport messages outside the agent loop.
+type IncomingDispatcher interface {
+	IsConfigured() bool
+	DispatchIncoming(context.Context, IncomingMessage) error
+}
 
 type MessageRole string
 

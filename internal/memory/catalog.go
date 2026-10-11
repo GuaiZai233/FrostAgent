@@ -156,6 +156,52 @@ func (s *CatalogStore) FormatForPrompt(owner string) (string, error) {
 		"当问题可能涉及这些主题时，调用 memory 搜索工具获取原始记忆。", nil
 }
 
+// FormatForGroupPrompt returns a bounded index prompt for the isolated group.
+func (s *CatalogStore) FormatForGroupPrompt(groupID string) (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	catalog, err := s.Get(groupID)
+	if err != nil || catalog == nil || len(catalog.Topics) == 0 {
+		return "", err
+	}
+
+	topics := append([]MemoryTopic(nil), catalog.Topics...)
+	if len(topics) > 24 {
+		topics = topics[:24]
+	}
+
+	labels := make([]string, 0, len(topics))
+	for _, topic := range topics {
+		name := sanitizeTopicText(topic.Name)
+		if name == "" {
+			continue
+		}
+		aliases := make([]string, 0, len(topic.Aliases))
+		for _, alias := range topic.Aliases {
+			alias = sanitizeTopicText(alias)
+			if alias != "" && !strings.EqualFold(alias, name) {
+				aliases = append(aliases, alias)
+			}
+			if len(aliases) == 4 {
+				break
+			}
+		}
+		if len(aliases) > 0 {
+			name += "(" + strings.Join(aliases, ", ") + ")"
+		}
+		labels = append(labels, name)
+	}
+	if len(labels) == 0 {
+		return "", nil
+	}
+
+	return "## 群聊记忆主题索引\n" +
+		"当前群聊已有以下记忆主题：" + strings.Join(labels, ", ") + "\n\n" +
+		"这些只是索引，不代表具体事实。\n" +
+		"当群聊问题可能涉及这些主题时，调用 memory 搜索工具获取原始群记忆。", nil
+}
+
 func (s *CatalogStore) load() (*catalogFile, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {

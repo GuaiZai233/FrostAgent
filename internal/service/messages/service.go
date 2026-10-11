@@ -198,9 +198,23 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch each outgoing message through the core dispatcher
+	adapterID := ""
+	if value, exists := req.Metadata["adapter_id"]; exists {
+		var ok bool
+		adapterID, ok = value.(string)
+		if _, registered := s.dispatcher.GetAdapter(adapterID); !ok || !registered {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "adapter_id must name a registered adapter"})
+			return
+		}
+	}
 	ctx := r.Context()
 	for _, msg := range messages {
 		targetPlatform := msg.Platform
+		if adapterID != "" {
+			targetPlatform = adapterID
+		}
 		// Platform fallback: if target platform adapter is not found, attempt common alias mapping
 		if _, ok := s.dispatcher.GetAdapter(targetPlatform); !ok {
 			if targetPlatform == "qq" {

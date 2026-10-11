@@ -28,7 +28,6 @@ export function mountDialoguePage(container: HTMLElement): () => void {
             <h1 class="page-title">人设对话</h1>
             <span class="badge badge-outline text-xs font-mono" id="dialogue-filepath">${escapeHtml(filePath)}</span>
           </div>
-          <p class="page-description">管理当前实例的 Few-shot 示例库，让智能体在特定场景与人物关系下展现精准细腻的语气与性格</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="tabs">

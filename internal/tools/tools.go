@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"FrostAgent/internal/core"
 	"context"
 	"fmt"
 )
@@ -11,6 +12,7 @@ type Tool struct {
 	parameter      any //用于大模型生成json schema
 	execute        func(args string) (string, error)
 	executeContext func(ctx context.Context, args string) (string, error)
+	executeResult  func(ctx context.Context, args string) (core.ToolExecutionResult, error)
 }
 
 func (t Tool) Name() string {
@@ -34,6 +36,10 @@ func (t Tool) Execute(args string) (string, error) {
 
 // ExecuteContext supplies request-local values to tools that need them.
 func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	if t.executeResult != nil {
+		result, err := t.executeResult(ctx, args)
+		return result.Content, err
+	}
 	if t.executeContext != nil {
 		return t.executeContext(ctx, args)
 	}
@@ -41,4 +47,17 @@ func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("tool %s has no executor", t.name)
 	}
 	return t.execute(args)
+}
+
+// ExecuteResult returns execution metadata without changing the legacy API.
+func (t Tool) ExecuteResult(ctx context.Context, args string) (core.ToolExecutionResult, error) {
+	if t.executeResult != nil {
+		return t.executeResult(ctx, args)
+	}
+	content, err := t.ExecuteContext(ctx, args)
+	return textResult(content), err
+}
+
+func textResult(content string) core.ToolExecutionResult {
+	return core.ToolExecutionResult{Content: content}
 }

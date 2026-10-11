@@ -20,6 +20,9 @@ type OneBotEvent struct {
 	SelfID        int64           `json:"self_id"`
 	PostType      string          `json:"post_type"`
 	MetaEventType string          `json:"meta_event_type,omitempty"`
+	NoticeType    string          `json:"notice_type,omitempty"`
+	SubType       string          `json:"sub_type,omitempty"`
+	OperatorID    int64           `json:"operator_id,omitempty"`
 	MessageType   string          `json:"message_type,omitempty"`
 	GroupID       int64           `json:"group_id,omitempty"`
 	UserID        int64           `json:"user_id,omitempty"`

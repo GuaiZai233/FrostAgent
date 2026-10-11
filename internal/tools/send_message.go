@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"FrostAgent/internal/core"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -77,47 +79,47 @@ func SendMsgTool() Tool {
 			"required": []string{"messages"},
 		},
 
-		execute: func(args string) (string, error) {
+		executeResult: func(_ context.Context, args string) (core.ToolExecutionResult, error) {
 			var payload struct {
 				Messages []Msg  `json:"messages"`
 				Session  string `json:"session,omitempty"`
 			}
 
 			if err := json.Unmarshal([]byte(args), &payload); err != nil {
-				return "", fmt.Errorf("send_message 参数不是合法 JSON: %w", err)
+				return textResult(""), fmt.Errorf("send_message 参数不是合法 JSON: %w", err)
 			}
 			if len(payload.Messages) == 0 {
-				return "", fmt.Errorf("send_message 至少需要一条 messages")
+				return textResult(""), fmt.Errorf("send_message 至少需要一条 messages")
 			}
 
 			for i, msg := range payload.Messages {
 				switch msg.Type {
 				case "plain":
 					if strings.TrimSpace(msg.Text) == "" {
-						return "", fmt.Errorf("messages[%d].text 不能为空", i)
+						return textResult(""), fmt.Errorf("messages[%d].text 不能为空", i)
 					}
 				case "mention_user":
 					if strings.TrimSpace(msg.MentionUserID) == "" {
-						return "", fmt.Errorf("messages[%d].mention_user_id 不能为空", i)
+						return textResult(""), fmt.Errorf("messages[%d].mention_user_id 不能为空", i)
 					}
 				case "quote":
 					if strings.TrimSpace(msg.MessageID) == "" {
-						return "", fmt.Errorf("messages[%d].message_id 不能为空", i)
+						return textResult(""), fmt.Errorf("messages[%d].message_id 不能为空", i)
 					}
 				case "image", "record", "video", "file":
 					if strings.TrimSpace(msg.Path) == "" && strings.TrimSpace(msg.URL) == "" {
-						return "", fmt.Errorf("messages[%d] 需要 path 或 url", i)
+						return textResult(""), fmt.Errorf("messages[%d] 需要 path 或 url", i)
 					}
 				default:
-					return "", fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
+					return textResult(""), fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
 				}
 			}
 
 			normalized, err := json.Marshal(payload)
 			if err != nil {
-				return "", fmt.Errorf("send_message 参数序列化失败: %w", err)
+				return textResult(""), fmt.Errorf("send_message 参数序列化失败: %w", err)
 			}
-			return string(normalized), nil
+			return core.ToolExecutionResult{Content: string(normalized), MessagePayload: string(normalized)}, nil
 		},
 	}
 }

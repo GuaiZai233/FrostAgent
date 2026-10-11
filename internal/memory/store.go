@@ -333,9 +333,15 @@ func (s *Store) applyReflectionWithMerges(
 	owner string,
 	merges []validatedMerge,
 	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var snapshotByID map[string]MemoryEntry
+	if len(snapshots) > 0 {
+		snapshotByID = snapshots[0]
+	}
 
 	brain, err := s.load()
 	if err != nil {
@@ -421,6 +427,15 @@ func (s *Store) applyReflectionWithMerges(
 				continue
 			}
 			if outdated[entry.ID] {
+				if snapshotByID != nil {
+					snap, ok := snapshotByID[entry.ID]
+					if !ok || !sameMergeSource(entry, snap) {
+						// Concurrently modified in UI while reflection was running.
+						entry.Owner = canonicalOwner
+						remainingAll = append(remainingAll, entry)
+						continue
+					}
+				}
 				removedIDs = append(removedIDs, entry.ID)
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
@@ -460,6 +475,7 @@ func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 		current.Content == snapshot.Content &&
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
+		current.SourceMedia == snapshot.SourceMedia &&
 		current.Visibility == snapshot.Visibility &&
 		current.CreatedAt.Equal(snapshot.CreatedAt) &&
 		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
@@ -477,7 +493,11 @@ func buildMergedEntry(
 	visibility := VisibilityPublic
 	accessCount := 0
 	mergedFrom := make([]string, 0, len(sources))
+	sourceMedia := ""
 	for _, source := range sources {
+		if source.SourceMedia == SourceMediaImage {
+			sourceMedia = SourceMediaImage
+		}
 		mergedFrom = append(mergedFrom, source.ID)
 		if source.Visibility != VisibilityPublic {
 			visibility = VisibilityPrivate
@@ -494,6 +514,7 @@ func buildMergedEntry(
 		Content:     merge.Content,
 		Tags:        slices.Clone(merge.Tags),
 		Source:      SourceReflect,
+		SourceMedia: sourceMedia,
 		Visibility:  visibility,
 		CreatedAt:   now,
 		UpdatedAt:   now,

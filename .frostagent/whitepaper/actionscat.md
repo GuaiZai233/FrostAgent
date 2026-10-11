@@ -42,6 +42,16 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 
 ## 二、系统架构与数据流
 
+### 入站消息自动分发
+
+每个实例将 OneBot 与 AstrBot 的入站文本接入既有 `POST /api/v1/dispatch`，在对话唤醒和模型路由之前单次分发。未唤醒对话或关闭对话路由的普通消息也可匹配。OneBot 只提取当前消息的 text 段；AstrBot 使用当前 `content`，不把历史上下文、附件、原始协议或凭据加入事件。事件携带真实适配器平台、会话、用户和群标识，发往实例配置的 `ACTIONSCAT_ENDPOINT`，使用现有 dispatch token。
+
+mock 会话、已处理的管理命令、心跳和非消息事件不分发。已配置 ActionsCat 时，待分发消息也经过现有安全入站门禁：锁定或被阻止的消息不分发，过滤后的消息使用脱敏正文。安全控制模式仍由现有设置决定；simple 模式不运行分类模型，aggressive 模式沿用分类门禁。每个收到的合格事件只尝试一次，不对未知结果重试；请求最多等待 3 秒，错误仅记录并继续聊天。此保证针对单次接收，不是跨上游重发、重连或进程重启的去重。
+
+匹配语法由 ActionsCat 现有确定性 MatcherEngine 提供：`exact` 为全文相等，`contains` 为子串包含，`regex` 为 Go 正则表达式。比如包含 Bilibili 链接可用 `contains` + `bilibili.com`；`*.bilibili.com/*` 不是已支持的 glob 语法。
+
+默认回归覆盖实际 WebSocket 入口、文本归一化、单次尝试、mock/锁定隔离、脱敏、分发失败继续对话。真实 MatcherEngine → SQLite Run 回归需可用 ActionsCat 源码：设置 `ACTIONSCAT_TEST_CHECKOUT` 为该 checkout 的绝对路径，执行 `go test -race ./internal/actionscat/...`。测试将编译短期本机 fixture，仅使用临时数据库、合成身份和 fake sandbox，实际执行既有匹配器和 Run 持久化，不启动真实 Action 或连接生产服务。未设置 checkout 时这项跨仓库测试会显式跳过。
+
 ```
                 ┌──────────────────────────────────────────────────┐
                 │          OneBot / AstrBot / Direct Chat          │
@@ -262,6 +272,9 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - `timezone: string`（可选，IANA 时区标识，默认 `Asia/Shanghai`）
   - `enabled: bool`（可选，默认 true）
 - **契约保证**：注册成功后由 ActionsCat 后台常驻调度器自主调度，脱离 LLM 在后台周期运行。
+- **收件上下文**：从真实私聊/群聊创建时，工具从可信 `RunContext` 附带可选 `delivery_context`（平台、适配器、消息类型、目标、会话、发送者、群标识）。这些字段不作为模型参数，模型传入的同名对象不参与路由；管理员与 Mock 门禁保持不变。非聊天入口缺少平台或发送者时不附带上下文。
+- **定时回复**：ActionsCat 将上下文保存到 Schedule，触发时注入 `ACTIONSCAT_EVENT_PLATFORM / ADAPTER_ID / MESSAGE_TYPE / TARGET_ID / SESSION_ID / USER_ID / GROUP_ID`。Action 使用现有 `actionscat.Reply` 和 `frostagent.sendmsg` 能力回复，无需将收件人写入源码。`metadata.adapter_id` 选择本实例注册的传输适配器，原平台名保留给 AstrBot 主动发送。
+- **兼容与部署**：旧任务缺少上下文仍可执行，SDK 继续使用原有事件字段；没有收件信息时 `Reply` 返回 `ErrNoSession`。需要先部署支持此契约的 ActionsCat，并重新构建使用新版内置 SDK 的 Action。旧服务未回传相同上下文时，工具明确提示收件信息未确认保存，避免把已创建任务误报为自动回复就绪。
 
 #### 12. `actionscat_list_schedules`
 - **功能**：查询指定 Action 绑定的所有定时调度规则；

@@ -26,9 +26,11 @@ type RunContext struct {
 	SessionID           string
 	Owner               string
 	OwnerType           memory.OwnerType
-	ActorUserID         string // Trusted sender ID supplied by the platform adapter.
-	ActorPlatform       string // Trusted platform namespace; never populated from model content.
-	InstanceID          string // Runtime instance used for audit/evaluation attribution.
+	ActorUserID         string              // Trusted sender ID supplied by the platform adapter.
+	MemorySource        memory.GroupMessage // Current message text and vision output supplied by the adapter.
+	ActorPlatform       string              // Trusted platform namespace; never populated from model content.
+	AdapterID           string              // Trusted transport adapter used for later delivery.
+	InstanceID          string              // Runtime instance used for audit/evaluation attribution.
 	SendHook            func(toolResultJSON string) error
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
 	ObservationScope    string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups

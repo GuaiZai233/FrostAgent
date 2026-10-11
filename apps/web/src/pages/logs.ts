@@ -47,7 +47,6 @@ export function mountLogsPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">日志查询</h1>
-          <p class="page-description">查看运行时日志、请求体/响应体详情与实时日志流</p>
         </div>
         <div class="flex items-center gap-2">
           <button class="btn btn-outline btn-icon-sm" id="logs-refresh-btn" title="刷新">

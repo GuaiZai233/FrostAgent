@@ -312,7 +312,7 @@ function initAppShell(): void {
       navItems.find((n) => n.path === path)?.label || '设置',
       (container) => {
         if (instanceState.selected) return mounts[index](container);
-        container.innerHTML = `<div class="page-container"><article class="card p-6"><h1 class="page-title">请选择实例</h1><p class="page-description">FrostAgent Control Plane 正在运行。创建或选择实例后，即可管理它的配置与数据。</p><button class="btn btn-primary mt-4" id="empty-manage">实例管理</button></article></div>`;
+        container.innerHTML = `<div class="page-container"><article class="card p-6"><h1 class="page-title">请选择实例</h1><p class="text-sm text-muted mt-1">FrostAgent Control Plane 正在运行。创建或选择实例后，即可管理它的配置与数据。</p><button class="btn btn-primary mt-4" id="empty-manage">实例管理</button></article></div>`;
         container
           .querySelector('#empty-manage')!
           .addEventListener('click', () => void openInstanceManagement());

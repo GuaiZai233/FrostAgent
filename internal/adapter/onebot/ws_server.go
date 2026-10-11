@@ -325,6 +325,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
+	memoryText := userText
+	var memoryImageDescription string
+	var memoryMessageID string
+	if event.MessageID != 0 {
+		memoryMessageID = strconv.FormatInt(int64(event.MessageID), 10)
+	}
 	currentHasImage := content.IsContainImage(segments)
 	replyHasImage := content.IsContainImage(replyContext.Segments)
 	visionEnabled := engine != nil && engine.VisionProvider != nil
@@ -388,6 +394,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 			}
 			if imageDesc != "" {
+				memoryImageDescription = imageDesc
+				if turn != nil {
+					turn.StagedGuard().SetImageDescription(imageDesc)
+				}
 				userText = userText + " 【图片内容】：" + imageDesc
 			}
 		}
@@ -787,7 +797,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				if turn != nil && turn.StagedGuard() != nil {
 					turn.StagedGuard().Promote()
-				} else {
+				} else if msgID != "" {
 					session.PromoteGroupCompactMessage(msgID)
 				}
 				botReply := extractBotReplyText(replyText)
@@ -818,24 +828,57 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if runResult.MemoryWritten {
 				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 			} else if strings.TrimSpace(userText) != "" && !conn.mock {
-				pendingUserText := userText
-				if event.MessageType == "group" && !conn.mock {
-					pendingUserText = formatGroupSpeakerMessage(event, userText)
+				if event.MessageType == "group" {
+					groupIDStr := strconv.FormatInt(event.GroupID, 10)
+					userIDStr := strconv.FormatInt(event.UserID, 10)
+					speakerName := senderDisplayName(event)
+					msgID := ""
+					if event.MessageID != 0 {
+						msgID = strconv.FormatInt(int64(event.MessageID), 10)
+					}
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          groupIDStr,
+							SpeakerID:        userIDStr,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        msgID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     groupIDStr,
+							SpeakerID:   userIDStr,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+							MessageID:   msgID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+						},
+					})
 				}
-				engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-					{
-						Owner:     owner,
-						OwnerType: ownerType,
-						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-						Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-					},
-					{
-						Owner:     owner,
-						OwnerType: ownerType,
-						Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-						Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-					},
-				})
 			}
 		}
 
@@ -844,13 +887,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			Context:          runCtx,
-			Epoch:            startEpoch,
-			SessionID:        conn.historyKey(event),
-			Owner:            owner,
-			OwnerType:        ownerType,
-			ActorUserID:      strconv.FormatInt(event.UserID, 10),
+			Context:     runCtx,
+			Epoch:       startEpoch,
+			SessionID:   conn.historyKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: strconv.FormatInt(event.UserID, 10),
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
 			ActorPlatform:    securityPlatform,
+			AdapterID:        "onebot",
 			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
 			ObservationScope: conn.generation,
@@ -879,7 +925,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Drop()
-					} else {
+					} else if msgID != "" {
 						session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
 					}
 					if engine != nil && engine.GroupCompactor != nil {
@@ -928,11 +974,64 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				if turn != nil && turn.StagedGuard() != nil {
 					turn.StagedGuard().Promote()
-				} else {
+				} else if msgID != "" {
 					session.PromoteGroupCompactMessage(msgID)
 				}
 				if engine != nil && engine.GroupCompactor != nil && !conn.mock {
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+				}
+			}
+			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+				if event.MessageType == "group" {
+					groupIDStr := strconv.FormatInt(event.GroupID, 10)
+					userIDStr := strconv.FormatInt(event.UserID, 10)
+					speakerName := senderDisplayName(event)
+					msgID := ""
+					if event.MessageID != 0 {
+						msgID = strconv.FormatInt(int64(event.MessageID), 10)
+					}
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          groupIDStr,
+							SpeakerID:        userIDStr,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        msgID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     groupIDStr,
+							SpeakerID:   userIDStr,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							MessageID:   msgID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+						},
+					})
 				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", conn.historyKey(event)))
@@ -954,7 +1053,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Promote()
-					} else {
+					} else if msgID != "" {
 						session.PromoteGroupCompactMessage(msgID)
 					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
@@ -1086,7 +1185,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			if turn != nil && turn.StagedGuard() != nil {
 				turn.StagedGuard().Drop()
-			} else {
+			} else if msgID != "" {
 				session.DropGroupCompactMessage(msgID, strconv.FormatInt(event.UserID, 10))
 			}
 		}
