@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func lifecycleConfiguration() Configuration {
@@ -213,12 +214,19 @@ func TestLegacyInlineSecretMigratesAndIsRemovedFromConfiguration(t *testing.T) {
 func TestConcurrentSnapshotsRemainConsistentDuringPublish(t *testing.T) {
 	m := publishedLifecycleManager(t)
 	start := make(chan struct{})
+	stop := make(chan struct{})
+	observed := make(chan int64, 16)
 	errs := make(chan error, 4)
 	var readers sync.WaitGroup
 	for range 4 {
 		readers.Go(func() {
 			<-start
-			for range 100 {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
 				snapshot := m.Snapshot()
 				target, err := snapshot.Resolve(WorkloadDialogue, Scope{})
 				if err != nil || target.UpstreamModel != fmt.Sprintf("model-%d", snapshot.config.Revision) {
@@ -229,10 +237,15 @@ func TestConcurrentSnapshotsRemainConsistentDuringPublish(t *testing.T) {
 				active.Models[0].UpstreamModel = "caller-mutation"
 				draft := m.Draft()
 				draft.Models[0].UpstreamModel = "caller-mutation"
+				select {
+				case observed <- snapshot.config.Revision:
+				default:
+				}
 			}
 		})
 	}
 	close(start)
+publishLoop:
 	for revision := 2; revision <= 12; revision++ {
 		cfg := m.Draft()
 		cfg.Models[0].UpstreamModel = fmt.Sprintf("model-%d", revision)
@@ -244,7 +257,22 @@ func TestConcurrentSnapshotsRemainConsistentDuringPublish(t *testing.T) {
 			t.Error(err)
 			break
 		}
+		deadline := time.NewTimer(2 * time.Second)
+		for {
+			select {
+			case seen := <-observed:
+				if seen == int64(revision) {
+					deadline.Stop()
+					goto nextPublish
+				}
+			case <-deadline.C:
+				t.Errorf("concurrent readers did not observe published revision %d", revision)
+				break publishLoop
+			}
+		}
+	nextPublish:
 	}
+	close(stop)
 	readers.Wait()
 	close(errs)
 	for err := range errs {
