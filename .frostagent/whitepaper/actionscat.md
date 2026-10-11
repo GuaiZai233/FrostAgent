@@ -262,6 +262,9 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - `timezone: string`（可选，IANA 时区标识，默认 `Asia/Shanghai`）
   - `enabled: bool`（可选，默认 true）
 - **契约保证**：注册成功后由 ActionsCat 后台常驻调度器自主调度，脱离 LLM 在后台周期运行。
+- **收件上下文**：从真实私聊/群聊创建时，工具从可信 `RunContext` 附带可选 `delivery_context`（平台、适配器、消息类型、目标、会话、发送者、群标识）。这些字段不作为模型参数，模型传入的同名对象不参与路由；管理员与 Mock 门禁保持不变。非聊天入口缺少平台或发送者时不附带上下文。
+- **定时回复**：ActionsCat 将上下文保存到 Schedule，触发时注入 `ACTIONSCAT_EVENT_PLATFORM / ADAPTER_ID / MESSAGE_TYPE / TARGET_ID / SESSION_ID / USER_ID / GROUP_ID`。Action 使用现有 `actionscat.Reply` 和 `frostagent.sendmsg` 能力回复，无需将收件人写入源码。`metadata.adapter_id` 选择本实例注册的传输适配器，原平台名保留给 AstrBot 主动发送。
+- **兼容与部署**：旧任务缺少上下文仍可执行，SDK 继续使用原有事件字段；没有收件信息时 `Reply` 返回 `ErrNoSession`。需要先部署支持此契约的 ActionsCat，并重新构建使用新版内置 SDK 的 Action。旧服务未回传相同上下文时，工具明确提示收件信息未确认保存，避免把已创建任务误报为自动回复就绪。
 
 #### 12. `actionscat_list_schedules`
 - **功能**：查询指定 Action 绑定的所有定时调度规则；

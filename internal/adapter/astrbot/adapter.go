@@ -172,6 +172,7 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
+		Platform:       msg.Platform,
 		TargetID:       msg.TargetID,
 		MessageType:    msg.MessageType,
 		GroupID:        groupID,
