@@ -119,6 +119,7 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 		Evidence:        "verbatim quote",
 		SourceMessageId: "msg_orig_123",
 		SourceSenderId:  "mock_u_alice",
+		SourceMedia:     "image",
 	}
 	memData, err := proto.Marshal(memEntry)
 	if err != nil {
@@ -130,7 +131,8 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 	}
 	if unmarshaledMem.GetEvidence() != "verbatim quote" ||
 		unmarshaledMem.GetSourceMessageId() != "msg_orig_123" ||
-		unmarshaledMem.GetSourceSenderId() != "mock_u_alice" {
+		unmarshaledMem.GetSourceSenderId() != "mock_u_alice" ||
+		unmarshaledMem.GetSourceMedia() != "image" {
 		t.Errorf("MemoryEntry provenance roundtrip mismatch: %+v", &unmarshaledMem)
 	}
 }

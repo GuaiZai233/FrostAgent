@@ -1068,6 +1068,10 @@ func (s *GroupStore) RememberRoute(owner string, route core.RouteContext) {
 // It is strictly limited to automatic duplicates of the SAME trusted source identity.
 // Explicit/manual writes and distinct platform messages are never conflated or merged.
 func isSameGroupMemory(existing, incoming MemoryEntry) bool {
+	// Text and vision output are distinct sources even when their wording matches.
+	if existing.SourceMedia != incoming.SourceMedia {
+		return false
+	}
 	// 1. Explicit / manual incoming additions must never be deduplicated or merged.
 	if incoming.Source == SourceManual {
 		return false

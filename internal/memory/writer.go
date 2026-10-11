@@ -314,11 +314,12 @@ func (w *Writer) parseAndSave(
 
 // GroupMessage represents a message in a group dialogue for memory extraction.
 type GroupMessage struct {
-	MessageID string `json:"message_id,omitempty"`
-	SenderID  string `json:"sender_id,omitempty"`
-	Sender    string `json:"sender,omitempty"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
+	MessageID        string `json:"message_id,omitempty"`
+	SenderID         string `json:"sender_id,omitempty"`
+	Sender           string `json:"sender,omitempty"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ImageDescription string `json:"image_description,omitempty"` // Adapter-provided vision output, never user-authored text.
 }
 
 type groupExtractedCandidate struct {
@@ -385,6 +386,9 @@ func (w *Writer) ExtractGroupMemories(
 			"sender":    name,
 			"role":      m.Role,
 			"content":   m.Content,
+		}
+		if m.ImageDescription != "" {
+			item["image_description"] = m.ImageDescription
 		}
 		if m.SenderID != "" {
 			item["sender_id"] = m.SenderID
@@ -500,6 +504,13 @@ func (w *Writer) parseAndSaveGroupCandidates(
 		}
 
 		validEvidence, ok := ValidateEvidence(candidateMsg.Content, rawEvidence)
+		sourceMedia := ""
+		if !ok {
+			validEvidence, ok = ValidateEvidence(candidateMsg.ImageDescription, rawEvidence)
+			if ok {
+				sourceMedia = SourceMediaImage
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -511,7 +522,7 @@ func (w *Writer) parseAndSaveGroupCandidates(
 		// contains a direct first-person self-reference (HasSelfReference).
 		// Otherwise, Owner defaults to GroupOwnerExplicit ("group").
 		ownerKey := GroupOwnerExplicit
-		if cand.IsSelf && srcMsg.SenderID != "" && HasSelfReference(validEvidence) {
+		if sourceMedia == "" && cand.IsSelf && srcMsg.SenderID != "" && HasSelfReference(validEvidence) {
 			ownerKey = srcMsg.SenderID
 		}
 
@@ -537,6 +548,7 @@ func (w *Writer) parseAndSaveGroupCandidates(
 			Content:         validEvidence,
 			Summary:         displaySummary,
 			Evidence:        validEvidence,
+			SourceMedia:     sourceMedia,
 			SourceMessageID: srcMsg.MessageID,
 			SourceSenderID:  srcMsg.SenderID,
 			Tags:            SanitizeTags(cand.Tags),

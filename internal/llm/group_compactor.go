@@ -613,11 +613,12 @@ func (c *GroupCompactor) distillGroupMemories(
 	groupMsgs := make([]memory.GroupMessage, len(snapshot.Messages))
 	for i, m := range snapshot.Messages {
 		groupMsgs[i] = memory.GroupMessage{
-			MessageID: m.MessageID,
-			SenderID:  m.SenderID,
-			Sender:    m.Sender,
-			Role:      m.Role,
-			Content:   m.Content,
+			MessageID:        m.MessageID,
+			SenderID:         m.SenderID,
+			Sender:           m.Sender,
+			Role:             m.Role,
+			Content:          m.Content,
+			ImageDescription: m.ImageDescription,
 		}
 	}
 

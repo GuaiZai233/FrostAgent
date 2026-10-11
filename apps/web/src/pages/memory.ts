@@ -1,4 +1,5 @@
 import { createInstanceAPI } from '../api/client';
+import { memoryDisplayContent, memoryEvidenceText } from './memory-display';
 import {
   MemoryEntry,
   GetMemoryStatsResponse,
@@ -717,6 +718,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             : '<span class="text-muted text-xs">-</span>';
 
         const isGroupOwner = mem.owner === 'group';
+        const displayContent = memoryDisplayContent(mem);
         const ownerDisplay = isGroupOwner ? '群整体 (group)' : mem.owner;
 
         return `
@@ -736,8 +738,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               </button>
             </td>
             <td class="memory-content-cell">
-              <button type="button" class="memory-content-preview" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(mem.content)}">
-                ${escapeHtml(mem.content)}
+              <button type="button" class="memory-content-preview" data-action="edit-memory" data-id="${escapeHtml(mem.id)}" title="${escapeHtml(displayContent)}">
+                ${escapeHtml(displayContent)}
               </button>
             </td>
             <td>${tagsHtml}</td>
@@ -1115,7 +1117,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
           </div>
 
           ${
-            mem.evidence
+            mem.evidence || mem.sourceMedia === 'image'
               ? `
             <div class="p-3 rounded-md border border-border bg-muted/60 text-xs flex flex-col gap-1.5">
               <div class="flex items-center justify-between text-muted">
@@ -1130,12 +1132,12 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                 }
               </div>
               <div class="font-mono text-foreground italic bg-background p-2 rounded border border-border/50 select-all break-words">${escapeHtml(
-                mem.evidence,
+                memoryEvidenceText(mem),
               )}</div>
               <div class="flex items-center justify-between text-[11px] text-muted flex-wrap gap-1">
                 ${
                   mem.sourceSenderId
-                    ? `<span>发言人: <strong class="font-mono text-foreground">${escapeHtml(mem.sourceSenderId)}</strong></span>`
+                    ? `<span>${mem.sourceMedia === 'image' ? '发图者' : '发言人'}: <strong class="font-mono text-foreground">${escapeHtml(mem.sourceSenderId)}</strong></span>`
                     : ''
                 }
                 ${

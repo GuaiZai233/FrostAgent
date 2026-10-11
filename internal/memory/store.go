@@ -475,6 +475,7 @@ func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 		current.Content == snapshot.Content &&
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
+		current.SourceMedia == snapshot.SourceMedia &&
 		current.Visibility == snapshot.Visibility &&
 		current.CreatedAt.Equal(snapshot.CreatedAt) &&
 		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
@@ -492,7 +493,11 @@ func buildMergedEntry(
 	visibility := VisibilityPublic
 	accessCount := 0
 	mergedFrom := make([]string, 0, len(sources))
+	sourceMedia := ""
 	for _, source := range sources {
+		if source.SourceMedia == SourceMediaImage {
+			sourceMedia = SourceMediaImage
+		}
 		mergedFrom = append(mergedFrom, source.ID)
 		if source.Visibility != VisibilityPublic {
 			visibility = VisibilityPrivate
@@ -509,6 +514,7 @@ func buildMergedEntry(
 		Content:     merge.Content,
 		Tags:        slices.Clone(merge.Tags),
 		Source:      SourceReflect,
+		SourceMedia: sourceMedia,
 		Visibility:  visibility,
 		CreatedAt:   now,
 		UpdatedAt:   now,

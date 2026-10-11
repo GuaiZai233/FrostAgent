@@ -29,6 +29,15 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					"type":        "string",
 					"description": "写入的记忆内容（action=write 时必填）",
 				},
+				"source_media": map[string]any{
+					"type":        "string",
+					"enum":        []string{"text", "image"},
+					"description": "write 时的事实来源：从当前图片识别结果记住的内容使用 image；直接来自当前用户文字使用 text。图片内容不作为发图者原话。",
+				},
+				"evidence": map[string]any{
+					"type":        "string",
+					"description": "write 时可提供当前用户文字或图片识别结果中的原文片段。图文混合消息中，写入文字摘要时应提供文字原文作为 evidence。",
+				},
 				"tags": map[string]any{
 					"type":        "array",
 					"description": "write 时写入标签，search 时搜索标签（如[\"maimai\",\"游戏版本\"]）。每个标签应是实体、主题、属性、版本名、别名或同义词，去掉\"当前、什么、帮我查\"等无检索价值的语气词，固定名称保持完整不要拆分。1～6个。",
@@ -41,9 +50,11 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 		},
 		executeContext: func(ctx context.Context, args string) (string, error) {
 			var params struct {
-				Action  string   `json:"action"`
-				Content string   `json:"content"`
-				Tags    []string `json:"tags"`
+				Action      string   `json:"action"`
+				Content     string   `json:"content"`
+				Tags        []string `json:"tags"`
+				SourceMedia string   `json:"source_media"`
+				Evidence    string   `json:"evidence"`
 			}
 			if err := json.Unmarshal([]byte(args), &params); err != nil {
 				return "", fmt.Errorf("参数解析失败: %w", err)
@@ -83,6 +94,16 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						Source:    memory.SourceManual,
 						CreatedAt: time.Now(),
 						UpdatedAt: time.Now(),
+					}
+					_, hasTextEvidence := memory.ValidateEvidence(runContext.MemorySource.Content, params.Evidence)
+					isText := params.SourceMedia == "text" &&
+						(hasTextEvidence || strings.Contains(runContext.MemorySource.Content, params.Content))
+					if runContext.MemorySource.ImageDescription != "" && !isText {
+						entry.SourceMedia = memory.SourceMediaImage
+						entry.Summary = memory.SanitizeSummary(params.Content)
+						entry.Evidence, _ = memory.ValidateEvidence(runContext.MemorySource.ImageDescription, params.Evidence)
+						entry.SourceMessageID = runContext.MemorySource.MessageID
+						entry.SourceSenderID = runContext.ActorUserID
 					}
 					if err := groupStore.Save(entry); err != nil {
 						return fmt.Sprintf("写入群记忆失败: %v", err), nil

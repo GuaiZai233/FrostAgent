@@ -216,7 +216,7 @@ func (m *MemberProfile) ResolveCallingName() string {
    - 提取入库的记忆条目 `Content` 严格直接绑定为用户原始发言字面截取的引述片段（`validEvidence`）。
    - **根除语义幻觉**：从根本上杜绝了否定词丢失（例如原话“我不过敏”被模型提炼为“我过敏”）以及虚构谓词/后缀（例如原话“我喜欢打机”被模型虚构附加“而且我是管理员”）等幻觉，因为存储的权威事实正是用户所说出的字面原句。
 2. **辅助展示摘要（`Summary`）**：
-   - 记录模型提炼出的可读概括与描述性摘要，用于前端面板或人机界面的友好呈现。
+   - 记录模型提炼出的可读概括与描述性摘要，用于前端面板或人机界面的友好呈现。记忆列表与悬浮提示优先显示 `Summary`；旧条目无摘要时回退 `Content`，人工修订条目优先显示当前修订内容。
    - **禁止篡改**：`Summary` 仅作展示用途，严禁静默覆盖或篡改底层权威的字面 `Content`。
 3. **引述来源与原始消息追踪（`Evidence` & `SourceMessageID` & `SourceSenderID`）**：
    - 每条提炼记忆强制记录并持久化 `Evidence`（引述原文片段）、`SourceMessageID`（来自底层适配器元数据的原始消息唯一标识）以及 `SourceSenderID`（底层协议注入的可信原始发言人标识），实现具备完整审计链条的事实溯源。
@@ -228,6 +228,15 @@ func (m *MemberProfile) ResolveCallingName() string {
    - **可信发言人与保守自述归属屏障（`SourceSenderID` & `HasSelfReference`）**：
      - 无论条目最终归属 `Owner` 为何值，均强制持久化记录底层协议可信的原始发言人 `SourceSenderID`，确保实际发言人在任何情况下均清晰可查；
      - 个人自述事实（`Owner = srcMsg.SenderID`）绝不单凭大模型不可信的 `is_self: true` 标记，而是强制要求引述字面片段自身必须包含第一人称代词（`HasSelfReference`，覆盖中文“我”、“俺”、“咱”、“自己”、“本人”及英文“i”、“me”、“my”等）。若引述为第三人称传闻或客观陈述，则保守归属于 `"group"`，杜绝主体张冠李戴，而其真实发言人依然完整保存在 `SourceSenderID` 中供检查与溯源。
+
+### 图片来源与文字引述
+
+- OneBot 与 AstrBot 将适配器识图结果放入独立的 `image_description` 字段，用户文字保留在 `content`。实时提取、成功 `stay_silent`、暂存消息的滚动压缩提炼均保留该区分；图片结果只附加到当前暂存消息的精确序号槽位，已丢弃或已完成的槽位不能被晚到结果复活。
+- 自动提取时，证据必须是该消息文字或识图结果的连续字面片段。仅在识图结果中命中的条目由服务端标记 `source_media: "image"`，始终归属 `"group"`，不能依据图片中的“我”将事实归到发图者。
+- `Content` 与 `Evidence` 可保留识图结果片段用于检索和审计，但它们不是群友亲口说出的权威引述。图片条目的详情引述区固定显示 **`（原source为图片形式）`**；召回使用 `<image_description>` 容器，并附加相同来源说明，避免将视觉模型结果输出为 `<quote>`。
+- 群聊 `memory.write` 同样接收当前轮的可信图片来源。`source_media` 与 `evidence` 是可选工具参数；当前轮存在识图结果时默认保守标记图片来源。图文混合消息若要写入文字摘要，须提供 `source_media: "text"` 及可匹配用户文字的 `evidence`（或直接写入用户字面片段）。模型不能凭空创建可信图片来源。
+- `source_media` 随 JSON 导入导出及 ConnectRPC `MemoryEntry.source_media = 16` 传递，人工编辑保留它，反思合并含图片来源时继续保留该标记。文字与图片即使来自同一消息且片段相同，也不互相去重。
+- 该标记是兼容旧 JSON 的可选字段。未标注来源的历史条目不通过文字启发式自动改写；用户手写“【图片内容】”等标识仍按用户文字处理。
 
 ### 4.3 跨触发幂等持久化与并发安全（Cross-Trigger Idempotency）
 

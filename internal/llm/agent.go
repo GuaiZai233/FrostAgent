@@ -464,11 +464,12 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 				sName = item.SpeakerName
 			}
 			group.groupMessages = append(group.groupMessages, memory.GroupMessage{
-				MessageID: item.MessageID,
-				SenderID:  sID,
-				Sender:    sName,
-				Role:      string(item.Message.Role),
-				Content:   fmt.Sprintf("%v", item.Message.Content),
+				MessageID:        item.MessageID,
+				SenderID:         sID,
+				Sender:           sName,
+				Role:             string(item.Message.Role),
+				Content:          fmt.Sprintf("%v", item.Message.Content),
+				ImageDescription: item.ImageDescription,
 			})
 		} else {
 			if item.Owner == "" {

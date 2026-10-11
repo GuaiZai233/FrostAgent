@@ -40,6 +40,7 @@ message MemoryEntry {
   string evidence = 13;       // verbatim source quote
   string source_message_id = 14; // verified source message ID
   string source_sender_id = 15;  // verified source sender ID
+  string source_media = 16;      // "image" for bot-extracted image evidence; empty for text
 }
 
 message ListMemoriesRequest {

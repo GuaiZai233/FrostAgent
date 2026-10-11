@@ -325,6 +325,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
+	memoryText := userText
+	var memoryImageDescription string
+	var memoryMessageID string
+	if event.MessageID != 0 {
+		memoryMessageID = strconv.FormatInt(int64(event.MessageID), 10)
+	}
 	currentHasImage := content.IsContainImage(segments)
 	replyHasImage := content.IsContainImage(replyContext.Segments)
 	visionEnabled := engine != nil && engine.VisionProvider != nil
@@ -388,6 +394,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 			}
 			if imageDesc != "" {
+				memoryImageDescription = imageDesc
+				if turn != nil {
+					turn.StagedGuard().SetImageDescription(imageDesc)
+				}
 				userText = userText + " 【图片内容】：" + imageDesc
 			}
 		}
@@ -828,15 +838,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 						{
-							Owner:       owner,
-							OwnerType:   memory.OwnerGroup,
-							ScopeType:   memory.ScopeGroup,
-							GroupID:     groupIDStr,
-							SpeakerID:   userIDStr,
-							SpeakerName: speakerName,
-							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
-							MessageID:   msgID,
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          groupIDStr,
+							SpeakerID:        userIDStr,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        msgID,
 						},
 						{
 							Owner:       owner,
@@ -876,12 +887,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			Context:          runCtx,
-			Epoch:            startEpoch,
-			SessionID:        conn.historyKey(event),
-			Owner:            owner,
-			OwnerType:        ownerType,
-			ActorUserID:      strconv.FormatInt(event.UserID, 10),
+			Context:     runCtx,
+			Epoch:       startEpoch,
+			SessionID:   conn.historyKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: strconv.FormatInt(event.UserID, 10),
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
 			ActorPlatform:    securityPlatform,
 			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
@@ -978,15 +991,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					}
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 						{
-							Owner:       owner,
-							OwnerType:   memory.OwnerGroup,
-							ScopeType:   memory.ScopeGroup,
-							GroupID:     groupIDStr,
-							SpeakerID:   userIDStr,
-							SpeakerName: speakerName,
-							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
-							MessageID:   msgID,
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          groupIDStr,
+							SpeakerID:        userIDStr,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        msgID,
 						},
 						{
 							Owner:       owner,

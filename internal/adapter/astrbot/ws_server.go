@@ -748,6 +748,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	userText := astrBotVisibleText(event)
+	memoryText := userText
+	var memoryImageDescription string
 
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
@@ -827,6 +829,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			if imageDesc != "" {
+				memoryImageDescription = imageDesc
+				if turn != nil {
+					turn.StagedGuard().SetImageDescription(imageDesc)
+				}
 				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 			}
 		}
@@ -1127,12 +1133,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			Context:        runCtx,
-			Epoch:          startEpoch,
-			SessionID:      conn.sessionKey(event),
-			Owner:          owner,
-			OwnerType:      ownerType,
-			ActorUserID:    event.UserID,
+			Context:     runCtx,
+			Epoch:       startEpoch,
+			SessionID:   conn.sessionKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: event.UserID,
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+				MessageID: event.MessageID, SenderID: event.UserID},
 			ActorPlatform:  securityPlatform,
 			InstanceID:     engine.InstanceID,
 			SendHook:       sendHook,
@@ -1214,15 +1222,16 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					speakerName := senderDisplayName(event)
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 						{
-							Owner:       owner,
-							OwnerType:   memory.OwnerGroup,
-							ScopeType:   memory.ScopeGroup,
-							GroupID:     event.GroupID,
-							SpeakerID:   event.UserID,
-							SpeakerName: speakerName,
-							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
-							MessageID:   event.MessageID,
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          event.GroupID,
+							SpeakerID:        event.UserID,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        event.MessageID,
 						},
 						{
 							Owner:       owner,
@@ -1333,15 +1342,16 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			speakerName := senderDisplayName(event)
 			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
 				{
-					Owner:       owner,
-					OwnerType:   memory.OwnerGroup,
-					ScopeType:   memory.ScopeGroup,
-					GroupID:     event.GroupID,
-					SpeakerID:   event.UserID,
-					SpeakerName: speakerName,
-					Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-					Message:     core.ChatMessage{Role: core.RoleUser, Content: userText},
-					MessageID:   event.MessageID,
+					Owner:            owner,
+					OwnerType:        memory.OwnerGroup,
+					ScopeType:        memory.ScopeGroup,
+					GroupID:          event.GroupID,
+					SpeakerID:        event.UserID,
+					SpeakerName:      speakerName,
+					Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+					Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+					ImageDescription: memoryImageDescription,
+					MessageID:        event.MessageID,
 				},
 				{
 					Owner:       owner,
