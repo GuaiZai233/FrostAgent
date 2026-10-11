@@ -6,18 +6,20 @@ const esbuildPath = require.resolve('esbuild', {
   paths: [dirname(require.resolve('vite'))],
 });
 const { build } = require(esbuildPath);
-const result = await build({
-  entryPoints: [resolve('tests/instance-api.test.ts')],
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  write: false,
-  alias: {
-    '@frostagent/proto': resolve('../../libs/frostagent-proto/src/index.ts'),
-  },
-});
-await import(
-  'data:text/javascript;base64,' +
-    Buffer.from(result.outputFiles[0].contents).toString('base64')
-);
+for (const testFile of ['instance-api.test.ts', 'prompt-merge.test.ts', 'prompt-page.test.ts']) {
+  const result = await build({
+    entryPoints: [resolve('tests', testFile)],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    write: false,
+    alias: {
+      '@frostagent/proto': resolve('../../libs/frostagent-proto/src/index.ts'),
+    },
+  });
+  await import(
+    'data:text/javascript;base64,' +
+      Buffer.from(result.outputFiles[0].contents).toString('base64')
+  );
+}
 await import('./layout.test.mjs');

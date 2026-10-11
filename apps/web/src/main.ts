@@ -9,15 +9,12 @@ import './styles/layout.css';
 import { themeManager, type ThemeMode } from './theme';
 import { router } from './router';
 import { icon } from './components/icons';
+import { lazyMount } from './lazy-page';
 
 import { mountOverviewPage } from './pages/overview';
-import { mountSessionsPage } from './pages/sessions';
-import { mountMemoryPage } from './pages/memory';
 import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
-import { mountMCPPage } from './pages/mcp';
-import { mountActionsCatPage } from './pages/actionscat';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
@@ -29,6 +26,16 @@ import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountModelRouterPage, mountProvidersPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
+const mountMemoryPage = lazyMount(() =>
+  import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
+);
+const mountMCPPage = lazyMount(() =>
+  import('./pages/mcp').then(({ mountMCPPage }) => mountMCPPage),
+);
+const mountActionsCatPage = lazyMount(() =>
+  import('./pages/actionscat').then(({ mountActionsCatPage }) => mountActionsCatPage),
+);
+
 // Initialize Theme
 themeManager.init();
 
@@ -36,10 +43,9 @@ const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
   { path: '/providers', label: '模型供应商', iconName: 'sliders' },
   { path: '/model-router', label: '实例模型路由', iconName: 'sliders' },
-  { path: '/sessions', label: '会话管理', iconName: 'forum' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人设对话', iconName: 'chat' },
-  { path: '/prompt', label: 'Prompt 检查', iconName: 'sparkles' },
+  { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
@@ -222,7 +228,8 @@ function initAppShell(): void {
 
       const isActive =
         activePath === linkPath ||
-        (linkPath === '/settings' && activePath.startsWith('/settings'));
+        (linkPath === '/settings' && activePath.startsWith('/settings')) ||
+        (linkPath === '/prompt' && activePath === '/sessions');
 
       if (isActive) {
         item.classList.add('active');
@@ -250,10 +257,10 @@ function initAppShell(): void {
 
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
-  router.register('/sessions', '会话管理', mountSessionsPage);
+  router.register('/sessions', '会话与 Prompt', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
   router.register('/dialogue', '人设对话', mountDialoguePage);
-  router.register('/prompt', 'Prompt 检查', mountPromptPage);
+  router.register('/prompt', '会话与 Prompt', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
@@ -301,7 +308,7 @@ function initAppShell(): void {
   ];
   const mounts = [
     mountOverviewPage,
-    mountSessionsPage,
+    mountPromptPage,
     mountMemoryPage,
     mountDialoguePage,
     mountPromptPage,
