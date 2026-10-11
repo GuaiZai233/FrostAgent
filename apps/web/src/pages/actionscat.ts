@@ -27,7 +27,6 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">ActionsCat 自动化</h1>
-          <p class="page-description">管理与监控 ActionsCat 无服务器沙箱动作与执行历史，并向 Agent 开放自动化工具</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline" id="actionscat-refresh-btn" title="刷新状态与动作列表">

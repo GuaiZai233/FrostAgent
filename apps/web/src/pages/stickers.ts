@@ -33,7 +33,6 @@ export function mountStickersPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">表情包摘取</h1>
-          <p class="page-description">管理 Bot 自动收集与手动上传的表情包</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="flex items-center gap-1" style="width: 13rem;">

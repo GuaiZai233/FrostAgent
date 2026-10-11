@@ -26,7 +26,6 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">记忆管理</h1>
-          <p class="page-description">管理 Bot 长期记忆、用户专属知识与反思提炼</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="flex items-center gap-1" style="width: 13rem;">

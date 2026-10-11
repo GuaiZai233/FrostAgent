@@ -28,7 +28,6 @@ export function mountSessionsPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">会话管理</h1>
-          <p class="page-description">查看与管理 Bot 参与的所有私聊及群聊会话状态</p>
         </div>
         <button class="btn btn-outline btn-sm" id="sessions-refresh-btn">
           ${icon('refresh', 'w-3.5 h-3.5')}
