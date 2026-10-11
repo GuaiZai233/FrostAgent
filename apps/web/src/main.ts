@@ -9,15 +9,13 @@ import './styles/layout.css';
 import { themeManager, type ThemeMode } from './theme';
 import { router } from './router';
 import { icon } from './components/icons';
+import { lazyMount } from './lazy-page';
 
 import { mountOverviewPage } from './pages/overview';
 import { mountSessionsPage } from './pages/sessions';
-import { mountMemoryPage } from './pages/memory';
 import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
-import { mountMCPPage } from './pages/mcp';
-import { mountActionsCatPage } from './pages/actionscat';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
@@ -26,6 +24,16 @@ import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
+
+const mountMemoryPage = lazyMount(() =>
+  import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
+);
+const mountMCPPage = lazyMount(() =>
+  import('./pages/mcp').then(({ mountMCPPage }) => mountMCPPage),
+);
+const mountActionsCatPage = lazyMount(() =>
+  import('./pages/actionscat').then(({ mountActionsCatPage }) => mountActionsCatPage),
+);
 
 // Initialize Theme
 themeManager.init();
