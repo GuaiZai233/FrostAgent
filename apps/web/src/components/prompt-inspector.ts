@@ -445,7 +445,12 @@ export function parsePrompt(raw: string): ParsedPrompt {
 export function renderPromptInspector(
   container: HTMLElement,
   dataOrRaw: ParsedPrompt | string,
-  options: { showRawToggle?: boolean; title?: string } = {},
+  options: {
+    showRawToggle?: boolean;
+    title?: string;
+    onViewSummary?: () => void;
+    modelConfigHref?: string;
+  } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw) : dataOrRaw;
   let viewMode: 'visual' | 'raw' = 'visual';
@@ -457,7 +462,7 @@ export function renderPromptInspector(
           <div class="prompt-section-header">
             <div class="prompt-section-title">
               <span class="text-primary flex items-center">${icon('code', 'w-4 h-4')}</span>
-              <span>${options.title || '原始 Prompt 内容'}</span>
+              <span>${escapeHtml(options.title || '原始 Prompt 内容')}</span>
             </div>
             <div class="flex items-center gap-2">
               <button class="btn btn-ghost btn-sm" id="pi-copy-btn">
@@ -495,13 +500,23 @@ export function renderPromptInspector(
         <!-- Top Toolbar / Badges -->
         <div class="flex items-center justify-between gap-3 flex-wrap border-b border-border pb-2.5">
           <div class="flex items-center gap-2 flex-wrap text-xs">
-            <span class="badge badge-outline flex items-center gap-1">
-              ${icon('sparkles', 'w-3 h-3 text-info')}
-              <span>Prompt Inspector</span>
-            </span>
             ${
-              parsed.model
-                ? `<span class="badge badge-purple text-xs font-mono">${escapeHtml(parsed.model)}</span>`
+              options.onViewSummary
+                ? `<button class="btn btn-outline btn-sm" id="pi-view-summary-btn" title="查看群聊总结">
+                    ${icon('sparkles', 'w-3.5 h-3.5 text-info')}
+                    <span>群聊总结</span>
+                  </button>`
+                : `<span class="badge badge-outline flex items-center gap-1">
+                    ${icon('sparkles', 'w-3 h-3 text-info')}
+                    <span>Prompt Inspector</span>
+                  </span>`
+            }
+            ${
+              options.modelConfigHref
+                ? `<a class="btn btn-outline btn-sm" title="配置模型" href="${escapeHtml(options.modelConfigHref)}">
+                    ${icon('settings', 'w-3.5 h-3.5')}
+                    <span>模型配置</span>
+                  </a>`
                 : ''
             }
             ${
@@ -588,7 +603,7 @@ export function renderPromptInspector(
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${renderSummaryGroups(parsed.summaryGroups)}
+                ${renderSummaryGroups(parsed.summaryGroups, parsed.model)}
               </div>
             </div>
           </div>
@@ -629,7 +644,7 @@ export function renderPromptInspector(
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false)).join('')}
+                ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model)).join('')}
               </div>
             </div>
           </div>
@@ -752,6 +767,9 @@ export function renderPromptInspector(
   }
 
   function bindInteractiveEvents() {
+    container.querySelector<HTMLButtonElement>('#pi-view-summary-btn')
+      ?.addEventListener('click', () => options.onViewSummary?.());
+
     const copyBtn = container.querySelector<HTMLButtonElement>('#pi-copy-btn');
     copyBtn?.addEventListener('click', async () => {
       const success = await copyToClipboard(parsed.raw);
@@ -777,11 +795,11 @@ export function renderPromptInspector(
 /**
  * Renders all summary groups with their current compact content.
  */
-function renderSummaryGroups(summaryGroups: SummaryGroupInfo[]): string {
+function renderSummaryGroups(summaryGroups: SummaryGroupInfo[], model?: string): string {
   return summaryGroups
     .map((group, idx) => {
       const messages = group.parsedMessages || (group.messages || []).map(parseMessageLine);
-      return renderSummaryGroupBlock(messages, group, idx);
+      return renderSummaryGroupBlock(messages, group, idx, model);
     })
     .join('');
 }
@@ -793,8 +811,9 @@ function renderSummaryGroupBlock(
   messages: GroupMessageItem[],
   group: SummaryGroupInfo,
   groupIdx: number,
+  model?: string,
 ): string {
-  const rowsHtml = messages.map((m) => renderSingleMessageRow(m, true)).join('');
+  const rowsHtml = messages.map((m) => renderSingleMessageRow(m, true, model)).join('');
 
   return `
     <div class="summary-group-wrapper" data-group-index="${groupIdx}">
@@ -824,7 +843,7 @@ function renderSummaryGroupBlock(
 /**
  * Renders an individual message entry row.
  */
-function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): string {
+function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean, model?: string): string {
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';
@@ -836,7 +855,7 @@ function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean): s
       <div class="msg-meta">
         ${
           isAssistant
-            ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium">Assistant / Bot</span>`
+            ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium" title="当前上下文模型，历史回复当时使用的模型可能不同">Bot (${escapeHtml(model || '未知模型')})</span>`
             : `<span class="badge badge-outline msg-role-badge text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
         ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}

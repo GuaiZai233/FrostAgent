@@ -1,8 +1,11 @@
 import { createInstanceAPI } from '../api/client';
 import { SessionInfo } from '@frostagent/proto';
-import { escapeHtml, formatDateTime, formatPlatform, isGroupSession } from '../utils/formatters';
+import { escapeHtml, formatCount, formatDateTime, formatPlatform, isGroupSession, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
+import { openDialog } from '../components/dialog';
+import { confirmDialog } from '../components/confirm';
+import { attachPaginationEvents, renderPagination } from '../components/pagination';
 import { copyToClipboard } from '../utils/clipboard';
 import {
   renderPromptInspector,
@@ -14,24 +17,33 @@ import {
 // NOTE: parsePrompt / renderPromptInspector are also used by the logs page via
 // openPromptInspectorDialog — do NOT remove those exports from prompt-inspector.ts.
 
-export function mountPromptPage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+export function mountPromptPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
   let sessionsLoading = false;
   let sessions: SessionInfo[] = [];
+  let totalSessions = 0;
+  let sessionsRequestSeq = 0;
+  let searchSessions: SessionInfo[] | null = null;
+  let searchSessionsLoading = false;
+  let searchSessionsRequestSeq = 0;
   let selectedSessionId = '';
+  let selectedSession: SessionInfo | null = null;
   let currentPromptText = '';
-  let activePlatformFilter = 'all-groups'; // 'all-groups' | 'aiohttp' | 'onebot' | 'all'
+  let activePlatformFilter = 'all'; // 'all-groups' | 'aiohttp' | 'onebot' | 'all'
   let searchQuery = '';
   let inspectorCleanup: (() => void) | null = null;
   let isEditorExpanded = false;
   let sessionContextRequestSeq = 0;
+  const tokenStack = new PageTokenStack();
+  let pageSize = 20;
+  let summaryDialogClose: (() => void) | null = null;
+  const pageAbortController = new AbortController();
 
   container.innerHTML = `
     <div class="page-container fade-in">
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
-          <h1 class="page-title">会话上下文检查</h1>
+          <h1 class="page-title">会话与 Prompt 检查</h1>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline btn-sm" id="prompt-toggle-editor-btn">
@@ -69,7 +81,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-1.5 font-medium text-xs text-foreground">
               ${icon('forum', 'w-3.5 h-3.5 text-primary')}
-              <span>群聊会话列表</span>
+              <span>会话列表</span>
             </div>
             <button class="btn btn-ghost btn-icon-sm h-7 w-7" id="prompt-sessions-refresh-btn" title="刷新会话">
               ${icon('refresh', 'w-3.5 h-3.5')}
@@ -83,15 +95,16 @@ export function mountPromptPage(container: HTMLElement): () => void {
                 type="search"
                 id="prompt-session-search-input"
                 class="input text-xs w-full"
-                placeholder="搜索群号 / 会话 ID..."
+                placeholder="搜索最近 100 条会话的群号 / 会话 ID..."
               />
             </div>
             <div class="flex items-center gap-1 flex-wrap text-xs" id="prompt-platform-filter-tabs">
+              <button class="btn btn-xs ${activePlatformFilter === 'all' ? 'btn-primary' : 'btn-outline'}" data-filter="all">全部</button>
               <button class="btn btn-xs ${activePlatformFilter === 'all-groups' ? 'btn-primary' : 'btn-outline'}" data-filter="all-groups">全部群聊</button>
               <button class="btn btn-xs ${activePlatformFilter === 'aiohttp' ? 'btn-primary' : 'btn-outline'}" data-filter="aiohttp">aiohttp</button>
               <button class="btn btn-xs ${activePlatformFilter === 'onebot' ? 'btn-primary' : 'btn-outline'}" data-filter="onebot">OneBot</button>
-              <button class="btn btn-xs ${activePlatformFilter === 'all' ? 'btn-primary' : 'btn-outline'}" data-filter="all">全部</button>
             </div>
+            <p class="text-[11px] text-muted">搜索和平台筛选覆盖最近 100 条会话</p>
           </div>
 
           <!-- Session List Items Container -->
@@ -101,6 +114,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
               <div class="mt-2">加载会话列表中...</div>
             </div>
           </div>
+          <div class="prompt-session-pagination" id="prompt-sessions-pagination"></div>
         </aside>
 
         <!-- Right: Inspector Visual Mount Point (8 cols) -->
@@ -115,6 +129,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
   const mountEl = container.querySelector<HTMLElement>('#prompt-inspector-mount')!;
   const sessionListEl = container.querySelector<HTMLElement>('#prompt-session-list')!;
+  const sessionPaginationEl = container.querySelector<HTMLElement>('#prompt-sessions-pagination')!;
   const searchInput = container.querySelector<HTMLInputElement>('#prompt-session-search-input')!;
   const filterTabsEl = container.querySelector<HTMLElement>('#prompt-platform-filter-tabs')!;
   const sessionsRefreshBtn = container.querySelector<HTMLButtonElement>('#prompt-sessions-refresh-btn')!;
@@ -129,30 +144,74 @@ export function mountPromptPage(container: HTMLElement): () => void {
   // 1. Fetch Session List
   async function loadSessions(): Promise<boolean> {
     if (isUnmounted) return false;
+    const requestSeq = ++sessionsRequestSeq;
     sessionsLoading = true;
     renderSessionList();
 
     try {
-      const res = await api.getSessions(100);
-      if (isUnmounted) return false;
+      const res = await api.getSessions(pageSize, tokenStack.currentToken);
+      if (isUnmounted || requestSeq !== sessionsRequestSeq) return false;
       sessions = res.sessions || [];
+      totalSessions = Number(res.pagination?.total ?? sessions.length);
+      tokenStack.setNextToken(res.pagination?.pageToken);
+      const refreshed = sessions.find((session) => session.sessionId === selectedSessionId);
+      if (refreshed) selectedSession = refreshed;
       return true;
     } catch (err) {
-      if (isUnmounted) return false;
+      if (isUnmounted || requestSeq !== sessionsRequestSeq) return false;
       toast.error('加载会话列表失败: ' + (err instanceof Error ? err.message : String(err)));
       sessions = [];
+      totalSessions = 0;
+      tokenStack.setNextToken('');
       return false;
     } finally {
-      if (!isUnmounted) {
+      if (!isUnmounted && requestSeq === sessionsRequestSeq) {
         sessionsLoading = false;
         renderSessionList();
       }
     }
   }
 
+  function isSearchMode(): boolean {
+    return Boolean(searchQuery || activePlatformFilter !== 'all');
+  }
+
+  async function loadSearchSessions(): Promise<void> {
+    if (isUnmounted || searchSessions !== null || searchSessionsLoading) return;
+    const requestSeq = ++searchSessionsRequestSeq;
+    searchSessionsLoading = true;
+    renderSessionList();
+    try {
+      const res = await api.getSessions(100);
+      if (isUnmounted || requestSeq !== searchSessionsRequestSeq) return;
+      searchSessions = res.sessions || [];
+      const refreshed = searchSessions.find((session) => session.sessionId === selectedSessionId);
+      if (refreshed) selectedSession = refreshed;
+    } catch (err) {
+      if (isUnmounted || requestSeq !== searchSessionsRequestSeq) return;
+      toast.error('加载会话搜索范围失败: ' + (err instanceof Error ? err.message : String(err)));
+      searchSessions = [];
+    } finally {
+      if (!isUnmounted && requestSeq === searchSessionsRequestSeq) {
+        searchSessionsLoading = false;
+        renderSessionList();
+      }
+    }
+  }
+
+  async function refreshSessions(): Promise<boolean> {
+    searchSessionsRequestSeq += 1;
+    searchSessions = null;
+    searchSessionsLoading = false;
+    const loaded = await loadSessions();
+    if (loaded && isSearchMode()) await loadSearchSessions();
+    return loaded;
+  }
+
   // 2. Filter sessions
   function getFilteredSessions(): SessionInfo[] {
-    return sessions.filter((s) => {
+    const source = isSearchMode() ? searchSessions || [] : sessions;
+    return source.filter((s) => {
       const id = s.sessionId.toLowerCase();
       const platform = (s.platform || '').toLowerCase();
       const isGroup = isGroupSession(s);
@@ -182,7 +241,8 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
   // 3. Render Session List
   function renderSessionList() {
-    if (sessionsLoading && sessions.length === 0) {
+    if ((isSearchMode() && searchSessionsLoading && searchSessions === null)
+      || (!isSearchMode() && sessionsLoading && sessions.length === 0)) {
       sessionListEl.innerHTML = `
         <div class="text-center text-muted text-xs p-6">
           <span class="spinner"></span>
@@ -194,11 +254,35 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
     const filtered = getFilteredSessions();
 
+    sessionPaginationEl.innerHTML = isSearchMode() ? '' : renderPagination({
+      total: totalSessions,
+      pageIndex: tokenStack.pageIndex,
+      pageSize,
+      canGoBack: tokenStack.canGoBack,
+      canGoNext: tokenStack.canGoNext,
+      loading: sessionsLoading,
+    });
+    if (!isSearchMode()) attachPaginationEvents(sessionPaginationEl, {
+      onPageSizeChange: (newSize) => {
+        pageSize = newSize;
+        tokenStack.reset();
+        void loadSessions();
+      },
+      onPrevPage: () => {
+        tokenStack.prev();
+        void loadSessions();
+      },
+      onNextPage: () => {
+        tokenStack.next();
+        void loadSessions();
+      },
+    });
+
     if (filtered.length === 0) {
       sessionListEl.innerHTML = `
         <div class="text-center text-muted text-xs p-6">
           ${icon('forum', 'w-6 h-6 mx-auto mb-2 opacity-40')}
-          <div>暂无符合条件的群聊会话</div>
+          <div>暂无符合条件的会话</div>
         </div>
       `;
       return;
@@ -225,9 +309,9 @@ export function mountPromptPage(container: HTMLElement): () => void {
                 </span>
               </div>
             </div>
-            <div class="flex items-center justify-between text-[11px] text-muted">
-              <span>${s.messageCount} 条记录</span>
-              <span>${formatDateTime(s.lastActive || s.createdAt)}</span>
+            <div class="flex flex-col gap-0.5 text-[11px] text-muted">
+              <span>${formatCount(s.messageCount)} 条记录 · 最近活跃 ${escapeHtml(formatDateTime(s.lastActive))}</span>
+              <span>创建于 ${escapeHtml(formatDateTime(s.createdAt))}</span>
             </div>
             ${
               s.groupSummary
@@ -252,6 +336,8 @@ export function mountPromptPage(container: HTMLElement): () => void {
         const sessionId = card.getAttribute('data-session-id');
         if (sessionId) {
           selectedSessionId = sessionId;
+          selectedSession = (isSearchMode() ? searchSessions : sessions)
+            ?.find((session) => session.sessionId === sessionId) || null;
           renderSessionList();
           void loadSessionContext(sessionId);
         }
@@ -276,7 +362,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
       currentPromptText = resp.promptText || '';
       const parsed = buildInspectorDataFromSessionContext(resp);
-      renderInspector(parsed, `会话上下文预览 (${escapeHtml(sessionId)})`);
+      renderInspector(parsed, `会话上下文预览 (${sessionId})`, selectedSession?.sessionId === sessionId ? selectedSession : undefined);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
       toast.error('加载群聊上下文失败: ' + (err instanceof Error ? err.message : String(err)));
@@ -285,14 +371,76 @@ export function mountPromptPage(container: HTMLElement): () => void {
   }
 
   // 5. Render Inspector
-  function renderInspector(dataOrRaw: ParsedPrompt | string, title?: string) {
+  function renderInspector(dataOrRaw: ParsedPrompt | string, title?: string, session?: SessionInfo) {
     if (inspectorCleanup) {
       inspectorCleanup();
       inspectorCleanup = null;
     }
     const rawVal = typeof dataOrRaw === 'string' ? dataOrRaw : dataOrRaw.raw;
     rawInput.value = rawVal;
-    inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, { showRawToggle: true, title });
+    const groupId = session && isGroupSession(session)
+      ? groupIdFromSessionId(session.sessionId)
+      : '';
+    const modelConfigHref = session
+      ? groupId
+        ? `#/model-router?platform=${encodeURIComponent(session.platform || 'onebot')}&group_id=${encodeURIComponent(groupId)}`
+        : '#/model-router'
+      : undefined;
+    inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
+      showRawToggle: true,
+      title,
+      modelConfigHref,
+      onViewSummary: session && isGroupSession(session)
+        ? () => showSummaryDialog(session)
+        : undefined,
+    });
+  }
+
+  function showSummaryDialog(session: SessionInfo) {
+    void openDialog({
+      title: `群聊总结 - ${session.sessionId}`,
+      description: `平台: ${formatPlatform(session.platform)} · 消息数: ${formatCount(session.messageCount)}`,
+      maxWidth: '36rem',
+      bodyHtml: `
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(session.groupSummary || '暂无群聊总结内容。')}</div>
+      `,
+      footerHtml: `
+        ${session.groupSummary ? '<button class="btn btn-destructive btn-sm" id="prompt-delete-summary-btn">删除总结</button>' : ''}
+        <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>
+      `,
+      onMount: (dialogEl, close) => {
+        summaryDialogClose = () => close();
+        const deleteButton = dialogEl.querySelector<HTMLButtonElement>('#prompt-delete-summary-btn');
+        deleteButton?.addEventListener('click', async () => {
+          const confirmed = await confirmDialog({
+            title: '删除群聊总结',
+            message: `确定要清空会话 ${session.sessionId} 的群聊总结吗？此操作不可逆。`,
+            confirmLabel: '删除',
+            destructive: true,
+            signal: pageAbortController.signal,
+          });
+          if (!confirmed || isUnmounted || selectedSessionId !== session.sessionId) return;
+          deleteButton.disabled = true;
+          try {
+            const result = await api.deleteGroupSummary(session.sessionId);
+            if (!result.success) throw new Error(result.error || '服务端未删除总结');
+            if (isUnmounted) return;
+            session.groupSummary = '';
+            close();
+            toast.success('群聊总结已清空');
+            if (await refreshSessions() && !isUnmounted && selectedSessionId === session.sessionId) {
+              await loadSessionContext(session.sessionId);
+            }
+          } catch (err) {
+            if (!isUnmounted) {
+              deleteButton.disabled = false;
+              toast.error('删除总结失败: ' + (err instanceof Error ? err.message : String(err)));
+            }
+          }
+        });
+      },
+      onClose: () => { summaryDialogClose = null; },
+    });
   }
 
   // 6. Render Clean Empty State
@@ -311,27 +459,21 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
   // 7. Bind Events
   sessionsRefreshBtn.addEventListener('click', async () => {
-    const loaded = await loadSessions();
-    if (!loaded || !selectedSessionId || isUnmounted) return;
-
-    if (sessions.some((session) => session.sessionId === selectedSessionId)) {
+    const loaded = await refreshSessions();
+    if (loaded && selectedSessionId && !isUnmounted) {
       await loadSessionContext(selectedSessionId);
-      return;
     }
-
-    selectedSessionId = '';
-    currentPromptText = '';
-    renderEmptyState();
   });
 
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value.trim();
     renderSessionList();
+    if (isSearchMode()) void loadSearchSessions();
   });
 
   filterTabsEl.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((tab) => {
     tab.addEventListener('click', () => {
-      const filter = tab.getAttribute('data-filter') || 'all-groups';
+      const filter = tab.getAttribute('data-filter') || 'all';
       activePlatformFilter = filter;
       filterTabsEl.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((btn) => {
         if (btn.getAttribute('data-filter') === filter) {
@@ -341,6 +483,7 @@ export function mountPromptPage(container: HTMLElement): () => void {
         }
       });
       renderSessionList();
+      if (isSearchMode()) void loadSearchSessions();
     });
   });
 
@@ -383,9 +526,19 @@ export function mountPromptPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    pageAbortController.abort();
+    summaryDialogClose?.();
     if (inspectorCleanup) {
       inspectorCleanup();
       inspectorCleanup = null;
     }
   };
+}
+
+function groupIdFromSessionId(sessionId: string): string {
+  const lower = sessionId.toLowerCase();
+  if (lower.startsWith('group:')) return sessionId.slice('group:'.length);
+  const marker = ':group:';
+  const index = lower.lastIndexOf(marker);
+  return index >= 0 ? sessionId.slice(index + marker.length) : '';
 }
