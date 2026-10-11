@@ -777,6 +777,15 @@ dialog.dialog-modal::backdrop {
   white-space: nowrap;
 }
 
+.prompt-session-pagination .pagination {
+  flex-wrap: wrap;
+  padding: 0.5rem 0 0;
+}
+
+.prompt-session-pagination .pagination > div {
+  flex-wrap: wrap;
+}
+
 .prompt-section {
   display: flex;
   flex-direction: column;
@@ -940,8 +949,11 @@ dialog.dialog-modal::backdrop {
 }
 
 .msg-role-badge {
-  flex-shrink: 0;
-  line-height: 1;
+  flex-shrink: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.2;
 }
 
 .msg-time {

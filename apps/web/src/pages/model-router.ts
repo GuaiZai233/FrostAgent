@@ -345,7 +345,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function renderGroups(): string {
     return `
       <div class="flex items-center justify-between gap-3 mb-3">
-        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于全局配置的 diff；群列表入口同时复用会话管理。</p></div>
+        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于全局配置的 diff；群列表入口同时复用会话与 Prompt 检查。</p></div>
         <button class="btn btn-primary btn-sm" id="add-group">${icon('plus', 'w-3.5 h-3.5')} 手动添加</button>
       </div>
       <div class="card table-card overflow-hidden"><div class="table-container"><table class="table">
