@@ -220,6 +220,46 @@ class FakeClient:
 
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_astrbot_wake_prefix_does_not_wake_frostagent(self):
+        event = FakeEvent(group_id="group_test", content="/help", is_wake=True)
+        event.is_wake = True
+        sent = await self.forward(event)
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(sent[0]["is_wake"])
+        self.assertFalse(sent[0]["is_at"])
+        self.assertEqual(sent[0]["content"], "/help")
+
+    async def test_astrbot_prefix_does_not_bypass_group_forward_filter(self):
+        sent = await self.forward(
+            FakeEvent(group_id="group_test", content="/hello", is_wake=True),
+            forward_all_group_messages=False,
+        )
+        self.assertEqual(sent, [])
+
+    async def test_reply_to_bot_still_wakes_without_astrbot_flag(self):
+        event = FakeEvent(group_id="group_test", content="继续")
+        reply = Reply("reply_test")
+        reply.sender_id = "bot_self"
+        event.message_obj.message = [reply]
+        sent = await self.forward(event, forward_all_group_messages=False)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0]["is_wake"])
+        self.assertFalse(sent[0]["is_at"])
+
+    async def test_reply_to_other_user_does_not_inherit_astrbot_wake(self):
+        event = FakeEvent(group_id="group_test", content="继续", is_wake=True)
+        reply = Reply("reply_test")
+        reply.sender_id = "other_test"
+        event.message_obj.message = [reply]
+        sent = await self.forward(event)
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(sent[0]["is_wake"])
+
+    async def test_private_message_still_forwards_without_astrbot_wake(self):
+        sent = await self.forward(FakeEvent(content="hello"))
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["message_type"], "private")
+
     async def forward(
         self,
         event: FakeEvent,

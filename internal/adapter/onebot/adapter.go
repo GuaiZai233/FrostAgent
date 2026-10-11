@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -29,10 +30,11 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
-	engine  *llm.Engine
-	stealer *sticker.Stealer
-	mu      sync.RWMutex
-	conns   map[*wsConnection]struct{}
+	engine             *llm.Engine
+	stealer            *sticker.Stealer
+	mu                 sync.RWMutex
+	conns              map[*wsConnection]struct{}
+	incomingDispatcher core.IncomingDispatcher
 }
 
 // NewAdapter 创建一个新的 OneBot 适配器实例。
@@ -45,6 +47,11 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 
 func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
+}
+
+// SetIncomingDispatcher configures dispatch before the adapter starts serving.
+func (a *Adapter) SetIncomingDispatcher(dispatcher core.IncomingDispatcher) {
+	a.incomingDispatcher = dispatcher
 }
 
 func (c *wsConnection) observeStickers(event model.OneBotEvent) {
@@ -304,8 +311,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
 		}
 
+		reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
+		defer reader.Close()
 		for {
-			_, message, err := conn.ReadMessage()
+			_, message, err := reader.ReadMessage()
 			if err != nil {
 				if a.engine != nil {
 					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
@@ -363,8 +372,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					WakeSignals: DetectGroupWakeSignals(event, scope),
 				}
 			}
+			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
+				event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-				isWoken(event, a.engine, routing) {
+				(isWoken(event, a.engine, routing) || canDispatch) {
 				secPlatform := "onebot"
 				if wsConn.mock {
 					secPlatform = "mock"
@@ -419,6 +430,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					}
 				} else if decision.Action == security.WatchdogWarn {
 					warningNotice = decision.WarningNotice
+				}
+			}
+
+			if canDispatch && !wsConn.isClosed() {
+				incoming := ToIncomingMessage(event)
+				var text strings.Builder
+				for _, segment := range ParseMessageSegments(event.Message) {
+					if segment.Type == "text" {
+						if part, ok := segment.Data["text"].(string); ok {
+							text.WriteString(part)
+						}
+					}
+				}
+				incoming.Content = text.String()
+				if err := a.incomingDispatcher.DispatchIncoming(wsConn.Context(), incoming); err != nil {
+					if a.engine != nil {
+						a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+					}
 				}
 			}
 
@@ -633,4 +662,3 @@ func validateOutboundMediaURL(rawURL string) error {
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
 }
-

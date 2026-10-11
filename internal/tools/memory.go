@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,7 +49,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 			},
 			"required": []string{"action"},
 		},
-		executeContext: func(ctx context.Context, args string) (string, error) {
+		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			var params struct {
 				Action      string   `json:"action"`
 				Content     string   `json:"content"`
@@ -57,12 +58,12 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				Evidence    string   `json:"evidence"`
 			}
 			if err := json.Unmarshal([]byte(args), &params); err != nil {
-				return "", fmt.Errorf("参数解析失败: %w", err)
+				return textResult(""), fmt.Errorf("参数解析失败: %w", err)
 			}
 
 			runContext, ok := llm.RunContextFromContext(ctx)
 			if !ok || runContext.Owner == "" {
-				return "无法获取当前用户信息", nil
+				return textResult("无法获取当前用户信息"), nil
 			}
 			currentUser := runContext.Owner
 			groupID := runContext.RouteScope.GroupID
@@ -70,18 +71,18 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 			switch params.Action {
 			case "write":
 				if runContext.Mock {
-					return "记忆已记录（模拟会话：断电即丢，不持久化保存）", nil
+					return textResult("记忆已记录（模拟会话：断电即丢，不持久化保存）"), nil
 				}
 				if params.Content == "" {
-					return "写入记忆需要提供 content 参数", nil
+					return textResult("写入记忆需要提供 content 参数"), nil
 				}
 				if groupID != "" {
 					if engine.GroupManager == nil {
-						return "群记忆功能未启用", nil
+						return textResult("群记忆功能未启用"), nil
 					}
 					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
 					if err != nil {
-						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
 					}
 					entry := memory.MemoryEntry{
 						ID:        memory.GenerateID(),
@@ -106,12 +107,12 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						entry.SourceSenderID = runContext.ActorUserID
 					}
 					if err := groupStore.Save(entry); err != nil {
-						return fmt.Sprintf("写入群记忆失败: %v", err), nil
+						return textResult(fmt.Sprintf("写入群记忆失败: %v", err)), nil
 					}
-					return "群记忆已写入", nil
+					return core.ToolExecutionResult{Content: "群记忆已写入", MemoryWritten: true}, nil
 				}
 				if engine.MemoryWriter == nil {
-					return "记忆写入功能未启用", nil
+					return textResult("记忆写入功能未启用"), nil
 				}
 				if err := engine.MemoryWriter.WriteByOwner(
 					currentUser,
@@ -119,35 +120,35 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					params.Content,
 					params.Tags,
 				); err != nil {
-					return fmt.Sprintf("写入失败: %v", err), nil
+					return textResult(fmt.Sprintf("写入失败: %v", err)), nil
 				}
-				return "记忆已写入", nil
+				return core.ToolExecutionResult{Content: "记忆已写入", MemoryWritten: true}, nil
 
 			case "search":
 				// Clean and validate tags
 				tags := cleanSearchTags(params.Tags)
 				if len(tags) == 0 {
-					return "搜索需要提供 tags 参数（1～6个标签）", nil
+					return textResult("搜索需要提供 tags 参数（1～6个标签）"), nil
 				}
 				if len(tags) > 6 {
-					return "搜索最多支持 6 个不同的 tags 标签", nil
+					return textResult("搜索最多支持 6 个不同的 tags 标签"), nil
 				}
 				if groupID != "" {
 					if engine.GroupManager == nil {
-						return "群记忆功能未启用", nil
+						return textResult("群记忆功能未启用"), nil
 					}
 					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
 					if err != nil {
-						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
 					}
 					entries, err := groupStore.SearchByTags(tags, 0)
 					if err != nil {
-						return fmt.Sprintf("搜索群记忆失败: %v", err), nil
+						return textResult(fmt.Sprintf("搜索群记忆失败: %v", err)), nil
 					}
 					filtered := engine.MemoryGateway.FilterGroup(entries)
 					filtered = engine.MemoryReader.Limit(filtered)
 					if len(filtered) == 0 {
-						return "未找到相关群记忆", nil
+						return textResult("未找到相关群记忆"), nil
 					}
 					if !runContext.Mock {
 						if err := groupStore.RecordRecall(filtered); err != nil {
@@ -160,19 +161,19 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						}
 					}
 					result, _ := json.Marshal(filtered)
-					return string(result), nil
+					return textResult(string(result)), nil
 				}
 				if engine.MemoryReader == nil {
-					return "记忆搜索功能未启用", nil
+					return textResult("记忆搜索功能未启用"), nil
 				}
 				entries, err := engine.MemoryReader.SearchByTags(context.Background(), tags)
 				if err != nil {
-					return fmt.Sprintf("搜索失败: %v", err), nil
+					return textResult(fmt.Sprintf("搜索失败: %v", err)), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
 				filtered = engine.MemoryReader.Limit(filtered)
 				if len(filtered) == 0 {
-					return "未找到相关记忆", nil
+					return textResult("未找到相关记忆"), nil
 				}
 				if !runContext.Mock {
 					if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
@@ -185,69 +186,69 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					}
 				}
 				result, _ := json.Marshal(filtered)
-				return string(result), nil
+				return textResult(string(result)), nil
 
 			case "list":
 				if groupID != "" {
 					if engine.GroupManager == nil {
-						return "群记忆功能未启用", nil
+						return textResult("群记忆功能未启用"), nil
 					}
 					groupStore, err := engine.GroupManager.GetGroupStore(groupID)
 					if err != nil {
-						return fmt.Sprintf("获取群记忆存储失败: %v", err), nil
+						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
 					}
 					entries, err := groupStore.ListAll()
 					if err != nil {
-						return fmt.Sprintf("列出群记忆失败: %v", err), nil
+						return textResult(fmt.Sprintf("列出群记忆失败: %v", err)), nil
 					}
 					filtered := engine.MemoryGateway.FilterGroup(entries)
 					filtered = engine.MemoryReader.Limit(filtered)
 					if len(filtered) == 0 {
-						return "当前群还没有任何记忆", nil
+						return textResult("当前群还没有任何记忆"), nil
 					}
 					result, _ := json.Marshal(filtered)
-					return string(result), nil
+					return textResult(string(result)), nil
 				}
 				if engine.MemoryGateway == nil {
-					return "记忆功能未启用", nil
+					return textResult("记忆功能未启用"), nil
 				}
 				entries, err := engine.MemoryReader.Recall(context.Background(), "")
 				if err != nil {
-					return fmt.Sprintf("列出失败: %v", err), nil
+					return textResult(fmt.Sprintf("列出失败: %v", err)), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
 				filtered = engine.MemoryReader.Limit(filtered)
 				if len(filtered) == 0 {
-					return "你还没有任何记忆", nil
+					return textResult("你还没有任何记忆"), nil
 				}
 				result, _ := json.Marshal(filtered)
-				return string(result), nil
+				return textResult(string(result)), nil
 
 			case "reflect":
 				if groupID != "" {
-					return "群聊暂不支持记忆反思整理", nil
+					return textResult("群聊暂不支持记忆反思整理"), nil
 				}
 				if runContext.Mock {
-					return "模拟会话模式下禁用记忆反思重构", nil
+					return textResult("模拟会话模式下禁用记忆反思重构"), nil
 				}
 				if engine.MemoryReflections == nil {
-					return "记忆反思功能未启用", nil
+					return textResult("记忆反思功能未启用"), nil
 				}
 				status, started, err := engine.MemoryReflections.Start(currentUser)
 				if err != nil {
-					return fmt.Sprintf("启动记忆反思失败: %v", err), nil
+					return textResult(fmt.Sprintf("启动记忆反思失败: %v", err)), nil
 				}
 				if !started {
 					target := status.Owner
 					if target == "" {
 						target = "全部用户"
 					}
-					return fmt.Sprintf("记忆反思任务正在运行（范围：%s）", target), nil
+					return textResult(fmt.Sprintf("记忆反思任务正在运行（范围：%s）", target)), nil
 				}
-				return "记忆反思任务已在后台启动，完成后会更新主题索引", nil
+				return textResult("记忆反思任务已在后台启动，完成后会更新主题索引"), nil
 
 			default:
-				return "未知操作，支持：write、search、list、reflect", nil
+				return textResult("未知操作，支持：write、search、list、reflect"), nil
 			}
 		},
 	}

@@ -1171,7 +1171,8 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 	return Tool{
 		name: "actionscat_create_schedule",
 		description: "在 ActionsCat 中为指定的 Action 创建定时触发器 (Schedule)（仅限管理员 ADMIN_QQ_IDS）。" +
-			"基于 5 段式标准 Cron 表达式（分 时 日 月 周）及 IANA 时区（默认 Asia/Shanghai）在后台定时触发任务执行，无需 LLM 常驻或唤醒。",
+			"基于 5 段式标准 Cron 表达式（分 时 日 月 周）及 IANA 时区（默认 Asia/Shanghai）在后台定时触发任务执行，无需 LLM 常驻或唤醒。" +
+			"从当前私聊或群聊保存收件上下文；Action 请用 actionscat.Reply 回复，不需要在源码中写收件人 ID。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1234,10 +1235,12 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 				enabled = *input.Enabled
 			}
 
+			delivery := scheduleDeliveryContext(runContext)
 			sched, err := client.CreateSchedule(ctx, input.ActionID, actionscat.CreateScheduleReq{
-				CronExpr: strings.TrimSpace(input.CronExpr),
-				Timezone: tz,
-				Enabled:  enabled,
+				CronExpr:        strings.TrimSpace(input.CronExpr),
+				Timezone:        tz,
+				Enabled:         enabled,
+				DeliveryContext: delivery,
 			})
 			if err != nil {
 				return fmt.Sprintf("创建 ActionsCat 定时触发器失败: %v", err), nil
@@ -1250,6 +1253,9 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 				Schedule: *sched,
 				Notice:   "定时触发器创建成功。ActionsCat 调度器将在后台按 Cron 表达式自动计算并在下次调度时间到达时触发执行。",
 			}
+			if delivery != nil && (sched.DeliveryContext == nil || *sched.DeliveryContext != *delivery) {
+				resp.Notice += " 服务端未确认保存当前会话的收件上下文，不能保证自动回复到本会话；请升级 ActionsCat 并检查该定时任务，避免重复创建。"
+			}
 
 			data, err := json.MarshalIndent(resp, "", "  ")
 			if err != nil {
@@ -1257,6 +1263,23 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 			}
 			return string(data), nil
 		},
+	}
+}
+
+// scheduleDeliveryContext derives routing exclusively from the trusted caller.
+func scheduleDeliveryContext(run llm.RunContext) *actionscat.DeliveryContext {
+	platform, userID := strings.TrimSpace(run.ActorPlatform), strings.TrimSpace(run.ActorUserID)
+	if platform == "" || userID == "" {
+		return nil
+	}
+	groupID := strings.TrimSpace(run.RouteScope.GroupID)
+	messageType, targetID := "private", userID
+	if groupID != "" {
+		messageType, targetID = "group", groupID
+	}
+	return &actionscat.DeliveryContext{
+		Platform: platform, AdapterID: run.AdapterID, MessageType: messageType, TargetID: targetID,
+		SessionID: run.SessionID, UserID: userID, GroupID: groupID,
 	}
 }
 

@@ -61,6 +61,9 @@ type managed struct {
 	logger  *logs.Store
 	mcp     *mcp.Manager
 }
+
+type runtimeBuilder func(*Manager, *managed, *instanceconfig.Store, string, bool) (*Runtime, error)
+
 type Manager struct {
 	mu               sync.RWMutex
 	root             string
@@ -79,9 +82,18 @@ type Manager struct {
 	shutdown         context.Context
 	shutdownCancel   context.CancelFunc
 	closeOnce        sync.Once
+	buildRuntime     runtimeBuilder
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
+	return newManager(root, global, dialoguePath, buildManagedRuntime)
+}
+
+func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, configDir string, enabled bool) (*Runtime, error) {
+	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, m.wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security)
+}
+
+func newManager(root string, global *instanceconfig.Store, dialoguePath string, builder runtimeBuilder) (*Manager, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -97,7 +109,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if dialoguePath == "" {
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs)}
+	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs), buildRuntime: builder}
 	if global != nil {
 		rawTimeout := strings.TrimSpace(global.Get("SECURITY_GATEWAY_TIMEOUT"))
 		if rawTimeout == "" {
@@ -231,7 +243,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			m.registry.Instances[index].Error = pathError.Error()
 			continue
 		}
-		if info.Deleting {
+		if info.Deleting || info.Enabled {
 			continue
 		}
 		r, c, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
@@ -289,7 +301,7 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security)
+	r, err := m.buildRuntime(m, i, c, configDir, enabled)
 	if err == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}

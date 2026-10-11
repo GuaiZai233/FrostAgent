@@ -896,6 +896,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
 			ActorPlatform:    securityPlatform,
+			AdapterID:        "onebot",
 			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
 			ObservationScope: conn.generation,

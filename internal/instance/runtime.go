@@ -361,6 +361,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)
+	ob.SetIncomingDispatcher(actionsCatClient)
+	ab.SetIncomingDispatcher(actionsCatClient)
 	ob.SetStealer(stealer)
 	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)

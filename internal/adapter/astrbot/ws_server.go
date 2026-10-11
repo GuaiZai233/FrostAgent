@@ -1142,6 +1142,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: event.MessageID, SenderID: event.UserID},
 			ActorPlatform:  securityPlatform,
+			AdapterID:      "astrbot",
 			InstanceID:     engine.InstanceID,
 			SendHook:       sendHook,
 			SecurityNotice: notice,

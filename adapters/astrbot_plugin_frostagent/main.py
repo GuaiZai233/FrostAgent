@@ -605,14 +605,12 @@ def extract_interaction_metadata(
 
 
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
-    """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。
+    """仅将 @机器人或引用机器人转换为 FrostAgent 的唤醒信号。
 
-    注意：不读取 event.is_wake，因为 AstrBot 的 WakingCheckStage 会在
-    handler filter 匹配时将其置为 True（我们注册了 EventMessageType.ALL，
-    导致所有消息的 is_wake 均为 True）。仅使用 is_at_or_wake_command，
-    它只在真正的 @机器人、唤醒词前缀或私聊时为 True。
+    AstrBot 的 is_wake / is_at_or_wake_command 包含自身 handler、命令和
+    唤醒词语义，不能作为 FrostAgent 的唤醒信号。名称和别名由后端判断。
     """
-    is_wake = bool(getattr(event, "is_at_or_wake_command", False))
+    is_wake = False
     is_at = False
 
     self_id = extract_self_id(event)
