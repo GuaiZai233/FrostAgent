@@ -24,10 +24,11 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
-	engine  *llm.Engine
-	stealer *sticker.Stealer
-	mu      sync.RWMutex
-	conns   map[*wsConn]struct{}
+	engine             *llm.Engine
+	stealer            *sticker.Stealer
+	mu                 sync.RWMutex
+	conns              map[*wsConn]struct{}
+	incomingDispatcher core.IncomingDispatcher
 }
 
 const astrBotQQPlatform = "aiocqhttp"
@@ -42,6 +43,11 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 
 func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
+}
+
+// SetIncomingDispatcher configures dispatch before the adapter starts serving.
+func (a *Adapter) SetIncomingDispatcher(dispatcher core.IncomingDispatcher) {
+	a.incomingDispatcher = dispatcher
 }
 
 func (a *Adapter) observeStickers(event Event) {
@@ -335,7 +341,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 			}
 
-			if a.engine != nil && a.engine.Security != nil && pristineShouldReply {
+			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
+				(event.Type == "" || event.Type == "event") &&
+				(event.EventType == "" || event.EventType == "message") &&
+				(event.MessageType == "group" || event.MessageType == "private")
+			if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
 				platform := event.Platform
 				if platform == "" {
 					platform = "astrbot"
@@ -384,6 +394,16 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					}
 				} else if decision.Action == security.WatchdogWarn {
 					warningNotice = decision.WarningNotice
+				}
+			}
+
+			if canDispatch && !c.isClosed() {
+				incoming := ToIncomingMessage(event)
+				incoming.SessionID = sessionKey(event)
+				if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
+					if a.engine != nil {
+						a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+					}
 				}
 			}
 
@@ -507,5 +527,3 @@ func sanitizeIngressMetadata(event *Event) {
 		}
 	}
 }
-
-
