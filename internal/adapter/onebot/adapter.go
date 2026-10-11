@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -303,8 +304,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
 		}
 
+		reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
+		defer reader.Close()
 		for {
-			_, message, err := conn.ReadMessage()
+			_, message, err := reader.ReadMessage()
 			if err != nil {
 				if a.engine != nil {
 					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
@@ -595,4 +598,3 @@ func validateOutboundMediaURL(rawURL string) error {
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
 }
-

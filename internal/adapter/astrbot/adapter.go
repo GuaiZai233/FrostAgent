@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
@@ -297,8 +298,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
 		}
 
+		reader := heartbeat.Start(c.Context(), conn, c.Close)
+		defer reader.Close()
 		for {
-			_, message, err := conn.ReadMessage()
+			_, message, err := reader.ReadMessage()
 			if err != nil {
 				if a.engine != nil {
 					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
@@ -507,5 +510,3 @@ func sanitizeIngressMetadata(event *Event) {
 		}
 	}
 }
-
-
