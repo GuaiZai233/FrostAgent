@@ -12,7 +12,6 @@ import (
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -29,10 +28,6 @@ type ToolExecutor interface {
 	Description() string
 	Parameters() map[string]any
 	Execute(args string) (string, error)
-}
-
-type contextualToolExecutor interface {
-	ExecuteContext(ctx context.Context, args string) (string, error)
 }
 
 const (
@@ -903,16 +898,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
 			var toolResult string
+			var execution core.ToolExecutionResult
 			toolSucceeded := false
 			// 从 map 或 MCP Manager 中找到工具执行
 			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
-				var res string
 				var err error
-				if contextualTool, ok := tool.(contextualToolExecutor); ok {
-					res, err = contextualTool.ExecuteContext(ctx, tc.Function.Arguments)
-				} else {
-					res, err = tool.Execute(tc.Function.Arguments)
-				}
+				execution, err = executeToolResult(ctx, tool, tc)
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
 						if hasRunCtx && runCtx.Proactive {
@@ -933,7 +924,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
 				} else {
 					toolSucceeded = true
-					toolResult = res
+					toolResult = execution.Content
 					if IsStaySilentTool(tc.Function.Name) {
 						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
 						return AgentRunResult{
@@ -942,7 +933,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							Usage:         totalUsage,
 						}
 					}
-					if isMemoryWriteAction(tc, res) {
+					if execution.MemoryWritten {
 						memoryWritten = true
 					}
 				}
@@ -961,7 +952,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, toolResult, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
+			securityContent := toolResult
+			if execution.MessagePayload != "" && execution.MessagePayload != toolResult && len(execution.MessagePayload) <= MaxToolOutputBytes {
+				securityContent += "\n" + execution.MessagePayload
+			}
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					toolResult = "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
@@ -979,28 +974,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			toolResultLog := formatToolResultLog(tc.Function.Name, toolResult)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
-			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
-				if ctx.Err() != nil {
-					toolResult = "消息发送取消：会话已取消"
-				} else {
-					epochInvalid := false
-					if runContext.SessionID != "" && runContext.Epoch > 0 && e.SessionManager != nil {
-						if sessCore, ok := e.SessionManager.Get(runContext.SessionID); ok {
-							if sess, isSess := sessCore.(*SessionContext); isSess {
-								if sess.Epoch() != runContext.Epoch {
-									epochInvalid = true
-								}
-							}
-						}
-					}
-					if epochInvalid {
-						toolResult = "消息发送取消：会话已重置"
-					} else if err := runContext.SendHook(toolResult); err != nil {
-						toolResult = fmt.Sprintf("消息发送失败：%v", err)
-					} else {
-						toolResult = "消息已发送"
-					}
-				}
+			if toolSucceeded {
+				toolResult = e.deliverToolResult(ctx, execution, toolResult)
 			}
 
 			toolMsg := ChatMessage{
@@ -1033,13 +1008,6 @@ func isStandaloneAssistantSilentMarker(content string) bool {
 	return strings.TrimSpace(content) == AssistantSilentMarker
 }
 
-func looksLikeMessagePayload(toolResult string) bool {
-	var probe struct {
-		Messages []json.RawMessage `json:"messages"`
-	}
-	return json.Unmarshal([]byte(toolResult), &probe) == nil && len(probe.Messages) > 0
-}
-
 // staySilentConflict rejects ambiguous parallel tool batches before any tool
 // executes. The terminal decision must be exclusive so the model cannot both
 // request side effects and terminate the same assistant response.
@@ -1053,22 +1021,6 @@ func staySilentConflict(toolCalls []ToolCall) string {
 		}
 	}
 	return ""
-}
-
-// isMemoryWriteAction identifies explicit writes that must not be extracted a
-// second time. Background reflection does not count as handling this turn.
-func isMemoryWriteAction(toolCall ToolCall, result string) bool {
-	if toolCall.Function.Name != "memory" {
-		return false
-	}
-
-	var params struct {
-		Action string `json:"action"`
-	}
-	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
-		return false
-	}
-	return params.Action == "write" && result == "记忆已写入"
 }
 
 // effectiveMaxHistory 返回当前生效的历史消息上限：

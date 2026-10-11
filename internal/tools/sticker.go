@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"FrostAgent/internal/core"
 	"FrostAgent/internal/sticker"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -32,16 +34,16 @@ func SendStickerTool(store *sticker.Store, prefixes ...string) Tool {
 			},
 			"required": []string{"query"},
 		},
-		execute: func(args string) (string, error) {
+		executeResult: func(_ context.Context, args string) (core.ToolExecutionResult, error) {
 			var payload struct {
 				Query string `json:"query"`
 			}
 			if err := json.Unmarshal([]byte(args), &payload); err != nil {
-				return "", fmt.Errorf("invalid args: %w", err)
+				return textResult(""), fmt.Errorf("invalid args: %w", err)
 			}
 			query := strings.TrimSpace(payload.Query)
 			if query == "" {
-				return "", fmt.Errorf("query cannot be empty")
+				return textResult(""), fmt.Errorf("query cannot be empty")
 			}
 
 			entries := store.List()
@@ -67,13 +69,13 @@ func SendStickerTool(store *sticker.Store, prefixes ...string) Tool {
 			}
 
 			if len(candidates) == 0 {
-				return `{"error":"查无此词条"}`, nil
+				return textResult(`{"error":"查无此词条"}`), nil
 			}
 
 			selected := weightedRandomSticker(candidates)
 			filePath, ok := store.FilePath(selected.entry.ID)
 			if !ok {
-				return `{"error":"sticker file not found"}`, nil
+				return textResult(`{"error":"sticker file not found"}`), nil
 			}
 			imageURL := fmt.Sprintf(prefix+"/api/sticker/%s/image", url.PathEscape(selected.entry.ID))
 
@@ -90,7 +92,7 @@ func SendStickerTool(store *sticker.Store, prefixes ...string) Tool {
 				},
 			}
 			data, _ := json.Marshal(result)
-			return string(data), nil
+			return core.ToolExecutionResult{Content: string(data), MessagePayload: string(data)}, nil
 		},
 	}
 }
