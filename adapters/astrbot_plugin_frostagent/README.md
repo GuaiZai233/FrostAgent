@@ -15,3 +15,9 @@
 | `forward_all_group_messages` | 是否将所有群消息发送给 FrostAgent (用于群聊总结) | `true` |
 | `heartbeat_interval` | 心跳保活间隔 (秒) | `30` |
 | `reconnect_interval` | 异常断开重连间隔 (秒) | `5` |
+
+## 群聊唤醒
+
+AstrBot 自身的唤醒词、命令前缀（如 `/help`）不作为 FrostAgent 的唤醒信号。插件只上报真实 @机器人或引用机器人；FrostAgent 后端继续独立识别实例的 `BOT_NAME` / `BOT_ALIASES`。私聊仍按既有私聊路径处理。
+
+`forward_all_group_messages=true` 时，普通群消息仍转发用于群聊上下文；转发本身不表示显式唤醒。若希望后端从普通文本中识别自身名称或别名，应保持此设置开启。关闭后插件只转发 @或引用机器人的群消息。独立配置的主动回复概率仍由后端控制。
