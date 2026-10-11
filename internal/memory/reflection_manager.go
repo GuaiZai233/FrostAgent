@@ -104,3 +104,64 @@ func (m *ReflectionManager) run(owner string, onComplete ...func(err error)) {
 	}
 	m.Log().InfoWithConsoleSummary(logs.SYSTEM, "后台记忆反思任务已完成", "后台记忆反思任务已完成")
 }
+
+// StartGroup launches reflection for an isolated group store in the background.
+func (m *ReflectionManager) StartGroup(groupStore *GroupStore, onComplete ...func(err error)) (ReflectionStatus, bool, error) {
+	if m == nil || m.reflector == nil || !m.reflector.Available() {
+		return ReflectionStatus{}, false, fmt.Errorf("memory reflection is not configured")
+	}
+	if groupStore == nil {
+		return ReflectionStatus{}, false, fmt.Errorf("group store is required")
+	}
+
+	groupID := groupStore.GroupID()
+	ownerLabel := "group:" + groupID
+
+	m.mu.Lock()
+	if m.status.Running {
+		status := m.status
+		m.mu.Unlock()
+		return status, false, nil
+	}
+	m.status.Running = true
+	m.status.Owner = ownerLabel
+	m.status.StartedAt = time.Now()
+	m.status.LastError = ""
+	status := m.status
+	m.mu.Unlock()
+
+	if !m.Go(func() { m.runGroup(groupStore, onComplete...) }) {
+		m.mu.Lock()
+		m.status.Running = false
+		m.mu.Unlock()
+		return status, false, fmt.Errorf("实例未启用")
+	}
+	return status, true, nil
+}
+
+func (m *ReflectionManager) runGroup(groupStore *GroupStore, onComplete ...func(err error)) {
+	ctx := m.Context()
+	err := m.reflector.ReflectGroup(ctx, groupStore)
+
+	m.mu.Lock()
+	m.status.Running = false
+	m.status.LastCompletedAt = time.Now()
+	if err != nil {
+		m.status.LastError = err.Error()
+	} else {
+		m.status.LastError = ""
+	}
+	m.mu.Unlock()
+
+	for _, cb := range onComplete {
+		if cb != nil {
+			cb(err)
+		}
+	}
+
+	if err != nil {
+		m.Log().Error(logs.SYSTEM, fmt.Sprintf("后台群记忆反思失败 (群: %s): %v", groupStore.GroupID(), err))
+		return
+	}
+	m.Log().InfoWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("后台群记忆反思任务已完成 (群: %s)", groupStore.GroupID()), "后台群记忆反思任务已完成")
+}

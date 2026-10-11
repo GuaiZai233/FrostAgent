@@ -297,7 +297,7 @@ func stageGroupCompactMessage(event Event, engine *llm.Engine) *llm.StagedGroupC
 	return stageGroupCompactText(event, visibleText, engine)
 }
 
-func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string) {
+func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string, turn *llm.SessionTurn) {
 	replyText = strings.TrimSpace(replyText)
 	if session == nil || engine == nil || replyText == "" {
 		return
@@ -311,7 +311,7 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 	}
-	session.StageGroupCompactMessage(
+	seq, _ := session.StageGroupCompactSlot(
 		llm.GroupCompactMessage{
 			Role:      "assistant",
 			Sender:    botName,
@@ -322,6 +322,9 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 		maxBufferSize,
 		messageID,
 	)
+	if turn != nil && turn.StagedGuard() != nil && seq > 0 {
+		turn.StagedGuard().AddSequence(seq)
+	}
 }
 
 func astrBotVisibleText(event Event) string {
@@ -745,6 +748,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	userText := astrBotVisibleText(event)
+	memoryText := userText
+	var memoryImageDescription string
 
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
@@ -824,6 +829,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			if imageDesc != "" {
+				memoryImageDescription = imageDesc
+				if turn != nil {
+					turn.StagedGuard().SetImageDescription(imageDesc)
+				}
 				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 			}
 		}
@@ -1113,7 +1122,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
 				if event.MessageType == "group" && !conn.mock {
-					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID)
+					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, turn)
 				}
 			}
 			return nil
@@ -1124,12 +1133,14 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			Context:        runCtx,
-			Epoch:          startEpoch,
-			SessionID:      conn.sessionKey(event),
-			Owner:          owner,
-			OwnerType:      ownerType,
-			ActorUserID:    event.UserID,
+			Context:     runCtx,
+			Epoch:       startEpoch,
+			SessionID:   conn.sessionKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: event.UserID,
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+				MessageID: event.MessageID, SenderID: event.UserID},
 			ActorPlatform:  securityPlatform,
 			AdapterID:      "astrbot",
 			InstanceID:     engine.InstanceID,
@@ -1155,7 +1166,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if event.MessageType == "group" {
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Drop()
-					} else {
+					} else if event.MessageID != "" {
 						session.DropGroupCompactMessage(event.MessageID, event.UserID)
 					}
 					if engine != nil && engine.GroupCompactor != nil {
@@ -1199,12 +1210,59 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if session != nil {
 					if turn != nil && turn.StagedGuard() != nil {
 						turn.StagedGuard().Promote()
-					} else {
+					} else if event.MessageID != "" {
 						session.PromoteGroupCompactMessage(event.MessageID)
 					}
 					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
 						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 					}
+				}
+			}
+			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+				if event.MessageType == "group" {
+					speakerName := senderDisplayName(event)
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          event.GroupID,
+							SpeakerID:        event.UserID,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        event.MessageID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     event.GroupID,
+							SpeakerID:   event.UserID,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							MessageID:   event.MessageID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+						},
+					})
 				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
@@ -1241,7 +1299,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if event.MessageType == "group" {
 				if turn != nil && turn.StagedGuard() != nil {
 					turn.StagedGuard().Drop()
-				} else {
+				} else if event.MessageID != "" {
 					session.DropGroupCompactMessage(event.MessageID, event.UserID)
 				}
 			}
@@ -1268,7 +1326,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if session != nil {
 			if turn != nil && turn.StagedGuard() != nil {
 				turn.StagedGuard().Promote()
-			} else {
+			} else if event.MessageID != "" {
 				session.PromoteGroupCompactMessage(event.MessageID)
 			}
 		}
@@ -1281,24 +1339,51 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if runResult.MemoryWritten {
 		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
 	} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
-		pendingUserText := userText
 		if event.MessageType == "group" {
-			pendingUserText = formatGroupSpeakerMessage(event, userText)
+			speakerName := senderDisplayName(event)
+			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+				{
+					Owner:            owner,
+					OwnerType:        memory.OwnerGroup,
+					ScopeType:        memory.ScopeGroup,
+					GroupID:          event.GroupID,
+					SpeakerID:        event.UserID,
+					SpeakerName:      speakerName,
+					Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+					Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+					ImageDescription: memoryImageDescription,
+					MessageID:        event.MessageID,
+				},
+				{
+					Owner:       owner,
+					OwnerType:   memory.OwnerGroup,
+					ScopeType:   memory.ScopeGroup,
+					GroupID:     event.GroupID,
+					SpeakerID:   event.UserID,
+					SpeakerName: speakerName,
+					Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+					Message:     core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+					MessageID:   event.MessageID,
+				},
+			})
+		} else {
+			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+				{
+					Owner:     owner,
+					OwnerType: ownerType,
+					ScopeType: memory.ScopePrivate,
+					Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+					Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+				},
+				{
+					Owner:     owner,
+					OwnerType: ownerType,
+					ScopeType: memory.ScopePrivate,
+					Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+					Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+				},
+			})
 		}
-		engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-			{
-				Owner:     owner,
-				OwnerType: ownerType,
-				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-				Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-			},
-			{
-				Owner:     owner,
-				OwnerType: ownerType,
-				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
-			},
-		})
 	}
 
 	if event.MessageType == "group" && !conn.mock {
