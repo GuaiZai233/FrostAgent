@@ -851,6 +851,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			OwnerType:        ownerType,
 			ActorUserID:      strconv.FormatInt(event.UserID, 10),
 			ActorPlatform:    securityPlatform,
+			AdapterID:        "onebot",
 			InstanceID:       engine.InstanceID,
 			SendHook:         sendHook,
 			ObservationScope: conn.generation,

@@ -1131,6 +1131,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			OwnerType:      ownerType,
 			ActorUserID:    event.UserID,
 			ActorPlatform:  securityPlatform,
+			AdapterID:      "astrbot",
 			InstanceID:     engine.InstanceID,
 			SendHook:       sendHook,
 			SecurityNotice: notice,
