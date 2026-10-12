@@ -1,64 +1,112 @@
 import { instanceState, instanceRequest } from '../instance-state';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
+import { escapeHtml } from '../utils/formatters';
 
 export function mountBackupRestorePage(container: HTMLElement): () => void {
   const id = instanceState.selected!.id;
   const base = `/api/instances/${id}/backup`;
   container.innerHTML = `
-    <div class="page-container fade-in">
-      <header class="pb-1">
+    <div class="page-container backup-page fade-in">
+      <header class="backup-page-header">
         <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置">${icon('arrow_left', 'w-4 h-4')}</a>
-        <h1 class="page-title">备份与还原</h1>
-        <p class="page-description">当前实例的备份会直接下载到浏览器。密钥不会包含在导出文件中；只包含当前实例引用的共享供应商与模型。</p>
-      </header>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">一键全量备份</h2>
-        <p class="text-sm text-muted mt-1">包含设置、私聊及群聊记忆、档案、摘要和贴图。贴图图片作为 ZIP 中的独立文件保存。</p>
-        <a href="${base}" download="frostagent-${id}.zip" class="btn btn-primary mt-4">下载一键全量备份 ZIP</a>
-      </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">快速备份</h2>
-        <div class="flex flex-wrap gap-2 mt-4">
-          <a href="${base}/settings" download="setting.json" class="btn btn-outline">设置 JSON</a>
-          <a href="${base}/memories" download="memory.json" class="btn btn-outline">记忆 JSON</a>
-          <a href="${base}/stickers" download="stickers.zip" class="btn btn-outline">贴图 ZIP</a>
-          <a href="${base}/summaries" download="group_summaries.json" class="btn btn-outline">摘要 JSON</a>
+        <div class="min-w-0">
+          <h1 class="page-title">备份与还原</h1>
+          <p class="text-sm text-muted mt-1">为实例保存一份存档，或从已有备份继续。</p>
         </div>
+        <span class="badge badge-outline backup-instance">${icon('bot', 'w-3.5 h-3.5')} ${escapeHtml(instanceState.selected!.name)}</span>
+      </header>
+
+      <article class="card backup-feature">
+        <div class="backup-feature-copy">
+          <div class="backup-icon">${icon('download', 'w-5 h-5')}</div>
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold">一键全量备份</h2>
+            <p class="text-sm text-muted mt-1">一次保存设置、记忆、档案、摘要和贴图，图片作为 ZIP 内的独立文件保留。</p>
+          </div>
+        </div>
+        <a href="${base}" download="frostagent-${id}.zip" class="btn btn-primary">${icon('download', 'w-4 h-4')} 下载全量 ZIP</a>
       </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">全局设置</h2>
-        <p class="text-sm text-muted mt-1">全局设置单独备份；密钥与凭据来源置空，导入时保留当前密钥。</p>
-        <a href="/api/instances/global/backup/settings" download="global-setting.json" class="btn btn-outline mt-4">下载全局设置 JSON</a>
-        <input id="global-import-file" class="input mt-4" type="file" accept=".json,application/json" />
-        <button id="global-import-button" class="btn btn-outline mt-3" disabled>导入全局设置</button>
-      </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">全局访问锁与审计</h2>
-        <p class="text-sm text-muted mt-1">单独备份全局访问状态和安全审计记录。导入会替换当前记录。</p>
-        <a href="/api/instances/global/backup/security" download="global-security.json" class="btn btn-outline mt-4">下载访问与审计 JSON</a>
-        <input id="security-import-file" class="input mt-4" type="file" accept=".json,application/json" />
-        <button id="security-import-button" class="btn btn-outline mt-3" disabled>导入访问与审计</button>
-      </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">快速导入设置</h2>
-        <p class="text-sm text-muted mt-1">选择 setting.json 后，将一次性替换当前实例的非密钥设置、模型路由、MCP 和示例对话。导入文件中的密钥会被忽略。相同的共享供应商将复用已有凭据；定义冲突时新增供应商并置空密钥，不覆盖其他实例使用的配置。</p>
-        <input id="settings-import-file" class="input mt-4" type="file" accept=".json,application/json" />
-        <button id="settings-import-button" class="btn btn-outline mt-3" disabled>导入 setting.json</button>
-      </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">快速导入记忆</h2>
-        <p class="text-sm text-muted mt-1">按 ID 合并记忆和归档，同 ID 跳过，现有群档案优先。不同 ID 的相同内容可能重复，导入后请到记忆管理页面人工查重。</p>
-        <input id="memory-import-file" class="input mt-4" type="file" accept=".json,application/json" />
-        <button id="memory-import-button" class="btn btn-outline mt-3" disabled>合并导入 memory.json</button>
-      </article>
-      <article class="card p-5 mt-4">
-        <h2 class="card-title text-base">全量还原为新实例</h2>
-        <p class="text-sm text-muted mt-1">选择 FrostAgent 全量 ZIP 后创建一个全新实例。还原后的实例默认停用，检查共享供应商凭据和适配器后再启用。</p>
-        <input id="restore-instance-name" class="input mt-4" type="text" maxlength="32" placeholder="新实例名称（留空自动命名）" />
-        <input id="restore-instance-file" class="input mt-3" type="file" accept=".zip,application/zip" />
-        <button id="restore-instance-button" class="btn btn-outline mt-3" disabled>还原为新实例</button>
-      </article>
+      <p class="backup-note">${icon('info', 'w-4 h-4')}<span>备份直接下载到浏览器，密钥与凭据来源置空；只包含当前实例引用的共享供应商与模型。</span></p>
+
+      <section class="backup-section" aria-labelledby="backup-parts-title">
+        <div class="backup-section-heading"><h2 id="backup-parts-title">分项备份</h2><span>只带走需要的部分</span></div>
+        <div class="backup-download-grid">
+          ${[
+            { path: 'settings', file: 'setting.json', title: '实例设置', detail: '模型路由、MCP 与示例对话', format: 'JSON', symbol: 'sliders' },
+            { path: 'memories', file: 'memory.json', title: '记忆与档案', detail: '私聊及群聊记忆、归档', format: 'JSON', symbol: 'brain' },
+            { path: 'stickers', file: 'stickers.zip', title: '贴图', detail: '贴图信息与原始图片', format: 'ZIP', symbol: 'image' },
+            { path: 'summaries', file: 'group_summaries.json', title: '群摘要', detail: '群聊的运行摘要', format: 'JSON', symbol: 'file_text' },
+          ].map((part) => `
+            <a href="${base}/${part.path}" download="${part.file}" class="card backup-download">
+              <div class="backup-download-top">${icon(part.symbol, 'w-5 h-5')}<span class="badge badge-outline">${part.format}</span></div>
+              <div><h3 class="text-sm font-semibold">${part.title}</h3><p class="text-xs text-muted mt-1">${part.detail}</p></div>
+              <span class="backup-download-action">下载 ${part.format} ${icon('arrow_down', 'w-3.5 h-3.5')}</span>
+            </a>`).join('')}
+        </div>
+      </section>
+
+      <section class="backup-section" aria-labelledby="backup-import-title">
+        <div class="backup-section-heading"><h2 id="backup-import-title">导入与还原</h2><span>选择备份文件后执行</span></div>
+        <div class="backup-import-grid">
+          <article class="card backup-panel">
+            <div class="backup-panel-heading">${icon('upload', 'w-4 h-4')}<h3>全量还原为新实例</h3></div>
+            <p class="backup-description">从全量 ZIP 创建一个新实例。新实例默认停用，检查供应商凭据与适配器后再启用。</p>
+            <div class="backup-form">
+              <label for="restore-instance-name">新实例名称 <span class="text-muted font-normal">（可选）</span></label>
+              <input id="restore-instance-name" class="input" type="text" maxlength="32" placeholder="留空自动命名" />
+              <label for="restore-instance-file">全量备份 ZIP</label>
+              <input id="restore-instance-file" class="input" type="file" accept=".zip,application/zip" />
+              <button id="restore-instance-button" class="btn btn-outline" disabled>还原为新实例</button>
+            </div>
+          </article>
+          <article class="card backup-panel">
+            <div class="backup-panel-heading">${icon('sliders', 'w-4 h-4')}<h3>导入实例设置</h3></div>
+            <p class="backup-description">替换当前实例的非密钥设置、模型路由、MCP 和示例对话。文件中的密钥会被忽略。</p>
+            <details class="backup-details"><summary>${icon('chevron_right', 'w-3.5 h-3.5')}共享供应商如何处理</summary><p>匹配的供应商复用已有凭据；定义冲突时新增供应商并置空密钥，其他实例使用的配置保持不变。</p></details>
+            <div class="backup-form">
+              <label for="settings-import-file">设置文件 setting.json</label>
+              <input id="settings-import-file" class="input" type="file" accept=".json,application/json" />
+              <button id="settings-import-button" class="btn btn-outline" disabled>导入设置</button>
+            </div>
+          </article>
+          <article class="card backup-panel">
+            <div class="backup-panel-heading">${icon('brain', 'w-4 h-4')}<h3>合并导入记忆</h3></div>
+            <p class="backup-description">按 ID 合并记忆和归档，同 ID 跳过，现有群档案优先。不同 ID 可能包含重复内容，请在记忆管理中人工查重。</p>
+            <div class="backup-form">
+              <label for="memory-import-file">记忆文件 memory.json</label>
+              <input id="memory-import-file" class="input" type="file" accept=".json,application/json" />
+              <button id="memory-import-button" class="btn btn-outline" disabled>合并导入记忆</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="backup-section" aria-labelledby="backup-global-title">
+        <div class="backup-section-heading"><h2 id="backup-global-title">全局数据</h2><span>作用于所有实例，单独备份与导入</span></div>
+        <div class="backup-global-grid">
+          <article class="card backup-panel">
+            <div class="backup-panel-heading">${icon('settings', 'w-4 h-4')}<h3>全局设置</h3></div>
+            <p class="backup-description">导出时密钥与凭据来源置空，导入时保留当前密钥。</p>
+            <a href="/api/instances/global/backup/settings" download="global-setting.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载全局设置 JSON</a>
+            <div class="backup-form backup-form-separated">
+              <label for="global-import-file">全局设置文件</label>
+              <input id="global-import-file" class="input" type="file" accept=".json,application/json" />
+              <button id="global-import-button" class="btn btn-outline" disabled>导入全局设置</button>
+            </div>
+          </article>
+          <article class="card backup-panel">
+            <div class="backup-panel-heading">${icon('lock', 'w-4 h-4')}<h3>全局访问锁与审计</h3></div>
+            <p class="backup-description">包含全局访问状态和安全审计记录。导入会替换当前记录。</p>
+            <a href="/api/instances/global/backup/security" download="global-security.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载访问与审计 JSON</a>
+            <div class="backup-form backup-form-separated">
+              <label for="security-import-file">访问与审计文件</label>
+              <input id="security-import-file" class="input" type="file" accept=".json,application/json" />
+              <button id="security-import-button" class="btn btn-outline" disabled>导入访问与审计</button>
+            </div>
+          </article>
+        </div>
+      </section>
     </div>`;
   const fileInput = container.querySelector<HTMLInputElement>('#settings-import-file')!;
   const globalFile = container.querySelector<HTMLInputElement>('#global-import-file')!;
