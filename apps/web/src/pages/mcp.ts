@@ -1208,10 +1208,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
             } else {
               jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
               jsonAlert.textContent = res.error || '未识别到有效的 MCP 配置';
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
-                <span class="text-destructive">${res.error || '配置无法识别'}</span>
-              `;
+              syncStatus.textContent = '';
               return false;
             }
           } finally {
