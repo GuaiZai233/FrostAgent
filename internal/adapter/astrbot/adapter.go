@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -336,14 +337,35 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			pristineShouldReply := false
 			if event.MessageType == "group" || event.MessageType == "private" {
-				if !c.mock && handleAdminCommand(c, event, a.engine) {
-					continue
-				}
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
 				pristineShouldReply = shouldReply(&event, scope)
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+				if a.engine != nil && a.engine.SessionManager != nil &&
+					(event.Type == "" || event.Type == "event") &&
+					(event.EventType == "" || event.EventType == "message") {
+					config := botloop.Parse(a.engine.Getenv)
+					platform := event.Platform
+					if platform == "" {
+						platform = "astrbot"
+					}
+					session := a.engine.SessionManager.GetOrCreate(c.sessionKey(event))
+					exceeded := session.ObserveBotLoop(
+						event.UserID, config.IsMarked(platform, event.UserID),
+						pristineShouldReply, config.Limit(), config.Revision(),
+					)
+					if exceeded {
+						if config.Hard() {
+							_ = sendTerminalNoopWithSuppress(event, c)
+							continue
+						}
+						event.botLoopSoft = true
+					}
+				}
+				if !c.mock && handleAdminCommand(c, event, a.engine) {
+					continue
+				}
 			}
 
 			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&

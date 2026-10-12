@@ -28,7 +28,8 @@ type Event struct {
 	IsWake      bool              `json:"is_wake,omitempty"`      // 是否触发唤醒 (At, 唤醒词, 引用等)
 	IsAt        bool              `json:"is_at,omitempty"`        // 是否 @ 了机器人
 	Timestamp   int64             `json:"timestamp,omitempty"`    // 时间戳 (秒)
-	Metadata    map[string]any    `json:"metadata,omitempty"`     // 扩展元数据
+	botLoopSoft bool
+	Metadata    map[string]any `json:"metadata,omitempty"` // 扩展元数据
 }
 
 // ActionMessage represents one ordered component in an outbound AstrBot message chain.

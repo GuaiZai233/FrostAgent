@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
@@ -365,13 +366,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			var warningNotice string
+			var botLoopSoft bool
 			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
-				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
-					continue
-				}
 				var scope *runtimescope.Scope
 				if a.engine != nil {
 					scope = a.engine.Scope
@@ -379,6 +378,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				routing = EventRouting{
 					Derived:     true,
 					WakeSignals: DetectGroupWakeSignals(event, scope),
+				}
+				if a.engine != nil && a.engine.SessionManager != nil {
+					config := botloop.Parse(a.engine.Getenv)
+					userID := strconv.FormatInt(event.UserID, 10)
+					session := a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event))
+					exceeded := session.ObserveBotLoop(
+						userID, config.IsMarked("onebot", userID),
+						isWoken(event, a.engine, routing), config.Limit(), config.Revision(),
+					)
+					if exceeded {
+						if config.Hard() {
+							continue
+						}
+						botLoopSoft = true
+					}
+				}
+				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+					continue
 				}
 			}
 			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
@@ -528,7 +545,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn.inFlight.Add(1)
 			if !a.engine.Go(func() {
 				defer wsConn.inFlight.Done()
-				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing)
+				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft)
 			}) {
 				wsConn.inFlight.Done()
 				if turn != nil {

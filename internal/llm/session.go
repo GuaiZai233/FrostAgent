@@ -287,6 +287,9 @@ type SessionContext struct {
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold     int
 	deliveryFailure         *DeliveryFailure
+	botLoopSender           string
+	botLoopTurns            int
+	botLoopConfig           string
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
@@ -315,6 +318,33 @@ func (s *SessionContext) SetGroupName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groupName = name
+}
+
+// ObserveBotLoop tracks consecutive eligible requests from a marked bot in ingress order.
+// Messages from any other sender interrupt the streak, including unwoken group chatter.
+func (s *SessionContext) ObserveBotLoop(senderID string, marked, eligible bool, limit int, config string) bool {
+	if s == nil || senderID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.botLoopConfig != config {
+		s.botLoopConfig = config
+		s.botLoopSender = ""
+		s.botLoopTurns = 0
+	}
+	if s.botLoopSender != senderID {
+		s.botLoopSender = senderID
+		s.botLoopTurns = 0
+	}
+	if !marked {
+		s.botLoopTurns = 0
+		return false
+	}
+	if eligible {
+		s.botLoopTurns++
+	}
+	return eligible && limit > 0 && s.botLoopTurns > limit
 }
 
 // SetDeliveryFailure records a transient delivery failure on the session.
@@ -926,6 +956,9 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
+	s.botLoopSender = ""
+	s.botLoopTurns = 0
+	s.botLoopConfig = ""
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
 	s.privateCompacting = false
@@ -2404,6 +2437,9 @@ func (s *SessionContext) Clear() {
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
+	s.botLoopSender = ""
+	s.botLoopTurns = 0
+	s.botLoopConfig = ""
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
 	s.UpdatedAt = time.Now()
