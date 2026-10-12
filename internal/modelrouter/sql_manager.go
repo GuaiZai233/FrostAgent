@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"FrostAgent/internal/storage"
 )
@@ -56,12 +57,15 @@ func (m *Manager) sqlDraft() Configuration {
 	return cloneConfiguration(m.draft)
 }
 
-func (m *Manager) saveSQLDraft(cfg Configuration) error {
+func (m *Manager) saveSQLDraft(cfg Configuration, owner string) error {
 	m.db.ModelRouterMu.RLock()
 	defer m.db.ModelRouterMu.RUnlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.loadSQL(); err != nil {
+		return err
+	}
+	if err := m.checkDraftOwner(owner); err != nil {
 		return err
 	}
 	if cfg.Revision != m.active.Revision {
@@ -90,26 +94,70 @@ func (m *Manager) saveSQLDraft(cfg Configuration) error {
 		}
 	}
 	m.draft = cloneConfiguration(cfg)
+	if m.instanceID == "" {
+		if reflect.DeepEqual(cfg.Endpoints, m.active.Endpoints) &&
+			reflect.DeepEqual(cfg.Models, m.active.Models) && !m.secrets.HasDraftChanges() {
+			m.draftOwner = ""
+		} else {
+			m.draftOwner = owner
+		}
+	}
 	return nil
 }
 
-func (m *Manager) discardSQLDraft() Configuration {
+func (m *Manager) discardSQLDraft(owner string) (Configuration, error) {
 	m.db.ModelRouterMu.RLock()
 	defer m.db.ModelRouterMu.RUnlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkDraftOwner(owner); err != nil {
+		return Configuration{}, err
+	}
 	m.loadErr = m.loadSQL()
 	m.draft = cloneConfiguration(m.active)
 	m.secrets.DiscardDraft()
-	return cloneConfiguration(m.draft)
+	m.draftOwner = ""
+	return cloneConfiguration(m.draft), m.loadErr
 }
 
-func (m *Manager) publishSQL() (Configuration, error) {
+func (m *Manager) resetSQLCatalogDraft() (Configuration, error) {
+	m.db.CatalogMutationMu.Lock()
+	defer m.db.CatalogMutationMu.Unlock()
+	m.db.ModelRouterMu.Lock()
+	defer m.db.ModelRouterMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.loadErr = m.loadSQL()
+	if m.loadErr != nil {
+		return Configuration{}, m.loadErr
+	}
+	if m.draftOwner != "" || m.secrets.HasDraftChanges() ||
+		!reflect.DeepEqual(m.draft.Endpoints, m.active.Endpoints) ||
+		!reflect.DeepEqual(m.draft.Models, m.active.Models) {
+		// A reset invalidates the old editor's revision, so it cannot later
+		// report a successful publication of a secret that was discarded.
+		if _, err := m.db.SQL.Exec(`UPDATE provider_revision SET revision = revision + 1 WHERE id = 1`); err != nil {
+			return Configuration{}, err
+		}
+		m.active.Revision++
+	}
+	m.draft = cloneConfiguration(m.active)
+	m.secrets.DiscardDraft()
+	m.draftOwner = ""
+	return cloneConfiguration(m.draft), nil
+}
+
+func (m *Manager) publishSQL(owner string) (Configuration, error) {
+	m.db.CatalogMutationMu.Lock()
+	defer m.db.CatalogMutationMu.Unlock()
 	m.db.ModelRouterMu.Lock()
 	defer m.db.ModelRouterMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.loadSQL(); err != nil {
+		return Configuration{}, err
+	}
+	if err := m.checkDraftOwner(owner); err != nil {
 		return Configuration{}, err
 	}
 	cfg := cloneConfiguration(m.draft)
@@ -150,6 +198,7 @@ func (m *Manager) publishSQL() (Configuration, error) {
 	}
 	m.active, m.draft = cloneConfiguration(cfg), cloneConfiguration(cfg)
 	m.secrets.DiscardDraft()
+	m.draftOwner = ""
 	m.loadErr = nil
 	return cloneConfiguration(cfg), nil
 }

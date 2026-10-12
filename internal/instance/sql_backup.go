@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
 	"errors"
@@ -211,6 +212,9 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if err != nil {
 		return Info{}, err
 	}
+	var catalogBefore modelrouter.Configuration
+	catalogLocked := false
+	catalogReady := false
 	defer func() {
 		if resultErr != nil {
 			prepareErr := m.PrepareDeletion(info.ID)
@@ -218,6 +222,12 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 				prepareErr = m.ConfirmDeletion(info.ID)
 			}
 			resultErr = errors.Join(resultErr, prepareErr)
+			if catalogReady && prepareErr == nil {
+				resultErr = errors.Join(resultErr, modelrouter.RestoreCatalogWithinMutation(m.db, catalogBefore))
+			}
+		}
+		if catalogLocked {
+			m.db.CatalogMutationMu.Unlock()
 		}
 	}()
 	if info.Error != "" {
@@ -229,7 +239,14 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	}
 	i.op.Lock()
 	defer i.op.Unlock()
-	if err := backup.ImportSettings(m.db, info.ID, decoded.Settings); err != nil {
+	m.db.CatalogMutationMu.Lock()
+	catalogLocked = true
+	catalogBefore, err = modelrouter.SnapshotCatalogWithinMutation(m.db)
+	if err != nil {
+		return Info{}, err
+	}
+	catalogReady = true
+	if err := backup.ImportSettingsWithinCatalogMutation(m.db, info.ID, decoded.Settings); err != nil {
 		return Info{}, err
 	}
 	if _, err := backup.ImportMemories(m.db, info.ID, decoded.Memories, false); err != nil {

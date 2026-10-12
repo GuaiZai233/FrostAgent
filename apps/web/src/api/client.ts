@@ -544,7 +544,7 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-export function createInstanceAPI(options: { globalModelCatalog?: boolean } = {}) {
+export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
   let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
@@ -604,6 +604,7 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean } = {}
           fetch: (input, init) => {
             selectionSignal.throwIfAborted();
             const request = new Request(input, init);
+            if (options.catalogDraftOwner) request.headers.set('X-FrostAgent-Catalog-Draft', options.catalogDraftOwner);
             return fetch(new Request(request, {
               signal: AbortSignal.any([request.signal, selectionSignal]),
             }));
@@ -753,6 +754,12 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean } = {}
 
     discardModelRouterDraft(): Promise<ModelRouterConfiguration | undefined> {
       return modelRouterClient.discardDraft({}).then((res) => res.draft);
+    },
+
+    resetSharedCatalogDraft(): Promise<ModelRouterConfiguration | undefined> {
+      if (!options.globalModelCatalog) throw new Error('只能在共享供应商页面重置草稿');
+      return modelRouterClient.discardDraft({}, { headers: { 'X-FrostAgent-Catalog-Draft-Reset': 'true' } })
+        .then((res) => res.draft);
     },
 
     publishModelRouter(): Promise<PublishResponse> {

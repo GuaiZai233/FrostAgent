@@ -221,6 +221,36 @@ func readCatalogTx(ctx context.Context, tx *sql.Tx) (Configuration, error) {
 	return cfg, rows.Err()
 }
 
+// SnapshotCatalogWithinMutation and RestoreCatalogWithinMutation are paired
+// around instance restoration. The caller holds DB.CatalogMutationMu so no
+// unrelated publication can be lost during compensation.
+func SnapshotCatalogWithinMutation(db *storage.DB) (Configuration, error) {
+	db.ModelRouterMu.RLock()
+	defer db.ModelRouterMu.RUnlock()
+	ctx := context.Background()
+	tx, err := db.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Configuration{}, err
+	}
+	defer tx.Rollback()
+	return readCatalogTx(ctx, tx)
+}
+
+func RestoreCatalogWithinMutation(db *storage.DB, snapshot Configuration) error {
+	db.ModelRouterMu.Lock()
+	defer db.ModelRouterMu.Unlock()
+	ctx := context.Background()
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := writeCatalogTx(ctx, db, tx, snapshot); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func importedID(used map[string]bool) (string, error) {
 	for {
 		value := make([]byte, 12)

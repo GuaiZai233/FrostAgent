@@ -5,7 +5,7 @@ import { instanceState } from '../instance-state';
 
 type RouterAPI = Pick<ReturnType<typeof createInstanceAPI>,
   'getModelRouterState' | 'saveModelRouterDraft' | 'publishModelRouter' | 'discardModelRouterDraft'
-  | 'setDraftEndpointSecret' | 'clearDraftEndpointSecret' | 'listUpstreamModels' | 'testModel'>;
+  | 'resetSharedCatalogDraft' | 'setDraftEndpointSecret' | 'clearDraftEndpointSecret' | 'listUpstreamModels' | 'testModel'>;
 
 const emptyConfiguration = () => create(ModelRouterConfigurationSchema, { version: 1 });
 const fingerprint = (config: ModelRouterConfiguration) => toJsonString(ModelRouterConfigurationSchema, config);
@@ -28,8 +28,21 @@ export class ModelRouterEditorError extends Error {
 
 // One editor owns two independently versioned scopes. Catalog calls always use
 // the root service; routing calls stay bound to the instance selected on mount.
+function catalogDraftOwner() {
+  const key = `frostagent:model-catalog-draft:${instanceState.selected?.id ?? 'global'}`;
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const owner = crypto.randomUUID();
+    sessionStorage.setItem(key, owner);
+    return owner;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
 export function createModelRouterEditorAPI(
-  catalog: RouterAPI = createInstanceAPI({ globalModelCatalog: true }),
+  catalog: RouterAPI = createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: catalogDraftOwner() }),
   routes: RouterAPI | undefined = instanceState.selected ? createInstanceAPI() : undefined,
 ) {
   let catalogActive = emptyConfiguration();
@@ -67,6 +80,8 @@ export function createModelRouterEditorAPI(
       catalogActive = structuredClone(catalogState.active ?? emptyConfiguration());
       routesActive = structuredClone(routeState?.active ?? emptyConfiguration());
       pending = merge();
+      pending.endpoints = structuredClone(catalogState.draft?.endpoints ?? catalogActive.endpoints);
+      pending.models = structuredClone(catalogState.draft?.models ?? catalogActive.models);
       secretDirty = catalogState.hasDraftSecretChanges;
       const loadError = [catalogState.loadError, routeState?.loadError].filter(Boolean).join('；');
       ready = !loadError;
@@ -142,13 +157,15 @@ export function createModelRouterEditorAPI(
       pending = structuredClone(configuration);
       const completed: string[] = [];
       try {
-        const discardedCatalog = await catalog.discardModelRouterDraft();
-        if (!discardedCatalog) throw new Error('放弃共享供应商草稿失败');
-        catalogActive = structuredClone(discardedCatalog);
+        if (catalogChanged() || secretDirty) {
+          const discardedCatalog = await catalog.discardModelRouterDraft();
+          if (!discardedCatalog) throw new Error('放弃共享供应商草稿失败');
+          catalogActive = structuredClone(discardedCatalog);
+          completed.push('共享供应商草稿已放弃');
+        }
         pending.endpoints = structuredClone(catalogActive.endpoints);
         pending.models = structuredClone(catalogActive.models);
         secretDirty = false;
-        completed.push('共享供应商草稿已放弃');
         if (routes) {
           const discardedRoutes = await routes.discardModelRouterDraft();
           if (!discardedRoutes) throw new Error('放弃实例路由草稿失败');
@@ -159,6 +176,16 @@ export function createModelRouterEditorAPI(
       } catch (error) {
         throw snapshotError(error, completed);
       }
+    },
+    async resetSharedCatalogDraft() {
+      assertReady();
+      const discarded = await catalog.resetSharedCatalogDraft();
+      if (!discarded) throw new Error('重置共享供应商草稿失败');
+      catalogActive = structuredClone(discarded);
+      pending.endpoints = structuredClone(discarded.endpoints);
+      pending.models = structuredClone(discarded.models);
+      secretDirty = false;
+      return structuredClone(pending);
     },
     async setDraftEndpointSecret(endpointId: string, apiKey: string) {
       assertReady();

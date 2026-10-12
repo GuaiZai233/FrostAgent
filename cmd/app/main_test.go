@@ -33,11 +33,15 @@ func TestManagementMuxSharedModelCatalog(t *testing.T) {
 	cfg := state.Msg.Active
 	cfg.Endpoints = []*v1.ModelEndpoint{{Id: "shared", DisplayName: "Shared", BaseUrl: "https://example.invalid/v1", Enabled: true}}
 	cfg.Models = []*v1.ModelTarget{{Id: "model", DisplayName: "Model", EndpointId: "shared", UpstreamModel: "synthetic", Enabled: true}}
-	saved, err := catalog.SaveDraft(ctx, connect.NewRequest(&v1.SaveDraftRequest{Configuration: cfg}))
+	saveReq := connect.NewRequest(&v1.SaveDraftRequest{Configuration: cfg})
+	saveReq.Header().Set("X-FrostAgent-Catalog-Draft", "synthetic-page")
+	saved, err := catalog.SaveDraft(ctx, saveReq)
 	if err != nil || !saved.Msg.GetSuccess() {
 		t.Fatalf("save shared catalog: %v, %v", saved, err)
 	}
-	published, err := catalog.Publish(ctx, connect.NewRequest(&v1.PublishRequest{}))
+	publishReq := connect.NewRequest(&v1.PublishRequest{})
+	publishReq.Header().Set("X-FrostAgent-Catalog-Draft", "synthetic-page")
+	published, err := catalog.Publish(ctx, publishReq)
 	if err != nil || !published.Msg.GetSuccess() {
 		t.Fatalf("publish shared catalog: %v, %v", published, err)
 	}

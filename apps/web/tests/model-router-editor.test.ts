@@ -17,13 +17,16 @@ function fixture(withInstance = true) {
   const state = {
     catalog: catalogInitial, routes: configuration(3n),
     catalogDraft: structuredClone(catalogInitial), routeDraft: configuration(3n),
+    exposeCatalogDraft: false, catalogSecretDirty: false,
     failCatalog: false, failRoutes: false, failDiscardRoutes: false,
     failCatalogPublishNumber: 0, catalogPublishes: 0,
   };
   const makeAPI = (scope: 'catalog' | 'routes') => ({
     async getModelRouterState() {
       calls.push(`${scope}:load`);
-      return { active: structuredClone(state[scope]), loadError: '', hasDraftSecretChanges: false };
+      return { active: structuredClone(state[scope]),
+        draft: scope === 'catalog' && state.exposeCatalogDraft ? structuredClone(state.catalogDraft) : undefined,
+        loadError: '', hasDraftSecretChanges: scope === 'catalog' && state.exposeCatalogDraft && state.catalogSecretDirty };
     },
     async saveModelRouterDraft(config: ModelRouterConfiguration) {
       calls.push(`${scope}:save`);
@@ -61,6 +64,11 @@ function fixture(withInstance = true) {
       if (scope === 'routes' && state.failDiscardRoutes) throw new Error('route discard unavailable');
       return structuredClone(state[scope]);
     },
+    async resetSharedCatalogDraft() {
+      calls.push(`${scope}:reset`);
+      state.catalogDraft = structuredClone(state.catalog);
+      return structuredClone(state.catalog);
+    },
     async setDraftEndpointSecret() { calls.push(`${scope}:secret`); return { success: true, configured: true, error: '' }; },
     async clearDraftEndpointSecret() { calls.push(`${scope}:clear`); return { success: true, configured: false, error: '' }; },
     async listUpstreamModels() { calls.push(`${scope}:list`); return { models: ['test-model'], error: '' }; },
@@ -90,6 +98,34 @@ function fixture(withInstance = true) {
   await editor.saveModelRouterDraft(draft);
   await editor.publishModelRouter();
   assert.deepEqual(calls.slice(2), ['routes:save', 'routes:publish'], 'route-only edits must not overwrite the shared catalog');
+}
+
+{
+  // Another instance has already staged a new URL and key in the shared
+  // catalog. This editor receives only its own view of the active catalog.
+  const { editor, state, calls } = fixture();
+  state.catalogDraft.endpoints[0].baseUrl = 'https://pending.invalid/v1';
+  const draft = (await editor.getModelRouterState()).active;
+  draft.globalBindings = [];
+  await editor.saveModelRouterDraft(draft);
+  await editor.publishModelRouter();
+  assert.deepEqual(calls.slice(2), ['routes:save', 'routes:publish']);
+  assert.equal(state.catalog.endpoints[0].baseUrl, 'https://provider.invalid/v1');
+  assert.equal(state.catalogDraft.endpoints[0].baseUrl, 'https://pending.invalid/v1');
+}
+
+{
+  // Reopening the page that owns a staged key must restore the matching URL.
+  const { editor, state } = fixture();
+  state.exposeCatalogDraft = true;
+  state.catalogSecretDirty = true;
+  state.catalogDraft.endpoints[0].baseUrl = 'https://pending.invalid/v1';
+  const loaded = await editor.getModelRouterState();
+  assert.equal(loaded.active.endpoints[0].baseUrl, 'https://provider.invalid/v1');
+  assert.equal(loaded.draft.endpoints[0].baseUrl, 'https://pending.invalid/v1');
+  await editor.saveModelRouterDraft(loaded.draft);
+  await editor.publishModelRouter();
+  assert.equal(state.catalog.endpoints[0].baseUrl, 'https://pending.invalid/v1');
 }
 
 {

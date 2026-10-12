@@ -10,6 +10,8 @@ Object.assign(globalThis, {
 });
 const calls: string[] = [];
 const logSources: string[] = [];
+const catalogDraftOwners: string[] = [];
+const catalogDraftResets: string[] = [];
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = input instanceof Request ? input.url : String(input);
   (input instanceof Request ? input.signal : init?.signal)?.throwIfAborted();
@@ -17,6 +19,10 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   logSources.push(
     new Headers(init?.headers).get('X-FrostAgent-Log-Source') ?? '',
   );
+  catalogDraftOwners.push(new Headers(input instanceof Request ? input.headers : init?.headers)
+    .get('X-FrostAgent-Catalog-Draft') ?? '');
+  catalogDraftResets.push(new Headers(input instanceof Request ? input.headers : init?.headers)
+    .get('X-FrostAgent-Catalog-Draft-Reset') ?? '');
   return new Response(JSON.stringify({ success: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -181,6 +187,10 @@ await createInstanceAPI().getModelRouterState();
 assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/GetState');
 await createInstanceAPI({ globalModelCatalog: true }).publishModelRouter();
 assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/Publish');
+await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).getModelRouterState();
+assert.equal(catalogDraftOwners.at(-1), 'synthetic-page-b', 'shared catalog requests lost the editor owner');
+await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).resetSharedCatalogDraft();
+assert.equal(catalogDraftResets.at(-1), 'true', 'explicit shared draft reset lost its request marker');
 console.log('PASS: shared providers use the root API and instance routes require a selected instance');
 
 const oldCatalogPage = createInstanceAPI({ globalModelCatalog: true });

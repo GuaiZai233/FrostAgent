@@ -28,15 +28,25 @@ func TestProviderAPIExistsWithoutInstanceAndRejectsInstanceCredentialEdits(t *te
 	cfg := state.Msg.Active
 	cfg.Endpoints = []*v1.ModelEndpoint{{Id: "shared", DisplayName: "Shared", BaseUrl: "https://example.invalid/v1", Enabled: true}}
 	cfg.Models = []*v1.ModelTarget{{Id: "model", DisplayName: "Model", EndpointId: "shared", UpstreamModel: "synthetic", Enabled: true}}
-	saved, err := global.SaveDraft(ctx, connect.NewRequest(&v1.SaveDraftRequest{Configuration: cfg}))
+	withoutOwner, err := global.SaveDraft(ctx, connect.NewRequest(&v1.SaveDraftRequest{Configuration: cfg}))
+	if err != nil || withoutOwner.Msg.Success {
+		t.Fatalf("ownerless global draft was accepted: %v, %v", withoutOwner, err)
+	}
+	saveReq := connect.NewRequest(&v1.SaveDraftRequest{Configuration: cfg})
+	saveReq.Header().Set("X-FrostAgent-Catalog-Draft", "synthetic-page")
+	saved, err := global.SaveDraft(ctx, saveReq)
 	if err != nil || !saved.Msg.Success {
 		t.Fatalf("global draft: %v, %v", saved, err)
 	}
-	key, err := global.SetDraftEndpointSecret(ctx, connect.NewRequest(&v1.SetDraftEndpointSecretRequest{EndpointId: "shared", ApiKey: "synthetic-provider-key"}))
+	keyReq := connect.NewRequest(&v1.SetDraftEndpointSecretRequest{EndpointId: "shared", ApiKey: "synthetic-provider-key"})
+	keyReq.Header().Set("X-FrostAgent-Catalog-Draft", "synthetic-page")
+	key, err := global.SetDraftEndpointSecret(ctx, keyReq)
 	if err != nil || !key.Msg.Success {
 		t.Fatalf("global credential: %v, %v", key, err)
 	}
-	published, err := global.Publish(ctx, connect.NewRequest(&v1.PublishRequest{}))
+	publishReq := connect.NewRequest(&v1.PublishRequest{})
+	publishReq.Header().Set("X-FrostAgent-Catalog-Draft", "synthetic-page")
+	published, err := global.Publish(ctx, publishReq)
 	if err != nil || !published.Msg.Success {
 		t.Fatalf("global publish: %v, %v", published, err)
 	}

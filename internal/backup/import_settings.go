@@ -17,6 +17,14 @@ import (
 // router, MCP, and dialogue configuration in one SQL transaction. Secrets in
 // an uploaded file are ignored; existing shared credentials remain untouched.
 func ImportSettings(db *storage.DB, instanceID string, data Settings) error {
+	db.CatalogMutationMu.Lock()
+	defer db.CatalogMutationMu.Unlock()
+	return ImportSettingsWithinCatalogMutation(db, instanceID, data)
+}
+
+// ImportSettingsWithinCatalogMutation is for instance restore while it holds
+// CatalogMutationMu across every restore phase and its rollback.
+func ImportSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data Settings) error {
 	db.ModelRouterMu.Lock()
 	defer db.ModelRouterMu.Unlock()
 	if err := ValidateFormat(data.FormatVersion); err != nil {

@@ -83,6 +83,110 @@ func seedCatalog(t *testing.T, db *storage.DB, baseURL string) *Manager {
 	return catalog
 }
 
+func TestCatalogDraftOwnerKeepsEndpointAndSecretTogether(t *testing.T) {
+	for _, backend := range []storage.Backend{storage.SQLite, storage.Postgres} {
+		t.Run(string(backend), func(t *testing.T) {
+			db := catalogTestDB(t, backend)
+			catalog := seedCatalog(t, db, "https://old.invalid/v1")
+			active, draft, err := catalog.StateForOwner("page-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.SaveDraftForOwner(active, "no-op-page"); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.SaveDraftForOwner(active, "page-b"); err != nil {
+				t.Fatalf("no-op save reserved the shared catalog: %v", err)
+			}
+			draft.Endpoints[0].BaseURL = "https://new.invalid/v1"
+			if err := catalog.SaveDraftForOwner(draft, "page-a"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := catalog.SetDraftEndpointSecretForOwner("shared", "synthetic-new-key", "page-a"); err != nil {
+				t.Fatal(err)
+			}
+			previewEndpoint, _, previewKey, err := catalog.previewEndpointForOwner("shared", "", "page-a")
+			if err != nil || previewEndpoint.BaseURL != "https://new.invalid/v1" || previewKey != "synthetic-new-key" {
+				t.Fatalf("owner preview lost matching URL and key: %+v, %v", previewEndpoint, err)
+			}
+			if _, _, _, err := catalog.previewEndpointForOwner("shared", "", "page-b"); err == nil {
+				t.Fatal("other page previewed staged URL and key")
+			}
+			if _, _, _, err := catalog.previewEndpointForOwner("shared", "", ""); err == nil {
+				t.Fatal("ownerless client previewed staged URL and key")
+			}
+			otherActive, otherDraft, err := catalog.StateForOwner("page-b")
+			if err != nil || otherActive.Endpoints[0].BaseURL != active.Endpoints[0].BaseURL ||
+				otherDraft.Endpoints[0].BaseURL != active.Endpoints[0].BaseURL ||
+				catalog.HasDraftSecretChangesForOwner("page-b") {
+				t.Fatalf("other page inherited pending catalog or key: active=%+v draft=%+v err=%v", otherActive, otherDraft, err)
+			}
+			if err := catalog.SaveDraftForOwner(otherDraft, "page-b"); err == nil {
+				t.Fatal("other page replaced the owned catalog draft")
+			}
+			if _, err := catalog.PublishForOwner("page-b"); err == nil {
+				t.Fatal("other page published the pending key with its old endpoint")
+			}
+			if _, err := catalog.DiscardDraftForOwner("page-b"); err == nil {
+				t.Fatal("other page discarded the owned catalog draft")
+			}
+			routes := NewSQL(db, "instance-b")
+			binding := routes.Draft()
+			binding.GlobalBindings[WorkloadDialogue] = Binding{Mode: BindingModel, ModelID: "model-b"}
+			if err := routes.SaveDraft(binding); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := routes.Publish(); err != nil {
+				t.Fatal(err)
+			}
+			var key string
+			if err := db.SQL.QueryRow(db.Bind(`SELECT secret FROM provider_secrets WHERE ref = ?`), "endpoint/shared").Scan(&key); err != nil || key != "synthetic-old-key" {
+				t.Fatalf("route publish changed shared key: %v", err)
+			}
+			if cfg := catalog.Active(); cfg.Endpoints[0].BaseURL != "https://old.invalid/v1" {
+				t.Fatal("route publish changed shared endpoint")
+			}
+			if _, err := catalog.PublishForOwner("page-a"); err != nil {
+				t.Fatal(err)
+			}
+			if cfg := catalog.Active(); cfg.Endpoints[0].BaseURL != "https://new.invalid/v1" {
+				t.Fatal("owner did not publish its endpoint")
+			}
+			if err := db.SQL.QueryRow(db.Bind(`SELECT secret FROM provider_secrets WHERE ref = ?`), "endpoint/shared").Scan(&key); err != nil || key != "synthetic-new-key" {
+				t.Fatalf("owner did not publish matching key: %v", err)
+			}
+			abandoned := catalog.Draft()
+			abandoned.Endpoints[0].BaseURL = "https://abandoned.invalid/v1"
+			if err := catalog.SaveDraftForOwner(abandoned, "page-a"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := catalog.SetDraftEndpointSecretForOwner("shared", "synthetic-abandoned-key", "page-a"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := catalog.ResetSharedDraft(); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.SaveDraftForOwner(abandoned, "page-a"); err == nil {
+				t.Fatal("reset owner published an old draft after its key was discarded")
+			}
+			if err := db.SQL.QueryRow(db.Bind(`SELECT secret FROM provider_secrets WHERE ref = ?`), "endpoint/shared").Scan(&key); err != nil || key != "synthetic-new-key" {
+				t.Fatalf("reset published abandoned key: %v", err)
+			}
+			recovered := catalog.Draft()
+			recovered.Endpoints[0].DisplayName = "Recovered Provider"
+			if err := catalog.SaveDraftForOwner(recovered, "page-b"); err != nil {
+				t.Fatalf("reset did not release draft owner: %v", err)
+			}
+			if _, err := catalog.PublishForOwner("page-b"); err != nil {
+				t.Fatal(err)
+			}
+			if current := catalog.Active(); current.Endpoints[0].BaseURL != "https://new.invalid/v1" || current.Endpoints[0].DisplayName != "Recovered Provider" {
+				t.Fatalf("recovery combined the abandoned URL with published catalog: %+v", current)
+			}
+		})
+	}
+}
+
 func bindInstance(t *testing.T, manager *Manager, modelID string) {
 	t.Helper()
 	cfg := manager.Draft()

@@ -38,6 +38,7 @@ type Manager struct {
 	ReserveEndpoints func([]Endpoint) error
 	db               *storage.DB
 	instanceID       string
+	draftOwner       string
 }
 
 func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
@@ -172,6 +173,10 @@ func (m *Manager) LoadError() error {
 	return m.loadErr
 }
 
+func (m *Manager) IsSharedCatalog() bool {
+	return m.db != nil && m.instanceID == ""
+}
+
 func (m *Manager) Active() Configuration {
 	if m.db != nil {
 		return m.sqlActive()
@@ -191,6 +196,10 @@ func (m *Manager) ActiveChecked() (Configuration, error) {
 
 // State reads the active configuration and draft at one catalog revision.
 func (m *Manager) State() (Configuration, Configuration, error) {
+	return m.StateForOwner("")
+}
+
+func (m *Manager) StateForOwner(owner string) (Configuration, Configuration, error) {
 	if m.db != nil {
 		m.db.ModelRouterMu.RLock()
 		defer m.db.ModelRouterMu.RUnlock()
@@ -199,6 +208,9 @@ func (m *Manager) State() (Configuration, Configuration, error) {
 		m.loadErr = m.loadSQL()
 		if m.instanceID != "" {
 			m.draft.Endpoints, m.draft.Models = m.active.Endpoints, m.active.Models
+		}
+		if m.instanceID == "" && m.draftOwner != "" && m.draftOwner != owner {
+			return cloneConfiguration(m.active), cloneConfiguration(m.active), m.loadErr
 		}
 		return cloneConfiguration(m.active), cloneConfiguration(m.draft), m.loadErr
 	}
@@ -224,8 +236,12 @@ func (m *Manager) Snapshot() *Snapshot {
 }
 
 func (m *Manager) SaveDraft(cfg Configuration) error {
+	return m.SaveDraftForOwner(cfg, "")
+}
+
+func (m *Manager) SaveDraftForOwner(cfg Configuration, owner string) error {
 	if m.db != nil {
-		return m.saveSQLDraft(cfg)
+		return m.saveSQLDraft(cfg, owner)
 	}
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
@@ -274,6 +290,10 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 }
 
 func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error) {
+	return m.SetDraftEndpointSecretForOwner(endpointID, apiKey, "")
+}
+
+func (m *Manager) SetDraftEndpointSecretForOwner(endpointID, apiKey, owner string) (bool, error) {
 	if m.db != nil && m.instanceID != "" {
 		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
 	}
@@ -282,6 +302,9 @@ func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkDraftOwner(owner); err != nil {
+		return false, err
+	}
 	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
 	if err != nil {
 		return false, err
@@ -291,15 +314,23 @@ func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error
 	}
 	m.secrets.Stage(endpoint, apiKey, false)
 	setEndpointConfigured(&m.draft, endpoint.ID, true)
+	m.draftOwner = owner
 	return true, nil
 }
 
 func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
+	return m.ClearDraftEndpointSecretForOwner(endpointID, "")
+}
+
+func (m *Manager) ClearDraftEndpointSecretForOwner(endpointID, owner string) (bool, error) {
 	if m.db != nil && m.instanceID != "" {
 		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkDraftOwner(owner); err != nil {
+		return false, err
+	}
 	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
 	if err != nil {
 		return false, err
@@ -309,6 +340,7 @@ func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
 	}
 	m.secrets.Stage(endpoint, "", true)
 	setEndpointConfigured(&m.draft, endpoint.ID, false)
+	m.draftOwner = owner
 	return false, nil
 }
 
@@ -316,20 +348,51 @@ func (m *Manager) HasDraftSecretChanges() bool {
 	return m.secrets.HasDraftChanges()
 }
 
+func (m *Manager) HasDraftSecretChangesForOwner(owner string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.draftOwner == owner && m.secrets.HasDraftChanges()
+}
+
+func (m *Manager) checkDraftOwner(owner string) error {
+	if m.db != nil && m.instanceID == "" && m.draftOwner != "" && m.draftOwner != owner {
+		return fmt.Errorf("共享供应商草稿正由其他编辑页面修改，请先完成该页面的编辑")
+	}
+	return nil
+}
+
 func (m *Manager) DiscardDraft() Configuration {
+	cfg, _ := m.DiscardDraftForOwner("")
+	return cfg
+}
+
+func (m *Manager) DiscardDraftForOwner(owner string) (Configuration, error) {
 	if m.db != nil {
-		return m.discardSQLDraft()
+		return m.discardSQLDraft(owner)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.draft = cloneConfiguration(m.active)
 	m.secrets.DiscardDraft()
-	return cloneConfiguration(m.draft)
+	return cloneConfiguration(m.draft), nil
+}
+
+// ResetSharedDraft is an explicit recovery action for an abandoned editor.
+// It only drops unpublished changes and never publishes staged credentials.
+func (m *Manager) ResetSharedDraft() (Configuration, error) {
+	if m.db == nil || m.instanceID != "" {
+		return Configuration{}, fmt.Errorf("只能在全局模型供应商页面重置共享草稿")
+	}
+	return m.resetSQLCatalogDraft()
 }
 
 func (m *Manager) Publish() (Configuration, error) {
+	return m.PublishForOwner("")
+}
+
+func (m *Manager) PublishForOwner(owner string) (Configuration, error) {
 	if m.db != nil {
-		return m.publishSQL()
+		return m.publishSQL(owner)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -25,6 +25,9 @@ const (
 )
 
 type DB struct {
+	// CatalogMutationMu protects a full restore from concurrent catalog writes.
+	// Acquire it before ModelRouterMu when both are needed.
+	CatalogMutationMu sync.Mutex
 	// ModelRouterMu serializes shared catalog, credentials and route snapshots.
 	ModelRouterMu sync.RWMutex
 	SQL           *sql.DB

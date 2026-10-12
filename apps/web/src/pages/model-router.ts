@@ -14,6 +14,7 @@ import {
   type ModelTarget,
 } from '@frostagent/proto';
 import { createModelRouterEditorAPI, ModelRouterEditorError } from '../api/model-router-editor';
+import { confirmDialog } from '../components/confirm';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -115,7 +116,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       if (unmounted) return;
       const published = state.active ?? state.draft ?? create(ModelRouterConfigurationSchema, { version: 1 });
       activeConfiguration = cloneConfiguration(published);
-      draft = cloneConfiguration(published);
+      draft = cloneConfiguration(state.draft ?? published);
       loadError = state.loadError;
       hasDraftSecretChanges = state.hasDraftSecretChanges;
       loading = false;
@@ -198,6 +199,27 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
   }
 
+  async function resetSharedCatalogDraft() {
+    if (!await confirmDialog({
+      title: '重置共享草稿',
+      message: '这会丢弃所有页面尚未发布的共享供应商、模型与密钥修改，以及本页未发布的实例路由修改。确定继续吗？',
+      confirmLabel: '重置共享草稿',
+      destructive: true,
+    })) return;
+    busy = true;
+    render();
+    try {
+      await api.resetSharedCatalogDraft();
+      await load();
+      toast.info('共享供应商草稿已重置');
+    } catch (err) {
+      toast.error('重置共享草稿失败: ' + errorText(err));
+    } finally {
+      busy = false;
+      render();
+    }
+  }
+
   function applyPartialResult(error: unknown) {
     if (!(error instanceof ModelRouterEditorError)) return;
     activeConfiguration = cloneConfiguration(error.active);
@@ -223,6 +245,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
+            <button class="btn btn-outline btn-sm" id="router-reset-shared" ${busy ? 'disabled' : ''}>重置共享草稿</button>
             <button class="btn btn-primary btn-sm" id="router-publish" ${busy ? 'disabled' : ''}>${icon('play', 'w-3.5 h-3.5')} 发布配置</button>
           </div>
         </header>
@@ -235,7 +258,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
 
         ${
           dirty
-            ? `<div class="card router-unsaved-warning p-3 text-xs flex items-center gap-2">${icon('circle_alert', 'w-4 h-4')}<span>当前配置尚未保存，请点击“发布配置”以应用，离开页面即丢弃。</span></div>`
+            ? `<div class="card router-unsaved-warning p-3 text-xs flex items-center gap-2">${icon('circle_alert', 'w-4 h-4')}<span>当前配置尚未发布，请点击“发布配置”以应用。</span></div>`
             : ''
         }
 
@@ -408,6 +431,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     });
     container.querySelector('#router-publish')?.addEventListener('click', () => void publish());
     container.querySelector('#router-discard')?.addEventListener('click', () => void discardDraft());
+    container.querySelector('#router-reset-shared')?.addEventListener('click', () => void resetSharedCatalogDraft());
     container.querySelector('#add-endpoint')?.addEventListener('click', () => editEndpoint());
     container.querySelector('#add-model')?.addEventListener('click', () => editModel());
     container.querySelector('#add-group')?.addEventListener('click', () => editGroup());
