@@ -245,6 +245,37 @@ func TestStickerQuotaAllowsOrderedTextAndStickerBatch(t *testing.T) {
 	}
 }
 
+func TestSendMessageStickerPayloadResetsQuota(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	const payload = `{"messages":[{"type":"image","path":"/test/sticker.png","is_sticker":true}]}`
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+			ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`},
+		}}},
+		{Role: core.RoleAssistant, Content: "done"},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
+		"send_message": &staticTool{name: "send_message", result: payload},
+	}}
+	for range 4 {
+		e.RecordBotMessage(false)
+	}
+	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+		SendHook: func(got string) error {
+			if got != payload {
+				t.Fatalf("unexpected payload: %s", got)
+			}
+			return nil
+		},
+	})
+	if result.Content != "done" {
+		t.Fatalf("result=%q", result.Content)
+	}
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
+		t.Fatalf("send_message sticker did not reset quota: remaining=%d", remaining)
+	}
+}
+
 type concurrentStickerProvider struct {
 	mu       sync.Mutex
 	requests []core.ChatRequest

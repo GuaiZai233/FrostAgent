@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-func isOneBotFinalSticker(content string) bool {
+func hasStickerImage(content string) bool {
 	var payload struct {
 		Messages []struct {
 			Type      string `json:"type"`

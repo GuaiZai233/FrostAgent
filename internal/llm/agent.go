@@ -1047,7 +1047,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
-			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && isOneBotFinalSticker(contentStr)
+			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
 			if hasRunCtx && !runCtx.Mock && !outputBlocked {
 				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 					messages = messages[:len(messages)-1]
@@ -1249,7 +1249,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			if toolSucceeded {
 				var stickerReservation *StickerReservation
-				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && tc.Function.Name != "send_sticker" {
+				deliverySticker := hasStickerImage(execution.MessagePayload)
+				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && !deliverySticker {
 					pairedSticker := false
 					for _, later := range responseMsg.ToolCalls[tcIndex+1:] {
 						if later.Function.Name == "send_sticker" {
@@ -1268,7 +1269,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				var delivered bool
 				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
 				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" {
-					e.FinishBotMessage(stickerReservation, delivered, tc.Function.Name == "send_sticker")
+					e.FinishBotMessage(stickerReservation, delivered, deliverySticker)
 				}
 			}
 
