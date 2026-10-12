@@ -1048,6 +1048,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
+			willSendFinalMessage := contentStr != "" || (hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive)
 			if hasRunCtx && !runCtx.Mock && !outputBlocked {
 				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 					messages = messages[:len(messages)-1]
@@ -1058,7 +1059,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					addStickerIteration()
 					continue
 				}
-				if !finalSticker && (stickerEnforcing || (contentStr != "" && e.stickerNeededBeforeReply())) {
+				if !finalSticker && (stickerEnforcing || (willSendFinalMessage && e.stickerNeededBeforeReply())) {
 					stickerEnforcing = true
 					stickerAttempts++
 					if stickerAttempts >= 3 {
@@ -1075,7 +1076,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			var stickerReservation *StickerReservation
-			if hasRunCtx && !runCtx.Mock && runCtx.AdapterID != "" && !outputBlocked && contentStr != "" && !finalSticker {
+			if hasRunCtx && !runCtx.Mock && runCtx.AdapterID != "" && !outputBlocked && willSendFinalMessage && !finalSticker {
 				var reserved bool
 				stickerReservation, reserved = e.reserveBotMessage(false)
 				if !reserved {

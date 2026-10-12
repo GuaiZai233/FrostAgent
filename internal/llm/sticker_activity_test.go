@@ -349,6 +349,26 @@ func TestStickerReservationReleasedAfterFailedDelivery(t *testing.T) {
 	}
 }
 
+func TestBillingReceiptOnlyFinalUsesStickerQuota(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant},
+		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
+		{Role: core.RoleAssistant},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	for range 4 {
+		e.RecordBotMessage(false)
+	}
+	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+		AdapterID: "astrbot", Billing: &BillingRunState{BillingActive: true},
+	})
+	if len(p.requests) != 3 || result.StickerReservation == nil {
+		t.Fatalf("receipt-only final skipped enforcement or reservation: calls=%d reservation=%v", len(p.requests), result.StickerReservation)
+	}
+	e.FinishBotMessage(result.StickerReservation, false, false)
+}
+
 func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	const payload = `{"messages":[{"type":"image","path":"/test/sticker.png","is_sticker":true}]}`
