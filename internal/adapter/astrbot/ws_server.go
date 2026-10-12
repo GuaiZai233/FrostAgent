@@ -1017,6 +1017,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		receiptText          string
 		deliveredToolReplies []string
 		runResult            llm.AgentRunResult
+		finalDelivered       bool
 	)
 
 	if engine != nil && session != nil {
@@ -1155,6 +1156,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Mock:          conn.mock,
 			Proactive:     isProactiveReply(&event),
 		})
+		defer func() {
+			if !conn.mock {
+				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, false)
+			}
+		}()
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
 			return
@@ -1314,9 +1320,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		return
 	}
-	if engine != nil && !conn.mock && strings.TrimSpace(sentReplyText) != "" {
-		engine.RecordBotMessage(false)
-	}
+	finalDelivered = strings.TrimSpace(sentReplyText) != ""
 
 	if engine == nil || session == nil {
 		return

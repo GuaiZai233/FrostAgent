@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/sticker"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -192,7 +193,7 @@ func TestStickerQuotaBlocksSecondMessageInSameToolBatch(t *testing.T) {
 	e := &Engine{Provider: p, MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{
 		"send_message": &staticTool{name: "send_message", result: payload},
 	}}
-	for range 4 {
+	for range 3 {
 		e.RecordBotMessage(false)
 	}
 	delivered := 0
@@ -202,7 +203,7 @@ func TestStickerQuotaBlocksSecondMessageInSameToolBatch(t *testing.T) {
 	if result.Content != "done" || delivered != 1 {
 		t.Fatalf("result=%q delivered=%d, want one delivery", result.Content, delivered)
 	}
-	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 0 {
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
 		t.Fatalf("plain message with is_sticker flag reset quota: remaining=%d", remaining)
 	}
 	var blocked bool
@@ -213,6 +214,107 @@ func TestStickerQuotaBlocksSecondMessageInSameToolBatch(t *testing.T) {
 	}
 	if !blocked {
 		t.Fatal("second send_message was not blocked at quota")
+	}
+}
+
+func TestStickerQuotaAllowsOrderedTextAndStickerBatch(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
+			{ID: "text", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
+			{ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{}`}},
+		}},
+		{Role: core.RoleAssistant},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
+		"send_message": &staticTool{name: "send_message", result: `{"messages":[{"type":"plain","text":"hello"}]}`},
+		"send_sticker": &staticTool{name: "send_sticker", result: `{"messages":[{"type":"image","path":"/test/sticker.png","is_sticker":true}]}`},
+	}}
+	for range 5 {
+		e.RecordBotMessage(false)
+	}
+	var delivered []string
+	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+		SendHook: func(payload string) error { delivered = append(delivered, payload); return nil },
+	})
+	if len(delivered) != 2 || !strings.Contains(delivered[0], `"text":"hello"`) || !strings.Contains(delivered[1], `"is_sticker":true`) {
+		t.Fatalf("ordered batch dropped a message: %v", delivered)
+	}
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
+		t.Fatalf("paired sticker did not reset quota: remaining=%d", remaining)
+	}
+}
+
+type concurrentStickerProvider struct {
+	mu       sync.Mutex
+	requests []core.ChatRequest
+	started  chan struct{}
+	gate     chan struct{}
+}
+
+func (p *concurrentStickerProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, req)
+	call := len(p.requests)
+	p.mu.Unlock()
+	if call <= 2 {
+		p.started <- struct{}{}
+		<-p.gate
+	}
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary"}}, nil
+}
+
+func TestConcurrentSessionsReserveStickerQuota(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &concurrentStickerProvider{started: make(chan struct{}, 2), gate: make(chan struct{})}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	for range 3 {
+		e.RecordBotMessage(false)
+	}
+	results := make(chan AgentRunResult, 2)
+	for range 2 {
+		go func() {
+			results <- e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{AdapterID: "onebot"})
+		}()
+	}
+	<-p.started
+	<-p.started
+	close(p.gate)
+	first, second := <-results, <-results
+	if first.StickerReservation == nil || second.StickerReservation == nil {
+		t.Fatalf("one session lost its final reservation: first=%v second=%v", first.StickerReservation, second.StickerReservation)
+	}
+	p.mu.Lock()
+	requestCount := len(p.requests)
+	p.mu.Unlock()
+	if requestCount != 5 {
+		t.Fatalf("concurrent session skipped three enforcement attempts: calls=%d", requestCount)
+	}
+	e.FinishBotMessage(first.StickerReservation, true, false)
+	e.FinishBotMessage(second.StickerReservation, true, false)
+}
+
+func TestStickerReservationReleasedAfterFailedDelivery(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	e := &Engine{}
+	for range 3 {
+		e.RecordBotMessage(false)
+	}
+	first, ok := e.reserveBotMessage(false)
+	if !ok || first == nil {
+		t.Fatal("fourth ordinary message should reserve a slot")
+	}
+	if _, ok := e.reserveBotMessage(false); ok {
+		t.Fatal("concurrent ordinary message exceeded reserved quota")
+	}
+	e.FinishBotMessage(first, false, false)
+	second, ok := e.reserveBotMessage(false)
+	if !ok || second == nil {
+		t.Fatal("failed delivery did not release its slot")
+	}
+	e.FinishBotMessage(second, true, false)
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
+		t.Fatalf("confirmed delivery was not counted: remaining=%d", remaining)
 	}
 }
 

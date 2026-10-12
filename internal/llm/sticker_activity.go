@@ -2,9 +2,28 @@ package llm
 
 import (
 	"FrostAgent/internal/sticker"
+	"encoding/json"
 	"fmt"
 	"sync"
 )
+
+func isOneBotFinalSticker(content string) bool {
+	var payload struct {
+		Messages []struct {
+			Type      string `json:"type"`
+			IsSticker bool   `json:"is_sticker"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal([]byte(content), &payload) != nil {
+		return false
+	}
+	for _, message := range payload.Messages {
+		if message.Type == "image" && message.IsSticker {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	ignoreEnforceStickerMarker = "<ignore_enforce_sticker />"
@@ -19,6 +38,15 @@ type stickerActivityState struct {
 	level        int
 	sinceSticker int
 	grace        int
+	pending      int
+	generation   uint64
+}
+
+// StickerReservation holds one pending ordinary outbound message until its
+// adapter confirms or rejects delivery.
+type StickerReservation struct {
+	generation uint64
+	once       sync.Once
 }
 
 func (e *Engine) stickerActivitySnapshot() (interval, remaining, grace int) {
@@ -31,7 +59,7 @@ func (e *Engine) stickerActivitySnapshot() (interval, remaining, grace int) {
 	if interval == 0 {
 		return 0, 0, 0
 	}
-	return interval, max(0, interval-s.sinceSticker), s.grace
+	return interval, max(0, interval-s.sinceSticker-s.pending), s.grace
 }
 
 func (s *stickerActivityState) applyLevel(level int) {
@@ -39,31 +67,64 @@ func (s *stickerActivityState) applyLevel(level int) {
 		s.level = level
 		s.sinceSticker = 0
 		s.grace = 0
+		s.pending = 0
+		s.generation++
+	}
+}
+
+func (e *Engine) reserveBotMessage(allowPairedSticker bool) (*StickerReservation, bool) {
+	s := &e.stickerActivity
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyLevel(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)))
+	if s.level == 0 {
+		return nil, true
+	}
+	// Leave the last slot in each interval for a sticker. A text message
+	// immediately followed by send_sticker in the same batch may share it.
+	if s.grace == 0 && !allowPairedSticker && s.sinceSticker+s.pending >= sticker.ActivityInterval(s.level)-1 {
+		return nil, false
+	}
+	s.pending++
+	return &StickerReservation{generation: s.generation}, true
+}
+
+// FinishBotMessage releases a pending slot and records only confirmed delivery.
+func (e *Engine) FinishBotMessage(reservation *StickerReservation, delivered, isSticker bool) {
+	if e == nil {
+		return
+	}
+	finish := func() {
+		s := &e.stickerActivity
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.applyLevel(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)))
+		if reservation != nil && reservation.generation == s.generation {
+			s.pending--
+		}
+		if !delivered || s.level == 0 {
+			return
+		}
+		if isSticker {
+			s.sinceSticker = 0
+			s.grace = 0
+		} else {
+			s.sinceSticker++
+			if s.grace > 0 {
+				s.grace--
+			}
+		}
+	}
+	if reservation != nil {
+		reservation.once.Do(finish)
+	} else {
+		finish()
 	}
 }
 
 // RecordBotMessage is called only after a platform ACK or transport write.
 func (e *Engine) RecordBotMessage(isSticker bool) {
-	if e == nil {
-		return
-	}
-	level := sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey))
-	s := &e.stickerActivity
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.applyLevel(level)
-	if level == 0 {
-		return
-	}
-	if isSticker {
-		s.sinceSticker = 0
-		s.grace = 0
-		return
-	}
-	s.sinceSticker++
-	if s.grace > 0 {
-		s.grace--
-	}
+	e.FinishBotMessage(nil, true, isSticker)
 }
 
 func (e *Engine) grantStickerGrace() {

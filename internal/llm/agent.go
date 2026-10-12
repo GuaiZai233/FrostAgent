@@ -68,15 +68,16 @@ func truncateRunes(value string, limit int) string {
 // autonomous ban action (ban_user tool). OutputBlocked is true when the final
 // answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
-	Content          string
-	MemoryWritten    bool
-	Silent           bool
-	StaySilentCalled bool
-	SilenceReason    string // "stay_silent", "security_block", "route_disabled", "canceled", "epoch_changed", "provider_fallback"
-	Banned           bool
-	OutputBlocked    bool
-	Usage            core.Usage
-	Error            error
+	Content            string
+	StickerReservation *StickerReservation
+	MemoryWritten      bool
+	Silent             bool
+	StaySilentCalled   bool
+	SilenceReason      string // "stay_silent", "security_block", "route_disabled", "canceled", "epoch_changed", "provider_fallback"
+	Banned             bool
+	OutputBlocked      bool
+	Usage              core.Usage
+	Error              error
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
@@ -1046,6 +1047,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
+			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && isOneBotFinalSticker(contentStr)
 			if hasRunCtx && !runCtx.Mock && !outputBlocked {
 				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 					messages = messages[:len(messages)-1]
@@ -1056,7 +1058,27 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					addStickerIteration()
 					continue
 				}
-				if stickerEnforcing || (contentStr != "" && e.stickerNeededBeforeReply()) {
+				if !finalSticker && (stickerEnforcing || (contentStr != "" && e.stickerNeededBeforeReply())) {
+					stickerEnforcing = true
+					stickerAttempts++
+					if stickerAttempts >= 3 {
+						messages = messages[:len(messages)-1]
+						messages = appendStickerForgiveness(messages, i)
+						e.grantStickerGrace()
+						stickerEnforcing = false
+						stickerAttempts = 0
+					} else {
+						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+					}
+					addStickerIteration()
+					continue
+				}
+			}
+			var stickerReservation *StickerReservation
+			if hasRunCtx && !runCtx.Mock && runCtx.AdapterID != "" && !outputBlocked && contentStr != "" && !finalSticker {
+				var reserved bool
+				stickerReservation, reserved = e.reserveBotMessage(false)
+				if !reserved {
 					stickerEnforcing = true
 					stickerAttempts++
 					if stickerAttempts >= 3 {
@@ -1074,10 +1096,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
 			return AgentRunResult{
-				Content:       contentStr,
-				MemoryWritten: memoryWritten,
-				OutputBlocked: outputBlocked,
-				Usage:         totalUsage,
+				Content:            contentStr,
+				StickerReservation: stickerReservation,
+				MemoryWritten:      memoryWritten,
+				OutputBlocked:      outputBlocked,
+				Usage:              totalUsage,
 			}
 		}
 
@@ -1105,7 +1128,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			continue
 		}
 
-		for _, tc := range responseMsg.ToolCalls {
+		for tcIndex, tc := range responseMsg.ToolCalls {
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
 			}
@@ -1137,15 +1160,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				continue
 			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
 				mergeSecurityNotice(&runCtx, decision.WarningNotice)
-			}
-			if hasRunCtx && !runCtx.Mock && tc.Function.Name == "send_message" {
-				if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && remaining == 0 && grace == 0 {
-					messages = append(messages, ChatMessage{
-						Role: "tool", ToolCallID: tc.ID,
-						Content: "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。",
-					})
-					continue
-				}
 			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
@@ -1234,10 +1248,27 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if toolSucceeded {
+				var stickerReservation *StickerReservation
+				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && tc.Function.Name != "send_sticker" {
+					pairedSticker := false
+					for _, later := range responseMsg.ToolCalls[tcIndex+1:] {
+						if later.Function.Name == "send_sticker" {
+							pairedSticker = true
+							break
+						}
+					}
+					var reserved bool
+					stickerReservation, reserved = e.reserveBotMessage(pairedSticker)
+					if !reserved {
+						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
+						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
+						continue
+					}
+				}
 				var delivered bool
 				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
-				if delivered && hasRunCtx && !runCtx.Mock {
-					e.RecordBotMessage(tc.Function.Name == "send_sticker")
+				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" {
+					e.FinishBotMessage(stickerReservation, delivered, tc.Function.Name == "send_sticker")
 				}
 			}
 
