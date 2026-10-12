@@ -2,6 +2,7 @@ package llm
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/security"
 	"FrostAgent/internal/sticker"
 	"context"
 	"strings"
@@ -237,11 +238,111 @@ func TestStickerQuotaAllowsOrderedTextAndStickerBatch(t *testing.T) {
 	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(payload string) error { delivered = append(delivered, payload); return nil },
 	})
-	if len(delivered) != 2 || !strings.Contains(delivered[0], `"text":"hello"`) || !strings.Contains(delivered[1], `"is_sticker":true`) {
+	if len(delivered) != 1 || strings.Index(delivered[0], `"text":"hello"`) < 0 || strings.Index(delivered[0], `"text":"hello"`) >= strings.Index(delivered[0], `"is_sticker":true`) {
 		t.Fatalf("ordered batch dropped a message: %v", delivered)
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
 		t.Fatalf("paired sticker did not reset quota: remaining=%d", remaining)
+	}
+}
+
+func TestStickerPairFailureDoesNotSendText(t *testing.T) {
+	const textPayload = `{"messages":[{"type":"plain","text":"hello"}]}`
+	const stickerPayload = `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`
+	for _, tc := range []struct {
+		name, stickerResult string
+		failHook            bool
+		watchdogSticker     bool
+	}{
+		{name: "sticker not found", stickerResult: `{"error":"查无此词条"}`},
+		{name: "sticker delivery failed", stickerResult: stickerPayload, failHook: true},
+		{name: "watchdog blocked sticker", stickerResult: stickerPayload, watchdogSticker: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(sticker.ActivityEnvKey, "10")
+			p := &stickerActivityProvider{responses: []core.ChatMessage{
+				{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
+					{ID: "text", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
+					{ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{}`}},
+				}},
+				{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
+				{Role: core.RoleAssistant, Content: "done"},
+			}}
+			e := &Engine{Provider: p, MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{
+				"send_message": &staticTool{name: "send_message", result: textPayload},
+				"send_sticker": &staticTool{name: "send_sticker", result: tc.stickerResult},
+			}}
+			if tc.watchdogSticker {
+				controller := security.NewController(t.TempDir())
+				controller.SetMode(security.ControlModeAggressive)
+				controller.Watchdog.SetClassifier(&mockGateClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+					if input.Stage == security.StageToolResult && strings.Contains(input.Content, "sticker.png") {
+						return security.ClassificationResult{Category: security.RiskCategoryDataExfiltration, RiskLevel: security.RiskLevelHigh}, nil
+					}
+					return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+				}})
+				e.Security = controller
+			}
+			for range 5 {
+				e.RecordBotMessage(false)
+			}
+			var sends int
+			e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+				ActorPlatform: "test-platform", ActorUserID: "test_actor",
+				SendHook: func(string) error {
+					sends++
+					if tc.failHook {
+						return context.DeadlineExceeded
+					}
+					return nil
+				},
+			})
+			wantSends := 0
+			if tc.failHook {
+				wantSends = 1
+			}
+			if sends != wantSends {
+				t.Fatalf("unexpected send attempts: %d, want %d", sends, wantSends)
+			}
+			if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 0 {
+				t.Fatalf("failed pair changed quota: remaining=%d", remaining)
+			}
+		})
+	}
+}
+
+func TestOnlyAdjacentTextSharesStickerDelivery(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
+			{ID: "first", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
+			{ID: "second", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
+			{ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{}`}},
+		}},
+		{Role: core.RoleAssistant},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
+		"send_message": &staticTool{name: "send_message", result: `{"messages":[{"type":"plain","text":"hello"}]}`},
+		"send_sticker": &staticTool{name: "send_sticker", result: `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`},
+	}}
+	for range 5 {
+		e.RecordBotMessage(false)
+	}
+	var delivered []string
+	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+		SendHook: func(payload string) error { delivered = append(delivered, payload); return nil },
+	})
+	if len(delivered) != 1 || !strings.Contains(delivered[0], `"is_sticker":true`) {
+		t.Fatalf("unpaired message bypassed quota: %v", delivered)
+	}
+	var firstBlocked bool
+	for _, msg := range p.requests[1].Messages {
+		if msg.Role == core.RoleTool && msg.ToolCallID == "first" && strings.Contains(msg.Content.(string), "额度已到期") {
+			firstBlocked = true
+		}
+	}
+	if !firstBlocked {
+		t.Fatal("first ordinary message borrowed a nonadjacent sticker")
 	}
 }
 
@@ -331,15 +432,15 @@ func TestStickerReservationReleasedAfterFailedDelivery(t *testing.T) {
 	for range 3 {
 		e.RecordBotMessage(false)
 	}
-	first, ok := e.reserveBotMessage(false)
+	first, ok := e.reserveBotMessage()
 	if !ok || first == nil {
 		t.Fatal("fourth ordinary message should reserve a slot")
 	}
-	if _, ok := e.reserveBotMessage(false); ok {
+	if _, ok := e.reserveBotMessage(); ok {
 		t.Fatal("concurrent ordinary message exceeded reserved quota")
 	}
 	e.FinishBotMessage(first, false, false)
-	second, ok := e.reserveBotMessage(false)
+	second, ok := e.reserveBotMessage()
 	if !ok || second == nil {
 		t.Fatal("failed delivery did not release its slot")
 	}

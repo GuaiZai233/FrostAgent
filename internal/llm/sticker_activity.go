@@ -72,7 +72,7 @@ func (s *stickerActivityState) applyLevel(level int) {
 	}
 }
 
-func (e *Engine) reserveBotMessage(allowPairedSticker bool) (*StickerReservation, bool) {
+func (e *Engine) reserveBotMessage() (*StickerReservation, bool) {
 	s := &e.stickerActivity
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,9 +80,8 @@ func (e *Engine) reserveBotMessage(allowPairedSticker bool) (*StickerReservation
 	if s.level == 0 {
 		return nil, true
 	}
-	// Leave the last slot in each interval for a sticker. A text message
-	// immediately followed by send_sticker in the same batch may share it.
-	if s.grace == 0 && !allowPairedSticker && s.sinceSticker+s.pending >= sticker.ActivityInterval(s.level)-1 {
+	// Leave the last slot in each interval for a sticker.
+	if s.grace == 0 && s.sinceSticker+s.pending >= sticker.ActivityInterval(s.level)-1 {
 		return nil, false
 	}
 	s.pending++

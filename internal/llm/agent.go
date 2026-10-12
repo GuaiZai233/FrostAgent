@@ -1078,7 +1078,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			var stickerReservation *StickerReservation
 			if hasRunCtx && !runCtx.Mock && runCtx.AdapterID != "" && !outputBlocked && willSendFinalMessage && !finalSticker {
 				var reserved bool
-				stickerReservation, reserved = e.reserveBotMessage(false)
+				stickerReservation, reserved = e.reserveBotMessage()
 				if !reserved {
 					stickerEnforcing = true
 					stickerAttempts++
@@ -1129,7 +1129,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			continue
 		}
 
-		for tcIndex, tc := range responseMsg.ToolCalls {
+		for tcIndex := 0; tcIndex < len(responseMsg.ToolCalls); tcIndex++ {
+			tc := responseMsg.ToolCalls[tcIndex]
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
 			}
@@ -1148,6 +1149,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated"), Usage: totalUsage}
 						}
 					}
+				}
+			}
+			if hasRunCtx && !runCtx.Mock && !runCtx.Proactive && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
+				if interval, _, _ := e.stickerActivitySnapshot(); interval > 0 {
+					stickerCall := responseMsg.ToolCalls[tcIndex+1]
+					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					messages = append(messages,
+						ChatMessage{Role: "tool", Content: textResult, ToolCallID: tc.ID},
+						ChatMessage{Role: "tool", Content: stickerResult, ToolCallID: stickerCall.ID},
+					)
+					tcIndex++
+					continue
 				}
 			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
@@ -1252,15 +1265,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				var stickerReservation *StickerReservation
 				deliverySticker := hasStickerImage(execution.MessagePayload)
 				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && !deliverySticker {
-					pairedSticker := false
-					for _, later := range responseMsg.ToolCalls[tcIndex+1:] {
-						if later.Function.Name == "send_sticker" {
-							pairedSticker = true
-							break
-						}
-					}
 					var reserved bool
-					stickerReservation, reserved = e.reserveBotMessage(pairedSticker)
+					stickerReservation, reserved = e.reserveBotMessage()
 					if !reserved {
 						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
 						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
