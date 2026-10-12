@@ -95,8 +95,9 @@ func (m *Manager) saveSQLDraft(cfg Configuration, owner string) error {
 	}
 	m.draft = cloneConfiguration(cfg)
 	if m.instanceID == "" {
-		if reflect.DeepEqual(cfg.Endpoints, m.active.Endpoints) &&
-			reflect.DeepEqual(cfg.Models, m.active.Models) && !m.secrets.HasDraftChanges() {
+		m.draftPending = !reflect.DeepEqual(cfg.Endpoints, m.active.Endpoints) ||
+			!reflect.DeepEqual(cfg.Models, m.active.Models) || m.secrets.HasDraftChanges()
+		if !m.draftPending {
 			m.draftOwner = ""
 		} else {
 			m.draftOwner = owner
@@ -117,6 +118,7 @@ func (m *Manager) discardSQLDraft(owner string) (Configuration, error) {
 	m.draft = cloneConfiguration(m.active)
 	m.secrets.DiscardDraft()
 	m.draftOwner = ""
+	m.draftPending = false
 	return cloneConfiguration(m.draft), m.loadErr
 }
 
@@ -144,6 +146,7 @@ func (m *Manager) resetSQLCatalogDraft() (Configuration, error) {
 	m.draft = cloneConfiguration(m.active)
 	m.secrets.DiscardDraft()
 	m.draftOwner = ""
+	m.draftPending = false
 	return cloneConfiguration(m.draft), nil
 }
 
@@ -199,6 +202,7 @@ func (m *Manager) publishSQL(owner string) (Configuration, error) {
 	m.active, m.draft = cloneConfiguration(cfg), cloneConfiguration(cfg)
 	m.secrets.DiscardDraft()
 	m.draftOwner = ""
+	m.draftPending = false
 	m.loadErr = nil
 	return cloneConfiguration(cfg), nil
 }

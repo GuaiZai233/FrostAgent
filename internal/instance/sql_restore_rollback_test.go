@@ -158,15 +158,16 @@ func TestPostgresRestoreFailureRollsBackSharedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
 	schema := fmt.Sprintf("fa_restore_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(`CREATE SCHEMA ` + schema); err != nil {
+		admin.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if _, err := admin.Exec(`DROP SCHEMA ` + schema + ` CASCADE`); err != nil {
 			t.Error(err)
 		}
+		admin.Close()
 	})
 	query := parsed.Query()
 	query.Set("search_path", schema)

@@ -39,6 +39,7 @@ type Manager struct {
 	db               *storage.DB
 	instanceID       string
 	draftOwner       string
+	draftPending     bool
 }
 
 func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
@@ -315,6 +316,7 @@ func (m *Manager) SetDraftEndpointSecretForOwner(endpointID, apiKey, owner strin
 	m.secrets.Stage(endpoint, apiKey, false)
 	setEndpointConfigured(&m.draft, endpoint.ID, true)
 	m.draftOwner = owner
+	m.draftPending = true
 	return true, nil
 }
 
@@ -341,6 +343,7 @@ func (m *Manager) ClearDraftEndpointSecretForOwner(endpointID, owner string) (bo
 	m.secrets.Stage(endpoint, "", true)
 	setEndpointConfigured(&m.draft, endpoint.ID, false)
 	m.draftOwner = owner
+	m.draftPending = true
 	return false, nil
 }
 

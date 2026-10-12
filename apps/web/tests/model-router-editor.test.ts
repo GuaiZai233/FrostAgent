@@ -129,6 +129,25 @@ function fixture(withInstance = true) {
 }
 
 {
+  // A restore can update the catalog while this page owns unpublished edits.
+  // Keep those edits visible, block publication, and permit explicit reset.
+  const { editor, state, calls } = fixture();
+  state.exposeCatalogDraft = true;
+  state.catalogDraft.endpoints[0].baseUrl = 'https://pending.invalid/v1';
+  state.catalog.revision++;
+  const loaded = await editor.getModelRouterState();
+  assert.match(loaded.loadError, /当前草稿基于旧版本/);
+  assert.equal(loaded.draft.endpoints[0].baseUrl, 'https://pending.invalid/v1');
+  await assert.rejects(editor.saveModelRouterDraft(loaded.draft), /尚未成功加载/);
+  await assert.rejects(editor.publishModelRouter(), /尚未成功加载/);
+  assert.deepEqual(calls, ['catalog:load', 'routes:load']);
+  await editor.resetSharedCatalogDraft();
+  const recovered = await editor.getModelRouterState();
+  assert.equal(recovered.loadError, '');
+  assert.equal(recovered.draft.endpoints[0].baseUrl, 'https://provider.invalid/v1');
+}
+
+{
   const { editor, state, calls } = fixture();
   const draft = (await editor.getModelRouterState()).active;
   draft.endpoints[0].displayName = 'Updated shared provider';

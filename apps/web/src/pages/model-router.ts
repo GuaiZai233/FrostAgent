@@ -252,7 +252,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
 
         ${
           loadError
-            ? `<div class="card p-3 badge-destructive"><strong>数据库配置加载失败：</strong>${escapeHtml(loadError)}。请恢复数据库连接后刷新页面。</div>`
+            ? `<div class="card p-3 badge-destructive"><strong>模型配置暂不可编辑：</strong>${escapeHtml(loadError)}</div>`
             : ''
         }
 

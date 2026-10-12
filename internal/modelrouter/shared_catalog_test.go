@@ -245,8 +245,11 @@ func TestSharedCatalogAndIsolatedRoutes(t *testing.T) {
 			if _, err := catalog.Publish(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := stale.Publish(); err == nil {
-				t.Fatal("stale catalog overwrote published state")
+			if _, err := stale.Publish(); err != nil {
+				t.Fatalf("clean catalog draft did not follow published state: %v", err)
+			}
+			if current := catalog.Active(); current.Models[0].UpstreamModel != "changed" || current.Endpoints[0].Enabled {
+				t.Fatalf("clean catalog draft overwrote published state: %+v", current)
 			}
 			if _, err := a.Resolve(WorkloadDialogue, Scope{}); err == nil {
 				t.Fatal("disabled provider was still usable")

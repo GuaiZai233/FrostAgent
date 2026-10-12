@@ -43,7 +43,11 @@ jobs:
       - name: Test shared providers on PostgreSQL
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/modelrouter -run '^TestSharedCatalogAndIsolatedRoutes$' -count=1 -v
+        run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether)$' -count=1 -v
+      - name: Test PostgreSQL restore rollback
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/instance -run '^TestPostgresRestoreFailureRollsBackSharedCatalog$' -count=1 -v
       - name: Test PostgreSQL memory writes
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable

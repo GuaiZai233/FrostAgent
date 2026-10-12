@@ -137,3 +137,64 @@ func TestInstanceSettingsReuseSharedProvidersAndRemapConflicts(t *testing.T) {
 		t.Fatalf("imported endpoint has a credential: %v", err)
 	}
 }
+
+func TestSettingsImportRefreshesCleanCatalogDraftAndPreservesStaleEdits(t *testing.T) {
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('target', 'Target', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	// The control plane creates this manager before any backup is restored.
+	catalog := modelrouter.NewSQL(db, "")
+	imported := modelrouter.NewSQL(db, "target").Draft()
+	imported.Endpoints = []modelrouter.Endpoint{{ID: "imported-provider", DisplayName: "Imported Provider", BaseURL: "https://imported.invalid/v1", Enabled: true}}
+	imported.Models = []modelrouter.Model{{ID: "imported-model", DisplayName: "Imported Model", EndpointID: "imported-provider", UpstreamModel: "synthetic-model", Enabled: true}}
+	imported.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "imported-model"}
+	if err := ImportSettings(db, "target", Settings{FormatVersion: FormatVersion, ModelRouter: imported}); err != nil {
+		t.Fatal(err)
+	}
+	active, draft, err := catalog.StateForOwner("page-a")
+	if err != nil || len(active.Models) != 1 || len(draft.Models) != 1 ||
+		active.Revision != draft.Revision || draft.Models[0].ID != "imported-model" {
+		t.Fatalf("restored provider missing from clean editor draft: active=%+v draft=%+v err=%v", active, draft, err)
+	}
+	if err := catalog.SaveDraftForOwner(draft, "page-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.PublishForOwner("page-a"); err != nil {
+		t.Fatalf("clean editor attempted to remove restored model: %v", err)
+	}
+
+	active, draft, err = catalog.StateForOwner("page-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Endpoints[0].DisplayName = "Unpublished name"
+	if err := catalog.SaveDraftForOwner(draft, "page-a"); err != nil {
+		t.Fatal(err)
+	}
+	imported.Endpoints[0] = modelrouter.Endpoint{ID: "second-provider", DisplayName: "Second Provider", BaseURL: "https://second.invalid/v1", Enabled: true}
+	imported.Models[0] = modelrouter.Model{ID: "second-model", DisplayName: "Second Model", EndpointID: "second-provider", UpstreamModel: "second-model", Enabled: true}
+	imported.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "second-model"}
+	if err := ImportSettings(db, "target", Settings{FormatVersion: FormatVersion, ModelRouter: imported}); err != nil {
+		t.Fatal(err)
+	}
+	active, draft, err = catalog.StateForOwner("page-a")
+	if err != nil || len(active.Models) != 2 || draft.Revision == active.Revision ||
+		draft.Endpoints[0].DisplayName != "Unpublished name" {
+		t.Fatalf("stale owned edits were hidden or replaced: active=%+v draft=%+v err=%v", active, draft, err)
+	}
+	if _, err := catalog.PublishForOwner("page-a"); err == nil {
+		t.Fatal("stale catalog draft published over restored providers")
+	}
+	if _, err := catalog.ResetSharedDraft(); err != nil {
+		t.Fatal(err)
+	}
+	active, draft, err = catalog.StateForOwner("page-a")
+	if err != nil || len(draft.Models) != 2 || draft.Revision != active.Revision {
+		t.Fatalf("reset did not restore imported catalog: active=%+v draft=%+v err=%v", active, draft, err)
+	}
+}

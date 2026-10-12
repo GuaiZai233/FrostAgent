@@ -127,6 +127,12 @@ func (m *Manager) loadSQL() error {
 		return err
 	}
 	m.active = cfg
+	// Imports and restores update the shared catalog outside this manager. A
+	// clean in-memory draft follows those changes, while pending edits retain
+	// their original revision so the editor can report a conflict.
+	if m.instanceID == "" && !m.draftPending && m.draftOwner == "" && !m.secrets.HasDraftChanges() {
+		m.draft = cloneConfiguration(cfg)
+	}
 	return nil
 }
 

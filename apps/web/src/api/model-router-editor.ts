@@ -83,7 +83,10 @@ export function createModelRouterEditorAPI(
       pending.endpoints = structuredClone(catalogState.draft?.endpoints ?? catalogActive.endpoints);
       pending.models = structuredClone(catalogState.draft?.models ?? catalogActive.models);
       secretDirty = catalogState.hasDraftSecretChanges;
-      const loadError = [catalogState.loadError, routeState?.loadError].filter(Boolean).join('；');
+      const staleCatalogDraft = catalogState.draft && catalogState.draft.revision !== catalogActive.revision;
+      const loadError = [catalogState.loadError, routeState?.loadError,
+        staleCatalogDraft ? '共享供应商目录已更新，当前草稿基于旧版本。请点击“重置共享草稿”后重新编辑' : '',
+      ].filter(Boolean).join('；');
       ready = !loadError;
       return { active: merge(), draft: structuredClone(pending), hasDraftSecretChanges: secretDirty, loadError };
     },
@@ -178,7 +181,6 @@ export function createModelRouterEditorAPI(
       }
     },
     async resetSharedCatalogDraft() {
-      assertReady();
       const discarded = await catalog.resetSharedCatalogDraft();
       if (!discarded) throw new Error('重置共享供应商草稿失败');
       catalogActive = structuredClone(discarded);
