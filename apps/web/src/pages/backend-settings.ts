@@ -61,6 +61,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let enableReplyOther = false;
   let proactiveReplyEnabled = false;
   let proactiveReplyProbability = 0.05;
+  let stickerActivity = 0;
+  let stickerSaving = false;
+  let stickerEditSeq = 0;
   let proactiveWhitelistEnabled = false;
   let proactiveWhitelistGroups: string[] = [];
   let botLoopSaving = false;
@@ -232,6 +235,17 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             </div>
           </div>
 
+          <div class="mb-4 pb-4 border-b border-border" id="sticker-activity-card">
+            <div class="flex items-center justify-between mb-3 gap-2">
+              <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
+              <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+            </div>
+            <input type="range" id="sticker-activity-slider" class="slider w-full" min="0" max="10" step="1" value="0" aria-label="表情包使用积极度" />
+            <div class="flex justify-between text-[11px] text-muted mt-1">
+              <span>0 · 禁用</span><span>10 · 每 5 条回复</span>
+            </div>
+          </div>
+
           <!-- Group Response Rules -->
           <div>
             <h3 class="text-xs font-semibold text-foreground mb-2.5">群聊回复规则</h3>
@@ -312,6 +326,12 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const proactiveReplyProbDisplay = container.querySelector<HTMLElement>(
     '#proactive-reply-prob-display',
   )!;
+  const stickerActivitySlider = container.querySelector<HTMLInputElement>(
+    '#sticker-activity-slider',
+  )!;
+  const stickerActivityDisplay = container.querySelector<HTMLElement>(
+    '#sticker-activity-display',
+  )!;
 
   const proactiveWhitelistCb =
     container.querySelector<HTMLInputElement>('#proactive-whitelist-cb')!;
@@ -370,6 +390,13 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     proactiveReplyControls.style.pointerEvents =
       enabled && !isSaving ? 'auto' : 'none';
     updateWhitelistUI(isSaving);
+  }
+
+  function updateStickerActivityUI(level: number) {
+    stickerActivitySlider.value = String(level);
+    stickerActivitySlider.disabled = stickerSaving;
+    stickerActivityDisplay.textContent =
+      level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 条回复`;
   }
 
   function updateWhitelistUI(isSaving = false) {
@@ -498,6 +525,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   async function loadData() {
     if (isUnmounted) return;
     const loadSeq = proactiveSync.nextLoadSeq();
+    const stickerLoadSeq = stickerEditSeq;
     const whitelistLoadSeq = whitelistSync.nextLoadSeq();
     loading = true;
     renderTable();
@@ -508,7 +536,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         api.getSessions(100).catch(() => ({ sessions: [] })),
       ]);
       if (isUnmounted) return;
-      envVars = vars;
+      envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT');
 
       sessionGroupMap.clear();
       for (const sess of sessionsResp.sessions || []) {
@@ -523,6 +551,16 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       }
 
       const getVal = (k: string) => vars.find((v) => v.key === k)?.value ?? '';
+      if (!stickerSaving && stickerLoadSeq === stickerEditSeq) {
+        const parsedActivity = Number(getVal('STICKER_ACTIVITY'));
+        stickerActivity =
+          Number.isInteger(parsedActivity) &&
+          parsedActivity >= 0 &&
+          parsedActivity <= 10
+            ? parsedActivity
+            : 0;
+        updateStickerActivityUI(stickerActivity);
+      }
       groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
       enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
       enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
@@ -957,6 +995,39 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         groupReplyCb.checked,
       ),
   );
+
+  // Proactive reply event handlers
+  stickerActivitySlider.addEventListener('input', () => {
+    updateStickerActivityUI(Number(stickerActivitySlider.value));
+  });
+
+  stickerActivitySlider.addEventListener('change', async () => {
+    const level = Number(stickerActivitySlider.value);
+    stickerEditSeq++;
+    stickerSaving = true;
+    updateStickerActivityUI(level);
+    let reload = false;
+    try {
+      const res = await api.updateEnvVar({
+        key: 'STICKER_ACTIVITY',
+        value: String(level),
+        isSecret: false,
+      });
+      if (!res.success)
+        throw new Error(res.error || '更新表情包使用积极度失败');
+      stickerActivity = level;
+      toast.success('表情包使用积极度已更新');
+    } catch (err) {
+      toast.error(
+        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
+      );
+      reload = true;
+    } finally {
+      stickerSaving = false;
+      if (!isUnmounted) updateStickerActivityUI(stickerActivity);
+    }
+    if (reload && !isUnmounted) await loadData();
+  });
 
   proactiveReplyCb.addEventListener('change', () => {
     void handleProactiveToggle(proactiveReplyCb.checked);

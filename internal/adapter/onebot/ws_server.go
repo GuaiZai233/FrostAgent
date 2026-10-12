@@ -688,9 +688,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	// 4. Call the agent engine with history
 	var (
-		replyText   string
-		receiptText string
-		runResult   llm.AgentRunResult
+		replyText      string
+		receiptText    string
+		runResult      llm.AgentRunResult
+		finalDelivered bool
+		finalSticker   bool
 	)
 	commitAssistantHistory := func(string) {}
 
@@ -917,6 +919,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Mock:           conn.mock,
 			Proactive:      wakeSignals.Proactive,
 		})
+		defer func() {
+			if !conn.mock {
+				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, finalSticker)
+			}
+		}()
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
 			return
@@ -1085,8 +1092,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	var toolOutput struct {
 		Messages []tools.Msg `json:"messages"`
 	}
+	if json.Unmarshal([]byte(replyText), &toolOutput) == nil {
+		for _, message := range toolOutput.Messages {
+			if message.IsSticker && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
+				replyText = "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"
+				toolOutput.Messages = nil
+				break
+			}
+			if message.Type == "image" && message.IsSticker {
+				finalSticker = true
+			}
+		}
+	}
 
-	if err := json.Unmarshal([]byte(replyText), &toolOutput); err == nil && len(toolOutput.Messages) > 0 {
+	if len(toolOutput.Messages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
@@ -1181,6 +1200,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if err == nil {
 		conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+		finalDelivered = strings.TrimSpace(replyText) != "" || receiptText != ""
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 		commitAssistantHistory(replyText)
 	} else {

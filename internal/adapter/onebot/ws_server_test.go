@@ -13,6 +13,7 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
@@ -813,8 +814,79 @@ func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
 	}
 }
 
+func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
+	const rawSticker = `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`
+	for _, tc := range []struct {
+		name, level string
+		wantSticker bool
+	}{
+		{name: "default disabled"},
+		{name: "enabled", level: "10", wantSticker: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(sticker.ActivityEnvKey, tc.level)
+			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: rawSticker}}}}
+			engine := newTestEngine(provider)
+			if tc.wantSticker {
+				for range 4 {
+					engine.RecordBotMessage(false)
+				}
+			}
+			srv, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			event := model.OneBotEvent{
+				SelfID: 700000041, PostType: "message", MessageType: "private",
+				UserID: 700000042, MessageID: 700000043,
+				Message: json.RawMessage(`[{"type":"text","data":{"text":"你好"}}]`),
+			}
+			if err := conn.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			var action model.OneBotAction
+			if err := conn.ReadJSON(&action); err != nil {
+				t.Fatal(err)
+			}
+			if action.Action != "send_private_msg" {
+				t.Fatalf("unexpected action: %s", action.Action)
+			}
+			message := action.Params.(map[string]any)["message"]
+			if tc.wantSticker {
+				segments, ok := message.([]any)
+				if !ok || len(segments) != 1 || segments[0].(map[string]any)["type"] != "image" {
+					t.Fatalf("enabled sticker was not sent: %#v", message)
+				}
+			} else if message != "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。" {
+				t.Fatalf("disabled sticker escaped as rich text: %#v", message)
+			}
+			if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantSticker {
+				deadline := time.Now().Add(time.Second)
+				for len(engine.SessionManager.GetOrCreate("private:700000042").Snapshot()) < 2 && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+				engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "quota"}}, llm.RunContext{})
+				provider.mu.Lock()
+				request := provider.requests[len(provider.requests)-1]
+				provider.mu.Unlock()
+				last := request.Messages[len(request.Messages)-1].Content.(string)
+				if !strings.Contains(last, "还剩 5 轮回复") {
+					t.Fatalf("terminal sticker did not reset quota: %s", last)
+				}
+			}
+		})
+	}
+}
+
 func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *testing.T) {
 	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
+	t.Setenv("STICKER_ACTIVITY", "10")
 	provider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{Message: core.ChatMessage{
@@ -918,10 +990,18 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 	if !foundToolReply {
 		t.Fatalf("群聊 compact 未包含工具实际发送文本，实际=%+v", compact.RecentMessages)
 	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	provider.mu.Lock()
+	request := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 4 轮回复") {
+		t.Fatalf("成功 ACK 后应计入一条工具消息，实际=%v", request.Messages)
+	}
 }
 
 func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T) {
 	t.Setenv("ONEBOT_ACTION_TIMEOUT", "200ms")
+	t.Setenv("STICKER_ACTIVITY", "10")
 	provider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{Message: core.ChatMessage{
@@ -992,6 +1072,13 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	history := engine.SessionManager.GetOrCreate("private:700000022").Snapshot()
 	if len(history) != 1 || history[0].Role != string(core.RoleUser) {
 		t.Fatalf("失败 ACK 后不应提交 assistant 历史，实际=%+v", history)
+	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	provider.mu.Lock()
+	request := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 5 轮回复") {
+		t.Fatalf("失败 ACK 不应计入工具消息，实际=%v", request.Messages)
 	}
 }
 

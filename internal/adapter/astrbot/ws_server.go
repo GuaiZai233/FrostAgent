@@ -13,6 +13,7 @@ import (
 	"FrostAgent/internal/proactive"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
@@ -75,18 +76,27 @@ func checkWebSocketOrigin(r *http.Request) bool {
 }
 
 var nextConnGeneration uint64
+var nextDeliveryID uint64
+
+type deliveryReceipt struct {
+	Type       string `json:"type"`
+	DeliveryID string `json:"delivery_id"`
+	Delivered  bool   `json:"delivered"`
+	Error      string `json:"error,omitempty"`
+}
 
 type wsConn struct {
 	*runtimescope.Scope
-	conn         *websocket.Conn
-	generation   string
-	inFlight     sync.WaitGroup
-	closed       atomic.Bool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	writeMu      sync.Mutex
-	mock         bool
-	mockSessions sync.Map
+	conn              *websocket.Conn
+	generation        string
+	inFlight          sync.WaitGroup
+	closed            atomic.Bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	writeMu           sync.Mutex
+	mock              bool
+	mockSessions      sync.Map
+	pendingDeliveries sync.Map
 }
 
 func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
@@ -169,6 +179,44 @@ func (c *wsConn) Close() error {
 		return nil
 	}
 	return c.conn.Close()
+}
+
+func (c *wsConn) acceptDeliveryReceipt(receipt deliveryReceipt) {
+	if receipt.DeliveryID == "" {
+		return
+	}
+	if pending, ok := c.pendingDeliveries.Load(receipt.DeliveryID); ok {
+		select {
+		case pending.(chan deliveryReceipt) <- receipt:
+		default:
+		}
+	}
+}
+
+func (c *wsConn) writeStickerActionAndWait(action Action) error {
+	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
+	receipts := make(chan deliveryReceipt, 1)
+	c.pendingDeliveries.Store(action.DeliveryID, receipts)
+	defer c.pendingDeliveries.Delete(action.DeliveryID)
+	if err := c.WriteJSON(action); err != nil {
+		return err
+	}
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	select {
+	case receipt := <-receipts:
+		if !receipt.Delivered {
+			if receipt.Error != "" {
+				return fmt.Errorf("AstrBot 贴纸发送失败: %s", receipt.Error)
+			}
+			return errors.New("AstrBot 贴纸发送失败")
+		}
+		return nil
+	case <-c.Context().Done():
+		return c.Context().Err()
+	case <-timer.C:
+		return errors.New("等待 AstrBot 贴纸投递回执超时")
+	}
 }
 
 func (c *wsConn) sessionKey(event Event) string {
@@ -1021,6 +1069,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		receiptText          string
 		deliveredToolReplies []string
 		runResult            llm.AgentRunResult
+		finalDelivered       bool
 	)
 
 	if engine != nil && session != nil {
@@ -1116,9 +1165,18 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if session != nil && session.Epoch() != startEpoch {
 				return errors.New("会话已重置，取消发送中间消息")
 			}
-			if err := conn.WriteJSON(action); err != nil {
-				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
-				return err
+			var sendErr error
+			if action.containsSticker() && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) > 0 {
+				if !event.StickerDeliveryReceipt {
+					return errors.New("AstrBot 插件版本不支持表情包投递回执，请更新插件")
+				}
+				sendErr = conn.writeStickerActionAndWait(action)
+			} else {
+				sendErr = conn.WriteJSON(action)
+			}
+			if sendErr != nil {
+				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", sendErr))
+				return sendErr
 			}
 			if session != nil && session.Epoch() != startEpoch {
 				return errors.New("会话已重置，取消发送中间消息")
@@ -1159,6 +1217,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Mock:          conn.mock,
 			Proactive:     isProactiveReply(&event),
 		})
+		defer func() {
+			if !conn.mock {
+				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, false)
+			}
+		}()
 		replyText = runResult.Content
 		if session != nil && session.Epoch() != startEpoch {
 			return
@@ -1318,6 +1381,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		return
 	}
+	finalDelivered = strings.TrimSpace(sentReplyText) != ""
 
 	if engine == nil || session == nil {
 		return

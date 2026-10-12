@@ -28,6 +28,10 @@ const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
 );
+const dialoguePage = await readFile(
+  new URL('../src/pages/dialogue.ts', import.meta.url),
+  'utf8',
+);
 assert.doesNotMatch(backendSettings, /edit-env-secret-cb/, 'setting secrecy is fixed by the server registry');
 const components = await readFile(
   new URL('../src/styles/components.css', import.meta.url),
@@ -134,6 +138,11 @@ assert.equal(
   false,
   'SYSTEM_PROMPT must be an instance-level setting, not in globalKeys',
 );
+assert.match(main, /path: '\/dialogue', label: '人格设定'/);
+assert.match(dialoguePage, /<h1 class="page-title">人格设定<\/h1>/);
+assert.match(dialoguePage, /id="system-prompt-edit-btn"[^>]*title="编辑系统提示词"/);
+assert.match(dialoguePage, /id="system-prompt-display" class="[^"]*bg-muted[^"]*text-muted/);
+assert.match(backendSettings, /envVars = vars\.filter\(\(item\) => item\.key !== 'SYSTEM_PROMPT'\)/);
 
 assert.match(
   backendSettings,

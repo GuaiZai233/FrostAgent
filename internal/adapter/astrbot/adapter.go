@@ -329,6 +329,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
+			if event.Type == "delivery_result" {
+				var receipt deliveryReceipt
+				if json.Unmarshal(message, &receipt) == nil {
+					c.acceptDeliveryReceipt(receipt)
+				}
+				continue
+			}
 			sanitizeIngressMetadata(&event)
 			var warningNotice string
 			var scope *runtimescope.Scope

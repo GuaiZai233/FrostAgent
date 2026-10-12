@@ -6,9 +6,13 @@ import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
 
-export function mountDialoguePage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+export function mountDialoguePage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
+  let systemPrompt = '';
+  let systemPromptLoaded = false;
+  let systemPromptEditing = false;
+  let systemPromptSaving = false;
+  let systemPromptLoadSeq = 0;
   let loading = false;
   let dialogues: DialogueItem[] = [];
   let filePath = '当前实例 · 数据库存储';
@@ -25,7 +29,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="page-title">人设对话</h1>
+            <h1 class="page-title">人格设定</h1>
             <span class="badge badge-outline text-xs font-mono" id="dialogue-filepath">${escapeHtml(filePath)}</span>
           </div>
         </div>
@@ -54,6 +58,23 @@ export function mountDialoguePage(container: HTMLElement): () => void {
           </button>
         </div>
       </header>
+
+      <article class="card p-4 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="card-title text-sm font-semibold">系统提示词 (System Prompt)</h2>
+          <button type="button" class="btn btn-ghost btn-icon-sm" id="system-prompt-edit-btn" title="编辑系统提示词" aria-label="编辑系统提示词" disabled>
+            ${icon('pencil', 'w-3.5 h-3.5')}
+          </button>
+        </div>
+        <div id="system-prompt-display" class="rounded-md bg-muted p-3 text-sm text-muted whitespace-pre-wrap break-words select-text" style="min-height: 5rem;">加载中...</div>
+        <div id="system-prompt-editor" class="flex flex-col gap-3" style="display: none;">
+          <textarea id="system-prompt-input" class="textarea text-sm leading-relaxed" rows="8" aria-label="系统提示词"></textarea>
+          <div class="flex items-center justify-end gap-2">
+            <button type="button" class="btn btn-outline btn-sm" id="system-prompt-cancel-btn">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" id="system-prompt-save-btn">保存并生效</button>
+          </div>
+        </div>
+      </article>
 
       <!-- Prompt Preview Collapsible -->
       <details class="card prompt-preview-card overflow-hidden" id="prompt-preview-details" open>
@@ -133,6 +154,12 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   `;
 
   // Element references
+  const systemPromptDisplay = container.querySelector<HTMLElement>('#system-prompt-display')!;
+  const systemPromptEditor = container.querySelector<HTMLElement>('#system-prompt-editor')!;
+  const systemPromptInput = container.querySelector<HTMLTextAreaElement>('#system-prompt-input')!;
+  const systemPromptEditBtn = container.querySelector<HTMLButtonElement>('#system-prompt-edit-btn')!;
+  const systemPromptCancelBtn = container.querySelector<HTMLButtonElement>('#system-prompt-cancel-btn')!;
+  const systemPromptSaveBtn = container.querySelector<HTMLButtonElement>('#system-prompt-save-btn')!;
   const filepathEl = container.querySelector<HTMLElement>('#dialogue-filepath')!;
   const modeVisualBtn = container.querySelector<HTMLButtonElement>('#mode-visual-btn')!;
   const modeRawBtn = container.querySelector<HTMLButtonElement>('#mode-raw-btn')!;
@@ -150,6 +177,63 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   const exportBtn = container.querySelector<HTMLButtonElement>('#dialogue-export-btn')!;
   const importInput = container.querySelector<HTMLInputElement>('#dialogue-import-input')!;
   const refreshBtn = container.querySelector<HTMLButtonElement>('#dialogue-refresh-btn')!;
+
+  function renderSystemPrompt() {
+    systemPromptDisplay.style.display = systemPromptEditing ? 'none' : 'block';
+    systemPromptEditor.style.display = systemPromptEditing ? 'flex' : 'none';
+    systemPromptEditBtn.disabled = !systemPromptLoaded || systemPromptEditing || systemPromptSaving;
+    systemPromptInput.disabled = systemPromptSaving;
+    systemPromptCancelBtn.disabled = systemPromptSaving;
+    systemPromptSaveBtn.disabled = systemPromptSaving;
+    if (!systemPromptEditing) {
+      systemPromptDisplay.textContent = systemPromptLoaded ? systemPrompt || '（未设置）' : '加载中...';
+    }
+  }
+
+  async function loadSystemPrompt() {
+    const loadSeq = ++systemPromptLoadSeq;
+    systemPromptLoaded = false;
+    systemPromptEditing = false;
+    renderSystemPrompt();
+    try {
+      const vars = await api.listEnvVars();
+      if (isUnmounted || loadSeq !== systemPromptLoadSeq) return;
+      systemPrompt = vars.find((item) => item.key === 'SYSTEM_PROMPT')?.value ?? '';
+      systemPromptLoaded = true;
+      renderSystemPrompt();
+    } catch (err) {
+      if (isUnmounted || loadSeq !== systemPromptLoadSeq) return;
+      systemPromptDisplay.textContent = '加载失败';
+      toast.error('加载系统提示词失败: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function saveSystemPrompt() {
+    if (systemPromptSaving) return;
+    const value = systemPromptInput.value;
+    systemPromptSaving = true;
+    refreshBtn.disabled = true;
+    renderSystemPrompt();
+    try {
+      const result = await api.updateEnvVar({ key: 'SYSTEM_PROMPT', value, isSecret: false });
+      if (isUnmounted) return;
+      if (!result.success) {
+        toast.error('保存系统提示词失败: ' + result.error);
+        return;
+      }
+      systemPrompt = value;
+      systemPromptEditing = false;
+      toast.success('系统提示词已保存并生效');
+    } catch (err) {
+      if (!isUnmounted) {
+        toast.error('保存系统提示词失败: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    } finally {
+      systemPromptSaving = false;
+      refreshBtn.disabled = false;
+      if (!isUnmounted) renderSystemPrompt();
+    }
+  }
 
   async function loadData() {
     if (isUnmounted) return;
@@ -534,6 +618,27 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   }
 
   // Event handlers
+  systemPromptEditBtn.addEventListener('click', () => {
+    if (!systemPromptLoaded) return;
+    systemPromptInput.value = systemPrompt;
+    systemPromptEditing = true;
+    renderSystemPrompt();
+    systemPromptInput.focus();
+  });
+  systemPromptCancelBtn.addEventListener('click', () => {
+    systemPromptEditing = false;
+    renderSystemPrompt();
+  });
+  systemPromptSaveBtn.addEventListener('click', () => void saveSystemPrompt());
+  systemPromptInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      systemPromptCancelBtn.click();
+    } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      systemPromptSaveBtn.click();
+    }
+  });
   modeVisualBtn.addEventListener('click', () => setMode('visual'));
   modeRawBtn.addEventListener('click', () => setMode('raw'));
 
@@ -599,12 +704,15 @@ export function mountDialoguePage(container: HTMLElement): () => void {
 
   refreshBtn.addEventListener('click', () => {
     void loadData();
+    if (!systemPromptEditing) void loadSystemPrompt();
     if (viewMode === 'raw') void loadRawYaml();
   });
 
   void loadData();
+  void loadSystemPrompt();
 
   return () => {
     isUnmounted = true;
+    systemPromptLoadSeq++;
   };
 }

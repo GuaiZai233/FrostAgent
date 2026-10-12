@@ -2,6 +2,7 @@ package tools
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
@@ -34,7 +35,10 @@ func SendStickerTool(store *sticker.Store, prefixes ...string) Tool {
 			},
 			"required": []string{"query"},
 		},
-		executeResult: func(_ context.Context, args string) (core.ToolExecutionResult, error) {
+		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
+			if sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
+				return textResult(`{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`), nil
+			}
 			var payload struct {
 				Query string `json:"query"`
 			}
