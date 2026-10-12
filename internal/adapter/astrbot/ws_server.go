@@ -200,7 +200,7 @@ func (c *wsConn) writeStickerActionAndWait(action Action) error {
 	if err := c.WriteJSON(action); err != nil {
 		return err
 	}
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(60 * time.Second)
 	defer timer.Stop()
 	select {
 	case receipt := <-receipts:
