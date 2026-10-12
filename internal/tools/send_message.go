@@ -2,6 +2,8 @@ package tools
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -79,7 +81,7 @@ func SendMsgTool() Tool {
 			"required": []string{"messages"},
 		},
 
-		executeResult: func(_ context.Context, args string) (core.ToolExecutionResult, error) {
+		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			var payload struct {
 				Messages []Msg  `json:"messages"`
 				Session  string `json:"session,omitempty"`
@@ -93,6 +95,9 @@ func SendMsgTool() Tool {
 			}
 
 			for i, msg := range payload.Messages {
+				if msg.IsSticker && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
+					return textResult(`{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`), nil
+				}
 				switch msg.Type {
 				case "plain":
 					if strings.TrimSpace(msg.Text) == "" {

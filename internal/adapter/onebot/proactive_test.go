@@ -210,6 +210,16 @@ func TestOneBotProactiveMultiTurnHistoryPurity(t *testing.T) {
 	}
 
 	// 确认第1轮调用 LLM 时，requestPrompt 带有 proactive.PromptPrefix
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		provider.mu.Lock()
+		ready := len(provider.requests) > 0
+		provider.mu.Unlock()
+		if ready {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	provider.mu.Lock()
 	if len(provider.requests) < 1 {
 		provider.mu.Unlock()

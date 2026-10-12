@@ -55,23 +55,23 @@ func looksLikeMessagePayload(content string) bool {
 
 // deliverToolResult owns pending message delivery and session validity checks.
 // Call only after tool-result security inspection permits delivery.
-func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutionResult, content string) string {
+func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutionResult, content string) (string, bool) {
 	run, ok := RunContextFromContext(ctx)
 	if !ok || run.SendHook == nil || result.MessagePayload == "" || len(result.MessagePayload) > MaxToolOutputBytes {
-		return content
+		return content, false
 	}
 	if ctx.Err() != nil {
-		return "消息发送取消：会话已取消"
+		return "消息发送取消：会话已取消", false
 	}
 	if run.SessionID != "" && run.Epoch > 0 && e.SessionManager != nil {
 		if current, ok := e.SessionManager.Get(run.SessionID); ok {
 			if session, ok := current.(*SessionContext); ok && session.Epoch() != run.Epoch {
-				return "消息发送取消：会话已重置"
+				return "消息发送取消：会话已重置", false
 			}
 		}
 	}
 	if err := run.SendHook(result.MessagePayload); err != nil {
-		return fmt.Sprintf("消息发送失败：%v", err)
+		return fmt.Sprintf("消息发送失败：%v", err), false
 	}
-	return "消息已发送"
+	return "消息已发送", true
 }

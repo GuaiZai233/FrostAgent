@@ -559,6 +559,7 @@ func TestAstrBotMentionOnlyUsesRecentGroupContext(t *testing.T) {
 }
 
 func TestAstrBotSendHook(t *testing.T) {
+	t.Setenv("STICKER_ACTIVITY", "10")
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{
@@ -644,6 +645,99 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 	if finalAction.Content != "搜索完成，这是最终回答。" {
 		t.Errorf("期望最终回复为 '搜索完成，这是最终回答。', 实际=%s", finalAction.Content)
+	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	toolProvider.mu.Lock()
+	request := toolProvider.requests[len(toolProvider.requests)-1]
+	toolProvider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 轮回复") {
+		t.Fatalf("工具消息与最终回复传输成功后应计入两条，实际=%v", request.Messages)
+	}
+}
+
+func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
+	for _, tc := range []struct {
+		name, errorText string
+		delivered       bool
+		wantRemaining   int
+	}{
+		{name: "accepted", delivered: true, wantRemaining: 5},
+		{name: "sticker fetch failed", errorText: "download failed", wantRemaining: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("STICKER_ACTIVITY", "10")
+			provider := &mockLLMProvider{responses: []*core.ChatResponse{
+				{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+					ID: "sticker_call", Type: "function", Function: core.ToolCallFunction{
+						Name: "send_message", Arguments: `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`,
+					},
+				}}}},
+				{Message: core.ChatMessage{Role: core.RoleAssistant}},
+			}}
+			engine := newTestEngine(provider)
+			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+			engine.RecordBotMessage(false)
+			engine.RecordBotMessage(false)
+			srv, _, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			event := Event{Type: "event", EventType: "message", MessageID: "receipt_test", UserID: "user_test",
+				Content: "hello", Platform: "astrbot", MessageType: "private", StickerDeliveryReceipt: true, Timestamp: time.Now().Unix()}
+			if err := conn.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var action Action
+			if err := json.Unmarshal(raw, &action); err != nil {
+				t.Fatal(err)
+			}
+			if action.DeliveryID == "" || !action.containsSticker() {
+				t.Fatalf("sticker action missing delivery receipt request: %+v", action)
+			}
+			if err := conn.WriteJSON(deliveryReceipt{Type: "delivery_result", DeliveryID: action.DeliveryID,
+				Delivered: tc.delivered, Error: tc.errorText}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatal(err)
+			}
+			engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+			provider.mu.Lock()
+			requests := append([]core.ChatRequest(nil), provider.requests...)
+			provider.mu.Unlock()
+			if len(requests) < 3 {
+				t.Fatalf("missing tool-result request: %d", len(requests))
+			}
+			foundResult := false
+			for _, msg := range requests[1].Messages {
+				if msg.Role == core.RoleTool && msg.ToolCallID == "sticker_call" {
+					foundResult = true
+					result, _ := msg.Content.(string)
+					if tc.delivered && result != "消息已发送" || !tc.delivered && !strings.Contains(result, tc.errorText) {
+						t.Fatalf("unexpected delivery result: %q", result)
+					}
+				}
+			}
+			if !foundResult {
+				t.Fatal("missing sticker tool result")
+			}
+			foundQuota := false
+			for _, msg := range requests[2].Messages {
+				if content, ok := msg.Content.(string); ok && strings.Contains(content, fmt.Sprintf("还剩 %d 轮回复", tc.wantRemaining)) {
+					foundQuota = true
+				}
+			}
+			if !foundQuota {
+				t.Fatalf("quota was updated before AstrBot receipt: %+v", requests[2].Messages)
+			}
+		})
 	}
 }
 

@@ -289,6 +289,14 @@ class FrostAgentWSClient:
         else:
             logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
 
+    async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
+        await self.send_event({
+            "type": "delivery_result",
+            "delivery_id": delivery_id,
+            "delivered": delivered,
+            "error": error,
+        })
+
     async def _handle_incoming_action(self, raw_msg: str) -> None:
         try:
             action = json.loads(raw_msg)
@@ -385,6 +393,7 @@ class FrostAgentAdapter(Star):
             return
 
         payload = await build_frostagent_payload(event)
+        payload["sticker_delivery_receipt"] = True
         msg_id = payload["message_id"]
 
         if not payload.get("content") and not payload.get("attachments"):
@@ -425,12 +434,24 @@ class FrostAgentAdapter(Star):
                     action = await resolve_sticker_sources(action, self.settings.http_base_url)
                 except StickerFetchError as e:
                     logger.error(f"[frostagent-adapter] 表情包获取失败，已取消发送: {e}")
+                    if action.get("delivery_id"):
+                        await self.client.send_delivery_result(action["delivery_id"], False, str(e))
                     if not action.get("is_intermediate", False):
                         break
                     continue
 
                 contains_sticker = action_contains_sticker(action)
-                responses = await deliver_action_to_astrbot(event, action)
+                try:
+                    responses = await deliver_action_to_astrbot(event, action)
+                except Exception as e:
+                    logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
+                    if action.get("delivery_id"):
+                        await self.client.send_delivery_result(action["delivery_id"], False, str(e))
+                    if not action.get("is_intermediate", False):
+                        break
+                    continue
+                if action.get("delivery_id"):
+                    await self.client.send_delivery_result(action["delivery_id"], True)
                 if (responses or contains_sticker) and not frostagent_replied:
                     # FrostAgent 已接管本次回复，仅阻止 AstrBot 默认 LLM 再处理同一事件。
                     event.should_call_llm(True)
@@ -1063,11 +1084,8 @@ async def deliver_action_to_astrbot(
     # AstrBot's RespondStage treats unregistered custom component classes as an
     # empty chain. Send StickerImage directly so aiocqhttp can serialize its
     # OneBot sticker subtype payload instead of dropping it before delivery.
-    try:
-        await event.send(MessageChain(parts))
-        logger.info("[frostagent-adapter] 表情包已交付平台发送")
-    except Exception as e:
-        logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
+    await event.send(MessageChain(parts))
+    logger.info("[frostagent-adapter] 表情包已交付平台发送")
     return []
 
 

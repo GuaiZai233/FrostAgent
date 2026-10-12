@@ -9,6 +9,7 @@ import (
 )
 
 func TestSendStickerTool(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "1")
 	tempDir := t.TempDir()
 	store, err := sticker.NewStore(filepath.Join(tempDir, "stickers"))
 	if err != nil {
@@ -104,6 +105,22 @@ func TestSendStickerTool(t *testing.T) {
 	}
 	if !strings.Contains(out, "查无此词条") {
 		t.Errorf("suspected-inappropriate sticker was matched unexpectedly: %s", out)
+	}
+}
+
+func TestSendStickerDisabled(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "0")
+	store, err := sticker.NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SendStickerTool(store).Execute(`{"query":"开心"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = `{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`
+	if result != expected {
+		t.Fatalf("disabled result = %q, want %q", result, expected)
 	}
 }
 
