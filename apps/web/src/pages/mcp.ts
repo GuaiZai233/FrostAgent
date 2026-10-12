@@ -841,13 +841,13 @@ export function mountMCPPage(container: HTMLElement): () => void {
     openDialog({
       title: isEdit ? `编辑 MCP 服务器: ${existing?.name}` : '添加 MCP 服务器',
       description: isEdit
-        ? '修改传输方式或命令参数，支持可视化表单与 JSON 实时双向识别'
-        : '配置外部 MCP Server，支持可视化表单与 JSON 实时双向识别',
+        ? '修改传输方式或命令参数'
+        : '配置外部 MCP Server',
       maxWidth: '42rem',
       bodyHtml: `
         <div class="flex flex-col gap-3 text-xs">
-          <!-- Top Tabs & Bidirectional Sync Indicator -->
-          <div class="flex items-center justify-between gap-2 pb-2 border-b border-border flex-wrap">
+          <!-- Top Tabs -->
+          <div class="pb-2 border-b border-border">
             <div class="tabs" id="mcp-dialog-tabs">
               <button type="button" class="tab-item active" data-tab="form">
                 ${icon('sliders_horizontal', 'size-3.5')}
@@ -857,10 +857,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
                 ${icon('file_code', 'size-3.5')}
                 <span>JSON 编辑</span>
               </button>
-            </div>
-            <div id="mcp-sync-status" class="text-[11px] flex items-center gap-1.5 text-muted">
-              <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-              <span class="text-success">表单与 JSON 实时双向识别</span>
             </div>
           </div>
 
@@ -1057,7 +1053,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
         const jsonTextarea = dialogEl.querySelector('#form-json') as HTMLTextAreaElement;
         const jsonAlert = dialogEl.querySelector('#mcp-json-alert') as HTMLElement;
-        const syncStatus = dialogEl.querySelector('#mcp-sync-status') as HTMLElement;
 
         let isSyncing = false;
         let activeTab: 'form' | 'json' = 'form';
@@ -1182,10 +1177,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
             readFormIntoDraft();
             jsonTextarea.value = draftToJSON(currentDraft);
             jsonAlert.className = 'hidden';
-            syncStatus.innerHTML = `
-              <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-              <span class="text-success">表单与 JSON 实时双向识别</span>
-            `;
           } finally {
             isSyncing = false;
           }
@@ -1200,18 +1191,10 @@ export function mountMCPPage(container: HTMLElement): () => void {
               currentDraft = res.draft;
               renderFormFromDraft();
               jsonAlert.className = 'hidden';
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-                <span class="text-success">${res.message || '已成功识别并同步至表单'}</span>
-              `;
               return true;
             } else {
               jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
               jsonAlert.textContent = res.error || '未识别到有效的 MCP 配置';
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
-                <span class="text-destructive">${res.error || '配置无法识别'}</span>
-              `;
               return false;
             }
           } finally {
