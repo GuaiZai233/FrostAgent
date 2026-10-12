@@ -107,6 +107,22 @@ func TestSettingsUpdateEnvVarAllowlist(t *testing.T) {
 	}
 }
 
+func TestStickerActivitySettingAcceptsOnlyIntegerRange(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"-1", "11", "1.5", "invalid", "01"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid value %q accepted: response=%v error=%v", value, res, err)
+		}
+	}
+	for _, value := range []string{"0", "1", "10"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid value %q rejected: response=%v error=%v", value, res, err)
+		}
+	}
+}
+
 func TestSettingsDeleteEnvVar(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")

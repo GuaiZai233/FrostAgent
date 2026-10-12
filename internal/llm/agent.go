@@ -80,13 +80,15 @@ type AgentRunResult struct {
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
-// Proactive turns allow terminal silence, final text replies, and the memory subsystem.
-// ActionsCat and other external/privileged/mutating tools are strictly disallowed.
+// Proactive turns allow terminal silence, final text replies, memory, and
+// sticker delivery. Other external or privileged tools remain disallowed.
 func IsProactiveAllowedTool(name string) bool {
 	switch name {
 	case StaySilentToolName:
 		return true
 	case "memory":
+		return true
+	case "send_sticker":
 		return true
 	default:
 		return false
@@ -147,8 +149,9 @@ type Engine struct {
 	SandboxBackend sandbox.Backend
 
 	// Security is shared by every runtime owned by the Control Plane.
-	Security   *security.Controller
-	InstanceID string
+	Security        *security.Controller
+	InstanceID      string
+	stickerActivity stickerActivityState
 }
 
 // EffectiveMaxIterations resolves the effective iteration limit captured
@@ -382,6 +385,19 @@ func (e *Engine) RunMessagesWithContext(
 		}
 	}
 
+	if !runContext.Mock {
+		if notice := e.stickerActivityPrompt(); notice != "" {
+			messages = append([]ChatMessage(nil), messages...)
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					if content, ok := messages[i].Content.(string); ok {
+						messages[i].Content = notice + "\n\n" + content
+					}
+					break
+				}
+			}
+		}
+	}
 	return e.runLoopWithResult(ctx, messages)
 }
 
@@ -655,7 +671,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 	// 主循环
 	maxIterations := e.EffectiveMaxIterations()
-	for i := range maxIterations {
+	baseMaxIterations := maxIterations
+	addStickerIteration := func() {
+		if maxIterations-baseMaxIterations < 4 {
+			maxIterations++
+		}
+	}
+	stickerEnforcing := false
+	stickerAttempts := 0
+	if interval, remaining, grace := e.stickerActivitySnapshot(); hasRunCtx && !runCtx.Mock && interval > 0 && remaining == 0 && grace == 0 {
+		stickerEnforcing = true
+		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+	}
+	for i := 0; i < maxIterations; i++ {
 		if err := e.securityAccess(runCtx); err != nil {
 			return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
 		}
@@ -918,6 +946,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		messages = append(messages, *responseMsg)
+		if stickerEnforcing {
+			if interval, remaining, grace := e.stickerActivitySnapshot(); interval == 0 || grace > 0 || remaining == interval {
+				stickerEnforcing = false
+				stickerAttempts = 0
+			}
+		}
 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
@@ -938,13 +972,44 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
-				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
-				return AgentRunResult{
-					MemoryWritten:    memoryWritten,
-					Silent:           true,
-					StaySilentCalled: false,
-					SilenceReason:    "provider_fallback",
-					Usage:            totalUsage,
+				if stickerEnforcing {
+					// Treat an internal silence marker like any other missed enforcement attempt.
+					contentStr = ""
+				} else {
+					e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
+					return AgentRunResult{
+						MemoryWritten:    memoryWritten,
+						Silent:           true,
+						StaySilentCalled: false,
+						SilenceReason:    "provider_fallback",
+						Usage:            totalUsage,
+					}
+				}
+			}
+			if hasRunCtx && !runCtx.Mock && !outputBlocked {
+				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+					messages = messages[:len(messages)-1]
+					messages = appendStickerForgiveness(messages, i)
+					e.grantStickerGrace()
+					stickerEnforcing = false
+					stickerAttempts = 0
+					addStickerIteration()
+					continue
+				}
+				if stickerEnforcing || (contentStr != "" && e.stickerNeededBeforeReply()) {
+					stickerEnforcing = true
+					stickerAttempts++
+					if stickerAttempts >= 3 {
+						messages = messages[:len(messages)-1]
+						messages = appendStickerForgiveness(messages, i)
+						e.grantStickerGrace()
+						stickerEnforcing = false
+						stickerAttempts = 0
+					} else {
+						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+					}
+					addStickerIteration()
+					continue
 				}
 			}
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
@@ -964,6 +1029,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					Content:    conflict,
 					ToolCallID: tc.ID,
 				})
+			}
+			if stickerEnforcing {
+				stickerAttempts++
+				if stickerAttempts >= 3 {
+					messages = appendStickerForgiveness(messages, i)
+					e.grantStickerGrace()
+					stickerEnforcing = false
+					stickerAttempts = 0
+				} else {
+					messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+				}
+				addStickerIteration()
 			}
 			continue
 		}
@@ -1001,6 +1078,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
 				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
+			if hasRunCtx && !runCtx.Mock && tc.Function.Name == "send_message" {
+				if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && remaining == 0 && grace == 0 {
+					messages = append(messages, ChatMessage{
+						Role: "tool", ToolCallID: tc.ID,
+						Content: "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。",
+					})
+					continue
+				}
+			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
@@ -1033,13 +1119,17 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolSucceeded = true
 					toolResult = execution.Content
 					if IsStaySilentTool(tc.Function.Name) {
-						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
-						return AgentRunResult{
-							MemoryWritten:    memoryWritten,
-							Silent:           true,
-							StaySilentCalled: true,
-							SilenceReason:    "stay_silent",
-							Usage:            totalUsage,
+						if stickerEnforcing {
+							toolResult = stickerEnforcementPrompt
+						} else {
+							e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
+							return AgentRunResult{
+								MemoryWritten:    memoryWritten,
+								Silent:           true,
+								StaySilentCalled: true,
+								SilenceReason:    "stay_silent",
+								Usage:            totalUsage,
+							}
 						}
 					}
 					if execution.MemoryWritten {
@@ -1084,7 +1174,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if toolSucceeded {
-				toolResult = e.deliverToolResult(ctx, execution, toolResult)
+				var delivered bool
+				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
+				if delivered && hasRunCtx && !runCtx.Mock {
+					e.RecordBotMessage(tc.Function.Name == "send_sticker")
+				}
 			}
 
 			toolMsg := ChatMessage{
@@ -1093,6 +1187,27 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				ToolCallID: tc.ID,
 			}
 			messages = append(messages, toolMsg)
+		}
+		if hasRunCtx && !runCtx.Mock && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
+				if remaining == interval {
+					// A sticker was sent in this batch; the quota is satisfied.
+					stickerEnforcing = false
+					stickerAttempts = 0
+				} else if grace == 0 {
+					stickerEnforcing = true
+					stickerAttempts++
+					if stickerAttempts >= 3 {
+						messages = appendStickerForgiveness(messages, i)
+						e.grantStickerGrace()
+						stickerEnforcing = false
+						stickerAttempts = 0
+					} else {
+						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+					}
+					addStickerIteration()
+				}
+			}
 		}
 	}
 	if hasRunCtx && runCtx.Proactive {

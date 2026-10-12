@@ -815,6 +815,7 @@ func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
 
 func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *testing.T) {
 	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
+	t.Setenv("STICKER_ACTIVITY", "10")
 	provider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{Message: core.ChatMessage{
@@ -918,10 +919,18 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 	if !foundToolReply {
 		t.Fatalf("群聊 compact 未包含工具实际发送文本，实际=%+v", compact.RecentMessages)
 	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	provider.mu.Lock()
+	request := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 4 轮回复") {
+		t.Fatalf("成功 ACK 后应计入一条工具消息，实际=%v", request.Messages)
+	}
 }
 
 func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T) {
 	t.Setenv("ONEBOT_ACTION_TIMEOUT", "200ms")
+	t.Setenv("STICKER_ACTIVITY", "10")
 	provider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{Message: core.ChatMessage{
@@ -992,6 +1001,13 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	history := engine.SessionManager.GetOrCreate("private:700000022").Snapshot()
 	if len(history) != 1 || history[0].Role != string(core.RoleUser) {
 		t.Fatalf("失败 ACK 后不应提交 assistant 历史，实际=%+v", history)
+	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	provider.mu.Lock()
+	request := provider.requests[len(provider.requests)-1]
+	provider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 5 轮回复") {
+		t.Fatalf("失败 ACK 不应计入工具消息，实际=%v", request.Messages)
 	}
 }
 

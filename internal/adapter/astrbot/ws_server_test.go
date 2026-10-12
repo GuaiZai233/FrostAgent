@@ -559,6 +559,7 @@ func TestAstrBotMentionOnlyUsesRecentGroupContext(t *testing.T) {
 }
 
 func TestAstrBotSendHook(t *testing.T) {
+	t.Setenv("STICKER_ACTIVITY", "10")
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{
@@ -644,6 +645,13 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 	if finalAction.Content != "搜索完成，这是最终回答。" {
 		t.Errorf("期望最终回复为 '搜索完成，这是最终回答。', 实际=%s", finalAction.Content)
+	}
+	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
+	toolProvider.mu.Lock()
+	request := toolProvider.requests[len(toolProvider.requests)-1]
+	toolProvider.mu.Unlock()
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 轮回复") {
+		t.Fatalf("工具消息与最终回复传输成功后应计入两条，实际=%v", request.Messages)
 	}
 }
 

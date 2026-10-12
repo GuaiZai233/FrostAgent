@@ -1174,6 +1174,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if err == nil {
 		conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+		if engine != nil && !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
+			engine.RecordBotMessage(false)
+		}
 		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 		commitAssistantHistory(replyText)
 	} else {

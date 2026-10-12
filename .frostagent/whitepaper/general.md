@@ -211,10 +211,10 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **执行异常与后置渲染失败静默丢弃机制 (Silent Error Handling & Post-Run Formatting Silence)**：
   - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机、工具执行异常，或在后置渲染阶段发生单条消息超长、引用消息校验失败（`validateQuoteMessages`）、OneBot 消息组装失败（`BuildOneBotMessage`），系统严格执行静默丢弃策略：仅在控制台/日志记录警告或错误日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向未唤醒群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
   - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
-- **主动回复只读模式与副作用工具强禁闭机制 (Proactive Reply Read-Only Confinement & Side-Effect Prevention, Option A)**：
-  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`send_sticker`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
+- **主动回复工具门禁与副作用限制 (Proactive Reply Tool Confinement)**：
+  - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
-    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除所有副作用与外部特权工具，向模型仅暴露控制与记忆工具（`stay_silent`、`memory` 记忆管理），从调用源头消除模型生成变异工具调用的可能；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，向模型仅暴露 `stay_silent`、`memory` 与受积极度开关限制的 `send_sticker`；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
     - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
     - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
     - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；
@@ -406,6 +406,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 当视觉模型不可用或网络异常时，标记状态为 `unsummarized`（未摘要）并隔离保护，绝不向大模型工具输出未摘要表情包；多模态服务恢复后支持批量一键重试并更新状态为 `ready`。
 - **工具检索与轮盘赌加权随机选择 (`send_sticker` Tool & Weighted Roulette Selection)**：
   - 注册 `send_sticker` 工具供大模型在合适语境下调用；
+  - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 条成功出站消息至少发送一次表情包。OneBot 按平台 ACK、AstrBot 按传输写入成功计数；发送失败与 Mock 不计数。计数在实例内存中，重启后重置。
+  - 在当轮请求的用户消息快照中注入剩余回复数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；

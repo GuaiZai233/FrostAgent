@@ -1314,6 +1314,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		return
 	}
+	if engine != nil && !conn.mock && strings.TrimSpace(sentReplyText) != "" {
+		engine.RecordBotMessage(false)
+	}
 
 	if engine == nil || session == nil {
 		return

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"FrostAgent/internal/sticker"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -9,6 +10,18 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestSendMsgToolRejectsStickerFlagWhenDisabled(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "0")
+	result, err := SendMsgTool().Execute(`{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
 
 func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
 	tool := SendMsgTool()

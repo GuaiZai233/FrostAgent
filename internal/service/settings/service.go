@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -47,6 +48,9 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_PROACTIVE_REPLY":           {"是否启用主动回复", false, false, false},
 	"PROACTIVE_REPLY_GROUP_WHITELIST":  {"主动回复允许的群号白名单，多个群号以英文逗号分隔", false, false, false},
 	"ENABLE_PROACTIVE_REPLY_WHITELIST": {"是否启用主动回复群聊白名单模式", false, false, false},
+
+	"STICKER_ACTIVITY": {"表情包使用积极度（0 禁用，1~10 对应每 50~5 条回复）", false, false, false},
+
 	"GROUP_COMPACT_BUFFER_SIZE":   {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MIN_INTERVAL":  {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
 	"GROUP_RAW_CONTEXT_MAX_CHARS": {"群聊未压缩原消息临时上下文的最大字符数（默认 12000）", false, false, false},
@@ -247,6 +251,15 @@ func (s *Service) UpdateEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
+	}
+	if key == "STICKER_ACTIVITY" {
+		level, err := strconv.Atoi(value)
+		if err != nil || level < 0 || level > 10 || strconv.Itoa(level) != value {
+			return connect.NewResponse(&v1.UpdateEnvVarResponse{
+				Success: false,
+				Error:   "表情包使用积极度必须是 0 到 10 的整数",
+			}), nil
+		}
 	}
 
 	if strings.ContainsRune(value, 0) {

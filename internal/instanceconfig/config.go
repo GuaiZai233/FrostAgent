@@ -35,6 +35,7 @@ var ControlPlaneRestartKeys = map[string]bool{
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
 	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
 }
+
 // SharedKeys can be configured at both global (control plane) and instance scopes.
 var SharedKeys = map[string]bool{
 	"SECURITY_GATEWAY_TIMEOUT":    true,
@@ -280,4 +281,5 @@ BILLING_ENABLED=false
 BILLING_MAX_OUTPUT_TOKENS=2048
 BILLING_SAFETY_MULTIPLIER=1.2
 AGENT_MAX_ITERATIONS=35
+STICKER_ACTIVITY=0
 `
