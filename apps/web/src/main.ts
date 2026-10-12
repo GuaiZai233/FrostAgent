@@ -43,7 +43,7 @@ const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
   { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
-  { path: '/dialogue', label: '人设对话', iconName: 'chat' },
+  { path: '/dialogue', label: '人格设定', iconName: 'chat' },
   { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
@@ -258,7 +258,7 @@ function initAppShell(): void {
   router.register('/overview', '概览', mountOverviewPage);
   router.register('/sessions', '会话与 Prompt', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
-  router.register('/dialogue', '人设对话', mountDialoguePage);
+  router.register('/dialogue', '人格设定', mountDialoguePage);
   router.register('/prompt', '会话与 Prompt', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/logs', '日志查询', mountLogsPage);

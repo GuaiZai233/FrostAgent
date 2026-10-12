@@ -475,7 +475,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         api.getSessions(100).catch(() => ({ sessions: [] })),
       ]);
       if (isUnmounted) return;
-      envVars = vars;
+      envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT');
 
       sessionGroupMap.clear();
       for (const sess of sessionsResp.sessions || []) {
