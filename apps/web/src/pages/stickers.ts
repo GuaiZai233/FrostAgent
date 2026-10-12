@@ -26,6 +26,9 @@ export function mountStickersPage(container: HTMLElement): () => void {
   let pageSize = 24;
   let statusFilter = '';
   let searchQuery = '';
+  let sortBy = 'created_at';
+  let descending = false;
+  let latestListRequest = 0;
   const tokenStack = new PageTokenStack();
 
   container.innerHTML = `
@@ -52,6 +55,16 @@ export function mountStickersPage(container: HTMLElement): () => void {
             <option value="">全部状态</option>
             <option value="ready">已摘要</option>
             <option value="unsummarized">未摘要</option>
+          </select>
+
+          <select id="sticker-sort-select" class="select text-xs" style="width: 12rem;" title="召回次数使用现有收集权重">
+            <option value="created_at">按添加时间排序</option>
+            <option value="weight">按召回次数排序（收集权重）</option>
+          </select>
+
+          <select id="sticker-sort-order-select" class="select text-xs" style="width: 5rem;" title="排序方向">
+            <option value="asc">顺序</option>
+            <option value="desc">倒序</option>
           </select>
 
           <button class="btn btn-outline" id="sticker-retry-btn" title="重新摘要所有未完成的表情包">
@@ -183,6 +196,8 @@ export function mountStickersPage(container: HTMLElement): () => void {
   const searchInput = container.querySelector<HTMLInputElement>('#sticker-search-input')!;
   const searchBtn = container.querySelector<HTMLButtonElement>('#sticker-search-btn')!;
   const statusSelect = container.querySelector<HTMLSelectElement>('#sticker-status-select')!;
+  const sortSelect = container.querySelector<HTMLSelectElement>('#sticker-sort-select')!;
+  const sortOrderSelect = container.querySelector<HTMLSelectElement>('#sticker-sort-order-select')!;
   const retryBtn = container.querySelector<HTMLButtonElement>('#sticker-retry-btn')!;
   const retryIcon = container.querySelector<HTMLElement>('#sticker-retry-icon')!;
   const refreshBtn = container.querySelector<HTMLButtonElement>('#sticker-refresh-btn')!;
@@ -213,21 +228,24 @@ export function mountStickersPage(container: HTMLElement): () => void {
 
   async function loadStickers() {
     if (isUnmounted) return;
+    const requestId = ++latestListRequest;
     loading = true;
     renderGrid();
 
     try {
-      const res = await api.listStickers(pageSize, tokenStack.currentToken, statusFilter, searchQuery);
-      if (isUnmounted) return;
+      const res = await api.listStickers(
+        pageSize, tokenStack.currentToken, statusFilter, searchQuery, sortBy, descending,
+      );
+      if (isUnmounted || requestId !== latestListRequest) return;
       stickers = res.stickers;
       tokenStack.setNextToken(res.nextPageToken ?? '');
       total = res.totalCount;
     } catch (err) {
-      if (isUnmounted) return;
+      if (isUnmounted || requestId !== latestListRequest) return;
       toast.error('加载表情包失败: ' + (err instanceof Error ? err.message : String(err)));
       stickers = [];
     } finally {
-      if (!isUnmounted) {
+      if (!isUnmounted && requestId === latestListRequest) {
         loading = false;
         renderGrid();
       }
@@ -566,6 +584,18 @@ export function mountStickersPage(container: HTMLElement): () => void {
     void loadStickers();
   });
 
+  sortSelect.addEventListener('change', () => {
+    sortBy = sortSelect.value;
+    tokenStack.reset();
+    void loadStickers();
+  });
+
+  sortOrderSelect.addEventListener('change', () => {
+    descending = sortOrderSelect.value === 'desc';
+    tokenStack.reset();
+    void loadStickers();
+  });
+
   retryBtn.addEventListener('click', retryUnsummarized);
   uploadInput.addEventListener('change', handleUpload);
 
@@ -575,6 +605,10 @@ export function mountStickersPage(container: HTMLElement): () => void {
     statusSelect.value = '';
     searchQuery = '';
     searchInput.value = '';
+    sortBy = 'created_at';
+    sortSelect.value = sortBy;
+    descending = false;
+    sortOrderSelect.value = 'asc';
     void loadStats();
     void loadStickers();
   });

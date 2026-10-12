@@ -2,9 +2,11 @@ package stickersvc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,6 +175,75 @@ func TestStickerService_Pagination(t *testing.T) {
 	}
 	if resp3.Msg.GetNextPageToken() != "" {
 		t.Errorf("expected empty next_page_token on last page, got %q", resp3.Msg.GetNextPageToken())
+	}
+}
+
+func TestStickerService_ListSortsBeforePagination(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stickers")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	entries := []sticker.Entry{
+		{ID: "a", Weight: 2, CreatedAt: 30, Status: sticker.StatusReady},
+		{ID: "b", Weight: 1, CreatedAt: 10, Status: sticker.StatusReady},
+		{ID: "c", Weight: 2, CreatedAt: 20, Status: sticker.StatusReady},
+		{ID: "d", Weight: 3, CreatedAt: 40, Status: sticker.StatusUnsummarized},
+		{ID: "e", Weight: 3, CreatedAt: 20, Status: sticker.StatusReady},
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sticker.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, nil)
+
+	tests := []struct {
+		name, sortBy string
+		descending   bool
+		statusFilter string
+		want         []string
+	}{
+		{name: "legacy order", want: []string{"a", "b", "c", "d", "e"}},
+		{name: "weight ascending", sortBy: "weight", statusFilter: "ready", want: []string{"b", "a", "c", "e"}},
+		{name: "weight descending", sortBy: "weight", descending: true, statusFilter: "ready", want: []string{"e", "a", "c", "b"}},
+		{name: "created ascending", sortBy: "created_at", statusFilter: "ready", want: []string{"b", "c", "e", "a"}},
+		{name: "created descending", sortBy: "created_at", descending: true, statusFilter: "ready", want: []string{"a", "c", "e", "b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			pageToken := ""
+			for {
+				resp, err := svc.ListStickers(context.Background(), connect.NewRequest(&v1.ListStickersRequest{
+					Pagination:   &v1.Pagination{PageSize: 2, PageToken: pageToken},
+					StatusFilter: tt.statusFilter,
+					SortBy:       tt.sortBy,
+					Descending:   tt.descending,
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if int(resp.Msg.GetTotalCount()) != len(tt.want) {
+					t.Fatalf("total count = %d, want %d", resp.Msg.GetTotalCount(), len(tt.want))
+				}
+				for _, item := range resp.Msg.GetStickers() {
+					got = append(got, item.GetId())
+				}
+				pageToken = resp.Msg.GetNextPageToken()
+				if pageToken == "" {
+					break
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("sticker order = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
