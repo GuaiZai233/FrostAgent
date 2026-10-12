@@ -111,7 +111,7 @@ func (s *Service) ListDialogues(
 	}), nil
 }
 
-// SaveDialogues saves the dialogue examples list, atomically writes the YAML file, and updates the engine prompt.
+// SaveDialogues atomically saves dialogue examples and updates the engine prompt.
 func (s *Service) SaveDialogues(
 	ctx context.Context,
 	req *connect.Request[v1.SaveDialoguesRequest],
@@ -160,16 +160,25 @@ func (s *Service) SaveDialogues(
 	}), nil
 }
 
-// GetRawDialogueFile returns the raw YAML content of the dialogue file.
+// GetRawDialogueFile exports the stored dialogue examples as YAML.
 func (s *Service) GetRawDialogueFile(
 	ctx context.Context,
 	req *connect.Request[v1.GetRawDialogueFileRequest],
 ) (*connect.Response[v1.GetRawDialogueFileResponse], error) {
-	if s.db != nil {
-		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("raw dialogue YAML editor has been removed"))
-	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.db != nil {
+		examples, err := LoadExamplesSQL(s.db, s.instanceID)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read dialogue examples: %w", err))
+		}
+		data, err := yaml.Marshal(examples)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal dialogue YAML: %w", err))
+		}
+		return connect.NewResponse(&v1.GetRawDialogueFileResponse{Content: string(data)}), nil
+	}
 
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
@@ -188,18 +197,28 @@ func (s *Service) GetRawDialogueFile(
 	}), nil
 }
 
-// UpdateRawDialogueFile updates the raw YAML content after syntax validation.
+// UpdateRawDialogueFile imports YAML into the configured store after parsing it.
 func (s *Service) UpdateRawDialogueFile(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateRawDialogueFileRequest],
 ) (*connect.Response[v1.UpdateRawDialogueFileResponse], error) {
-	if s.db != nil {
-		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("raw dialogue YAML editor has been removed"))
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	content := req.Msg.GetContent()
+	if s.db != nil {
+		var document yaml.Node
+		if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+			return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
+				Error: fmt.Sprintf("YAML 语法解析错误: %v", err),
+			}), nil
+		}
+		if len(document.Content) != 1 || document.Content[0].Kind != yaml.SequenceNode {
+			return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
+				Error: "YAML 必须是对话示例列表；如需清空，请显式填写 []",
+			}), nil
+		}
+	}
 	examples, err := llm.ParseDialogueYAML([]byte(content))
 	if err != nil {
 		return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
@@ -208,10 +227,16 @@ func (s *Service) UpdateRawDialogueFile(
 		}), nil
 	}
 
-	if err := s.atomicWriteFile([]byte(content)); err != nil {
+	var saveErr error
+	if s.db != nil {
+		saveErr = SaveExamplesSQL(s.db, s.instanceID, examples)
+	} else {
+		saveErr = s.atomicWriteFile([]byte(content))
+	}
+	if saveErr != nil {
 		return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
 			Success: false,
-			Error:   fmt.Sprintf("写入文件失败: %v", err),
+			Error:   fmt.Sprintf("保存示例对话失败: %v", saveErr),
 		}), nil
 	}
 
@@ -219,7 +244,7 @@ func (s *Service) UpdateRawDialogueFile(
 	if s.engine != nil {
 		s.engine.SetDialoguePrompt(prompt)
 	}
-	s.log().Info(logs.SYSTEM, fmt.Sprintf("已更新原始示例对话文件 (%d 条)，同步生效至系统提示词", len(examples)))
+	s.log().Info(logs.SYSTEM, fmt.Sprintf("已导入示例对话 YAML (%d 条)，同步生效至系统提示词", len(examples)))
 
 	return connect.NewResponse(&v1.UpdateRawDialogueFileResponse{
 		Success:       true,
