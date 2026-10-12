@@ -170,6 +170,7 @@ class FakeEvent:
         self.is_at_or_wake_command = is_wake
         self.call_llm = False
         self.should_call_llm_calls: list[bool] = []
+        self.sent_chains: list[_MessageChain] = []
         self.message_obj = SimpleNamespace(
             message_id="msg_test",
             message=components,
@@ -198,12 +199,16 @@ class FakeEvent:
         self.call_llm = call_llm
         self.should_call_llm_calls.append(call_llm)
 
+    async def send(self, chain: _MessageChain) -> None:
+        self.sent_chains.append(chain)
+
 
 class FakeClient:
     def __init__(self, actions: list[dict[str, Any]] | None = None):
         self.sent_events: list[dict[str, Any]] = []
         self.queue: asyncio.Queue | None = None
         self.actions = actions or [{"action": "noop"}]
+        self.delivery_results: list[tuple[str, bool, str]] = []
 
     def register_waiter(self, _msg_id: str) -> asyncio.Queue:
         self.queue = asyncio.Queue()
@@ -218,8 +223,66 @@ class FakeClient:
         for action in self.actions:
             await self.queue.put(action)
 
+    async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
+        self.delivery_results.append((delivery_id, delivered, error))
+
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_mixed_sticker_fetch_failure_reports_rejection(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True, http_base_url="http://frostagent:8080")
+        adapter.client = FakeClient([
+            {"action": "send_message", "is_intermediate": True, "delivery_id": "delivery_test",
+             "messages": [{"type": "plain", "text": "hello"},
+                          {"type": "image", "url": "/api/sticker/missing/image", "is_sticker": True}]},
+            {"action": "noop"},
+        ])
+        event = FakeEvent(content="hello")
+        with patch.object(adapter_module, "resolve_sticker_sources", side_effect=adapter_module.StickerFetchError("download failed")):
+            results = [result async for result in adapter.forward_to_frostagent(event)]
+        self.assertEqual(results, [])
+        self.assertEqual(event.sent_chains, [])
+        self.assertEqual(adapter.client.delivery_results, [("delivery_test", False, "download failed")])
+        self.assertTrue(adapter.client.sent_events[0]["sticker_delivery_receipt"])
+
+    async def test_mixed_sticker_send_reports_success(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True, http_base_url="http://frostagent:8080")
+        adapter.client = FakeClient([
+            {"action": "send_message", "is_intermediate": True, "delivery_id": "delivery_test",
+             "messages": [{"type": "plain", "text": "hello"},
+                          {"type": "image", "url": "base64://c3RpY2tlcg==", "is_sticker": True}]},
+            {"action": "noop"},
+        ])
+        event = FakeEvent(content="hello")
+        results = [result async for result in adapter.forward_to_frostagent(event)]
+        self.assertEqual(results, [])
+        self.assertEqual(len(event.sent_chains), 1)
+        self.assertEqual(adapter.client.delivery_results, [("delivery_test", True, "")])
+
+    async def test_mixed_sticker_send_failure_reports_rejection(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(forward_all_group_messages=True, http_base_url="http://frostagent:8080")
+        adapter.client = FakeClient([
+            {"action": "send_message", "is_intermediate": True, "delivery_id": "delivery_test",
+             "messages": [{"type": "plain", "text": "hello"},
+                          {"type": "image", "url": "base64://c3RpY2tlcg==", "is_sticker": True}]},
+            {"action": "noop"},
+        ])
+
+        class FailingEvent(FakeEvent):
+            async def send(self, _chain: _MessageChain) -> None:
+                raise RuntimeError("platform rejected")
+
+        event = FailingEvent(content="hello")
+        results = [result async for result in adapter.forward_to_frostagent(event)]
+        self.assertEqual(results, [])
+        self.assertEqual(event.sent_chains, [])
+        self.assertEqual(adapter.client.delivery_results, [("delivery_test", False, "platform rejected")])
+
     async def test_astrbot_wake_prefix_does_not_wake_frostagent(self):
         event = FakeEvent(group_id="group_test", content="/help", is_wake=True)
         event.is_wake = True

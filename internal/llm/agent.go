@@ -1152,7 +1152,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			if hasRunCtx && !runCtx.Mock && !runCtx.Proactive && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
-				if interval, _, _ := e.stickerActivitySnapshot(); interval > 0 {
+				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
 					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
 					messages = append(messages,

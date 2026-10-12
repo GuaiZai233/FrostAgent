@@ -311,6 +311,31 @@ func TestStickerPairFailureDoesNotSendText(t *testing.T) {
 	}
 }
 
+func TestOptionalStickerFailurePreservesTextBeforeQuota(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
+			{ID: "text", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
+			{ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{}`}},
+		}},
+		{Role: core.RoleAssistant, Content: "done"},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
+		"send_message": &staticTool{name: "send_message", result: `{"messages":[{"type":"plain","text":"hello"}]}`},
+		"send_sticker": &staticTool{name: "send_sticker", result: `{"error":"查无此词条"}`},
+	}}
+	var delivered []string
+	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
+		SendHook: func(payload string) error { delivered = append(delivered, payload); return nil },
+	})
+	if len(delivered) != 1 || !strings.Contains(delivered[0], `"text":"hello"`) {
+		t.Fatalf("optional sticker failure dropped text: %v", delivered)
+	}
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 4 {
+		t.Fatalf("ordinary text was not counted: remaining=%d", remaining)
+	}
+}
+
 func TestOnlyAdjacentTextSharesStickerDelivery(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
