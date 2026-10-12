@@ -9,6 +9,42 @@ export function mountSettingsPage(container: HTMLElement): () => void {
 
       <div class="flex flex-col gap-3" style="max-width: 42rem;">
         <a
+          href="#/settings/storage"
+          class="card p-4 hover-bg transition-colors text-foreground"
+          style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none; width: 100%;"
+        >
+          <div style="display: flex; align-items: center; gap: 0.875rem; min-width: 0;">
+            <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary" style="flex-shrink: 0;">
+              ${icon('server', 'w-4 h-4')}
+            </div>
+            <div style="min-width: 0;">
+              <h2 class="text-sm font-semibold text-foreground">数据库设置</h2>
+              <p class="text-xs text-muted mt-0.5">选择 SQLite 或 PostgreSQL 并立即连接</p>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">
+            ${icon('chevron_right', 'w-4 h-4')}
+          </div>
+        </a>
+        <a
+          href="#/settings/backup"
+          class="card p-4 hover-bg transition-colors text-foreground"
+          style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none; width: 100%;"
+        >
+          <div style="display: flex; align-items: center; gap: 0.875rem; min-width: 0;">
+            <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary" style="flex-shrink: 0;">
+              ${icon('download', 'w-4 h-4')}
+            </div>
+            <div style="min-width: 0;">
+              <h2 class="text-sm font-semibold text-foreground">备份与还原</h2>
+              <p class="text-xs text-muted mt-0.5">一键全量备份与各部分快速备份</p>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">
+            ${icon('chevron_right', 'w-4 h-4')}
+          </div>
+        </a>
+        <a
           href="#/settings/backend"
           class="card p-4 hover-bg transition-colors text-foreground"
           style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none; width: 100%;"
@@ -18,8 +54,8 @@ export function mountSettingsPage(container: HTMLElement): () => void {
               ${icon('server', 'w-4 h-4')}
             </div>
             <div style="min-width: 0;">
-              <h2 class="text-sm font-semibold text-foreground">Bot 行为与服务端设置</h2>
-              <p class="text-xs text-muted mt-0.5">配置主动回复概率、群聊响应策略、服务端环境变量与原始 .env</p>
+              <h2 class="text-sm font-semibold text-foreground">Bot 服务端设置</h2>
+              <p class="text-xs text-muted mt-0.5">修改数据库中的服务端设置、主动回复与群聊响应策略</p>
             </div>
           </div>
           <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">

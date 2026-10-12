@@ -79,6 +79,9 @@ func (s *Scope) Getenv(k string) string {
 				return v
 			}
 		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return ""
+		}
 		return os.Getenv(k)
 	}
 	if s.Config == nil {
@@ -170,6 +173,9 @@ func (s *Scope) LookupEnv(k string) (string, bool) {
 			if v, ok := s.Global.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
 				return v, true
 			}
+		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return "", false
 		}
 		return os.LookupEnv(k)
 	}

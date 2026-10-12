@@ -1,4 +1,4 @@
-import { instanceURL } from '../instance-state';
+import { instanceURL, instanceState } from '../instance-state';
 import { createInstanceAPI } from '../api/client';
 import type { StickerItem, GetStickerStatsResponse } from '@frostagent/proto';
 import { escapeHtml, PageTokenStack } from '../utils/formatters';
@@ -35,6 +35,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
           <h1 class="page-title">表情包摘取</h1>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
+          <a class="btn btn-outline" href="/api/instances/${instanceState.selected!.id}/backup/stickers" download="stickers.zip">下载贴图备份</a>
           <div class="flex items-center gap-1" style="width: 13rem;">
             <input
               type="search"

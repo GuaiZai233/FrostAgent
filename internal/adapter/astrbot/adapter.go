@@ -416,6 +416,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if a.engine != nil && a.engine.ModelRouter != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
 				routeSnapshot = a.engine.ModelRouter.Snapshot()
+				if err := routeSnapshot.LoadError(); err != nil {
+					a.engine.PauseOnStorageError(err)
+					continue
+				}
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
 					if isProactiveReply(&event) {
 						_ = sendTerminalNoopWithSuppress(event, c)
@@ -435,18 +439,28 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			if event.MessageType == "group" && !c.mock {
 				if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
-					if gStore, err := a.engine.GroupManager.GetGroupStore(event.GroupID); err == nil {
+					gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
+					if err == nil && gStore != nil {
 						role := memory.GroupRoleUnknown
 						if r, ok := event.Metadata["role"].(string); ok {
 							role = memory.NormalizeGroupRole(r)
 						}
-						_, _ = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
-						if event.GroupName != "" {
-							_ = gStore.UpdateGroupName(event.GroupName)
+						_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+						if err == nil && event.GroupName != "" {
+							err = gStore.UpdateGroupName(event.GroupName)
 						}
-						routeScope := astrBotRouteScope(event)
-						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
-						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						if err == nil {
+							routeScope := astrBotRouteScope(event)
+							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+							gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						}
+					}
+					if err != nil {
+						a.engine.PauseOnStorageError(err)
+						if turn != nil {
+							turn.Done()
+						}
+						continue
 					}
 				}
 				if isExplicitlyWoken(event, scope) {

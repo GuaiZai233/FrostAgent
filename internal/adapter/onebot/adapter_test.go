@@ -367,20 +367,30 @@ func TestOneBot_PassiveGroupMessages_NoMetadataLLMCallsAndXMLDefense(t *testing.
 		}
 	}
 
-	// 1. Assert member profile was observed and stored
-	var mem *memory.MemberProfile
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-		if gStore, err := gm.GetGroupStore("777888"); err == nil {
-			if prof, err := gStore.GetProfile(); err == nil {
-				if m := prof.GetMember("888999"); m != nil {
-					mem = m
-					break
-				}
-			}
+	// Wait for the final passive message to reach the compact buffer. This also
+	// ensures the preceding member/profile writes finish before TempDir cleanup.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		snapshot := engine.SessionManager.GetOrCreate("group:777888").SnapshotGroupContext(10, 10000, "")
+		if len(snapshot.RecentStructuredMessages) == 5 {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("processed %d of 5 passive group messages", len(snapshot.RecentStructuredMessages))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+
+	// 1. Assert member profile was observed and stored
+	gStore, err := gm.GetGroupStore("777888")
+	if err != nil {
+		t.Fatalf("get group store: %v", err)
+	}
+	prof, err := gStore.GetProfile()
+	if err != nil {
+		t.Fatalf("get profile: %v", err)
+	}
+	mem := prof.GetMember("888999")
 	if mem == nil {
 		t.Fatalf("expected member 888999 to be observed")
 	}

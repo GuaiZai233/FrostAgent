@@ -1,4 +1,5 @@
 import { createInstanceAPI } from '../api/client';
+import { instanceState } from '../instance-state';
 import { SessionInfo } from '@frostagent/proto';
 import { escapeHtml, formatCount, formatDateTime, formatPlatform, isGroupSession, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -18,6 +19,7 @@ import {
 // openPromptInspectorDialog — do NOT remove those exports from prompt-inspector.ts.
 
 export function mountPromptPage(container: HTMLElement, api = createInstanceAPI()): () => void {
+  const instanceID = instanceState.selected?.id;
   let isUnmounted = false;
   let sessionsLoading = false;
   let sessions: SessionInfo[] = [];
@@ -46,6 +48,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
           <h1 class="page-title">会话与 Prompt 检查</h1>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
+          ${instanceID ? `<a class="btn btn-outline btn-sm" href="/api/instances/${escapeHtml(instanceID)}/backup/summaries" download="group_summaries.json">下载群摘要备份</a>` : ''}
           <button class="btn btn-outline btn-sm" id="prompt-toggle-editor-btn">
             ${icon('code', 'w-3.5 h-3.5')}
             <span id="prompt-toggle-editor-label">自定义输入</span>

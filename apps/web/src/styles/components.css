@@ -1096,3 +1096,117 @@ dialog.dialog-modal::backdrop {
 .toggle-switch input:disabled + span {opacity:.55;}
 @media (min-width:640px) { .instance-kpis {grid-template-columns:repeat(4,minmax(0,1fr));} }
 
+
+/* Backup controls follow the available content width, including beside the sidebar. */
+.backup-page {
+  max-width: 76rem;
+  container-type: inline-size;
+}
+.backup-page-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .75rem;
+}
+.backup-instance {
+  margin-left: auto;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.card.backup-feature {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--primary) 4%, var(--card));
+}
+.backup-feature-copy {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
+.backup-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 3rem;
+  height: 3rem;
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--primary);
+}
+.backup-page .btn:not(.btn-icon-sm) {
+  align-self: flex-start;
+  flex-shrink: 0;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 2.5rem;
+  height: auto;
+  white-space: normal;
+  text-align: center;
+}
+.backup-feature > .btn { align-self: center; }
+.backup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  color: var(--muted-foreground);
+  font-size: .75rem;
+  line-height: 1.6;
+}
+.backup-note > svg { flex-shrink: 0; margin-top: .1rem; }
+.backup-section { display: flex; flex-direction: column; gap: .875rem; }
+.backup-section-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .375rem .75rem; }
+.backup-section-heading h2 { font-size: .9375rem; font-weight: 600; }
+.backup-section-heading > span { font-size: .75rem; color: var(--muted-foreground); }
+.backup-download-grid,
+.backup-import-grid,
+.backup-global-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
+.card.backup-download {
+  display: flex;
+  flex-direction: column;
+  gap: .875rem;
+  min-width: 0;
+  padding: 1.125rem;
+  text-decoration: none;
+  transition: background-color .15s, border-color .15s;
+}
+.backup-download:hover { background: var(--muted); border-color: var(--muted-foreground); }
+.backup-download:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.backup-download-top { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: var(--muted-foreground); }
+.backup-download-action { display: flex; align-items: center; gap: .375rem; margin-top: auto; font-size: .75rem; font-weight: 500; }
+.card.backup-panel { display: flex; flex-direction: column; min-width: 0; gap: .875rem; padding: 1.25rem; }
+.backup-panel-heading { display: flex; align-items: center; gap: .5rem; }
+.backup-panel-heading > svg { color: var(--muted-foreground); flex-shrink: 0; }
+.backup-panel-heading h3 { font-size: .875rem; font-weight: 600; }
+.backup-description { font-size: .8125rem; line-height: 1.7; color: var(--muted-foreground); }
+.backup-details { font-size: .75rem; line-height: 1.6; color: var(--muted-foreground); }
+.backup-details summary { display: flex; align-items: center; gap: .25rem; cursor: pointer; }
+.backup-details summary::-webkit-details-marker { display: none; }
+.backup-details summary > svg { flex-shrink: 0; transition: transform .15s; }
+.backup-details[open] summary > svg { transform: rotate(90deg); }
+.backup-details p { margin-top: .5rem; }
+.backup-form { display: flex; flex-direction: column; gap: .625rem; margin-top: auto; min-width: 0; }
+.backup-form label { font-size: .75rem; font-weight: 500; }
+.backup-form .input { width: 100%; min-width: 0; }
+.backup-form .btn { margin-top: .25rem; }
+.backup-form-separated { padding-top: 1rem; border-top: 1px solid var(--border); }
+@container (min-width: 30rem) {
+  .backup-download-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 42rem) {
+  .backup-import-grid,
+  .backup-global-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 60rem) {
+  .backup-download-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .backup-import-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (max-width: 42rem) {
+  .card.backup-feature { flex-direction: column; align-items: flex-start; padding: 1.25rem; }
+  .backup-feature > .btn { align-self: flex-start; }
+}

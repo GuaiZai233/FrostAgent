@@ -1912,4 +1912,3 @@ func TestAstrBotOmittedPlatformCannotMatchQQWhitelist(t *testing.T) {
 	}
 	provider.mu.Unlock()
 }
-

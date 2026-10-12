@@ -1,6 +1,8 @@
 package groupsummary
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,12 +32,16 @@ type fileData struct {
 // use within one process; multiple processes must not share the same file.
 type Store struct {
 	path        string
+	db          *storage.DB
+	instanceID  string
 	mu          sync.RWMutex
 	records     map[string]Record
 	generations map[string]uint64
 	blockedErr  error
 	saveHook    func(records map[string]Record) error
 }
+
+func (s *Store) IsDatabase() bool { return s != nil && s.db != nil }
 
 // NewStore loads the summary file. A malformed file blocks writes for the
 // lifetime of this Store so recoverable data is never overwritten.
@@ -67,6 +73,31 @@ func NewStore(path string) (*Store, error) {
 		}
 	}
 	return store, nil
+}
+
+func NewSQLStore(db *storage.DB, instanceID string) (*Store, error) {
+	store := &Store{db: db, instanceID: instanceID, records: make(map[string]Record), generations: make(map[string]uint64)}
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT group_id, summary, created_at, updated_at
+		FROM group_summaries WHERE instance_id = ? AND platform = 'qq'`), instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record Record
+		var created, updated string
+		if err := rows.Scan(&record.SessionID, &record.Summary, &created, &updated); err != nil {
+			return nil, err
+		}
+		if record.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+			return nil, err
+		}
+		if record.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
+			return nil, err
+		}
+		store.records[record.SessionID] = record
+	}
+	return store, rows.Err()
 }
 
 func load(path string) (fileData, error) {
@@ -286,6 +317,27 @@ func cloneRecords(records map[string]Record) map[string]Record {
 // save writes a complete replacement before atomically moving it over the
 // live file. Rename failures are returned instead of falling back to truncation.
 func (s *Store) save(records map[string]Record) error {
+	if s.db != nil {
+		ctx := context.Background()
+		tx, err := s.db.SQL.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM group_summaries WHERE instance_id = ? AND platform = 'qq'`), s.instanceID); err != nil {
+			return err
+		}
+		for _, record := range records {
+			if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO group_summaries
+				(instance_id, platform, group_id, summary, generation, created_at, updated_at)
+				VALUES (?, 'qq', ?, ?, ?, ?, ?)`), s.instanceID, record.SessionID, record.Summary,
+				s.generations[record.SessionID], record.CreatedAt.UTC().Format(time.RFC3339Nano),
+				record.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 	summaries := make([]Record, 0, len(records))
 	for _, record := range records {
 		summaries = append(summaries, record)

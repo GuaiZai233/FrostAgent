@@ -1771,4 +1771,3 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 	}
 	return "ok", nil
 }
-

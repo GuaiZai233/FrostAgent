@@ -444,5 +444,3 @@ test('ProactiveWhitelistSync forces full reconciliation of both keys on next sav
   assert.equal(sync.getState().enabled, false);
   assert.deepEqual(sync.getState().groups, ['A', 'B']);
 });
-
-

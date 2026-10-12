@@ -11,7 +11,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   let isUnmounted = false;
   let loading = false;
   let dialogues: DialogueItem[] = [];
-  let filePath = 'dialogue.yml';
+  let filePath = '当前实例 · 数据库存储';
   let promptPreview = '';
   let searchQuery = '';
   let selectedRelation = '';
@@ -37,7 +37,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
             </button>
             <button class="tab-item" id="mode-raw-btn">
               ${icon('code', 'w-3.5 h-3.5')}
-              <span>原始 YAML</span>
+              <span>YAML 编辑</span>
             </button>
           </div>
           <button class="btn btn-outline btn-sm" id="dialogue-export-btn">
@@ -107,7 +107,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <div id="raw-mode-container" class="flex flex-col gap-3" style="display: none;">
         <div class="card p-4 flex flex-col gap-3">
           <div class="flex items-center justify-between">
-            <label class="form-label" for="raw-yaml-textarea">原始 YAML 内容编辑</label>
+            <label class="form-label" for="raw-yaml-textarea">YAML 内容编辑</label>
             <div class="flex items-center gap-2">
               <button class="btn btn-outline btn-sm" id="raw-reload-btn">
                 ${icon('refresh', 'w-3.5 h-3.5')}
@@ -119,6 +119,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
               </button>
             </div>
           </div>
+          <p class="text-xs text-muted">保存或导入将替换当前实例的全部对话示例，并即时生效。数据保存在数据库中，YAML 用于编辑和导入导出。</p>
           <textarea
             id="raw-yaml-textarea"
             class="textarea font-mono text-xs leading-relaxed"
@@ -158,10 +159,8 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       dialogues = resp.dialogues || [];
       promptPreview = resp.promptPreview || '（无提示词预览）';
-      if (resp.filePath) {
-        filePath = resp.filePath;
-        filepathEl.textContent = filePath;
-      }
+      filePath = resp.filePath || '当前实例 · 数据库存储';
+      filepathEl.textContent = filePath;
       promptPreviewContent.textContent = promptPreview;
     } catch (err) {
       if (isUnmounted) return;
@@ -487,7 +486,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       rawYaml = resp.content || '';
       rawTextarea.value = rawYaml;
     } catch (err) {
-      toast.error('加载原始 YAML 失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('加载 YAML 失败: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       rawLoading = false;
       rawReloadBtn.disabled = false;
@@ -502,11 +501,9 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       const content = rawTextarea.value;
       const resp = await api.updateRawDialogueFile(content);
       if (resp.success) {
-        if (resp.promptPreview) {
-          promptPreview = resp.promptPreview;
-          promptPreviewContent.textContent = promptPreview;
-        }
-        toast.success('原始 YAML 保存成功并已实时生效！');
+        promptPreview = resp.promptPreview || '（无提示词预览）';
+        promptPreviewContent.textContent = promptPreview;
+        toast.success('YAML 保存成功并已实时生效！');
         void loadData();
       } else {
         toast.error('保存失败: ' + resp.error);
@@ -561,7 +558,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   exportBtn.addEventListener('click', async () => {
     try {
       const resp = await api.getRawDialogueFile();
-      const content = resp.content || promptPreview;
+      const content = resp.content;
       const blob = new Blob([content], { type: 'text/yaml;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

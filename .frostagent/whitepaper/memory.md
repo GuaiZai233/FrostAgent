@@ -236,7 +236,7 @@ func (m *MemberProfile) ResolveCallingName() string {
 - `Content` 与 `Evidence` 可保留识图结果片段用于检索和审计，但它们不是群友亲口说出的权威引述。图片条目的详情引述区固定显示 **`（原source为图片形式）`**；召回使用 `<image_description>` 容器，并附加相同来源说明，避免将视觉模型结果输出为 `<quote>`。
 - 群聊 `memory.write` 同样接收当前轮的可信图片来源。`source_media` 与 `evidence` 是可选工具参数；当前轮存在识图结果时默认保守标记图片来源。图文混合消息若要写入文字摘要，须提供 `source_media: "text"` 及可匹配用户文字的 `evidence`（或直接写入用户字面片段）。模型不能凭空创建可信图片来源。
 - `source_media` 随 JSON 导入导出及 ConnectRPC `MemoryEntry.source_media = 16` 传递，人工编辑保留它，反思合并含图片来源时继续保留该标记。文字与图片即使来自同一消息且片段相同，也不互相去重。
-- 该标记是兼容旧 JSON 的可选字段。未标注来源的历史条目不通过文字启发式自动改写；用户手写“【图片内容】”等标识仍按用户文字处理。
+- SQL v10 通过追加迁移为 `memory_entries` 新增 `source_media` 列，私聊、群聊与实例备份均保留该标记。已有 SQL 条目默认留空，不通过文字启发式自动改写；用户手写“【图片内容】”等标识仍按用户文字处理。
 
 ### 4.3 跨触发幂等持久化与并发安全（Cross-Trigger Idempotency）
 

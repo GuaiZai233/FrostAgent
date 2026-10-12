@@ -2,6 +2,7 @@ package modelrouter
 
 import (
 	"FrostAgent/internal/runtimescope"
+	"FrostAgent/internal/storage"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -16,7 +17,14 @@ import (
 const configurationVersion = 1
 
 type Snapshot struct {
-	config Configuration
+	config      Configuration
+	err         error
+	credentials map[string]snapshotCredential
+}
+
+type snapshotCredential struct {
+	value string
+	err   error
 }
 
 type Manager struct {
@@ -28,6 +36,25 @@ type Manager struct {
 	secrets          *SecretBackend
 	loadErr          error
 	ReserveEndpoints func([]Endpoint) error
+	db               *storage.DB
+	instanceID       string
+	draftOwner       string
+	draftPending     bool
+}
+
+func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
+	db.ModelRouterMu.RLock()
+	defer db.ModelRouterMu.RUnlock()
+	secrets, secretErr := newSQLSecretBackend(db, instanceID)
+	m := &Manager{Scope: runtimescope.First(scopes), db: db, instanceID: instanceID,
+		active: defaultConfiguration(), secrets: secrets}
+	if secretErr != nil {
+		m.loadErr = secretErr
+	} else if err := m.loadSQL(); err != nil {
+		m.loadErr = err
+	}
+	m.draft = cloneConfiguration(m.active)
+	return m
 }
 
 func New(path string, scopes ...*runtimescope.Scope) *Manager {
@@ -147,28 +174,84 @@ func (m *Manager) LoadError() error {
 	return m.loadErr
 }
 
+func (m *Manager) IsSharedCatalog() bool {
+	return m.db != nil && m.instanceID == ""
+}
+
 func (m *Manager) Active() Configuration {
+	if m.db != nil {
+		return m.sqlActive()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneConfiguration(m.active)
 }
 
+// ActiveChecked reports failures from this read instead of returning cached state.
+func (m *Manager) ActiveChecked() (Configuration, error) {
+	if m.db != nil {
+		return m.sqlSnapshot()
+	}
+	return m.Active(), m.LoadError()
+}
+
+// State reads the active configuration and draft at one catalog revision.
+func (m *Manager) State() (Configuration, Configuration, error) {
+	return m.StateForOwner("")
+}
+
+func (m *Manager) StateForOwner(owner string) (Configuration, Configuration, error) {
+	if m.db != nil {
+		m.db.ModelRouterMu.RLock()
+		defer m.db.ModelRouterMu.RUnlock()
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.loadErr = m.loadSQL()
+		if m.instanceID != "" {
+			m.draft.Endpoints, m.draft.Models = m.active.Endpoints, m.active.Models
+		}
+		if m.instanceID == "" && m.draftOwner != "" && m.draftOwner != owner {
+			return cloneConfiguration(m.active), cloneConfiguration(m.active), m.loadErr
+		}
+		return cloneConfiguration(m.active), cloneConfiguration(m.draft), m.loadErr
+	}
+	return m.Active(), m.Draft(), m.LoadError()
+}
+
 func (m *Manager) Draft() Configuration {
+	if m.db != nil {
+		return m.sqlDraft()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneConfiguration(m.draft)
 }
 
 func (m *Manager) Snapshot() *Snapshot {
+	if m.db != nil {
+		return m.sqlRuntimeSnapshot()
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return &Snapshot{config: cloneConfiguration(m.active)}
 }
 
 func (m *Manager) SaveDraft(cfg Configuration) error {
+	return m.SaveDraftForOwner(cfg, "")
+}
+
+func (m *Manager) SaveDraftForOwner(cfg Configuration, owner string) error {
+	if m.db != nil {
+		return m.saveSQLDraft(cfg, owner)
+	}
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
 		return err
+	}
+	if m.db != nil {
+		if err := validateSQLSources(cfg); err != nil {
+			return err
+		}
 	}
 	if m.ReserveEndpoints != nil {
 		if err := m.ReserveEndpoints(cfg.Endpoints); err != nil {
@@ -208,11 +291,21 @@ func (m *Manager) SaveDraft(cfg Configuration) error {
 }
 
 func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error) {
+	return m.SetDraftEndpointSecretForOwner(endpointID, apiKey, "")
+}
+
+func (m *Manager) SetDraftEndpointSecretForOwner(endpointID, apiKey, owner string) (bool, error) {
+	if m.db != nil && m.instanceID != "" {
+		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
+	}
 	if strings.TrimSpace(apiKey) == "" {
 		return false, fmt.Errorf("API Key 为空；留空表示保留原 Secret")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkDraftOwner(owner); err != nil {
+		return false, err
+	}
 	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
 	if err != nil {
 		return false, err
@@ -222,12 +315,24 @@ func (m *Manager) SetDraftEndpointSecret(endpointID, apiKey string) (bool, error
 	}
 	m.secrets.Stage(endpoint, apiKey, false)
 	setEndpointConfigured(&m.draft, endpoint.ID, true)
+	m.draftOwner = owner
+	m.draftPending = true
 	return true, nil
 }
 
 func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
+	return m.ClearDraftEndpointSecretForOwner(endpointID, "")
+}
+
+func (m *Manager) ClearDraftEndpointSecretForOwner(endpointID, owner string) (bool, error) {
+	if m.db != nil && m.instanceID != "" {
+		return false, fmt.Errorf("请在全局模型供应商页面管理凭据")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkDraftOwner(owner); err != nil {
+		return false, err
+	}
 	endpoint, err := endpointByID(m.draft, strings.TrimSpace(endpointID))
 	if err != nil {
 		return false, err
@@ -237,6 +342,8 @@ func (m *Manager) ClearDraftEndpointSecret(endpointID string) (bool, error) {
 	}
 	m.secrets.Stage(endpoint, "", true)
 	setEndpointConfigured(&m.draft, endpoint.ID, false)
+	m.draftOwner = owner
+	m.draftPending = true
 	return false, nil
 }
 
@@ -244,15 +351,52 @@ func (m *Manager) HasDraftSecretChanges() bool {
 	return m.secrets.HasDraftChanges()
 }
 
+func (m *Manager) HasDraftSecretChangesForOwner(owner string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.draftOwner == owner && m.secrets.HasDraftChanges()
+}
+
+func (m *Manager) checkDraftOwner(owner string) error {
+	if m.db != nil && m.instanceID == "" && m.draftOwner != "" && m.draftOwner != owner {
+		return fmt.Errorf("共享供应商草稿正由其他编辑页面修改，请先完成该页面的编辑")
+	}
+	return nil
+}
+
 func (m *Manager) DiscardDraft() Configuration {
+	cfg, _ := m.DiscardDraftForOwner("")
+	return cfg
+}
+
+func (m *Manager) DiscardDraftForOwner(owner string) (Configuration, error) {
+	if m.db != nil {
+		return m.discardSQLDraft(owner)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.draft = cloneConfiguration(m.active)
 	m.secrets.DiscardDraft()
-	return cloneConfiguration(m.draft)
+	return cloneConfiguration(m.draft), nil
+}
+
+// ResetSharedDraft is an explicit recovery action for an abandoned editor.
+// It only drops unpublished changes and never publishes staged credentials.
+func (m *Manager) ResetSharedDraft() (Configuration, error) {
+	if m.db == nil || m.instanceID != "" {
+		return Configuration{}, fmt.Errorf("只能在全局模型供应商页面重置共享草稿")
+	}
+	return m.resetSQLCatalogDraft()
 }
 
 func (m *Manager) Publish() (Configuration, error) {
+	return m.PublishForOwner("")
+}
+
+func (m *Manager) PublishForOwner(owner string) (Configuration, error) {
+	if m.db != nil {
+		return m.publishSQL(owner)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cfg := cloneConfiguration(m.draft)
@@ -260,12 +404,23 @@ func (m *Manager) Publish() (Configuration, error) {
 	if err := validateConfiguration(cfg); err != nil {
 		return Configuration{}, err
 	}
+	if m.db != nil {
+		if err := validateSQLSources(cfg); err != nil {
+			return Configuration{}, err
+		}
+	}
 	cfg.Revision = m.active.Revision + 1
 	rollbackSecrets, err := m.secrets.Apply(m.active, cfg)
 	if err != nil {
 		return Configuration{}, err
 	}
-	if err := writeAtomic(m.path, cfg); err != nil {
+	var persistErr error
+	if m.db != nil {
+		persistErr = m.writeSQL(cfg)
+	} else {
+		persistErr = writeAtomic(m.path, cfg)
+	}
+	if err := persistErr; err != nil {
 		if rollbackErr := rollbackSecrets(); rollbackErr != nil {
 			return Configuration{}, fmt.Errorf("写入模型路由配置失败: %v；恢复 Secret Backend 失败: %w", err, rollbackErr)
 		}
@@ -286,7 +441,17 @@ func (s *Snapshot) Resolve(workload Workload, scope Scope) (Target, error) {
 	if s == nil {
 		return Target{}, fmt.Errorf("model router snapshot is unavailable")
 	}
+	if s.err != nil {
+		return Target{}, s.err
+	}
 	return resolveConfiguration(s.config, workload, scope)
+}
+
+func (s *Snapshot) LoadError() error {
+	if s == nil {
+		return fmt.Errorf("model router snapshot is unavailable")
+	}
+	return s.err
 }
 
 func (s *Snapshot) IsDisabled(workload Workload, scope Scope) bool {
@@ -296,6 +461,9 @@ func (s *Snapshot) IsDisabled(workload Workload, scope Scope) bool {
 
 func (m *Manager) Effective(scope Scope) []EffectiveBinding {
 	snapshot := m.Snapshot()
+	if snapshot.err != nil {
+		return nil
+	}
 	result := make([]EffectiveBinding, 0, len(Workloads))
 	for _, workload := range Workloads {
 		binding, inherited := effectiveBinding(snapshot.config, workload, scope)
@@ -560,6 +728,15 @@ func validateConfiguration(cfg Configuration) error {
 			if err := validateBinding(binding, modelIDs, endpointIDs, true, workload != WorkloadDialogue); err != nil {
 				return fmt.Errorf("group %s/%s %s binding: %w", group.Platform, group.GroupID, workload, err)
 			}
+		}
+	}
+	return nil
+}
+
+func validateSQLSources(cfg Configuration) error {
+	for _, endpoint := range cfg.Endpoints {
+		if endpoint.APIKeySource == APIKeyStorageEnv {
+			return fmt.Errorf("endpoint %q cannot use process environment in SQL storage", endpoint.DisplayName)
 		}
 	}
 	return nil

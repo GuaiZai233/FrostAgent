@@ -22,7 +22,7 @@ func TestStartupConstructsEachRuntimeOnce(t *testing.T) {
 	seed.Close()
 
 	calls := map[string][]bool{}
-	manager, err := newManager(seed.root, seed.global, seed.templateDialogue,
+	manager, err := newManager(seed.root, seed.global, seed.templateDialogue, nil,
 		func(m *Manager, item *managed, config *instanceconfig.Store, dir string, enabled bool) (*Runtime, error) {
 			calls[item.id] = append(calls[item.id], enabled)
 			return buildManagedRuntime(m, item, config, dir, enabled)
