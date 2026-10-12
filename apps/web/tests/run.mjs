@@ -6,7 +6,13 @@ const esbuildPath = require.resolve('esbuild', {
   paths: [dirname(require.resolve('vite'))],
 });
 const { build } = require(esbuildPath);
-for (const testFile of ['instance-api.test.ts', 'model-router-editor.test.ts', 'prompt-merge.test.ts', 'prompt-page.test.ts']) {
+for (const testFile of [
+  'instance-api.test.ts',
+  'model-router-editor.test.ts',
+  'prompt-merge.test.ts',
+  'prompt-page.test.ts',
+  'dialogue-page.test.ts',
+]) {
   const result = await build({
     entryPoints: [resolve('tests', testFile)],
     bundle: true,
