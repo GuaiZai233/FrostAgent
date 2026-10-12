@@ -149,6 +149,7 @@ func managementMux(manager http.Handler) *http.ServeMux {
 	mux.Handle("/api/v1/actionscat/", manager)
 	mux.Handle("/api/v1/messages/send", manager)
 	mux.Handle("/frostagent.v1.LogService/", manager)
+	mux.Handle("/frostagent.v1.ModelRouterService/", manager)
 	mux.Handle("/frostagent.v1.MCPService/", http.NotFoundHandler())
 	mux.Handle("/api/log-images/", manager)
 	mux.Handle("/", frontend.Handler())

@@ -12,7 +12,7 @@ const calls: string[] = [];
 const logSources: string[] = [];
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = input instanceof Request ? input.url : String(input);
-  init?.signal?.throwIfAborted();
+  (input instanceof Request ? input.signal : init?.signal)?.throwIfAborted();
   calls.push(url);
   logSources.push(
     new Headers(init?.headers).get('X-FrostAgent-Log-Source') ?? '',
@@ -101,6 +101,25 @@ assert.equal(
   'ActionsCat requests bypassed their owning instance',
 );
 instanceState.select(null);
+
+// Capture the Request signal as well as requests which start after a switch.
+const originalFetch = globalThis.fetch;
+let requestStarted!: () => void;
+const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+let pendingSignal: AbortSignal | undefined;
+globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+  pendingSignal = input instanceof Request ? input.signal : init?.signal ?? undefined;
+  pendingSignal?.addEventListener('abort', () => reject(pendingSignal?.reason), { once: true });
+  requestStarted();
+});
+const inFlightCatalog = createInstanceAPI({ globalModelCatalog: true }).getModelRouterState();
+const rejectedCatalog = assert.rejects(inFlightCatalog);
+await started;
+instanceState.select(a);
+assert.equal(pendingSignal?.aborted, true, 'switch did not abort the in-flight shared catalog Request');
+await rejectedCatalog;
+globalThis.fetch = originalFetch;
+instanceState.select(null);
 await assert.rejects(createInstanceAPI().listMCPServers(), /请先选择实例/);
 await assert.rejects(createInstanceAPI().listDialogues(), /请先选择实例/);
 await assert.rejects(actionsCatAPI.listActions(), /请先选择实例/);
@@ -163,3 +182,11 @@ assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1
 await createInstanceAPI({ globalModelCatalog: true }).publishModelRouter();
 assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/Publish');
 console.log('PASS: shared providers use the root API and instance routes require a selected instance');
+
+const oldCatalogPage = createInstanceAPI({ globalModelCatalog: true });
+instanceState.select(b);
+const catalogCallsBeforeSwitch = calls.length;
+await assert.rejects(oldCatalogPage.publishModelRouter());
+await assert.rejects(oldCatalogPage.setDraftEndpointSecret('synthetic-provider', 'synthetic-key'));
+assert.equal(calls.length, catalogCallsBeforeSwitch, 'stale model editor mutated the shared catalog after switching instances');
+instanceState.select(null);

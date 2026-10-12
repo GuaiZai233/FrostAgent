@@ -23,7 +23,7 @@ import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
-import { mountModelRouterPage, mountProvidersPage } from './pages/model-router';
+import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
 const mountMemoryPage = lazyMount(() =>
@@ -41,8 +41,7 @@ themeManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
-  { path: '/providers', label: '模型供应商', iconName: 'sliders' },
-  { path: '/model-router', label: '实例模型路由', iconName: 'sliders' },
+  { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人设对话', iconName: 'chat' },
   { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
@@ -285,8 +284,7 @@ function initAppShell(): void {
     '指令设置',
     mountCommandSettingsPage,
   );
-  router.register('/providers', '模型供应商', mountProvidersPage);
-  router.register('/model-router', '实例模型路由', mountModelRouterPage);
+  router.register('/model-router', '模型路由器', mountModelRouterPage);
   // Security is a control-plane page and must remain available without an instance.
   router.register('/security', '安全控制', mountSecurityPage);
 
@@ -304,7 +302,6 @@ function initAppShell(): void {
     '/settings/backend',
     '/settings/backup',
     '/settings/commands',
-    '/model-router',
   ];
   const mounts = [
     mountOverviewPage,
@@ -319,7 +316,6 @@ function initAppShell(): void {
     mountBackendSettingsPage,
     mountBackupRestorePage,
     mountCommandSettingsPage,
-    mountModelRouterPage,
   ];
   guardedPaths.forEach((path, index) =>
     register(

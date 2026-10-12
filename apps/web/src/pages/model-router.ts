@@ -13,7 +13,7 @@ import {
   type ModelRouterConfiguration,
   type ModelTarget,
 } from '@frostagent/proto';
-import { createInstanceAPI } from '../api/client';
+import { createModelRouterEditorAPI, ModelRouterEditorError } from '../api/model-router-editor';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -95,16 +95,12 @@ function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
   return `${model.displayName} · ${endpoint?.displayName || '未知 Endpoint'} · ${model.upstreamModel}`;
 }
 
-export function mountProvidersPage(container: HTMLElement): () => void {
-  return mountModelRouterPage(container, true);
-}
-
-export function mountModelRouterPage(container: HTMLElement, catalog = false): () => void {
-  const api = createInstanceAPI({ globalModelCatalog: catalog });
+export function mountModelRouterPage(container: HTMLElement): () => void {
+  const api = createModelRouterEditorAPI();
   let unmounted = false;
   let loading = true;
   let busy = false;
-  let tab: 'endpoints' | 'models' | 'global' | 'groups' = catalog ? 'endpoints' : 'global';
+  let tab: 'endpoints' | 'models' | 'global' | 'groups' = 'endpoints';
   let activeConfiguration = create(ModelRouterConfigurationSchema, { version: 1 });
   let draft = cloneConfiguration(activeConfiguration);
   let loadError = '';
@@ -124,7 +120,7 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
       hasDraftSecretChanges = state.hasDraftSecretChanges;
       loading = false;
       render();
-      if (!catalog) openRequestedGroup();
+      if (api.hasInstance) openRequestedGroup();
     } catch (err) {
       if (unmounted) return;
       loading = false;
@@ -139,7 +135,7 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
       render();
     }
     try {
-      const response = await api.saveModelRouterDraft(draft);
+      const response = await api.saveModelRouterDraft(draft, !updatePage);
       if (!response.success || !response.draft) {
         toast.error(response.error || '同步配置失败');
         return false;
@@ -170,8 +166,9 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
       activeConfiguration = cloneConfiguration(response.active);
       draft = cloneConfiguration(response.active);
       hasDraftSecretChanges = false;
-      toast.success(catalog ? '共享模型供应商已发布，所有实例即时生效' : '实例模型路由已发布');
+      toast.success('模型路由配置已发布');
     } catch (err) {
+      applyPartialResult(err);
       toast.error('发布配置失败: ' + errorText(err));
     } finally {
       busy = false;
@@ -183,7 +180,7 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
     busy = true;
     render();
     try {
-      const discarded = await api.discardModelRouterDraft();
+      const discarded = await api.discardModelRouterDraft(draft);
       if (discarded) {
         activeConfiguration = cloneConfiguration(discarded);
         draft = cloneConfiguration(discarded);
@@ -193,6 +190,7 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
       hasDraftSecretChanges = false;
       toast.info('内存草稿已恢复为活动配置');
     } catch (err) {
+      applyPartialResult(err);
       toast.error('放弃草稿失败: ' + errorText(err));
     } finally {
       busy = false;
@@ -200,7 +198,15 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
     }
   }
 
+  function applyPartialResult(error: unknown) {
+    if (!(error instanceof ModelRouterEditorError)) return;
+    activeConfiguration = cloneConfiguration(error.active);
+    draft = cloneConfiguration(error.draft);
+    hasDraftSecretChanges = error.hasDraftSecretChanges;
+  }
+
   function render() {
+    if (unmounted) return;
     if (loading) {
       container.innerHTML = `<div class="page-container"><div class="card p-6 text-center text-muted"><span class="spinner"></span> 正在加载模型路由器...</div></div>`;
       return;
@@ -212,8 +218,8 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
       <div class="page-container fade-in">
         <header class="page-header">
           <div>
-            <h1 class="page-title">${catalog ? '模型供应商' : '实例模型路由'}</h1>
-            <p class="text-xs text-muted">${catalog ? '供应商、密钥和模型目录由所有实例共享。每个实例单独选择使用的模型。' : '此处仅修改当前实例的默认模型与群覆盖。<a href="#/providers" class="text-primary">管理共享模型供应商</a>'}</p>
+            <h1 class="page-title">模型路由器</h1>
+            <p class="text-xs text-muted">供应商、密钥和模型由所有实例共享，发布后立即作用于所有实例；默认路由与群覆盖仅作用于当前实例。${api.hasInstance ? '' : '请先选择实例以配置路由。'}</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
@@ -234,9 +240,10 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
         }
 
         <div class="tabs" role="tablist">
-          ${catalog
-            ? tabButton('endpoints', '供应商') + tabButton('models', '模型目录')
-            : tabButton('global', '实例默认路由') + tabButton('groups', '群覆盖')}
+          ${tabButton('endpoints', 'Endpoints')}
+          ${tabButton('models', 'Models')}
+          ${tabButton('global', '实例默认路由')}
+          ${tabButton('groups', '群覆盖')}
         </div>
 
         <section id="router-tab-content">${renderTab()}</section>
@@ -247,7 +254,8 @@ export function mountModelRouterPage(container: HTMLElement, catalog = false): (
   }
 
   function tabButton(value: typeof tab, label: string): string {
-    return `<button class="tab-item ${tab === value ? 'active' : ''}" data-router-tab="${value}">${label}</button>`;
+    const disabled = !api.hasInstance && (value === 'global' || value === 'groups');
+    return `<button class="tab-item ${tab === value ? 'active' : ''}" data-router-tab="${value}" ${disabled ? 'disabled title="请先选择实例"' : ''}>${label}</button>`;
   }
 
   function renderTab(): string {

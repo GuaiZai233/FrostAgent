@@ -598,7 +598,17 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean } = {}
   const modelRouterClient: Client<typeof ModelRouterService> = createClient(
     ModelRouterService,
     options.globalModelCatalog
-      ? createConnectTransport({ baseUrl: window.location.origin, interceptors: [authInterceptor] })
+      ? createConnectTransport({
+          baseUrl: window.location.origin,
+          interceptors: [authInterceptor],
+          fetch: (input, init) => {
+            selectionSignal.throwIfAborted();
+            const request = new Request(input, init);
+            return fetch(new Request(request, {
+              signal: AbortSignal.any([request.signal, selectionSignal]),
+            }));
+          },
+        })
       : transport,
   );
 
