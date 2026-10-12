@@ -151,7 +151,7 @@ func TestDialogueService_LogProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries = instanceLogger.Snapshot()
-	if len(entries) < 2 || !strings.Contains(entries[len(entries)-1].Content, "已更新原始示例对话文件 (1 条)") {
+	if len(entries) < 2 || !strings.Contains(entries[len(entries)-1].Content, "已导入示例对话 YAML (1 条)") {
 		t.Fatalf("instance logger missing UpdateRawDialogueFile log: %v", entries)
 	}
 }

@@ -13,7 +13,8 @@ import {
   type ModelRouterConfiguration,
   type ModelTarget,
 } from '@frostagent/proto';
-import { createInstanceAPI } from '../api/client';
+import { createModelRouterEditorAPI, ModelRouterEditorError } from '../api/model-router-editor';
+import { confirmDialog } from '../components/confirm';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -30,7 +31,6 @@ const workloads = [
 
 const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
 const apiKeyStorageManual = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_MANUAL;
-const apiKeyStorageEnv = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_ENV;
 const apiKeyStorageSecretFile = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_SECRET_FILE;
 const apiKeyStorageWindowsCredentialManager = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER;
 
@@ -63,8 +63,6 @@ function endpointAPIKeyStorage(endpoint: ModelEndpoint): ModelAPIKeyStorage {
 function endpointCredentialText(endpoint: ModelEndpoint): string {
   const status = endpoint.apiKeyConfigured ? '已配置' : '未配置';
   switch (endpointAPIKeyStorage(endpoint)) {
-    case apiKeyStorageEnv:
-      return `环境变量：${endpoint.apiKeyRef || 'UPSTREAM_API_KEY'} · ${status}`;
     case apiKeyStorageSecretFile:
       return `secret_file：${endpoint.apiKeyRef} · ${status}`;
     case apiKeyStorageWindowsCredentialManager:
@@ -99,7 +97,7 @@ function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
 }
 
 export function mountModelRouterPage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+  const api = createModelRouterEditorAPI();
   let unmounted = false;
   let loading = true;
   let busy = false;
@@ -118,12 +116,12 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       if (unmounted) return;
       const published = state.active ?? state.draft ?? create(ModelRouterConfigurationSchema, { version: 1 });
       activeConfiguration = cloneConfiguration(published);
-      draft = cloneConfiguration(published);
+      draft = cloneConfiguration(state.draft ?? published);
       loadError = state.loadError;
       hasDraftSecretChanges = state.hasDraftSecretChanges;
       loading = false;
       render();
-      openRequestedGroup();
+      if (api.hasInstance) openRequestedGroup();
     } catch (err) {
       if (unmounted) return;
       loading = false;
@@ -138,7 +136,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       render();
     }
     try {
-      const response = await api.saveModelRouterDraft(draft);
+      const response = await api.saveModelRouterDraft(draft, !updatePage);
       if (!response.success || !response.draft) {
         toast.error(response.error || '同步配置失败');
         return false;
@@ -171,6 +169,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       hasDraftSecretChanges = false;
       toast.success('模型路由配置已发布');
     } catch (err) {
+      applyPartialResult(err);
       toast.error('发布配置失败: ' + errorText(err));
     } finally {
       busy = false;
@@ -182,7 +181,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     busy = true;
     render();
     try {
-      const discarded = await api.discardModelRouterDraft();
+      const discarded = await api.discardModelRouterDraft(draft);
       if (discarded) {
         activeConfiguration = cloneConfiguration(discarded);
         draft = cloneConfiguration(discarded);
@@ -192,6 +191,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       hasDraftSecretChanges = false;
       toast.info('内存草稿已恢复为活动配置');
     } catch (err) {
+      applyPartialResult(err);
       toast.error('放弃草稿失败: ' + errorText(err));
     } finally {
       busy = false;
@@ -199,7 +199,36 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
   }
 
+  async function resetSharedCatalogDraft() {
+    if (!await confirmDialog({
+      title: '重置共享草稿',
+      message: '这会丢弃所有页面尚未发布的共享供应商、模型与密钥修改，以及本页未发布的实例路由修改。确定继续吗？',
+      confirmLabel: '重置共享草稿',
+      destructive: true,
+    })) return;
+    busy = true;
+    render();
+    try {
+      await api.resetSharedCatalogDraft();
+      await load();
+      toast.info('共享供应商草稿已重置');
+    } catch (err) {
+      toast.error('重置共享草稿失败: ' + errorText(err));
+    } finally {
+      busy = false;
+      render();
+    }
+  }
+
+  function applyPartialResult(error: unknown) {
+    if (!(error instanceof ModelRouterEditorError)) return;
+    activeConfiguration = cloneConfiguration(error.active);
+    draft = cloneConfiguration(error.draft);
+    hasDraftSecretChanges = error.hasDraftSecretChanges;
+  }
+
   function render() {
+    if (unmounted) return;
     if (loading) {
       container.innerHTML = `<div class="page-container"><div class="card p-6 text-center text-muted"><span class="spinner"></span> 正在加载模型路由器...</div></div>`;
       return;
@@ -212,29 +241,31 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <header class="page-header">
           <div>
             <h1 class="page-title">模型路由器</h1>
+            <p class="text-xs text-muted">供应商、密钥和模型由所有实例共享，发布后立即作用于所有实例；默认路由与群覆盖仅作用于当前实例。${api.hasInstance ? '' : '请先选择实例以配置路由。'}</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
+            <button class="btn btn-outline btn-sm" id="router-reset-shared" ${busy ? 'disabled' : ''}>重置共享草稿</button>
             <button class="btn btn-primary btn-sm" id="router-publish" ${busy ? 'disabled' : ''}>${icon('play', 'w-3.5 h-3.5')} 发布配置</button>
           </div>
         </header>
 
         ${
           loadError
-            ? `<div class="card p-3 badge-destructive"><strong>配置文件加载失败：</strong>${escapeHtml(loadError)}。原文件不会被自动覆盖；保存并发布新配置后才能恢复。</div>`
+            ? `<div class="card p-3 badge-destructive"><strong>模型配置暂不可编辑：</strong>${escapeHtml(loadError)}</div>`
             : ''
         }
 
         ${
           dirty
-            ? `<div class="card router-unsaved-warning p-3 text-xs flex items-center gap-2">${icon('circle_alert', 'w-4 h-4')}<span>当前配置尚未保存，请点击“发布配置”以应用，离开页面即丢弃。</span></div>`
+            ? `<div class="card router-unsaved-warning p-3 text-xs flex items-center gap-2">${icon('circle_alert', 'w-4 h-4')}<span>当前配置尚未发布，请点击“发布配置”以应用。</span></div>`
             : ''
         }
 
         <div class="tabs" role="tablist">
-          ${tabButton('endpoints', 'Endpoint Accounts')}
+          ${tabButton('endpoints', 'Endpoints')}
           ${tabButton('models', 'Models')}
-          ${tabButton('global', '全局路由')}
+          ${tabButton('global', '实例默认路由')}
           ${tabButton('groups', '群覆盖')}
         </div>
 
@@ -246,7 +277,8 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   }
 
   function tabButton(value: typeof tab, label: string): string {
-    return `<button class="tab-item ${tab === value ? 'active' : ''}" data-router-tab="${value}">${label}</button>`;
+    const disabled = !api.hasInstance && (value === 'global' || value === 'groups');
+    return `<button class="tab-item ${tab === value ? 'active' : ''}" data-router-tab="${value}" ${disabled ? 'disabled title="请先选择实例"' : ''}>${label}</button>`;
   }
 
   function renderTab(): string {
@@ -266,7 +298,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function renderEndpoints(): string {
     return `
       <div class="flex items-center justify-between gap-3 mb-3">
-        <div><h2 class="text-base font-semibold">Endpoint Accounts</h2><p class="text-xs text-muted">一个 Endpoint 可以承载多个模型；空 Key 表示无鉴权。</p></div>
+        <div><h2 class="text-base font-semibold">共享模型供应商</h2><p class="text-xs text-muted">一个 Endpoint 可以承载多个模型；空 Key 表示无鉴权。</p></div>
         <button class="btn btn-primary btn-sm" id="add-endpoint">${icon('plus', 'w-3.5 h-3.5')} 新增 Endpoint</button>
       </div>
       <div class="card table-card overflow-hidden">
@@ -325,7 +357,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
 
   function renderGlobalBindings(): string {
     return `
-      <div class="mb-3"><h2 class="text-base font-semibold">全局六槽配置</h2><p class="text-xs text-muted">私聊和没有群级 diff 的群使用这些默认值。</p></div>
+      <div class="mb-3"><h2 class="text-base font-semibold">实例默认模型</h2><p class="text-xs text-muted">私聊和没有群级 diff 的群使用这些默认值。</p></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(19rem,1fr));gap:.75rem">
         ${workloads.map((workload) => {
           const binding = bindingFor(draft.globalBindings, workload.value);
@@ -335,7 +367,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               <strong class="text-sm">${workload.label}</strong>
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -344,7 +376,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function renderGroups(): string {
     return `
       <div class="flex items-center justify-between gap-3 mb-3">
-        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于全局配置的 diff；群列表入口同时复用会话与 Prompt 检查。</p></div>
+        <div><h2 class="text-base font-semibold">群级覆盖</h2><p class="text-xs text-muted">仅保存相对于实例默认配置的差异；群列表入口同时复用会话与 Prompt 检查。</p></div>
         <button class="btn btn-primary btn-sm" id="add-group">${icon('plus', 'w-3.5 h-3.5')} 手动添加</button>
       </div>
       <div class="card table-card overflow-hidden"><div class="table-container"><table class="table">
@@ -368,7 +400,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   function bindingOptions(
     binding: ModelBinding | undefined,
     allowInherit: boolean,
-    inheritLabel = '继承全局',
+    inheritLabel = '继承实例默认',
     allowDisabled = true,
     allowFollowDialogue = false,
   ): string {
@@ -399,6 +431,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     });
     container.querySelector('#router-publish')?.addEventListener('click', () => void publish());
     container.querySelector('#router-discard')?.addEventListener('click', () => void discardDraft());
+    container.querySelector('#router-reset-shared')?.addEventListener('click', () => void resetSharedCatalogDraft());
     container.querySelector('#add-endpoint')?.addEventListener('click', () => editEndpoint());
     container.querySelector('#add-model')?.addEventListener('click', () => editModel());
     container.querySelector('#add-group')?.addEventListener('click', () => editGroup());
@@ -461,9 +494,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     let keyStorage = endpointAPIKeyStorage(endpoint);
     let secretInput = '';
     let clearSecret = false;
-    let envVarName = keyStorage === apiKeyStorageEnv && endpoint.apiKeyRef
-      ? endpoint.apiKeyRef
-      : 'UPSTREAM_API_KEY';
     let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
     const secretInputField = () => `<div style="position:relative"><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret" style="padding-right:2.5rem"><button type="button" class="btn btn-ghost btn-icon-sm text-muted" id="endpoint-key-reveal" title="短暂显示 API Key" aria-label="短暂显示 API Key" aria-pressed="false" style="position:absolute;right:0.125rem;top:50%;transform:translateY(-50%);width:2rem;height:2rem">${icon('eye', 'w-3.5 h-3.5')}</button></div>`;
     const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
@@ -471,15 +501,13 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       : '';
     const keyStorageDetails = () => {
       switch (keyStorage) {
-        case apiKeyStorageEnv:
-          return `<p class="form-hint">编辑 .env 文件或在当前 shell 会话中临时指定。</p><div class="form-group mt-2"><label class="form-label">环境变量名称</label><input class="input font-mono" id="endpoint-env-var" value="${escapeHtml(envVarName)}"></div>`;
         case apiKeyStorageSecretFile:
           return `<p class="form-hint">推荐 Docker 用户使用，路径类似 /run/secrets/openai；填写绝对路径。</p><div class="form-group mt-2"><label class="form-label">Secret 文件路径</label><input class="input font-mono" id="endpoint-secret-file" value="${escapeHtml(secretFile)}"></div>`;
         case apiKeyStorageWindowsCredentialManager:
           return `<p class="form-hint font-mono">Target: guaitech.frostagent/endpoint/${escapeHtml(endpoint.id)}</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
         case apiKeyStorageManual:
         default:
-          return `<p class="form-hint"><strong class="font-bold text-destructive">将明文存储！</strong>路径为 /data/model_router_secrets.json，仅推荐用于受信任的本地部署环境。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
+          return `<p class="form-hint">手动填写的密钥保存在数据库中，导出备份时会置空。</p><div class="form-group mt-2"><label class="form-label">API Key（允许为空）</label>${secretInputField()}</div>${secretAction()}`;
       }
     };
     void openDialog({
@@ -488,7 +516,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="endpoint-name" value="${escapeHtml(endpoint.displayName)}"></div>
         <div class="form-group"><label class="form-label">Base URL</label><input class="input font-mono" id="endpoint-url" value="${escapeHtml(endpoint.baseUrl)}" placeholder="https://example.com/v1"><p class="form-hint text-destructive" id="endpoint-url-warning" style="display:${endpointWarns(endpoint.baseUrl) ? 'block' : 'none'}">这里建议填写 Base URL，也就是不以 /chat/completions 结尾。如果执意继续，很可能引起错误。</p></div>
-        <div class="form-group"><label class="form-label">API Key 存储格式（必选）</label><select class="select" id="endpoint-key-storage" required><option value="${apiKeyStorageManual}" ${keyStorage === apiKeyStorageManual ? 'selected' : ''}>手动填写</option><option value="${apiKeyStorageWindowsCredentialManager}" ${keyStorage === apiKeyStorageWindowsCredentialManager ? 'selected' : ''}>写入 Windows Credential Manager</option><option value="${apiKeyStorageEnv}" ${keyStorage === apiKeyStorageEnv ? 'selected' : ''}>从环境变量读取</option><option value="${apiKeyStorageSecretFile}" ${keyStorage === apiKeyStorageSecretFile ? 'selected' : ''}>secret_file</option></select><div id="endpoint-key-storage-details">${keyStorageDetails()}</div></div>
+        <div class="form-group"><label class="form-label">API Key 存储格式（必选）</label><select class="select" id="endpoint-key-storage" required><option value="${apiKeyStorageManual}" ${keyStorage === apiKeyStorageManual ? 'selected' : ''}>手动填写</option><option value="${apiKeyStorageWindowsCredentialManager}" ${keyStorage === apiKeyStorageWindowsCredentialManager ? 'selected' : ''}>写入 Windows Credential Manager</option><option value="${apiKeyStorageSecretFile}" ${keyStorage === apiKeyStorageSecretFile ? 'selected' : ''}>secret_file</option></select><div id="endpoint-key-storage-details">${keyStorageDetails()}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="endpoint-enabled" ${endpoint.enabled ? 'checked' : ''}>启用 Endpoint</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="endpoint-confirm">保存</button>`,
       onMount: (dialog, close) => {
@@ -499,8 +527,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         const captureStorageValue = () => {
           if (endpointUsesAPIKeyInput(keyStorage)) {
             secretInput = dialog.querySelector<HTMLInputElement>('#endpoint-key')?.value ?? secretInput;
-          } else if (keyStorage === apiKeyStorageEnv) {
-            envVarName = dialog.querySelector<HTMLInputElement>('#endpoint-env-var')?.value ?? envVarName;
           } else if (keyStorage === apiKeyStorageSecretFile) {
             secretFile = dialog.querySelector<HTMLInputElement>('#endpoint-secret-file')?.value ?? secretFile;
           }
@@ -556,10 +582,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             toast.error('请填写 Secret 文件路径');
             return;
           }
-          if (keyStorage === apiKeyStorageEnv && !envVarName.trim()) {
-            toast.error('请填写环境变量名称');
-            return;
-          }
           const confirmButton = event.currentTarget as HTMLButtonElement;
           confirmButton.disabled = true;
           confirmButton.setAttribute('aria-busy', 'true');
@@ -569,9 +591,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           endpoint.apiKeySource = keyStorage;
           endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
             ? secretFile.trim()
-            : keyStorage === apiKeyStorageEnv
-              ? envVarName.trim()
-              : keyStorage === apiKeyStorageWindowsCredentialManager
+            : keyStorage === apiKeyStorageWindowsCredentialManager
                 ? `guaitech.frostagent/endpoint/${endpoint.id}`
                 : `endpoint/${endpoint.id}`;
           endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;
@@ -739,11 +759,11 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       : create(GroupModelOverrideSchema, { platform: platform || 'onebot', groupId, bindings: [] });
     void openDialog({
       title: '群级模型配置',
-      description: '仅保存相对于全局配置的 diff。',
+      description: '仅保存相对于实例默认配置的差异。',
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承全局', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {

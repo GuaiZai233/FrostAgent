@@ -2,6 +2,7 @@ package memory
 
 import (
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/storage"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,6 +85,8 @@ func SafeGroupKey(groupID string) string {
 // in an isolated directory under groups/<safe_group_key>/.
 type GroupStore struct {
 	groupID          string
+	platform         string
+	sql              *sqlBrainStore
 	dir              string
 	profilePath      string
 	memoryPath       string
@@ -143,6 +146,20 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 	return store, nil
 }
 
+func newSQLGroupStore(db *storage.DB, instanceID, platform, groupID string) (*GroupStore, error) {
+	canon := CanonicalGroupID(groupID)
+	if canon == "" || platform == "" {
+		return nil, errors.New("group platform and ID are required")
+	}
+	store := &GroupStore{
+		groupID: canon, platform: platform,
+		sql:    &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopeGroup, platform: platform, groupID: canon},
+		routes: make(map[string]core.RouteContext),
+	}
+	store.catalog = NewSQLCatalogStore(db, instanceID, ScopeGroup, platform, canon)
+	return store, nil
+}
+
 // GroupID returns the logical group ID.
 func (s *GroupStore) GroupID() string {
 	return s.groupID
@@ -184,6 +201,9 @@ func (s *GroupStore) atomicWriteFile(path string, data []byte) error {
 
 // loadProfile reads the group profile from disk.
 func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
+	if s.sql != nil {
+		return s.loadSQLProfile()
+	}
 	data, err := os.ReadFile(s.profilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -207,6 +227,9 @@ func (s *GroupStore) loadProfileLocked() (*GroupProfile, error) {
 
 // saveProfileLocked writes the group profile to disk.
 func (s *GroupStore) saveProfileLocked(profile *GroupProfile) error {
+	if s.sql != nil {
+		return s.saveSQLProfile(profile)
+	}
 	profile.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -232,6 +255,9 @@ func (s *GroupStore) ObserveMember(userID, nickname, card, role, source string) 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.observeSQLMember(userID, nickname, card, role, source)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -286,6 +312,9 @@ func (s *GroupStore) UpdateGroupName(name string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLGroupName(name)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -308,6 +337,9 @@ func (s *GroupStore) UpdateMemberRole(userID string, role GroupRole) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLMemberFields(userID, role, "", nil, true)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -337,6 +369,9 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.updateSQLMemberFields(userID, "", preferredName, aliases, false)
+	}
 
 	profile, err := s.loadProfileLocked()
 	if err != nil {
@@ -369,6 +404,9 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 
 // loadMemoryLocked reads the group memory entries from disk.
 func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
+	if s.sql != nil {
+		return s.sql.load()
+	}
 	data, err := os.ReadFile(s.memoryPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -390,6 +428,9 @@ func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 
 // saveMemoryLocked writes the group memory data to disk atomically.
 func (s *GroupStore) saveMemoryLocked(brain *BrainData) error {
+	if s.sql != nil {
+		return s.sql.save(brain)
+	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal group memory: %w", err)
@@ -430,6 +471,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 	}
 
 	now := time.Now()
+	changedIDs := make(map[string]struct{}, len(entries))
 	for i := range entries {
 		incoming := &entries[i]
 		incoming.ScopeType = ScopeGroup
@@ -481,6 +523,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 			}
 			brain.Entries = append(brain.Entries, *incoming)
 		}
+		changedIDs[incoming.ID] = struct{}{}
 	}
 
 	// Initial pre-commit verification before hook
@@ -510,6 +553,20 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		return ErrConditionFailed
 	}
 
+	if s.sql != nil {
+		changed := make([]MemoryEntry, 0, len(changedIDs))
+		seenIDs := make(map[string]struct{}, len(brain.Entries))
+		for _, entry := range brain.Entries {
+			if _, duplicate := seenIDs[entry.ID]; duplicate {
+				return fmt.Errorf("duplicate memory ID %s", entry.ID)
+			}
+			seenIDs[entry.ID] = struct{}{}
+			if _, ok := changedIDs[entry.ID]; ok {
+				changed = append(changed, entry)
+			}
+		}
+		return s.sql.upsertEntries(changed)
+	}
 	return s.saveMemoryLocked(brain)
 }
 
@@ -734,6 +791,9 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 func (s *GroupStore) IncrementAccessCount(memoryIDs ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.sql.incrementAccessCounts(memoryIDs)
+	}
 
 	brain, err := s.loadMemoryLocked()
 	if err != nil {
@@ -1133,4 +1193,3 @@ func mergeMemoryTags(existing, incoming []string) []string {
 	}
 	return SanitizeTags(res)
 }
-

@@ -544,7 +544,8 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-export function createInstanceAPI() {
+export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
+  let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
   const transport = createConnectTransport({
@@ -596,7 +597,20 @@ export function createInstanceAPI() {
 
   const modelRouterClient: Client<typeof ModelRouterService> = createClient(
     ModelRouterService,
-    transport,
+    options.globalModelCatalog
+      ? createConnectTransport({
+          baseUrl: window.location.origin,
+          interceptors: [authInterceptor],
+          fetch: (input, init) => {
+            selectionSignal.throwIfAborted();
+            const request = new Request(input, init);
+            if (options.catalogDraftOwner) request.headers.set('X-FrostAgent-Catalog-Draft', options.catalogDraftOwner);
+            return fetch(new Request(request, {
+              signal: AbortSignal.any([request.signal, selectionSignal]),
+            }));
+          },
+        })
+      : transport,
   );
 
   const dialogueClient: Client<typeof DialogueService> = createClient(
@@ -742,6 +756,12 @@ export function createInstanceAPI() {
       return modelRouterClient.discardDraft({}).then((res) => res.draft);
     },
 
+    resetSharedCatalogDraft(): Promise<ModelRouterConfiguration | undefined> {
+      if (!options.globalModelCatalog) throw new Error('只能在共享供应商页面重置草稿');
+      return modelRouterClient.discardDraft({}, { headers: { 'X-FrostAgent-Catalog-Draft-Reset': 'true' } })
+        .then((res) => res.draft);
+    },
+
     publishModelRouter(): Promise<PublishResponse> {
       return modelRouterClient.publish({});
     },
@@ -757,6 +777,7 @@ export function createInstanceAPI() {
     },
 
     // Memory
+    setMemoryPlatform(platform: string): void { memoryPlatform = platform; },
     listMemories(
       pageSize: number,
       pageToken = '',
@@ -769,15 +790,16 @@ export function createInstanceAPI() {
         owner,
         scope,
         groupId,
+        platform: memoryPlatform,
       });
     },
 
     deleteMemory(id: string, scope = '', groupId = ''): Promise<DeleteMemoryResponse> {
-      return memoryClient.deleteMemory({ id, scope, groupId });
+      return memoryClient.deleteMemory({ id, scope, groupId, platform: memoryPlatform });
     },
 
     getMemoryStats(scope = '', groupId = ''): Promise<GetMemoryStatsResponse> {
-      return memoryClient.getMemoryStats({ scope, groupId });
+      return memoryClient.getMemoryStats({ scope, groupId, platform: memoryPlatform });
     },
 
     searchMemories(
@@ -792,6 +814,7 @@ export function createInstanceAPI() {
         pagination: { pageSize, pageToken },
         scope,
         groupId,
+        platform: memoryPlatform,
       });
     },
 
@@ -802,7 +825,7 @@ export function createInstanceAPI() {
       scope = '',
       groupId = '',
     ): Promise<AddMemoryResponse> {
-      return memoryClient.addMemory({ owner, content, tags, scope, groupId });
+      return memoryClient.addMemory({ owner, content, tags, scope, groupId, platform: memoryPlatform });
     },
 
     updateMemory(
@@ -818,11 +841,12 @@ export function createInstanceAPI() {
         tags,
         scope,
         groupId,
+        platform: memoryPlatform,
       });
     },
 
     exportMemories(scope = '', groupId = ''): Promise<ExportMemoriesResponse> {
-      return memoryClient.exportMemories({ scope, groupId });
+      return memoryClient.exportMemories({ scope, groupId, platform: memoryPlatform });
     },
 
     importMemories(
@@ -831,11 +855,11 @@ export function createInstanceAPI() {
       scope = '',
       groupId = '',
     ): Promise<ImportMemoriesResponse> {
-      return memoryClient.importMemories({ jsonContent, overwrite, scope, groupId });
+      return memoryClient.importMemories({ jsonContent, overwrite, scope, groupId, platform: memoryPlatform });
     },
 
     triggerMemoryReflection(owner = '', scope = '', groupId = ''): Promise<TriggerReflectionResponse> {
-      return memoryClient.triggerReflection({ owner, scope, groupId });
+      return memoryClient.triggerReflection({ owner, scope, groupId, platform: memoryPlatform });
     },
 
     listGroups(): Promise<ListGroupsResponse> {
@@ -843,11 +867,11 @@ export function createInstanceAPI() {
     },
 
     getGroupProfile(groupId: string): Promise<GetGroupProfileResponse> {
-      return memoryClient.getGroupProfile({ groupId });
+      return memoryClient.getGroupProfile({ groupId, platform: memoryPlatform });
     },
 
     updateGroupProfile(groupId: string, groupName: string): Promise<UpdateGroupProfileResponse> {
-      return memoryClient.updateGroupProfile({ groupId, groupName });
+      return memoryClient.updateGroupProfile({ groupId, groupName, platform: memoryPlatform });
     },
 
     updateMemberProfile(
@@ -856,7 +880,7 @@ export function createInstanceAPI() {
       preferredName: string,
       aliases: string[],
     ): Promise<UpdateMemberProfileResponse> {
-      return memoryClient.updateMemberProfile({ groupId, userId, preferredName, aliases });
+      return memoryClient.updateMemberProfile({ groupId, userId, preferredName, aliases, platform: memoryPlatform });
     },
 
     // Dialogue Examples

@@ -48,6 +48,7 @@ message ListMemoriesRequest {
   Pagination pagination = 2;
   string scope = 3;           // "private" or "group" (empty = "private")
   string group_id = 4;        // required when scope == "group"
+  string platform = 5;
 }
 
 message ListMemoriesResponse {
@@ -60,6 +61,7 @@ message SearchMemoriesRequest {
   Pagination pagination = 2;
   string scope = 3;           // "private" or "group"
   string group_id = 4;        // required when scope == "group"
+  string platform = 5;
 }
 
 message SearchMemoriesResponse {
@@ -74,6 +76,7 @@ message AddMemoryRequest {
   string visibility = 4;      // deprecated
   string scope = 5;           // "private" or "group"
   string group_id = 6;        // required when scope == "group"
+  string platform = 7;
 }
 
 message AddMemoryResponse {
@@ -88,6 +91,7 @@ message UpdateMemoryRequest {
   string visibility = 4;      // deprecated
   string scope = 5;           // "private" or "group"
   string group_id = 6;        // required when scope == "group"
+  string platform = 7;
 }
 
 message UpdateMemoryResponse {
@@ -99,6 +103,7 @@ message DeleteMemoryRequest {
   string id = 1;
   string scope = 2;           // "private" or "group"
   string group_id = 3;        // required when scope == "group"
+  string platform = 4;
 }
 
 message DeleteMemoryResponse {
@@ -109,6 +114,7 @@ message DeleteMemoryResponse {
 message GetMemoryStatsRequest {
   string scope = 1;           // "private", "group", or empty
   string group_id = 2;        // group id when scope == "group"
+  string platform = 3;
 }
 
 message GetMemoryStatsResponse {
@@ -124,6 +130,7 @@ message GetMemoryStatsResponse {
 message ExportMemoriesRequest {
   string scope = 1;           // "private" or "group"
   string group_id = 2;
+  string platform = 3;
 }
 
 message ExportMemoriesResponse {
@@ -136,6 +143,7 @@ message ImportMemoriesRequest {
   bool overwrite = 2;         // overwrite existing IDs
   string scope = 3;           // "private" or "group"
   string group_id = 4;
+  string platform = 5;
 }
 
 message ImportMemoriesResponse {
@@ -148,6 +156,7 @@ message TriggerReflectionRequest {
   string owner = 1;           // empty = reflect all owners
   string scope = 2;           // "private" or "group"
   string group_id = 3;
+  string platform = 4;
 }
 
 message TriggerReflectionResponse {
@@ -167,6 +176,7 @@ message GroupSummary {
   int32 member_count = 3;
   int32 memory_count = 4;
   string updated_at = 5;
+  string platform = 6;
 }
 
 message ListGroupsRequest {}
@@ -198,6 +208,7 @@ message GroupProfile {
 
 message GetGroupProfileRequest {
   string group_id = 1;
+  string platform = 2;
 }
 
 message GetGroupProfileResponse {
@@ -208,6 +219,7 @@ message GetGroupProfileResponse {
 message UpdateGroupProfileRequest {
   string group_id = 1;
   string group_name = 2;
+  string platform = 3;
 }
 
 message UpdateGroupProfileResponse {
@@ -220,6 +232,7 @@ message UpdateMemberProfileRequest {
   string user_id = 2;
   string preferred_name = 3;
   repeated string aliases = 4;
+  string platform = 5;
 }
 
 message UpdateMemberProfileResponse {

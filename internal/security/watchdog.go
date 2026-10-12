@@ -3,6 +3,7 @@ package security
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/storage"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -118,6 +119,14 @@ type AuditStore struct {
 	path  string
 	limit int
 	mu    sync.Mutex
+	db    *storage.DB
+}
+
+func NewSQLAuditStore(db *storage.DB, limit int) *AuditStore {
+	if limit <= 0 {
+		limit = 1000
+	}
+	return &AuditStore{db: db, limit: limit}
 }
 
 func NewAuditStore(path string, limit int) *AuditStore {
@@ -135,6 +144,9 @@ func (s *AuditStore) Append(event AuditEvent) error {
 	}
 	if event.ID == "" {
 		event.ID = ContentHash(event.At.String() + event.Hash)[:16]
+	}
+	if s.db != nil {
+		return s.appendSQL(event)
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -188,6 +200,9 @@ func (s *AuditStore) Append(event AuditEvent) error {
 func (s *AuditStore) List(limit int) ([]AuditEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		return s.listSQL(limit)
+	}
 	data, err := osReadFile(s.path)
 	if err != nil {
 		return nil, err

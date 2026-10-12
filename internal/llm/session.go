@@ -285,8 +285,8 @@ type SessionContext struct {
 	groupStore              *memory.GroupStore
 	scope                   *runtimescope.Scope
 	pendingTurns            [][]memory.PendingExtractionItem
-	extractionThreshold    int
-	deliveryFailure        *DeliveryFailure
+	extractionThreshold     int
+	deliveryFailure         *DeliveryFailure
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
@@ -1430,18 +1430,33 @@ func (g *StagedGroupCompactGuard) Promote() bool {
 
 // Drop permanently removes the staged message and invalidates in-flight compaction snapshots.
 func (g *StagedGroupCompactGuard) Drop() bool {
+	dropped, _ := g.DropChecked()
+	return dropped
+}
+
+// DropChecked reports a failed durable purge to the caller.
+func (g *StagedGroupCompactGuard) DropChecked() (bool, error) {
 	if g == nil || !g.finalized.CompareAndSwap(false, true) {
-		return false
+		return false, nil
 	}
 	dropped := false
 	if g.session != nil {
-		for _, seq := range g.sequences {
-			if g.session.DropGroupCompactSlot(seq, g.messageID, g.senderID) {
-				dropped = true
-			}
+		if len(g.sequences) == 0 {
+			return g.session.DropGroupCompactSlotChecked(0, g.messageID, g.senderID)
 		}
+		var dropErr error
+		for i, seq := range g.sequences {
+			messageID := ""
+			if i == len(g.sequences)-1 {
+				messageID = g.messageID
+			}
+			removed, err := g.session.DropGroupCompactSlotChecked(seq, messageID, g.senderID)
+			dropped = dropped || removed
+			dropErr = errors.Join(dropErr, err)
+		}
+		return dropped, dropErr
 	}
-	return dropped
+	return false, nil
 }
 
 // Done ensures the staged message is finalized exactly once. If neither Promote nor Drop
@@ -1519,15 +1534,21 @@ func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize 
 // messageID revocation, invalidates associated snapshot sources, aborts in-flight distillation barriers,
 // and reconciles group store entries.
 func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, senderID string) bool {
+	dropped, _ := s.DropGroupCompactSlotChecked(sequence, messageID, senderID)
+	return dropped
+}
+
+// DropGroupCompactSlotChecked reports durable purge failures to SQL callers.
+func (s *SessionContext) DropGroupCompactSlotChecked(sequence uint64, messageID, senderID string) (bool, error) {
 	if s == nil {
-		return false
+		return false, nil
 	}
 	s.mu.Lock()
 
 	msgID := strings.TrimSpace(messageID)
 	if sequence == 0 && msgID == "" {
 		s.mu.Unlock()
-		return false
+		return false, nil
 	}
 
 	dropped := false
@@ -1536,7 +1557,7 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 		var filtered []groupCompactItem
 		if sequence > 0 {
 			for _, item := range s.groupCompactBuffer {
-				if item.sequence == sequence {
+				if item.staged && item.sequence == sequence {
 					dropped = true
 					continue
 				}
@@ -1617,7 +1638,6 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 	s.groupCompactGeneration++
 	s.UpdatedAt = time.Now()
 	store := s.groupStore
-	scope := s.scope
 	s.mu.Unlock()
 
 	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
@@ -1630,19 +1650,22 @@ func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, sender
 	// strictly scoped to this specific message ID. Never purge by sender.
 	if store != nil && msgID != "" {
 		if err := store.PurgeDistilledEntries(msgID); err != nil {
-			if scope != nil && scope.Logger != nil {
-				scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("reconciliation purge failed for message %s: %v", msgID, err))
-			}
+			return dropped || len(barriersToAbort) > 0, fmt.Errorf("purge distilled group memory: %w", err)
 		}
 	}
 
-	return dropped || len(barriersToAbort) > 0
+	return dropped || len(barriersToAbort) > 0, nil
 }
 
 // DropGroupCompactMessage removes group compact messages matching messageID (if non-empty).
 // If messageID is empty, it returns false and never guesses or deletes any buffer items.
 func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) bool {
 	return s.DropGroupCompactSlot(0, messageID, senderID)
+}
+
+// DropGroupCompactMessageChecked reports durable purge failures to SQL callers.
+func (s *SessionContext) DropGroupCompactMessageChecked(messageID, senderID string) (bool, error) {
+	return s.DropGroupCompactSlotChecked(0, messageID, senderID)
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -1825,15 +1848,30 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 // CommitGroupCompact replaces the running summary and removes only raw
 // messages included in snapshot. It rejects results invalidated by deletion.
 func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) bool {
+	committed, _ := s.CommitGroupCompactWithPersistence(snapshot, summary, nil)
+	return committed
+}
+
+// CommitGroupCompactWithPersistence keeps a SQL summary durable before it is
+// visible to readers or removed from the raw-message buffer.
+func (s *SessionContext) CommitGroupCompactWithPersistence(
+	snapshot GroupCompactSnapshot, summary string, persist func() (bool, error),
+) (bool, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return false
+		return false, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snapshot.Generation != s.groupCompactGeneration {
-		return false
+		return false, nil
+	}
+	if persist != nil {
+		applied, err := persist()
+		if err != nil || !applied {
+			return false, err
+		}
 	}
 
 	// Stash previous clean state for potential rollback upon subsequent ban
@@ -1903,7 +1941,7 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 		s.groupCompactBuffer = remaining
 	}
 	s.UpdatedAt = time.Now()
-	return true
+	return true, nil
 }
 
 // GroupRunningSummary returns the latest completed group summary.
@@ -2039,7 +2077,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.extractionThreshold == 0 {
+	if s.extractionThreshold < minTurns || s.extractionThreshold > maxTurns {
 		s.extractionThreshold = minTurns
 		if width := maxTurns - minTurns + 1; width > 1 {
 			s.extractionThreshold += rand.IntN(width)
@@ -2119,6 +2157,27 @@ func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.groupSummaryStore = store
+}
+
+// TransferSessionsTo keeps live conversation state when an instance runtime is
+// rebuilt after a database setting change. The old runtime must be stopped first.
+func (sm *SessionManager) TransferSessionsTo(next *SessionManager) {
+	if sm == nil || next == nil || sm == next {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	for id, session := range sm.sessions {
+		session.SetScope(next.Scope)
+		next.sessions[id] = session
+	}
+	for id, name := range sm.groupNames {
+		next.groupNames[id] = name
+	}
+	sm.sessions = make(map[string]*SessionContext)
+	sm.groupNames = make(map[string]string)
 }
 
 // GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。

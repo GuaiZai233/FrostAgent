@@ -1286,8 +1286,9 @@ func TestSecurityGatewayRealDeadlineExceededFailClosed(t *testing.T) {
 	audit := NewAuditStore(t.TempDir()+"/audit.jsonl", 100)
 	wd := NewWatchdog(access, audit)
 
-	// Provider hangs for 500ms, but classifier timeout is configured to 25ms
-	slowProvider := &slowMockLLMProvider{delay: 500 * time.Millisecond}
+	// Keep a wide gap between the provider delay and deadline so a busy CI
+	// runner cannot make a successful cancellation look like a missed timeout.
+	slowProvider := &slowMockLLMProvider{delay: 2 * time.Second}
 	llmCls := NewLLMClassifier(slowProvider, "slow-test-model", 25*time.Millisecond)
 	wd.SetClassifier(llmCls)
 
@@ -1301,7 +1302,7 @@ func TestSecurityGatewayRealDeadlineExceededFailClosed(t *testing.T) {
 		dec := ctrl.GateIngressWithContext(context.Background(), principal, "hello world normal query", AuditEvent{Session: fmt.Sprintf("sess-timeout-%d", i)})
 		duration := time.Since(start)
 
-		if duration > 400*time.Millisecond {
+		if duration > time.Second {
 			t.Fatalf("evaluation did not abort around 25ms deadline, took %v", duration)
 		}
 

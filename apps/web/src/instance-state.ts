@@ -3,8 +3,8 @@ export interface InstanceInfo {
   name: string;
   created_at: string;
   enabled: boolean;
+  deleting?: boolean;
   error?: string;
-  restart_required?: boolean;
 }
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();

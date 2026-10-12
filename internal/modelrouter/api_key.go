@@ -1,7 +1,11 @@
 package modelrouter
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +30,26 @@ type SecretBackend struct {
 	manualPath string
 	manual     map[string]string
 	draft      map[string]secretMutation
+	db         *storage.DB
+	instanceID string
+}
+
+func newSQLSecretBackend(db *storage.DB, instanceID string) (*SecretBackend, error) {
+	backend := &SecretBackend{db: db, instanceID: instanceID,
+		manual: make(map[string]string), draft: make(map[string]secretMutation)}
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT ref, secret FROM provider_secrets`))
+	if err != nil {
+		return backend, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ref, value string
+		if err := rows.Scan(&ref, &value); err != nil {
+			return backend, err
+		}
+		backend.manual[ref] = value
+	}
+	return backend, rows.Err()
 }
 
 type manualSecretStore struct {
@@ -93,6 +117,14 @@ func (b *SecretBackend) Resolve(endpoint Endpoint) (string, error) {
 	ref := strings.TrimSpace(endpoint.APIKeyRef)
 	switch endpoint.APIKeySource {
 	case "", APIKeyStorageManual:
+		if b.db != nil {
+			var value string
+			err := b.db.SQL.QueryRowContext(context.Background(), b.db.Bind(`SELECT secret FROM provider_secrets WHERE ref = ?`), ref).Scan(&value)
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", nil
+			}
+			return value, err
+		}
 		b.mu.RLock()
 		apiKey := b.manual[ref]
 		b.mu.RUnlock()
@@ -220,6 +252,10 @@ func (b *SecretBackend) StoreForMigration(endpoint Endpoint, value string) error
 }
 
 func (b *SecretBackend) Apply(previous, next Configuration) (func() error, error) {
+	return b.apply(previous, next, true)
+}
+
+func (b *SecretBackend) apply(previous, next Configuration, persist bool) (func() error, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -282,7 +318,7 @@ func (b *SecretBackend) Apply(previous, next Configuration) (func() error, error
 		}
 	}
 
-	if manualChanged {
+	if manualChanged && persist {
 		if err := b.writeManualLocked(); err != nil {
 			b.manual = manualBefore
 			_ = restoreWindowsCredentials(windowsBefore)
@@ -300,7 +336,7 @@ func (b *SecretBackend) Apply(previous, next Configuration) (func() error, error
 		rolledBack = true
 		b.manual = cloneSecretMap(manualBefore)
 		var firstErr error
-		if manualChanged {
+		if manualChanged && persist {
 			firstErr = b.writeManualLocked()
 		}
 		if err := restoreWindowsCredentials(windowsBefore); firstErr == nil {
@@ -341,6 +377,9 @@ func restoreWindowsCredentials(states map[string]credentialState) error {
 }
 
 func (b *SecretBackend) writeManualLocked() error {
+	if b.db != nil {
+		return fmt.Errorf("SQL credentials require a catalog transaction")
+	}
 	return writeJSONAtomic(b.manualPath, manualSecretStore{
 		Version: manualSecretStoreVersion,
 		Secrets: cloneSecretMap(b.manual),

@@ -50,7 +50,7 @@ func (s *Service) ListMemories(
 		if s.groupManager == nil {
 			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("group memory manager not initialized"))
 		}
-		groupStore, gErr := s.groupManager.GetGroupStore(groupID)
+		groupStore, gErr := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if gErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get group store: %w", gErr))
 		}
@@ -100,7 +100,7 @@ func (s *Service) SearchMemories(
 		if s.groupManager == nil {
 			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("group memory manager not initialized"))
 		}
-		groupStore, gErr := s.groupManager.GetGroupStore(groupID)
+		groupStore, gErr := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if gErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get group store: %w", gErr))
 		}
@@ -146,7 +146,7 @@ func (s *Service) AddMemory(
 		if s.groupManager == nil {
 			return connect.NewResponse(&v1.AddMemoryResponse{Error: "group memory manager not initialized"}), nil
 		}
-		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if err != nil {
 			return connect.NewResponse(&v1.AddMemoryResponse{Error: err.Error()}), nil
 		}
@@ -224,7 +224,7 @@ func (s *Service) UpdateMemory(
 		if s.groupManager == nil {
 			return connect.NewResponse(&v1.UpdateMemoryResponse{Success: false, Error: "group memory manager not initialized"}), nil
 		}
-		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if err != nil {
 			return connect.NewResponse(&v1.UpdateMemoryResponse{Success: false, Error: err.Error()}), nil
 		}
@@ -265,7 +265,7 @@ func (s *Service) DeleteMemory(
 		if s.groupManager == nil {
 			return connect.NewResponse(&v1.DeleteMemoryResponse{Success: false, Error: "group memory manager not initialized"}), nil
 		}
-		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if err != nil {
 			return connect.NewResponse(&v1.DeleteMemoryResponse{Success: false, Error: err.Error()}), nil
 		}
@@ -295,7 +295,7 @@ func (s *Service) GetMemoryStats(
 		if s.groupManager == nil {
 			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("group memory manager not initialized"))
 		}
-		groupStore, err := s.groupManager.GetGroupStore(req.Msg.GetGroupId())
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), req.Msg.GetGroupId())
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
@@ -368,7 +368,7 @@ func (s *Service) ExportMemories(
 		if s.groupManager == nil {
 			return connect.NewResponse(&v1.ExportMemoriesResponse{Error: "group memory manager not initialized"}), nil
 		}
-		groupStore, gErr := s.groupManager.GetGroupStore(groupID)
+		groupStore, gErr := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if gErr != nil {
 			return connect.NewResponse(&v1.ExportMemoriesResponse{Error: gErr.Error()}), nil
 		}
@@ -430,7 +430,7 @@ func (s *Service) ImportMemories(
 		if s.groupManager == nil {
 			return connect.NewResponse(&v1.ImportMemoriesResponse{Error: "group memory manager not initialized"}), nil
 		}
-		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if err != nil {
 			return connect.NewResponse(&v1.ImportMemoriesResponse{Error: err.Error()}), nil
 		}
@@ -481,7 +481,7 @@ func (s *Service) TriggerReflection(
 				Error: "group memory manager not initialized",
 			}), nil
 		}
-		groupStore, err := s.groupManager.GetGroupStore(groupID)
+		groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 		if err != nil {
 			return connect.NewResponse(&v1.TriggerReflectionResponse{
 				Error: err.Error(),
@@ -537,6 +537,7 @@ func (s *Service) ListGroups(
 	for i, sm := range summaries {
 		result[i] = &v1.GroupSummary{
 			GroupId:     sm.GroupID,
+			Platform:    sm.Platform,
 			GroupName:   sm.GroupName,
 			MemberCount: int32(sm.MemberCount),
 			MemoryCount: int32(sm.MemoryCount),
@@ -559,7 +560,7 @@ func (s *Service) GetGroupProfile(
 		return connect.NewResponse(&v1.GetGroupProfileResponse{Error: "group memory manager not initialized"}), nil
 	}
 
-	groupStore, err := s.groupManager.GetGroupStore(groupID)
+	groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 	if err != nil {
 		return connect.NewResponse(&v1.GetGroupProfileResponse{Error: err.Error()}), nil
 	}
@@ -614,7 +615,7 @@ func (s *Service) UpdateGroupProfile(
 		return connect.NewResponse(&v1.UpdateGroupProfileResponse{Success: false, Error: "group memory manager not initialized"}), nil
 	}
 
-	groupStore, err := s.groupManager.GetGroupStore(groupID)
+	groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 	if err != nil {
 		return connect.NewResponse(&v1.UpdateGroupProfileResponse{Success: false, Error: err.Error()}), nil
 	}
@@ -639,7 +640,7 @@ func (s *Service) UpdateMemberProfile(
 		return connect.NewResponse(&v1.UpdateMemberProfileResponse{Success: false, Error: "group memory manager not initialized"}), nil
 	}
 
-	groupStore, err := s.groupManager.GetGroupStore(groupID)
+	groupStore, err := s.groupManager.GetGroupStoreForPlatform(req.Msg.GetPlatform(), groupID)
 	if err != nil {
 		return connect.NewResponse(&v1.UpdateMemberProfileResponse{Success: false, Error: err.Error()}), nil
 	}

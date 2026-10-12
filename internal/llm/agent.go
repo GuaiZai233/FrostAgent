@@ -154,6 +154,39 @@ type Engine struct {
 	stickerActivity stickerActivityState
 }
 
+// DropRejectedGroupMessage keeps a failed SQL purge from being ignored by the
+// adapter. Canceling the runtime scope stops new work until it is rebuilt.
+func (e *Engine) DropRejectedGroupMessage(session *SessionContext, guard *StagedGroupCompactGuard, messageID, senderID string) {
+	if session == nil {
+		return
+	}
+	var err error
+	if guard != nil {
+		_, err = guard.DropChecked()
+	} else {
+		_, err = session.DropGroupCompactMessageChecked(messageID, senderID)
+	}
+	e.PauseOnStorageError(err)
+}
+
+func (e *Engine) PauseOnStorageError(err error) {
+	if err == nil {
+		return
+	}
+	e.Log().Error(logs.SYSTEM, fmt.Sprintf("数据库状态更新失败，实例已暂停: %v", err))
+	if e.Scope != nil {
+		e.Scope.Cancel()
+	}
+}
+
+func (e *Engine) memoryFailure(operation string, err error) AgentRunResult {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if e.Scope != nil && e.Scope.Config != nil && e.Scope.Config.IsDatabase() {
+		e.PauseOnStorageError(wrapped)
+	}
+	return AgentRunResult{Error: wrapped}
+}
+
 // EffectiveMaxIterations resolves the effective iteration limit captured
 // on Engine.MaxIterations, falling back to DefaultMaxIterations (35) if unset.
 // It preserves restart-required semantics so running engines do not mutate
@@ -225,6 +258,21 @@ func (e *Engine) RunMessagesWithUser(
 	})
 }
 
+// buildContextSystemPrompt keeps stable instructions before request-local data
+// so minute-level time changes do not invalidate their prompt-cache prefix.
+func buildContextSystemPrompt(systemPrompt, dialoguePrompt string, now time.Time) string {
+	var parts []string
+	if systemPrompt != "" {
+		parts = append(parts, systemPrompt)
+	}
+	if dialoguePrompt != "" {
+		parts = append(parts, dialoguePrompt)
+	}
+	// Keep the current time available for relative dates (today/tomorrow/this week).
+	parts = append(parts, "当前系统时间："+memory.CurrentTimeLabel(now))
+	return strings.Join(parts, "\n\n")
+}
+
 // RunMessagesWithContext runs one agent request with owner and transport hooks
 // scoped to that request instead of mutable Engine fields.
 func (e *Engine) RunMessagesWithContext(
@@ -258,13 +306,7 @@ func (e *Engine) RunMessagesWithContext(
 	ctx = withRunContext(ctx, runContext)
 
 	if len(messages) == 0 || messages[0].Role != "system" {
-		systemPrompt := e.Getenv("SYSTEM_PROMPT")
-		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
-		systemPrompt = "当前系统时间：" + memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
-
-		if e.PersonaDialogue() != "" {
-			systemPrompt += "\n\n" + e.PersonaDialogue()
-		}
+		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue(), time.Now())
 
 		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
 		if isGroupChat {
@@ -275,11 +317,17 @@ func (e *Engine) RunMessagesWithContext(
 			senderID := runContext.ActorUserID
 
 			if e.GroupManager != nil && groupID != "" {
-				groupStore, gErr := e.GroupManager.GetGroupStore(groupID)
-				if gErr == nil && groupStore != nil {
+				groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
+				if gErr != nil {
+					return e.memoryFailure("open group memory", gErr)
+				}
+				if groupStore != nil {
 					profile, pErr := groupStore.GetProfile()
+					if pErr != nil {
+						return e.memoryFailure("read group profile", pErr)
+					}
 					var senderProfile *memory.MemberProfile
-					if pErr == nil && profile != nil {
+					if profile != nil {
 						senderProfile = profile.GetMember(senderID)
 						if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
 							systemPrompt += "\n\n" + memberPrompt
@@ -289,7 +337,7 @@ func (e *Engine) RunMessagesWithContext(
 					if groupStore.CatalogStore() != nil {
 						catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
 						if cErr != nil {
-							e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取群记忆主题索引失败: %v", cErr))
+							return e.memoryFailure("read group memory catalog", cErr)
 						} else if catalogContext != "" {
 							systemPrompt += "\n\n" + catalogContext
 						}
@@ -298,7 +346,10 @@ func (e *Engine) RunMessagesWithContext(
 					if e.MemoryGateway != nil {
 						lastUserMsg := extractLastUserMessage(messages)
 						raw, sErr := groupStore.Search(lastUserMsg, 0)
-						if sErr == nil && len(raw) > 0 {
+						if sErr != nil {
+							return e.memoryFailure("search group memory", sErr)
+						}
+						if len(raw) > 0 {
 							filtered := e.MemoryGateway.FilterGroup(raw)
 							if len(filtered) > 20 {
 								filtered = filtered[:20]
@@ -308,7 +359,7 @@ func (e *Engine) RunMessagesWithContext(
 								systemPrompt += "\n\n" + groupMemContext
 								if !runContext.Mock {
 									if err := groupStore.RecordRecall(filtered); err != nil {
-										e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录群记忆召回次数失败: %v", err))
+										return e.memoryFailure("record group memory recall", err)
 									}
 								}
 							}
@@ -320,7 +371,7 @@ func (e *Engine) RunMessagesWithContext(
 			if owner != "" && e.MemoryCatalog != nil {
 				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
 				if err != nil {
-					e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
+					return e.memoryFailure("read memory catalog", err)
 				} else if catalogContext != "" {
 					systemPrompt += "\n\n" + catalogContext
 				}
@@ -330,16 +381,17 @@ func (e *Engine) RunMessagesWithContext(
 			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 				lastUserMsg := extractLastUserMessage(messages)
 				raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
-				if err == nil {
-					filtered := e.MemoryGateway.FilterPrivate(raw, owner)
-					filtered = e.MemoryReader.Limit(filtered)
-					if len(filtered) > 0 {
-						memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
-						systemPrompt += "\n\n" + memoryContext
-						if !runContext.Mock {
-							if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
-							}
+				if err != nil {
+					return e.memoryFailure("recall memory", err)
+				}
+				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
+				filtered = e.MemoryReader.Limit(filtered)
+				if len(filtered) > 0 {
+					memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
+					systemPrompt += "\n\n" + memoryContext
+					if !runContext.Mock {
+						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+							return e.memoryFailure("record memory recall", err)
 						}
 					}
 				}
@@ -352,7 +404,7 @@ func (e *Engine) RunMessagesWithContext(
 	}
 
 	// Persist the assembled system prompt so Session Context Inspector can show
-	// the real dynamically-built prompt (time + dialogue + memory) rather than a
+	// the real dynamically-built prompt (instructions + dialogue + time + memory) rather than a
 	// static reconstruction. SessionID is intentionally separate from the memory
 	// owner namespace (for example private:123 versus owner 123).
 	sessionID := strings.TrimSpace(runContext.SessionID)
@@ -511,11 +563,19 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 				if errors.Is(err, context.Canceled) || !validator() {
 					return
 				}
+				if errors.Is(err, memory.ErrStorageUnavailable) {
+					e.PauseOnStorageError(err)
+					return
+				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊批量提取记忆失败 (群: %s): %v", group.groupID, err))
 			}
 		} else {
 			if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
 				if errors.Is(err, context.Canceled) || !validator() {
+					return
+				}
+				if errors.Is(err, memory.ErrStorageUnavailable) {
+					e.PauseOnStorageError(err)
 					return
 				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))

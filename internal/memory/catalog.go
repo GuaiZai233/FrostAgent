@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"FrostAgent/internal/storage"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,12 +38,17 @@ type catalogFile struct {
 // CatalogStore persists replaceable reflection output outside brain.json.
 type CatalogStore struct {
 	path string
+	sql  *sqlBrainStore
 	mu   sync.RWMutex
 }
 
 // NewCatalogStore creates a topic catalog backed by an independent JSON file.
 func NewCatalogStore(path string) *CatalogStore {
 	return &CatalogStore{path: path}
+}
+
+func NewSQLCatalogStore(db *storage.DB, instanceID string, scope ScopeType, platform, groupID string) *CatalogStore {
+	return &CatalogStore{sql: &sqlBrainStore{db: db, instanceID: instanceID, scope: scope, platform: platform, groupID: groupID}}
 }
 
 // Get returns the topic catalog for one owner, resolving legacy and aliased QQ owners.
@@ -203,6 +210,29 @@ func (s *CatalogStore) FormatForGroupPrompt(groupID string) (string, error) {
 }
 
 func (s *CatalogStore) load() (*catalogFile, error) {
+	if s.sql != nil {
+		file := &catalogFile{Version: currentCatalogVersion, Users: make(map[string]UserMemoryCatalog)}
+		b := s.sql
+		rows, err := b.db.SQL.QueryContext(context.Background(), b.db.Bind(`SELECT owner, catalog_json FROM memory_catalogs
+			WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ?`),
+			b.instanceID, b.scope, b.platform, b.groupID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var owner, raw string
+			var catalog UserMemoryCatalog
+			if err := rows.Scan(&owner, &raw); err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal([]byte(raw), &catalog); err != nil {
+				return nil, err
+			}
+			file.Users[owner] = catalog
+		}
+		return file, rows.Err()
+	}
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -236,6 +266,32 @@ func (s *CatalogStore) load() (*catalogFile, error) {
 }
 
 func (s *CatalogStore) save(file *catalogFile) error {
+	if s.sql != nil {
+		b := s.sql
+		ctx := context.Background()
+		tx, err := b.db.SQL.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM memory_catalogs
+			WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ?`),
+			b.instanceID, b.scope, b.platform, b.groupID); err != nil {
+			return err
+		}
+		for owner, catalog := range file.Users {
+			raw, err := json.Marshal(catalog)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO memory_catalogs
+				(instance_id, scope_type, platform, group_id, owner, catalog_json)
+				VALUES (?, ?, ?, ?, ?, ?)`), b.instanceID, b.scope, b.platform, b.groupID, owner, string(raw)); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal memory catalog: %w", err)

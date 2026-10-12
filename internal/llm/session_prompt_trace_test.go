@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -84,6 +85,7 @@ func TestSessionContext_ClearResetsDerivedState(t *testing.T) {
 }
 
 func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
+	t.Setenv("SYSTEM_PROMPT", "Stable system instructions")
 	sessionManager := NewSessionManager()
 	sessionID := "private:10001"
 	sess := sessionManager.GetOrCreate(sessionID)
@@ -96,9 +98,10 @@ func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 		DialoguePrompt: "Few-shot dialogue examples",
 	}
 
-	msgs := []ChatMessage{
+	sess.ReplaceMessages([]ChatMessage{
 		{Role: "user", Content: "Hello world"},
-	}
+	})
+	msgs := sess.Snapshot()
 
 	runCtx := RunContext{
 		SessionID: sessionID,
@@ -115,13 +118,16 @@ func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	if savedModel != "test-llm-model" {
 		t.Errorf("expected model 'test-llm-model', got %q", savedModel)
 	}
-	if !strings.Contains(savedSys, "Few-shot dialogue examples") {
-		t.Errorf("expected saved system prompt to contain 'Few-shot dialogue examples', got %q", savedSys)
-	}
-	if !strings.Contains(savedSys, "当前系统时间：") {
-		t.Errorf("expected saved system prompt to start with '当前系统时间：', got %q", savedSys)
+	if !strings.HasPrefix(savedSys, "Stable system instructions\n\nFew-shot dialogue examples\n\n当前系统时间：") {
+		t.Errorf("expected stable instructions and persona before dynamic time, got %q", savedSys)
 	}
 	if !strings.Contains(savedSys, "星期") {
 		t.Errorf("expected saved system prompt to contain dynamic time, got %q", savedSys)
+	}
+	if len(provider.lastRequest.Messages) != 2 || provider.lastRequest.Messages[0].Role != core.RoleSystem || provider.lastRequest.Messages[0].Content != savedSys {
+		t.Errorf("prompt trace must match the system prompt sent to the provider, got %+v", provider.lastRequest.Messages)
+	}
+	if !reflect.DeepEqual(sess.Snapshot(), msgs) {
+		t.Errorf("dynamic prompt must not pollute session history, got %+v", sess.Snapshot())
 	}
 }

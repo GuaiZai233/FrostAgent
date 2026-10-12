@@ -3,10 +3,41 @@ package runtimescope
 import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/storage"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestSQLScopeDoesNotReadProcessSettingFallback(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "scope.db"))
+	t.Setenv("SECURITY_GATEWAY_TIMEOUT", "99s")
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := instanceconfig.OpenDatabase(db, "test-instance", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global, err := instanceconfig.OpenDatabase(db, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := New(instance, global, logs.General)
+	if got := scope.Getenv("SECURITY_GATEWAY_TIMEOUT"); got != "" {
+		t.Fatalf("process environment leaked into SQL setting: %q", got)
+	}
+	if got, ok := scope.LookupEnv("SECURITY_GATEWAY_TIMEOUT"); ok || got != "" {
+		t.Fatalf("process environment leaked into SQL setting lookup: %q, %t", got, ok)
+	}
+}
 
 func TestScopeSharedKeysPrecedence(t *testing.T) {
 	dir := t.TempDir()

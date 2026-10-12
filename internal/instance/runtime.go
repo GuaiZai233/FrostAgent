@@ -28,6 +28,7 @@ import (
 	"FrostAgent/internal/service/settings"
 	stickersvc "FrostAgent/internal/service/sticker"
 	"FrostAgent/internal/sticker"
+	"FrostAgent/internal/storage"
 	"FrostAgent/internal/tools"
 	"fmt"
 	"net/http"
@@ -50,7 +51,7 @@ type Runtime struct {
 	Astrbot *astrbot.Adapter
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -72,7 +73,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			scope.Wait()
 		}
 	}()
-	routerManager := modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
+	var routerManager *modelrouter.Manager
+	if db != nil {
+		routerManager = modelrouter.NewSQL(db, instanceID, scope)
+	} else {
+		routerManager = modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
+	}
 	if err := routerManager.LoadError(); err != nil {
 		if enabled {
 			return nil, err
@@ -100,17 +106,30 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 
 	// Initialize memory system
-	store := memory.NewStore(filepath.Join(dir, "brain.json"))
-	groupManager := memory.NewGroupManager(dir, scope)
-	if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
-		return nil, fmt.Errorf("migrate legacy group memories: %w", err)
+	var store *memory.Store
+	var groupManager *memory.GroupManager
+	if db != nil {
+		store = memory.NewSQLStore(db, instanceID)
+		groupManager = memory.NewSQLGroupManager(db, instanceID, scope)
+	} else {
+		store = memory.NewStore(filepath.Join(dir, "brain.json"))
+		groupManager = memory.NewGroupManager(dir, scope)
+		if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
+			return nil, fmt.Errorf("migrate legacy group memories: %w", err)
+		}
 	}
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope
 	writer.SetGroupManager(groupManager)
 	writer.SetLLM(memoryProvider, "model-router-memory-extract")
-	groupSummaryStore, err := groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
+	var groupSummaryStore *groupsummary.Store
+	var err error
+	if db != nil {
+		groupSummaryStore, err = groupsummary.NewSQLStore(db, instanceID)
+	} else {
+		groupSummaryStore, err = groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +165,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
-	catalog := memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
+	var catalog *memory.CatalogStore
+	if db != nil {
+		catalog = memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
+	} else {
+		catalog = memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
+	}
 	reflector := memory.NewReflector(
 		store,
 		catalog,
@@ -232,7 +256,13 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	var summarizer *sticker.Summarizer
 	var stealer *sticker.Stealer
-	stickerStore, err2 := sticker.NewStore(filepath.Join(dir, "sticker"))
+	var stickerStore *sticker.Store
+	var err2 error
+	if db != nil {
+		stickerStore, err2 = sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
+	} else {
+		stickerStore, err2 = sticker.NewStore(filepath.Join(dir, "sticker"))
+	}
 	if err2 != nil {
 		return nil, err2
 	} else {
@@ -257,17 +287,24 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	dispatcher := core.NewDefaultDispatcher()
 
 	dialoguePath := filepath.Join(configDir, "dialogue.yml")
-	if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
-		var dialogueContent []byte
-		if templateDialogue != "" {
-			dialogueContent, _ = os.ReadFile(templateDialogue)
+	if db == nil {
+		if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
+			var dialogueContent []byte
+			if templateDialogue != "" {
+				dialogueContent, _ = os.ReadFile(templateDialogue)
+			}
+			if len(dialogueContent) == 0 {
+				dialogueContent = []byte("[]\n")
+			}
+			_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
 		}
-		if len(dialogueContent) == 0 {
-			dialogueContent = []byte("[]\n")
-		}
-		_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
 	}
-	dialoguePrompt, err := llm.LoadDialoguePrompt(dialoguePath)
+	var dialoguePrompt string
+	if db != nil {
+		dialoguePrompt, err = dialogue.LoadPromptSQL(db, instanceID)
+	} else {
+		dialoguePrompt, err = llm.LoadDialoguePrompt(dialoguePath)
+	}
 	if err != nil && !os.IsNotExist(err) {
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
@@ -337,7 +374,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	)
 	mux.Handle(memoryPath, memoryHandler)
 
-	dialogueSvc := dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
+	var dialogueSvc *dialogue.Service
+	if db != nil {
+		dialogueSvc = dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
+	} else {
+		dialogueSvc = dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
+	}
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
 		dialogueSvc,
 	)
