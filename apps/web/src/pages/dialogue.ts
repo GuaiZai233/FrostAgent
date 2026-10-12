@@ -182,6 +182,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
     systemPromptDisplay.style.display = systemPromptEditing ? 'none' : 'block';
     systemPromptEditor.style.display = systemPromptEditing ? 'flex' : 'none';
     systemPromptEditBtn.disabled = !systemPromptLoaded || systemPromptEditing || systemPromptSaving;
+    systemPromptInput.disabled = systemPromptSaving;
     systemPromptCancelBtn.disabled = systemPromptSaving;
     systemPromptSaveBtn.disabled = systemPromptSaving;
     if (!systemPromptEditing) {
@@ -703,7 +704,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
 
   refreshBtn.addEventListener('click', () => {
     void loadData();
-    void loadSystemPrompt();
+    if (!systemPromptEditing) void loadSystemPrompt();
     if (viewMode === 'raw') void loadRawYaml();
   });
 

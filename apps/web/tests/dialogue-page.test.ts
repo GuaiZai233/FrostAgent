@@ -40,12 +40,18 @@ toast.success = (message) => {
 
 let storedPrompt = '原有人格\n第二行';
 let saveSucceeds = true;
+let deferSave = false;
+let resolvePendingSave: (() => void) | undefined;
+let envLoads = 0;
+let dialogueLoads = 0;
 const updates: Array<{ key: string; value: string; isSecret: boolean }> = [];
 const api = {
   async listEnvVars() {
+    envLoads++;
     return [{ key: 'SYSTEM_PROMPT', value: storedPrompt, isSecret: false }];
   },
   async listDialogues() {
+    dialogueLoads++;
     return { dialogues: [], promptPreview: '', filePath: '' };
   },
   async updateEnvVar(update: {
@@ -54,6 +60,14 @@ const api = {
     isSecret: boolean;
   }) {
     updates.push(update);
+    if (deferSave) {
+      return new Promise<{ success: boolean; error: string }>((resolve) => {
+        resolvePendingSave = () => {
+          storedPrompt = update.value;
+          resolve({ success: true, error: '' });
+        };
+      });
+    }
     if (!saveSucceeds) return { success: false, error: 'write failed' };
     storedPrompt = update.value;
     return { success: true, error: '' };
@@ -69,6 +83,7 @@ const input = root.querySelector('#system-prompt-input');
 const edit = root.querySelector('#system-prompt-edit-btn');
 const save = root.querySelector('#system-prompt-save-btn');
 const cancel = root.querySelector('#system-prompt-cancel-btn');
+const refresh = root.querySelector('#dialogue-refresh-btn');
 
 assert.equal(
   edit.disabled,
@@ -83,9 +98,24 @@ assert.equal(edit.disabled, false);
 edit.click();
 assert.equal(input.value, '原有人格\n第二行');
 assert.equal(editor.style.display, 'flex');
-input.value = '新的人格\n第二行';
-save.click();
+input.value = '未保存草稿';
+refresh.click();
 await settle();
+assert.equal(editor.style.display, 'flex', 'refresh keeps the prompt editor open');
+assert.equal(input.value, '未保存草稿', 'refresh preserves the unsaved draft');
+assert.equal(envLoads, 1, 'refresh does not reload the prompt during editing');
+assert.equal(dialogueLoads, 2, 'refresh still reloads dialogue examples');
+
+input.value = '新的人格\n第二行';
+deferSave = true;
+save.click();
+assert.equal(input.disabled, true, 'typing is blocked during a pending save');
+assert.equal(save.disabled, true);
+assert.equal(cancel.disabled, true);
+assert.equal(refresh.disabled, true);
+resolvePendingSave?.();
+await settle();
+deferSave = false;
 assert.deepEqual(updates[0], {
   key: 'SYSTEM_PROMPT',
   value: '新的人格\n第二行',
@@ -93,6 +123,7 @@ assert.deepEqual(updates[0], {
 });
 assert.equal(display.textContent, '新的人格\n第二行');
 assert.equal(editor.style.display, 'none');
+assert.equal(input.disabled, false);
 assert.equal(successes.at(-1), '系统提示词已保存并生效');
 
 saveSucceeds = false;
@@ -115,7 +146,7 @@ assert.equal(
 );
 
 storedPrompt = '外部更新';
-root.querySelector('#dialogue-refresh-btn').click();
+refresh.click();
 await settle();
 assert.equal(
   display.textContent,
