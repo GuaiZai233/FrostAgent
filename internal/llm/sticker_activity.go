@@ -31,106 +31,90 @@ const (
 	stickerEnforcementPrompt   = "你仍未发送表情。如果你认为对话场景实在无法发送/挑选不到适宜的表情，请调用 ignore_enforce_sticker 工具以放宽约束。此内部动作请仅输出 <ignore_enforce_sticker />。"
 )
 
-// stickerActivityState is per instance. It only counts confirmed outbound
-// messages; adapter send hooks and terminal send paths own that confirmation.
+// stickerActivityState counts selected incoming turns per instance. Confirmed
+// outbound messages only reset the sticker counter or consume existing grace.
 type stickerActivityState struct {
 	mu           sync.Mutex
 	level        int
+	mode         string
 	sinceSticker int
 	grace        int
-	pending      int
-	generation   uint64
-}
-
-// StickerReservation holds one pending ordinary outbound message until its
-// adapter confirms or rejects delivery.
-type StickerReservation struct {
-	generation uint64
-	once       sync.Once
 }
 
 func (e *Engine) stickerActivitySnapshot() (interval, remaining, grace int) {
-	level := sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey))
 	s := &e.stickerActivity
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyLevel(level)
-	interval = sticker.ActivityInterval(level)
+	s.applyConfig(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)), sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)))
+	interval = sticker.ActivityInterval(s.level)
 	if interval == 0 {
 		return 0, 0, 0
 	}
-	return interval, max(0, interval-s.sinceSticker-s.pending), s.grace
+	return interval, max(0, interval-s.sinceSticker), s.grace
 }
 
-func (s *stickerActivityState) applyLevel(level int) {
-	if s.level != level {
+func (s *stickerActivityState) applyConfig(level int, mode string) {
+	if s.level != level || s.mode != mode {
 		s.level = level
+		s.mode = mode
 		s.sinceSticker = 0
 		s.grace = 0
-		s.pending = 0
-		s.generation++
 	}
 }
 
-func (e *Engine) reserveBotMessage() (*StickerReservation, bool) {
-	s := &e.stickerActivity
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.applyLevel(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)))
-	if s.level == 0 {
-		return nil, true
-	}
-	// Leave the last slot in each interval for a sticker.
-	if s.grace == 0 && s.sinceSticker+s.pending >= sticker.ActivityInterval(s.level)-1 {
-		return nil, false
-	}
-	s.pending++
-	return &StickerReservation{generation: s.generation}, true
+// RecordIncomingMessage counts every real incoming chat message in all-messages
+// mode, including messages that do not wake the bot. Protocol events are excluded
+// by the adapters. Counting does not itself trigger a reply.
+func (e *Engine) RecordIncomingMessage() {
+	e.recordStickerTurn(sticker.ActivityAllMessages)
 }
 
-// FinishBotMessage releases a pending slot and records only confirmed delivery.
-func (e *Engine) FinishBotMessage(reservation *StickerReservation, delivered, isSticker bool) {
+// RecordBotTurn counts one triggered dialogue, including proactive dialogues
+// that later choose silence. Tool iterations and outbound messages are not turns.
+func (e *Engine) RecordBotTurn() {
+	e.recordStickerTurn(sticker.ActivityBotTurns)
+}
+
+func (e *Engine) recordStickerTurn(mode string) {
 	if e == nil {
 		return
 	}
-	finish := func() {
-		s := &e.stickerActivity
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.applyLevel(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)))
-		if reservation != nil && reservation.generation == s.generation {
-			s.pending--
-		}
-		if !delivered || s.level == 0 {
-			return
-		}
-		if isSticker {
-			s.sinceSticker = 0
-			s.grace = 0
-		} else {
-			s.sinceSticker++
-			if s.grace > 0 {
-				s.grace--
-			}
-		}
-	}
-	if reservation != nil {
-		reservation.once.Do(finish)
-	} else {
-		finish()
+	s := &e.stickerActivity
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyConfig(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)), sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)))
+	interval := sticker.ActivityInterval(s.level)
+	if interval > 0 && s.mode == mode {
+		s.sinceSticker = min(interval, s.sinceSticker+1)
 	}
 }
 
 // RecordBotMessage is called only after a platform ACK or transport write.
+// Ordinary outbound messages do not advance the activity counter.
 func (e *Engine) RecordBotMessage(isSticker bool) {
-	e.FinishBotMessage(nil, true, isSticker)
+	if e == nil {
+		return
+	}
+	s := &e.stickerActivity
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyConfig(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)), sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)))
+	if s.level == 0 {
+		return
+	}
+	if isSticker {
+		s.sinceSticker = 0
+		s.grace = 0
+	} else if s.grace > 0 {
+		s.grace--
+	}
 }
 
 func (e *Engine) grantStickerGrace() {
 	s := &e.stickerActivity
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyLevel(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)))
+	s.applyConfig(sticker.ActivityLevel(e.Getenv(sticker.ActivityEnvKey)), sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)))
 	if s.level > 0 {
 		s.grace = 2
 	}
@@ -144,12 +128,16 @@ func (e *Engine) stickerActivityPrompt() string {
 	if grace > 0 {
 		return fmt.Sprintf("表情包发送约束已放宽，还剩 %d 轮回复。", grace)
 	}
-	return fmt.Sprintf("你的表情包发送积极性被设定，FrostAgent 强制你在还剩 %d 轮回复之内发送一个表情。", remaining)
+	unit := "个 Bot 对话轮次"
+	if sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)) == sticker.ActivityAllMessages {
+		unit = "条传入消息"
+	}
+	return fmt.Sprintf("你的表情包发送积极性被设定，FrostAgent 强制你在还剩 %d %s之内发送一个表情。", remaining, unit)
 }
 
 func (e *Engine) stickerNeededBeforeReply() bool {
 	interval, remaining, grace := e.stickerActivitySnapshot()
-	return interval > 0 && remaining <= 1 && grace == 0
+	return interval > 0 && remaining == 0 && grace == 0
 }
 
 func appendStickerForgiveness(messages []ChatMessage, iteration int) []ChatMessage {
