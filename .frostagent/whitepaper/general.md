@@ -172,7 +172,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 ### Bot 连续对话防循环
 
-- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可配置实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
+- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可输入用户 ID，点击「添加」或按回车逐个加入 Bot 标记列表，并逐项移除。点击「保存」时提交整个列表及输入框中尚未添加的 ID；列表为空即关闭。配置仍使用实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
 - OneBot 与 AstrBot 按入站顺序、按会话统计同一标记用户触发的对话请求；其他用户的任意消息（包括未唤醒的群聊消息）打断计数。AstrBot 插件关闭完整群消息转发时，仍发送不含内容的打断事件。被安全或路由规则静默拒绝的消息不增加轮数；安全规则直接发出的拒绝回复则计入轮数。
 - 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
 

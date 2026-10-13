@@ -46,8 +46,10 @@ function configurationBadges(key: string): string {
   return ownership;
 }
 
-export function mountBackendSettingsPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountBackendSettingsPage(
+  container: HTMLElement,
+  api = createInstanceAPI(),
+): () => void {
   let isUnmounted = false;
   let loading = false;
   let envVars: EnvVar[] = [];
@@ -70,6 +72,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let proactiveWhitelistEnabled = false;
   let proactiveWhitelistGroups: string[] = [];
   let botLoopSaving = false;
+  let botLoopLoaded = false;
+  let botLoopDirty = false;
+  let botLoopEditSeq = 0;
+  let botLoopUserIDs: string[] = [];
   const sessionGroupMap = new Map<string, string>();
 
   container.innerHTML = `
@@ -216,10 +222,13 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
             <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              <label class="flex flex-col gap-1.5">
-                <span class="text-xs font-medium">标记为 Bot 的用户 ID</span>
-                <input id="bot-loop-user-ids" type="text" class="input input-sm font-mono text-xs" placeholder="用户 ID，多个用逗号分隔" />
-              </label>
+              <div class="flex flex-col gap-1.5 min-w-0">
+                <label for="bot-loop-user-id-input" class="text-xs font-medium">标记为 Bot 的用户 ID</label>
+                <div class="flex items-center gap-2">
+                  <input id="bot-loop-user-id-input" type="text" class="input input-sm font-mono text-xs flex-1 min-w-0" placeholder="输入用户 ID" autocomplete="off" />
+                  <button type="button" id="bot-loop-add-user" class="btn btn-outline btn-sm shrink-0">添加</button>
+                </div>
+              </div>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">最多连续轮数</span>
                 <input id="bot-loop-max-turns" type="number" class="input input-sm font-mono text-xs w-28" min="1" step="1" value="3" />
@@ -232,8 +241,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                 </select>
               </label>
             </div>
+            <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
             <div class="flex items-center justify-between gap-2 mt-2">
-              <span class="text-[11px] text-muted">留空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
               <button type="button" id="bot-loop-save" class="btn btn-primary btn-sm shrink-0">保存</button>
             </div>
           </div>
@@ -379,7 +389,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     '#proactive-whitelist-tags',
   )!;
 
-  const botLoopUserIDsInput = container.querySelector<HTMLInputElement>('#bot-loop-user-ids')!;
+  const botLoopUserIDInput = container.querySelector<HTMLInputElement>('#bot-loop-user-id-input')!;
+  const botLoopAddUserButton = container.querySelector<HTMLButtonElement>('#bot-loop-add-user')!;
+  const botLoopUserTags = container.querySelector<HTMLElement>('#bot-loop-user-tags')!;
   const botLoopMaxTurnsInput = container.querySelector<HTMLInputElement>('#bot-loop-max-turns')!;
   const botLoopModeSelect = container.querySelector<HTMLSelectElement>('#bot-loop-mode')!;
   const botLoopSaveButton = container.querySelector<HTMLButtonElement>('#bot-loop-save')!;
@@ -562,6 +574,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     if (isUnmounted) return;
     const loadSeq = proactiveSync.nextLoadSeq();
     const stickerLoadSeq = stickerEditSeq;
+    const botLoopLoadSeq = botLoopEditSeq;
     const whitelistLoadSeq = whitelistSync.nextLoadSeq();
     loading = true;
     renderTable();
@@ -610,9 +623,13 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       quoteTraceCb.checked = getVal('ENABLE_QUOTE_TRACE') !== 'false';
       quoteTraceDepthInput.value = String(quoteTraceDepth);
       quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
-      botLoopUserIDsInput.value = getVal('BOT_LOOP_USER_IDS');
-      botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
-      botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
+      if (!botLoopDirty && botLoopLoadSeq === botLoopEditSeq) {
+        botLoopUserIDs = [...new Set(getVal('BOT_LOOP_USER_IDS').split(/[,;\s]+/).filter(Boolean).map(normalizeBotUserID))];
+        botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
+        botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
+        botLoopLoaded = true;
+        updateBotLoopUI();
+      }
 
       const probValStr = getVal('PROACTIVE_REPLY_PROBABILITY');
       const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
@@ -984,26 +1001,86 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     await proactiveSync.setTarget(proactiveReplyEnabled, val);
   }
 
-  function setBotLoopSaving(saving: boolean) {
-    botLoopSaving = saving;
-    botLoopUserIDsInput.disabled = saving;
-    botLoopMaxTurnsInput.disabled = saving;
-    botLoopModeSelect.disabled = saving;
-    botLoopSaveButton.disabled = saving;
-    botLoopSaveButton.textContent = saving ? '保存中...' : '保存';
+  function normalizeBotUserID(userID: string): string {
+    const colon = userID.indexOf(':');
+    return colon < 0 ? userID : userID.slice(0, colon).toLowerCase() + userID.slice(colon);
   }
 
+  function updateBotLoopUI() {
+    const disabled = botLoopSaving || !botLoopLoaded;
+    botLoopUserIDInput.disabled = disabled;
+    botLoopAddUserButton.disabled = disabled;
+    botLoopMaxTurnsInput.disabled = disabled;
+    botLoopModeSelect.disabled = disabled;
+    botLoopSaveButton.disabled = disabled;
+    botLoopSaveButton.textContent = botLoopSaving ? '保存中...' : '保存';
+    botLoopUserTags.innerHTML = botLoopUserIDs.length === 0
+      ? '<span class="text-[11px] text-muted">尚未添加用户 ID</span>'
+      : botLoopUserIDs.map((userID, index) => `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono min-w-0">
+            <span class="break-all">${escapeHtml(userID)}</span>
+            <button type="button" class="text-muted hover:text-danger shrink-0 cursor-pointer" data-bot-user-index="${index}" aria-label="移除 ${escapeHtml(userID)}" title="移除用户 ID" ${disabled ? 'disabled' : ''}>&times;</button>
+          </span>
+        `).join('');
+    botLoopUserTags.querySelectorAll<HTMLButtonElement>('[data-bot-user-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (botLoopSaving || !botLoopLoaded) return;
+        botLoopUserIDs.splice(Number(button.dataset.botUserIndex), 1);
+        markBotLoopDirty();
+        updateBotLoopUI();
+      });
+    });
+  }
+
+  function markBotLoopDirty() {
+    botLoopDirty = true;
+    botLoopEditSeq++;
+  }
+
+  function addBotLoopUser(): boolean {
+    if (botLoopSaving || !botLoopLoaded) return false;
+    const userID = normalizeBotUserID(botLoopUserIDInput.value.trim());
+    if (!userID || /[,;\s]/.test(userID)) {
+      toast.error(userID ? '每次添加一个用户 ID' : '请输入用户 ID');
+      return false;
+    }
+    if (botLoopUserIDs.includes(userID)) {
+      toast.error('该用户 ID 已添加');
+      return false;
+    }
+    botLoopUserIDs.push(userID);
+    botLoopUserIDInput.value = '';
+    markBotLoopDirty();
+    updateBotLoopUI();
+    botLoopUserIDInput.focus();
+    return true;
+  }
+
+  updateBotLoopUI();
+  botLoopAddUserButton.addEventListener('click', () => { addBotLoopUser(); });
+  botLoopUserIDInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      addBotLoopUser();
+    }
+  });
+  botLoopUserIDInput.addEventListener('input', markBotLoopDirty);
+  botLoopMaxTurnsInput.addEventListener('input', markBotLoopDirty);
+  botLoopModeSelect.addEventListener('change', markBotLoopDirty);
+
   botLoopSaveButton.addEventListener('click', () => {
-    if (botLoopSaving) return;
+    if (botLoopSaving || !botLoopLoaded) return;
     const maxTurns = Number(botLoopMaxTurnsInput.value);
     if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
       toast.error('最多连续轮数必须为正整数');
       return;
     }
-    const userIDs = botLoopUserIDsInput.value.split(/[,;\s]+/).filter(Boolean).join(',');
+    if (botLoopUserIDInput.value.trim() && !addBotLoopUser()) return;
+    const userIDs = botLoopUserIDs.join(',');
     const mode = botLoopModeSelect.value === 'hard' ? 'hard' : 'soft';
     void (async () => {
-      setBotLoopSaving(true);
+      botLoopSaving = true;
+      updateBotLoopUI();
       try {
         for (const [key, value] of [
           ['BOT_LOOP_MAX_TURNS', String(maxTurns)],
@@ -1020,8 +1097,13 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             (err instanceof Error ? err.message : String(err)),
         );
       } finally {
+        botLoopDirty = false;
+        botLoopEditSeq++;
         await loadData();
-        if (!isUnmounted) setBotLoopSaving(false);
+        if (!isUnmounted) {
+          botLoopSaving = false;
+          updateBotLoopUI();
+        }
       }
     })();
   });
