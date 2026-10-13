@@ -127,7 +127,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - FrostAgent 明确将 OneBot `message_id` 界定为连接级不透明句柄（Opaque Handle），仅用于当轮会话上下文中的 quote/reply 引用查询与临时 sticker 溯源，不将其作为全局持久或跨上游稳定标识；
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
     - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话（包括当前连接代收发的消息，以及经由当前连接 `get_msg` 查询成功并验证属于当前会话的历史引用目标）；跨连接代、未曾观测或跨会话的过时/未验证 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
-    - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），回退为空引用上下文，绝不中断或阻断核心对话事件分发；
+    - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），保留已成功取得的引用节点并停止后续追溯，绝不中断或阻断核心对话事件分发；
+    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件仅在后端通过入站安全门禁并确认需要回复后，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
     - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；
     - 跨容器文件系统边界说明：前置校验验证的是 FrostAgent 本地视角下的文件可读性。由于非贴纸媒体通过 `file://<local path>` 穿越 OneBot 协议边界，若 OneBot 上游独立容器化部署，必须与 FrostAgent 共享存储卷（Shared Volume）以解析本地路径；跨隔离容器或远程文件系统的路径穿透明确不在归一化保证范围内；

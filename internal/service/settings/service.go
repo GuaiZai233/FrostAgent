@@ -45,6 +45,8 @@ var knownEnvVars = map[string]envEntry{
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
+	"ENABLE_QUOTE_TRACE":                  {"是否追溯收到消息的引用链（默认开启）", false, false, false},
+	"QUOTE_TRACE_DEPTH":                   {"引用追溯深度（1~10，默认 5）", false, false, false},
 	"PROACTIVE_REPLY_PROBABILITY":          {"主动回复触发概率（0.01~1.00，0 为关闭）", false, false, false},
 	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
 	"PROACTIVE_REPLY_GROUP_WHITELIST":      {"主动回复允许的群号白名单，多个群号以英文逗号分隔", false, false, false},
@@ -267,6 +269,15 @@ func (s *Service) UpdateEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
+	}
+	if key == "QUOTE_TRACE_DEPTH" {
+		depth, err := strconv.Atoi(value)
+		if err != nil || depth < 1 || depth > 10 || strconv.Itoa(depth) != value {
+			return connect.NewResponse(&v1.UpdateEnvVarResponse{
+				Success: false,
+				Error:   "引用追溯深度必须是 1 到 10 的整数",
+			}), nil
+		}
 	}
 	if key == "STICKER_ACTIVITY" {
 		level, err := strconv.Atoi(value)

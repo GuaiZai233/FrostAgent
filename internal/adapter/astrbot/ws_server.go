@@ -96,6 +96,7 @@ type wsConn struct {
 	mock              bool
 	mockSessions      sync.Map
 	pendingDeliveries sync.Map
+	pendingQuotes     sync.Map
 }
 
 func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
@@ -807,9 +808,19 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
+	// Quote lookups occur only after ingress security and reply routing.
+	quoteChain := conn.lookupQuoteChain(event)
+	quoteHasImage := false
+	for _, node := range quoteChain {
+		quoteHasImage = quoteHasImage || content.IsContainImage(node.Segments)
+	}
+
 	// 处理图片等多模态内容描述
 	var imageSegments []content.MessageSegment
 	for _, att := range event.Attachments {
+		if att.MessageID != "" && att.MessageID != event.MessageID {
+			continue
+		}
 		if att.Type == core.AttachmentTypeImage && (len(att.Content) > 0 || att.URL != "") {
 			data := make(map[string]any)
 			if len(att.Content) > 0 {
@@ -824,7 +835,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
-	if len(imageSegments) > 0 && engine != nil {
+	if (len(imageSegments) > 0 || quoteHasImage) && engine != nil {
 		visionEnabled := engine.VisionProvider != nil
 		if visionEnabled && routeSnapshot != nil {
 			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
@@ -855,7 +866,10 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 
-			imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			imageDesc := ""
+			if len(imageSegments) > 0 {
+				imageDesc = content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			}
 			if imageDesc != "" {
 				if engine != nil && engine.Security != nil {
 					principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
@@ -882,6 +896,37 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					turn.StagedGuard().SetImageDescription(imageDesc)
 				}
 				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			}
+		}
+	}
+
+	if quoteHasImage && engine.VisionProvider != nil &&
+		(routeSnapshot == nil || !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)) {
+		for i := range quoteChain {
+			if !content.IsContainImage(quoteChain[i].Segments) {
+				continue
+			}
+			imageDesc := content.ProcessImage(routeCtx, quoteChain[i].Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			if imageDesc == "" {
+				continue
+			}
+			if engine.Security != nil {
+				principal, err := security.NewPrincipal(securityPlatform, event.UserID)
+				if err == nil {
+					decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						Instance: engine.InstanceID, Session: conn.sessionKey(event),
+					})
+					if decision.IsFailure {
+						imageDesc = ""
+					} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+						imageDesc = decision.SanitizedContent
+					} else if decision.Action == security.WatchdogWarn && notice == "" {
+						notice = decision.WarningNotice
+					}
+				}
+			}
+			if imageDesc != "" {
+				quoteChain[i].Context["image_description"] = imageDesc
 			}
 		}
 	}
@@ -1052,6 +1097,26 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		if vettedRecent != "" {
 			requestPrompt += "\n\n" + vettedRecent
+		}
+	}
+	if quotePrompt := astrBotQuotePrompt(quoteChain); quotePrompt != "" {
+		if engine.Security != nil {
+			principal, err := security.NewPrincipal(securityPlatform, event.UserID)
+			if err == nil {
+				decision := evalCtx(principal, security.SourceUserQuote, quotePrompt, security.AuditEvent{
+					Instance: engine.InstanceID, Session: conn.sessionKey(event),
+				})
+				if decision.IsFailure {
+					quotePrompt = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					quotePrompt = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
+				}
+			}
+		}
+		if quotePrompt != "" {
+			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", quotePrompt)
 		}
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))

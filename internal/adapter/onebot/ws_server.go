@@ -332,7 +332,17 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		memoryMessageID = strconv.FormatInt(int64(event.MessageID), 10)
 	}
 	currentHasImage := content.IsContainImage(segments)
-	replyHasImage := content.IsContainImage(replyContext.Segments)
+	quoteNodes := []*resolvedReplyContext{&replyContext}
+	for i := range replyContext.Ancestors {
+		quoteNodes = append(quoteNodes, &replyContext.Ancestors[i])
+	}
+	replyHasImage := false
+	for _, quote := range quoteNodes {
+		if content.IsContainImage(quote.Segments) {
+			replyHasImage = true
+			break
+		}
+	}
 	visionEnabled := engine != nil && engine.VisionProvider != nil
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
@@ -402,30 +412,35 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
-	if replyHasImage && visionEnabled {
-		imageDesc := content.ProcessImage(routeCtx, replyContext.Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
-		if imageDesc != "" {
-			if engine != nil && engine.Security != nil {
-				principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
-				if pErr == nil {
-					decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
-						Instance: engine.InstanceID,
-						Session:  conn.historyKey(event),
-					})
-					if decision.IsFailure {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
-						imageDesc = ""
-					} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含风险内容，已被脱敏替换: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
-						imageDesc = decision.SanitizedContent
-					} else if decision.Action == security.WatchdogWarn && notice == "" {
-						notice = decision.WarningNotice
+	if visionEnabled {
+		for _, quote := range quoteNodes {
+			if !content.IsContainImage(quote.Segments) {
+				continue
+			}
+			imageDesc := content.ProcessImage(routeCtx, quote.Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			if imageDesc != "" {
+				if engine != nil && engine.Security != nil {
+					principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
+					if pErr == nil {
+						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+							Instance: engine.InstanceID,
+							Session:  conn.historyKey(event),
+						})
+						if decision.IsFailure {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述因安全审查服务异常被隔离剔除: %s", decision.SafeSummary))
+							imageDesc = ""
+						} else if decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("引用消息图片描述包含风险内容，已被脱敏替换: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
+							imageDesc = decision.SanitizedContent
+						} else if decision.Action == security.WatchdogWarn && notice == "" {
+							notice = decision.WarningNotice
+						}
 					}
 				}
 			}
-		}
-		if imageDesc != "" {
-			replyContext.addImageDescription(imageDesc, engine.Scope)
+			if imageDesc != "" {
+				quote.addImageDescription(imageDesc, engine.Scope)
+			}
 		}
 	}
 
@@ -651,11 +666,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 	if replyContext.Prompt != "" {
-		vettedReply := replyContext.Prompt
+		vettedReply := replyContext.promptWithAncestors()
 		if engine != nil && engine.Security != nil {
 			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
-				decision := evalCtx(principal, security.SourceUserQuote, replyContext.Prompt, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceUserQuote, vettedReply, security.AuditEvent{
 					Instance: engine.InstanceID,
 					Session:  conn.historyKey(event),
 				})

@@ -335,6 +335,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				continue
 			}
+			if event.Type == "quote_lookup_result" {
+				var response quoteLookupResponse
+				if json.Unmarshal(message, &response) == nil {
+					c.acceptQuoteLookup(response)
+				}
+				continue
+			}
 			sanitizeIngressMetadata(&event)
 			var warningNotice string
 			var scope *runtimescope.Scope
