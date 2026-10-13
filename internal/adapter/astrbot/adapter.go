@@ -333,13 +333,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if event.MessageType == "group" && event.GroupID != "" && event.UserID != "" &&
 					a.engine != nil && a.engine.SessionManager != nil {
 					config := botloop.Parse(a.engine.Getenv)
-					platform := event.Platform
-					if platform == "" {
-						platform = "astrbot"
+					if config.Enabled() {
+						platform := event.Platform
+						if platform == "" {
+							platform = "astrbot"
+						}
+						a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ObserveBotLoop(
+							event.UserID, config.IsMarked(platform, event.UserID), false, config.Limit(), config.Revision(),
+						)
 					}
-					a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ObserveBotLoop(
-						event.UserID, config.IsMarked(platform, event.UserID), false, config.Limit(), config.Revision(),
-					)
 				}
 				continue
 			}
@@ -370,14 +372,16 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					(event.Type == "" || event.Type == "event") &&
 					(event.EventType == "" || event.EventType == "message") {
 					botLoopConfig = botloop.Parse(a.engine.Getenv)
-					platform := event.Platform
-					if platform == "" {
-						platform = "astrbot"
+					if botLoopConfig.Enabled() {
+						platform := event.Platform
+						if platform == "" {
+							platform = "astrbot"
+						}
+						botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
+						botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
+							event.UserID, botLoopMarked, botLoopConfig.Revision(),
+						)
 					}
-					botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
-					botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
-						event.UserID, botLoopMarked, botLoopConfig.Revision(),
-					)
 				}
 				if !c.mock && handleAdminCommand(c, event, a.engine) {
 					botLoopObservation.Finish(false, botLoopConfig.Limit())

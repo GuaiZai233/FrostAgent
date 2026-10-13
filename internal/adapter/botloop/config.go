@@ -51,6 +51,7 @@ func (c Config) IsMarked(platform, userID string) bool {
 	return ok
 }
 
+func (c Config) Enabled() bool    { return len(c.users) > 0 }
 func (c Config) Limit() int       { return c.limit }
 func (c Config) Hard() bool       { return c.hard }
 func (c Config) Revision() string { return c.revision }

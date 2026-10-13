@@ -385,11 +385,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				if a.engine != nil && a.engine.SessionManager != nil {
 					botLoopConfig = botloop.Parse(a.engine.Getenv)
-					botLoopUserID = strconv.FormatInt(event.UserID, 10)
-					botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
-					botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
-						botLoopUserID, botLoopMarked, botLoopConfig.Revision(),
-					)
+					if botLoopConfig.Enabled() {
+						botLoopUserID = strconv.FormatInt(event.UserID, 10)
+						botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
+						botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
+							botLoopUserID, botLoopMarked, botLoopConfig.Revision(),
+						)
+					}
 				}
 				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
 					botLoopObservation.Finish(false, botLoopConfig.Limit())
