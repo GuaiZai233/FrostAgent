@@ -130,29 +130,25 @@ func TestAstrBotBotLoopFilteredHumanInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	sendBot := func(id string) {
+	sendBot := func(id string, interrupted bool) {
 		t.Helper()
 		if err := conn.WriteJSON(Event{Type: "event", EventType: "message", Platform: "astrbot",
 			MessageType: "group", GroupID: "room-a", UserID: "bot-a", MessageID: id,
-			Content: id, IsWake: true}); err != nil {
+			Content: id, IsWake: true, BotLoopInterrupted: interrupted}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sendBot("first")
+	sendBot("first", false)
 	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
 		t.Fatalf("first turn: %+v", action)
 	}
-	sendBot("blocked")
+	sendBot("blocked", false)
 	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
 		t.Fatalf("second turn must be dropped: %+v", action)
 	}
-	if err := conn.WriteJSON(Event{Type: "bot_loop_interrupt", Platform: "astrbot",
-		MessageType: "group", GroupID: "room-a", UserID: "human-a"}); err != nil {
-		t.Fatal(err)
-	}
-	sendBot("resumed")
+	sendBot("resumed", true)
 	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_resumed" {
-		t.Fatalf("filtered human message must interrupt streak without a response: %+v", action)
+		t.Fatalf("in-band filtered-message marker must reset the streak: %+v", action)
 	}
 }
 

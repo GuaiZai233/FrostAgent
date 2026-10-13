@@ -15,7 +15,7 @@ type Config struct {
 	revision string
 }
 
-func Parse(getenv func(string) string) Config {
+func Parse(getenv func(string) string, revision ...uint64) Config {
 	cfg := Config{users: make(map[string]struct{}), limit: 3}
 	if getenv == nil {
 		return cfg
@@ -24,6 +24,9 @@ func Parse(getenv func(string) string) Config {
 	maxTurns := getenv("BOT_LOOP_MAX_TURNS")
 	mode := getenv("BOT_LOOP_MODE")
 	cfg.revision = users + "\x00" + maxTurns + "\x00" + mode
+	if len(revision) > 0 {
+		cfg.revision += "\x00" + strconv.FormatUint(revision[0], 10)
+	}
 	for _, user := range strings.FieldsFunc(users, func(r rune) bool {
 		return r == ',' || r == ';' || unicode.IsSpace(r)
 	}) {

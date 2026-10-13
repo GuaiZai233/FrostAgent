@@ -230,3 +230,36 @@ func TestOneBotBotLoopHardDropSuppressesSecurityRejection(t *testing.T) {
 		t.Fatalf("security-rejected turns must not call the model: got %d", count)
 	}
 }
+
+func TestOneBotBotLoopDisableAndRestoreSameSettingsResetsStreak(t *testing.T) {
+	provider := botLoopSilentProvider()
+	engine := newTestEngine(provider)
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{
+		"BOT_LOOP_USER_IDS": "onebot:11", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
+	})
+	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	send := func(id int32) {
+		t.Helper()
+		if err := conn.WriteJSON(model.OneBotEvent{PostType: "message", MessageType: "private",
+			UserID: 11, MessageID: id, Message: json.RawMessage(`"hello"`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(1)
+	waitOneBotRequests(t, provider, 1)
+	if err := engine.Scope.Config.Update("BOT_LOOP_USER_IDS", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Scope.Config.Update("BOT_LOOP_USER_IDS", "onebot:11", false); err != nil {
+		t.Fatal(err)
+	}
+	send(2)
+	waitOneBotRequests(t, provider, 2)
+}

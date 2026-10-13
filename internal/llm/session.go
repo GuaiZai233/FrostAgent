@@ -324,19 +324,20 @@ func (s *SessionContext) SetGroupName(name string) {
 
 // BotLoopObservation reserves the sender's position before asynchronous ingress checks.
 type BotLoopObservation struct {
-	session  *SessionContext
-	senderID string
-	marked   bool
-	config   string
-	epoch    uint64
-	previous <-chan struct{}
-	done     chan struct{}
-	once     sync.Once
-	exceeded bool
+	session     *SessionContext
+	senderID    string
+	marked      bool
+	config      string
+	interrupted bool
+	epoch       uint64
+	previous    <-chan struct{}
+	done        chan struct{}
+	once        sync.Once
+	exceeded    bool
 }
 
 // BeginBotLoop records ingress order across connections sharing a session.
-func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string) *BotLoopObservation {
+func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string, interrupted ...bool) *BotLoopObservation {
 	if s == nil || senderID == "" {
 		return nil
 	}
@@ -345,6 +346,7 @@ func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config strin
 	observation := &BotLoopObservation{
 		session: s, senderID: senderID, marked: marked, config: config,
 		epoch: s.botLoopEpoch, previous: s.botLoopTail, done: make(chan struct{}),
+		interrupted: len(interrupted) > 0 && interrupted[0],
 	}
 	s.botLoopTail = observation.done
 	return observation
@@ -365,6 +367,10 @@ func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
 		if o.epoch == s.botLoopEpoch {
 			if s.botLoopConfig != o.config {
 				s.botLoopConfig = o.config
+				s.botLoopSender = ""
+				s.botLoopTurns = 0
+			}
+			if o.interrupted {
 				s.botLoopSender = ""
 				s.botLoopTurns = 0
 			}

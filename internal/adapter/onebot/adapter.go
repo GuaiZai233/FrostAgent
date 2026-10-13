@@ -384,7 +384,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					WakeSignals: DetectGroupWakeSignals(event, scope),
 				}
 				if a.engine != nil && a.engine.SessionManager != nil {
-					botLoopConfig = botloop.Parse(a.engine.Getenv)
+					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
 					if botLoopConfig.Enabled() {
 						botLoopUserID = strconv.FormatInt(event.UserID, 10)
 						botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)

@@ -11,24 +11,25 @@ import (
 
 // Event 表示 AstrBot 插件发送给 FrostAgent 的入站事件。
 type Event struct {
-	Type                   string            `json:"type"`                   // "event" 或 "heartbeat"
-	EventType              string            `json:"event_type,omitempty"`   // "message", "heartbeat", "notice"
-	MessageID              string            `json:"message_id,omitempty"`   // 消息唯一 ID
-	SessionID              string            `json:"session_id,omitempty"`   // 会话 ID (如 "astrbot:group:123" 或 "astrbot:private:456")
-	Platform               string            `json:"platform,omitempty"`     // 平台标识 (如 "astrbot", "qq", "telegram", "wechat")
-	MessageType            string            `json:"message_type,omitempty"` // "group", "private"
-	UserID                 string            `json:"user_id,omitempty"`      // 用户 ID
-	SenderName             string            `json:"sender_name,omitempty"`  // 发送者昵称
-	SenderCard             string            `json:"sender_card,omitempty"`  // 发送者群名片/备注
-	GroupID                string            `json:"group_id,omitempty"`     // 群 ID
-	GroupName              string            `json:"group_name,omitempty"`   // 群名称
-	Content                string            `json:"content,omitempty"`      // 文本内容
-	Messages               []string          `json:"messages,omitempty"`     // 连续上下文消息 (可选)
-	Attachments            []core.Attachment `json:"attachments,omitempty"`  // 多媒体附件
-	IsWake                 bool              `json:"is_wake,omitempty"`      // 是否触发唤醒 (At, 唤醒词, 引用等)
-	IsAt                   bool              `json:"is_at,omitempty"`        // 是否 @ 了机器人
-	Timestamp              int64             `json:"timestamp,omitempty"`    // 时间戳 (秒)
-	Metadata               map[string]any    `json:"metadata,omitempty"`     // 扩展元数据
+	Type                   string            `json:"type"`                           // "event" 或 "heartbeat"
+	EventType              string            `json:"event_type,omitempty"`           // "message", "heartbeat", "notice"
+	MessageID              string            `json:"message_id,omitempty"`           // 消息唯一 ID
+	SessionID              string            `json:"session_id,omitempty"`           // 会话 ID (如 "astrbot:group:123" 或 "astrbot:private:456")
+	Platform               string            `json:"platform,omitempty"`             // 平台标识 (如 "astrbot", "qq", "telegram", "wechat")
+	MessageType            string            `json:"message_type,omitempty"`         // "group", "private"
+	UserID                 string            `json:"user_id,omitempty"`              // 用户 ID
+	SenderName             string            `json:"sender_name,omitempty"`          // 发送者昵称
+	SenderCard             string            `json:"sender_card,omitempty"`          // 发送者群名片/备注
+	GroupID                string            `json:"group_id,omitempty"`             // 群 ID
+	GroupName              string            `json:"group_name,omitempty"`           // 群名称
+	Content                string            `json:"content,omitempty"`              // 文本内容
+	Messages               []string          `json:"messages,omitempty"`             // 连续上下文消息 (可选)
+	Attachments            []core.Attachment `json:"attachments,omitempty"`          // 多媒体附件
+	IsWake                 bool              `json:"is_wake,omitempty"`              // 是否触发唤醒 (At, 唤醒词, 引用等)
+	IsAt                   bool              `json:"is_at,omitempty"`                // 是否 @ 了机器人
+	BotLoopInterrupted     bool              `json:"bot_loop_interrupted,omitempty"` // 过滤消息已打断连续对话
+	Timestamp              int64             `json:"timestamp,omitempty"`            // 时间戳 (秒)
+	Metadata               map[string]any    `json:"metadata,omitempty"`             // 扩展元数据
 	StickerDeliveryReceipt bool              `json:"sticker_delivery_receipt,omitempty"`
 	botLoopSoft            bool
 }

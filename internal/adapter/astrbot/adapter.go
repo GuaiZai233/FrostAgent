@@ -329,22 +329,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
 				continue
 			}
-			if event.Type == "bot_loop_interrupt" {
-				if event.MessageType == "group" && event.GroupID != "" && event.UserID != "" &&
-					a.engine != nil && a.engine.SessionManager != nil {
-					config := botloop.Parse(a.engine.Getenv)
-					if config.Enabled() {
-						platform := event.Platform
-						if platform == "" {
-							platform = "astrbot"
-						}
-						a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ObserveBotLoop(
-							event.UserID, config.IsMarked(platform, event.UserID), false, config.Limit(), config.Revision(),
-						)
-					}
-				}
-				continue
-			}
 			if event.Type == "delivery_result" {
 				var receipt deliveryReceipt
 				if json.Unmarshal(message, &receipt) == nil {
@@ -371,7 +355,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if a.engine != nil && a.engine.SessionManager != nil &&
 					(event.Type == "" || event.Type == "event") &&
 					(event.EventType == "" || event.EventType == "message") {
-					botLoopConfig = botloop.Parse(a.engine.Getenv)
+					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
 					if botLoopConfig.Enabled() {
 						platform := event.Platform
 						if platform == "" {
@@ -379,7 +363,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						}
 						botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
 						botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
-							event.UserID, botLoopMarked, botLoopConfig.Revision(),
+							event.UserID, botLoopMarked, botLoopConfig.Revision(), event.BotLoopInterrupted,
 						)
 					}
 				}
