@@ -287,6 +287,11 @@ type SessionContext struct {
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold     int
 	deliveryFailure         *DeliveryFailure
+	botLoopSender           string
+	botLoopTurns            int
+	botLoopConfig           string
+	botLoopTail             chan struct{}
+	botLoopEpoch            uint64
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
@@ -315,6 +320,80 @@ func (s *SessionContext) SetGroupName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groupName = name
+}
+
+// BotLoopObservation reserves the sender's position before asynchronous ingress checks.
+type BotLoopObservation struct {
+	session     *SessionContext
+	senderID    string
+	marked      bool
+	config      string
+	interrupted bool
+	epoch       uint64
+	previous    <-chan struct{}
+	done        chan struct{}
+	once        sync.Once
+	exceeded    bool
+}
+
+// BeginBotLoop records ingress order across connections sharing a session.
+func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string, interrupted ...bool) *BotLoopObservation {
+	if s == nil || senderID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	observation := &BotLoopObservation{
+		session: s, senderID: senderID, marked: marked, config: config,
+		epoch: s.botLoopEpoch, previous: s.botLoopTail, done: make(chan struct{}),
+		interrupted: len(interrupted) > 0 && interrupted[0],
+	}
+	s.botLoopTail = observation.done
+	return observation
+}
+
+// Finish settles an ingress event after policy and routing decisions are known.
+// Every reserved event must be finished, including events rejected before dialogue.
+func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
+	if o == nil {
+		return false
+	}
+	o.once.Do(func() {
+		if o.previous != nil {
+			<-o.previous
+		}
+		s := o.session
+		s.mu.Lock()
+		if o.epoch == s.botLoopEpoch {
+			if s.botLoopConfig != o.config {
+				s.botLoopConfig = o.config
+				s.botLoopSender = ""
+				s.botLoopTurns = 0
+			}
+			if o.interrupted {
+				s.botLoopSender = ""
+				s.botLoopTurns = 0
+			}
+			if s.botLoopSender != o.senderID {
+				s.botLoopSender = o.senderID
+				s.botLoopTurns = 0
+			}
+			if !o.marked {
+				s.botLoopTurns = 0
+			} else if eligible {
+				s.botLoopTurns++
+				o.exceeded = limit > 0 && s.botLoopTurns > limit
+			}
+		}
+		s.mu.Unlock()
+		close(o.done)
+	})
+	return o.exceeded
+}
+
+// ObserveBotLoop applies a synchronous observation, used when no ingress checks are pending.
+func (s *SessionContext) ObserveBotLoop(senderID string, marked, eligible bool, limit int, config string) bool {
+	return s.BeginBotLoop(senderID, marked, config).Finish(eligible, limit)
 }
 
 // SetDeliveryFailure records a transient delivery failure on the session.
@@ -926,6 +1005,11 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
+	s.botLoopSender = ""
+	s.botLoopTurns = 0
+	s.botLoopConfig = ""
+	s.botLoopTail = nil
+	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
 	s.privateCompacting = false
@@ -2404,6 +2488,11 @@ func (s *SessionContext) Clear() {
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
+	s.botLoopSender = ""
+	s.botLoopTurns = 0
+	s.botLoopConfig = ""
+	s.botLoopTail = nil
+	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
 	s.UpdatedAt = time.Now()

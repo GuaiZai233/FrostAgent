@@ -46,17 +46,18 @@ var SharedKeys = map[string]bool{
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
 type Store struct {
-	mu        sync.RWMutex
-	path      string
-	values    map[string]string
-	overrides map[string]string
-	global    bool
-	raw       string
-	loadErr   error
-	accessErr error
-	db        *storage.DB
-	dbScope   string
-	dbID      string
+	mu              sync.RWMutex
+	path            string
+	values          map[string]string
+	overrides       map[string]string
+	global          bool
+	raw             string
+	loadErr         error
+	accessErr       error
+	db              *storage.DB
+	dbScope         string
+	dbID            string
+	botLoopRevision uint64
 }
 
 // OpenDatabase loads application settings exclusively from SQL. Process
@@ -162,6 +163,20 @@ func (s *Store) AccessError() error { s.mu.RLock(); defer s.mu.RUnlock(); return
 func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
 func (s *Store) IsDatabase() bool   { return s != nil && s.db != nil }
 
+// BotLoopRevision changes after each successful Bot loop setting mutation.
+func (s *Store) BotLoopRevision() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.botLoopRevision
+}
+
+func botLoopSetting(key string) bool {
+	return key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
+}
+
 func allowed(k string, global bool) bool {
 	if !keyPattern.MatchString(k) {
 		return false
@@ -227,6 +242,9 @@ func (s *Store) Update(k, v string, remove bool) error {
 				return err
 			}
 			delete(s.values, k)
+			if botLoopSetting(k) {
+				s.botLoopRevision++
+			}
 			return nil
 		}
 		if _, err := s.db.SQL.Exec(s.db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
@@ -235,6 +253,9 @@ func (s *Store) Update(k, v string, remove bool) error {
 			return err
 		}
 		s.values[k] = v
+		if botLoopSetting(k) {
+			s.botLoopRevision++
+		}
 		return nil
 	}
 	if s.loadErr != nil {
@@ -265,6 +286,9 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.values = next
 	s.raw = raw
+	if botLoopSetting(k) {
+		s.botLoopRevision++
+	}
 	return nil
 }
 
@@ -313,6 +337,12 @@ func (s *Store) ReplaceDatabaseSubset(keys map[string]bool, values map[string]st
 	for key, value := range values {
 		s.values[key] = value
 	}
+	for key := range keys {
+		if botLoopSetting(key) {
+			s.botLoopRevision++
+			break
+		}
+	}
 	return nil
 }
 
@@ -336,6 +366,12 @@ func (s *Store) Replace(raw string) error {
 	}
 	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
 		return err
+	}
+	for _, key := range []string{"BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
+		if s.values[key] != next[key] {
+			s.botLoopRevision++
+			break
+		}
 	}
 	s.values = next
 	s.raw = raw
@@ -405,6 +441,9 @@ MEMORY_REFLECTION_TIMEOUT=10m
 ENABLE_AT_IN_GROUP_MSG=true
 GROUP_REPLY_ON_MENTION=true
 ENABLE_REPLY_IN_GROUP_MSG=false
+BOT_LOOP_USER_IDS=
+BOT_LOOP_MAX_TURNS=3
+BOT_LOOP_MODE=soft
 GROUP_COMPACT_BUFFER_SIZE=20
 GROUP_COMPACT_MIN_INTERVAL=30s
 GROUP_RAW_CONTEXT_MAX_CHARS=12000

@@ -283,11 +283,12 @@ class FrostAgentWSClient:
                 except Exception as e:
                     logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
 
-    async def send_event(self, event_data: dict[str, Any]) -> None:
+    async def send_event(self, event_data: dict[str, Any]) -> bool:
         if is_ws_open(self.ws):
             await self.ws.send(json.dumps(event_data))
-        else:
-            logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+            return True
+        logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+        return False
 
     async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
         await self.send_event({
@@ -368,6 +369,9 @@ class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self._configuration_error: Optional[str] = None
+        self._bot_loop_locks: dict[str, asyncio.Lock] = {}
+        self._bot_loop_last_forwarded_sender: dict[str, str] = {}
+        self._bot_loop_interrupted: set[str] = set()
         try:
             self.settings = load_settings(config)
         except WSURLConfigurationError as exc:
@@ -392,25 +396,48 @@ class FrostAgentAdapter(Star):
         if self._configuration_error:
             return
 
-        payload = await build_frostagent_payload(event)
-        payload["sticker_delivery_receipt"] = True
-        msg_id = payload["message_id"]
-
-        if not payload.get("content") and not payload.get("attachments"):
-            is_group_interaction = payload.get("message_type") == "group" and (
-                payload.get("is_wake") or payload.get("is_at")
-            )
-            if not is_group_interaction:
-                return
-
-        if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
-            if not payload.get("is_wake") and not payload.get("is_at"):
-                return
-
-        # 注册该事件的响应队列
-        queue = self.client.register_waiter(msg_id)
+        # Serialize local sender tracking through the actual send for this session.
+        # Filtered group messages never leave the plugin.
+        if not hasattr(self, "_bot_loop_locks"):
+            self._bot_loop_locks = {}
+            self._bot_loop_last_forwarded_sender = {}
+            self._bot_loop_interrupted = set()
+        group_id = extract_group_id(event)
+        session_key = f"{_extract_platform_name(event)}:group:{group_id}" if group_id else ""
+        lock = self._bot_loop_locks.setdefault(session_key, asyncio.Lock()) if session_key else asyncio.Lock()
+        queue = None
+        msg_id = ""
         try:
-            await self.client.send_event(payload)
+            async with lock:
+                payload = await build_frostagent_payload(event)
+                payload["sticker_delivery_receipt"] = True
+                msg_id = payload["message_id"]
+                if session_key:
+                    previous = self._bot_loop_last_forwarded_sender.get(session_key)
+                    if previous is not None and previous != payload["user_id"]:
+                        self._bot_loop_interrupted.add(session_key)
+
+                if not payload.get("content") and not payload.get("attachments"):
+                    is_group_interaction = payload.get("message_type") == "group" and (
+                        payload.get("is_wake") or payload.get("is_at")
+                    )
+                    if not is_group_interaction:
+                        return
+
+                if session_key and not self.settings.forward_all_group_messages:
+                    if not payload.get("is_wake") and not payload.get("is_at"):
+                        return
+
+                if session_key:
+                    payload["bot_loop_interrupted"] = (
+                        previous is None or session_key in self._bot_loop_interrupted
+                    )
+                queue = self.client.register_waiter(msg_id)
+                if not await self.client.send_event(payload):
+                    return
+                if session_key:
+                    self._bot_loop_last_forwarded_sender[session_key] = payload["user_id"]
+                    self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
             frostagent_replied = False
@@ -464,7 +491,8 @@ class FrostAgentAdapter(Star):
                 if not action.get("is_intermediate", False):
                     break
         finally:
-            self.client.unregister_waiter(msg_id)
+            if queue is not None:
+                self.client.unregister_waiter(msg_id)
 
     async def terminate(self):
         await self.client.stop()
