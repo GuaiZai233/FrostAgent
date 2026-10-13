@@ -367,6 +367,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 
 			var warningNotice string
 			var botLoopSoft bool
+			var botLoopObservation *llm.BotLoopObservation
+			var botLoopConfig botloop.Config
+			var botLoopUserID string
+			var botLoopMarked bool
 			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -380,21 +384,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					WakeSignals: DetectGroupWakeSignals(event, scope),
 				}
 				if a.engine != nil && a.engine.SessionManager != nil {
-					config := botloop.Parse(a.engine.Getenv)
-					userID := strconv.FormatInt(event.UserID, 10)
-					session := a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event))
-					exceeded := session.ObserveBotLoop(
-						userID, config.IsMarked("onebot", userID),
-						isWoken(event, a.engine, routing), config.Limit(), config.Revision(),
+					botLoopConfig = botloop.Parse(a.engine.Getenv)
+					botLoopUserID = strconv.FormatInt(event.UserID, 10)
+					botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
+					botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
+						botLoopUserID, botLoopMarked, botLoopConfig.Revision(),
 					)
-					if exceeded {
-						if config.Hard() {
-							continue
-						}
-						botLoopSoft = true
-					}
 				}
 				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
 					continue
 				}
 			}
@@ -408,6 +406,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
 				if principalErr != nil {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
 					continue
 				}
 				var decision security.WatchdogDecision
@@ -417,6 +416,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 				}
 				if security.Blocks(decision.Action) {
+					directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
+					if directReply {
+						if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+							continue
+						}
+					} else {
+						botLoopObservation.Finish(false, botLoopConfig.Limit())
+					}
 					if decision.IsFailure {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
 					} else {
@@ -425,7 +432,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					if shouldSendSecurityDirectReply(event, a.engine, routing) {
+					if directReply {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						action := "send_private_msg"
 						type1 := "user_id"
@@ -459,6 +466,20 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			var routeSnapshot *modelrouter.Snapshot
+			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			}
+			botLoopEligible := isWoken(event, a.engine, routing) && (routeSnapshot == nil ||
+				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event))))
+			if botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit()) {
+				if botLoopConfig.Hard() {
+					continue
+				}
+				botLoopSoft = true
+			}
+
 			if canDispatch && !wsConn.isClosed() {
 				incoming := ToIncomingMessage(event)
 				var text strings.Builder
@@ -477,10 +498,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			if routeSnapshot != nil {
 				if err := routeSnapshot.LoadError(); err != nil {
 					a.engine.PauseOnStorageError(err)
 					continue

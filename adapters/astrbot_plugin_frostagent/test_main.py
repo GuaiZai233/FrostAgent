@@ -219,6 +219,8 @@ class FakeClient:
 
     async def send_event(self, payload: dict[str, Any]) -> None:
         self.sent_events.append(payload)
+        if payload.get("type") == "bot_loop_interrupt":
+            return
         assert self.queue is not None
         for action in self.actions:
             await self.queue.put(action)
@@ -292,12 +294,16 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sent[0]["is_at"])
         self.assertEqual(sent[0]["content"], "/help")
 
-    async def test_astrbot_prefix_does_not_bypass_group_forward_filter(self):
+    async def test_astrbot_prefix_only_forwards_bot_loop_interruption(self):
         sent = await self.forward(
             FakeEvent(group_id="group_test", content="/hello", is_wake=True),
             forward_all_group_messages=False,
         )
-        self.assertEqual(sent, [])
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["type"], "bot_loop_interrupt")
+        self.assertEqual(sent[0]["session_id"], "test:group:group_test")
+        self.assertEqual(sent[0]["user_id"], "user_test")
+        self.assertNotIn("content", sent[0])
 
     async def test_reply_to_bot_still_wakes_without_astrbot_flag(self):
         event = FakeEvent(group_id="group_test", content="继续")

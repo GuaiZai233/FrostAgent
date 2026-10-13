@@ -405,6 +405,14 @@ class FrostAgentAdapter(Star):
 
         if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
             if not payload.get("is_wake") and not payload.get("is_at"):
+                await self.client.send_event({
+                    "type": "bot_loop_interrupt",
+                    "session_id": payload["session_id"],
+                    "platform": payload["platform"],
+                    "message_type": "group",
+                    "group_id": payload["group_id"],
+                    "user_id": payload["user_id"],
+                })
                 return
 
         # 注册该事件的响应队列

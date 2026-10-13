@@ -969,7 +969,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         }
         toast.success('Bot 连续对话设置已保存');
       } catch (err) {
-        toast.error('保存失败: ' + (err instanceof Error ? err.message : String(err)));
+        toast.error(
+          '保存未完成，部分设置可能已生效；正在重新加载实际设置: ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
       } finally {
         await loadData();
         if (!isUnmounted) setBotLoopSaving(false);
