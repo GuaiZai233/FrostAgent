@@ -1773,9 +1773,9 @@ type dummyTestTool struct {
 	executed *atomic.Int32
 }
 
-func (d *dummyTestTool) Name() string               { return d.name }
-func (d *dummyTestTool) Description() string        { return "dummy test tool" }
-func (d *dummyTestTool) Parameters() map[string]any { return map[string]any{} }
+func (d *dummyTestTool) Name() string                 { return d.name }
+func (d *dummyTestTool) Description() string          { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
 func (d *dummyTestTool) Execute(args string) (string, error) {
 	if d.executed != nil {
 		d.executed.Add(1)

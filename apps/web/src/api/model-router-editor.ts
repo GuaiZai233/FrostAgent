@@ -116,9 +116,10 @@ export function createModelRouterEditorAPI(
       };
       const publishRoutes = async () => {
         if (!routes || !routesChanged()) return;
-        const response = await routes.saveModelRouterDraft(routeConfiguration());
+        const configuration = routeConfiguration();
+        const response = await routes.saveModelRouterDraft(configuration);
         if (!response.success || !response.draft) throw new Error(response.error || '同步实例路由失败');
-        const published = await routes.publishModelRouter();
+        const published = await routes.publishModelRouter(configuration);
         if (!published.success || !published.active) throw new Error(published.error || '发布实例路由失败');
         routesActive = structuredClone(published.active);
         pending.globalBindings = structuredClone(routesActive.globalBindings);

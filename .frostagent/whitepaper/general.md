@@ -70,6 +70,9 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
   - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
   - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
+  - 群级模型页内配置：「会话与 Prompt」中的群聊模型配置入口直接打开当前页弹窗，六个工作负载使用与实例默认配置相同的模型下拉选项，并支持继承实例默认；保存并发布仅更新当前群的覆盖，保留其他群和默认路由，以已发布配置为基线避免带入其他草稿；QQ 平台别名按后端规则匹配，发布成功后刷新当前会话上下文。
+  - 实例路由发布冲突保护：`ModelRouterService.Publish` 必须携带调用者保存的 `expected_configuration`；后端在发布锁内同时核对活动版本与草稿路由，草稿被另一页面替换或版本已更新时拒绝发布，保留活动配置和替换后的草稿。旧网页及直接调用接口的脚本缺少校验信息时提示刷新后重试。前端发布携带原始保存请求的配置，不能信任两步调用之间可能已被替换的 SaveDraft 响应；SQL 实例只比较自身路由，共享供应商目录继续按编辑页面 owner 管理，不引入持久化格式或迁移。
+  - 群级模型发布状态：发布 RPC 发出后禁用弹窗取消、关闭、Esc 与遮罩关闭，直到发布成功关闭并刷新当前上下文，或失败后显示错误并恢复操作；页面卸载仍强制清理弹窗，失效页面不会接收异步刷新。
   - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
   - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 
@@ -127,7 +130,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - FrostAgent 明确将 OneBot `message_id` 界定为连接级不透明句柄（Opaque Handle），仅用于当轮会话上下文中的 quote/reply 引用查询与临时 sticker 溯源，不将其作为全局持久或跨上游稳定标识；
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
     - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话（包括当前连接代收发的消息，以及经由当前连接 `get_msg` 查询成功并验证属于当前会话的历史引用目标）；跨连接代、未曾观测或跨会话的过时/未验证 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
-    - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），回退为空引用上下文，绝不中断或阻断核心对话事件分发；
+    - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），保留已成功取得的引用节点并停止后续追溯，绝不中断或阻断核心对话事件分发；
+    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。直接引用节点优先提供插件已转发的图片字节，并保留回查中可读取的其他图片；视觉请求按解码后的图片内容去重，避免不完整 Reply.chain、缓存标识或失效 URL 造成丢图或重复。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件声明支持回查后，仅在后端通过入站安全门禁并确认需要回复时，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
     - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；
     - 跨容器文件系统边界说明：前置校验验证的是 FrostAgent 本地视角下的文件可读性。由于非贴纸媒体通过 `file://<local path>` 穿越 OneBot 协议边界，若 OneBot 上游独立容器化部署，必须与 FrostAgent 共享存储卷（Shared Volume）以解析本地路径；跨隔离容器或远程文件系统的路径穿透明确不在归一化保证范围内；
@@ -165,6 +169,12 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
        - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
 - **共存与独立控制**：
   - 支持通过实例数据库设置（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
+
+### Bot 连续对话防循环
+
+- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可配置实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
+- OneBot 与 AstrBot 按入站顺序、按会话统计同一标记用户触发的对话请求；其他用户的任意消息（包括未唤醒的群聊消息）打断计数。AstrBot 插件关闭完整群消息转发时，仍发送不含内容的打断事件。被安全或路由规则静默拒绝的消息不增加轮数；安全规则直接发出的拒绝回复则计入轮数。
+- 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
 
 ### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
 
@@ -407,8 +417,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 当视觉模型不可用或网络异常时，标记状态为 `unsummarized`（未摘要）并隔离保护，绝不向大模型工具输出未摘要表情包；多模态服务恢复后支持批量一键重试并更新状态为 `ready`。
 - **工具检索与轮盘赌加权随机选择 (`send_sticker` Tool & Weighted Roulette Selection)**：
   - 注册 `send_sticker` 工具供大模型在合适语境下调用；
-  - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 条成功出站消息至少发送一次表情包。OneBot 按平台 ACK、AstrBot 按传输写入成功计数；发送失败与 Mock 不计数。计数在实例内存中，重启后重置。
-  - 在当轮请求的用户消息快照中注入剩余回复数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。
+  - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 个选定轮次至少发送一次表情包。`STICKER_ACTIVITY_MODE` 可选 `bot_turns`（默认，强制 Bot 对话轮次：每次唤醒或触发主动回复进入对话计一次，最终静默也计数）与 `all_messages`（全部轮次：OneBot/AstrBot 每条传入聊天消息计一次，无需唤醒；心跳、通知、API 回执和 Mock 不计数）。多次模型思考或同轮多条出站消息不重复计数；全部轮次到期只在下一次正常触发对话时执行约束，不会自行触发主动回复。只有成功确认发送的表情包才重置计数。计数在实例内存中，重启、切换模式或调整积极度后重置。
+  - 在当轮请求的用户消息快照中注入所选模式的剩余轮次数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；
@@ -418,9 +428,10 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - Web 控制台在「Prompt 检查」下方提供「表情包摘取」独立管理页面（`/#stickers`）；
   - 提供表情包总数、就绪数、未摘要数与累计抓取总权重等统计卡片；
   - 支持按情绪关键词/描述实时模糊过滤与状态快速筛选；
+  - 表情包列表可按添加时间或现有 `weight`（重复收集次数，界面称召回次数）顺序、倒序排列；先排序再分页，相同值保持原有顺序；
   - 支持本地表情包手动上传入库、表情包关键词与描述在线编辑、单张删除以及一键重试所有未摘要表情包；
   - 提供 ConnectRPC `StickerService` 契约及 `/api/sticker/{id}/image` 原生 HTTP 缩略图流式直链服务；
-  - `ListStickers` 接口支持基于 `page_token` 的偏移量分页，保证超出首页的数据可通过翻页访问。
+  - `ListStickers` 接口支持基于 `page_token` 的偏移量分页，保证超出首页的数据可通过翻页访问；未指定排序字段时保持原有列表顺序。
 
 ### 模型上下文协议外部工具系统 (MCP Host Subsystem)
 

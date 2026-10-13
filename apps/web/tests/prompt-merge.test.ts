@@ -40,6 +40,15 @@ assert.doesNotMatch(container.innerHTML, /Assistant \/ Bot|badge-purple text-xs 
 listeners.get('#pi-view-summary-btn')?.();
 assert.equal(summaryOpened, true);
 
+let modelConfigOpened = false;
+renderPromptInspector(container, prompt, {
+  onConfigureModel: () => { modelConfigOpened = true; },
+});
+assert.match(container.innerHTML, /id="pi-model-config-btn"/);
+assert.doesNotMatch(container.innerHTML, /href="#\/model-router/);
+listeners.get('#pi-model-config-btn')?.();
+assert.equal(modelConfigOpened, true);
+
 renderPromptInspector(container, prompt);
 assert.match(container.innerHTML, /Prompt Inspector/);
 assert.doesNotMatch(container.innerHTML, /id="pi-view-summary-btn"|模型配置/);

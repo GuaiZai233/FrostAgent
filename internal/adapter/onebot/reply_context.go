@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"FrostAgent/internal/adapter/onebot/content"
+	"FrostAgent/internal/adapter/quotetrace"
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/model"
 	"FrostAgent/internal/runtimescope"
@@ -114,6 +115,8 @@ type resolvedReplyContext struct {
 	MessageID   string
 	SessionID   string
 	Segments    []content.MessageSegment
+	ParentID    int64
+	Ancestors   []resolvedReplyContext
 }
 
 type oneBotMessageData struct {
@@ -129,15 +132,53 @@ type oneBotMessageData struct {
 	Message     json.RawMessage     `json:"message"`
 }
 
-// lookupReplyContext resolves the first reply segment through OneBot get_msg.
-// It waits at most one second and always degrades to an empty context so stale
-// or unsupported history cannot block the current event's normal wake signal.
+// lookupReplyContext follows an in-session reply chain through OneBot get_msg.
+// Each lookup has a one-second bound; stale or unsupported history ends the chain.
 func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReplyContext {
 	messageID, ok := replyMessageID(event)
 	if !ok || c == nil {
 		return resolvedReplyContext{}
 	}
-	return c.lookupMessageContext(c.Context(), event, messageID)
+	depth := quotetrace.Depth(c.Scope.Getenv)
+	if depth == 0 {
+		return resolvedReplyContext{}
+	}
+	seen := map[int64]struct{}{int64(event.MessageID): {}}
+	chain := make([]resolvedReplyContext, 0, depth)
+	for len(chain) < depth && messageID != 0 {
+		if _, exists := seen[messageID]; exists {
+			break
+		}
+		seen[messageID] = struct{}{}
+		resolved := c.lookupMessageContext(c.Context(), event, messageID)
+		if resolved.MessageID == "" {
+			break
+		}
+		chain = append(chain, resolved)
+		messageID = resolved.ParentID
+	}
+	if len(chain) == 0 {
+		return resolvedReplyContext{}
+	}
+	first := chain[0]
+	first.Ancestors = chain[1:]
+	return first
+}
+
+func (r resolvedReplyContext) promptWithAncestors() string {
+	if len(r.Ancestors) == 0 {
+		return r.Prompt
+	}
+	messages := make([]json.RawMessage, 0, 1+len(r.Ancestors))
+	messages = append(messages, json.RawMessage(r.Prompt))
+	for _, ancestor := range r.Ancestors {
+		messages = append(messages, json.RawMessage(ancestor.Prompt))
+	}
+	prompt, err := json.Marshal(map[string]any{"quoted_messages": messages})
+	if err != nil {
+		return r.Prompt
+	}
+	return string(prompt)
 }
 
 func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.OneBotEvent, messageID int64) resolvedReplyContext {
@@ -268,6 +309,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		MessageID:   strconv.FormatInt(messageID, 10),
 		SessionID:   historyKey(event),
 		Segments:    segments,
+		ParentID:    replyMessageIDFromRaw(data.Message),
 	}
 }
 
@@ -277,9 +319,12 @@ func (c *wsConnection) replyMessageMatchesEvent(event model.OneBotEvent, message
 		if data.MessageType != "" && data.MessageType != "group" {
 			return false
 		}
-		return data.GroupID == 0 || data.GroupID == event.GroupID
+		if data.GroupID != 0 {
+			return data.GroupID == event.GroupID
+		}
+		return c.messageSessionMatches(messageID, historyKey(event))
 	case "private":
-		if data.MessageType != "" && data.MessageType != "private" {
+		if data.GroupID != 0 || (data.MessageType != "" && data.MessageType != "private") {
 			return false
 		}
 		if peerID, ok := privateMessagePeer(event.SelfID, data); ok {
@@ -442,16 +487,47 @@ func (r *resolvedReplyContext) addImageDescription(description string, scopes ..
 
 func replyMessageID(event model.OneBotEvent) (int64, bool) {
 	for _, raw := range EventRawMessages(event) {
-		for _, segment := range ParseMessageSegments(raw) {
-			if segment.Type != "reply" {
-				continue
-			}
-			if messageID, ok := numericMessageID(segment.Data["id"]); ok {
-				return messageID, true
-			}
+		if messageID := replyMessageIDFromRaw(raw); messageID != 0 {
+			return messageID, true
 		}
 	}
 	return 0, false
+}
+
+func replyMessageIDFromRaw(raw json.RawMessage) int64 {
+	var entries []struct {
+		Type string
+		Data map[string]json.RawMessage
+	}
+	if json.Unmarshal(raw, &entries) == nil {
+		for _, entry := range entries {
+			if entry.Type != "reply" {
+				continue
+			}
+			var value json.Number
+			if json.Unmarshal(entry.Data["id"], &value) == nil {
+				if id, err := value.Int64(); err == nil {
+					return id
+				}
+			}
+			var text string
+			if json.Unmarshal(entry.Data["id"], &text) == nil {
+				if id, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64); err == nil {
+					return id
+				}
+			}
+		}
+		return 0
+	}
+	for _, segment := range ParseMessageSegments(raw) {
+		if segment.Type != "reply" {
+			continue
+		}
+		if messageID, ok := numericMessageID(segment.Data["id"]); ok {
+			return messageID
+		}
+	}
+	return 0
 }
 
 func numericMessageID(value interface{}) (int64, bool) {

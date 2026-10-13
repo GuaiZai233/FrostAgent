@@ -3,6 +3,8 @@ import { createInstanceAPI, securityAPI, actionsCatAPI } from '../src/api/client
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
+import { create } from '@bufbuild/protobuf';
+import { ModelRouterConfigurationSchema } from '@frostagent/proto';
 const events = new EventTarget();
 Object.assign(globalThis, {
   window: Object.assign(events, { location: { origin: 'http://localhost' } }),
@@ -12,6 +14,7 @@ const calls: string[] = [];
 const logSources: string[] = [];
 const catalogDraftOwners: string[] = [];
 const catalogDraftResets: string[] = [];
+const publishPayloads: Record<string, unknown>[] = [];
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = input instanceof Request ? input.url : String(input);
   (input instanceof Request ? input.signal : init?.signal)?.throwIfAborted();
@@ -23,6 +26,9 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     .get('X-FrostAgent-Catalog-Draft') ?? '');
   catalogDraftResets.push(new Headers(input instanceof Request ? input.headers : init?.headers)
     .get('X-FrostAgent-Catalog-Draft-Reset') ?? '');
+  if (url.endsWith('/Publish')) {
+    publishPayloads.push(await (input instanceof Request ? input.clone() : new Request(url, init)).json());
+  }
   return new Response(JSON.stringify({ success: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -187,6 +193,11 @@ await createInstanceAPI().getModelRouterState();
 assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/GetState');
 await createInstanceAPI({ globalModelCatalog: true }).publishModelRouter();
 assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/Publish');
+assert.deepEqual(publishPayloads.at(-1), {});
+const expectedRoutes = create(ModelRouterConfigurationSchema, { version: 1, revision: 7n });
+await createInstanceAPI().publishModelRouter(expectedRoutes);
+assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/Publish');
+assert.deepEqual(publishPayloads.at(-1), { expectedConfiguration: { version: 1, revision: '7' } });
 await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).getModelRouterState();
 assert.equal(catalogDraftOwners.at(-1), 'synthetic-page-b', 'shared catalog requests lost the editor owner');
 await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).resetSharedCatalogDraft();

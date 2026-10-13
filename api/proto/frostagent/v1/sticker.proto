@@ -32,6 +32,8 @@ message ListStickersRequest {
   Pagination pagination = 1;
   string status_filter = 2;
   string search = 3;
+  string sort_by = 4; // "weight" or "created_at"; empty keeps the existing order.
+  bool descending = 5;
 }
 
 message ListStickersResponse {

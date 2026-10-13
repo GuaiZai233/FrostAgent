@@ -45,11 +45,17 @@ var knownEnvVars = map[string]envEntry{
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
+	"ENABLE_QUOTE_TRACE":                   {"是否追溯收到消息的引用链（默认开启）", false, false, false},
+	"QUOTE_TRACE_DEPTH":                    {"引用追溯深度（1~10，默认 5）", false, false, false},
+	"BOT_LOOP_USER_IDS":                    {"管理员标记的 Bot 用户 ID，逗号分隔；可用 platform:ID 限定平台", false, false, false},
+	"BOT_LOOP_MAX_TURNS":                   {"与标记 Bot 连续对话的最多轮数", false, false, false},
+	"BOT_LOOP_MODE":                        {"超限处理：hard 静默丢弃，soft 注入静默建议", false, false, false},
 	"PROACTIVE_REPLY_PROBABILITY":          {"主动回复触发概率（0.01~1.00，0 为关闭）", false, false, false},
 	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
 	"PROACTIVE_REPLY_GROUP_WHITELIST":      {"主动回复允许的群号白名单，多个群号以英文逗号分隔", false, false, false},
 	"ENABLE_PROACTIVE_REPLY_WHITELIST":     {"是否启用主动回复群聊白名单模式", false, false, false},
-	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 条回复）", false, false, false},
+	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
+	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
 	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
@@ -268,6 +274,15 @@ func (s *Service) UpdateEnvVar(
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
 	}
+	if key == "QUOTE_TRACE_DEPTH" {
+		depth, err := strconv.Atoi(value)
+		if err != nil || depth < 1 || depth > 10 || strconv.Itoa(depth) != value {
+			return connect.NewResponse(&v1.UpdateEnvVarResponse{
+				Success: false,
+				Error:   "引用追溯深度必须是 1 到 10 的整数",
+			}), nil
+		}
+	}
 	if key == "STICKER_ACTIVITY" {
 		level, err := strconv.Atoi(value)
 		if err != nil || level < 0 || level > 10 || strconv.Itoa(level) != value {
@@ -276,6 +291,13 @@ func (s *Service) UpdateEnvVar(
 				Error:   "表情包使用积极度必须是 0 到 10 的整数",
 			}), nil
 		}
+	}
+
+	if key == "STICKER_ACTIVITY_MODE" && value != "bot_turns" && value != "all_messages" {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   "表情包积极度计数模式必须是 bot_turns 或 all_messages",
+		}), nil
 	}
 
 	if strings.ContainsRune(value, 0) {

@@ -650,8 +650,8 @@ func TestAstrBotSendHook(t *testing.T) {
 	toolProvider.mu.Lock()
 	request := toolProvider.requests[len(toolProvider.requests)-1]
 	toolProvider.mu.Unlock()
-	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 轮回复") {
-		t.Fatalf("工具消息与最终回复传输成功后应计入两条，实际=%v", request.Messages)
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 个 Bot 对话轮次") {
+		t.Fatalf("工具消息与最终回复应只计入一个对话轮次，实际=%v", request.Messages)
 	}
 }
 
@@ -661,8 +661,8 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 		delivered       bool
 		wantRemaining   int
 	}{
-		{name: "accepted", delivered: true, wantRemaining: 5},
-		{name: "sticker fetch failed", errorText: "download failed", wantRemaining: 3},
+		{name: "accepted", delivered: true, wantRemaining: 4},
+		{name: "sticker fetch failed", errorText: "download failed", wantRemaining: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("STICKER_ACTIVITY", "10")
@@ -676,8 +676,8 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 			}}
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-			engine.RecordBotMessage(false)
-			engine.RecordBotMessage(false)
+			engine.RecordBotTurn()
+			engine.RecordBotTurn()
 			srv, _, wsURL := startWSTestServer(engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -730,7 +730,7 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 			}
 			foundQuota := false
 			for _, msg := range requests[2].Messages {
-				if content, ok := msg.Content.(string); ok && strings.Contains(content, fmt.Sprintf("还剩 %d 轮回复", tc.wantRemaining)) {
+				if content, ok := msg.Content.(string); ok && strings.Contains(content, fmt.Sprintf("还剩 %d 个 Bot 对话轮次", tc.wantRemaining)) {
 					foundQuota = true
 				}
 			}

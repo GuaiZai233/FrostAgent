@@ -135,6 +135,22 @@ func TestStickerActivitySettingAcceptsOnlyIntegerRange(t *testing.T) {
 	}
 }
 
+func TestQuoteTraceDepthAcceptsOnlyIntegerRange(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"0", "11", "1.5", "invalid", "01", ""} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "QUOTE_TRACE_DEPTH", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid depth %q accepted: response=%v error=%v", value, res, err)
+		}
+	}
+	for _, value := range []string{"1", "5", "10"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "QUOTE_TRACE_DEPTH", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid depth %q rejected: response=%v error=%v", value, res, err)
+		}
+	}
+}
+
 func TestSettingsDeleteEnvVar(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")
@@ -1150,5 +1166,34 @@ func TestSettingsMultipleStatementsOnSameLine(t *testing.T) {
 	}
 	if _, ok := parsed["BOT_NAME"]; ok {
 		t.Errorf("BOT_NAME still present after delete (content:\n%s)", text)
+	}
+}
+
+func TestStickerActivityModeSettingValidationAndPersistence(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"", "replies", "ALL_MESSAGES", " bot_turns"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY_MODE", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid mode %q accepted: %v %v", value, res, err)
+		}
+	}
+	for _, value := range []string{"bot_turns", "all_messages"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY_MODE", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid mode %q rejected: %v %v", value, res, err)
+		}
+		got, err := svc.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range got.Msg.GetEnvVars() {
+			if item.GetKey() == "STICKER_ACTIVITY_MODE" && item.GetValue() == value {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("mode %q was not saved", value)
+		}
 	}
 }

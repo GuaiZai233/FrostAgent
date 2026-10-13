@@ -762,8 +762,8 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
         .then((res) => res.draft);
     },
 
-    publishModelRouter(): Promise<PublishResponse> {
-      return modelRouterClient.publish({});
+    publishModelRouter(expectedConfiguration?: ModelRouterConfiguration): Promise<PublishResponse> {
+      return modelRouterClient.publish({ expectedConfiguration });
     },
 
     listUpstreamModels(
@@ -908,11 +908,15 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       pageToken = '',
       statusFilter = '',
       search = '',
+      sortBy = '',
+      descending = false,
     ): Promise<ListStickersResponse> {
       return stickerClient.listStickers({
         pagination: { pageSize, pageToken },
         statusFilter,
         search,
+        sortBy,
+        descending,
       });
     },
 

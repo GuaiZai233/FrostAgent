@@ -612,10 +612,10 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 }
 
 type mockAlcyoneState struct {
-	mu             sync.Mutex
-	reserveCount   int
-	commitCount    int
-	releaseCount   int
+	mu           sync.Mutex
+	reserveCount int
+	commitCount  int
+	releaseCount int
 	reserveHandler func(w http.ResponseWriter, r *http.Request)
 	commitHandler  func(w http.ResponseWriter, r *http.Request)
 	releaseHandler func(w http.ResponseWriter, r *http.Request)
@@ -1619,9 +1619,9 @@ type dummyTestTool struct {
 	executed *atomic.Int32
 }
 
-func (d *dummyTestTool) Name() string               { return d.name }
-func (d *dummyTestTool) Description() string        { return "dummy test tool" }
-func (d *dummyTestTool) Parameters() map[string]any { return map[string]any{} }
+func (d *dummyTestTool) Name() string                 { return d.name }
+func (d *dummyTestTool) Description() string          { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
 func (d *dummyTestTool) Execute(args string) (string, error) {
 	if d.executed != nil {
 		d.executed.Add(1)
@@ -1715,7 +1715,7 @@ func TestAstrBotIngressMetadataCannotBypassWhitelistGate(t *testing.T) {
 		Metadata: map[string]any{
 			"_frostagent_should_reply":    true,
 			"_frostagent_proactive_reply": true,
-			"custom_tracking_id":          "track_101",
+			"custom_tracking_id":         "track_101",
 		},
 	}
 	b1, err := json.Marshal(spoofedEvent)
