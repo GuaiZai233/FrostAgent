@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1780,4 +1781,192 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 		d.executed.Add(1)
 	}
 	return "ok", nil
+}
+
+func TestOneBotProactiveTriggerLogging(t *testing.T) {
+	// 验证：一旦触发主动回复逻辑就在日志里写一条SYSTEM级别INFO：【触发主动回复逻辑】，在控制台不隐藏
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+	scope.Logger = logs.New("test-onebot-proactive-1", "test-onebot-proactive-1", 100)
+
+	provider := &mockLLMProvider{
+		responses: []*core.ChatResponse{
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "主动插嘴的一句话",
+				},
+			},
+			{
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "显式唤醒的一句话",
+				},
+			},
+		},
+	}
+
+	engine := newTestEngine(provider)
+	engine.Scope = scope
+
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. 触发主动回复的群聊消息
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("创建 pipe 失败: %v", err)
+	}
+	prevStdout := os.Stdout
+	os.Stdout = wPipe
+
+	event := model.OneBotEvent{
+		SelfID:      30001,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     10001,
+		UserID:      20001,
+		MessageID:   801,
+		Message:     json.RawMessage(`[{"type":"text","data":{"text":"大家今天过得怎么样？"}}]`),
+	}
+	b, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+		os.Stdout = prevStdout
+		_ = wPipe.Close()
+		_ = rPipe.Close()
+		t.Fatalf("发送事件失败: %v", err)
+	}
+
+	// 接收直到收到回复
+	var gotMsg bool
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			continue
+		}
+		if act.Action == "get_group_info" {
+			groupInfoResponse := map[string]any{
+				"status":  "ok",
+				"retcode": 0,
+				"data": map[string]any{
+					"group_id":   10001,
+					"group_name": "测试群",
+				},
+				"echo": act.Echo,
+			}
+			respB, _ := json.Marshal(groupInfoResponse)
+			_ = conn.WriteMessage(websocket.TextMessage, respB)
+			continue
+		}
+		if act.Action == "send_group_msg" {
+			gotMsg = true
+			break
+		}
+	}
+	if !gotMsg {
+		os.Stdout = prevStdout
+		_ = wPipe.Close()
+		_ = rPipe.Close()
+		t.Fatalf("期望收到主动回复出站消息")
+	}
+
+	os.Stdout = prevStdout
+	_ = wPipe.Close()
+	consoleBytes, _ := io.ReadAll(rPipe)
+	_ = rPipe.Close()
+	consoleOutput := string(consoleBytes)
+
+	// 验证日志快照中有 SYSTEM 级别的 INFO 日志：【触发主动回复逻辑】
+	var foundSystemLog bool
+	for _, entry := range engine.Log().Snapshot() {
+		if entry.Category == logs.SYSTEM && entry.Level == logs.INFO && entry.Content == "【触发主动回复逻辑】" {
+			foundSystemLog = true
+			break
+		}
+	}
+	if !foundSystemLog {
+		t.Fatalf("日志快照中未找到 Category=SYSTEM Level=INFO Content=【触发主动回复逻辑】的记录")
+	}
+
+	// 验证控制台不隐藏（输出中直接包含【触发主动回复逻辑】，而不是 ...）
+	if !strings.Contains(consoleOutput, "【触发主动回复逻辑】") {
+		t.Fatalf("控制台输出未包含【触发主动回复逻辑】: %s", consoleOutput)
+	}
+
+	// 2. 显式唤醒不应输出【触发主动回复逻辑】
+	scopeExplicit := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+	})
+	scopeExplicit.Logger = logs.New("test-onebot-explicit-2", "test-onebot-explicit-2", 100)
+	engineExplicit := newTestEngine(provider)
+	engineExplicit.Scope = scopeExplicit
+	srvExplicit, wsURLExplicit := startWSTestServer(engineExplicit)
+	defer srvExplicit.Close()
+
+	connExplicit, _, err := websocket.DefaultDialer.Dial(wsURLExplicit, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer connExplicit.Close()
+
+	eventExplicit := model.OneBotEvent{
+		SelfID:      30001,
+		PostType:    "message",
+		MessageType: "group",
+		GroupID:     10001,
+		UserID:      20001,
+		MessageID:   802,
+		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 显式唤醒"}}]`),
+	}
+	bExplicit, _ := json.Marshal(eventExplicit)
+	if err := connExplicit.WriteMessage(websocket.TextMessage, bExplicit); err != nil {
+		t.Fatalf("发送显式唤醒事件失败: %v", err)
+	}
+
+	for {
+		_ = connExplicit.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, respBytes, err := connExplicit.ReadMessage()
+		if err != nil {
+			break
+		}
+		var act model.OneBotAction
+		if err := json.Unmarshal(respBytes, &act); err != nil {
+			continue
+		}
+		if act.Action == "get_group_info" {
+			groupInfoResponse := map[string]any{
+				"status":  "ok",
+				"retcode": 0,
+				"data": map[string]any{
+					"group_id":   10001,
+					"group_name": "测试群",
+				},
+				"echo": act.Echo,
+			}
+			respB, _ := json.Marshal(groupInfoResponse)
+			_ = connExplicit.WriteMessage(websocket.TextMessage, respB)
+			continue
+		}
+		if act.Action == "send_group_msg" {
+			break
+		}
+	}
+
+	for _, entry := range engineExplicit.Log().Snapshot() {
+		if entry.Content == "【触发主动回复逻辑】" {
+			t.Fatalf("显式唤醒不应输出【触发主动回复逻辑】日志")
+		}
+	}
 }
