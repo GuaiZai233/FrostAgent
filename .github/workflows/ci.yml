@@ -44,7 +44,7 @@ jobs:
       - name: Test shared providers on PostgreSQL
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether)$' -count=1 -v
+        run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether|TestRoutePublicationGuardKeepsScopesIsolated)$' -count=1 -v
       - name: Generate Go proto for restore test
         run: |
           go install github.com/bufbuild/buf/cmd/buf@latest

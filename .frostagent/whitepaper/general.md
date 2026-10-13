@@ -76,6 +76,9 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
   - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
   - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
+  - 群级模型页内配置：「会话与 Prompt」中的群聊模型配置入口直接打开当前页弹窗，六个工作负载使用与实例默认配置相同的模型下拉选项，并支持继承实例默认；保存并发布仅更新当前群的覆盖，保留其他群和默认路由，以已发布配置为基线避免带入其他草稿；QQ 平台别名按后端规则匹配，发布成功后刷新当前会话上下文。
+  - 实例路由发布冲突保护：`ModelRouterService.Publish` 必须携带调用者保存的 `expected_configuration`；后端在发布锁内同时核对活动版本与草稿路由，草稿被另一页面替换或版本已更新时拒绝发布，保留活动配置和替换后的草稿。旧网页及直接调用接口的脚本缺少校验信息时提示刷新后重试。前端发布携带原始保存请求的配置，不能信任两步调用之间可能已被替换的 SaveDraft 响应；SQL 实例只比较自身路由，共享供应商目录继续按编辑页面 owner 管理，不引入持久化格式或迁移。
+  - 群级模型发布状态：发布 RPC 发出后禁用弹窗取消、关闭、Esc 与遮罩关闭，直到发布成功关闭并刷新当前上下文，或失败后显示错误并恢复操作；页面卸载仍强制清理弹窗，失效页面不会接收异步刷新。
   - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
   - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 

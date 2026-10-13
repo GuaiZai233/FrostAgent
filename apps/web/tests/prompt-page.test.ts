@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { create } from '@bufbuild/protobuf';
+import { ModelRouterConfigurationSchema } from '@frostagent/proto';
 import { mountPromptPage } from '../src/pages/prompt';
 import { toast } from '../src/components/toast';
 import type { createInstanceAPI } from '../src/api/client';
@@ -72,7 +74,12 @@ const session = {
 const pageCalls: Array<[number, string]> = [];
 const contextCalls: string[] = [];
 let deleteCalls = 0;
+let modelStateCalls = 0;
 const api = {
+  async getModelRouterState() {
+    modelStateCalls++;
+    return { active: create(ModelRouterConfigurationSchema, { version: 1 }), loadError: '' };
+  },
   async getSessions(size: number, token: string) {
     pageCalls.push([size, token]);
     return size === 100
@@ -119,8 +126,17 @@ root.querySelector('#prompt-session-list').querySelectorAll('.prompt-session-car
 await Promise.resolve();
 const inspector = root.querySelector('#prompt-inspector-mount');
 assert.ok(inspector.innerHTML.includes('id="pi-view-summary-btn"'), 'group summary action was not rendered');
-assert.match(inspector.innerHTML, /group_id=123/);
+assert.match(inspector.innerHTML, /id="pi-model-config-btn"/);
+assert.doesNotMatch(inspector.innerHTML, /href="#\/model-router/);
 assert.deepEqual(contextCalls, [session.sessionId]);
+
+inspector.querySelector('#pi-model-config-btn').click();
+await Promise.resolve();
+const modelDialog = dialogs.at(-1)!;
+assert.equal(modelStateCalls, 1, 'group model action did not load the current instance configuration');
+assert.match(modelDialog.querySelector('.dialog-body').innerHTML, /select class="select group-model-binding"/);
+modelDialog.querySelector('.dialog-close-btn').click();
+assert.equal(modelDialog.closed, true);
 
 inspector.querySelector('#pi-view-summary-btn').click();
 const summaryDialog = dialogs.at(-1)!;

@@ -150,7 +150,7 @@ func (m *Manager) resetSQLCatalogDraft() (Configuration, error) {
 	return cloneConfiguration(m.draft), nil
 }
 
-func (m *Manager) publishSQL(owner string) (Configuration, error) {
+func (m *Manager) publishSQL(owner string, expected *Configuration) (Configuration, error) {
 	m.db.CatalogMutationMu.Lock()
 	defer m.db.CatalogMutationMu.Unlock()
 	m.db.ModelRouterMu.Lock()
@@ -162,6 +162,11 @@ func (m *Manager) publishSQL(owner string) (Configuration, error) {
 	}
 	if err := m.checkDraftOwner(owner); err != nil {
 		return Configuration{}, err
+	}
+	if expected != nil {
+		if err := m.checkExpectedRouteDraft(*expected); err != nil {
+			return Configuration{}, err
+		}
 	}
 	cfg := cloneConfiguration(m.draft)
 	if cfg.Revision != m.active.Revision {

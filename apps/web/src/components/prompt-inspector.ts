@@ -449,6 +449,7 @@ export function renderPromptInspector(
     showRawToggle?: boolean;
     title?: string;
     onViewSummary?: () => void;
+    onConfigureModel?: () => void;
     modelConfigHref?: string;
   } = {},
 ): () => void {
@@ -512,8 +513,13 @@ export function renderPromptInspector(
                   </span>`
             }
             ${
-              options.modelConfigHref
-                ? `<a class="btn btn-outline btn-sm" title="配置模型" href="${escapeHtml(options.modelConfigHref)}">
+              options.onConfigureModel
+                ? `<button class="btn btn-outline btn-sm" id="pi-model-config-btn" title="配置模型">
+                    ${icon('settings', 'w-3.5 h-3.5')}
+                    <span>模型配置</span>
+                  </button>`
+                : options.modelConfigHref
+                  ? `<a class="btn btn-outline btn-sm" title="配置模型" href="${escapeHtml(options.modelConfigHref)}">
                     ${icon('settings', 'w-3.5 h-3.5')}
                     <span>模型配置</span>
                   </a>`
@@ -769,6 +775,9 @@ export function renderPromptInspector(
   function bindInteractiveEvents() {
     container.querySelector<HTMLButtonElement>('#pi-view-summary-btn')
       ?.addEventListener('click', () => options.onViewSummary?.());
+
+    container.querySelector<HTMLButtonElement>('#pi-model-config-btn')
+      ?.addEventListener('click', () => options.onConfigureModel?.());
 
     const copyBtn = container.querySelector<HTMLButtonElement>('#pi-copy-btn');
     copyBtn?.addEventListener('click', async () => {
