@@ -102,6 +102,9 @@ func TestSQLGroupCompactPersistsBeforePublishing(t *testing.T) {
 	if _, admitted := compactor.Scope.Enter(); admitted {
 		t.Fatal("failed SQL summary write did not pause the runtime")
 	}
+	// The callback reports the result before deferred in-flight cleanup finishes.
+	// Drain the old worker before replacing its scope and retrying compaction.
+	compactor.Scope.Wait()
 	compactor.Scope = runtimescope.New(nil, nil, nil)
 	store.SetSaveHook(nil)
 	if err := compactor.ForceCompact(session, owner, modelrouter.Scope{}, func(err error) { completed <- err }); err != nil {
@@ -115,6 +118,7 @@ func TestSQLGroupCompactPersistsBeforePublishing(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for durable compact")
 	}
+	compactor.Scope.Wait()
 	reopened, err := groupsummary.NewSQLStore(db, "test-instance")
 	if err != nil {
 		t.Fatal(err)
