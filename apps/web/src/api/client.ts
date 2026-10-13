@@ -1,4 +1,6 @@
 import { instanceState } from '../instance-state';
+import { getControlToken } from './control-auth';
+export { getControlToken, setControlToken } from './control-auth';
 import { createClient } from '@connectrpc/connect';
 import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
@@ -106,30 +108,32 @@ export const extraEnvAPI = {
   },
 };
 
+async function globalSettingsRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/${path}`, {
+    ...init,
+    headers,
+    signal: instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  return response;
+}
+
+export const globalSettingsAPI = {
+  async download(): Promise<Blob> {
+    return (await globalSettingsRequest('backup/settings')).blob();
+  },
+  async import(settings: unknown): Promise<void> {
+    await globalSettingsRequest('import/settings', { method: 'POST', body: JSON.stringify(settings) });
+  },
+};
+
 export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
-
-const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
-
-export function getControlToken(): string {
-  try {
-    return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export function setControlToken(token: string): void {
-  try {
-    const trimmed = token.trim();
-    if (trimmed) {
-      localStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, trimmed);
-    } else {
-      localStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // localStorage errors ignored
-  }
-}
 
 export interface LockedPrincipal {
   principal: { platform: string; user_id: string };

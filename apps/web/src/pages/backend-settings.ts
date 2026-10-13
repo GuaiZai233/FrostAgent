@@ -16,7 +16,7 @@ const globalKeys = new Set([
   'MCP_ENFORCE_LOCAL_TOKEN',
   'SECURITY_CONTROL_MODE',
 ]);
-import { createInstanceAPI, extraEnvAPI, type ExtraEnvEntry } from '../api/client';
+import { createInstanceAPI, extraEnvAPI, setControlToken, type ExtraEnvEntry } from '../api/client';
 import { instanceState } from '../instance-state';
 import { EnvVar } from '@frostagent/proto';
 import { escapeHtml } from '../utils/formatters';
@@ -621,6 +621,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     try {
       const result = await api.deleteEnvVar(key);
       if (!result.success) throw new Error(result.error);
+      syncBrowserControlToken(key, '');
       toast.success('已恢复默认值');
       await loadData();
     } catch (error) {
@@ -708,6 +709,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     try {
       const res = await api.updateEnvVar({ key, value, isSecret });
       if (res.success) {
+        syncBrowserControlToken(key, value);
         toast.success('设置已保存');
         void loadData();
         return true;
@@ -721,6 +723,13 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       );
       return false;
     }
+  }
+
+  function syncBrowserControlToken(key: string, value: string): void {
+    if (key !== 'MCP_CONTROL_TOKEN' && key !== 'ADMIN_TOKEN') return;
+    const primary = key === 'MCP_CONTROL_TOKEN' ? value : envVars.find((item) => item.key === 'MCP_CONTROL_TOKEN')?.value;
+    const fallback = key === 'ADMIN_TOKEN' ? value : envVars.find((item) => item.key === 'ADMIN_TOKEN')?.value;
+    setControlToken(primary?.trim() || fallback || '');
   }
 
   // Toggle behavior settings

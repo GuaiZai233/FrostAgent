@@ -7,10 +7,97 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func localSettingsRequest(method, path string, body io.Reader) *http.Request {
+	request := httptest.NewRequest(method, path, body)
+	request.RemoteAddr = "127.0.0.1:12345"
+	return request
+}
+
+func TestSensitiveGlobalSettingsRoutesRequireControlPlaneAuth(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err := m.global.Update("MCP_CONTROL_TOKEN", "synthetic-control-token", false); err != nil {
+		t.Fatal(err)
+	}
+	const key = "SYNTHETIC_AUTH_PROVIDER_TOKEN"
+	if err := envinject.Put(context.Background(), m.db, key, "original-secret"); err != nil {
+		t.Fatal(err)
+	}
+	settings := backup.ExportGlobalSettings(m.global)
+	replacement := map[string]string{key: "imported-secret"}
+	settings.ExtraEnv = &replacement
+	importBody, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		method, path, body string
+	}{
+		{http.MethodGet, "/api/instances/global/extra-env", ""},
+		{http.MethodPut, "/api/instances/global/extra-env", `{"key":"SYNTHETIC_AUTH_PROVIDER_TOKEN","value":"modified-secret"}`},
+		{http.MethodDelete, "/api/instances/global/extra-env/" + key, ""},
+		{http.MethodGet, "/api/instances/global/backup/settings", ""},
+		{http.MethodPost, "/api/instances/global/import/settings", string(importBody)},
+	}
+	for _, allowRemote := range []bool{false, true} {
+		if allowRemote {
+			if err := m.global.Update("ALLOW_REMOTE_MCP_MANAGEMENT", "true", false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, tc := range cases {
+			for _, header := range []string{"", "Bearer incorrect-token"} {
+				request := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+				request.RemoteAddr = "198.51.100.15:12345"
+				if header != "" {
+					request.Header.Set("Authorization", header)
+				}
+				response := httptest.NewRecorder()
+				m.ServeHTTP(response, request)
+				if response.Code != http.StatusUnauthorized ||
+					response.Header().Get("Cache-Control") != "no-store" ||
+					bytes.Contains(response.Body.Bytes(), []byte("original-secret")) {
+					t.Fatalf("unauthed %s %s (remote=%v header=%q): %d %s", tc.method, tc.path,
+						allowRemote, header, response.Code, response.Body.String())
+				}
+			}
+		}
+	}
+	entries, err := envinject.List(context.Background(), m.db)
+	if err != nil || len(entries) != 1 || entries[0].Value != "original-secret" {
+		t.Fatalf("unauthorized mutations changed extra env: %#v %v", entries, err)
+	}
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/instances/global/extra-env"},
+		{http.MethodGet, "/api/instances/global/backup/settings"},
+	} {
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		request.RemoteAddr = "198.51.100.15:12345"
+		request.Header.Set("Authorization", "Bearer synthetic-control-token")
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte("original-secret")) {
+			t.Fatalf("authed %s: %d %s", tc.path, response.Code, response.Body.String())
+		}
+	}
+	if err := m.global.Update("MCP_ENFORCE_LOCAL_TOKEN", "true", false); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, localSettingsRequest(http.MethodGet, "/api/instances/global/extra-env", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("local token enforcement was bypassed: %d", response.Code)
+	}
+}
 
 func TestGlobalSettingsBackupRestoresExtraEnvAndKeepsLegacyImports(t *testing.T) {
 	m, err := NewDatabase(t.TempDir())
@@ -24,7 +111,7 @@ func TestGlobalSettingsBackupRestoresExtraEnvAndKeepsLegacyImports(t *testing.T)
 		t.Fatal(err)
 	}
 	export := httptest.NewRecorder()
-	m.ServeHTTP(export, httptest.NewRequest(http.MethodGet, "/api/instances/global/backup/settings", nil))
+	m.ServeHTTP(export, localSettingsRequest(http.MethodGet, "/api/instances/global/backup/settings", nil))
 	if export.Code != http.StatusOK {
 		t.Fatalf("export: %d %s", export.Code, export.Body.String())
 	}
@@ -45,7 +132,7 @@ func TestGlobalSettingsBackupRestoresExtraEnvAndKeepsLegacyImports(t *testing.T)
 			t.Fatal(err)
 		}
 		response := httptest.NewRecorder()
-		m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
+		m.ServeHTTP(response, localSettingsRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
 		return response
 	}
 	if response := importSettings(data); response.Code != http.StatusOK {
@@ -105,7 +192,7 @@ func TestGlobalSettingsBackupRestoresExtraEnvOnApplyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)).WithContext(requestCtx))
+	m.ServeHTTP(response, localSettingsRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)).WithContext(requestCtx))
 	if response.Code == http.StatusOK || m.global.Get("WS_ALLOWED_ORIGINS") != "" {
 		t.Fatalf("failed import was not rolled back: %d %s", response.Code, response.Body.String())
 	}

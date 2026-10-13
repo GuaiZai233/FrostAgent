@@ -61,7 +61,7 @@ func TestSQLExtraEnvRouteRejectsManagedSettingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	request := httptest.NewRequest(http.MethodPut, "/api/instances/global/extra-env",
+	request := localSettingsRequest(http.MethodPut, "/api/instances/global/extra-env",
 		strings.NewReader(`{"key":"SYNTHETIC_EXTERNAL_TOKEN","value":"synthetic-secret"}`))
 	response := httptest.NewRecorder()
 	m.ServeHTTP(response, request)
@@ -69,24 +69,24 @@ func TestSQLExtraEnvRouteRejectsManagedSettingKeys(t *testing.T) {
 		t.Fatalf("extra env write failed: %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/instances/global/extra-env", nil))
+	m.ServeHTTP(response, localSettingsRequest(http.MethodGet, "/api/instances/global/extra-env", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "SYNTHETIC_EXTERNAL_TOKEN") {
 		t.Fatalf("extra env entry unavailable: %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/instances/global/extra-env",
+	m.ServeHTTP(response, localSettingsRequest(http.MethodPut, "/api/instances/global/extra-env",
 		strings.NewReader(`{"key":"BOT_NAME","value":"unexpected"}`)))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("managed setting key was accepted as extra env: %d", response.Code)
 	}
 	response = httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/instances/global/extra-env",
+	m.ServeHTTP(response, localSettingsRequest(http.MethodPut, "/api/instances/global/extra-env",
 		strings.NewReader(`{"key":"bot_name","value":"unexpected"}`)))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("case variant of managed key was accepted: %d", response.Code)
 	}
 	response = httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodDelete,
+	m.ServeHTTP(response, localSettingsRequest(http.MethodDelete,
 		"/api/instances/global/extra-env/SYNTHETIC_EXTERNAL_TOKEN", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("extra env delete failed: %d %s", response.Code, response.Body.String())

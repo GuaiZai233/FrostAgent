@@ -1,4 +1,6 @@
 import { instanceState, instanceRequest } from '../instance-state';
+import { globalSettingsAPI } from '../api/client';
+import { controlPlaneFetch } from '../api/control-auth';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
@@ -88,7 +90,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
           <article class="card backup-panel">
             <div class="backup-panel-heading">${icon('settings', 'w-4 h-4')}<h3>全局设置</h3></div>
             <p class="backup-description">常规设置的密钥与凭据来源会置空；额外 env 注入项会以明文包含在文件中。请妥善保管，导入后重启 FrostAgent 才会应用注入项。</p>
-            <a href="/api/instances/global/backup/settings" download="global-setting.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载全局设置 JSON</a>
+            <button id="global-download-button" type="button" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载全局设置 JSON</button>
             <div class="backup-form backup-form-separated">
               <label for="global-import-file">全局设置文件</label>
               <input id="global-import-file" class="input" type="file" accept=".json,application/json" />
@@ -109,6 +111,27 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       </section>
     </div>`;
   const fileInput = container.querySelector<HTMLInputElement>('#settings-import-file')!;
+  const globalDownloadButton = container.querySelector<HTMLButtonElement>('#global-download-button')!;
+  globalDownloadButton.onclick = () => {
+    void (async () => {
+      globalDownloadButton.disabled = true;
+      try {
+        const blob = await globalSettingsAPI.download();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'global-setting.json';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (error) {
+        toast.error('下载全局设置失败: ' + String(error));
+      } finally {
+        globalDownloadButton.disabled = false;
+      }
+    })();
+  };
   const globalFile = container.querySelector<HTMLInputElement>('#global-import-file')!;
   const globalButton = container.querySelector<HTMLButtonElement>('#global-import-button')!;
   globalFile.onchange = () => { globalButton.disabled = !globalFile.files?.length; };
@@ -118,7 +141,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       if (!file) return;
       globalButton.disabled = true;
       try {
-        await instanceRequest('/global/import/settings', JSON.parse(await file.text()));
+        await globalSettingsAPI.import(JSON.parse(await file.text()));
         toast.success('全局设置已导入；额外 env 注入项重启 FrostAgent 后生效');
       } catch (error) {
         toast.error('导入全局设置失败: ' + String(error));
@@ -193,7 +216,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       restoreButton.disabled = true;
       try {
         const name = restoreName.value.trim();
-        const response = await fetch(`/api/instances/restore?name=${encodeURIComponent(name)}`, {
+        const response = await controlPlaneFetch(`/api/instances/restore?name=${encodeURIComponent(name)}`, {
           method: 'POST', body: file,
         });
         const result = await response.json();

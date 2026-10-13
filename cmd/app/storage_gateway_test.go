@@ -59,13 +59,13 @@ func TestStorageGatewayFailedSwitchKeepsSQLiteData(t *testing.T) {
 	}
 
 	response := httptest.NewRecorder()
-	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/storage", nil))
+	gateway.ServeHTTP(response, localManagementRequest(http.MethodGet, "/api/storage", nil))
 	var view storage.Config
 	if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil || view.Backend != storage.SQLite {
 		t.Fatalf("storage API state is wrong: %#v, %v", view, err)
 	}
 	response = httptest.NewRecorder()
-	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/storage", strings.NewReader(`{"backend":"postgres","dsn":""}`)))
+	gateway.ServeHTTP(response, localManagementRequest(http.MethodPost, "/api/storage", strings.NewReader(`{"backend":"postgres","dsn":""}`)))
 	if response.Code == http.StatusOK {
 		t.Fatal("storage API accepted an empty PostgreSQL address")
 	}
@@ -141,7 +141,7 @@ func TestPostgresGatewaySwitchLoadsEachDatabaseWithoutMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/storage", strings.NewReader(string(postBody))))
+	gateway.ServeHTTP(response, localManagementRequest(http.MethodPost, "/api/storage", strings.NewReader(string(postBody))))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"listen_addr":"127.0.0.1:19080"`) {
 		t.Fatalf("switch response lost the new management address: %d %s", response.Code, response.Body.String())
 	}

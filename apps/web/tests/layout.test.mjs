@@ -28,6 +28,14 @@ const backendSettings = await readFile(
   new URL('../src/pages/backend-settings.ts', import.meta.url),
   'utf8',
 );
+const backupRestore = await readFile(
+  new URL('../src/pages/backup-restore.ts', import.meta.url),
+  'utf8',
+);
+const apiClient = await readFile(
+  new URL('../src/api/client.ts', import.meta.url),
+  'utf8',
+);
 const backendSettingsForm = await readFile(
   new URL('../src/pages/backend-settings-form.ts', import.meta.url),
   'utf8',
@@ -164,6 +172,11 @@ assert.match(backendSettingsForm, /class="toggle-switch"/);
 assert.match(backendSettingsForm, /kind === 'number' \? 'number'/);
 assert.doesNotMatch(backendSettings, /<table class="table env-table">|<p[^>]*>GROUP_REPLY_ON_MENTION<\/p>/);
 assert.match(settingFields, /BOT_NAME: \{ label: '机器人名称'/);
+assert.match(settingFields, /MAX_CONTEXT_MESSAGES: \{[^\n]*min: 4,/);
+assert.match(backupRestore, /globalSettingsAPI\.download\(\)/);
+assert.match(backupRestore, /globalSettingsAPI\.import\(/);
+assert.doesNotMatch(backupRestore, /<a href="\/api\/instances\/global\/backup\/settings"/);
+assert.match(apiClient, /globalSettingsRequest[\s\S]*Authorization[\s\S]*globalSettingsAPI/);
 const knownSettings = settingsService.match(/var knownEnvVars = map\[string\]envEntry\{([\s\S]*?)\n\}/)?.[1] ?? '';
 const dedicatedSettings = settingFields.match(/export const dedicatedSettingKeys = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '';
 for (const [, key] of knownSettings.matchAll(/^\s*"([A-Z_]+)":/gm)) {

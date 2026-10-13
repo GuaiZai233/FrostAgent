@@ -1595,6 +1595,14 @@ func writeError(w http.ResponseWriter, err error) {
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil {
+		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
+			path == "global/backup/settings" || path == "global/import/settings" {
+			w.Header().Set("Cache-Control", "no-store")
+			if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
 		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") {
 			m.serveExtraEnv(w, r, path)
 			return

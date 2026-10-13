@@ -101,23 +101,35 @@ func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database is switching", http.StatusServiceUnavailable)
 		return
 	}
-	manager.ServeHTTP(w, r)
+	managementAuthMiddleware(manager, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
 }
 
 func (g *storageGateway) SecurityHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.mu.RLock()
 		handler := g.security
+		manager := g.current
 		g.mu.RUnlock()
-		if handler == nil {
+		if handler == nil || manager == nil {
 			http.Error(w, "database is switching", http.StatusServiceUnavailable)
 			return
 		}
-		handler.ServeHTTP(w, r)
+		managementAuthMiddleware(handler, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
 	})
 }
 
 func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	manager, _, _ := g.snapshot()
+	if manager == nil {
+		http.Error(w, "database is switching", http.StatusServiceUnavailable)
+		return
+	}
+	managementAuthMiddleware(http.HandlerFunc(g.serveStorageLocked), manager.ControlPlaneGetenv()).ServeHTTP(w, r)
+}
+
+func (g *storageGateway) serveStorageLocked(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case http.MethodGet:
@@ -129,7 +141,7 @@ func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
 			writeStorageError(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := g.switchTo(r.Context(), config); err != nil {
+		if err := g.switchToLocked(r.Context(), config); err != nil {
 			writeStorageError(w, http.StatusServiceUnavailable, err)
 			return
 		}
@@ -148,12 +160,16 @@ func writeStorageError(w http.ResponseWriter, status int, err error) {
 }
 
 func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config) error {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	return g.switchToLocked(ctx, requested)
+}
+
+func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.Config) error {
 	config, err := storage.NormalizeConfig(requested)
 	if err != nil {
 		return err
 	}
-	g.switchMu.Lock()
-	defer g.switchMu.Unlock()
 	old, previous, _ := g.snapshot()
 	if old == nil {
 		return errors.New("database is unavailable")

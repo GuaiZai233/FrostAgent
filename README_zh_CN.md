@@ -1,5 +1,11 @@
 # FrostAgent
 
+远程管理 API 必须提供有效控制令牌，覆盖设置、备份、日志、实例操作和数据库切换。
+先在本机的 Bot 服务端设置中配置“管理控制令牌”，再在网页“前端设置”中填写相同值。
+`MCP_CONTROL_TOKEN` 优先于兼容的 `ADMIN_TOKEN`，`ALLOW_REMOTE_MCP_MANAGEMENT` 无法绕过管理入口鉴权。
+本机访问默认免令牌；启用 `MCP_ENFORCE_LOCAL_TOKEN` 后本机也必须认证。
+反向代理应保留原 Host 或转发标识。如果代理把 Host 改成本机地址并清除全部转发标识，必须启用本机强制令牌，避免远程请求被识别成本机请求。
+
 FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框架，支持适配 Onebot 等多种协议，可以接入即时通信软件使用。
 
 [English](README.md) | [中文](README_zh_CN.md)

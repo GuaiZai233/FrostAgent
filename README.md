@@ -1,5 +1,15 @@
 # FrostAgent
 
+Remote management API requests require a valid control token, including settings,
+backups, logs, instance operations and database selection. Configure the management
+token locally in Bot server settings, then enter it in the web console's frontend
+settings. `MCP_CONTROL_TOKEN` takes priority over the compatible `ADMIN_TOKEN`.
+`ALLOW_REMOTE_MCP_MANAGEMENT` does not bypass management API authentication.
+Local loopback access remains available unless `MCP_ENFORCE_LOCAL_TOKEN` is enabled.
+Reverse proxies must preserve the public Host or a forwarding header. If a proxy
+rewrites Host to localhost and removes all forwarding metadata, enable
+`MCP_ENFORCE_LOCAL_TOKEN` so its requests cannot use the local exemption.
+
 FrostAgent is an AI role-playing and agent orchestration framework written in Golang. It supports multiple protocol adapters, such as OneBot, and can be integrated with various instant messaging applications.
 
 [English](README.md) | [中文](README_zh_CN.md)

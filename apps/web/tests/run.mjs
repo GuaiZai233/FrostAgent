@@ -12,6 +12,8 @@ for (const testFile of [
   'prompt-merge.test.ts',
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
+  'control-auth.test.ts',
+  'authenticated-resources.test.ts',
 ]) {
   const result = await build({
     entryPoints: [resolve('tests', testFile)],
