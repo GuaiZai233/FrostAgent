@@ -2,7 +2,20 @@ package sticker
 
 import "strconv"
 
-const ActivityEnvKey = "STICKER_ACTIVITY"
+const (
+	ActivityEnvKey      = "STICKER_ACTIVITY"
+	ActivityModeEnvKey  = "STICKER_ACTIVITY_MODE"
+	ActivityBotTurns    = "bot_turns"
+	ActivityAllMessages = "all_messages"
+)
+
+// ActivityMode defaults legacy and invalid configuration to bot dialogue turns.
+func ActivityMode(raw string) string {
+	if raw == ActivityAllMessages {
+		return ActivityAllMessages
+	}
+	return ActivityBotTurns
+}
 
 // ActivityLevel treats missing or invalid configuration as disabled.
 func ActivityLevel(raw string) int {

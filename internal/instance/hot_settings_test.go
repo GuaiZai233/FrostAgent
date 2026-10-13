@@ -44,6 +44,7 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 		t.Fatalf("runtime still sees old name %q", got)
 	}
 	update("SANDBOX_ENABLED", "false")
+	update("STICKER_ACTIVITY_MODE", "all_messages")
 	update("SANDBOX_BASE_URL", "https://synthetic-sandbox.example")
 	if got := m.sandbox.Get().BaseURL; got != "https://synthetic-sandbox.example" {
 		t.Fatalf("sandbox manager still sees old endpoint %q", got)

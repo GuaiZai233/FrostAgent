@@ -25,7 +25,7 @@ func (e *Engine) deliverStickerPair(ctx context.Context, run *RunContext, textCa
 		return "文字未发送：配对贴纸消息无效。", fmt.Sprintf("表情包未发送：%v", err)
 	}
 	result, delivered := e.deliverToolResult(ctx, core.ToolExecutionResult{MessagePayload: payload}, payload)
-	if delivered {
+	if delivered && !run.Mock {
 		e.RecordBotMessage(true)
 	}
 	return result, result
