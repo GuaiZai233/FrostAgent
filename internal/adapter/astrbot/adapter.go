@@ -446,11 +446,8 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
 				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
-			if botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit()) {
-				if botLoopConfig.Hard() {
-					_ = sendTerminalNoopWithSuppress(event, c)
-					continue
-				}
+			botLoopExceeded := botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+			if botLoopExceeded && !botLoopConfig.Hard() {
 				event.botLoopSoft = true
 			}
 
@@ -462,6 +459,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
 					}
 				}
+			}
+
+			if botLoopExceeded && botLoopConfig.Hard() {
+				_ = sendTerminalNoopWithSuppress(event, c)
+				continue
 			}
 
 			if routeSnapshot != nil {
