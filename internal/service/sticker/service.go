@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,22 @@ func (s *Service) ListStickers(
 			}
 		}
 		filtered = append(filtered, e)
+	}
+
+	sortBy := req.Msg.GetSortBy()
+	if sortBy == "weight" || sortBy == "created_at" {
+		sort.SliceStable(filtered, func(i, j int) bool {
+			var left, right int64
+			if sortBy == "weight" {
+				left, right = int64(filtered[i].Weight), int64(filtered[j].Weight)
+			} else {
+				left, right = filtered[i].CreatedAt, filtered[j].CreatedAt
+			}
+			if req.Msg.GetDescending() {
+				return left > right
+			}
+			return left < right
+		})
 	}
 
 	pageSize := int(req.Msg.GetPagination().GetPageSize())
