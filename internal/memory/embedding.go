@@ -69,6 +69,7 @@ type embeddingState struct {
 	RetryAt                  time.Time
 	Failures                 int
 	Generation               uint64
+	CatalogRevision          int64
 }
 
 // Embeddings owns derived indexes and workers within one instance lifetime.
@@ -137,7 +138,8 @@ func (m *Embeddings) CarryIndexesFrom(old *Embeddings) {
 			continue
 		}
 		m.states[s] = &embeddingState{Fingerprint: state.Fingerprint, SourceHash: state.SourceHash,
-			RequestedHash: state.SourceHash, Ready: state.Ready, Vectors: state.Vectors, Generation: state.Generation}
+			RequestedHash: state.SourceHash, Ready: state.Ready, Vectors: state.Vectors, Generation: state.Generation,
+			CatalogRevision: state.CatalogRevision}
 	}
 }
 
@@ -182,7 +184,8 @@ func (m *Embeddings) scan() {
 
 func (m *Embeddings) ensure(s SearchScope) (*embeddingState, error) {
 	s = s.normalized()
-	target, err := m.router.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{Platform: s.Platform, GroupID: s.GroupID})
+	snapshot := m.router.Snapshot()
+	target, err := snapshot.Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{Platform: s.Platform, GroupID: s.GroupID})
 	if err != nil {
 		return nil, fmt.Errorf("Embedding 模型未配置或不可用: %w", err)
 	}
@@ -236,6 +239,12 @@ func (m *Embeddings) ensure(s SearchScope) (*embeddingState, error) {
 			}
 		}
 		state.RequestedHash = sourceHash
+		state.LastError, state.RetryAt, state.Failures = nil, time.Time{}, 0
+		m.queueLocked(s, state)
+	} else if !state.Active && state.LastError != nil && state.CatalogRevision != snapshot.CatalogRevision() {
+		// A publication can repair permanent errors such as invalid credentials.
+		// rebuild records its own snapshot revision, so an in-flight old request
+		// cannot consume a publication that should wake it after failure.
 		state.LastError, state.RetryAt, state.Failures = nil, time.Time{}, 0
 		m.queueLocked(s, state)
 	} else if !state.Active && !state.RetryAt.IsZero() && !time.Now().Before(state.RetryAt) {
@@ -418,7 +427,11 @@ func snapshotMatches(before, after []MemoryEntry) bool {
 }
 
 func (m *Embeddings) rebuild(ctx context.Context, s SearchScope, fp string) error {
-	target, provider, err := m.router.EmbeddingSession(ctx, modelrouter.Scope{Platform: s.Platform, GroupID: s.GroupID})
+	snapshot := m.router.Snapshot()
+	m.mu.Lock()
+	m.states[s].CatalogRevision = snapshot.CatalogRevision()
+	m.mu.Unlock()
+	target, provider, err := m.router.EmbeddingSession(m.router.WithSnapshot(ctx, snapshot), modelrouter.Scope{Platform: s.Platform, GroupID: s.GroupID})
 	if err != nil {
 		return err
 	}

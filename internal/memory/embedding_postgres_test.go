@@ -198,3 +198,14 @@ func TestPostgresEmbeddingStaleQuery(t *testing.T) {
 		return newSQLEmbeddingFixture(t, db, handler)
 	})
 }
+
+func TestPostgresEmbeddingCredentialRecovery(t *testing.T) {
+	for _, inFlight := range []bool{false, true} {
+		t.Run(fmt.Sprint("in-flight-", inFlight), func(t *testing.T) {
+			db := newEmbeddingPostgresDB(t)
+			exerciseEmbeddingCredentialRecovery(t, func(handler http.HandlerFunc) embeddingFixture {
+				return newSQLEmbeddingFixture(t, db, handler)
+			}, inFlight)
+		})
+	}
+}

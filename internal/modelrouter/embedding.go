@@ -47,7 +47,10 @@ func InputTooLong(err error) bool {
 // EmbeddingSession captures the same target and credentials for index or query
 // generation, so a concurrent route publication cannot mix vector spaces.
 func (m *Manager) EmbeddingSession(ctx context.Context, scope Scope) (Target, core.EmbeddingProvider, error) {
-	snapshot := m.Snapshot()
+	snapshot := snapshotFromContext(ctx)
+	if snapshot == nil {
+		snapshot = m.Snapshot()
+	}
 	target, err := snapshot.Resolve(WorkloadEmbedding, scope)
 	if err != nil {
 		return Target{}, nil, fmt.Errorf("Embedding 模型未配置或不可用: %w", err)

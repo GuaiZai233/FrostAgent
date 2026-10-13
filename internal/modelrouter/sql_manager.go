@@ -30,6 +30,10 @@ func (m *Manager) sqlRuntimeSnapshot() *Snapshot {
 	defer m.mu.Unlock()
 	m.loadErr = m.loadSQL()
 	snapshot := &Snapshot{config: cloneConfiguration(m.active), err: m.loadErr, credentials: make(map[string]snapshotCredential)}
+	if snapshot.err == nil {
+		snapshot.err = m.db.SQL.QueryRow(`SELECT revision FROM provider_revision WHERE id = 1`).Scan(&snapshot.catalogRevision)
+		m.loadErr = snapshot.err
+	}
 	if m.loadErr == nil {
 		for _, endpoint := range m.active.Endpoints {
 			value, err := m.secrets.Resolve(endpoint)

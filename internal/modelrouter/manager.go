@@ -18,10 +18,15 @@ import (
 const configurationVersion = 1
 
 type Snapshot struct {
-	config      Configuration
-	err         error
-	credentials map[string]snapshotCredential
+	config          Configuration
+	err             error
+	credentials     map[string]snapshotCredential
+	catalogRevision int64
 }
+
+// CatalogRevision identifies a published provider configuration, independently
+// of an instance's route revision and without including credential values.
+func (s *Snapshot) CatalogRevision() int64 { return s.catalogRevision }
 
 type snapshotCredential struct {
 	value string
@@ -234,7 +239,7 @@ func (m *Manager) Snapshot() *Snapshot {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return &Snapshot{config: cloneConfiguration(m.active)}
+	return &Snapshot{config: cloneConfiguration(m.active), catalogRevision: m.active.Revision}
 }
 
 func (m *Manager) SaveDraft(cfg Configuration) error {
