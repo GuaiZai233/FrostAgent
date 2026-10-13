@@ -20,7 +20,7 @@ export const settingFields: Record<string, SettingField> = {
   SECURITY_CONTROL_MODE: { label: '安全控制模式', group: '安全与权限', type: 'select', hot: true, options: [
     { value: 'off', label: '关闭' }, { value: 'simple', label: '基础' }, { value: 'aggressive', label: '严格' },
   ] },
-  MAX_CONTEXT_MESSAGES: { label: '保留消息条数', group: '对话与上下文', type: 'number', min: 1, step: 1, hot: true },
+  MAX_CONTEXT_MESSAGES: { label: '保留消息条数', group: '对话与上下文', type: 'number', min: 4, step: 1, hot: true },
   MAX_CONTEXT_CHARS: { label: '上下文字符上限', group: '对话与上下文', type: 'number', min: 1, step: 1 },
   BOT_NAME: { label: '机器人名称', group: '对话与上下文', hot: true },
   BOT_ALIASES: { label: '机器人唤醒别名', group: '对话与上下文', hint: '多个名称用英文逗号分隔', hot: true },

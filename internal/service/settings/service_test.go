@@ -267,6 +267,9 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 			go func(k string, round int) {
 				defer wg.Done()
 				val := fmt.Sprintf("val_%s_%d", k, round)
+				if k == "MAX_CONTEXT_MESSAGES" {
+					val = fmt.Sprintf("%d", round+4)
+				}
 				resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
 					Key:   k,
 					Value: val,

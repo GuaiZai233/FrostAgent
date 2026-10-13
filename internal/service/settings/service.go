@@ -276,6 +276,15 @@ func (s *Service) UpdateEnvVar(
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
 	}
+	if key == "MAX_CONTEXT_MESSAGES" {
+		count, err := strconv.Atoi(value)
+		if err != nil || count < 4 {
+			return connect.NewResponse(&v1.UpdateEnvVarResponse{
+				Success: false,
+				Error:   "保留消息条数必须是不小于 4 的整数",
+			}), nil
+		}
+	}
 	if key == "STICKER_ACTIVITY" {
 		level, err := strconv.Atoi(value)
 		if err != nil || level < 0 || level > 10 || strconv.Itoa(level) != value {
