@@ -3,7 +3,6 @@ import {
   GroupModelOverrideSchema,
   ModelAPIKeyStorage,
   ModelBindingMode,
-  ModelBindingSchema,
   ModelEndpointSchema,
   ModelRouterConfigurationSchema,
   ModelTargetSchema,
@@ -11,7 +10,6 @@ import {
   type ModelBinding,
   type ModelEndpoint,
   type ModelRouterConfiguration,
-  type ModelTarget,
 } from '@frostagent/proto';
 import { createModelRouterEditorAPI, ModelRouterEditorError } from '../api/model-router-editor';
 import { confirmDialog } from '../components/confirm';
@@ -19,15 +17,7 @@ import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
-
-const workloads = [
-  { value: ModelWorkload.DIALOGUE, label: '主对话' },
-  { value: ModelWorkload.SUBAGENT, label: '子 Agent' },
-  { value: ModelWorkload.VISION, label: '多模态（图片）' },
-  { value: ModelWorkload.REFLECTION, label: '反思' },
-  { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取' },
-  { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩' },
-] as const;
+import { bindingFor, bindingOptions, setBinding, workloads } from '../utils/model-bindings';
 
 const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
 const apiKeyStorageManual = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_MANUAL;
@@ -48,10 +38,6 @@ function configurationFingerprint(config: ModelRouterConfiguration): string {
 
 function endpointWarns(baseUrl: string): boolean {
   return baseUrl.trim().replace(/\/+$/, '').toLowerCase().endsWith('/chat/completions');
-}
-
-function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBinding | undefined {
-  return bindings.find((binding) => binding.workload === workload);
 }
 
 function endpointAPIKeyStorage(endpoint: ModelEndpoint): ModelAPIKeyStorage {
@@ -89,11 +75,6 @@ function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload
     return bindingFor(bindings, ModelWorkload.DIALOGUE)?.mode !== ModelBindingMode.MODEL;
   }
   return binding?.mode !== ModelBindingMode.MODEL;
-}
-
-function modelLabel(model: ModelTarget, endpoints: ModelEndpoint[]): string {
-  const endpoint = endpoints.find((item) => item.id === model.endpointId);
-  return `${model.displayName} · ${endpoint?.displayName || '未知 Endpoint'} · ${model.upstreamModel}`;
 }
 
 export function mountModelRouterPage(container: HTMLElement): () => void {
@@ -367,7 +348,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               <strong class="text-sm">${workload.label}</strong>
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(draft, binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -395,31 +376,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             : `<tr><td colspan="4" class="text-center text-muted" style="padding:2.5rem">尚无群级覆盖。</td></tr>`
         }</tbody>
       </table></div></div>`;
-  }
-
-  function bindingOptions(
-    binding: ModelBinding | undefined,
-    allowInherit: boolean,
-    inheritLabel = '继承实例默认',
-    allowDisabled = true,
-    allowFollowDialogue = false,
-  ): string {
-    const selectedMode = binding?.mode ?? (
-      allowInherit
-        ? ModelBindingMode.INHERIT
-        : allowFollowDialogue && !allowDisabled
-          ? ModelBindingMode.FOLLOW_DIALOGUE
-          : ModelBindingMode.DISABLED
-    );
-    const selectedModel = binding?.modelId || '';
-    const items: string[] = [];
-    if (allowInherit) items.push(`<option value="inherit" ${selectedMode === ModelBindingMode.INHERIT ? 'selected' : ''}>${inheritLabel}</option>`);
-    if (allowFollowDialogue) items.push(`<option value="follow-dialogue" ${selectedMode === ModelBindingMode.FOLLOW_DIALOGUE ? 'selected' : ''}>跟随主对话</option>`);
-    if (allowDisabled) items.push(`<option value="disabled" ${selectedMode === ModelBindingMode.DISABLED ? 'selected' : ''}>Disabled</option>`);
-    for (const model of draft.models) {
-      items.push(`<option value="model:${escapeHtml(model.id)}" ${selectedMode === ModelBindingMode.MODEL && selectedModel === model.id ? 'selected' : ''}>${escapeHtml(modelLabel(model, draft.endpoints))}</option>`);
-    }
-    return items.join('');
   }
 
   function attachPageEvents() {
@@ -763,7 +719,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(draft, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {
@@ -783,25 +739,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         });
       },
     });
-  }
-
-  function setBinding(bindings: ModelBinding[], workload: ModelWorkload, value: string, allowInherit: boolean) {
-    const index = bindings.findIndex((binding) => binding.workload === workload);
-    if (value === 'inherit' && allowInherit) {
-      if (index >= 0) bindings.splice(index, 1);
-      return;
-    }
-    const binding = create(ModelBindingSchema, {
-      workload,
-      mode: value === 'disabled'
-        ? ModelBindingMode.DISABLED
-        : value === 'follow-dialogue'
-          ? ModelBindingMode.FOLLOW_DIALOGUE
-          : ModelBindingMode.MODEL,
-      modelId: value.startsWith('model:') ? value.slice(6) : '',
-    });
-    if (index >= 0) bindings[index] = binding;
-    else bindings.push(binding);
   }
 
   function modelIsReferenced(modelId: string): boolean {

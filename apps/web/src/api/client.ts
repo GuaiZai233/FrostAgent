@@ -762,8 +762,8 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
         .then((res) => res.draft);
     },
 
-    publishModelRouter(): Promise<PublishResponse> {
-      return modelRouterClient.publish({});
+    publishModelRouter(expectedConfiguration?: ModelRouterConfiguration): Promise<PublishResponse> {
+      return modelRouterClient.publish({ expectedConfiguration });
     },
 
     listUpstreamModels(

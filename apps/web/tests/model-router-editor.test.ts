@@ -19,7 +19,7 @@ function fixture(withInstance = true) {
     catalogDraft: structuredClone(catalogInitial), routeDraft: configuration(3n),
     exposeCatalogDraft: false, catalogSecretDirty: false,
     failCatalog: false, failRoutes: false, failDiscardRoutes: false,
-    failCatalogPublishNumber: 0, catalogPublishes: 0,
+    failCatalogPublishNumber: 0, catalogPublishes: 0, replaceRouteDraft: false,
   };
   const makeAPI = (scope: 'catalog' | 'routes') => ({
     async getModelRouterState() {
@@ -42,11 +42,22 @@ function fixture(withInstance = true) {
       } else {
         assert.ok(config.globalBindings.every((binding) => !binding.modelId || state.catalog.models.some((model) => model.id === binding.modelId)), 'route saved before its new model was published');
         state.routeDraft = structuredClone(config);
+        if (state.replaceRouteDraft) state.routeDraft.groupOverrides = [{
+          $typeName: 'frostagent.v1.GroupModelOverride', platform: 'qq', groupId: 'synthetic-other-group', bindings: [],
+        }];
       }
-      return { success: true, draft: structuredClone(config), error: '' };
+      return { success: true, draft: structuredClone(scope === 'routes' ? state.routeDraft : config), error: '' };
     },
-    async publishModelRouter() {
+    async publishModelRouter(expected?: ModelRouterConfiguration) {
       calls.push(`${scope}:publish`);
+      if (scope === 'routes') {
+        assert.ok(expected, 'instance publication did not include its expected configuration');
+        if (JSON.stringify(expected.groupOverrides) !== JSON.stringify(state.routeDraft.groupOverrides)) {
+          return { success: false, error: 'route draft replaced by another page' };
+        }
+        assert.deepEqual(expected.globalBindings, state.routeDraft.globalBindings);
+        assert.equal(expected.revision, state.routes.revision);
+      } else assert.equal(expected, undefined, 'catalog publication adopted the route contract');
       if (scope === 'catalog') {
         state.catalogPublishes++;
         if (state.catalogPublishes === state.failCatalogPublishNumber) return { success: false, error: 'catalog unavailable' };
@@ -77,6 +88,19 @@ function fixture(withInstance = true) {
   type API = NonNullable<Parameters<typeof createModelRouterEditorAPI>[0]>;
   const editor = createModelRouterEditorAPI(makeAPI('catalog') as API, withInstance ? makeAPI('routes') as API : undefined);
   return { calls, state, editor };
+}
+
+{
+  const { editor, state } = fixture();
+  const draft = (await editor.getModelRouterState()).active;
+  draft.globalBindings = [];
+  await editor.saveModelRouterDraft(draft);
+  state.replaceRouteDraft = true;
+  await assert.rejects(editor.publishModelRouter(), /route draft replaced by another page/);
+  assert.equal(state.routes.globalBindings[0].modelId, 'shared-model', 'conflicting draft was published');
+  state.replaceRouteDraft = false;
+  await editor.publishModelRouter();
+  assert.deepEqual(state.routes.globalBindings, [], 'retry lost the original route edit');
 }
 
 {

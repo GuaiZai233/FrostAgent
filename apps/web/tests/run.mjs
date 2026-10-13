@@ -10,6 +10,7 @@ for (const testFile of [
   'instance-api.test.ts',
   'model-router-editor.test.ts',
   'prompt-merge.test.ts',
+  'group-model-config.test.ts',
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
 ]) {

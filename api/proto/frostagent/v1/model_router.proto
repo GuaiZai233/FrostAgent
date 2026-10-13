@@ -127,7 +127,11 @@ message DiscardDraftResponse {
   ModelRouterConfiguration draft = 1;
 }
 
-message PublishRequest {}
+message PublishRequest {
+  // Required for instance routes: the configuration this caller saved.
+  // Shared catalog publication continues to use its editor owner.
+  ModelRouterConfiguration expected_configuration = 1;
+}
 
 message PublishResponse {
   bool success = 1;
