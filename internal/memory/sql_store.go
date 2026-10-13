@@ -23,7 +23,7 @@ func (b sqlBrainStore) load() (*BrainData, error) {
 	ctx := context.Background()
 	rows, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT id, owner, owner_type, content, summary, evidence,
 		source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at,
-		access_count, merged_from_json FROM memory_entries
+		access_count, merged_from_json, summary_dirty FROM memory_entries
 		WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? ORDER BY created_at, id`),
 		b.instanceID, b.scope, b.platform, b.groupID)
 	if err != nil {
@@ -35,7 +35,7 @@ func (b sqlBrainStore) load() (*BrainData, error) {
 		var ownerType, source, visibility, createdAt, updatedAt, merged string
 		if err := rows.Scan(&entry.ID, &entry.Owner, &ownerType, &entry.Content, &entry.Summary,
 			&entry.Evidence, &entry.SourceMessageID, &entry.SourceSenderID, &entry.SourceMedia, &source, &visibility,
-			&createdAt, &updatedAt, &entry.AccessCount, &merged); err != nil {
+			&createdAt, &updatedAt, &entry.AccessCount, &merged, &entry.SummaryNeedsRefresh); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -170,6 +170,13 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 		if entry.ID == "" {
 			return fmt.Errorf("memory ID cannot be empty")
 		}
+		if b.db.EmbeddingStorageReady.Load() {
+			if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM memory_embeddings
+				WHERE instance_id=? AND scope_type=? AND platform=? AND group_id=? AND memory_id=? AND content_hash<>?`),
+				b.instanceID, b.scope, b.platform, b.groupID, entry.ID, memoryHash(entry)); err != nil {
+				return err
+			}
+		}
 		merged, err := json.Marshal(entry.MergedFrom)
 		if err != nil {
 			return err
@@ -183,8 +190,8 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 		}
 		query := `INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json, summary_dirty
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if update {
 			query += ` ON CONFLICT (instance_id, scope_type, platform, group_id, id) DO UPDATE SET
 				owner = excluded.owner, owner_type = excluded.owner_type, content = excluded.content,
@@ -192,13 +199,13 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 				source_message_id = excluded.source_message_id, source_sender_id = excluded.source_sender_id,
 				source_media = excluded.source_media, source = excluded.source, visibility = excluded.visibility,
 				created_at = excluded.created_at, updated_at = excluded.updated_at,
-				access_count = excluded.access_count, merged_from_json = excluded.merged_from_json`
+				access_count = excluded.access_count, merged_from_json = excluded.merged_from_json, summary_dirty = excluded.summary_dirty`
 		}
 		if _, err = tx.ExecContext(ctx, b.db.Bind(query), b.instanceID, b.scope, b.platform, b.groupID,
 			entry.ID, entry.Owner, entry.OwnerType, entry.Content, entry.Summary, entry.Evidence,
 			entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia, entry.Source, entry.Visibility,
 			entry.CreatedAt.UTC().Format(time.RFC3339Nano), entry.UpdatedAt.UTC().Format(time.RFC3339Nano),
-			entry.AccessCount, string(merged)); err != nil {
+			entry.AccessCount, string(merged), boolInteger(entry.SummaryNeedsRefresh)); err != nil {
 			return err
 		}
 		for _, tag := range entry.Tags {
@@ -213,6 +220,39 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 }
 
 func (b sqlBrainStore) saveTx(ctx context.Context, tx *sql.Tx, brain *BrainData) error {
+	if b.db.EmbeddingStorageReady.Load() {
+		rows, err := tx.QueryContext(ctx, b.db.Bind(`SELECT memory_id,content_hash FROM memory_embeddings
+			WHERE instance_id=? AND scope_type=? AND platform=? AND group_id=?`), b.instanceID, b.scope, b.platform, b.groupID)
+		if err != nil {
+			return err
+		}
+		current := map[string]string{}
+		for _, e := range brain.Entries {
+			current[e.ID] = memoryHash(e)
+		}
+		var remove []string
+		for rows.Next() {
+			var id, hash string
+			if err := rows.Scan(&id, &hash); err != nil {
+				rows.Close()
+				return err
+			}
+			if current[id] != hash {
+				remove = append(remove, id)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range remove {
+			if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM memory_embeddings
+			WHERE instance_id=? AND scope_type=? AND platform=? AND group_id=? AND memory_id=?`), b.instanceID, b.scope, b.platform, b.groupID, id); err != nil {
+				return err
+			}
+		}
+	}
 	args := []any{b.instanceID, b.scope, b.platform, b.groupID}
 	for _, table := range []string{"memory_entries", "memory_merge_archives"} {
 		if _, err := tx.ExecContext(ctx, b.db.Bind(`DELETE FROM `+table+` WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ?`), args...); err != nil {
@@ -229,12 +269,12 @@ func (b sqlBrainStore) saveTx(ctx context.Context, tx *sql.Tx, brain *BrainData)
 		}
 		if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json, summary_dirty
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			b.instanceID, b.scope, b.platform, b.groupID, entry.ID, entry.Owner, entry.OwnerType,
 			entry.Content, entry.Summary, entry.Evidence, entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia,
 			entry.Source, entry.Visibility, entry.CreatedAt.UTC().Format(time.RFC3339Nano),
-			entry.UpdatedAt.UTC().Format(time.RFC3339Nano), entry.AccessCount, string(merged)); err != nil {
+			entry.UpdatedAt.UTC().Format(time.RFC3339Nano), entry.AccessCount, string(merged), boolInteger(entry.SummaryNeedsRefresh)); err != nil {
 			return err
 		}
 		for _, tag := range entry.Tags {

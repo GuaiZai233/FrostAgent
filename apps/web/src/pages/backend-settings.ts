@@ -50,6 +50,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
+  let storageBackend = "";
   let envVars: EnvVar[] = [];
   const visibleSecrets = new Set<string>();
   let editingKey: string | null = null;
@@ -92,6 +93,17 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       </header>
 
       <div class="flex flex-col gap-4">
+        <article class="card p-4">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="card-title text-sm font-semibold">记忆设置</h2>
+            <small class="badge badge-outline">当前实例</small>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-3">
+            <label class="text-xs font-semibold" for="embedding-enabled">启用Embedding</label>
+            <label class="toggle-switch"><input type="checkbox" id="embedding-enabled" role="switch" aria-label="启用Embedding" disabled><span aria-hidden="true"></span></label>
+          </div>
+          <p id="embedding-sqlite-warning" class="text-xs text-destructive mt-2" hidden>sqlite不支持向量存储，反思后embedding的结果将不会持久化！</p>
+        </article>
         <!-- Group Behavior Settings Card -->
         <article class="card p-4">
           <div class="card-header border-b border-border pb-3 mb-3">
@@ -392,6 +404,29 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const quoteTraceCb = container.querySelector<HTMLInputElement>('#quote-trace-cb')!;
   const quoteTraceDepthInput = container.querySelector<HTMLInputElement>('#quote-trace-depth')!;
 
+  const embeddingToggle = container.querySelector<HTMLInputElement>('#embedding-enabled')!;
+  const embeddingWarning = container.querySelector<HTMLElement>('#embedding-sqlite-warning')!;
+  embeddingToggle.addEventListener('change', async () => {
+    embeddingToggle.disabled = true;
+    try {
+      const response = await api.updateEnvVar({
+        key: 'ENABLE_EMBEDDING',
+        value: String(embeddingToggle.checked),
+        isSecret: false,
+      });
+      if (!response.success) throw new Error(response.error);
+      toast.success('记忆设置已更新');
+    } catch (error) {
+      embeddingToggle.checked = !embeddingToggle.checked;
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!isUnmounted) {
+        embeddingToggle.disabled = false;
+        embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
+      }
+    }
+  });
+
   const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
 
   function updateProactiveUI(
@@ -567,12 +602,17 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     renderTable();
 
     try {
-      const [vars, sessionsResp] = await Promise.all([
-        api.listEnvVars(),
+      const [memorySettings, sessionsResp] = await Promise.all([
+        api.listEnvVarsWithStorage(),
         api.getSessions(100).catch(() => ({ sessions: [] })),
       ]);
       if (isUnmounted) return;
-      envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT');
+      const vars = memorySettings.envVars;
+      storageBackend = memorySettings.storageBackend;
+      embeddingToggle.checked = vars.find(item => item.key === 'ENABLE_EMBEDDING')?.value === 'true';
+      embeddingToggle.disabled = false;
+      embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
+      envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT').filter(item => item.key !== 'ENABLE_EMBEDDING');
 
       sessionGroupMap.clear();
       for (const sess of sessionsResp.sessions || []) {

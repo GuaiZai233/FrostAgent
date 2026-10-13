@@ -180,6 +180,8 @@ var migrations = []migration{
 		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
 	}},
 	{11, providerSchema},
+	{12, []string{`ALTER TABLE provider_models ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE memory_entries ADD COLUMN summary_dirty INTEGER NOT NULL DEFAULT 0`}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

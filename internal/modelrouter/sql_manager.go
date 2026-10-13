@@ -297,8 +297,8 @@ func writeCatalogTx(ctx context.Context, db *storage.DB, tx *sql.Tx, cfg Configu
 			enabled = 1
 		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO provider_models
-   (id, display_name, endpoint_id, upstream_model, enabled, capabilities, position) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			model.ID, model.DisplayName, model.EndpointID, model.UpstreamModel, enabled, string(capabilities), pos); err != nil {
+   (id, display_name, endpoint_id, upstream_model, enabled, capabilities, position, max_input_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			model.ID, model.DisplayName, model.EndpointID, model.UpstreamModel, enabled, string(capabilities), pos, model.MaxInputTokens); err != nil {
 			return err
 		}
 	}

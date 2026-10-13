@@ -83,6 +83,7 @@ var knownEnvVars = map[string]envEntry{
 	"BILLING_SAFETY_MULTIPLIER":            {"计费预扣款输入 Token 安全倍率", false, true, false},
 	"BILLING_PROMPT_PRICE_PER_MILLION":     {"每百万输入 Token 的计费价格", false, false, false},
 	"BILLING_COMPLETION_PRICE_PER_MILLION": {"每百万输出 Token 的计费价格", false, false, false},
+	"ENABLE_EMBEDDING":                     {"启用记忆向量检索", false, false, false},
 	"MEMORY_REFLECTION_TIMEOUT":            {"记忆反思独立超时时间", false, true, false},
 	"BRAIN_PATH":                           {"记忆存储 brain.json 路径", false, true, false},
 	"UPSTREAM_API_KEY":                     {"上游 API 认证密钥", true, true, false},
@@ -139,6 +140,8 @@ func CaptureInitialEnv() {
 
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
+	storageBackend    string
+	validateEmbedding func(context.Context) error
 	envPath           string
 	config, global    *instanceconfig.Store
 	sandboxManager    SandboxManager
@@ -148,6 +151,11 @@ type Service struct {
 
 func NewScoped(c, g *instanceconfig.Store, sandboxManager SandboxManager) *Service {
 	return &Service{config: c, global: g, sandboxManager: sandboxManager}
+}
+
+func (s *Service) SetEmbeddingStorage(backend string, validate func(context.Context) error) {
+	s.storageBackend = backend
+	s.validateEmbedding = validate
 }
 
 // SetSandboxConfigManager wires the shared sandbox configuration manager.
@@ -249,7 +257,7 @@ func (s *Service) ListEnvVars(
 			IsSecret: meta.IsSecret,
 		})
 	}
-	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars}), nil
+	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars, StorageBackend: s.storageBackend}), nil
 }
 
 // UpdateEnvVar updates a single env var in the .env file.
@@ -273,6 +281,16 @@ func (s *Service) UpdateEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
+	}
+	if key == "ENABLE_EMBEDDING" {
+		if value != "true" && value != "false" {
+			return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: "启用 Embedding 必须为 true 或 false"}), nil
+		}
+		if value == "true" && s.validateEmbedding != nil {
+			if err := s.validateEmbedding(ctx); err != nil {
+				return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
+			}
+		}
 	}
 	if key == "QUOTE_TRACE_DEPTH" {
 		depth, err := strconv.Atoi(value)

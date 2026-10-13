@@ -117,15 +117,15 @@ async function flush() { for (let index = 0; index < 5; index++) await Promise.r
   const { dialog, body, button } = f.open('aiocqhttp');
   await flush();
   const selects = body.querySelectorAll('.group-model-binding');
-  assert.equal(selects.length, 6);
+  assert.equal(selects.length, 7);
   assert.equal(selects[0].value, 'disabled', 'QQ platform aliases must restore the existing group binding');
   assert.equal(selects[1].value, 'inherit');
   assert.match(body.innerHTML, /Model &lt;name&gt; · Endpoint &lt;name&gt; · test-model/);
   for (const workload of workloads) {
     const select = selects.find((item) => Number(item.dataset.workload) === workload.value)!;
-    const globalOptions = bindingOptions(f.active, undefined, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE);
+    const globalOptions = bindingOptions(f.active, undefined, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING);
     assert.equal(/value="follow-dialogue"/.test(select.innerHTML), /value="follow-dialogue"/.test(globalOptions));
-    assert.equal(/value="disabled"/.test(select.innerHTML), /value="disabled"/.test(globalOptions));
+    assert.equal(/value="disabled"/.test(select.innerHTML), workload.value===ModelWorkload.EMBEDDING ? false : /value="disabled"/.test(globalOptions));
     assert.match(select.innerHTML, /value="model:model"/);
   }
   selects[0].value = 'model:model';

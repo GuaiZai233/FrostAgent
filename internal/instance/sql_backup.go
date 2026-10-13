@@ -124,10 +124,12 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	}
 	if buildErr == nil && oldRuntime != nil && oldRuntime.Engine != nil && r != nil && r.Engine != nil {
 		r.Engine.GroupManager.CarrySQLStoresFrom(oldRuntime.Engine.GroupManager)
+		r.Engine.MemoryEmbeddings.CarryIndexesFrom(oldRuntime.Engine.MemoryEmbeddings)
 		oldRuntime.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
+	r.StartEmbeddings()
 	i.mu.Unlock()
 	if buildErr != nil {
 		_ = m.update(i.id, func(info *Info) { info.Enabled = false; info.Error = buildErr.Error() })
@@ -362,6 +364,7 @@ func (m *Manager) CancelDeletion(id string) error {
 	r, c, err := m.buildFresh(i.id, i, false, m.dir(i.id))
 	i.mu.Lock()
 	i.runtime, i.config = r, c
+	r.StartEmbeddings()
 	i.mu.Unlock()
 	if err != nil {
 		_ = m.update(i.id, func(info *Info) { info.Error = err.Error() })
