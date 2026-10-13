@@ -30,6 +30,7 @@ export function openGroupModelConfig(
 ): () => void {
   let closed = false;
   let busy = false;
+  let publishing = false;
   let closeDialog: (() => void) | undefined;
   void openDialog({
     title: '群级模型配置',
@@ -37,11 +38,16 @@ export function openGroupModelConfig(
     maxWidth: '38rem',
     bodyHtml: '<div class="text-center text-muted p-6"><span class="spinner"></span> 正在加载模型配置...</div>',
     footerHtml: '<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-model-publish" disabled>保存并发布</button>',
+    canDismiss: () => !publishing,
     onClose: () => { closed = true; },
     onMount: (dialog, close) => {
       closeDialog = close;
       const body = dialog.querySelector<HTMLElement>('.dialog-body')!;
       const publishButton = dialog.querySelector<HTMLButtonElement>('#group-model-publish')!;
+      const setPublishing = (value: boolean) => {
+        publishing = value;
+        dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = value; });
+      };
       const load = async () => {
         try {
           const state = await api.getModelRouterState();
@@ -83,6 +89,8 @@ export function openGroupModelConfig(
                 const saved = await api.saveModelRouterDraft(updated);
                 if (closed) return;
                 if (!saved.success || !saved.draft) throw new Error(saved.error || '保存群级模型配置失败');
+                setPublishing(true);
+                publishButton.textContent = '发布中...';
                 const published = await api.publishModelRouter(updated);
                 if (closed) return;
                 if (!published.success || !published.active) throw new Error(published.error || '发布群级模型配置失败');
@@ -94,6 +102,7 @@ export function openGroupModelConfig(
               if (!closed) toast.error('保存群级模型配置失败: ' + errorText(err));
             } finally {
               if (!closed) {
+                setPublishing(false);
                 busy = false;
                 publishButton.disabled = false;
                 publishButton.textContent = '保存并发布';

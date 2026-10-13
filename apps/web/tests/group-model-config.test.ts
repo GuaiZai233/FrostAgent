@@ -12,17 +12,18 @@ class MockElement {
   value = '';
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
-  private listeners = new Map<string, () => unknown>();
+  private listeners = new Map<string, (event?: Event) => unknown>();
   private children = new Map<string, MockElement>();
   private selects: MockElement[] | undefined;
-  addEventListener(event: string, listener: () => unknown) { this.listeners.set(event, listener); }
+  addEventListener(event: string, listener: (event?: Event) => unknown) { this.listeners.set(event, listener); }
   click() { return this.listeners.get('click')?.(); }
+  emit(event: string, payload: unknown) { return this.listeners.get(event)?.(payload as Event); }
   querySelector(selector: string): MockElement {
     if (!this.children.has(selector)) this.children.set(selector, new MockElement());
     return this.children.get(selector)!;
   }
   querySelectorAll(selector: string): MockElement[] {
-    if (selector === '.dialog-close-btn') return [this.querySelector(selector)];
+    if (selector === '.dialog-close-btn') return [this.querySelector(selector), this.querySelector('.dialog-close-btn-header')];
     if (selector !== '.group-model-binding') return [];
     return this.selects ??= [...this.innerHTML.matchAll(/<select[^>]*data-workload="(\d+)"[^>]*>(.*?)<\/select>/gs)].map((match) => {
       const select = new MockElement();
@@ -40,6 +41,7 @@ class MockDialog extends MockElement {
   showModal() {}
   close() { this.closed = true; }
   remove() {}
+  getBoundingClientRect() { return { top: 10, bottom: 110, left: 10, width: 200 }; }
 }
 
 const dialogs: MockDialog[] = [];
@@ -154,6 +156,7 @@ async function flush() { for (let index = 0; index < 5; index++) await Promise.r
   await button.click();
   assert.equal(dialog.closed, false);
   assert.equal(button.disabled, false);
+  assert.ok(dialog.querySelectorAll('.dialog-close-btn').every((item) => !item.disabled), 'failed publication left dismissal disabled');
   assert.equal(f.refreshed, 0);
   assert.match(errors.at(-1) || '', /publish unavailable/);
   f.state.publishError = '';
@@ -249,6 +252,65 @@ async function flush() { for (let index = 0; index < 5; index++) await Promise.r
   assert.deepEqual(f.saved[1].groupOverrides[0], f.active.groupOverrides[0], 'closed dialog edit leaked into the next publication');
   assert.equal(f.saved[1].groupOverrides.at(-1)?.groupId, '789');
   assert.equal(f.refreshed, 1);
+}
+
+for (const failure of [false, true]) {
+  const f = fixture();
+  const { dialog, button } = f.open();
+  await flush();
+  let release!: () => void;
+  f.state.publishGate = new Promise((resolve) => { release = resolve; });
+  f.state.publishError = failure ? 'publication rejected' : '';
+  const pending = button.click();
+  await flush();
+  assert.deepEqual(f.calls, ['load', 'save', 'publish']);
+  assert.equal(button.textContent, '发布中...');
+  for (const dismissButton of dialog.querySelectorAll('.dialog-close-btn')) {
+    assert.equal(dismissButton.disabled, true);
+    dismissButton.click();
+    assert.equal(dialog.closed, false, 'a button dismissed the in-flight publication');
+  }
+  const escape = new Event('cancel', { cancelable: true });
+  dialog.emit('cancel', escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(dialog.closed, false, 'Escape dismissed the in-flight publication');
+  dialog.emit('click', { target: dialog, clientX: 0, clientY: 0 });
+  assert.equal(dialog.closed, false, 'backdrop dismissed the in-flight publication');
+  release();
+  await pending;
+  if (failure) {
+    assert.equal(dialog.closed, false);
+    assert.equal(f.refreshed, 0);
+    assert.match(errors.at(-1) || '', /publication rejected/);
+    assert.ok(dialog.querySelectorAll('.dialog-close-btn').every((item) => !item.disabled));
+    dialog.querySelector('.dialog-close-btn').click();
+    assert.equal(dialog.closed, true, 'failed publication could not be dismissed');
+  } else {
+    assert.equal(dialog.closed, true);
+    assert.equal(f.refreshed, 1, 'publication success did not refresh the context');
+    assert.equal(successes.at(-1), '群级模型配置已发布');
+    const next = f.open('telegram', '789');
+    await flush();
+    assert.equal(next.button.disabled, false, 'completed publication blocked a new dialog');
+    next.cleanup();
+  }
+}
+
+{
+  const f = fixture();
+  const { dialog, button, cleanup } = f.open();
+  await flush();
+  let release!: () => void;
+  f.state.publishGate = new Promise((resolve) => { release = resolve; });
+  const pending = button.click();
+  await flush();
+  const successCount = successes.length;
+  cleanup();
+  assert.equal(dialog.closed, true, 'page teardown left a busy dialog mounted');
+  release();
+  await pending;
+  assert.equal(f.refreshed, 0, 'unmounted page refreshed through an old publication');
+  assert.equal(successes.length, successCount);
 }
 
 process.stdout.write('PASS: inline group model options, isolated publication, retry, and lifecycle guards\n');
