@@ -83,7 +83,7 @@ export function openGroupModelConfig(
                 const saved = await api.saveModelRouterDraft(updated);
                 if (closed) return;
                 if (!saved.success || !saved.draft) throw new Error(saved.error || '保存群级模型配置失败');
-                const published = await api.publishModelRouter();
+                const published = await api.publishModelRouter(updated);
                 if (closed) return;
                 if (!published.success || !published.active) throw new Error(published.error || '发布群级模型配置失败');
                 close();

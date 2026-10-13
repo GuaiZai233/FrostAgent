@@ -142,7 +142,16 @@ func (s *Service) Publish(
 	if s.missingDraftOwner(owner) {
 		return connect.NewResponse(&v1.PublishResponse{Error: missingDraftOwner}), nil
 	}
-	active, err := s.manager.PublishForOwner(owner)
+	var active router.Configuration
+	var err error
+	if s.manager.IsSharedCatalog() {
+		active, err = s.manager.PublishForOwner(owner)
+	} else {
+		if req.Msg.GetExpectedConfiguration() == nil {
+			return connect.NewResponse(&v1.PublishResponse{Error: "实例路由发布缺少预期配置，请刷新页面后重试"}), nil
+		}
+		active, err = s.manager.PublishExpectedRoutes(configurationFromProto(req.Msg.GetExpectedConfiguration()))
+	}
 	if err != nil {
 		return connect.NewResponse(&v1.PublishResponse{Error: err.Error()}), nil
 	}

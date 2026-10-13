@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -394,11 +395,51 @@ func (m *Manager) Publish() (Configuration, error) {
 }
 
 func (m *Manager) PublishForOwner(owner string) (Configuration, error) {
+	return m.publishForOwner(owner, nil)
+}
+
+// PublishExpectedRoutes publishes only if the draft still matches the routes
+// saved by this caller. The comparison and write share the publication lock.
+func (m *Manager) PublishExpectedRoutes(expected Configuration) (Configuration, error) {
+	return m.publishForOwner("", &expected)
+}
+
+func (m *Manager) checkExpectedRouteDraft(expected Configuration) error {
+	expected = cloneConfiguration(expected)
+	draft := cloneConfiguration(m.draft)
+	if expected.Revision != m.active.Revision || expected.Revision != draft.Revision ||
+		expected.Version != draft.Version ||
+		!reflect.DeepEqual(expected.GlobalBindings, draft.GlobalBindings) ||
+		!reflect.DeepEqual(expected.GroupOverrides, draft.GroupOverrides) {
+		return fmt.Errorf("模型路由草稿已被其他页面修改或配置已更新，请刷新后重试")
+	}
+	// SQL instances only own routes; shared catalog changes are independent.
+	// File-backed managers own the catalog in the same configuration as well.
+	if m.db == nil {
+		for i := range expected.Endpoints {
+			expected.Endpoints[i].APIKeyConfigured = false
+		}
+		for i := range draft.Endpoints {
+			draft.Endpoints[i].APIKeyConfigured = false
+		}
+		if !reflect.DeepEqual(expected.Endpoints, draft.Endpoints) || !reflect.DeepEqual(expected.Models, draft.Models) {
+			return fmt.Errorf("模型路由草稿已被其他页面修改，请刷新后重试")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) publishForOwner(owner string, expected *Configuration) (Configuration, error) {
 	if m.db != nil {
-		return m.publishSQL(owner)
+		return m.publishSQL(owner, expected)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if expected != nil {
+		if err := m.checkExpectedRouteDraft(*expected); err != nil {
+			return Configuration{}, err
+		}
+	}
 	cfg := cloneConfiguration(m.draft)
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {

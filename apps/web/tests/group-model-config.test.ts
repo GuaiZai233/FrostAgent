@@ -90,8 +90,9 @@ function fixture() {
       await state.saveGate;
       return { success: !state.saveError, error: state.saveError, draft: configuration };
     },
-    async publishModelRouter() {
+    async publishModelRouter(expected: ModelRouterConfiguration) {
       calls.push('publish');
+      assert.deepEqual(expected, saved.at(-1), 'group publication did not bind to its saved configuration');
       await state.publishGate;
       return { success: !state.publishError, error: state.publishError, active: saved.at(-1) };
     },
