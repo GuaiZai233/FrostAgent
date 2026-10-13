@@ -6,7 +6,6 @@ import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
-	secsvc "FrostAgent/internal/service/security"
 	"context"
 	"fmt"
 	"maps"
@@ -142,7 +141,7 @@ func managementMux(manager http.Handler) http.Handler {
 	if gateway, ok := manager.(interface{ SecurityHandler() http.Handler }); ok {
 		mux.Handle("/api/security/", gateway.SecurityHandler())
 	} else if registry, ok := manager.(*instance.Manager); ok {
-		mux.Handle("/api/security/", secsvc.NewWithStore(registry.SecurityController(), registry.ControlPlaneGetenv(), registry.GlobalConfig()))
+		mux.Handle("/api/security/", securityHandlerFor(registry))
 	}
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)

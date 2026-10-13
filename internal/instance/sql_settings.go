@@ -7,11 +7,26 @@ import (
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"strings"
+	"time"
 )
+
+// SettingsWriteHandler serializes other global setting writers with draft
+// commit, runtime application and rollback. Reads do not need this lock.
+func (m *Manager) SettingsWriteHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			m.settingsWriteMu.Lock()
+			defer m.settingsWriteMu.Unlock()
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func equalSettings(left, right map[string]string) bool { return maps.Equal(left, right) }
 
@@ -21,6 +36,43 @@ func (m *Manager) restoreGlobalSnapshot(previous map[string]string) error {
 		keys[key] = true
 	}
 	return m.global.ReplaceDatabaseSubset(keys, previous)
+}
+
+func (m *Manager) rollbackSettingsDraft(i *managed, before, after, globalBefore, globalAfter map[string]string, enabled, reload bool) error {
+	i.op.Lock()
+	i.mu.RLock()
+	config := i.config
+	i.mu.RUnlock()
+	var changes []instanceconfig.DatabaseChange
+	appendChanges := func(store *instanceconfig.Store, previous, committed map[string]string) {
+		keys := make(map[string]bool)
+		for key := range previous {
+			keys[key] = true
+		}
+		for key := range committed {
+			keys[key] = true
+		}
+		for key := range keys {
+			value, existed := previous[key]
+			current, exists := committed[key]
+			if value != current || existed != exists {
+				changes = append(changes, instanceconfig.DatabaseChange{Store: store, Key: key, Value: value, Clear: !existed})
+			}
+		}
+	}
+	appendChanges(config, before, after)
+	appendChanges(m.global, globalBefore, globalAfter)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := instanceconfig.ApplyDatabaseChanges(ctx, changes)
+	cancel()
+	if err == nil && reload {
+		err = m.reloadSQLRuntimeLocked(i, enabled, before)
+	}
+	i.op.Unlock()
+	if err == nil {
+		err = m.applyGlobalSettings()
+	}
+	return err
 }
 
 // ApplyGlobalSettings refreshes control-plane dependencies and every instance

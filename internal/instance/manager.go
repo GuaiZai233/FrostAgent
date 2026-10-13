@@ -81,6 +81,7 @@ type Manager struct {
 	templateDialogue   string
 	billing            atomic.Pointer[billing.Client]
 	globalApplyMu      sync.Mutex
+	settingsWriteMu    sync.Mutex
 	appliedGlobal      map[string]string
 	globalApplyHook    func() error
 	mcpGetenv          func(string) string
@@ -1318,6 +1319,11 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			readOnly = true
 		}
 	}
+	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	if settingsWrite {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
 	var opUnlock func()
 	if !ws && !stream {
 		var locked bool
@@ -1375,7 +1381,8 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	urlCopy.Path = path
 	req.URL = &urlCopy
 	var before, globalBefore map[string]string
-	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	settingsDraft := settingsWrite && strings.HasSuffix(path, "/UpdateEnvVars")
+	wasRunning := rt.Scope.Context().Err() == nil
 	if !ws && !stream {
 		before = i.config.Snapshot()
 	}
@@ -1392,10 +1399,17 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	if !ws && !stream {
 		after := i.config.Snapshot()
 		if m.db != nil {
-			if !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after) {
-				if err := m.reloadSQLRuntimeLocked(i, rt.Scope.Context().Err() == nil, before); err != nil {
+			globalAfter := m.global.Snapshot()
+			instanceReload := !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after)
+			if instanceReload {
+				if err := m.reloadSQLRuntimeLocked(i, wasRunning, before); err != nil {
 					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
 					if settingsWrite {
+						if settingsDraft {
+							opUnlock()
+							opUnlock = nil
+							err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
+						}
 						writeError(w, err)
 					}
 					return
@@ -1406,6 +1420,10 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 					opUnlock()
 					opUnlock = nil
 					if err := m.applyGlobalSettings(); err != nil {
+						if settingsDraft {
+							writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
+							return
+						}
 						rollbackErr := m.restoreGlobalSnapshot(globalBefore)
 						if rollbackErr == nil {
 							rollbackErr = m.applyGlobalSettings()
@@ -1594,6 +1612,10 @@ func writeError(w http.ResponseWriter, err error) {
 }
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
+	if m.db != nil && path == "global/import/settings" && r.Method == http.MethodPost {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
 	if m.db != nil {
 		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
 			path == "global/backup/settings" || path == "global/import/settings" {

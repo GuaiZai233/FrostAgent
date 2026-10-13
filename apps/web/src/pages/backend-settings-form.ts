@@ -1,4 +1,4 @@
-import type { EnvVar } from '@frostagent/proto';
+import type { SettingValue } from './settings-draft';
 import { escapeHtml } from '../utils/formatters';
 import { dedicatedSettingKeys, settingFields } from './backend-setting-fields';
 
@@ -9,12 +9,13 @@ const groupOrder = [
 
 export function renderBackendSettingsForm(
   root: HTMLElement,
-  values: EnvVar[],
+  values: SettingValue[],
   isGlobal: (key: string) => boolean,
-  save: (key: string, value: string, isSecret: boolean) => Promise<boolean>,
-  clear: (key: string, label: string) => Promise<void>,
+  change: (key: string, value: string) => void,
+  clear: (key: string) => void,
+  isCleared: (key: string) => boolean,
 ): void {
-  const groups = new Map<string, EnvVar[]>();
+  const groups = new Map<string, SettingValue[]>();
   for (const value of values) {
     if (dedicatedSettingKeys.has(value.key)) continue;
     const field = settingFields[value.key];
@@ -33,23 +34,24 @@ export function renderBackendSettingsForm(
             const field = settingFields[item.key];
             const label = escapeHtml(field.label);
             const key = escapeHtml(item.key);
-            const status = field.hot ? '立即生效' : '保存时重载实例';
+            const status = isCleared(item.key) ? '待恢复默认值' : field.hot ? '保存后生效' : '保存时重载实例';
             const kind = field.type ?? 'text';
             const input = kind === 'switch'
-              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${item.value === 'true' ? 'checked' : ''} /><span aria-hidden="true"></span></label>`
+              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${item.value === 'true' ? 'checked' : ''} ${isCleared(item.key) ? 'disabled' : ''} /><span aria-hidden="true"></span></label>`
               : kind === 'select'
-                ? `<div class="flex items-center gap-2"><select id="setting-${key}" class="input input-sm flex-1" data-setting-input="${key}" aria-label="${label}">
+                ? `<div class="flex items-center gap-2"><select id="setting-${key}" class="input input-sm flex-1" data-setting-input="${key}" aria-label="${label}" ${isCleared(item.key) ? 'disabled' : ''}>
                     ${field.options?.map((option) => `<option value="${escapeHtml(option.value)}" ${item.value === option.value || (!item.value && option.value === 'simple') ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('') ?? ''}
-                  </select><button type="button" class="btn btn-primary btn-sm" data-setting-save="${key}">保存</button></div>`
+                  </select></div>`
               : `<div class="flex items-center gap-2 min-w-0">
                    <input id="setting-${key}" class="input input-sm flex-1 min-w-0" data-setting-input="${key}" aria-label="${label}"
                      type="${kind === 'secret' ? 'password' : kind === 'number' ? 'number' : 'text'}"
                      value="${escapeHtml(item.value)}"
+                     ${isCleared(item.key) ? 'disabled' : ''}
+                     ${item.key === 'MAX_CONTEXT_MESSAGES' ? 'required' : ''}
                      ${field.min === undefined ? '' : `min="${field.min}"`}
                      ${field.max === undefined ? '' : `max="${field.max}"`}
                      ${field.step === undefined ? '' : `step="${field.step}"`} />
                    ${kind === 'secret' ? `<button type="button" class="btn btn-outline btn-sm" data-setting-reveal="${key}" aria-label="显示或隐藏${label}">显示</button>` : ''}
-                   <button type="button" class="btn btn-primary btn-sm" data-setting-save="${key}">保存</button>
                  </div>`;
             return `<div class="min-w-0" data-setting-row="${key}">
               <div class="flex items-center justify-between gap-2 mb-1.5">
@@ -58,7 +60,8 @@ export function renderBackendSettingsForm(
               </div>
               ${input}
               ${field.hint ? `<p class="text-[11px] text-muted mt-1">${escapeHtml(field.hint)}</p>` : ''}
-              <button type="button" class="text-[11px] text-muted hover:text-destructive mt-1" data-setting-clear="${key}">恢复默认值</button>
+              <p class="text-[11px] text-muted mt-1">删除自定义配置后：${escapeHtml(item.resetHint || '使用代码回退值或继承值')}</p>
+              <button type="button" class="text-[11px] text-muted hover:text-destructive mt-1" data-setting-clear="${key}">${isCleared(item.key) ? '撤销删除' : '删除自定义配置'}</button>
             </div>`;
           }).join('')}
         </div>
@@ -73,19 +76,8 @@ export function renderBackendSettingsForm(
     if (!row) continue;
     const input = row.querySelector<HTMLInputElement | HTMLSelectElement>('[data-setting-input]');
     const toggle = row.querySelector<HTMLInputElement>('[data-setting-switch]');
-    const saveButton = row.querySelector<HTMLButtonElement>('[data-setting-save]');
-    toggle?.addEventListener('change', async () => {
-      toggle.disabled = true;
-      const ok = await save(item.key, toggle.checked ? 'true' : 'false', item.isSecret);
-      if (!ok) toggle.checked = !toggle.checked;
-      toggle.disabled = false;
-    });
-    saveButton?.addEventListener('click', async () => {
-      if (!input || !input.reportValidity()) return;
-      saveButton.disabled = true;
-      await save(item.key, input.value, item.isSecret);
-      saveButton.disabled = false;
-    });
+    toggle?.addEventListener('change', () => change(item.key, toggle.checked ? 'true' : 'false'));
+    input?.addEventListener(input instanceof HTMLSelectElement ? 'change' : 'input', () => change(item.key, input.value));
     row.querySelector<HTMLButtonElement>('[data-setting-reveal]')?.addEventListener('click', (event) => {
       if (!(input instanceof HTMLInputElement)) return;
       const button = event.currentTarget as HTMLButtonElement;
@@ -93,7 +85,7 @@ export function renderBackendSettingsForm(
       button.textContent = input.type === 'password' ? '显示' : '隐藏';
     });
     row.querySelector<HTMLButtonElement>('[data-setting-clear]')?.addEventListener('click', () => {
-      void clear(item.key, field.label);
+      clear(item.key);
     });
   }
 }

@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/settings.proto.
  */
 export const file_frostagent_v1_settings: GenFile = /*@__PURE__*/
-  fileDesc("Chxmcm9zdGFnZW50L3YxL3NldHRpbmdzLnByb3RvEg1mcm9zdGFnZW50LnYxIjcKBkVudlZhchILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSEQoJaXNfc2VjcmV0GAMgASgIIhQKEkxpc3RFbnZWYXJzUmVxdWVzdCI+ChNMaXN0RW52VmFyc1Jlc3BvbnNlEicKCGVudl92YXJzGAEgAygLMhUuZnJvc3RhZ2VudC52MS5FbnZWYXIiRAoTVXBkYXRlRW52VmFyUmVxdWVzdBILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSEQoJaXNfc2VjcmV0GAMgASgIIjYKFFVwZGF0ZUVudlZhclJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiIgoTRGVsZXRlRW52VmFyUmVxdWVzdBILCgNrZXkYASABKAkiNgoURGVsZXRlRW52VmFyUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSIWChRHZXRSYXdFbnZGaWxlUmVxdWVzdCIoChVHZXRSYXdFbnZGaWxlUmVzcG9uc2USDwoHY29udGVudBgBIAEoCSIqChdVcGRhdGVSYXdFbnZGaWxlUmVxdWVzdBIPCgdjb250ZW50GAEgASgJIjoKGFVwZGF0ZVJhd0VudkZpbGVSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJMtoDCg9TZXR0aW5nc1NlcnZpY2USVAoLTGlzdEVudlZhcnMSIS5mcm9zdGFnZW50LnYxLkxpc3RFbnZWYXJzUmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuTGlzdEVudlZhcnNSZXNwb25zZRJXCgxVcGRhdGVFbnZWYXISIi5mcm9zdGFnZW50LnYxLlVwZGF0ZUVudlZhclJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLlVwZGF0ZUVudlZhclJlc3BvbnNlElcKDERlbGV0ZUVudlZhchIiLmZyb3N0YWdlbnQudjEuRGVsZXRlRW52VmFyUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuRGVsZXRlRW52VmFyUmVzcG9uc2USWgoNR2V0UmF3RW52RmlsZRIjLmZyb3N0YWdlbnQudjEuR2V0UmF3RW52RmlsZVJlcXVlc3QaJC5mcm9zdGFnZW50LnYxLkdldFJhd0VudkZpbGVSZXNwb25zZRJjChBVcGRhdGVSYXdFbnZGaWxlEiYuZnJvc3RhZ2VudC52MS5VcGRhdGVSYXdFbnZGaWxlUmVxdWVzdBonLmZyb3N0YWdlbnQudjEuVXBkYXRlUmF3RW52RmlsZVJlc3BvbnNlYgZwcm90bzM");
+  fileDesc("Chxmcm9zdGFnZW50L3YxL3NldHRpbmdzLnByb3RvEg1mcm9zdGFnZW50LnYxIksKBkVudlZhchILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSEQoJaXNfc2VjcmV0GAMgASgIEhIKCnJlc2V0X2hpbnQYBCABKAkiFAoSTGlzdEVudlZhcnNSZXF1ZXN0Ij4KE0xpc3RFbnZWYXJzUmVzcG9uc2USJwoIZW52X3ZhcnMYASADKAsyFS5mcm9zdGFnZW50LnYxLkVudlZhciJEChNVcGRhdGVFbnZWYXJSZXF1ZXN0EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCRIRCglpc19zZWNyZXQYAyABKAgiNgoUVXBkYXRlRW52VmFyUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJSChRVcGRhdGVFbnZWYXJzUmVxdWVzdBImCgd1cGRhdGVzGAEgAygLMhUuZnJvc3RhZ2VudC52MS5FbnZWYXISEgoKY2xlYXJfa2V5cxgCIAMoCSI3ChVVcGRhdGVFbnZWYXJzUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSIiChNEZWxldGVFbnZWYXJSZXF1ZXN0EgsKA2tleRgBIAEoCSI2ChREZWxldGVFbnZWYXJSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIhYKFEdldFJhd0VudkZpbGVSZXF1ZXN0IigKFUdldFJhd0VudkZpbGVSZXNwb25zZRIPCgdjb250ZW50GAEgASgJIioKF1VwZGF0ZVJhd0VudkZpbGVSZXF1ZXN0Eg8KB2NvbnRlbnQYASABKAkiOgoYVXBkYXRlUmF3RW52RmlsZVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkytgQKD1NldHRpbmdzU2VydmljZRJUCgtMaXN0RW52VmFycxIhLmZyb3N0YWdlbnQudjEuTGlzdEVudlZhcnNSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5MaXN0RW52VmFyc1Jlc3BvbnNlElcKDFVwZGF0ZUVudlZhchIiLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyUmVzcG9uc2USWgoNVXBkYXRlRW52VmFycxIjLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyc1JlcXVlc3QaJC5mcm9zdGFnZW50LnYxLlVwZGF0ZUVudlZhcnNSZXNwb25zZRJXCgxEZWxldGVFbnZWYXISIi5mcm9zdGFnZW50LnYxLkRlbGV0ZUVudlZhclJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRlbGV0ZUVudlZhclJlc3BvbnNlEloKDUdldFJhd0VudkZpbGUSIy5mcm9zdGFnZW50LnYxLkdldFJhd0VudkZpbGVSZXF1ZXN0GiQuZnJvc3RhZ2VudC52MS5HZXRSYXdFbnZGaWxlUmVzcG9uc2USYwoQVXBkYXRlUmF3RW52RmlsZRImLmZyb3N0YWdlbnQudjEuVXBkYXRlUmF3RW52RmlsZVJlcXVlc3QaJy5mcm9zdGFnZW50LnYxLlVwZGF0ZVJhd0VudkZpbGVSZXNwb25zZWIGcHJvdG8z");
 
 /**
  * @generated from message frostagent.v1.EnvVar
@@ -30,6 +30,13 @@ export type EnvVar = Message<"frostagent.v1.EnvVar"> & {
    * @generated from field: bool is_secret = 3;
    */
   isSecret: boolean;
+
+  /**
+   * Human-readable effective fallback or inheritance after clearing this key.
+   *
+   * @generated from field: string reset_hint = 4;
+   */
+  resetHint: string;
 };
 
 /**
@@ -119,6 +126,50 @@ export const UpdateEnvVarResponseSchema: GenMessage<UpdateEnvVarResponse> = /*@_
   messageDesc(file_frostagent_v1_settings, 4);
 
 /**
+ * @generated from message frostagent.v1.UpdateEnvVarsRequest
+ */
+export type UpdateEnvVarsRequest = Message<"frostagent.v1.UpdateEnvVarsRequest"> & {
+  /**
+   * @generated from field: repeated frostagent.v1.EnvVar updates = 1;
+   */
+  updates: EnvVar[];
+
+  /**
+   * @generated from field: repeated string clear_keys = 2;
+   */
+  clearKeys: string[];
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateEnvVarsRequest.
+ * Use `create(UpdateEnvVarsRequestSchema)` to create a new message.
+ */
+export const UpdateEnvVarsRequestSchema: GenMessage<UpdateEnvVarsRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 5);
+
+/**
+ * @generated from message frostagent.v1.UpdateEnvVarsResponse
+ */
+export type UpdateEnvVarsResponse = Message<"frostagent.v1.UpdateEnvVarsResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.UpdateEnvVarsResponse.
+ * Use `create(UpdateEnvVarsResponseSchema)` to create a new message.
+ */
+export const UpdateEnvVarsResponseSchema: GenMessage<UpdateEnvVarsResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 6);
+
+/**
  * @generated from message frostagent.v1.DeleteEnvVarRequest
  */
 export type DeleteEnvVarRequest = Message<"frostagent.v1.DeleteEnvVarRequest"> & {
@@ -133,7 +184,7 @@ export type DeleteEnvVarRequest = Message<"frostagent.v1.DeleteEnvVarRequest"> &
  * Use `create(DeleteEnvVarRequestSchema)` to create a new message.
  */
 export const DeleteEnvVarRequestSchema: GenMessage<DeleteEnvVarRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 5);
+  messageDesc(file_frostagent_v1_settings, 7);
 
 /**
  * @generated from message frostagent.v1.DeleteEnvVarResponse
@@ -155,7 +206,7 @@ export type DeleteEnvVarResponse = Message<"frostagent.v1.DeleteEnvVarResponse">
  * Use `create(DeleteEnvVarResponseSchema)` to create a new message.
  */
 export const DeleteEnvVarResponseSchema: GenMessage<DeleteEnvVarResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 6);
+  messageDesc(file_frostagent_v1_settings, 8);
 
 /**
  * @generated from message frostagent.v1.GetRawEnvFileRequest
@@ -168,7 +219,7 @@ export type GetRawEnvFileRequest = Message<"frostagent.v1.GetRawEnvFileRequest">
  * Use `create(GetRawEnvFileRequestSchema)` to create a new message.
  */
 export const GetRawEnvFileRequestSchema: GenMessage<GetRawEnvFileRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 7);
+  messageDesc(file_frostagent_v1_settings, 9);
 
 /**
  * @generated from message frostagent.v1.GetRawEnvFileResponse
@@ -185,7 +236,7 @@ export type GetRawEnvFileResponse = Message<"frostagent.v1.GetRawEnvFileResponse
  * Use `create(GetRawEnvFileResponseSchema)` to create a new message.
  */
 export const GetRawEnvFileResponseSchema: GenMessage<GetRawEnvFileResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 8);
+  messageDesc(file_frostagent_v1_settings, 10);
 
 /**
  * @generated from message frostagent.v1.UpdateRawEnvFileRequest
@@ -202,7 +253,7 @@ export type UpdateRawEnvFileRequest = Message<"frostagent.v1.UpdateRawEnvFileReq
  * Use `create(UpdateRawEnvFileRequestSchema)` to create a new message.
  */
 export const UpdateRawEnvFileRequestSchema: GenMessage<UpdateRawEnvFileRequest> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 9);
+  messageDesc(file_frostagent_v1_settings, 11);
 
 /**
  * @generated from message frostagent.v1.UpdateRawEnvFileResponse
@@ -224,7 +275,7 @@ export type UpdateRawEnvFileResponse = Message<"frostagent.v1.UpdateRawEnvFileRe
  * Use `create(UpdateRawEnvFileResponseSchema)` to create a new message.
  */
 export const UpdateRawEnvFileResponseSchema: GenMessage<UpdateRawEnvFileResponse> = /*@__PURE__*/
-  messageDesc(file_frostagent_v1_settings, 10);
+  messageDesc(file_frostagent_v1_settings, 12);
 
 /**
  * SettingsService manages environment variable configuration.
@@ -247,6 +298,14 @@ export const SettingsService: GenService<{
     methodKind: "unary";
     input: typeof UpdateEnvVarRequestSchema;
     output: typeof UpdateEnvVarResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.SettingsService.UpdateEnvVars
+   */
+  updateEnvVars: {
+    methodKind: "unary";
+    input: typeof UpdateEnvVarsRequestSchema;
+    output: typeof UpdateEnvVarsResponseSchema;
   },
   /**
    * @generated from rpc frostagent.v1.SettingsService.DeleteEnvVar

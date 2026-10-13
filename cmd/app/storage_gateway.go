@@ -48,7 +48,7 @@ func newStorageGateway(ctx context.Context, root string) (*storageGateway, error
 }
 
 func securityHandlerFor(manager *instance.Manager) http.Handler {
-	return secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig())
+	return manager.SettingsWriteHandler(secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig()))
 }
 
 func openSelectedManager(ctx context.Context, root string, config storage.Config, injectEnv bool) (*instance.Manager, error) {
@@ -106,6 +106,10 @@ func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (g *storageGateway) SecurityHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			g.switchMu.Lock()
+			defer g.switchMu.Unlock()
+		}
 		g.mu.RLock()
 		handler := g.security
 		manager := g.current

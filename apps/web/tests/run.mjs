@@ -13,6 +13,7 @@ for (const testFile of [
   'group-model-config.test.ts',
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
+  'backend-settings-page.test.ts',
   'control-auth.test.ts',
   'authenticated-resources.test.ts',
 ]) {

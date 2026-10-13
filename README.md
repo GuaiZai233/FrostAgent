@@ -79,6 +79,12 @@ go run ./cmd/app
 
 Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure providers, models and instance routing together under **模型路由器**, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
 
+## Bot settings and persona
+
+Configure the Bot name, wake aliases and system prompt under **人格设定**. Server settings use Chinese forms with a red sticky bar for pending changes. **保存** applies the draft; **还原** or leaving the page discards unsaved edits. Additional environment injection is saved with the draft and takes effect after restarting FrostAgent.
+
+`MAX_CONTEXT_CHARS`, `UPSTREAM_API_KEY`, `CODER_API_KEY`, `ALLOW_REMOTE_MCP_MANAGEMENT` and adapter selection switches are no longer offered as regular settings. Configure credentials on model endpoints and bind Coder through the subagent workload in **模型路由器**. Billing prices use nonnegative integer minor units (100 units = 1 snowflake = 0.01 CNY); the safety multiplier must be positive. Removing a custom setting uses the code fallback or global inheritance shown beside the control.
+
 ## Shared providers and instance routing
 
 **模型路由器** keeps Endpoints, Models, instance default routes and group overrides in one page. Provider URLs, credentials, enabled states and model definitions are shared across all instances in the selected database, even before an instance exists. Default workload models and group overrides belong to the selected Bot. Publishing applies changes to the shared catalog and the current instance's routes; if one scope fails, the page reports any completed publication and keeps the remaining edits for retry. Published provider changes apply to new requests immediately; an ongoing turn retains its URL and credential snapshot. Deleting an instance preserves shared providers. Models referenced by instance routes cannot be deleted.

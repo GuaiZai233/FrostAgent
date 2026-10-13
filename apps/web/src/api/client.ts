@@ -87,7 +87,7 @@ async function extraEnvRequest<T>(path: string, init: RequestInit = {}): Promise
   const response = await fetch(`/api/instances/global/extra-env${path}`, {
     ...init,
     headers,
-    signal: instanceState.signal,
+    signal: init.signal ? AbortSignal.any([instanceState.signal, init.signal]) : instanceState.signal,
   });
   if (!response.ok) {
     throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
@@ -100,11 +100,11 @@ export const extraEnvAPI = {
     const response = await extraEnvRequest<{ entries: ExtraEnvEntry[] }>('', { method: 'GET' });
     return response.entries;
   },
-  async put(entry: ExtraEnvEntry): Promise<void> {
-    await extraEnvRequest('', { method: 'PUT', body: JSON.stringify(entry) });
+  async put(entry: ExtraEnvEntry, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest('', { method: 'PUT', body: JSON.stringify(entry), signal });
   },
-  async delete(key: string): Promise<void> {
-    await extraEnvRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  async delete(key: string, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE', signal });
   },
 };
 
@@ -755,6 +755,13 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
     deleteEnvVar(key: string): Promise<{ success: boolean; error: string }> {
       return settingsClient.deleteEnvVar({ key });
+    },
+
+    updateEnvVars(changes: { key: string; value: string | null; isSecret: boolean }[], signal?: AbortSignal): Promise<{ success: boolean; error: string }> {
+      return settingsClient.updateEnvVars({
+        updates: changes.filter((change) => change.value !== null).map(({ key, value, isSecret }) => ({ key, value: value!, isSecret })),
+        clearKeys: changes.filter((change) => change.value === null).map(({ key }) => key),
+      }, { signal });
     },
 
     getRawEnvFile(): Promise<string> {

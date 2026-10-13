@@ -18,6 +18,7 @@ class MockElement {
   click() {
     if (!this.disabled) this.listeners.get('click')?.();
   }
+  input() { this.listeners.get('input')?.(); }
   focus() {}
   querySelector(selector: string): MockElement {
     if (!this.children.has(selector))
@@ -44,11 +45,18 @@ let deferSave = false;
 let resolvePendingSave: (() => void) | undefined;
 let envLoads = 0;
 let dialogueLoads = 0;
+let storedName = '示例 Bot';
+let storedAliases = '示例,小狐狸';
+const identityUpdates: Array<Array<{ key: string; value: string }>> = [];
 const updates: Array<{ key: string; value: string; isSecret: boolean }> = [];
 const api = {
   async listEnvVars() {
     envLoads++;
-    return [{ key: 'SYSTEM_PROMPT', value: storedPrompt, isSecret: false }];
+    return [
+      { key: 'SYSTEM_PROMPT', value: storedPrompt, isSecret: false },
+      { key: 'BOT_NAME', value: storedName, isSecret: false },
+      { key: 'BOT_ALIASES', value: storedAliases, isSecret: false },
+    ];
   },
   async listDialogues() {
     dialogueLoads++;
@@ -70,6 +78,16 @@ const api = {
     }
     if (!saveSucceeds) return { success: false, error: 'write failed' };
     storedPrompt = update.value;
+    return { success: true, error: '' };
+  },
+  async updateEnvVars(changes: Array<{ key: string; value: string }>, signal: AbortSignal) {
+    signal.throwIfAborted();
+    identityUpdates.push(changes);
+    if (!saveSucceeds) return { success: false, error: 'identity write failed' };
+    for (const change of changes) {
+      if (change.key === 'BOT_NAME') storedName = change.value;
+      if (change.key === 'BOT_ALIASES') storedAliases = change.value;
+    }
     return { success: true, error: '' };
   },
 } as unknown as ReturnType<typeof createInstanceAPI>;
@@ -94,6 +112,38 @@ await settle();
 assert.equal(display.textContent, storedPrompt);
 assert.equal(display.style.display, 'block');
 assert.equal(edit.disabled, false);
+const name = root.querySelector('#persona-bot-name');
+const aliases = root.querySelector('#persona-bot-aliases');
+const identitySave = root.querySelector('#persona-identity-save');
+assert.equal(name.value, storedName);
+assert.equal(aliases.value, storedAliases);
+name.value = '草稿名称';
+name.input();
+aliases.value = '草稿别名';
+aliases.input();
+assert.equal(identityUpdates.length, 0, 'identity typing must not save');
+refresh.click();
+await settle();
+assert.equal(name.value, '草稿名称', 'refresh must preserve identity drafts');
+identitySave.click();
+await settle();
+assert.deepEqual(identityUpdates[0].map(({ key, value }) => ({ key, value })), [
+  { key: 'BOT_NAME', value: '草稿名称' }, { key: 'BOT_ALIASES', value: '草稿别名' },
+]);
+assert.equal(identitySave.disabled, true);
+saveSucceeds = false;
+aliases.value = '失败草稿';
+aliases.input();
+identitySave.click();
+await settle();
+assert.equal(aliases.value, '失败草稿');
+assert.equal(identitySave.disabled, false);
+assert.equal(storedAliases, '草稿别名');
+aliases.value = storedAliases;
+aliases.input();
+saveSucceeds = true;
+const loadsBeforePromptEdit = envLoads;
+const dialogueLoadsBeforePromptEdit = dialogueLoads;
 
 edit.click();
 assert.equal(input.value, '原有人格\n第二行');
@@ -103,8 +153,8 @@ refresh.click();
 await settle();
 assert.equal(editor.style.display, 'flex', 'refresh keeps the prompt editor open');
 assert.equal(input.value, '未保存草稿', 'refresh preserves the unsaved draft');
-assert.equal(envLoads, 1, 'refresh does not reload the prompt during editing');
-assert.equal(dialogueLoads, 2, 'refresh still reloads dialogue examples');
+assert.equal(envLoads, loadsBeforePromptEdit, 'refresh does not reload the prompt during editing');
+assert.equal(dialogueLoads, dialogueLoadsBeforePromptEdit + 1, 'refresh still reloads dialogue examples');
 
 input.value = '新的人格\n第二行';
 deferSave = true;

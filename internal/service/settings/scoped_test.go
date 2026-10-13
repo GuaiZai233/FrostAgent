@@ -68,7 +68,7 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().Enabled {
 		t.Fatalf("shared sandbox disable failed: response=%v error=%v", deleteResponse, err)
 	}
-	if !update("UPSTREAM_API_KEY", `C:\synthetic\`) || c.Get("UPSTREAM_API_KEY") != `C:\synthetic\` {
+	if !update("ACTIONSCAT_MANAGEMENT_TOKEN", `C:\synthetic\`) || c.Get("ACTIONSCAT_MANAGEMENT_TOKEN") != `C:\synthetic\` {
 		t.Fatal("trailing backslash did not roundtrip")
 	}
 	if os.Getenv("BOT_NAME") != "process-sentinel" || os.Getenv("SYSTEM_PROMPT") != "shared-process-sentinel" {

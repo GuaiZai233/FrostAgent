@@ -6,6 +6,7 @@ package frostagent.v1;
 service SettingsService {
   rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
   rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
+  rpc UpdateEnvVars(UpdateEnvVarsRequest) returns (UpdateEnvVarsResponse);
   rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
   rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse);
   rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse);
@@ -15,6 +16,8 @@ message EnvVar {
   string key = 1;
   string value = 2;
   bool is_secret = 3;
+  // Human-readable effective fallback or inheritance after clearing this key.
+  string reset_hint = 4;
 }
 
 message ListEnvVarsRequest {}
@@ -30,6 +33,16 @@ message UpdateEnvVarRequest {
 }
 
 message UpdateEnvVarResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateEnvVarsRequest {
+  repeated EnvVar updates = 1;
+  repeated string clear_keys = 2;
+}
+
+message UpdateEnvVarsResponse {
   bool success = 1;
   string error = 2;
 }

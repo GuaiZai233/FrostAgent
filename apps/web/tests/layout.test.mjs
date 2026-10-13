@@ -171,13 +171,16 @@ for (const id of ['group-mention-cb', 'group-at-cb', 'group-reply-cb']) {
 assert.match(backendSettingsForm, /class="toggle-switch"/);
 assert.match(backendSettingsForm, /kind === 'number' \? 'number'/);
 assert.doesNotMatch(backendSettings, /<table class="table env-table">|<p[^>]*>GROUP_REPLY_ON_MENTION<\/p>/);
-assert.match(settingFields, /BOT_NAME: \{ label: '机器人名称'/);
+assert.match(dialoguePage, /id="persona-bot-name"/);
+assert.match(dialoguePage, /id="persona-bot-aliases"/);
+assert.doesNotMatch(settingFields, /BOT_NAME: \{|BOT_ALIASES: \{|CODER_API_KEY: \{|UPSTREAM_API_KEY: \{|MAX_CONTEXT_CHARS: \{|ALLOW_REMOTE_MCP_MANAGEMENT: \{|ENABLE_ONEBOT_ADAPTER: \{|ENABLE_ASTRBOT_ADAPTER: \{/);
 assert.match(settingFields, /MAX_CONTEXT_MESSAGES: \{[^\n]*min: 4,/);
 assert.match(backupRestore, /globalSettingsAPI\.download\(\)/);
 assert.match(backupRestore, /globalSettingsAPI\.import\(/);
 assert.doesNotMatch(backupRestore, /<a href="\/api\/instances\/global\/backup\/settings"/);
 assert.match(apiClient, /globalSettingsRequest[\s\S]*Authorization[\s\S]*globalSettingsAPI/);
 const knownSettings = settingsService.match(/var knownEnvVars = map\[string\]envEntry\{([\s\S]*?)\n\}/)?.[1] ?? '';
+assert.doesNotMatch(knownSettings, /^\s*"(?:CODER_API_KEY|UPSTREAM_API_KEY|MAX_CONTEXT_CHARS|ALLOW_REMOTE_MCP_MANAGEMENT|ENABLE_ONEBOT_ADAPTER|ENABLE_ASTRBOT_ADAPTER|BRAIN_PATH|DIALOGUE_PATH|ONEBOT_WS_PATH|ASTRBOT_WS_PATH)":/m);
 const dedicatedSettings = settingFields.match(/export const dedicatedSettingKeys = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '';
 for (const [, key] of knownSettings.matchAll(/^\s*"([A-Z_]+)":/gm)) {
   if (['DIALOGUE_PATH', 'BRAIN_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(key)) continue;
@@ -186,9 +189,19 @@ for (const [, key] of knownSettings.matchAll(/^\s*"([A-Z_]+)":/gm)) {
     `missing Chinese setting field or dedicated control for ${key}`,
   );
 }
-for (const key of ['MAX_CONTEXT_CHARS', 'CODER_API_KEY']) {
-  assert.equal(dedicatedSettings.includes(`'${key}'`), false, `${key} must appear in the general settings form`);
+for (const key of ['BOT_NAME', 'BOT_ALIASES']) {
+  assert.ok(dedicatedSettings.includes(`'${key}'`), `${key} belongs on the persona page`);
 }
+assert.match(backendSettings, /当前更改尚未保存，离开将丢弃。/);
+assert.match(components, /\.settings-draft-banner\s*{[^}]*position: sticky;/);
+assert.doesNotMatch(backendSettingsForm, /data-setting-save/);
+assert.doesNotMatch(backendSettings, /bot-loop-save-btn|extra-env-save|\.updateEnvVar\(/);
+assert.match(backendSettings, /启用群聊对话回复/);
+assert.doesNotMatch(backendSettings, /被 @ 时触发回复|永远不触发自动回复|强制 Bot 对话轮次|全部轮次/);
+assert.match(settingFields, /100 单位＝1 雪花＝0.01 元/);
+assert.match(settingFields, /BILLING_PROMPT_PRICE_PER_MILLION: \{[^\n]*step: 1/);
+assert.match(settingFields, /BILLING_SAFETY_MULTIPLIER: \{[^\n]*positive: true/);
+assert.match(backendSettingsForm, /删除自定义配置后：[\s\S]*item.resetHint/);
 
 assert.match(
   backendSettings,
