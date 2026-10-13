@@ -928,8 +928,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Proactive:      wakeSignals.Proactive,
 		})
 		defer func() {
-			if !conn.mock {
-				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, finalSticker)
+			if !conn.mock && finalDelivered {
+				engine.RecordBotMessage(finalSticker)
 			}
 		}()
 		replyText = runResult.Content

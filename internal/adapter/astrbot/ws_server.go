@@ -809,7 +809,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	// Quote lookups occur only after ingress security and reply routing.
-	quoteChain := conn.lookupQuoteChain(event)
+	quoteChain, allowDirectFallback := conn.lookupQuoteChain(event)
+	directQuote := directQuotedImageChain(event)
+	if len(quoteChain) == 0 && allowDirectFallback {
+		quoteChain = directQuote
+	} else if len(quoteChain) > 0 && len(directQuote) > 0 && !content.IsContainImage(quoteChain[0].Segments) {
+		quoteChain[0].Segments = append(quoteChain[0].Segments, directQuote[0].Segments...)
+	}
 	quoteHasImage := false
 	for _, node := range quoteChain {
 		quoteHasImage = quoteHasImage || content.IsContainImage(node.Segments)
@@ -1279,8 +1285,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Proactive:     isProactiveReply(&event),
 		})
 		defer func() {
-			if !conn.mock {
-				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, false)
+			if !conn.mock && finalDelivered {
+				engine.RecordBotMessage(false)
 			}
 		}()
 		replyText = runResult.Content

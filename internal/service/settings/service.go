@@ -51,7 +51,8 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
 	"PROACTIVE_REPLY_GROUP_WHITELIST":      {"主动回复允许的群号白名单，多个群号以英文逗号分隔", false, false, false},
 	"ENABLE_PROACTIVE_REPLY_WHITELIST":     {"是否启用主动回复群聊白名单模式", false, false, false},
-	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 条回复）", false, false, false},
+	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
+	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
 	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
@@ -287,6 +288,13 @@ func (s *Service) UpdateEnvVar(
 				Error:   "表情包使用积极度必须是 0 到 10 的整数",
 			}), nil
 		}
+	}
+
+	if key == "STICKER_ACTIVITY_MODE" && value != "bot_turns" && value != "all_messages" {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{
+			Success: false,
+			Error:   "表情包积极度计数模式必须是 bot_turns 或 all_messages",
+		}), nil
 	}
 
 	if strings.ContainsRune(value, 0) {

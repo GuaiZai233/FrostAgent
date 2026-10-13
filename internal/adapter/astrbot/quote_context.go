@@ -4,7 +4,9 @@ import (
 	"FrostAgent/internal/adapter/onebot"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/adapter/quotetrace"
+	"FrostAgent/internal/core"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -61,15 +63,51 @@ func (c *wsConn) lookupQuotedMessage(ctx context.Context, event Event, messageID
 	}
 }
 
-func (c *wsConn) lookupQuoteChain(event Event) []astrBotQuoteNode {
-	depth := quotetrace.Depth(c.Scope.Getenv)
-	if depth == 0 || event.Platform != astrBotQQPlatform || event.Metadata == nil {
+func quoteLookupSupported(event Event) bool {
+	return event.Metadata != nil && event.Metadata["quote_lookup_supported"] == true
+}
+
+func directQuotedImageChain(event Event) []astrBotQuoteNode {
+	if event.Metadata == nil {
 		return nil
+	}
+	replyID, _ := event.Metadata["reply_message_id"].(string)
+	replyID = strings.TrimSpace(replyID)
+	if replyID == "" {
+		return nil
+	}
+	var segments []content.MessageSegment
+	for _, att := range event.Attachments {
+		if att.MessageID != replyID || att.Type != core.AttachmentTypeImage || (len(att.Content) == 0 && att.URL == "") {
+			continue
+		}
+		data := make(map[string]any)
+		if len(att.Content) > 0 {
+			data["base64"] = base64.StdEncoding.EncodeToString(att.Content)
+		} else {
+			data["url"] = att.URL
+		}
+		segments = append(segments, content.MessageSegment{Type: "image", Data: data})
+	}
+	if len(segments) == 0 {
+		return nil
+	}
+	contextData := map[string]any{"message_id": replyID, "message": "[图片]"}
+	if event.MessageType == "group" {
+		contextData["group_id"] = event.GroupID
+	}
+	return []astrBotQuoteNode{{Context: contextData, Segments: segments}}
+}
+
+func (c *wsConn) lookupQuoteChain(event Event) ([]astrBotQuoteNode, bool) {
+	depth := quotetrace.Depth(c.Scope.Getenv)
+	if depth == 0 || event.Platform != astrBotQQPlatform || !quoteLookupSupported(event) {
+		return nil, true
 	}
 	messageID, _ := event.Metadata["reply_message_id"].(string)
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
-		return nil
+		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), quoteChainTimeout)
 	defer cancel()
@@ -77,18 +115,21 @@ func (c *wsConn) lookupQuoteChain(event Event) []astrBotQuoteNode {
 	chain := make([]astrBotQuoteNode, 0, depth)
 	for len(chain) < depth && messageID != "" {
 		if _, exists := seen[messageID]; exists {
-			break
+			return chain, false
 		}
 		seen[messageID] = struct{}{}
 		data := c.lookupQuotedMessage(ctx, event, messageID)
 		node, ok := parseAstrBotQuote(event, messageID, data)
 		if !ok {
+			if len(data) > 0 && strings.TrimSpace(string(data)) != "{}" {
+				return chain, false
+			}
 			break
 		}
 		chain = append(chain, node)
 		messageID = node.ParentID
 	}
-	return chain
+	return chain, true
 }
 
 func quoteField(data map[string]json.RawMessage, key string) string {

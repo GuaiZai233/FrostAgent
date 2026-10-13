@@ -42,12 +42,12 @@ func TestStickerActivityIntervalsAndGrace(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	e := &Engine{}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 1 || grace != 0 {
 		t.Fatalf("before quota: remaining=%d grace=%d", remaining, grace)
 	}
-	if !strings.Contains(e.stickerActivityPrompt(), "还剩 1 轮回复") {
+	if !strings.Contains(e.stickerActivityPrompt(), "还剩 1 个 Bot 对话轮次") {
 		t.Fatalf("unexpected prompt: %s", e.stickerActivityPrompt())
 	}
 	e.grantStickerGrace()
@@ -72,7 +72,7 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	input := []ChatMessage{{Role: "user", Content: "hello"}}
 	result := e.RunMessagesWithContext(input, RunContext{})
@@ -82,7 +82,13 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 	if input[0].Content != "hello" {
 		t.Fatalf("caller history was changed: %v", input[0].Content)
 	}
-	if !strings.Contains(p.requests[0].Messages[len(p.requests[0].Messages)-1].Content.(string), "还剩 1 轮回复") {
+	sawCountdown := false
+	for _, msg := range p.requests[0].Messages {
+		if text, ok := msg.Content.(string); ok && strings.Contains(text, "还剩 0 个 Bot 对话轮次") {
+			sawCountdown = true
+		}
+	}
+	if !sawCountdown {
 		t.Fatal("missing transient countdown")
 	}
 	last := p.requests[3]
@@ -114,7 +120,7 @@ func TestStickerEnforcementMarkerForgivesImmediately(t *testing.T) {
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
 	if result.Content != "ordinary reply" || len(p.requests) != 2 {
@@ -134,7 +140,7 @@ func TestStickerEnforcementConflictStillReachesForgiveness(t *testing.T) {
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
 	for range 5 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
 	if result.Content != "after forgiveness" || len(p.requests) != 4 {
@@ -158,7 +164,7 @@ func TestProactiveStickerDeliverySatisfiesQuota(t *testing.T) {
 		"send_sticker": &staticTool{name: "send_sticker", result: payload},
 	}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		Proactive: true,
@@ -180,41 +186,30 @@ func TestProactiveStickerDeliverySatisfiesQuota(t *testing.T) {
 	}
 }
 
-func TestStickerQuotaBlocksSecondMessageInSameToolBatch(t *testing.T) {
+func TestMultipleMessagesInOneBotTurnCountOnce(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
-	const payload = `{"messages":[{"type":"plain","text":"hello","is_sticker":true}]}`
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
 			{ID: "first", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
 			{ID: "second", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
 		}},
-		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
 		{Role: core.RoleAssistant, Content: "done"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{
-		"send_message": &staticTool{name: "send_message", result: payload},
+	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
+		"send_message": &staticTool{name: "send_message", result: `{"messages":[{"type":"plain","text":"hello","is_sticker":true}]}`},
 	}}
 	for range 3 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	delivered := 0
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(string) error { delivered++; return nil },
 	})
-	if result.Content != "done" || delivered != 1 {
-		t.Fatalf("result=%q delivered=%d, want one delivery", result.Content, delivered)
+	if result.Content != "done" || delivered != 2 || len(p.requests) != 2 {
+		t.Fatalf("result=%q delivered=%d calls=%d", result.Content, delivered, len(p.requests))
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
-		t.Fatalf("plain message with is_sticker flag reset quota: remaining=%d", remaining)
-	}
-	var blocked bool
-	for _, msg := range p.requests[1].Messages {
-		if msg.Role == core.RoleTool && msg.ToolCallID == "second" && strings.Contains(msg.Content.(string), "额度已到期") {
-			blocked = true
-		}
-	}
-	if !blocked {
-		t.Fatal("second send_message was not blocked at quota")
+		t.Fatalf("one dialogue counted multiple sends or iterations: remaining=%d", remaining)
 	}
 }
 
@@ -232,7 +227,7 @@ func TestStickerQuotaAllowsOrderedTextAndStickerBatch(t *testing.T) {
 		"send_sticker": &staticTool{name: "send_sticker", result: `{"messages":[{"type":"image","path":"/test/sticker.png","is_sticker":true}]}`},
 	}}
 	for range 5 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	var delivered []string
 	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
@@ -284,7 +279,7 @@ func TestStickerPairFailureDoesNotSendText(t *testing.T) {
 				e.Security = controller
 			}
 			for range 5 {
-				e.RecordBotMessage(false)
+				e.RecordBotTurn()
 			}
 			var sends int
 			e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
@@ -351,7 +346,7 @@ func TestOnlyAdjacentTextSharesStickerDelivery(t *testing.T) {
 		"send_sticker": &staticTool{name: "send_sticker", result: `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`},
 	}}
 	for range 5 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	var delivered []string
 	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
@@ -384,7 +379,7 @@ func TestSendMessageStickerPayloadResetsQuota(t *testing.T) {
 		"send_message": &staticTool{name: "send_message", result: payload},
 	}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(got string) error {
@@ -402,76 +397,79 @@ func TestSendMessageStickerPayloadResetsQuota(t *testing.T) {
 	}
 }
 
-type concurrentStickerProvider struct {
-	mu       sync.Mutex
-	requests []core.ChatRequest
-	started  chan struct{}
-	gate     chan struct{}
-}
-
-func (p *concurrentStickerProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-	p.mu.Lock()
-	p.requests = append(p.requests, req)
-	call := len(p.requests)
-	p.mu.Unlock()
-	if call <= 2 {
-		p.started <- struct{}{}
-		<-p.gate
+func TestConcurrentStickerTurnsCountOnceEach(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "1")
+	e := &Engine{}
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			e.RecordBotTurn()
+			e.RecordBotMessage(false)
+		})
 	}
-	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary"}}, nil
+	wg.Wait()
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 30 {
+		t.Fatalf("concurrent turns: remaining=%d, want 30", remaining)
+	}
 }
 
-func TestConcurrentSessionsReserveStickerQuota(t *testing.T) {
+func TestStickerActivityCountModesAndReset(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
-	p := &concurrentStickerProvider{started: make(chan struct{}, 2), gate: make(chan struct{})}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
-	for range 3 {
-		e.RecordBotMessage(false)
-	}
-	results := make(chan AgentRunResult, 2)
-	for range 2 {
-		go func() {
-			results <- e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{AdapterID: "onebot"})
-		}()
-	}
-	<-p.started
-	<-p.started
-	close(p.gate)
-	first, second := <-results, <-results
-	if first.StickerReservation == nil || second.StickerReservation == nil {
-		t.Fatalf("one session lost its final reservation: first=%v second=%v", first.StickerReservation, second.StickerReservation)
-	}
-	p.mu.Lock()
-	requestCount := len(p.requests)
-	p.mu.Unlock()
-	if requestCount != 5 {
-		t.Fatalf("concurrent session skipped three enforcement attempts: calls=%d", requestCount)
-	}
-	e.FinishBotMessage(first.StickerReservation, true, false)
-	e.FinishBotMessage(second.StickerReservation, true, false)
-}
-
-func TestStickerReservationReleasedAfterFailedDelivery(t *testing.T) {
-	t.Setenv(sticker.ActivityEnvKey, "10")
+	t.Setenv(sticker.ActivityModeEnvKey, "")
 	e := &Engine{}
 	for range 3 {
+		e.RecordIncomingMessage()
+	}
+	e.RecordBotTurn()
+	for range 3 {
 		e.RecordBotMessage(false)
 	}
-	first, ok := e.reserveBotMessage()
-	if !ok || first == nil {
-		t.Fatal("fourth ordinary message should reserve a slot")
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 4 {
+		t.Fatalf("default mode counted passive or outbound messages: %d", remaining)
 	}
-	if _, ok := e.reserveBotMessage(); ok {
-		t.Fatal("concurrent ordinary message exceeded reserved quota")
+	e.grantStickerGrace()
+	t.Setenv(sticker.ActivityModeEnvKey, sticker.ActivityAllMessages)
+	if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 5 || grace != 0 {
+		t.Fatalf("mode switch did not reset state: remaining=%d grace=%d", remaining, grace)
 	}
-	e.FinishBotMessage(first, false, false)
-	second, ok := e.reserveBotMessage()
-	if !ok || second == nil {
-		t.Fatal("failed delivery did not release its slot")
+	for range 4 {
+		e.RecordIncomingMessage()
 	}
-	e.FinishBotMessage(second, true, false)
+	e.RecordBotTurn()
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
-		t.Fatalf("confirmed delivery was not counted: remaining=%d", remaining)
+		t.Fatalf("all messages counted a dialogue twice: %d", remaining)
+	}
+	if !strings.Contains(e.stickerActivityPrompt(), "1 条传入消息") {
+		t.Fatal(e.stickerActivityPrompt())
+	}
+	e.RecordIncomingMessage()
+	if !e.stickerNeededBeforeReply() {
+		t.Fatal("fifth incoming message did not reach quota")
+	}
+	e.RecordBotMessage(true)
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
+		t.Fatal(remaining)
+	}
+}
+
+func TestProactiveSilentBotTurnCountsAndMockDoesNot(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	p := &stickerActivityProvider{responses: []core.ChatMessage{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+			ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: "stay_silent", Arguments: `{}`},
+		}}},
+	}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{Proactive: true})
+	if !result.Silent {
+		t.Fatal("expected proactive silence")
+	}
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 4 {
+		t.Fatal(remaining)
+	}
+	e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "mock"}}, RunContext{Mock: true})
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 4 {
+		t.Fatal("mock advanced counter", remaining)
 	}
 }
 
@@ -484,15 +482,14 @@ func TestBillingReceiptOnlyFinalUsesStickerQuota(t *testing.T) {
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		AdapterID: "astrbot", Billing: &BillingRunState{BillingActive: true},
 	})
-	if len(p.requests) != 3 || result.StickerReservation == nil {
-		t.Fatalf("receipt-only final skipped enforcement or reservation: calls=%d reservation=%v", len(p.requests), result.StickerReservation)
+	if len(p.requests) != 3 || result.Content != "" {
+		t.Fatalf("receipt-only final skipped enforcement: calls=%d content=%q", len(p.requests), result.Content)
 	}
-	e.FinishBotMessage(result.StickerReservation, false, false)
 }
 
 func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
@@ -509,7 +506,7 @@ func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
 		"send_sticker": &staticTool{name: "send_sticker", result: payload},
 	}}
 	for range 4 {
-		e.RecordBotMessage(false)
+		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(string) error { return context.DeadlineExceeded },
@@ -517,7 +514,7 @@ func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
 	if result.Content != "done" {
 		t.Fatalf("result=%q", result.Content)
 	}
-	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
+	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 0 {
 		t.Fatalf("failed delivery changed quota: remaining=%d", remaining)
 	}
 }

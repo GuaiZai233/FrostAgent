@@ -908,11 +908,15 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       pageToken = '',
       statusFilter = '',
       search = '',
+      sortBy = '',
+      descending = false,
     ): Promise<ListStickersResponse> {
       return stickerClient.listStickers({
         pagination: { pageSize, pageToken },
         statusFilter,
         search,
+        sortBy,
+        descending,
       });
     },
 

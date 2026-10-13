@@ -562,6 +562,8 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     }
     if reply_message_id:
         metadata["reply_message_id"] = reply_message_id
+        if platform == "aiocqhttp" and callable(getattr(first_attr(event, "bot"), "call_action", None)):
+            metadata["quote_lookup_supported"] = True
     payload["metadata"] = metadata
     return payload
 

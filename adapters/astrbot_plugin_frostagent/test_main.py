@@ -241,6 +241,23 @@ class QuoteLookupRoutingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_quote_lookup_capability_requires_qq_bot_action(self):
+        event = FakeEvent(content="你觉得呢？")
+        event.message_obj.message = [Reply("44")]
+        event.platform = "aiocqhttp"
+        event.bot = SimpleNamespace(call_action=lambda **_kwargs: None)
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertTrue(payload["metadata"]["quote_lookup_supported"])
+
+        event.bot = None
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertNotIn("quote_lookup_supported", payload["metadata"])
+
+        event.platform = "telegram"
+        event.bot = SimpleNamespace(call_action=lambda **_kwargs: None)
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertNotIn("quote_lookup_supported", payload["metadata"])
+
     async def test_quote_lookup_request_uses_current_qq_event(self):
         adapter = object.__new__(FrostAgentAdapter)
         adapter._configuration_error = None
