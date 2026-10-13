@@ -3,9 +3,12 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sort"
@@ -22,6 +25,7 @@ import (
 )
 
 var ErrEmbeddingNotReady = errors.New("向量索引尚未就绪")
+var errEmbeddingDimensionsChanged = errors.New("Embedding 向量维度已变化，正在重建索引")
 
 // SearchScope is supplied by trusted runtime/RPC routing, never by model text.
 type SearchScope struct {
@@ -57,10 +61,14 @@ type embeddedMemory struct {
 type embeddingState struct {
 	Fingerprint              string
 	SourceHash               string
+	RequestedHash            string
 	Ready                    bool
 	Vectors                  map[string]embeddedMemory
 	Active, Pending, Reflect bool
 	LastError                error
+	RetryAt                  time.Time
+	Failures                 int
+	Generation               uint64
 }
 
 // Embeddings owns derived indexes and workers within one instance lifetime.
@@ -128,7 +136,8 @@ func (m *Embeddings) CarryIndexesFrom(old *Embeddings) {
 		if !state.Ready {
 			continue
 		}
-		m.states[s] = &embeddingState{Fingerprint: state.Fingerprint, SourceHash: state.SourceHash, Ready: state.Ready, Vectors: state.Vectors, LastError: state.LastError}
+		m.states[s] = &embeddingState{Fingerprint: state.Fingerprint, SourceHash: state.SourceHash,
+			RequestedHash: state.SourceHash, Ready: state.Ready, Vectors: state.Vectors, Generation: state.Generation}
 	}
 }
 
@@ -197,6 +206,7 @@ func (m *Embeddings) ensure(s SearchScope) (*embeddingState, error) {
 			if stored == fp {
 				state.Fingerprint, state.Ready = fp, true
 				state.SourceHash = storedHash
+				state.RequestedHash = storedHash
 				state.Vectors, loadErr = m.persistedHashes(m.Context(), s)
 				if loadErr != nil {
 					m.mu.Unlock()
@@ -207,22 +217,32 @@ func (m *Embeddings) ensure(s SearchScope) (*embeddingState, error) {
 	}
 	if state.Fingerprint != fp {
 		state.Fingerprint, state.Ready, state.Vectors, state.LastError = fp, false, nil, nil
+		state.RequestedHash = sourceHash
+		state.RetryAt, state.Failures = time.Time{}, 0
+		state.Generation++
 		state.Reflect = true
 		m.queueLocked(s, state)
-	}
-	if state.Ready && len(entries) > 0 && state.SourceHash != sourceHash {
-		hasValid := false
-		for _, e := range entries {
-			if v, ok := state.Vectors[e.ID]; ok && v.Hash == memoryHash(e) {
-				hasValid = true
-				break
+	} else if state.RequestedHash != sourceHash {
+		if state.Ready && len(entries) > 0 {
+			hasValid := false
+			for _, e := range entries {
+				if v, ok := state.Vectors[e.ID]; ok && v.Hash == memoryHash(e) {
+					hasValid = true
+					break
+				}
+			}
+			if !hasValid {
+				state.Ready, state.Reflect = false, true
 			}
 		}
-		if !hasValid {
-			state.Ready, state.Reflect = false, true
-			state.SourceHash = sourceHash
-			m.queueLocked(s, state)
-		}
+		state.RequestedHash = sourceHash
+		state.LastError, state.RetryAt, state.Failures = nil, time.Time{}, 0
+		m.queueLocked(s, state)
+	} else if !state.Active && !state.RetryAt.IsZero() && !time.Now().Before(state.RetryAt) {
+		// Each worker has a finite request budget. Later scans may start a new
+		// attempt after backoff, without repeating completed reflection.
+		state.RetryAt = time.Time{}
+		m.queueLocked(s, state)
 	}
 	ready := state.Ready
 	m.mu.Unlock()
@@ -243,6 +263,7 @@ func (m *Embeddings) Update(s SearchScope) {
 	m.mu.Lock()
 	state := m.states[s]
 	if state != nil {
+		state.RetryAt, state.Failures = time.Time{}, 0
 		m.queueLocked(s, state)
 	}
 	m.mu.Unlock()
@@ -289,6 +310,15 @@ func (m *Embeddings) worker(s SearchScope) {
 		m.mu.Lock()
 		state = m.states[s]
 		state.LastError = err
+		state.RetryAt = time.Time{}
+		if err == nil {
+			state.Failures = 0
+		} else if transientEmbeddingError(err) && m.Context().Err() == nil {
+			if state.Failures < 6 {
+				state.Failures++
+			}
+			state.RetryAt = time.Now().Add(embeddingRecoveryDelay(state.Failures))
+		}
 		if errors.Is(err, ErrConditionFailed) && m.Context().Err() == nil {
 			state.Pending = true
 		}
@@ -307,6 +337,14 @@ func (m *Embeddings) worker(s SearchScope) {
 			}
 		}
 	}
+}
+
+func embeddingRecoveryDelay(failures int) time.Duration {
+	delay := 15 * time.Second
+	for attempt := 1; attempt < failures && delay < 5*time.Minute; attempt++ {
+		delay *= 2
+	}
+	return min(delay, 5*time.Minute)
 }
 
 func (m *Embeddings) entries(s SearchScope) ([]MemoryEntry, error) {
@@ -472,6 +510,8 @@ func (m *Embeddings) rebuild(ctx context.Context, s SearchScope, fp string) erro
 		}
 		state.Vectors, state.Ready = vectors, true
 		state.SourceHash = memorySnapshotHash(entries)
+		state.RequestedHash = state.SourceHash
+		state.Generation++
 		return nil
 	})
 }
@@ -495,12 +535,37 @@ func embedRetry(ctx context.Context, provider core.EmbeddingProvider, req core.E
 	}
 }
 func transientEmbeddingError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
 	var httpErr *openai.HTTPError
 	if errors.As(err, &httpErr) {
-		return httpErr.StatusCode == 429 || httpErr.StatusCode >= 500
+		return httpErr.StatusCode == 429 || (httpErr.StatusCode >= 500 && httpErr.StatusCode <= 599)
+	}
+	var verification *tls.CertificateVerificationError
+	var authority x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	if errors.As(err, &verification) || errors.As(err, &authority) || errors.As(err, &invalid) || errors.As(err, &hostname) {
+		return false
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return dns.Timeout() || dns.Temporary()
+	}
+	var address *net.AddrError
+	if errors.As(err, &address) {
+		return false
 	}
 	var network net.Error
-	return errors.As(err, &network) || errors.Is(err, context.DeadlineExceeded)
+	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) {
+		return true
+	}
+	var operation *net.OpError
+	if errors.As(err, &operation) {
+		return operation.Op == "dial" || operation.Op == "read" || operation.Op == "write"
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (m *Embeddings) Search(ctx context.Context, s SearchScope, query string, limit int) ([]MemoryEntry, error) {
@@ -520,6 +585,10 @@ func (m *Embeddings) Search(ctx context.Context, s SearchScope, query string, li
 		return nil, err
 	}
 	fp := modelrouter.EmbeddingFingerprint(target)
+	generation, err := m.indexGeneration(s, fp)
+	if err != nil {
+		return nil, err
+	}
 	text := core.LimitInput(query, target.MaxInputTokens)
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("搜索查询为空或无法截断")
@@ -531,32 +600,66 @@ func (m *Embeddings) Search(ctx context.Context, s SearchScope, query string, li
 	queryVector := response.Vectors[0]
 	var result []MemoryEntry
 	err = m.withEntriesLocked(s, func(entries []MemoryEntry) error {
-		m.mu.Lock()
-		state := m.states[s]
-		if !state.Ready || state.Fingerprint != fp {
-			m.mu.Unlock()
-			return ErrEmbeddingNotReady
-		}
-		vectors := state.Vectors
-		m.mu.Unlock()
-		var scores []embeddingScore
-		if m.vectorType != "" {
-			var e error
-			scores, e = m.pgScores(ctx, s, fp, queryVector)
-			if e != nil {
-				return e
-			}
-		} else {
-			for id, v := range vectors {
-				if len(v.Vector) == len(queryVector) {
-					scores = append(scores, embeddingScore{id, v.Hash, cosineDistance(queryVector, v.Vector)})
-				}
-			}
+		scores, err := m.searchScores(ctx, s, fp, queryVector, generation)
+		if err != nil {
+			return err
 		}
 		result = rankEmbedded(entries, scores, limit)
 		return nil
 	})
 	return result, err
+}
+
+func (m *Embeddings) indexGeneration(s SearchScope, fp string) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.states[s]
+	if state == nil || !state.Ready || state.Fingerprint != fp {
+		return 0, ErrEmbeddingNotReady
+	}
+	return state.Generation, nil
+}
+
+func (m *Embeddings) searchScores(ctx context.Context, s SearchScope, fp string, query []float32, generation uint64) ([]embeddingScore, error) {
+	m.mu.Lock()
+	state := m.states[s]
+	if state == nil || !state.Ready || state.Fingerprint != fp {
+		m.mu.Unlock()
+		return nil, ErrEmbeddingNotReady
+	}
+	vectors := state.Vectors
+	m.mu.Unlock()
+	var scores []embeddingScore
+	var err error
+	if m.vectorType != "" {
+		scores, err = m.pgScores(ctx, s, fp, query)
+	} else {
+		for id, v := range vectors {
+			if len(v.Vector) != len(query) {
+				err = errEmbeddingDimensionsChanged
+				break
+			}
+			scores = append(scores, embeddingScore{id, v.Hash, cosineDistance(query, v.Vector)})
+		}
+	}
+	if errors.Is(err, errEmbeddingDimensionsChanged) {
+		m.invalidateDimensions(s, fp, generation)
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddingNotReady, err)
+	}
+	return scores, err
+}
+
+func (m *Embeddings) invalidateDimensions(s SearchScope, fp string, generation uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.states[s]
+	// A query against the previous publication must not invalidate a newer one.
+	if state == nil || !state.Ready || state.Fingerprint != fp || state.Generation != generation {
+		return
+	}
+	state.Ready, state.Reflect = false, true
+	state.RetryAt, state.Failures = time.Time{}, 0
+	m.queueLocked(s, state)
 }
 
 type embeddingScore struct {

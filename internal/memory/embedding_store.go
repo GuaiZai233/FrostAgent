@@ -184,7 +184,7 @@ func (m *Embeddings) pgScores(ctx context.Context, s SearchScope, fp string, vec
 			return nil, err
 		}
 		if score.Distance < 0 {
-			return nil, fmt.Errorf("Embedding 向量维度已变化，请重建索引")
+			return nil, errEmbeddingDimensionsChanged
 		}
 		result = append(result, score)
 	}
@@ -216,6 +216,14 @@ func (m *Embeddings) searchAllPrivate(ctx context.Context, query string, limit i
 		return nil, err
 	}
 	fp := modelrouter.EmbeddingFingerprint(target)
+	generations := make(map[SearchScope]uint64, len(ready))
+	for _, s := range ready {
+		generation, err := m.indexGeneration(s, fp)
+		if err != nil {
+			return nil, err
+		}
+		generations[s] = generation
+	}
 	text := core.LimitInput(query, target.MaxInputTokens)
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("搜索查询为空或无法截断")
@@ -228,28 +236,20 @@ func (m *Embeddings) searchAllPrivate(ctx context.Context, query string, limit i
 	var result []MemoryEntry
 	err = m.withEntriesLocked(SearchScope{Type: ScopePrivate}, func(current []MemoryEntry) error {
 		var scores []embeddingScore
+		var dimensionErr error
 		for _, s := range ready {
-			m.mu.Lock()
-			state := m.states[s]
-			if state == nil || !state.Ready || state.Fingerprint != fp {
-				m.mu.Unlock()
-				return ErrEmbeddingNotReady
+			items, err := m.searchScores(ctx, s, fp, vector, generations[s])
+			if errors.Is(err, errEmbeddingDimensionsChanged) {
+				dimensionErr = err
+				continue
 			}
-			vectors := state.Vectors
-			m.mu.Unlock()
-			if m.vectorType != "" {
-				items, err := m.pgScores(ctx, s, fp, vector)
-				if err != nil {
-					return err
-				}
-				scores = append(scores, items...)
-			} else {
-				for id, v := range vectors {
-					if len(v.Vector) == len(vector) {
-						scores = append(scores, embeddingScore{id, v.Hash, cosineDistance(vector, v.Vector)})
-					}
-				}
+			if err != nil {
+				return err
 			}
+			scores = append(scores, items...)
+		}
+		if dimensionErr != nil {
+			return dimensionErr
 		}
 		result = rankEmbedded(current, scores, limit)
 		return nil

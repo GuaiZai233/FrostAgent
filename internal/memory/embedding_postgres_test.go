@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"testing"
@@ -14,7 +15,8 @@ import (
 	"FrostAgent/internal/storage"
 )
 
-func TestPostgresEmbeddingPersistenceAndIsolation(t *testing.T) {
+func newEmbeddingPostgresDB(t *testing.T) *storage.DB {
+	t.Helper()
 	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
 	if base == "" {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
@@ -45,7 +47,12 @@ func TestPostgresEmbeddingPersistenceAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestPostgresEmbeddingPersistenceAndIsolation(t *testing.T) {
+	db := newEmbeddingPostgresDB(t)
 	for _, id := range []string{"instance-a", "instance-b"} {
 		if _, err := db.SQL.Exec(db.Bind(`INSERT INTO instances(id,name,created_at)VALUES(?,?,'now')`), id, id); err != nil {
 			t.Fatal(err)
@@ -158,4 +165,36 @@ func TestPostgresEmbeddingPersistenceAndIsolation(t *testing.T) {
 	if fp, _ := fresh.persistedFingerprint(context.Background(), s); fp != "" {
 		t.Fatal("restoration retained derived index marker")
 	}
+}
+
+func TestPostgresEmbeddingPartialChanges(t *testing.T) {
+	db := newEmbeddingPostgresDB(t)
+	exerciseEmbeddingPartialChanges(t, func(handler http.HandlerFunc) embeddingFixture {
+		return newSQLEmbeddingFixture(t, db, handler)
+	})
+}
+
+func TestPostgresEmbeddingTransientRecovery(t *testing.T) {
+	db := newEmbeddingPostgresDB(t)
+	exerciseEmbeddingTransientRecovery(t, func(handler http.HandlerFunc) embeddingFixture {
+		return newSQLEmbeddingFixture(t, db, handler)
+	})
+}
+
+func TestPostgresEmbeddingDimensionRecovery(t *testing.T) {
+	for _, allPrivate := range []bool{false, true} {
+		t.Run(fmt.Sprint("all-private-", allPrivate), func(t *testing.T) {
+			db := newEmbeddingPostgresDB(t)
+			exerciseEmbeddingDimensionRecovery(t, func(handler http.HandlerFunc) embeddingFixture {
+				return newSQLEmbeddingFixture(t, db, handler)
+			}, allPrivate)
+		})
+	}
+}
+
+func TestPostgresEmbeddingStaleQuery(t *testing.T) {
+	db := newEmbeddingPostgresDB(t)
+	exerciseEmbeddingStaleQuery(t, func(handler http.HandlerFunc) embeddingFixture {
+		return newSQLEmbeddingFixture(t, db, handler)
+	})
 }
