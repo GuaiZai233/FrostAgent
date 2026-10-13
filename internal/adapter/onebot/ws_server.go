@@ -695,6 +695,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	if wakeSignals.Proactive {
+		if engine != nil {
+			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
+		}
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
 	}
 	if botLoopSoft {

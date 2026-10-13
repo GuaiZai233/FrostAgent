@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1911,4 +1912,147 @@ func TestAstrBotOmittedPlatformCannotMatchQQWhitelist(t *testing.T) {
 		t.Fatalf("期望 LLM 调用 1 次，实际调用次数: %d", len(provider.requests))
 	}
 	provider.mu.Unlock()
+}
+
+// Run each console assertion in its own process so WebSocket goroutines never
+// race with a reassignment of the process-wide stdout stream.
+func TestAstrBotProactiveTriggerLogging(t *testing.T) {
+	const childEnv = "FROSTAGENT_TEST_ASTRBOT_PROACTIVE_LOG"
+	if testCase := os.Getenv(childEnv); testCase != "" {
+		runAstrBotProactiveTriggerLogging(t, testCase)
+		return
+	}
+	for _, testCase := range []string{"proactive", "explicit_at", "explicit_name", "private", "security_block", "whitelist_block", "probability_miss"} {
+		t.Run(testCase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAstrBotProactiveTriggerLogging$", "-test.timeout=15s")
+			cmd.Env = append(os.Environ(), childEnv+"="+testCase)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("console subprocess failed: %v\n%s", err, output)
+			}
+			want := 0
+			if testCase == "proactive" {
+				want = 1
+			}
+			if got := strings.Count(string(output), "[INFO][SYSTEM] 【触发主动回复逻辑】"); got != want {
+				t.Fatalf("console trigger count = %d, want %d\n%s", got, want, output)
+			}
+		})
+	}
+}
+
+func runAstrBotProactiveTriggerLogging(t *testing.T, testCase string) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+		"BOT_NAME":                    "test-bot",
+		"BOT_ALIASES":                 "",
+	})
+	if testCase == "whitelist_block" {
+		scope = newTestScopeWithEnv(t, map[string]string{
+			"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+			"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+			"PROACTIVE_REPLY_GROUP_WHITELIST":  "astrbot:999",
+		})
+	} else if testCase == "probability_miss" {
+		scope = newTestScopeWithEnv(t, map[string]string{"PROACTIVE_REPLY_PROBABILITY": "0"})
+	}
+	scope.Logger = logs.New("test-proactive", "test-proactive", 100)
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	engine.Scope = scope
+	if testCase == "security_block" {
+		engine.Security = security.NewController(t.TempDir())
+		principal, err := security.NewPrincipal("astrbot", "102")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Security.Lock(principal, "synthetic test block"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	event := Event{
+		Type: "event", EventType: "message", MessageType: "group", Platform: "astrbot",
+		GroupID: "101", UserID: "102", MessageID: "test-message",
+		Content: "ordinary group message", Timestamp: time.Now().Unix(),
+	}
+	switch testCase {
+	case "explicit_at":
+		event.IsAt = true
+	case "explicit_name":
+		event.Content = "test-bot reply please"
+	case "private":
+		event.MessageType = "private"
+	}
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var action Action
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("expected completed action: %v", err)
+	}
+	if testCase == "security_block" || testCase == "whitelist_block" || testCase == "probability_miss" {
+		if action.Action != "noop" || action.SuppressLLM != (testCase == "security_block") {
+			t.Fatalf("incorrect drop action: %+v", action)
+		}
+		provider.mu.Lock()
+		calls := len(provider.requests)
+		provider.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("dropped event called LLM %d times", calls)
+		}
+		// Still check the stored log count for dropped events.
+		for _, entry := range engine.Log().Snapshot() {
+			if entry.Content == "【触发主动回复逻辑】" {
+				t.Fatal("dropped event recorded a proactive trigger")
+			}
+		}
+		return
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("action = %s, want send_message", action.Action)
+	}
+	want := 0
+	if testCase == "proactive" {
+		want = 1
+	}
+	got := 0
+	for _, entry := range engine.Log().Snapshot() {
+		if entry.Content == "【触发主动回复逻辑】" {
+			if entry.Category != logs.SYSTEM || entry.Level != logs.INFO {
+				t.Fatalf("incorrect trigger category or level: %+v", entry)
+			}
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("stored trigger count = %d, want %d", got, want)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 1 {
+		t.Fatalf("LLM requests = %d, want 1", len(provider.requests))
+	}
+	request := provider.requests[0]
+	if len(request.Messages) == 0 {
+		t.Fatal("LLM request contains no messages")
+	}
+	lastContent, ok := request.Messages[len(request.Messages)-1].Content.(string)
+	if !ok {
+		t.Fatal("expected text content in LLM request")
+	}
+	if strings.HasPrefix(lastContent, proactive.PromptPrefix) != (testCase == "proactive") {
+		t.Fatalf("proactive prompt does not match trigger for %s", testCase)
+	}
 }

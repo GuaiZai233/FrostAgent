@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -1780,4 +1781,159 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 		d.executed.Add(1)
 	}
 	return "ok", nil
+}
+
+// Run each console assertion in its own process so WebSocket goroutines never
+// race with a reassignment of the process-wide stdout stream.
+func TestOneBotProactiveTriggerLogging(t *testing.T) {
+	const childEnv = "FROSTAGENT_TEST_ONEBOT_PROACTIVE_LOG"
+	if testCase := os.Getenv(childEnv); testCase != "" {
+		runOneBotProactiveTriggerLogging(t, testCase)
+		return
+	}
+	for _, testCase := range []string{"proactive", "explicit_at", "explicit_name", "private", "security_block", "whitelist_block", "probability_miss", "input_length"} {
+		t.Run(testCase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOneBotProactiveTriggerLogging$", "-test.timeout=15s")
+			cmd.Env = append(os.Environ(), childEnv+"="+testCase)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("console subprocess failed: %v\n%s", err, output)
+			}
+			want := 0
+			if testCase == "proactive" {
+				want = 1
+			}
+			if got := strings.Count(string(output), "[INFO][SYSTEM] 【触发主动回复逻辑】"); got != want {
+				t.Fatalf("console trigger count = %d, want %d\n%s", got, want, output)
+			}
+		})
+	}
+}
+
+func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+		"BOT_NAME":                    "test-bot",
+		"BOT_ALIASES":                 "",
+	})
+	if testCase == "whitelist_block" {
+		scope = newTestScopeWithEnv(t, map[string]string{
+			"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+			"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+			"PROACTIVE_REPLY_GROUP_WHITELIST":  "999",
+		})
+	} else if testCase == "probability_miss" {
+		scope = newTestScopeWithEnv(t, map[string]string{"PROACTIVE_REPLY_PROBABILITY": "0"})
+	}
+	scope.Logger = logs.New("test-proactive", "test-proactive", 100)
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	engine.Scope = scope
+	if testCase == "security_block" {
+		engine.Security = security.NewController(t.TempDir())
+		principal, err := security.NewPrincipal("onebot", "102")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Security.Lock(principal, "synthetic test block"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	event := model.OneBotEvent{
+		SelfID: 103, PostType: "message", MessageType: "group",
+		GroupID: 101, UserID: 102, MessageID: 1,
+		Message: json.RawMessage(`[{"type":"text","data":{"text":"ordinary group message"}}]`),
+	}
+	switch testCase {
+	case "explicit_at":
+		event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"reply please"}}]`)
+	case "explicit_name":
+		event.Message = json.RawMessage(`[{"type":"text","data":{"text":"test-bot reply please"}}]`)
+	case "private":
+		event.MessageType = "private"
+	case "input_length":
+		event.Message, err = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": strings.Repeat("x", 30001)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := func(event model.OneBotEvent) {
+		t.Helper()
+		if err := conn.WriteJSON(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(event)
+	// An explicit sentinel in the same group also waits for the preceding
+	// session turn, so its reply proves the asynchronous drop path has finished.
+	if testCase == "security_block" || testCase == "whitelist_block" || testCase == "probability_miss" || testCase == "input_length" {
+		event.UserID = 104
+		event.MessageID = 2
+		event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"sentinel message"}}]`)
+		send(event)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var action model.OneBotAction
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatalf("expected completed reply: %v", err)
+		}
+		if action.Action == "get_group_info" {
+			if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"group_id": 101, "group_name": "test group"}, "echo": action.Echo}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		wantAction := "send_group_msg"
+		if event.MessageType == "private" {
+			wantAction = "send_private_msg"
+		}
+		if action.Action != wantAction {
+			t.Fatalf("action = %s, want %s", action.Action, wantAction)
+		}
+		break
+	}
+	want := 0
+	if testCase == "proactive" {
+		want = 1
+	}
+	got := 0
+	for _, entry := range engine.Log().Snapshot() {
+		if entry.Content == "【触发主动回复逻辑】" {
+			if entry.Category != logs.SYSTEM || entry.Level != logs.INFO {
+				t.Fatalf("incorrect trigger category or level: %+v", entry)
+			}
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("stored trigger count = %d, want %d", got, want)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 1 {
+		t.Fatalf("LLM requests = %d, want 1", len(provider.requests))
+	}
+	request := provider.requests[0]
+	if len(request.Messages) == 0 {
+		t.Fatal("LLM request contains no messages")
+	}
+	lastContent, ok := request.Messages[len(request.Messages)-1].Content.(string)
+	if !ok {
+		t.Fatal("expected text content in LLM request")
+	}
+	if strings.HasPrefix(lastContent, proactive.PromptPrefix) != (testCase == "proactive") {
+		t.Fatalf("proactive prompt does not match trigger for %s", testCase)
+	}
 }
