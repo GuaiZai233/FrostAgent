@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/logs"
 	"FrostAgent/internal/runtimescope"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -41,8 +42,21 @@ func IsContainImage(segments []MessageSegment) bool {
 }
 
 func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.LLMProvider, route core.RouteContext) string {
+	return processImage(ctx, segments, provider, route, false)
+}
+
+// ProcessImageWithFallback includes available image bytes from the same quoted
+// message and deduplicates decoded content when lookup sources contain them too.
+func ProcessImageWithFallback(ctx context.Context, segments, forwarded []MessageSegment, provider core.LLMProvider, route core.RouteContext) string {
+	combined := append([]MessageSegment(nil), forwarded...)
+	combined = append(combined, segments...)
+	return processImage(ctx, combined, provider, route, true)
+}
+
+func processImage(ctx context.Context, segments []MessageSegment, provider core.LLMProvider, route core.RouteContext, deduplicate bool) string {
 	var userTexts []string
 	var imageBase64List []string
+	seenImages := make(map[[32]byte]struct{})
 
 	// dispatch text and image
 	for _, seg := range segments {
@@ -57,6 +71,17 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 				continue
 			}
 			if b64, err := imageSourceToBase64(source, ctx); err == nil {
+				if deduplicate {
+					imageBytes, err := base64.StdEncoding.DecodeString(b64)
+					if err != nil {
+						continue
+					}
+					digest := sha256.Sum256(imageBytes)
+					if _, exists := seenImages[digest]; exists {
+						continue
+					}
+					seenImages[digest] = struct{}{}
+				}
 				imageBase64List = append(imageBase64List, b64)
 			} else {
 				runtimescope.FromContext(ctx).Log().Error(logs.WEBSOCKET, fmt.Sprintf("下载图片失败: %v", err))

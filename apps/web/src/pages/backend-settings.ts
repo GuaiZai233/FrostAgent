@@ -17,7 +17,7 @@ const globalKeys = new Set([
   'SECURITY_CONTROL_MODE',
 ]);
 const booleanKeys = new Set([
-  'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG',
+  'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG', 'ENABLE_QUOTE_TRACE',
   'ENABLE_ONEBOT_ADAPTER', 'ENABLE_ASTRBOT_ADAPTER', 'BILLING_ENABLED', 'ENABLE_PROACTIVE_REPLY',
   'ENABLE_PROACTIVE_REPLY_WHITELIST',
   'SANDBOX_ENABLED', 'ALLOW_REMOTE_MCP_MANAGEMENT', 'MCP_ENFORCE_LOCAL_TOKEN',
@@ -59,6 +59,8 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let groupReplyOnMention = false;
   let enableAtOther = false;
   let enableReplyOther = false;
+  let quoteTraceDepth = 5;
+  let quoteTraceSaving = false;
   let proactiveReplyEnabled = false;
   let proactiveReplyProbability = 0.05;
   let stickerActivity = 0;
@@ -282,6 +284,19 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               </label>
             </div>
           </div>
+
+          <div class="mt-4 p-3.5 rounded-lg border border-border flex flex-col gap-3">
+            <label class="flex items-center gap-2.5 cursor-pointer">
+              <input type="checkbox" id="quote-trace-cb" class="checkbox" />
+              <span class="text-xs font-semibold text-foreground">引用追溯</span>
+            </label>
+            <div class="flex items-center gap-2">
+              <label for="quote-trace-depth" class="text-xs text-muted">追溯深度</label>
+              <input type="number" id="quote-trace-depth" class="input input-sm font-mono w-20"
+                min="1" max="10" step="1" value="5" />
+              <span class="text-xs text-muted">层（1～10，默认 5）</span>
+            </div>
+          </div>
         </article>
 
         <!-- Settings table -->
@@ -374,6 +389,8 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
   const groupReplyCb =
     container.querySelector<HTMLInputElement>('#group-reply-cb')!;
+  const quoteTraceCb = container.querySelector<HTMLInputElement>('#quote-trace-cb')!;
+  const quoteTraceDepthInput = container.querySelector<HTMLInputElement>('#quote-trace-depth')!;
 
   const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
 
@@ -587,6 +604,12 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
       enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
       enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
+      const depthValue = Number(getVal('QUOTE_TRACE_DEPTH'));
+      quoteTraceDepth = Number.isInteger(depthValue) && depthValue >= 1 && depthValue <= 10
+        ? depthValue : 5;
+      quoteTraceCb.checked = getVal('ENABLE_QUOTE_TRACE') !== 'false';
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+      quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
       botLoopUserIDsInput.value = getVal('BOT_LOOP_USER_IDS');
       botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
       botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
@@ -757,7 +780,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               </div>
             </td>
             <td class="align-top">
-              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${item.value === 'true' ? 'checked' : ''} /><span>${item.value === 'true' ? '开启' : '关闭'}</span></label>` : `
+              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? 'checked' : ''} /><span>${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? '开启' : '关闭'}</span></label>` : `
               <div class="flex items-start gap-1.5 min-w-0">
                 <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
                 ${
@@ -1021,6 +1044,35 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         groupReplyCb.checked,
       ),
   );
+
+  quoteTraceCb.addEventListener('change', () => {
+    quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
+    void toggleGroupSetting('ENABLE_QUOTE_TRACE', quoteTraceCb.checked);
+  });
+  quoteTraceDepthInput.addEventListener('change', async () => {
+    const depth = Number(quoteTraceDepthInput.value);
+    if (!Number.isInteger(depth) || depth < 1 || depth > 10) {
+      toast.error('引用追溯深度必须是 1 到 10 的整数');
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+      return;
+    }
+    quoteTraceSaving = true;
+    quoteTraceDepthInput.disabled = true;
+    try {
+      const result = await api.updateEnvVar({
+        key: 'QUOTE_TRACE_DEPTH', value: String(depth), isSecret: false,
+      });
+      if (!result.success) throw new Error(result.error || '保存失败');
+      quoteTraceDepth = depth;
+      toast.success('引用追溯深度已更新');
+    } catch (err) {
+      toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+    } finally {
+      quoteTraceSaving = false;
+      if (!isUnmounted) quoteTraceDepthInput.disabled = !quoteTraceCb.checked;
+    }
+  });
 
   // Proactive reply event handlers
   stickerActivitySlider.addEventListener('input', () => {

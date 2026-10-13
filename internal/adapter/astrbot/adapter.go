@@ -336,6 +336,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				continue
 			}
+			if event.Type == "quote_lookup_result" {
+				var response quoteLookupResponse
+				if json.Unmarshal(message, &response) == nil {
+					c.acceptQuoteLookup(response)
+				}
+				continue
+			}
 			if !c.mock && (event.Type == "" || event.Type == "event") &&
 				(event.EventType == "" || event.EventType == "message") &&
 				(event.MessageType == "group" || event.MessageType == "private") {

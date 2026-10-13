@@ -305,6 +305,19 @@ class FrostAgentWSClient:
             logger.error(f"[frostagent-adapter] 解析出站动作失败: {e}, 原始数据: {raw_msg}")
             return
 
+        if action.get("type") == "quote_lookup":
+            event_message_id = str(action.get("event_message_id") or "")
+            queue = self._pending_queues.get(event_message_id)
+            if queue:
+                await queue.put(action)
+            else:
+                await self.send_event({
+                    "type": "quote_lookup_result",
+                    "echo": action.get("echo", ""),
+                    "data": {},
+                })
+            return
+
         echo = action.get("echo", "")
         # 尝试匹配 message_id (格式形如 reply_<msg_id> 或 hook_<msg_id>)
         msg_id = ""
@@ -448,6 +461,22 @@ class FrostAgentAdapter(Star):
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
 
+                if action.get("type") == "quote_lookup":
+                    quote_data = {}
+                    if (
+                        _extract_platform_name(event) == "aiocqhttp"
+                        and action.get("event_message_id") == msg_id
+                    ):
+                        quote_data = await lookup_reply_onebot_message(
+                            event, str(action.get("message_id") or "")
+                        )
+                    await self.client.send_event({
+                        "type": "quote_lookup_result",
+                        "echo": action.get("echo", ""),
+                        "data": quote_data,
+                    })
+                    continue
+
                 # 如果收到 noop 动作：
                 # 若为管理员指令静默丢弃 (admin_silent_drop / suppress_llm)，需抑制 AstrBot 默认 LLM 处理，
                 # 防止下游产生回复、产生 Token 消耗及污染会话历史；
@@ -561,6 +590,8 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     }
     if reply_message_id:
         metadata["reply_message_id"] = reply_message_id
+        if platform == "aiocqhttp" and callable(getattr(first_attr(event, "bot"), "call_action", None)):
+            metadata["quote_lookup_supported"] = True
     payload["metadata"] = metadata
     return payload
 
@@ -930,14 +961,14 @@ def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
     return onebot_segments_from_payload(raw_event)
 
 
-async def lookup_reply_onebot_segments(
+async def lookup_reply_onebot_message(
     event: AstrMessageEvent,
     message_id: str,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     bot = first_attr(event, "bot")
     call_action = getattr(bot, "call_action", None)
-    if not callable(call_action):
-        return []
+    if not callable(call_action) or not message_id:
+        return {}
 
     lookup_id: int | str = message_id
     if re.fullmatch(r"-?\d+", message_id):
@@ -960,13 +991,34 @@ async def lookup_reply_onebot_segments(
                 timeout=REPLY_LOOKUP_TIMEOUT_SECONDS,
             )
     except Exception as exc:
-        logger.warning(
-            f"[frostagent-adapter] 回查引用消息 {message_id} 失败，"
-            f"无法恢复可能被 AstrBot 丢弃的 mface: {exc}"
-        )
-        return []
-    return onebot_segments_from_payload(response)
+        logger.warning(f"[frostagent-adapter] 回查引用消息 {message_id} 失败: {exc}")
+        return {}
 
+    if first_attr(response, "retcode") not in (None, 0):
+        return {}
+    if first_attr(response, "status") not in (None, "ok"):
+        return {}
+    data = first_attr(response, "data")
+    if data is None:
+        data = response
+    result = {}
+    for key in (
+        "message_id", "message_type", "group_id", "user_id",
+        "target_id", "peer_id", "time", "message",
+    ):
+        value = first_attr(data, key)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+async def lookup_reply_onebot_segments(
+    event: AstrMessageEvent,
+    message_id: str,
+) -> list[dict[str, Any]]:
+    return onebot_segments_from_payload(
+        await lookup_reply_onebot_message(event, message_id)
+    )
 
 async def sticker_attachments_from_segments(
     segments: list[dict[str, Any]],

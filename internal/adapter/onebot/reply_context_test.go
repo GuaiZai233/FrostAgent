@@ -417,7 +417,6 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 	}
 }
 
-
 type stubSecurityClassifier struct{}
 
 func (s *stubSecurityClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -753,5 +752,30 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	locked, record, err := engine.Security.Access.IsLocked(p)
 	if err != nil || locked || len(record.StrikeTimes) != 0 {
 		t.Fatalf("用户不应累计 strike 或被锁定: locked=%v strikes=%d err=%v", locked, len(record.StrikeTimes), err)
+	}
+}
+
+func TestGroupGetMsgWithoutGroupIDRequiresObservedSession(t *testing.T) {
+	event := model.OneBotEvent{MessageType: "group", GroupID: 101}
+	conn := newWSConnection(nil)
+	data := oneBotMessageData{MessageType: "group", MessageID: 42}
+	if conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("unobserved group message without group_id became trusted")
+	}
+	conn.rememberMessageSession(42, historyKey(event))
+	if !conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("observed same-session group message was rejected")
+	}
+	if conn.replyMessageMatchesEvent(event, 43, oneBotMessageData{MessageType: "group", GroupID: 202}) {
+		t.Fatal("cross-group message became trusted")
+	}
+}
+
+func TestPrivateGetMsgRejectsGroupID(t *testing.T) {
+	event := model.OneBotEvent{MessageType: "private", UserID: 101}
+	conn := newWSConnection(nil)
+	data := oneBotMessageData{MessageType: "private", GroupID: 202, UserID: 101}
+	if conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("group message became trusted as private quote")
 	}
 }

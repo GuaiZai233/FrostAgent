@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib
+import json
 import os
 import sys
 import types
@@ -233,7 +234,72 @@ class FakeClient:
         self.delivery_results.append((delivery_id, delivered, error))
 
 
+class QuoteLookupRoutingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_lookup_reaches_the_waiting_event(self):
+        client = FrostAgentWSClient(SimpleNamespace(), None)
+        queue = client.register_waiter("msg_test")
+        request = {
+            "type": "quote_lookup", "echo": "quote_lookup_1",
+            "event_message_id": "msg_test", "message_id": "44",
+        }
+        await client._handle_incoming_action(json.dumps(request))
+        self.assertEqual(await asyncio.wait_for(queue.get(), 0.1), request)
+
+
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_quote_lookup_capability_requires_qq_bot_action(self):
+        event = FakeEvent(content="你觉得呢？")
+        event.message_obj.message = [Reply("44")]
+        event.platform = "aiocqhttp"
+        event.bot = SimpleNamespace(call_action=lambda **_kwargs: None)
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertTrue(payload["metadata"]["quote_lookup_supported"])
+
+        event.bot = None
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertNotIn("quote_lookup_supported", payload["metadata"])
+
+        event.platform = "telegram"
+        event.bot = SimpleNamespace(call_action=lambda **_kwargs: None)
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertNotIn("quote_lookup_supported", payload["metadata"])
+
+    async def test_quote_lookup_request_uses_current_qq_event(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=True,
+            http_base_url="http://frostagent:8080",
+        )
+        adapter.client = FakeClient([
+            {
+                "type": "quote_lookup", "echo": "quote_lookup_1",
+                "event_message_id": "msg_test", "message_id": "44",
+            },
+            {"action": "noop"},
+        ])
+        event = FakeEvent(content="你觉得呢？")
+        event.platform = "aiocqhttp"
+        calls = []
+
+        async def call_action(**kwargs):
+            calls.append(kwargs)
+            return {"status": "ok", "retcode": 0, "data": {
+                "message_id": 44, "message_type": "private",
+                "user_id": "user_test",
+                "message": [{"type": "text", "data": {"text": "同意"}}],
+            }}
+
+        event.bot = SimpleNamespace(call_action=call_action)
+        results = [item async for item in adapter.forward_to_frostagent(event)]
+        self.assertEqual(results, [])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["action"], "get_msg")
+        self.assertEqual(calls[0]["message_id"], 44)
+        self.assertEqual(adapter.client.sent_events[1]["type"], "quote_lookup_result")
+        self.assertEqual(adapter.client.sent_events[1]["echo"], "quote_lookup_1")
+        self.assertEqual(adapter.client.sent_events[1]["data"]["message_id"], 44)
+
     async def test_mixed_sticker_fetch_failure_reports_rejection(self):
         adapter = object.__new__(FrostAgentAdapter)
         adapter._configuration_error = None
