@@ -69,6 +69,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let stickerEditSeq = 0;
   let proactiveWhitelistEnabled = false;
   let proactiveWhitelistGroups: string[] = [];
+  let botLoopSaving = false;
   const sessionGroupMap = new Map<string, string>();
 
   container.innerHTML = `
@@ -207,6 +208,33 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Bot loop guard -->
+          <div class="mb-4 pb-4 border-b border-border">
+            <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
+            <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
+            <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">标记为 Bot 的用户 ID</span>
+                <input id="bot-loop-user-ids" type="text" class="input input-sm font-mono text-xs" placeholder="用户 ID，多个用逗号分隔" />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">最多连续轮数</span>
+                <input id="bot-loop-max-turns" type="number" class="input input-sm font-mono text-xs w-28" min="1" step="1" value="3" />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">超限处理</span>
+                <select id="bot-loop-mode" class="input input-sm text-xs">
+                  <option value="soft">非强制：提示静默</option>
+                  <option value="hard">强制：丢弃请求</option>
+                </select>
+              </label>
+            </div>
+            <div class="flex items-center justify-between gap-2 mt-2">
+              <span class="text-[11px] text-muted">留空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+              <button type="button" id="bot-loop-save" class="btn btn-primary btn-sm shrink-0">保存</button>
             </div>
           </div>
 
@@ -350,6 +378,11 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const proactiveWhitelistTags = container.querySelector<HTMLElement>(
     '#proactive-whitelist-tags',
   )!;
+
+  const botLoopUserIDsInput = container.querySelector<HTMLInputElement>('#bot-loop-user-ids')!;
+  const botLoopMaxTurnsInput = container.querySelector<HTMLInputElement>('#bot-loop-max-turns')!;
+  const botLoopModeSelect = container.querySelector<HTMLSelectElement>('#bot-loop-mode')!;
+  const botLoopSaveButton = container.querySelector<HTMLButtonElement>('#bot-loop-save')!;
 
   const groupMentionCb =
     container.querySelector<HTMLInputElement>('#group-mention-cb')!;
@@ -577,6 +610,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       quoteTraceCb.checked = getVal('ENABLE_QUOTE_TRACE') !== 'false';
       quoteTraceDepthInput.value = String(quoteTraceDepth);
       quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
+      botLoopUserIDsInput.value = getVal('BOT_LOOP_USER_IDS');
+      botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
+      botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
 
       const probValStr = getVal('PROACTIVE_REPLY_PROBABILITY');
       const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
@@ -947,6 +983,48 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   async function handleProactiveProbChange(val: number) {
     await proactiveSync.setTarget(proactiveReplyEnabled, val);
   }
+
+  function setBotLoopSaving(saving: boolean) {
+    botLoopSaving = saving;
+    botLoopUserIDsInput.disabled = saving;
+    botLoopMaxTurnsInput.disabled = saving;
+    botLoopModeSelect.disabled = saving;
+    botLoopSaveButton.disabled = saving;
+    botLoopSaveButton.textContent = saving ? '保存中...' : '保存';
+  }
+
+  botLoopSaveButton.addEventListener('click', () => {
+    if (botLoopSaving) return;
+    const maxTurns = Number(botLoopMaxTurnsInput.value);
+    if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
+      toast.error('最多连续轮数必须为正整数');
+      return;
+    }
+    const userIDs = botLoopUserIDsInput.value.split(/[,;\s]+/).filter(Boolean).join(',');
+    const mode = botLoopModeSelect.value === 'hard' ? 'hard' : 'soft';
+    void (async () => {
+      setBotLoopSaving(true);
+      try {
+        for (const [key, value] of [
+          ['BOT_LOOP_MAX_TURNS', String(maxTurns)],
+          ['BOT_LOOP_MODE', mode],
+          ['BOT_LOOP_USER_IDS', userIDs],
+        ]) {
+          const res = await api.updateEnvVar({ key, value, isSecret: false });
+          if (!res.success) throw new Error(res.error || key + ' 保存失败');
+        }
+        toast.success('Bot 连续对话设置已保存');
+      } catch (err) {
+        toast.error(
+          '保存未完成，部分设置可能已生效；正在重新加载实际设置: ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      } finally {
+        await loadData();
+        if (!isUnmounted) setBotLoopSaving(false);
+      }
+    })();
+  });
 
   // Group cb handlers
   groupMentionCb.addEventListener(

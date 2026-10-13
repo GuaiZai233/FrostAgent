@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/core"
@@ -365,6 +366,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			var warningNotice string
+			var botLoopSoft bool
+			var botLoopObservation *llm.BotLoopObservation
+			var botLoopConfig botloop.Config
+			var botLoopUserID string
+			var botLoopMarked bool
 			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -372,9 +378,6 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					a.engine.RecordIncomingMessage()
 				}
 				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
-				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
-					continue
-				}
 				var scope *runtimescope.Scope
 				if a.engine != nil {
 					scope = a.engine.Scope
@@ -382,6 +385,20 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				routing = EventRouting{
 					Derived:     true,
 					WakeSignals: DetectGroupWakeSignals(event, scope),
+				}
+				if a.engine != nil && a.engine.SessionManager != nil {
+					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+					if botLoopConfig.Enabled() {
+						botLoopUserID = strconv.FormatInt(event.UserID, 10)
+						botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
+						botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
+							botLoopUserID, botLoopMarked, botLoopConfig.Revision(),
+						)
+					}
+				}
+				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
+					continue
 				}
 			}
 			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
@@ -394,6 +411,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
 				if principalErr != nil {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
 					continue
 				}
 				var decision security.WatchdogDecision
@@ -403,6 +421,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 				}
 				if security.Blocks(decision.Action) {
+					directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
+					if directReply {
+						if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+							continue
+						}
+					} else {
+						botLoopObservation.Finish(false, botLoopConfig.Limit())
+					}
 					if decision.IsFailure {
 						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
 					} else {
@@ -411,7 +437,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					if shouldSendSecurityDirectReply(event, a.engine, routing) {
+					if directReply {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						action := "send_private_msg"
 						type1 := "user_id"
@@ -445,6 +471,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			var routeSnapshot *modelrouter.Snapshot
+			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			}
+			botLoopEligible := isWoken(event, a.engine, routing) && (routeSnapshot == nil ||
+				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event))))
+			botLoopExceeded := botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+			if botLoopExceeded && !botLoopConfig.Hard() {
+				botLoopSoft = true
+			}
+
 			if canDispatch && !wsConn.isClosed() {
 				incoming := ToIncomingMessage(event)
 				var text strings.Builder
@@ -463,10 +501,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			if botLoopExceeded && botLoopConfig.Hard() {
+				continue
+			}
+
+			if routeSnapshot != nil {
 				if err := routeSnapshot.LoadError(); err != nil {
 					a.engine.PauseOnStorageError(err)
 					continue
@@ -531,7 +570,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn.inFlight.Add(1)
 			if !a.engine.Go(func() {
 				defer wsConn.inFlight.Done()
-				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing)
+				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft)
 			}) {
 				wsConn.inFlight.Done()
 				if turn != nil {

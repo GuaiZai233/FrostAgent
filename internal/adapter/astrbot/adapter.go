@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/heartbeat"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/llm"
@@ -349,20 +350,39 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			sanitizeIngressMetadata(&event)
 			var warningNotice string
+			var botLoopObservation *llm.BotLoopObservation
+			var botLoopConfig botloop.Config
+			var botLoopMarked bool
 			var scope *runtimescope.Scope
 			if a.engine != nil {
 				scope = a.engine.Scope
 			}
 			pristineShouldReply := false
 			if event.MessageType == "group" || event.MessageType == "private" {
-				if !c.mock && handleAdminCommand(c, event, a.engine) {
-					continue
-				}
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
 				pristineShouldReply = shouldReply(&event, scope)
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+				if a.engine != nil && a.engine.SessionManager != nil &&
+					(event.Type == "" || event.Type == "event") &&
+					(event.EventType == "" || event.EventType == "message") {
+					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+					if botLoopConfig.Enabled() {
+						platform := event.Platform
+						if platform == "" {
+							platform = "astrbot"
+						}
+						botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
+						botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
+							event.UserID, botLoopMarked, botLoopConfig.Revision(), event.BotLoopInterrupted,
+						)
+					}
+				}
+				if !c.mock && handleAdminCommand(c, event, a.engine) {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
+					continue
+				}
 			}
 
 			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
@@ -379,6 +399,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
 					if isProactiveReply(&event) {
 						_ = sendTerminalNoopWithSuppress(event, c)
 					}
@@ -391,6 +412,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
 				}
 				if security.Blocks(decision.Action) {
+					directReply := isExplicitWake(&event, scope)
+					if directReply {
+						if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+							_ = sendTerminalNoopWithSuppress(event, c)
+							continue
+						}
+					} else {
+						botLoopObservation.Finish(false, botLoopConfig.Limit())
+					}
 					if decision.IsFailure {
 						if a.engine != nil && a.engine.Scope != nil {
 							a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
@@ -403,7 +433,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 						}
 					}
-					if isExplicitWake(&event, scope) {
+					if directReply {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						_ = sendDirectReply(event, c, msg)
 					} else if isProactiveReply(&event) {
@@ -421,6 +451,18 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			var routeSnapshot *modelrouter.Snapshot
+			if a.engine != nil && a.engine.ModelRouter != nil &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			}
+			botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
+				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
+			botLoopExceeded := botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+			if botLoopExceeded && !botLoopConfig.Hard() {
+				event.botLoopSoft = true
+			}
+
 			if canDispatch && !c.isClosed() {
 				incoming := ToIncomingMessage(event)
 				incoming.SessionID = sessionKey(event)
@@ -431,10 +473,12 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
+			if botLoopExceeded && botLoopConfig.Hard() {
+				_ = sendTerminalNoopWithSuppress(event, c)
+				continue
+			}
+
+			if routeSnapshot != nil {
 				if err := routeSnapshot.LoadError(); err != nil {
 					a.engine.PauseOnStorageError(err)
 					continue

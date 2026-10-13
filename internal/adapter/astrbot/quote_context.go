@@ -26,9 +26,10 @@ type quoteLookupResponse struct {
 }
 
 type astrBotQuoteNode struct {
-	Context  map[string]any
-	Segments []content.MessageSegment
-	ParentID string
+	Context         map[string]any
+	Segments        []content.MessageSegment
+	ParentID        string
+	ForwardedImages []content.MessageSegment
 }
 
 func (c *wsConn) acceptQuoteLookup(response quoteLookupResponse) {

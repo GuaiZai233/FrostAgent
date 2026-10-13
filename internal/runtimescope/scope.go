@@ -58,6 +58,14 @@ func (s *Scope) Context() context.Context {
 	}
 	return WithContext(s.ctx, s)
 }
+
+func (s *Scope) BotLoopRevision() uint64 {
+	if s == nil || s.Config == nil {
+		return 0
+	}
+	return s.Config.BotLoopRevision()
+}
+
 func (s *Scope) Getenv(k string) string {
 	if s == nil {
 		return os.Getenv(k)

@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/billing"
@@ -219,10 +220,13 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	}
 	var notice string
 	var routing EventRouting
+	var botLoopSoft bool
 	for _, arg := range args {
 		switch v := arg.(type) {
 		case string:
 			notice = v
+		case bool:
+			botLoopSoft = v
 		case EventRouting:
 			routing = v
 		case *EventRouting:
@@ -267,7 +271,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, wakeSignals, notice)
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, wakeSignals, botLoopSoft, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -289,12 +293,12 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 			}
 		}
 		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, GroupWakeSignals{}, notice)
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, GroupWakeSignals{}, botLoopSoft, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, warningNotice ...string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, warningNotice ...string) {
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -692,6 +696,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if wakeSignals.Proactive {
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
+	if botLoopSoft {
+		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
 	}
 
 	// 4. Call the agent engine with history

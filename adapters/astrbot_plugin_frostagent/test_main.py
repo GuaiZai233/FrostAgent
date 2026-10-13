@@ -163,6 +163,7 @@ class FakeEvent:
         is_wake: bool = False,
         mention_bot: bool = False,
         image_url: str = "",
+        sender_id: str = "user_test",
     ):
         components = [At("bot_self")] if mention_bot else []
         if image_url:
@@ -180,9 +181,10 @@ class FakeEvent:
         )
         self._group_id = group_id
         self._content = content
+        self._sender_id = sender_id
 
     def get_sender_id(self) -> str:
-        return "user_test"
+        return self._sender_id
 
     def get_group_id(self) -> str:
         return self._group_id
@@ -207,6 +209,7 @@ class FakeEvent:
 class FakeClient:
     def __init__(self, actions: list[dict[str, Any]] | None = None):
         self.sent_events: list[dict[str, Any]] = []
+        self.connected = True
         self.queue: asyncio.Queue | None = None
         self.actions = actions or [{"action": "noop"}]
         self.delivery_results: list[tuple[str, bool, str]] = []
@@ -218,11 +221,14 @@ class FakeClient:
     def unregister_waiter(self, _msg_id: str) -> None:
         self.queue = None
 
-    async def send_event(self, payload: dict[str, Any]) -> None:
+    async def send_event(self, payload: dict[str, Any]) -> bool:
+        if not self.connected:
+            return False
         self.sent_events.append(payload)
         assert self.queue is not None
         for action in self.actions:
             await self.queue.put(action)
+        return True
 
     async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
         self.delivery_results.append((delivery_id, delivered, error))
@@ -358,12 +364,81 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sent[0]["is_at"])
         self.assertEqual(sent[0]["content"], "/help")
 
-    async def test_astrbot_prefix_does_not_bypass_group_forward_filter(self):
+    async def test_astrbot_prefix_stays_local_when_group_forwarding_is_disabled(self):
         sent = await self.forward(
             FakeEvent(group_id="group_test", content="/hello", is_wake=True),
             forward_all_group_messages=False,
         )
         self.assertEqual(sent, [])
+
+    async def test_filtered_sender_change_marks_next_forwarded_event(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=False, http_base_url="http://127.0.0.1:8080",
+        )
+        adapter.client = FakeClient()
+        events = [
+            FakeEvent(group_id="group_test", content="first", mention_bot=True, sender_id="bot_test"),
+            FakeEvent(group_id="group_test", content="hidden human", sender_id="human_test"),
+            FakeEvent(group_id="group_test", content="hidden bot", sender_id="bot_test"),
+            FakeEvent(group_id="group_test", content="resumed", mention_bot=True, sender_id="bot_test"),
+            FakeEvent(group_id="group_test", content="consecutive", mention_bot=True, sender_id="bot_test"),
+        ]
+        for event in events:
+            async for _result in adapter.forward_to_frostagent(event):
+                pass
+        sent = adapter.client.sent_events
+        self.assertEqual(len(sent), 3)
+        self.assertEqual([item["content"] for item in sent], ["first", "resumed", "consecutive"])
+        self.assertEqual([item["bot_loop_interrupted"] for item in sent], [True, True, False])
+        self.assertTrue(all(item["user_id"] == "bot_test" for item in sent))
+
+    async def test_interruption_survives_disconnected_send(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=False, http_base_url="http://127.0.0.1:8080",
+        )
+        adapter.client = FakeClient()
+        async def forward(event: FakeEvent) -> None:
+            async for _result in adapter.forward_to_frostagent(event):
+                pass
+
+        await forward(FakeEvent(group_id="group_test", content="first", mention_bot=True, sender_id="bot_test"))
+        await forward(FakeEvent(group_id="group_test", content="hidden", sender_id="human_test"))
+        adapter.client.connected = False
+        await forward(FakeEvent(group_id="group_test", content="lost", mention_bot=True, sender_id="bot_test"))
+        self.assertEqual(len(adapter.client.sent_events), 1)
+        adapter.client.connected = True
+        await forward(FakeEvent(group_id="group_test", content="resumed", mention_bot=True, sender_id="bot_test"))
+        await forward(FakeEvent(group_id="group_test", content="consecutive", mention_bot=True, sender_id="bot_test"))
+        self.assertEqual(
+            [item["bot_loop_interrupted"] for item in adapter.client.sent_events],
+            [True, True, False],
+        )
+
+    async def test_filtered_sender_change_is_scoped_to_group(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=False, http_base_url="http://127.0.0.1:8080",
+        )
+        adapter.client = FakeClient()
+        events = [
+            FakeEvent(group_id="group_a", content="a1", mention_bot=True, sender_id="bot_test"),
+            FakeEvent(group_id="group_b", content="b1", mention_bot=True, sender_id="bot_test"),
+            FakeEvent(group_id="group_a", content="hidden", sender_id="human_test"),
+            FakeEvent(group_id="group_b", content="b2", mention_bot=True, sender_id="bot_test"),
+            FakeEvent(group_id="group_a", content="a2", mention_bot=True, sender_id="bot_test"),
+        ]
+        for event in events:
+            async for _result in adapter.forward_to_frostagent(event):
+                pass
+        self.assertEqual(
+            [item["bot_loop_interrupted"] for item in adapter.client.sent_events],
+            [True, True, False, True],
+        )
 
     async def test_reply_to_bot_still_wakes_without_astrbot_flag(self):
         event = FakeEvent(group_id="group_test", content="继续")

@@ -384,3 +384,131 @@ func TestRejectedCrossGroupLookupCannotUseQuotedAttachmentFallback(t *testing.T)
 		}
 	}
 }
+
+func TestQQQuoteKeepsAvailableImagesWithoutDuplicates(t *testing.T) {
+	forwardedBytes := []byte{0xff, 0xd8, 0xff, 0xd9, 0x01}
+	lookupBytes := []byte{0xff, 0xd8, 0xff, 0xd9, 0x02}
+	for _, tc := range []struct {
+		name       string
+		imageData  []map[string]any
+		wantImages [][]byte
+	}{
+		{"opaque_file", []map[string]any{{"file": "quoted-cache-token", "sub_type": 1}}, [][]byte{forwardedBytes}},
+		{"readable_source_no_duplicate", []map[string]any{{"base64": base64.StdEncoding.EncodeToString(forwardedBytes)}}, [][]byte{forwardedBytes}},
+		{"unusable_remote_url", []map[string]any{{"url": "https://example.com/expired-image"}}, [][]byte{forwardedBytes}},
+		{"skipped_earlier_image", []map[string]any{
+			{"file": "missing-first-image"},
+			{"base64": base64.StdEncoding.EncodeToString(forwardedBytes)},
+		}, [][]byte{forwardedBytes}},
+		{"partial_chain_keeps_lookup_only_image", []map[string]any{
+			{"base64": base64.StdEncoding.EncodeToString(lookupBytes)},
+			{"file": "second-cache-token"},
+		}, [][]byte{forwardedBytes, lookupBytes}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENABLE_QUOTE_TRACE", "true")
+			vision := &mockLLMProvider{responses: []*core.ChatResponse{{
+				Message: core.ChatMessage{Role: core.RoleAssistant, Content: "引用图片里的食物"},
+				Usage:   &core.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+			}}}
+			dialogue := &mockLLMProvider{}
+			engine := newTestEngine(dialogue)
+			engine.VisionProvider = vision
+			srv, _, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			event := Event{
+				Type: "event", EventType: "message", Platform: "aiocqhttp",
+				MessageType: "group", GroupID: "101", UserID: "77",
+				MessageID: "45", Content: "你觉得呢？", IsAt: true,
+				Metadata: map[string]any{"reply_message_id": "44", "quote_lookup_supported": true},
+				Attachments: []core.Attachment{{
+					Type: core.AttachmentTypeImage, MessageID: "44", Content: forwardedBytes,
+				}},
+			}
+			if err := conn.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			var lookup map[string]any
+			if err := conn.ReadJSON(&lookup); err != nil {
+				t.Fatal(err)
+			}
+			if lookup["type"] != "quote_lookup" {
+				t.Fatalf("lookup = %+v", lookup)
+			}
+			var imageSegments []map[string]any
+			for _, data := range tc.imageData {
+				imageSegments = append(imageSegments, map[string]any{"type": "image", "data": data})
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "quote_lookup_result", "echo": lookup["echo"],
+				"data": map[string]any{
+					"message_id": 44, "message_type": "group", "group_id": "101",
+					"message": imageSegments,
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var action Action
+			if err := conn.ReadJSON(&action); err != nil {
+				t.Fatal(err)
+			}
+			if action.Action != "send_message" {
+				t.Fatalf("final action = %+v", action)
+			}
+			vision.mu.Lock()
+			if len(vision.requests) != 1 {
+				vision.mu.Unlock()
+				t.Fatalf("vision calls = %d", len(vision.requests))
+			}
+			visionRequest := vision.requests[0]
+			vision.mu.Unlock()
+			var imageURLs []string
+			for _, message := range visionRequest.Messages {
+				blocks, ok := message.Content.([]any)
+				if !ok {
+					continue
+				}
+				for _, block := range blocks {
+					part, ok := block.(map[string]any)
+					if !ok || part["type"] != "image_url" {
+						continue
+					}
+					imageURL, _ := part["image_url"].(map[string]any)
+					url, _ := imageURL["url"].(string)
+					imageURLs = append(imageURLs, url)
+				}
+			}
+			if len(imageURLs) != len(tc.wantImages) {
+				t.Fatalf("vision images = %v, want %d images", imageURLs, len(tc.wantImages))
+			}
+			for i, imageBytes := range tc.wantImages {
+				wantURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imageBytes)
+				if imageURLs[i] != wantURL {
+					t.Fatalf("vision image %d = %q, want %q", i, imageURLs[i], wantURL)
+				}
+			}
+			dialogue.mu.Lock()
+			defer dialogue.mu.Unlock()
+			if len(dialogue.requests) != 1 {
+				t.Fatalf("dialogue calls = %d", len(dialogue.requests))
+			}
+			for _, message := range dialogue.requests[0].Messages {
+				prompt, ok := message.Content.(string)
+				if !ok || !strings.Contains(prompt, "<reply_context>") {
+					continue
+				}
+				if !strings.Contains(prompt, "引用图片里的食物") || strings.Contains(prompt, "【图片内容】：") {
+					t.Fatalf("quoted image provenance lost: %s", prompt)
+				}
+				return
+			}
+			t.Fatal("quoted image context missing")
+		})
+	}
+}

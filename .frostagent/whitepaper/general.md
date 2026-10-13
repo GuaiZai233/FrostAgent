@@ -128,7 +128,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
     - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话（包括当前连接代收发的消息，以及经由当前连接 `get_msg` 查询成功并验证属于当前会话的历史引用目标）；跨连接代、未曾观测或跨会话的过时/未验证 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
     - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），保留已成功取得的引用节点并停止后续追溯，绝不中断或阻断核心对话事件分发；
-    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件声明支持回查后，仅在后端通过入站安全门禁并确认需要回复时，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
+    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。直接引用节点优先提供插件已转发的图片字节，并保留回查中可读取的其他图片；视觉请求按解码后的图片内容去重，避免不完整 Reply.chain、缓存标识或失效 URL 造成丢图或重复。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件声明支持回查后，仅在后端通过入站安全门禁并确认需要回复时，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
     - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；
     - 跨容器文件系统边界说明：前置校验验证的是 FrostAgent 本地视角下的文件可读性。由于非贴纸媒体通过 `file://<local path>` 穿越 OneBot 协议边界，若 OneBot 上游独立容器化部署，必须与 FrostAgent 共享存储卷（Shared Volume）以解析本地路径；跨隔离容器或远程文件系统的路径穿透明确不在归一化保证范围内；
@@ -166,6 +166,12 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
        - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
 - **共存与独立控制**：
   - 支持通过实例数据库设置（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
+
+### Bot 连续对话防循环
+
+- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可配置实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
+- OneBot 与 AstrBot 按入站顺序、按会话统计同一标记用户触发的对话请求；其他用户的任意消息（包括未唤醒的群聊消息）打断计数。AstrBot 插件关闭完整群消息转发时，仍发送不含内容的打断事件。被安全或路由规则静默拒绝的消息不增加轮数；安全规则直接发出的拒绝回复则计入轮数。
+- 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
 
 ### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
 

@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"FrostAgent/internal/adapter/botloop"
 	"FrostAgent/internal/adapter/onebot/content"
 	"FrostAgent/internal/adapter/parity"
 	"FrostAgent/internal/billing"
@@ -813,12 +814,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	directQuote := directQuotedImageChain(event)
 	if len(quoteChain) == 0 && allowDirectFallback {
 		quoteChain = directQuote
-	} else if len(quoteChain) > 0 && len(directQuote) > 0 && !content.IsContainImage(quoteChain[0].Segments) {
-		quoteChain[0].Segments = append(quoteChain[0].Segments, directQuote[0].Segments...)
+	} else if len(quoteChain) > 0 && len(directQuote) > 0 {
+		quoteChain[0].ForwardedImages = directQuote[0].Segments
 	}
 	quoteHasImage := false
 	for _, node := range quoteChain {
-		quoteHasImage = quoteHasImage || content.IsContainImage(node.Segments)
+		quoteHasImage = quoteHasImage || content.IsContainImage(node.Segments) || len(node.ForwardedImages) > 0
 	}
 
 	// 处理图片等多模态内容描述
@@ -909,10 +910,16 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if quoteHasImage && engine.VisionProvider != nil &&
 		(routeSnapshot == nil || !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)) {
 		for i := range quoteChain {
-			if !content.IsContainImage(quoteChain[i].Segments) {
+			if !content.IsContainImage(quoteChain[i].Segments) && len(quoteChain[i].ForwardedImages) == 0 {
 				continue
 			}
-			imageDesc := content.ProcessImage(routeCtx, quoteChain[i].Segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			route := core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID}
+			imageDesc := ""
+			if len(quoteChain[i].ForwardedImages) > 0 {
+				imageDesc = content.ProcessImageWithFallback(routeCtx, quoteChain[i].Segments, quoteChain[i].ForwardedImages, engine.VisionProvider, route)
+			} else {
+				imageDesc = content.ProcessImage(routeCtx, quoteChain[i].Segments, engine.VisionProvider, route)
+			}
 			if imageDesc == "" {
 				continue
 			}
@@ -1129,6 +1136,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	if isProactiveReply(&event) {
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
+	if event.botLoopSoft {
+		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
 	}
 
 	var (
