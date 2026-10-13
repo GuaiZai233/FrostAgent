@@ -215,12 +215,39 @@ async function flush() { for (let index = 0; index < 5; index++) await Promise.r
   f.state.saveGate = new Promise((resolve) => { release = resolve; });
   const pending = button.click();
   button.click();
+  await flush();
   assert.deepEqual(f.calls, ['load', 'save'], 'duplicate clicks started another save');
   cleanup();
   release();
   await pending;
   assert.deepEqual(f.calls, ['load', 'save'], 'closed dialog published a stale edit');
   assert.equal(f.refreshed, 0);
+}
+
+{
+  const f = fixture();
+  const first = f.open();
+  await flush();
+  let release!: () => void;
+  f.state.saveGate = new Promise((resolve) => { release = resolve; });
+  first.body.querySelectorAll('.group-model-binding')[0].value = 'model:model';
+  const firstSave = first.button.click();
+  await flush();
+  first.cleanup();
+  const second = f.open('telegram', '789');
+  await flush();
+  second.body.querySelectorAll('.group-model-binding')[0].value = 'model:model';
+  f.state.saveGate = Promise.resolve();
+  const secondSave = second.button.click();
+  await flush();
+  assert.deepEqual(f.calls, ['load', 'save', 'load'], 'reopened dialog overtook an unfinished save');
+  release();
+  await firstSave;
+  await secondSave;
+  assert.deepEqual(f.calls, ['load', 'save', 'load', 'save', 'publish']);
+  assert.deepEqual(f.saved[1].groupOverrides[0], f.active.groupOverrides[0], 'closed dialog edit leaked into the next publication');
+  assert.equal(f.saved[1].groupOverrides.at(-1)?.groupId, '789');
+  assert.equal(f.refreshed, 1);
 }
 
 process.stdout.write('PASS: inline group model options, isolated publication, retry, and lifecycle guards\n');

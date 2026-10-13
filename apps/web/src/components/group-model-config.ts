@@ -8,6 +8,15 @@ import { toast } from './toast';
 type ModelRouterAPI = Pick<ReturnType<typeof createInstanceAPI>,
   'getModelRouterState' | 'saveModelRouterDraft' | 'publishModelRouter'>;
 
+const publicationQueues = new WeakMap<ModelRouterAPI, Promise<void>>();
+
+function publishInOrder(api: ModelRouterAPI, action: () => Promise<void>): Promise<void> {
+  const previous = publicationQueues.get(api) ?? Promise.resolve();
+  const pending = previous.then(action);
+  publicationQueues.set(api, pending.then(() => undefined, () => undefined));
+  return pending;
+}
+
 function canonicalPlatform(platform: string): string {
   const normalized = platform.trim().toLowerCase();
   return ['', 'qq', 'onebot', 'aiocqhttp'].includes(normalized) ? 'qq' : normalized;
@@ -69,15 +78,18 @@ export function openGroupModelConfig(
               updated.groupOverrides.push(group);
             }
             try {
-              const saved = await api.saveModelRouterDraft(updated);
-              if (closed) return;
-              if (!saved.success || !saved.draft) throw new Error(saved.error || '保存群级模型配置失败');
-              const published = await api.publishModelRouter();
-              if (closed) return;
-              if (!published.success || !published.active) throw new Error(published.error || '发布群级模型配置失败');
-              close();
-              toast.success('群级模型配置已发布');
-              onPublished();
+              await publishInOrder(api, async () => {
+                if (closed) return;
+                const saved = await api.saveModelRouterDraft(updated);
+                if (closed) return;
+                if (!saved.success || !saved.draft) throw new Error(saved.error || '保存群级模型配置失败');
+                const published = await api.publishModelRouter();
+                if (closed) return;
+                if (!published.success || !published.active) throw new Error(published.error || '发布群级模型配置失败');
+                close();
+                toast.success('群级模型配置已发布');
+                onPublished();
+              });
             } catch (err) {
               if (!closed) toast.error('保存群级模型配置失败: ' + errorText(err));
             } finally {
