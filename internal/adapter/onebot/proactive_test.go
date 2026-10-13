@@ -11,14 +11,13 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1774,9 +1773,9 @@ type dummyTestTool struct {
 	executed *atomic.Int32
 }
 
-func (d *dummyTestTool) Name() string                 { return d.name }
-func (d *dummyTestTool) Description() string          { return "dummy test tool" }
-func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
+func (d *dummyTestTool) Name() string               { return d.name }
+func (d *dummyTestTool) Description() string        { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any { return map[string]any{} }
 func (d *dummyTestTool) Execute(args string) (string, error) {
 	if d.executed != nil {
 		d.executed.Add(1)
@@ -1784,198 +1783,157 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 	return "ok", nil
 }
 
-type safeConsoleBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (s *safeConsoleBuffer) Write(p []byte) (n int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.Write(p)
-}
-
-func (s *safeConsoleBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
-}
-
+// Run each console assertion in its own process so WebSocket goroutines never
+// race with a reassignment of the process-wide stdout stream.
 func TestOneBotProactiveTriggerLogging(t *testing.T) {
-	// 验证：一旦触发主动回复逻辑就在日志里写一条SYSTEM级别INFO：【触发主动回复逻辑】，在控制台不隐藏
+	const childEnv = "FROSTAGENT_TEST_ONEBOT_PROACTIVE_LOG"
+	if testCase := os.Getenv(childEnv); testCase != "" {
+		runOneBotProactiveTriggerLogging(t, testCase)
+		return
+	}
+	for _, testCase := range []string{"proactive", "explicit_at", "explicit_name", "private", "security_block", "whitelist_block", "probability_miss", "input_length"} {
+		t.Run(testCase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOneBotProactiveTriggerLogging$", "-test.timeout=15s")
+			cmd.Env = append(os.Environ(), childEnv+"="+testCase)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("console subprocess failed: %v\n%s", err, output)
+			}
+			want := 0
+			if testCase == "proactive" {
+				want = 1
+			}
+			if got := strings.Count(string(output), "[INFO][SYSTEM] 【触发主动回复逻辑】"); got != want {
+				t.Fatalf("console trigger count = %d, want %d\n%s", got, want, output)
+			}
+		})
+	}
+}
+
+func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
 	scope := newTestScopeWithEnv(t, map[string]string{
 		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+		"BOT_NAME":                    "test-bot",
+		"BOT_ALIASES":                 "",
 	})
-	scope.Logger = logs.New("test-onebot-proactive-1", "test-onebot-proactive-1", 100)
-	var consoleBuf safeConsoleBuffer
-	scope.Logger.SetConsoleOutput(&consoleBuf)
-
-	provider := &mockLLMProvider{
-		responses: []*core.ChatResponse{
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "主动插嘴的一句话",
-				},
-			},
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "显式唤醒的一句话",
-				},
-			},
-		},
+	if testCase == "whitelist_block" {
+		scope = newTestScopeWithEnv(t, map[string]string{
+			"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+			"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+			"PROACTIVE_REPLY_GROUP_WHITELIST":  "999",
+		})
+	} else if testCase == "probability_miss" {
+		scope = newTestScopeWithEnv(t, map[string]string{"PROACTIVE_REPLY_PROBABILITY": "0"})
 	}
-
+	scope.Logger = logs.New("test-proactive", "test-proactive", 100)
+	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	engine.Scope = scope
-
+	if testCase == "security_block" {
+		engine.Security = security.NewController(t.TempDir())
+		principal, err := security.NewPrincipal("onebot", "102")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Security.Lock(principal, "synthetic test block"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
-
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatal(err)
 	}
 	defer conn.Close()
-
-	// 1. 触发主动回复的群聊消息
 	event := model.OneBotEvent{
-		SelfID:      30001,
-		PostType:    "message",
-		MessageType: "group",
-		GroupID:     10001,
-		UserID:      20001,
-		MessageID:   801,
-		Message:     json.RawMessage(`[{"type":"text","data":{"text":"大家今天过得怎么样？"}}]`),
+		SelfID: 103, PostType: "message", MessageType: "group",
+		GroupID: 101, UserID: 102, MessageID: 1,
+		Message: json.RawMessage(`[{"type":"text","data":{"text":"ordinary group message"}}]`),
 	}
-	b, _ := json.Marshal(event)
-	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
-		t.Fatalf("发送事件失败: %v", err)
-	}
-
-	// 接收直到收到回复
-	var gotMsg bool
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, respBytes, err := conn.ReadMessage()
+	switch testCase {
+	case "explicit_at":
+		event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"reply please"}}]`)
+	case "explicit_name":
+		event.Message = json.RawMessage(`[{"type":"text","data":{"text":"test-bot reply please"}}]`)
+	case "private":
+		event.MessageType = "private"
+	case "input_length":
+		event.Message, err = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": strings.Repeat("x", 30001)}}})
 		if err != nil {
-			break
+			t.Fatal(err)
 		}
-		var act model.OneBotAction
-		if err := json.Unmarshal(respBytes, &act); err != nil {
-			continue
+	}
+	send := func(event model.OneBotEvent) {
+		t.Helper()
+		if err := conn.WriteJSON(event); err != nil {
+			t.Fatal(err)
 		}
-		if act.Action == "get_group_info" {
-			groupInfoResponse := map[string]any{
-				"status":  "ok",
-				"retcode": 0,
-				"data": map[string]any{
-					"group_id":   10001,
-					"group_name": "测试群",
-				},
-				"echo": act.Echo,
+	}
+	send(event)
+	// An explicit sentinel in the same group also waits for the preceding
+	// session turn, so its reply proves the asynchronous drop path has finished.
+	if testCase == "security_block" || testCase == "whitelist_block" || testCase == "probability_miss" || testCase == "input_length" {
+		event.UserID = 104
+		event.MessageID = 2
+		event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"sentinel message"}}]`)
+		send(event)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var action model.OneBotAction
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatalf("expected completed reply: %v", err)
+		}
+		if action.Action == "get_group_info" {
+			if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"group_id": 101, "group_name": "test group"}, "echo": action.Echo}); err != nil {
+				t.Fatal(err)
 			}
-			respB, _ := json.Marshal(groupInfoResponse)
-			_ = conn.WriteMessage(websocket.TextMessage, respB)
 			continue
 		}
-		if act.Action == "send_group_msg" {
-			gotMsg = true
-			break
+		wantAction := "send_group_msg"
+		if event.MessageType == "private" {
+			wantAction = "send_private_msg"
 		}
+		if action.Action != wantAction {
+			t.Fatalf("action = %s, want %s", action.Action, wantAction)
+		}
+		break
 	}
-	if !gotMsg {
-		t.Fatalf("期望收到主动回复出站消息")
+	want := 0
+	if testCase == "proactive" {
+		want = 1
 	}
-
-	consoleOutput := consoleBuf.String()
-
-	// 验证日志快照中有 SYSTEM 级别的 INFO 日志：【触发主动回复逻辑】
-	var foundSystemLog bool
+	got := 0
 	for _, entry := range engine.Log().Snapshot() {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.INFO && entry.Content == "【触发主动回复逻辑】" {
-			foundSystemLog = true
-			break
-		}
-	}
-	if !foundSystemLog {
-		t.Fatalf("日志快照中未找到 Category=SYSTEM Level=INFO Content=【触发主动回复逻辑】的记录")
-	}
-
-	// 验证控制台不隐藏（输出中直接包含【触发主动回复逻辑】，而不是 ...）
-	if !strings.Contains(consoleOutput, "【触发主动回复逻辑】") {
-		t.Fatalf("控制台输出未包含【触发主动回复逻辑】: %s", consoleOutput)
-	}
-
-	// 2. 显式唤醒不应输出【触发主动回复逻辑】
-	scopeExplicit := newTestScopeWithEnv(t, map[string]string{
-		"PROACTIVE_REPLY_PROBABILITY": "1.00",
-	})
-	scopeExplicit.Logger = logs.New("test-onebot-explicit-2", "test-onebot-explicit-2", 100)
-	var explicitConsoleBuf safeConsoleBuffer
-	scopeExplicit.Logger.SetConsoleOutput(&explicitConsoleBuf)
-
-	engineExplicit := newTestEngine(provider)
-	engineExplicit.Scope = scopeExplicit
-	srvExplicit, wsURLExplicit := startWSTestServer(engineExplicit)
-	defer srvExplicit.Close()
-
-	connExplicit, _, err := websocket.DefaultDialer.Dial(wsURLExplicit, nil)
-	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
-	}
-	defer connExplicit.Close()
-
-	eventExplicit := model.OneBotEvent{
-		SelfID:      30001,
-		PostType:    "message",
-		MessageType: "group",
-		GroupID:     10001,
-		UserID:      20001,
-		MessageID:   802,
-		Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 显式唤醒"}}]`),
-	}
-	bExplicit, _ := json.Marshal(eventExplicit)
-	if err := connExplicit.WriteMessage(websocket.TextMessage, bExplicit); err != nil {
-		t.Fatalf("发送显式唤醒事件失败: %v", err)
-	}
-
-	for {
-		_ = connExplicit.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, respBytes, err := connExplicit.ReadMessage()
-		if err != nil {
-			break
-		}
-		var act model.OneBotAction
-		if err := json.Unmarshal(respBytes, &act); err != nil {
-			continue
-		}
-		if act.Action == "get_group_info" {
-			groupInfoResponse := map[string]any{
-				"status":  "ok",
-				"retcode": 0,
-				"data": map[string]any{
-					"group_id":   10001,
-					"group_name": "测试群",
-				},
-				"echo": act.Echo,
-			}
-			respB, _ := json.Marshal(groupInfoResponse)
-			_ = connExplicit.WriteMessage(websocket.TextMessage, respB)
-			continue
-		}
-		if act.Action == "send_group_msg" {
-			break
-		}
-	}
-
-	for _, entry := range engineExplicit.Log().Snapshot() {
 		if entry.Content == "【触发主动回复逻辑】" {
-			t.Fatalf("显式唤醒不应输出【触发主动回复逻辑】日志")
+			if entry.Category != logs.SYSTEM || entry.Level != logs.INFO {
+				t.Fatalf("incorrect trigger category or level: %+v", entry)
+			}
+			got++
 		}
 	}
-	if strings.Contains(explicitConsoleBuf.String(), "【触发主动回复逻辑】") {
-		t.Fatalf("显式唤醒控制台输出不应包含【触发主动回复逻辑】")
+	if got != want {
+		t.Fatalf("stored trigger count = %d, want %d", got, want)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 1 {
+		t.Fatalf("LLM requests = %d, want 1", len(provider.requests))
+	}
+	request := provider.requests[0]
+	if len(request.Messages) == 0 {
+		t.Fatal("LLM request contains no messages")
+	}
+	lastContent, ok := request.Messages[len(request.Messages)-1].Content.(string)
+	if !ok {
+		t.Fatal("expected text content in LLM request")
+	}
+	if strings.HasPrefix(lastContent, proactive.PromptPrefix) != (testCase == "proactive") {
+		t.Fatalf("proactive prompt does not match trigger for %s", testCase)
 	}
 }

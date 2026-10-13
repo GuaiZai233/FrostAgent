@@ -3,7 +3,6 @@ package logs
 import (
 	"container/ring"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -46,19 +45,18 @@ type subscriber struct {
 }
 
 type Store struct {
-	buffer        *ring.Ring
-	mu            sync.RWMutex
-	size          int
-	maxBytes      int
-	totalBytes    int
-	subscribers   map[int]*subscriber
-	nextSubID     int
-	subMu         sync.Mutex
-	nextEntryID   uint64
-	imageCache    map[string]*cachedImage
-	name          string
-	id            string
-	consoleOutput io.Writer
+	buffer      *ring.Ring
+	mu          sync.RWMutex
+	size        int
+	maxBytes    int
+	totalBytes  int
+	subscribers map[int]*subscriber
+	nextSubID   int
+	subMu       sync.Mutex
+	nextEntryID uint64
+	imageCache  map[string]*cachedImage
+	name        string
+	id          string
 }
 
 const (
@@ -83,14 +81,6 @@ func NewWithLimits(id, name string, size int, maxBytes int) *Store {
 	return s
 }
 func (s *Store) Rename(name string) { s.mu.Lock(); s.name = name; s.mu.Unlock() }
-
-// SetConsoleOutput redirects console output for this store to w.
-// If w is nil, console output defaults to stdout.
-func (s *Store) SetConsoleOutput(w io.Writer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.consoleOutput = w
-}
 
 // Init 初始化日志系统，指定环形缓冲区大小
 func (s *Store) Init(capacity int) {
@@ -167,7 +157,6 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	s.buffer = s.buffer.Next()
 	s.totalBytes += entryBytes(entry)
 	s.evictOverBudgetLocked()
-	cw := s.consoleOutput
 	s.mu.Unlock()
 
 	// 广播给 subscriber
@@ -175,11 +164,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 
 	// 同时输出到控制台，方便调试
 	if level != DEBUG {
-		if cw != nil {
-			fmt.Fprintln(cw, consoleLine)
-		} else {
-			fmt.Println(consoleLine)
-		}
+		fmt.Println(consoleLine)
 	}
 }
 
@@ -412,7 +397,6 @@ func Snapshot() []LogEntry                                   { return General.Sn
 func Clear()                                                 { General.Clear() }
 func SetMaxBytes(maxBytes int)                               { General.SetMaxBytes(maxBytes) }
 func TotalBytes() int                                        { return General.TotalBytes() }
-func SetConsoleOutput(w io.Writer)                           { General.SetConsoleOutput(w) }
 func Subscribe(f func(LogEntry) bool) (int, <-chan LogEntry) { return General.Subscribe(f) }
 func Unsubscribe(id int)                                     { General.Unsubscribe(id) }
 

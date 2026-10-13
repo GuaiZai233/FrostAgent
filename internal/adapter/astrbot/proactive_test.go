@@ -10,7 +10,6 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -612,10 +612,10 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 }
 
 type mockAlcyoneState struct {
-	mu           sync.Mutex
-	reserveCount int
-	commitCount  int
-	releaseCount int
+	mu             sync.Mutex
+	reserveCount   int
+	commitCount    int
+	releaseCount   int
 	reserveHandler func(w http.ResponseWriter, r *http.Request)
 	commitHandler  func(w http.ResponseWriter, r *http.Request)
 	releaseHandler func(w http.ResponseWriter, r *http.Request)
@@ -1619,9 +1619,9 @@ type dummyTestTool struct {
 	executed *atomic.Int32
 }
 
-func (d *dummyTestTool) Name() string                 { return d.name }
-func (d *dummyTestTool) Description() string          { return "dummy test tool" }
-func (d *dummyTestTool) Parameters() map[string]any   { return map[string]any{} }
+func (d *dummyTestTool) Name() string               { return d.name }
+func (d *dummyTestTool) Description() string        { return "dummy test tool" }
+func (d *dummyTestTool) Parameters() map[string]any { return map[string]any{} }
 func (d *dummyTestTool) Execute(args string) (string, error) {
 	if d.executed != nil {
 		d.executed.Add(1)
@@ -1715,7 +1715,7 @@ func TestAstrBotIngressMetadataCannotBypassWhitelistGate(t *testing.T) {
 		Metadata: map[string]any{
 			"_frostagent_should_reply":    true,
 			"_frostagent_proactive_reply": true,
-			"custom_tracking_id":         "track_101",
+			"custom_tracking_id":          "track_101",
 		},
 	}
 	b1, err := json.Marshal(spoofedEvent)
@@ -1914,171 +1914,145 @@ func TestAstrBotOmittedPlatformCannotMatchQQWhitelist(t *testing.T) {
 	provider.mu.Unlock()
 }
 
-type safeConsoleBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (s *safeConsoleBuffer) Write(p []byte) (n int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.Write(p)
-}
-
-func (s *safeConsoleBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
-}
-
+// Run each console assertion in its own process so WebSocket goroutines never
+// race with a reassignment of the process-wide stdout stream.
 func TestAstrBotProactiveTriggerLogging(t *testing.T) {
-	// 验证：AstrBot 一旦触发主动回复逻辑就在日志里写一条SYSTEM级别INFO：【触发主动回复逻辑】，在控制台不隐藏
+	const childEnv = "FROSTAGENT_TEST_ASTRBOT_PROACTIVE_LOG"
+	if testCase := os.Getenv(childEnv); testCase != "" {
+		runAstrBotProactiveTriggerLogging(t, testCase)
+		return
+	}
+	for _, testCase := range []string{"proactive", "explicit_at", "explicit_name", "private", "security_block", "whitelist_block", "probability_miss"} {
+		t.Run(testCase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAstrBotProactiveTriggerLogging$", "-test.timeout=15s")
+			cmd.Env = append(os.Environ(), childEnv+"="+testCase)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("console subprocess failed: %v\n%s", err, output)
+			}
+			want := 0
+			if testCase == "proactive" {
+				want = 1
+			}
+			if got := strings.Count(string(output), "[INFO][SYSTEM] 【触发主动回复逻辑】"); got != want {
+				t.Fatalf("console trigger count = %d, want %d\n%s", got, want, output)
+			}
+		})
+	}
+}
+
+func runAstrBotProactiveTriggerLogging(t *testing.T, testCase string) {
 	scope := newTestScopeWithEnv(t, map[string]string{
 		"PROACTIVE_REPLY_PROBABILITY": "1.00",
+		"BOT_NAME":                    "test-bot",
+		"BOT_ALIASES":                 "",
 	})
-	scope.Logger = logs.New("test-astrbot-proactive-1", "test-astrbot-proactive-1", 100)
-	var consoleBuf safeConsoleBuffer
-	scope.Logger.SetConsoleOutput(&consoleBuf)
-
-	provider := &mockLLMProvider{
-		responses: []*core.ChatResponse{
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "AstrBot 主动回复",
-				},
-			},
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "AstrBot 显式回复",
-				},
-			},
-		},
+	if testCase == "whitelist_block" {
+		scope = newTestScopeWithEnv(t, map[string]string{
+			"PROACTIVE_REPLY_PROBABILITY":      "1.00",
+			"ENABLE_PROACTIVE_REPLY_WHITELIST": "true",
+			"PROACTIVE_REPLY_GROUP_WHITELIST":  "astrbot:999",
+		})
+	} else if testCase == "probability_miss" {
+		scope = newTestScopeWithEnv(t, map[string]string{"PROACTIVE_REPLY_PROBABILITY": "0"})
 	}
-
+	scope.Logger = logs.New("test-proactive", "test-proactive", 100)
+	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	engine.Scope = scope
-
+	if testCase == "security_block" {
+		engine.Security = security.NewController(t.TempDir())
+		principal, err := security.NewPrincipal("astrbot", "102")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Security.Lock(principal, "synthetic test block"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv, _, wsURL := startWSTestServer(engine)
 	defer srv.Close()
-
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatal(err)
 	}
 	defer conn.Close()
-
-	// 1. 触发主动回复的群聊消息
 	event := Event{
-		Type:        "event",
-		EventType:   "message",
-		MessageType: "group",
-		GroupID:     "10001",
-		UserID:      "20001",
-		MessageID:   "msg_ast_801",
-		Content:     "群内普通消息触发主动回复",
-		Platform:    "astrbot",
-		IsWake:      false,
-		IsAt:        false,
-		Timestamp:   time.Now().Unix(),
+		Type: "event", EventType: "message", MessageType: "group", Platform: "astrbot",
+		GroupID: "101", UserID: "102", MessageID: "test-message",
+		Content: "ordinary group message", Timestamp: time.Now().Unix(),
 	}
-	b, _ := json.Marshal(event)
-	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
-		t.Fatalf("发送事件失败: %v", err)
+	switch testCase {
+	case "explicit_at":
+		event.IsAt = true
+	case "explicit_name":
+		event.Content = "test-bot reply please"
+	case "private":
+		event.MessageType = "private"
 	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	respType, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取响应失败: %v (type=%d)", err, respType)
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
 	}
-
-	var act Action
-	if err := json.Unmarshal(respBytes, &act); err != nil {
-		t.Fatalf("解析响应动作失败: %v", err)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
 	}
-	if act.Action != "send_message" {
-		t.Fatalf("期望 send_message，实际: %s", act.Action)
+	var action Action
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("expected completed action: %v", err)
 	}
-
-	consoleOutput := consoleBuf.String()
-
-	// 验证日志快照中有 SYSTEM 级别的 INFO 日志：【触发主动回复逻辑】
-	var foundSystemLog bool
+	if testCase == "security_block" || testCase == "whitelist_block" || testCase == "probability_miss" {
+		if action.Action != "noop" || action.SuppressLLM != (testCase == "security_block") {
+			t.Fatalf("incorrect drop action: %+v", action)
+		}
+		provider.mu.Lock()
+		calls := len(provider.requests)
+		provider.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("dropped event called LLM %d times", calls)
+		}
+		// Still check the stored log count for dropped events.
+		for _, entry := range engine.Log().Snapshot() {
+			if entry.Content == "【触发主动回复逻辑】" {
+				t.Fatal("dropped event recorded a proactive trigger")
+			}
+		}
+		return
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("action = %s, want send_message", action.Action)
+	}
+	want := 0
+	if testCase == "proactive" {
+		want = 1
+	}
+	got := 0
 	for _, entry := range engine.Log().Snapshot() {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.INFO && entry.Content == "【触发主动回复逻辑】" {
-			foundSystemLog = true
-			break
-		}
-	}
-	if !foundSystemLog {
-		t.Fatalf("AstrBot 日志快照中未找到 Category=SYSTEM Level=INFO Content=【触发主动回复逻辑】的记录")
-	}
-
-	// 验证在控制台不隐藏
-	if !strings.Contains(consoleOutput, "【触发主动回复逻辑】") {
-		t.Fatalf("AstrBot 控制台输出未包含【触发主动回复逻辑】: %s", consoleOutput)
-	}
-
-	// 2. 显式唤醒不应输出【触发主动回复逻辑】
-	scopeExplicit := newTestScopeWithEnv(t, map[string]string{
-		"PROACTIVE_REPLY_PROBABILITY": "1.00",
-	})
-	scopeExplicit.Logger = logs.New("test-astrbot-explicit-2", "test-astrbot-explicit-2", 100)
-	var explicitConsoleBuf safeConsoleBuffer
-	scopeExplicit.Logger.SetConsoleOutput(&explicitConsoleBuf)
-
-	engineExplicit := newTestEngine(provider)
-	engineExplicit.Scope = scopeExplicit
-
-	srvExplicit, _, wsURLExplicit := startWSTestServer(engineExplicit)
-	defer srvExplicit.Close()
-
-	connExplicit, _, err := websocket.DefaultDialer.Dial(wsURLExplicit, nil)
-	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
-	}
-	defer connExplicit.Close()
-
-	eventExplicit := Event{
-		Type:        "event",
-		EventType:   "message",
-		MessageType: "group",
-		GroupID:     "10001",
-		UserID:      "20001",
-		MessageID:   "msg_ast_802",
-		Content:     "显式唤醒群消息",
-		Platform:    "astrbot",
-		IsWake:      true,
-		IsAt:        false,
-		Timestamp:   time.Now().Unix(),
-	}
-	bExplicit, _ := json.Marshal(eventExplicit)
-	if err := connExplicit.WriteMessage(websocket.TextMessage, bExplicit); err != nil {
-		t.Fatalf("发送显式事件失败: %v", err)
-	}
-
-	_ = connExplicit.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, respBytesExplicit, err := connExplicit.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取显式响应失败: %v", err)
-	}
-
-	var actExplicit Action
-	if err := json.Unmarshal(respBytesExplicit, &actExplicit); err != nil {
-		t.Fatalf("解析显式动作失败: %v", err)
-	}
-	if actExplicit.Action != "send_message" {
-		t.Fatalf("期望显式回复 send_message，实际: %s", actExplicit.Action)
-	}
-
-	for _, entry := range engineExplicit.Log().Snapshot() {
 		if entry.Content == "【触发主动回复逻辑】" {
-			t.Fatalf("AstrBot 显式唤醒不应输出【触发主动回复逻辑】日志")
+			if entry.Category != logs.SYSTEM || entry.Level != logs.INFO {
+				t.Fatalf("incorrect trigger category or level: %+v", entry)
+			}
+			got++
 		}
 	}
-	if strings.Contains(explicitConsoleBuf.String(), "【触发主动回复逻辑】") {
-		t.Fatalf("AstrBot 显式唤醒控制台输出不应包含【触发主动回复逻辑】")
+	if got != want {
+		t.Fatalf("stored trigger count = %d, want %d", got, want)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 1 {
+		t.Fatalf("LLM requests = %d, want 1", len(provider.requests))
+	}
+	request := provider.requests[0]
+	if len(request.Messages) == 0 {
+		t.Fatal("LLM request contains no messages")
+	}
+	lastContent, ok := request.Messages[len(request.Messages)-1].Content.(string)
+	if !ok {
+		t.Fatal("expected text content in LLM request")
+	}
+	if strings.HasPrefix(lastContent, proactive.PromptPrefix) != (testCase == "proactive") {
+		t.Fatalf("proactive prompt does not match trigger for %s", testCase)
 	}
 }

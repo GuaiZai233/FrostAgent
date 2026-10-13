@@ -89,27 +89,6 @@ func TestConsoleSummaryKeepsFullStoredAndStreamedContent(t *testing.T) {
 		}
 	}
 }
-
-func TestStoreSetConsoleOutput(t *testing.T) {
-	store := New("inst-1", "实例乙", 10)
-	var buf strings.Builder
-	store.SetConsoleOutput(&buf)
-
-	store.InfoWithConsoleSummary(SYSTEM, "完整系统信息", "摘要系统信息")
-	store.Info(WEBSOCKET, "普通websocket日志")
-
-	output := buf.String()
-	if !strings.Contains(output, "摘要系统信息") {
-		t.Fatalf("expected injected console writer to receive summary, got %q", output)
-	}
-	if !strings.Contains(output, "...") {
-		t.Fatalf("expected regular Info to emit '...', got %q", output)
-	}
-	if strings.Contains(output, "完整系统信息") {
-		t.Fatalf("expected full content not to appear on console, got %q", output)
-	}
-}
-
 func TestImageCacheIsPerStore(t *testing.T) {
 	a := New("a1b2c3d4", "a", 2)
 	b := New("b1c2d3e4", "b", 2)
