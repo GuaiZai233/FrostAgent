@@ -16,20 +16,15 @@ const globalKeys = new Set([
   'MCP_ENFORCE_LOCAL_TOKEN',
   'SECURITY_CONTROL_MODE',
 ]);
-const booleanKeys = new Set([
-  'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG',
-  'ENABLE_ONEBOT_ADAPTER', 'ENABLE_ASTRBOT_ADAPTER', 'BILLING_ENABLED', 'ENABLE_PROACTIVE_REPLY',
-  'ENABLE_PROACTIVE_REPLY_WHITELIST',
-  'SANDBOX_ENABLED', 'ALLOW_REMOTE_MCP_MANAGEMENT', 'MCP_ENFORCE_LOCAL_TOKEN',
-]);
-import { createInstanceAPI } from '../api/client';
+import { createInstanceAPI, extraEnvAPI, type ExtraEnvEntry } from '../api/client';
 import { instanceState } from '../instance-state';
 import { EnvVar } from '@frostagent/proto';
-import { escapeHtml, maskSecret } from '../utils/formatters';
+import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { confirmDialog } from '../components/confirm';
 import { ProactiveSettingsSync } from './proactive-settings-sync';
+import { renderBackendSettingsForm } from './backend-settings-form';
 import {
   groupIdFromSessionId,
   parseWhitelistGroups,
@@ -39,22 +34,12 @@ import {
   ProactiveWhitelistSync,
 } from './proactive-whitelist';
 
-function configurationBadges(key: string): string {
-  const ownership = globalKeys.has(key)
-    ? '<small class="badge badge-outline">全局共享</small>'
-    : '<small class="badge badge-outline">当前实例</small>';
-  return ownership;
-}
-
 export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
   let isUnmounted = false;
   let loading = false;
   let envVars: EnvVar[] = [];
-  const visibleSecrets = new Set<string>();
-  let editingKey: string | null = null;
-  let editingValue = '';
-  let editingIsSecret = false;
+  let extraEnvEntries: ExtraEnvEntry[] = [];
 
   let groupReplyOnMention = false;
   let enableAtOther = false;
@@ -119,7 +104,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5">
                   <span class="text-xs font-semibold text-foreground">触发概率</span>
-                  <span class="text-[11px] text-muted font-mono">(PROACTIVE_REPLY_PROBABILITY)</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="text-xs font-mono font-semibold text-primary" id="proactive-reply-prob-display">0.05 (5%)</span>
@@ -210,7 +194,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           <div class="mb-4 pb-4 border-b border-border" id="sticker-activity-card">
             <div class="flex items-center justify-between mb-3 gap-2">
               <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
-              <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+                <input type="number" id="sticker-activity-number" class="input input-sm w-16 text-right" min="0" max="10" step="1" value="0" required aria-label="表情包使用积极度数值" />
+              </div>
             </div>
             <input type="range" id="sticker-activity-slider" class="slider w-full" min="0" max="10" step="1" value="0" aria-label="表情包使用积极度" />
             <div class="flex justify-between text-[11px] text-muted mt-1">
@@ -222,55 +209,41 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           <div>
             <h3 class="text-xs font-semibold text-foreground mb-2.5">群聊回复规则</h3>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-mention-cb" role="switch" aria-label="被 @ 时触发回复" /><span aria-hidden="true"></span></span>
                 <div>
                   <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
                 </div>
               </label>
 
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-at-cb" role="switch" aria-label="回复时 @ 对方" /><span aria-hidden="true"></span></span>
                 <div>
                   <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
                 </div>
               </label>
 
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-reply-cb" role="switch" aria-label="引用对方消息" /><span aria-hidden="true"></span></span>
                 <div>
                   <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
                 </div>
               </label>
             </div>
           </div>
         </article>
 
-        <!-- Settings table -->
-        <div class="card table-card overflow-hidden">
-          <div class="table-container">
-            <table class="table env-table">
-              <thead>
-                <tr>
-                  <th class="env-table-key-col">设置项</th>
-                  <th class="env-table-val-col">值</th>
-                  <th class="env-table-action-col">操作</th>
-                </tr>
-              </thead>
-              <tbody id="env-table-body">
-                <tr>
-                  <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-                    <span class="spinner"></span>
-                    <span style="margin-left: 0.5rem;">加载中...</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div id="settings-form" class="flex flex-col gap-4"></div>
+        <article class="card p-4">
+          <h2 class="card-title text-sm font-semibold">额外 env 注入</h2>
+          <p class="text-xs text-muted mt-1 mb-4">供外部组件读取的环境变量。保存或删除后需重启 FrostAgent 才会生效；宿主环境中已有的同名变量优先。</p>
+          <div id="extra-env-list" class="flex flex-col gap-2 mb-4"></div>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <input id="extra-env-key" class="input input-sm sm:w-48" aria-label="额外环境变量名" placeholder="变量名" autocomplete="off" />
+            <input id="extra-env-value" class="input input-sm flex-1" type="password" aria-label="额外环境变量值" placeholder="变量值" autocomplete="off" />
+            <button id="extra-env-save" type="button" class="btn btn-primary btn-sm">添加或更新</button>
           </div>
-        </div>
+        </article>
       </div>
 
     </div>
@@ -301,6 +274,9 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const stickerActivitySlider = container.querySelector<HTMLInputElement>(
     '#sticker-activity-slider',
   )!;
+  const stickerActivityNumber = container.querySelector<HTMLInputElement>(
+    '#sticker-activity-number',
+  )!;
   const stickerActivityDisplay = container.querySelector<HTMLElement>(
     '#sticker-activity-display',
   )!;
@@ -329,7 +305,11 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const groupReplyCb =
     container.querySelector<HTMLInputElement>('#group-reply-cb')!;
 
-  const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
+  const settingsRoot = container.querySelector<HTMLElement>('#settings-form')!;
+  const extraEnvList = container.querySelector<HTMLElement>('#extra-env-list')!;
+  const extraEnvKey = container.querySelector<HTMLInputElement>('#extra-env-key')!;
+  const extraEnvValue = container.querySelector<HTMLInputElement>('#extra-env-value')!;
+  const extraEnvSave = container.querySelector<HTMLButtonElement>('#extra-env-save')!;
 
   function updateProactiveUI(
     enabled: boolean,
@@ -362,6 +342,8 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   function updateStickerActivityUI(level: number) {
     stickerActivitySlider.value = String(level);
     stickerActivitySlider.disabled = stickerSaving;
+    stickerActivityNumber.value = String(level);
+    stickerActivityNumber.disabled = stickerSaving;
     stickerActivityDisplay.textContent =
       level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 条回复`;
   }
@@ -504,6 +486,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       ]);
       if (isUnmounted) return;
       envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT');
+      void loadExtraEnv();
 
       sessionGroupMap.clear();
       for (const sess of sessionsResp.sessions || []) {
@@ -592,276 +575,128 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
 
   function renderTable() {
     if (loading && envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-            <span class="spinner"></span>
-            <span style="margin-left: 0.5rem;">加载中...</span>
-          </td>
-        </tr>
-      `;
+      settingsRoot.innerHTML = '<div class="card p-8 text-center text-muted"><span class="spinner"></span> 加载中...</div>';
       return;
     }
-
-    if (envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 3rem;">
-            暂无设置项。
-          </td>
-        </tr>
-      `;
-      return;
-    }
-
-    tbody.innerHTML = envVars
-      .map((item) => {
-        const isEditing = editingKey === item.key;
-        const isSecret = item.isSecret;
-        const isVisible = visibleSecrets.has(item.key);
-
-        if (isEditing) {
-          const isMultiline =
-            !editingIsSecret &&
-            (editingValue.includes('\n') || editingValue.length > 60);
-
-          return `
-            <tr class="bg-muted">
-              <td class="align-top">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="font-mono text-xs font-semibold text-foreground break-all">${escapeHtml(item.key)}</span>
-                  <div class="flex items-center gap-1 flex-wrap">
-                    ${configurationBadges(item.key)}
-                  </div>
-                </div>
-              </td>
-              <td class="align-top">
-                <div class="flex items-start gap-2 min-w-0">
-                  ${
-                    editingIsSecret
-                      ? `
-                    <input
-                      type="password"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                      : isMultiline
-                        ? `
-                    <textarea
-                      class="textarea font-mono text-xs flex-1 min-w-0 leading-relaxed"
-                      id="edit-env-val-input"
-                      rows="${Math.min(8, Math.max(3, editingValue.split('\n').length))}"
-                      style="resize: vertical; min-height: 2.25rem;"
-                    >${escapeHtml(editingValue)}</textarea>
-                  `
-                        : `
-                    <input
-                      type="text"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                  }
-                </div>
-              </td>
-              <td class="align-top" style="text-align: right;">
-                <div class="flex items-center justify-end gap-1">
-                  <button class="btn btn-primary btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="save-inline-btn" title="保存">
-                    ${icon('check', 'w-3.5 h-3.5')}
-                  </button>
-                  <button class="btn btn-outline btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="cancel-inline-btn" title="取消">
-                    ${icon('close', 'w-3.5 h-3.5')}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          `;
-        }
-
-        const displayVal =
-          isSecret && !isVisible ? maskSecret(item.value) : item.value;
-
-        return `
-          <tr>
-            <td class="align-top">
-              <div class="flex items-center gap-1.5 flex-wrap">
-                ${isSecret ? `<span class="text-muted flex items-center shrink-0" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground break-all">${escapeHtml(item.key)}</span>
-                <div class="flex items-center gap-1 flex-wrap">
-                  ${configurationBadges(item.key)}
-                </div>
-              </div>
-            </td>
-            <td class="align-top">
-              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${item.value === 'true' ? 'checked' : ''} /><span>${item.value === 'true' ? '开启' : '关闭'}</span></label>` : `
-              <div class="flex items-start gap-1.5 min-w-0">
-                <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
-                ${
-                  isSecret
-                    ? `
-                  <button class="btn btn-ghost btn-icon-sm text-muted shrink-0" style="width: 1.5rem; height: 1.5rem; padding: 0; flex-shrink: 0;" data-action="toggle-secret" data-key="${escapeHtml(
-                    item.key,
-                  )}" title="${isVisible ? '隐藏' : '显示'}">
-                    ${icon(isVisible ? 'eye_off' : 'eye', 'w-3 h-3')}
-                  </button>
-                `
-                    : ''
-                }
-              </div>
-              `}
-            </td>
-            <td class="align-top" style="text-align: right;">
-              ${booleanKeys.has(item.key) ? '' : `
-              <div class="flex items-center justify-end gap-1">
-                <button class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" data-action="edit-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="修改">
-                  ${icon('pencil', 'w-3.5 h-3.5')}
-                </button>
-                <button class="btn btn-ghost btn-icon-sm text-destructive" style="width: 1.75rem; height: 1.75rem;" data-action="delete-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="删除">
-                  ${icon('trash', 'w-3.5 h-3.5')}
-                </button>
-              </div>
-              `}
-            </td>
-          </tr>
-        `;
-      })
-      .join('');
-
-    // Attach inline edit handlers if active
-    if (editingKey) {
-      const editInput = tbody.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-        '#edit-env-val-input',
-      );
-      const saveInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
-      const cancelInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
-
-      editInput?.focus();
-      if (editInput && typeof editInput.setSelectionRange === 'function') {
-        const len = editInput.value.length;
-        editInput.setSelectionRange(len, len);
-      }
-      editInput?.addEventListener('input', () => {
-        editingValue = editInput.value;
-      });
-
-      saveInlineBtn?.addEventListener('click', async () => {
-        await saveEnvVar(editingKey!, editingValue, editingIsSecret);
-        editingKey = null;
-        renderTable();
-      });
-
-      cancelInlineBtn?.addEventListener('click', () => {
-        editingKey = null;
-        renderTable();
-      });
-
-      editInput?.addEventListener('keydown', ((e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          cancelInlineBtn?.click();
-        } else if (
-          (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ||
-          (e.key === 'Enter' && editInput instanceof HTMLInputElement)
-        ) {
-          e.preventDefault();
-          saveInlineBtn?.click();
-        }
-      }) as EventListener);
-    }
-
-    // Attach row button events
-    tbody
-      .querySelectorAll<HTMLInputElement>('[data-action="toggle-setting"]')
-      .forEach((input) => {
-        input.addEventListener('change', () => {
-          if (input.dataset.key) void toggleGroupSetting(input.dataset.key, input.checked);
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="toggle-secret"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          if (visibleSecrets.has(key)) visibleSecrets.delete(key);
-          else visibleSecrets.add(key);
-          renderTable();
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="edit-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          const item = envVars.find((v) => v.key === key);
-          if (item) {
-            editingKey = item.key;
-            editingValue = item.value;
-            editingIsSecret = item.isSecret;
-            renderTable();
-          }
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="delete-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          const confirmed = await confirmDialog({
-            title: '清除设置项',
-            message: `确认清除设置项 ${key} 吗？`,
-            confirmLabel: '删除',
-            destructive: true,
-          });
-          if (confirmed) {
-            try {
-              const res = await api.deleteEnvVar(key);
-              if (res.success) {
-                toast.success('设置项已清除');
-                void loadData();
-              } else {
-                toast.error('删除失败: ' + res.error);
-              }
-            } catch (err) {
-              toast.error(
-                '删除失败: ' +
-                  (err instanceof Error ? err.message : String(err)),
-              );
-            }
-          }
-        });
-      });
+    renderBackendSettingsForm(
+      settingsRoot,
+      envVars,
+      (key) => globalKeys.has(key),
+      saveEnvVar,
+      clearSetting,
+    );
   }
 
-  async function saveEnvVar(key: string, value: string, isSecret: boolean) {
-    if (!key) return;
+  async function clearSetting(key: string, label: string): Promise<void> {
+    const confirmed = await confirmDialog({
+      title: '恢复默认值',
+      message: '确认清除“' + label + '”的自定义值吗？',
+      confirmLabel: '清除',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      const result = await api.deleteEnvVar(key);
+      if (!result.success) throw new Error(result.error);
+      toast.success('已恢复默认值');
+      await loadData();
+    } catch (error) {
+      toast.error('清除失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  function renderExtraEnv(): void {
+    if (extraEnvEntries.length === 0) {
+      extraEnvList.innerHTML = '<p class="text-xs text-muted">暂无额外注入项。</p>';
+      return;
+    }
+    extraEnvList.innerHTML = extraEnvEntries.map(({ key, value }) => `
+      <div class="flex items-center gap-2 min-w-0" data-extra-key="${escapeHtml(key)}">
+        <span class="font-mono text-xs w-40 shrink-0 break-all">${escapeHtml(key)}</span>
+        <input class="input input-sm flex-1 min-w-0" type="password" readonly value="${escapeHtml(value)}" aria-label="${escapeHtml(key)}的值" />
+        <button type="button" class="btn btn-outline btn-sm" data-extra-show>显示</button>
+        <button type="button" class="btn btn-outline btn-sm" data-extra-edit>编辑</button>
+        <button type="button" class="btn btn-ghost btn-sm text-destructive" data-extra-delete>删除</button>
+      </div>`).join('');
+    extraEnvList.querySelectorAll<HTMLElement>('[data-extra-key]').forEach((row) => {
+      const key = row.dataset.extraKey!;
+      const input = row.querySelector<HTMLInputElement>('input')!;
+      row.querySelector<HTMLButtonElement>('[data-extra-show]')?.addEventListener('click', (event) => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        (event.currentTarget as HTMLButtonElement).textContent = input.type === 'password' ? '显示' : '隐藏';
+      });
+      row.querySelector<HTMLButtonElement>('[data-extra-edit]')?.addEventListener('click', () => {
+        extraEnvKey.value = key;
+        extraEnvValue.value = input.value;
+        extraEnvValue.focus();
+      });
+      row.querySelector<HTMLButtonElement>('[data-extra-delete]')?.addEventListener('click', async () => {
+        const confirmed = await confirmDialog({
+          title: '删除额外环境变量',
+          message: '确认删除 ' + key + ' 吗？重启 FrostAgent 后生效。',
+          confirmLabel: '删除',
+          destructive: true,
+        });
+        if (!confirmed) return;
+        try {
+          await extraEnvAPI.delete(key);
+          toast.success('已删除，重启 FrostAgent 后生效');
+          await loadExtraEnv();
+        } catch (error) {
+          toast.error('删除失败: ' + (error instanceof Error ? error.message : String(error)));
+        }
+      });
+    });
+  }
+
+  async function loadExtraEnv(): Promise<void> {
+    try {
+      const entries = await extraEnvAPI.list();
+      if (isUnmounted) return;
+      extraEnvEntries = entries;
+      renderExtraEnv();
+    } catch (error) {
+      if (!isUnmounted) toast.error('加载额外环境变量失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  extraEnvSave.addEventListener('click', async () => {
+    const key = extraEnvKey.value.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      toast.error('请输入有效的环境变量名');
+      return;
+    }
+    extraEnvSave.disabled = true;
+    try {
+      await extraEnvAPI.put({ key, value: extraEnvValue.value });
+      extraEnvKey.value = '';
+      extraEnvValue.value = '';
+      toast.success('已保存，重启 FrostAgent 后生效');
+      await loadExtraEnv();
+    } catch (error) {
+      toast.error('保存失败: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      extraEnvSave.disabled = false;
+    }
+  });
+
+  async function saveEnvVar(key: string, value: string, isSecret: boolean): Promise<boolean> {
+    if (!key) return false;
     try {
       const res = await api.updateEnvVar({ key, value, isSecret });
       if (res.success) {
         toast.success('设置已保存');
         void loadData();
+        return true;
       } else {
         toast.error('保存失败: ' + res.error);
+        return false;
       }
     } catch (err) {
       toast.error(
         '保存失败: ' + (err instanceof Error ? err.message : String(err)),
       );
+      return false;
     }
   }
 
@@ -926,8 +761,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     updateStickerActivityUI(Number(stickerActivitySlider.value));
   });
 
-  stickerActivitySlider.addEventListener('change', async () => {
-    const level = Number(stickerActivitySlider.value);
+  async function saveStickerActivity(level: number) {
     stickerEditSeq++;
     stickerSaving = true;
     updateStickerActivityUI(level);
@@ -952,6 +786,18 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       if (!isUnmounted) updateStickerActivityUI(stickerActivity);
     }
     if (reload && !isUnmounted) await loadData();
+  }
+
+  stickerActivitySlider.addEventListener('change', () => {
+    void saveStickerActivity(Number(stickerActivitySlider.value));
+  });
+  stickerActivityNumber.addEventListener('change', () => {
+    const level = Number(stickerActivityNumber.value);
+    if (!stickerActivityNumber.value || !stickerActivityNumber.reportValidity() || !Number.isInteger(level)) {
+      updateStickerActivityUI(stickerActivity);
+      return;
+    }
+    void saveStickerActivity(level);
   });
 
   proactiveReplyCb.addEventListener('change', () => {

@@ -87,7 +87,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
         <div class="backup-global-grid">
           <article class="card backup-panel">
             <div class="backup-panel-heading">${icon('settings', 'w-4 h-4')}<h3>全局设置</h3></div>
-            <p class="backup-description">导出时密钥与凭据来源置空，导入时保留当前密钥。</p>
+            <p class="backup-description">常规设置的密钥与凭据来源会置空；额外 env 注入项会以明文包含在文件中。请妥善保管，导入后重启 FrostAgent 才会应用注入项。</p>
             <a href="/api/instances/global/backup/settings" download="global-setting.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载全局设置 JSON</a>
             <div class="backup-form backup-form-separated">
               <label for="global-import-file">全局设置文件</label>
@@ -119,7 +119,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       globalButton.disabled = true;
       try {
         await instanceRequest('/global/import/settings', JSON.parse(await file.text()));
-        toast.success('全局设置已导入，正在自动应用');
+        toast.success('全局设置已导入；额外 env 注入项重启 FrostAgent 后生效');
       } catch (error) {
         toast.error('导入全局设置失败: ' + String(error));
       } finally {

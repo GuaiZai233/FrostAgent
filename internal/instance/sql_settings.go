@@ -53,6 +53,11 @@ func (m *Manager) ApplyGlobalSettings() error {
 	}
 	m.security.SetClassifierTimeout(security.ValidateClassifierTimeout(rawTimeout, security.DefaultClassifierTimeout))
 	m.security.SetMode(security.ParseControlMode(m.global.Get("SECURITY_CONTROL_MODE")))
+	currentGlobal := m.global.Snapshot()
+	if !needsGlobalRuntimeReload(m.appliedGlobal, currentGlobal) {
+		m.appliedGlobal = currentGlobal
+		return nil
+	}
 
 	items, _ := m.List()
 	var applyErr error
@@ -78,6 +83,9 @@ func (m *Manager) ApplyGlobalSettings() error {
 			applyErr = errors.Join(applyErr, err)
 		}
 		i.op.Unlock()
+	}
+	if applyErr == nil {
+		m.appliedGlobal = currentGlobal
 	}
 	return applyErr
 }

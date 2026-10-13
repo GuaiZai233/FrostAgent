@@ -1,6 +1,7 @@
 package main
 
 import (
+	"FrostAgent/internal/envinject"
 	"FrostAgent/internal/instance"
 	secsvc "FrostAgent/internal/service/security"
 	"FrostAgent/internal/storage"
@@ -37,7 +38,7 @@ func newStorageGateway(ctx context.Context, root string) (*storageGateway, error
 		bootstrap.Close()
 		return nil, err
 	}
-	manager, err := openSelectedManager(ctx, root, config)
+	manager, err := openSelectedManager(ctx, root, config, true)
 	if err != nil {
 		bootstrap.Close()
 		return nil, err
@@ -50,10 +51,16 @@ func securityHandlerFor(manager *instance.Manager) http.Handler {
 	return secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig())
 }
 
-func openSelectedManager(ctx context.Context, root string, config storage.Config) (*instance.Manager, error) {
+func openSelectedManager(ctx context.Context, root string, config storage.Config, injectEnv bool) (*instance.Manager, error) {
 	db, err := storage.OpenWithConfig(ctx, root, config)
 	if err != nil {
 		return nil, err
+	}
+	if injectEnv {
+		if err := envinject.ApplyAtStartup(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return instance.NewDatabaseWithDB(root, db)
 }
@@ -83,7 +90,8 @@ func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.serveStorage(w, r)
 		return
 	}
-	if r.URL.Path == "/api/instances/global/import/settings" ||
+	if strings.HasPrefix(r.URL.Path, "/api/instances/global/extra-env") ||
+		r.URL.Path == "/api/instances/global/import/settings" ||
 		(strings.Contains(r.URL.Path, "/frostagent.v1.SettingsService/") && r.Method == http.MethodPost) {
 		g.switchMu.Lock()
 		defer g.switchMu.Unlock()
@@ -160,7 +168,8 @@ func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config)
 	g.security = nil
 	g.mu.Unlock()
 	old.Close()
-	manager, err := openSelectedManager(ctx, g.root, config)
+	previousInjection := envinject.Suspend()
+	manager, err := openSelectedManager(ctx, g.root, config, false)
 	if err == nil && g.apply != nil {
 		manager.SetGlobalApplyHook(func() error { return g.apply(manager) })
 	}
@@ -174,7 +183,10 @@ func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config)
 		if manager != nil {
 			manager.Close()
 		}
-		recovered, recoveryErr := openSelectedManager(context.Background(), g.root, previous)
+		if restoreErr := envinject.Restore(previousInjection); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+		recovered, recoveryErr := openSelectedManager(context.Background(), g.root, previous, false)
 		if recoveryErr == nil && g.apply != nil {
 			recovered.SetGlobalApplyHook(func() error { return g.apply(recovered) })
 		}

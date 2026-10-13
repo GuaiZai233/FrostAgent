@@ -89,6 +89,13 @@ var knownEnvVars = map[string]envEntry{
 	"ACTIONSCAT_DISPATCH_TOKEN":            {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},
 }
 
+// IsManagedKey reports whether a key already belongs to the structured
+// application settings catalog rather than additional process environment.
+func IsManagedKey(key string) bool {
+	_, ok := knownEnvVars[strings.ToUpper(key)]
+	return ok
+}
+
 // ExportableValueKeys lists classified non-secret setting values. Unknown
 // keys remain blank in setting.json until explicitly classified.
 func ExportableValueKeys() map[string]bool {

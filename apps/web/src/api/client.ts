@@ -71,6 +71,41 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
+export interface ExtraEnvEntry {
+  key: string;
+  value: string;
+}
+
+async function extraEnvRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Accept', 'application/json');
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/extra-env${path}`, {
+    ...init,
+    headers,
+    signal: instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const extraEnvAPI = {
+  async list(): Promise<ExtraEnvEntry[]> {
+    const response = await extraEnvRequest<{ entries: ExtraEnvEntry[] }>('', { method: 'GET' });
+    return response.entries;
+  },
+  async put(entry: ExtraEnvEntry): Promise<void> {
+    await extraEnvRequest('', { method: 'PUT', body: JSON.stringify(entry) });
+  },
+  async delete(key: string): Promise<void> {
+    await extraEnvRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  },
+};
+
 export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
 
 const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';

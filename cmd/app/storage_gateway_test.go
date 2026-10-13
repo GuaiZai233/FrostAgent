@@ -1,6 +1,7 @@
 package main
 
 import (
+	"FrostAgent/internal/envinject"
 	"FrostAgent/internal/instance"
 	"FrostAgent/internal/storage"
 	"context"
@@ -76,11 +77,33 @@ func TestPostgresGatewaySwitchLoadsEachDatabaseWithoutMigration(t *testing.T) {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
 	}
 	root := t.TempDir()
+	const injectedKey = "FROSTAGENT_SYNTHETIC_SWITCH_PROVIDER_TOKEN"
+	if _, exists := os.LookupEnv(injectedKey); exists {
+		t.Skip("synthetic injection key already exists")
+	}
+	t.Cleanup(func() {
+		envinject.Suspend()
+		_ = os.Unsetenv(injectedKey)
+	})
+	seed, err := storage.Open(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := envinject.Put(context.Background(), seed, injectedKey, "sqlite-token"); err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
 	gateway, err := newStorageGateway(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { gateway.Close() }()
+	if value, ok := envinject.LookupApplied(injectedKey); !ok || value != "sqlite-token" {
+		t.Fatalf("initial database injection missing: %q %t", value, ok)
+	}
 	sqlite, _, _ := gateway.snapshot()
 	sqliteInstance, err := sqlite.Create("SQLite Only")
 	if err != nil {
@@ -89,6 +112,9 @@ func TestPostgresGatewaySwitchLoadsEachDatabaseWithoutMigration(t *testing.T) {
 	postgresConfig := storage.Config{Backend: storage.Postgres, DSN: dsn}
 	if err := gateway.switchTo(context.Background(), postgresConfig); err != nil {
 		t.Fatal(err)
+	}
+	if _, ok := envinject.LookupApplied(injectedKey); ok || os.Getenv(injectedKey) != "" {
+		t.Fatal("previous database token remained available after storage switch")
 	}
 	postgres, _, _ := gateway.snapshot()
 	initial, _ := postgres.List()

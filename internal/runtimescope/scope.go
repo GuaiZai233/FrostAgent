@@ -2,6 +2,7 @@
 package runtimescope
 
 import (
+	"FrostAgent/internal/envinject"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
 	"context"
@@ -87,7 +88,13 @@ func (s *Scope) Getenv(k string) string {
 	if s.Config == nil {
 		return ""
 	}
-	return s.Config.Get(k)
+	value := s.Config.Get(k)
+	if value == "" && s.Config.IsDatabase() {
+		if injected, ok := envinject.LookupApplied(k); ok {
+			return injected
+		}
+	}
+	return value
 }
 func (s *Scope) Log() *logs.Store {
 	if s == nil || s.Logger == nil {
@@ -183,6 +190,11 @@ func (s *Scope) LookupEnv(k string) (string, bool) {
 		return "", false
 	}
 	v, ok := s.Config.Snapshot()[k]
+	if !ok && s.Config.IsDatabase() {
+		if injected, exists := envinject.LookupApplied(k); exists {
+			return injected, true
+		}
+	}
 	return v, ok
 }
 func (s *Scope) CheckOrigin(r *http.Request) bool {
