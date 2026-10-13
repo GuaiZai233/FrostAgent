@@ -335,6 +335,11 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				continue
 			}
+			if !c.mock && (event.Type == "" || event.Type == "event") &&
+				(event.EventType == "" || event.EventType == "message") &&
+				(event.MessageType == "group" || event.MessageType == "private") {
+				a.engine.RecordIncomingMessage()
+			}
 			sanitizeIngressMetadata(&event)
 			var warningNotice string
 			var scope *runtimescope.Scope

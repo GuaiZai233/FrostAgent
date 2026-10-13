@@ -368,6 +368,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var routing EventRouting
 			if event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
+				if !wsConn.mock {
+					a.engine.RecordIncomingMessage()
+				}
 				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
 				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
 					continue

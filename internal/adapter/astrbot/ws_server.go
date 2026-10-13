@@ -1214,8 +1214,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Proactive:     isProactiveReply(&event),
 		})
 		defer func() {
-			if !conn.mock {
-				engine.FinishBotMessage(runResult.StickerReservation, finalDelivered, false)
+			if !conn.mock && finalDelivered {
+				engine.RecordBotMessage(false)
 			}
 		}()
 		replyText = runResult.Content

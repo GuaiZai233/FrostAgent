@@ -62,6 +62,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let proactiveReplyEnabled = false;
   let proactiveReplyProbability = 0.05;
   let stickerActivity = 0;
+  let stickerActivityMode: 'bot_turns' | 'all_messages' = 'bot_turns';
   let stickerSaving = false;
   let stickerEditSeq = 0;
   let proactiveWhitelistEnabled = false;
@@ -212,9 +213,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
               <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
             </div>
+            <label for="sticker-activity-mode" class="text-xs font-medium text-foreground">计数方式</label>
+            <select id="sticker-activity-mode" class="select w-full mt-1 mb-2">
+              <option value="bot_turns">强制 Bot 对话轮次</option>
+              <option value="all_messages">全部轮次</option>
+            </select>
+            <p id="sticker-activity-mode-description" class="text-[11px] text-muted mb-3">每次唤醒或触发主动回复计一轮。</p>
             <input type="range" id="sticker-activity-slider" class="slider w-full" min="0" max="10" step="1" value="0" aria-label="表情包使用积极度" />
             <div class="flex justify-between text-[11px] text-muted mt-1">
-              <span>0 · 禁用</span><span>10 · 每 5 条回复</span>
+              <span>0 · 禁用</span><span>10 · 每 5 轮</span>
             </div>
           </div>
 
@@ -298,6 +305,12 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   const proactiveReplyProbDisplay = container.querySelector<HTMLElement>(
     '#proactive-reply-prob-display',
   )!;
+  const stickerActivityModeSelect = container.querySelector<HTMLSelectElement>(
+    '#sticker-activity-mode',
+  )!;
+  const stickerActivityModeDescription = container.querySelector<HTMLElement>(
+    '#sticker-activity-mode-description',
+  )!;
   const stickerActivitySlider = container.querySelector<HTMLInputElement>(
     '#sticker-activity-slider',
   )!;
@@ -362,8 +375,14 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   function updateStickerActivityUI(level: number) {
     stickerActivitySlider.value = String(level);
     stickerActivitySlider.disabled = stickerSaving;
+    stickerActivityModeSelect.value = stickerActivityMode;
+    stickerActivityModeSelect.disabled = stickerSaving;
+    stickerActivityModeDescription.textContent =
+      stickerActivityMode === 'all_messages'
+        ? '每条传入消息计一轮，无需唤醒 Bot。'
+        : '每次唤醒或触发主动回复计一轮。';
     stickerActivityDisplay.textContent =
-      level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 条回复`;
+      level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 轮`;
   }
 
   function updateWhitelistUI(isSaving = false) {
@@ -526,6 +545,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           parsedActivity <= 10
             ? parsedActivity
             : 0;
+        stickerActivityMode =
+          getVal('STICKER_ACTIVITY_MODE') === 'all_messages'
+            ? 'all_messages'
+            : 'bot_turns';
         updateStickerActivityUI(stickerActivity);
       }
       groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
@@ -926,33 +949,49 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     updateStickerActivityUI(Number(stickerActivitySlider.value));
   });
 
-  stickerActivitySlider.addEventListener('change', async () => {
-    const level = Number(stickerActivitySlider.value);
+  stickerActivitySlider.addEventListener('change', () => {
+    void saveStickerSetting('STICKER_ACTIVITY', stickerActivitySlider.value);
+  });
+
+  stickerActivityModeSelect.addEventListener('change', () => {
+    void saveStickerSetting(
+      'STICKER_ACTIVITY_MODE',
+      stickerActivityModeSelect.value,
+    );
+  });
+
+  async function saveStickerSetting(
+    key: 'STICKER_ACTIVITY' | 'STICKER_ACTIVITY_MODE',
+    value: string,
+  ) {
+    if (stickerSaving) return;
     stickerEditSeq++;
     stickerSaving = true;
-    updateStickerActivityUI(level);
+    updateStickerActivityUI(
+      key === 'STICKER_ACTIVITY' ? Number(value) : stickerActivity,
+    );
     let reload = false;
     try {
-      const res = await api.updateEnvVar({
-        key: 'STICKER_ACTIVITY',
-        value: String(level),
-        isSecret: false,
-      });
+      const res = await api.updateEnvVar({ key, value, isSecret: false });
       if (!res.success)
         throw new Error(res.error || '更新表情包使用积极度失败');
-      stickerActivity = level;
-      toast.success('表情包使用积极度已更新');
+      if (key === 'STICKER_ACTIVITY') stickerActivity = Number(value);
+      else
+        stickerActivityMode =
+          value === 'all_messages' ? 'all_messages' : 'bot_turns';
+      if (!isUnmounted) toast.success('表情包使用积极度已更新');
     } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
+      if (!isUnmounted)
+        toast.error(
+          '更新失败: ' + (err instanceof Error ? err.message : String(err)),
+        );
       reload = true;
     } finally {
       stickerSaving = false;
       if (!isUnmounted) updateStickerActivityUI(stickerActivity);
     }
     if (reload && !isUnmounted) await loadData();
-  });
+  }
 
   proactiveReplyCb.addEventListener('change', () => {
     void handleProactiveToggle(proactiveReplyCb.checked);

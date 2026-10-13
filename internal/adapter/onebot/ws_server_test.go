@@ -829,7 +829,7 @@ func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
 			engine := newTestEngine(provider)
 			if tc.wantSticker {
 				for range 4 {
-					engine.RecordBotMessage(false)
+					engine.RecordBotTurn()
 				}
 			}
 			srv, wsURL := startWSTestServer(engine)
@@ -876,7 +876,7 @@ func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
 				request := provider.requests[len(provider.requests)-1]
 				provider.mu.Unlock()
 				last := request.Messages[len(request.Messages)-1].Content.(string)
-				if !strings.Contains(last, "还剩 5 轮回复") {
+				if !strings.Contains(last, "还剩 4 个 Bot 对话轮次") {
 					t.Fatalf("terminal sticker did not reset quota: %s", last)
 				}
 			}
@@ -994,8 +994,8 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 	provider.mu.Lock()
 	request := provider.requests[len(provider.requests)-1]
 	provider.mu.Unlock()
-	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 4 轮回复") {
-		t.Fatalf("成功 ACK 后应计入一条工具消息，实际=%v", request.Messages)
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 个 Bot 对话轮次") {
+		t.Fatalf("同一对话的工具发送不应额外累计轮次，实际=%v", request.Messages)
 	}
 }
 
@@ -1077,8 +1077,8 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	provider.mu.Lock()
 	request := provider.requests[len(provider.requests)-1]
 	provider.mu.Unlock()
-	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 5 轮回复") {
-		t.Fatalf("失败 ACK 不应计入工具消息，实际=%v", request.Messages)
+	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 个 Bot 对话轮次") {
+		t.Fatalf("失败 ACK 不应重置已触发的对话轮次，实际=%v", request.Messages)
 	}
 }
 
