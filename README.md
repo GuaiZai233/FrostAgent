@@ -1,82 +1,56 @@
 # FrostAgent
 
-FrostAgent is an AI role-playing and agent orchestration framework written in Golang. It supports multiple protocol adapters, such as OneBot, and can be integrated with various instant messaging applications.
+FrostAgent is a Go framework for AI role-playing and agent orchestration. It connects to chat platforms through OneBot v11 or AstrBot and provides a web dashboard for instances, personas, model routing, memory, and tools.
 
 [English](README.md) | [中文](README_zh_CN.md)
 
 [![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
-[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
-[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
+[![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENSE)
 
-## Adapters
+## Documentation
 
-### WebSocket
+The complete Chinese documentation is in [`docs/`](docs/index.md): [introduction](docs/guide/introduction.md), [quick start](docs/guide/quick-start.md), [installation](docs/guide/installation.md), [configuration](docs/reference/configuration.md), [backups](docs/operations/storage.md), and [troubleshooting](docs/operations/troubleshooting.md).
 
-Enable a reverse WebSocket client in your local upstream bot/client, setting the URL to `ws://127.0.0.1:1234/instances/<instance-id>/ws/onebot` (the actual port depends on `WS_LISTEN_ADDR` in your environment variables).
+Run the VitePress site locally:
 
-### Collaboration with ActionsCat
+```bash
+pnpm install --frozen-lockfile
+pnpm docs:dev
+```
 
-[ActionsCat](https://github.com/actionscat/actionscat) supports static orchestration of automated workflows.
-
-After connecting ActionsCat via the adapter, you can run both systems in parallel to leverage the agent's advanced capabilities.
-
-Note: Since active maintenance of the ActionsCat project is currently suspended, you may choose alternative solutions for your bot's plugin ecosystem.
-
-### Collaboration with Frameworks Such as AstrBot
-
-When connected via adapters, FrostAgent can replace the LLM response module of agent frameworks like AstrBot without disrupting their rich plugin ecosystems.
-
-You can use the dedicated AstrBot plugin: [astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) to establish the connection. The default FrostAgent endpoint is `ws://127.0.0.1:1234/instances/<instance-id>/ws/astrbot`. Simply configure the communication between AstrBot and its upstream IM platform, and FrostAgent will take over message processing. **Note**: Please disable AstrBot's built-in LLM response module!
+Use `pnpm docs:build` and `pnpm docs:preview` for production output and preview. The documentation site is built separately from the Bot dashboard.
 
 ## Quick Start
 
-### 1. Build the Project
-
-This project uses the root `Makefile` for build orchestration.
+Prepare Go ≥ 1.25.3, Node.js 22+, pnpm 10.33.0, Buf, Make, and Bash:
 
 ```bash
-# Install Node.js dependencies (Angular toolchain, etc.)
-# This project uses pnpm as the package manager
-pnpm install
-
-# Install buf for protobuf code generation
+pnpm install --frozen-lockfile
 go install github.com/bufbuild/buf/cmd/buf@latest
-
-# Build everything - backend Go binaries + frontend Angular app
 make build
-```
-
-Compiled backend binaries will be located in `./bin/`, and frontend static assets will be placed in `internal/frontend/dist/`.
-
-You can also build individual components:
-
-```bash
-make build-api    # Build backend with embedded frontend
-make build-web    # Build frontend only
-```
-
-### 2. Choose a database
-
-SQLite is the default. FrostAgent creates `data/frostagent.db` on first start. Open **Settings > Database Settings** to choose PostgreSQL and enter its connection address; an empty address is rejected. The selection is kept in the local SQLite bootstrap table so it can be read before connecting to PostgreSQL. Switching connects to the target database and loads its existing settings and instances without migrating data. Use the instance backup and restore tools to move data manually. Only one FrostAgent process may use a PostgreSQL database at a time.
-
-**Breaking change:** JSON and `.env` runtime storage are no longer loaded or migrated. Back up existing data before replacing an earlier version. SQL schemas from the v7 baseline upgrade through ordered, non-destructive migrations; a database from a newer binary or before v7 is rejected without modification. The dashboard's **Settings > Backup & Restore** page downloads a versioned per-instance ZIP, `setting.json`, and `memory.json`. ZIP exports are limited to 512 MiB of expanded data and 512 MiB of archive bytes. Exports omit secrets and credential sources. A full ZIP restore creates a new disabled instance; configure credentials and adapters before enabling it.
-
-### 3. Start the Service
-
-```bash
 go run ./cmd/app
 ```
 
-Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure providers, models and instance routing together under **模型路由器**, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
+For a Windows PowerShell build without Make or Bash, see [installation](docs/guide/installation.md).
 
-## Shared providers and instance routing
+Open `http://127.0.0.1:8080`, create and select an instance, add a provider and model in **模型路由器**, publish its dialogue binding, and enable it from **概览**. Validate a temporary session through **直接对话** before connecting a real platform.
 
-**模型路由器** keeps Endpoints, Models, instance default routes and group overrides in one page. Provider URLs, credentials, enabled states and model definitions are shared across all instances in the selected database, even before an instance exists. Default workload models and group overrides belong to the selected Bot. Publishing applies changes to the shared catalog and the current instance's routes; if one scope fails, the page reports any completed publication and keeps the remaining edits for retry. Published provider changes apply to new requests immediately; an ongoing turn retains its URL and credential snapshot. Deleting an instance preserves shared providers. Models referenced by instance routes cannot be deleted.
+Current application settings and durable data use SQL, with `data/frostagent.db` as the default SQLite database and PostgreSQL selectable in the dashboard. No `.env.example` is required. Legacy `.env` and JSON directories are not automatically migrated; see [upgrade notes](docs/operations/upgrading.md). Providers, credentials, and models are shared; personas, routes, memory, sessions, and MCP configuration belong to each instance.
 
-Schema v11 stores the shared catalog in `provider_endpoints`, `provider_models`, `provider_secrets` and `provider_revision`. `model_bindings` and `model_revisions` remain instance scoped. Upgrades from v7–v10 copy providers and remap conflicting IDs, names and route references transactionally, retaining the old tables as inactive migration archives. Fresh databases use only the new structure. Manually modified databases containing duplicate Windows credential endpoint IDs are rejected without changing their schema version or source data.
+## Adapters
 
-Instance backups include only referenced provider/model definitions and omit credentials. Copying or restoring an instance reuses matching shared definitions and their existing credentials. Conflicting definitions receive new IDs and empty credentials, with imported routes remapped accordingly; other instances and shared credentials remain unchanged.
+Copy the instance-specific address from Overview and configure a reverse WebSocket client in the upstream:
 
-## License
+```text
+ws://127.0.0.1:1234/instances/<instance-id>/ws/onebot
+ws://127.0.0.1:1234/instances/<instance-id>/ws/astrbot
+```
 
-MPL-2.0 (see LICENSE file)
+For AstrBot, install the [dedicated plugin](adapters/astrbot_plugin_frostagent) and disable AstrBot's own LLM replies. Across containers, use reachable hosts and configure the plugin's HTTP base URL for sticker images.
+
+## Development and License
+
+See [Development.md](Development.md) and the [development guide](docs/development/index.md). The dashboard uses Vite and native TypeScript and is embedded in the Go executable.
+
+Released under [MPL-2.0](LICENSE).
