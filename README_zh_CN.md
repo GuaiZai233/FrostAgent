@@ -73,6 +73,36 @@ go run ./cmd/app
 
 打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，在“模型供应商”中统一配置 Provider 和模型，再在“实例模型路由”中选择当前 Bot 的模型，最后打开概览中的「是否启用」。设置、记忆、模型路由、MCP、示例对话、贴图元数据和群摘要存入 SQL；贴图图片字节仍在实例文件目录中。设置修改后自动应用，无需手动重启进程。
 
+## Docker 部署
+
+在仓库根目录使用 Docker Compose 启动：
+
+```bash
+docker compose up -d --build
+docker compose logs -f frostagent
+```
+
+打开 `http://localhost:8080`，按上面的步骤创建实例。适配器地址为 `ws://localhost:1234/instances/<实例ID>/ws/onebot`（或 `/ws/astrbot`）。同一 Compose 网络中的上游客户端可使用 `ws://frostagent:1234/instances/<实例ID>/ws/onebot`。
+
+Dockerfile 从源码生成 protobuf 并构建嵌入前端。运行时使用 UID/GID `10001:10001`，包含 CA 证书与时区数据。仅镜像的缺省监听地址为 `0.0.0.0:8080`、`0.0.0.0:1234`；普通构建仍默认监听本地回环地址。已有 SQL 设置优先，请通过控制台配置；`.env` 文件及应用环境变量不会被加载。
+
+Compose 默认只将两个端口发布到宿主机的 `127.0.0.1`。如需其他机器访问，请调整宿主机端口绑定，在控制台将完整的控制台地址填入 `HTTP_ALLOWED_ORIGINS`，并在管理界面前部署已有的访问控制。浏览器适配器跨域时需配置 `WS_ALLOWED_ORIGINS`。复用已保存本地回环监听设置的数据库前，请先将监听地址改为 `0.0.0.0`；修改 SQL 中的容器监听端口后，还需同步修改 Compose 端口映射。
+
+经 Docker 桥接网络转发的请求在 FrostAgent 看来来自非回环地址，即使浏览器使用 `localhost`。使用受令牌保护的 MCP、安全等接口时，请在后端设置配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN`，并在前端设置填写相同令牌。
+
+`frostagent-data` 命名卷保存 `/app/data`，包含 SQLite、PostgreSQL 引导选择和贴图文件。`docker compose down` 会保留数据，`docker compose down -v` 会删除数据。升级前请备份数据卷及外部 PostgreSQL 数据库。如果改用宿主机目录挂载，请确保 UID/GID `10001:10001` 对目录具有写权限。
+
+也可直接使用 Docker：
+
+```bash
+docker build -t frostagent:local .
+docker run -d --name frostagent --init --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:1234:1234 \
+  -v frostagent-data:/app/data frostagent:local
+```
+
+容器内的 `localhost` 指向容器自身。连接 PostgreSQL、模型供应商和沙箱网关时，请使用服务名或容器可达的宿主机地址。镜像不包含 Node.js、Python 等 stdio MCP 所需程序，可使用 HTTP MCP 服务，或自行扩展镜像安装所需工具。命令执行仍通过外部沙箱网关进行。
+
 ## 共享模型供应商与实例路由
 
 “模型供应商”无需选中实例即可使用。Provider 的地址、凭据、启停状态和模型目录在当前数据库内共享；每个实例独立保存六类任务的默认模型与群覆盖。修改 Provider 后所有实例的新请求即时使用新配置，已开始的对话保留其地址与凭据快照。删除实例不会删除共享供应商；删除仍被实例路由引用的模型会被拒绝。

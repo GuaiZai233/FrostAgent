@@ -32,11 +32,11 @@ func run() error {
 	desiredHandlers := func(global *instanceconfig.Store) map[string]http.Handler {
 		listen := global.Get("LISTEN_ADDR")
 		if listen == "" {
-			listen = "127.0.0.1:8080"
+			listen = instanceconfig.DefaultListenAddr
 		}
 		wsListen := global.Get("WS_LISTEN_ADDR")
 		if wsListen == "" {
-			wsListen = "127.0.0.1:1234"
+			wsListen = instanceconfig.DefaultWSListenAddr
 		}
 		handlers := map[string]http.Handler{listen: corsMiddleware(mux, global.Get)}
 		if wsListen != listen {

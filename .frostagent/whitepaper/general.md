@@ -9,6 +9,14 @@
 
 ## FrostAgent 的组成
 
+### Docker 部署
+
+根目录 `Dockerfile` 分别构建 TypeScript 前端和 Go protobuf，并将前端嵌入 `cmd/app` 静态二进制。运行镜像以 UID/GID `10001:10001` 启动，提供 CA 证书和时区数据；数据统一挂载到 `/app/data`，默认 Compose 使用命名卷，同时保存 SQL 引导信息与贴图字节。
+
+镜像通过 Go 链接参数仅将缺省监听地址改为 `0.0.0.0:8080`、`0.0.0.0:1234`；普通构建保持 `127.0.0.1`。SQL 中的监听设置始终优先，不引入环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布端口；已有 Host、Origin 和控制面鉴权规则继续生效，远程部署需通过设置与外部访问控制显式配置。
+
+Docker CI 构建镜像并以临时命名卷验证前端资源、非 root 启动、适配器端口隔离、WebSocket 握手、SQL 监听设置优先级、正常退出和重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+
 ### 并发回归验证
 
 每次面向 main 的 PR 和 main 推送，Linux CI 都运行 `go test -race`，覆盖实例生命周期、安全服务、LLM（含会话与群聊压缩）、记忆存储与反思、群摘要存储、模型路由，以及 OneBot / AstrBot 适配器。检测命令与包列表以 `.github/workflows/ci.yml` 的 `Run concurrency and race regressions` 步骤为准，单包超时为 300 秒。
