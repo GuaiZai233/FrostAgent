@@ -11,13 +11,14 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1783,12 +1784,31 @@ func (d *dummyTestTool) Execute(args string) (string, error) {
 	return "ok", nil
 }
 
+type safeConsoleBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeConsoleBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeConsoleBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 func TestOneBotProactiveTriggerLogging(t *testing.T) {
 	// 验证：一旦触发主动回复逻辑就在日志里写一条SYSTEM级别INFO：【触发主动回复逻辑】，在控制台不隐藏
 	scope := newTestScopeWithEnv(t, map[string]string{
 		"PROACTIVE_REPLY_PROBABILITY": "1.00",
 	})
 	scope.Logger = logs.New("test-onebot-proactive-1", "test-onebot-proactive-1", 100)
+	var consoleBuf safeConsoleBuffer
+	scope.Logger.SetConsoleOutput(&consoleBuf)
 
 	provider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
@@ -1820,13 +1840,6 @@ func TestOneBotProactiveTriggerLogging(t *testing.T) {
 	defer conn.Close()
 
 	// 1. 触发主动回复的群聊消息
-	rPipe, wPipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("创建 pipe 失败: %v", err)
-	}
-	prevStdout := os.Stdout
-	os.Stdout = wPipe
-
 	event := model.OneBotEvent{
 		SelfID:      30001,
 		PostType:    "message",
@@ -1838,9 +1851,6 @@ func TestOneBotProactiveTriggerLogging(t *testing.T) {
 	}
 	b, _ := json.Marshal(event)
 	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
-		os.Stdout = prevStdout
-		_ = wPipe.Close()
-		_ = rPipe.Close()
 		t.Fatalf("发送事件失败: %v", err)
 	}
 
@@ -1876,17 +1886,10 @@ func TestOneBotProactiveTriggerLogging(t *testing.T) {
 		}
 	}
 	if !gotMsg {
-		os.Stdout = prevStdout
-		_ = wPipe.Close()
-		_ = rPipe.Close()
 		t.Fatalf("期望收到主动回复出站消息")
 	}
 
-	os.Stdout = prevStdout
-	_ = wPipe.Close()
-	consoleBytes, _ := io.ReadAll(rPipe)
-	_ = rPipe.Close()
-	consoleOutput := string(consoleBytes)
+	consoleOutput := consoleBuf.String()
 
 	// 验证日志快照中有 SYSTEM 级别的 INFO 日志：【触发主动回复逻辑】
 	var foundSystemLog bool
@@ -1910,6 +1913,9 @@ func TestOneBotProactiveTriggerLogging(t *testing.T) {
 		"PROACTIVE_REPLY_PROBABILITY": "1.00",
 	})
 	scopeExplicit.Logger = logs.New("test-onebot-explicit-2", "test-onebot-explicit-2", 100)
+	var explicitConsoleBuf safeConsoleBuffer
+	scopeExplicit.Logger.SetConsoleOutput(&explicitConsoleBuf)
+
 	engineExplicit := newTestEngine(provider)
 	engineExplicit.Scope = scopeExplicit
 	srvExplicit, wsURLExplicit := startWSTestServer(engineExplicit)
@@ -1968,5 +1974,8 @@ func TestOneBotProactiveTriggerLogging(t *testing.T) {
 		if entry.Content == "【触发主动回复逻辑】" {
 			t.Fatalf("显式唤醒不应输出【触发主动回复逻辑】日志")
 		}
+	}
+	if strings.Contains(explicitConsoleBuf.String(), "【触发主动回复逻辑】") {
+		t.Fatalf("显式唤醒控制台输出不应包含【触发主动回复逻辑】")
 	}
 }
