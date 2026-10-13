@@ -283,11 +283,12 @@ class FrostAgentWSClient:
                 except Exception as e:
                     logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
 
-    async def send_event(self, event_data: dict[str, Any]) -> None:
+    async def send_event(self, event_data: dict[str, Any]) -> bool:
         if is_ws_open(self.ws):
             await self.ws.send(json.dumps(event_data))
-        else:
-            logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+            return True
+        logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+        return False
 
     async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
         await self.send_event({
@@ -302,6 +303,19 @@ class FrostAgentWSClient:
             action = json.loads(raw_msg)
         except Exception as e:
             logger.error(f"[frostagent-adapter] 解析出站动作失败: {e}, 原始数据: {raw_msg}")
+            return
+
+        if action.get("type") == "quote_lookup":
+            event_message_id = str(action.get("event_message_id") or "")
+            queue = self._pending_queues.get(event_message_id)
+            if queue:
+                await queue.put(action)
+            else:
+                await self.send_event({
+                    "type": "quote_lookup_result",
+                    "echo": action.get("echo", ""),
+                    "data": {},
+                })
             return
 
         echo = action.get("echo", "")
@@ -368,6 +382,9 @@ class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self._configuration_error: Optional[str] = None
+        self._bot_loop_locks: dict[str, asyncio.Lock] = {}
+        self._bot_loop_last_forwarded_sender: dict[str, str] = {}
+        self._bot_loop_interrupted: set[str] = set()
         try:
             self.settings = load_settings(config)
         except WSURLConfigurationError as exc:
@@ -392,25 +409,48 @@ class FrostAgentAdapter(Star):
         if self._configuration_error:
             return
 
-        payload = await build_frostagent_payload(event)
-        payload["sticker_delivery_receipt"] = True
-        msg_id = payload["message_id"]
-
-        if not payload.get("content") and not payload.get("attachments"):
-            is_group_interaction = payload.get("message_type") == "group" and (
-                payload.get("is_wake") or payload.get("is_at")
-            )
-            if not is_group_interaction:
-                return
-
-        if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
-            if not payload.get("is_wake") and not payload.get("is_at"):
-                return
-
-        # 注册该事件的响应队列
-        queue = self.client.register_waiter(msg_id)
+        # Serialize local sender tracking through the actual send for this session.
+        # Filtered group messages never leave the plugin.
+        if not hasattr(self, "_bot_loop_locks"):
+            self._bot_loop_locks = {}
+            self._bot_loop_last_forwarded_sender = {}
+            self._bot_loop_interrupted = set()
+        group_id = extract_group_id(event)
+        session_key = f"{_extract_platform_name(event)}:group:{group_id}" if group_id else ""
+        lock = self._bot_loop_locks.setdefault(session_key, asyncio.Lock()) if session_key else asyncio.Lock()
+        queue = None
+        msg_id = ""
         try:
-            await self.client.send_event(payload)
+            async with lock:
+                payload = await build_frostagent_payload(event)
+                payload["sticker_delivery_receipt"] = True
+                msg_id = payload["message_id"]
+                if session_key:
+                    previous = self._bot_loop_last_forwarded_sender.get(session_key)
+                    if previous is not None and previous != payload["user_id"]:
+                        self._bot_loop_interrupted.add(session_key)
+
+                if not payload.get("content") and not payload.get("attachments"):
+                    is_group_interaction = payload.get("message_type") == "group" and (
+                        payload.get("is_wake") or payload.get("is_at")
+                    )
+                    if not is_group_interaction:
+                        return
+
+                if session_key and not self.settings.forward_all_group_messages:
+                    if not payload.get("is_wake") and not payload.get("is_at"):
+                        return
+
+                if session_key:
+                    payload["bot_loop_interrupted"] = (
+                        previous is None or session_key in self._bot_loop_interrupted
+                    )
+                queue = self.client.register_waiter(msg_id)
+                if not await self.client.send_event(payload):
+                    return
+                if session_key:
+                    self._bot_loop_last_forwarded_sender[session_key] = payload["user_id"]
+                    self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
             frostagent_replied = False
@@ -420,6 +460,22 @@ class FrostAgentAdapter(Star):
                 except asyncio.TimeoutError:
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
+
+                if action.get("type") == "quote_lookup":
+                    quote_data = {}
+                    if (
+                        _extract_platform_name(event) == "aiocqhttp"
+                        and action.get("event_message_id") == msg_id
+                    ):
+                        quote_data = await lookup_reply_onebot_message(
+                            event, str(action.get("message_id") or "")
+                        )
+                    await self.client.send_event({
+                        "type": "quote_lookup_result",
+                        "echo": action.get("echo", ""),
+                        "data": quote_data,
+                    })
+                    continue
 
                 # 如果收到 noop 动作：
                 # 若为管理员指令静默丢弃 (admin_silent_drop / suppress_llm)，需抑制 AstrBot 默认 LLM 处理，
@@ -464,7 +520,8 @@ class FrostAgentAdapter(Star):
                 if not action.get("is_intermediate", False):
                     break
         finally:
-            self.client.unregister_waiter(msg_id)
+            if queue is not None:
+                self.client.unregister_waiter(msg_id)
 
     async def terminate(self):
         await self.client.stop()
@@ -533,6 +590,8 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     }
     if reply_message_id:
         metadata["reply_message_id"] = reply_message_id
+        if platform == "aiocqhttp" and callable(getattr(first_attr(event, "bot"), "call_action", None)):
+            metadata["quote_lookup_supported"] = True
     payload["metadata"] = metadata
     return payload
 
@@ -902,14 +961,14 @@ def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
     return onebot_segments_from_payload(raw_event)
 
 
-async def lookup_reply_onebot_segments(
+async def lookup_reply_onebot_message(
     event: AstrMessageEvent,
     message_id: str,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     bot = first_attr(event, "bot")
     call_action = getattr(bot, "call_action", None)
-    if not callable(call_action):
-        return []
+    if not callable(call_action) or not message_id:
+        return {}
 
     lookup_id: int | str = message_id
     if re.fullmatch(r"-?\d+", message_id):
@@ -932,13 +991,34 @@ async def lookup_reply_onebot_segments(
                 timeout=REPLY_LOOKUP_TIMEOUT_SECONDS,
             )
     except Exception as exc:
-        logger.warning(
-            f"[frostagent-adapter] 回查引用消息 {message_id} 失败，"
-            f"无法恢复可能被 AstrBot 丢弃的 mface: {exc}"
-        )
-        return []
-    return onebot_segments_from_payload(response)
+        logger.warning(f"[frostagent-adapter] 回查引用消息 {message_id} 失败: {exc}")
+        return {}
 
+    if first_attr(response, "retcode") not in (None, 0):
+        return {}
+    if first_attr(response, "status") not in (None, "ok"):
+        return {}
+    data = first_attr(response, "data")
+    if data is None:
+        data = response
+    result = {}
+    for key in (
+        "message_id", "message_type", "group_id", "user_id",
+        "target_id", "peer_id", "time", "message",
+    ):
+        value = first_attr(data, key)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+async def lookup_reply_onebot_segments(
+    event: AstrMessageEvent,
+    message_id: str,
+) -> list[dict[str, Any]]:
+    return onebot_segments_from_payload(
+        await lookup_reply_onebot_message(event, message_id)
+    )
 
 async def sticker_attachments_from_segments(
     segments: list[dict[str, Any]],

@@ -43,6 +43,11 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 	if got := before.Scope.Getenv("BOT_NAME"); got != "HotBot" {
 		t.Fatalf("runtime still sees old name %q", got)
 	}
+	update("ENABLE_QUOTE_TRACE", "false")
+	update("QUOTE_TRACE_DEPTH", "3")
+	update("BOT_LOOP_USER_IDS", "onebot:synthetic-bot")
+	update("BOT_LOOP_MAX_TURNS", "2")
+	update("BOT_LOOP_MODE", "hard")
 	update("SANDBOX_ENABLED", "false")
 	update("STICKER_ACTIVITY_MODE", "all_messages")
 	update("SANDBOX_BASE_URL", "https://synthetic-sandbox.example")

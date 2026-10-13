@@ -150,6 +150,78 @@ func TestIngressDispatchesPlainTextOnceWithoutDialogueWake(t *testing.T) {
 	}
 }
 
+func TestHardBotLoopPreservesIndependentIngressDispatch(t *testing.T) {
+	for _, name := range []string{"onebot", "astrbot"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("BOT_LOOP_USER_IDS", "onebot:1,test-platform:synthetic-user")
+			t.Setenv("BOT_LOOP_MAX_TURNS", "1")
+			t.Setenv("BOT_LOOP_MODE", "hard")
+			received := make(chan actionscat.MessageEvent, 2)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var event actionscat.MessageEvent
+				if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				received <- event
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer backend.Close()
+			adapter, engine, first := ingressCase(name, "private", "first")
+			modelCalls := make(chan struct{}, 2)
+			engine.Provider = emptyProvider{calls: modelCalls}
+			adapter.SetIncomingDispatcher(dispatchClient(backend.URL))
+			connection := startIngress(t, adapter, false)
+			if err := connection.WriteJSON(first); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case event := <-received:
+				if event.Text != "first" {
+					t.Fatalf("first dispatch: %+v", event)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("first message did not reach ActionsCat")
+			}
+			select {
+			case <-modelCalls:
+			case <-time.After(2 * time.Second):
+				t.Fatal("first message did not start a dialogue")
+			}
+
+			var second any
+			switch event := first.(type) {
+			case model.OneBotEvent:
+				event.MessageID = 2
+				event.Message, _ = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": "second"}}})
+				second = event
+			case astrbot.Event:
+				event.MessageID = "synthetic-second"
+				event.Content = "second"
+				second = event
+			default:
+				t.Fatalf("unexpected adapter event type %T", first)
+			}
+			if err := connection.WriteJSON(second); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case event := <-received:
+				if event.Text != "second" {
+					t.Fatalf("over-limit dispatch: %+v", event)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("over-limit message was lost before ActionsCat dispatch")
+			}
+			select {
+			case <-modelCalls:
+				t.Fatal("over-limit message invoked the dialogue model")
+			case <-time.After(150 * time.Millisecond):
+			}
+		})
+	}
+}
+
 type filteringClassifier struct{}
 
 func (filteringClassifier) Classify(context.Context, security.ClassificationInput) (security.ClassificationResult, error) {

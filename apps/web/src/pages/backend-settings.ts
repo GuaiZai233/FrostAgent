@@ -44,6 +44,8 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let groupReplyOnMention = false;
   let enableAtOther = false;
   let enableReplyOther = false;
+  let quoteTraceDepth = 5;
+  let quoteTraceSaving = false;
   let proactiveReplyEnabled = false;
   let proactiveReplyProbability = 0.05;
   let stickerActivity = 0;
@@ -52,6 +54,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
   let stickerEditSeq = 0;
   let proactiveWhitelistEnabled = false;
   let proactiveWhitelistGroups: string[] = [];
+  let botLoopSaving = false;
   const sessionGroupMap = new Map<string, string>();
 
   container.innerHTML = `
@@ -192,6 +195,33 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             </div>
           </div>
 
+          <!-- Bot loop guard -->
+          <div class="mb-4 pb-4 border-b border-border">
+            <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
+            <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
+            <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">标记为 Bot 的用户 ID</span>
+                <input id="bot-loop-user-ids" type="text" class="input input-sm font-mono text-xs" placeholder="用户 ID，多个用逗号分隔" />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">最多连续轮数</span>
+                <input id="bot-loop-max-turns" type="number" class="input input-sm font-mono text-xs w-28" min="1" step="1" value="3" />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">超限处理</span>
+                <select id="bot-loop-mode" class="input input-sm text-xs">
+                  <option value="soft">非强制：提示静默</option>
+                  <option value="hard">强制：丢弃请求</option>
+                </select>
+              </label>
+            </div>
+            <div class="flex items-center justify-between gap-2 mt-2">
+              <span class="text-[11px] text-muted">留空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+              <button type="button" id="bot-loop-save" class="btn btn-primary btn-sm shrink-0">保存</button>
+            </div>
+          </div>
+
           <div class="mb-4 pb-4 border-b border-border" id="sticker-activity-card">
             <div class="flex items-center justify-between mb-3 gap-2">
               <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
@@ -236,6 +266,22 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                   <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
                 </div>
               </label>
+            </div>
+          </div>
+
+          <div class="mt-4 p-3.5 rounded-lg border border-border flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-2.5">
+              <span class="text-xs font-semibold text-foreground">引用追溯</span>
+              <label class="toggle-switch" title="引用追溯">
+                <input type="checkbox" id="quote-trace-cb" role="switch" aria-label="引用追溯" />
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="flex items-center gap-2">
+              <label for="quote-trace-depth" class="text-xs text-muted">追溯深度</label>
+              <input type="number" id="quote-trace-depth" class="input input-sm font-mono w-20"
+                min="1" max="10" step="1" value="5" />
+              <span class="text-xs text-muted">层（1～10，默认 5）</span>
             </div>
           </div>
         </article>
@@ -312,11 +358,18 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     '#proactive-whitelist-tags',
   )!;
 
+  const botLoopUserIDsInput = container.querySelector<HTMLInputElement>('#bot-loop-user-ids')!;
+  const botLoopMaxTurnsInput = container.querySelector<HTMLInputElement>('#bot-loop-max-turns')!;
+  const botLoopModeSelect = container.querySelector<HTMLSelectElement>('#bot-loop-mode')!;
+  const botLoopSaveButton = container.querySelector<HTMLButtonElement>('#bot-loop-save')!;
+
   const groupMentionCb =
     container.querySelector<HTMLInputElement>('#group-mention-cb')!;
   const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
   const groupReplyCb =
     container.querySelector<HTMLInputElement>('#group-reply-cb')!;
+  const quoteTraceCb = container.querySelector<HTMLInputElement>('#quote-trace-cb')!;
+  const quoteTraceDepthInput = container.querySelector<HTMLInputElement>('#quote-trace-depth')!;
 
   const settingsRoot = container.querySelector<HTMLElement>('#settings-form')!;
   const extraEnvList = container.querySelector<HTMLElement>('#extra-env-list')!;
@@ -537,6 +590,15 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
       enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
       enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
+      const depthValue = Number(getVal('QUOTE_TRACE_DEPTH'));
+      quoteTraceDepth = Number.isInteger(depthValue) && depthValue >= 1 && depthValue <= 10
+        ? depthValue : 5;
+      quoteTraceCb.checked = getVal('ENABLE_QUOTE_TRACE') !== 'false';
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+      quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
+      botLoopUserIDsInput.value = getVal('BOT_LOOP_USER_IDS');
+      botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
+      botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
 
       const probValStr = getVal('PROACTIVE_REPLY_PROBABILITY');
       const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
@@ -769,6 +831,48 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
     await proactiveSync.setTarget(proactiveReplyEnabled, val);
   }
 
+  function setBotLoopSaving(saving: boolean) {
+    botLoopSaving = saving;
+    botLoopUserIDsInput.disabled = saving;
+    botLoopMaxTurnsInput.disabled = saving;
+    botLoopModeSelect.disabled = saving;
+    botLoopSaveButton.disabled = saving;
+    botLoopSaveButton.textContent = saving ? '保存中...' : '保存';
+  }
+
+  botLoopSaveButton.addEventListener('click', () => {
+    if (botLoopSaving) return;
+    const maxTurns = Number(botLoopMaxTurnsInput.value);
+    if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
+      toast.error('最多连续轮数必须为正整数');
+      return;
+    }
+    const userIDs = botLoopUserIDsInput.value.split(/[,;\s]+/).filter(Boolean).join(',');
+    const mode = botLoopModeSelect.value === 'hard' ? 'hard' : 'soft';
+    void (async () => {
+      setBotLoopSaving(true);
+      try {
+        for (const [key, value] of [
+          ['BOT_LOOP_MAX_TURNS', String(maxTurns)],
+          ['BOT_LOOP_MODE', mode],
+          ['BOT_LOOP_USER_IDS', userIDs],
+        ]) {
+          const res = await api.updateEnvVar({ key, value, isSecret: false });
+          if (!res.success) throw new Error(res.error || key + ' 保存失败');
+        }
+        toast.success('Bot 连续对话设置已保存');
+      } catch (err) {
+        toast.error(
+          '保存未完成，部分设置可能已生效；正在重新加载实际设置: ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      } finally {
+        await loadData();
+        if (!isUnmounted) setBotLoopSaving(false);
+      }
+    })();
+  });
+
   // Group cb handlers
   groupMentionCb.addEventListener(
     'change',
@@ -787,6 +891,35 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         groupReplyCb.checked,
       ),
   );
+
+  quoteTraceCb.addEventListener('change', () => {
+    quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
+    void toggleGroupSetting('ENABLE_QUOTE_TRACE', quoteTraceCb.checked);
+  });
+  quoteTraceDepthInput.addEventListener('change', async () => {
+    const depth = Number(quoteTraceDepthInput.value);
+    if (!Number.isInteger(depth) || depth < 1 || depth > 10) {
+      toast.error('引用追溯深度必须是 1 到 10 的整数');
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+      return;
+    }
+    quoteTraceSaving = true;
+    quoteTraceDepthInput.disabled = true;
+    try {
+      const result = await api.updateEnvVar({
+        key: 'QUOTE_TRACE_DEPTH', value: String(depth), isSecret: false,
+      });
+      if (!result.success) throw new Error(result.error || '保存失败');
+      quoteTraceDepth = depth;
+      toast.success('引用追溯深度已更新');
+    } catch (err) {
+      toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
+      quoteTraceDepthInput.value = String(quoteTraceDepth);
+    } finally {
+      quoteTraceSaving = false;
+      if (!isUnmounted) quoteTraceDepthInput.disabled = !quoteTraceCb.checked;
+    }
+  });
 
   // Proactive reply event handlers
   stickerActivitySlider.addEventListener('input', () => {
