@@ -5,6 +5,7 @@ import { escapeHtml, formatCount, formatDateTime, formatPlatform, isGroupSession
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
+import { openGroupModelConfig } from '../components/group-model-config';
 import { confirmDialog } from '../components/confirm';
 import { attachPaginationEvents, renderPagination } from '../components/pagination';
 import { copyToClipboard } from '../utils/clipboard';
@@ -39,6 +40,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   const tokenStack = new PageTokenStack();
   let pageSize = 20;
   let summaryDialogClose: (() => void) | null = null;
+  let modelDialogClose: (() => void) | null = null;
   const pageAbortController = new AbortController();
 
   container.innerHTML = `
@@ -384,15 +386,18 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     const groupId = session && isGroupSession(session)
       ? groupIdFromSessionId(session.sessionId)
       : '';
-    const modelConfigHref = session
-      ? groupId
-        ? `#/model-router?platform=${encodeURIComponent(session.platform || 'onebot')}&group_id=${encodeURIComponent(groupId)}`
-        : '#/model-router'
-      : undefined;
     inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
       showRawToggle: true,
       title,
-      modelConfigHref,
+      modelConfigHref: session && !groupId ? '#/model-router' : undefined,
+      onConfigureModel: session && groupId
+        ? () => {
+          modelDialogClose?.();
+          modelDialogClose = openGroupModelConfig(session.platform, groupId, api, () => {
+            if (!isUnmounted && selectedSessionId === session.sessionId) void loadSessionContext(session.sessionId);
+          });
+        }
+        : undefined,
       onViewSummary: session && isGroupSession(session)
         ? () => showSummaryDialog(session)
         : undefined,
@@ -531,6 +536,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     isUnmounted = true;
     pageAbortController.abort();
     summaryDialogClose?.();
+    modelDialogClose?.();
     if (inspectorCleanup) {
       inspectorCleanup();
       inspectorCleanup = null;
