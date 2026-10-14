@@ -117,12 +117,11 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
                   <input
                     type="number"
                     id="proactive-reply-number"
-                    class="input input-sm font-mono text-right"
+                    class="input input-sm settings-default-input font-mono text-right"
                     min="0.01"
                     max="1.00"
                     step="0.01"
-                    value="0.05"
-                    placeholder="0.05"
+                    placeholder="0.01"
                     style="width: 5.5rem;"
                   />
                   <span class="text-xs text-muted">/ 1.0</span>
@@ -195,11 +194,12 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
               </label>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">最多连续轮数</span>
-                <input id="bot-loop-max-turns" type="number" class="input input-sm font-mono text-xs w-28" min="1" step="1" value="3" required />
+                <input id="bot-loop-max-turns" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="1" step="1" placeholder="3" />
               </label>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">超限处理</span>
-                <select id="bot-loop-mode" class="input input-sm text-xs">
+                <select id="bot-loop-mode" class="input input-sm settings-default-select text-xs">
+                  <option value="">默认（提示静默）</option>
                   <option value="soft">非强制：提示静默</option>
                   <option value="hard">强制：丢弃请求</option>
                 </select>
@@ -215,11 +215,12 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
               <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
               <div class="flex items-center gap-2">
                 <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
-                <input type="number" id="sticker-activity-number" class="input input-sm w-16 text-right" min="0" max="10" step="1" value="0" required aria-label="表情包使用积极度数值" />
+                <input type="number" id="sticker-activity-number" class="input input-sm settings-default-input w-16 text-right" min="0" max="10" step="1" placeholder="0" aria-label="表情包使用积极度数值" />
               </div>
             </div>
             <label for="sticker-activity-mode" class="text-xs font-medium text-foreground">计数方式</label>
-            <select id="sticker-activity-mode" class="select w-full mt-1 mb-2">
+            <select id="sticker-activity-mode" class="select settings-default-select w-full mt-1 mb-2">
+              <option value="">默认（按 Bot 对话轮次）</option>
               <option value="bot_turns">按 Bot 对话轮次</option>
               <option value="all_messages">按收到的消息条数</option>
             </select>
@@ -269,14 +270,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             </div>
             <div class="flex items-center gap-2">
               <label for="quote-trace-depth" class="text-xs text-muted">追溯深度</label>
-              <input type="number" id="quote-trace-depth" class="input input-sm font-mono w-20"
-                min="1" max="10" step="1" value="5" />
+              <input type="number" id="quote-trace-depth" class="input input-sm settings-default-input font-mono w-20"
+                min="1" max="10" step="1" placeholder="5" />
               <span class="text-xs text-muted">层（1～10，默认 5）</span>
             </div>
           </div>
         </article>
 
-        <p class="text-[11px] text-muted">删除自定义配置的回退提示按已保存配置计算；关联设置同时修改时，保存后重新计算。</p>
         <div id="settings-form" class="flex flex-col gap-4"></div>
         <article class="card p-4">
           <h2 class="card-title text-sm font-semibold">额外 env 注入</h2>
@@ -316,13 +316,15 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   const stickerMode = element<HTMLSelectElement>('sticker-activity-mode');
   const quote = element<HTMLInputElement>('quote-trace-cb');
   const quoteDepth = element<HTMLInputElement>('quote-trace-depth');
-  probability.required = stickerNumber.required = quoteDepth.required = true;
   const numericControls: Record<string, HTMLInputElement> = {
     PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
     QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
   };
 
-  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value; }
+  function invalidNumbers(): HTMLInputElement[] {
+    return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
+  }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || invalidNumbers().length > 0; }
   function updateBanner(): void {
     banner.hidden = !dirty();
     saveBtn.disabled = saving || loading || !draft;
@@ -342,11 +344,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       settingsRoot.innerHTML = '<div class="card p-8 text-center text-muted">加载设置后即可编辑</div>';
       return;
     }
-    renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change, (key) => {
-      draft!.clear(key);
-      renderForm();
-      updateBanner();
-    }, (key) => draft!.isCleared(key));
+    renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
   }
 
   function renderGroups(): void {
@@ -374,9 +372,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   function updateProbabilityDisplay(): void {
-    const value = Number(probability.value);
+    const text = probability.value || '0.01';
+    const value = Number(text);
     element<HTMLElement>('proactive-reply-prob-display').textContent = Number.isFinite(value)
-      ? `${probability.value} (${Math.round(value * 100)}%)` : '待填写';
+      ? `${text} (${Math.round(value * 100)}%)` : '待填写';
   }
 
   function updateStickerDisplay(): void {
@@ -389,13 +388,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function renderControls(): void {
     if (!draft) return;
     const value = (key: string) => draft!.get(key);
-    const edited = new Set(draft.pending().map(({ key }) => key));
-    const displayed = (key: string, fallback: string) => edited.has(key) ? value(key) : value(key) || fallback;
     proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
       (value('ENABLE_PROACTIVE_REPLY') !== 'false' && Number(value('PROACTIVE_REPLY_PROBABILITY')) > 0);
-    const parsed = Number(value('PROACTIVE_REPLY_PROBABILITY'));
-    probability.value = edited.has('PROACTIVE_REPLY_PROBABILITY') ? value('PROACTIVE_REPLY_PROBABILITY') : parsed >= 0.01 && parsed <= 1 ? String(parsed) : '0.05';
-    probabilitySlider.value = probability.value;
+    probability.value = value('PROACTIVE_REPLY_PROBABILITY');
+    probabilitySlider.value = probability.value || '0.01';
     probability.disabled = probabilitySlider.disabled = !proactive.checked;
     element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
     element<HTMLElement>('proactive-reply-status-text').style.display = 'none';
@@ -408,13 +404,17 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
     }
     quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
-    quoteDepth.value = displayed('QUOTE_TRACE_DEPTH', '5');
+    quoteDepth.value = value('QUOTE_TRACE_DEPTH');
     quoteDepth.disabled = !quote.checked;
     element<HTMLInputElement>('bot-loop-user-ids').value = value('BOT_LOOP_USER_IDS');
-    element<HTMLInputElement>('bot-loop-max-turns').value = displayed('BOT_LOOP_MAX_TURNS', '3');
-    element<HTMLSelectElement>('bot-loop-mode').value = value('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
-    stickerNumber.value = stickerSlider.value = displayed('STICKER_ACTIVITY', '0');
-    stickerMode.value = value('STICKER_ACTIVITY_MODE') === 'all_messages' ? 'all_messages' : 'bot_turns';
+    element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    const loopMode = element<HTMLSelectElement>('bot-loop-mode');
+    loopMode.value = value('BOT_LOOP_MODE');
+    loopMode.dataset.default = String(!loopMode.value);
+    stickerNumber.value = value('STICKER_ACTIVITY');
+    stickerSlider.value = stickerNumber.value || '0';
+    stickerMode.value = value('STICKER_ACTIVITY_MODE');
+    stickerMode.dataset.default = String(!stickerMode.value);
     renderGroups();
     updateProbabilityDisplay();
     updateStickerDisplay();
@@ -511,6 +511,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     if (!draft || saving || loading) return;
     if (groupInput.value) addGroup();
     if ((extraKey.value || extraValue.value) && !addExtra()) return;
+    for (const input of invalidNumbers()) {
+      const disabled = input.disabled;
+      input.disabled = false;
+      input.reportValidity();
+      input.disabled = disabled;
+      return;
+    }
     for (const { key, value } of draft.pending()) {
       if (value === null) continue;
       const input = numericControls[key] ?? container.querySelector<HTMLInputElement>(`input[type="number"][data-setting-input="${key}"]`);
@@ -580,10 +587,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     const input = element<HTMLInputElement>(id);
     input.addEventListener('input', () => change(key, input.value));
   }
-  element<HTMLSelectElement>('bot-loop-mode').addEventListener('change', () => change('BOT_LOOP_MODE', element<HTMLSelectElement>('bot-loop-mode').value));
+  element<HTMLSelectElement>('bot-loop-mode').addEventListener('change', () => {
+    const input = element<HTMLSelectElement>('bot-loop-mode');
+    input.dataset.default = String(!input.value);
+    change('BOT_LOOP_MODE', input.value);
+  });
   proactive.addEventListener('change', () => {
     change('ENABLE_PROACTIVE_REPLY', proactive.checked ? 'true' : 'false');
-    if (proactive.checked && !(Number(draft?.get('PROACTIVE_REPLY_PROBABILITY')) >= 0.01)) change('PROACTIVE_REPLY_PROBABILITY', probability.value || '0.05');
     probability.disabled = probabilitySlider.disabled = !proactive.checked;
     element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
   });
@@ -593,7 +603,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     updateProbabilityDisplay();
   });
   probability.addEventListener('input', () => {
-    probabilitySlider.value = probability.value;
+    probabilitySlider.value = probability.value || '0.01';
     change('PROACTIVE_REPLY_PROBABILITY', probability.value);
     updateProbabilityDisplay();
   });
@@ -603,11 +613,15 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     updateStickerDisplay();
   });
   stickerNumber.addEventListener('input', () => {
-    stickerSlider.value = stickerNumber.value;
+    stickerSlider.value = stickerNumber.value || '0';
     change('STICKER_ACTIVITY', stickerNumber.value);
     updateStickerDisplay();
   });
-  stickerMode.addEventListener('change', () => { change('STICKER_ACTIVITY_MODE', stickerMode.value); updateStickerDisplay(); });
+  stickerMode.addEventListener('change', () => {
+    stickerMode.dataset.default = String(!stickerMode.value);
+    change('STICKER_ACTIVITY_MODE', stickerMode.value);
+    updateStickerDisplay();
+  });
   groupSelect.addEventListener('change', () => { groupInput.value = groupSelect.value; updateBanner(); });
   const addGroup = () => {
     if (!groupInput.value.trim()) return;

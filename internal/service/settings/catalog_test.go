@@ -82,10 +82,10 @@ func TestSettingsResetHintsExplainCodeFallbackAndInheritance(t *testing.T) {
 	for _, value := range response.Msg.EnvVars {
 		hints[value.Key] = value.ResetHint
 	}
-	if !strings.Contains(hints["MAX_CONTEXT_MESSAGES"], "50 条") ||
-		!strings.Contains(hints["SECURITY_GATEWAY_TIMEOUT"], "继承全局配置") || !strings.Contains(hints["SECURITY_GATEWAY_TIMEOUT"], "50s") ||
-		!strings.Contains(hints["SECURITY_CLASSIFIER_TIMEOUT"], "当前实例") || !strings.Contains(hints["SECURITY_CLASSIFIER_TIMEOUT"], "35s") ||
-		!strings.Contains(hints["GROUP_COMPACT_MAX_BUFFER_SIZE"], "300 条") {
+	if hints["MAX_CONTEXT_MESSAGES"] != "50" ||
+		!strings.Contains(hints["SECURITY_GATEWAY_TIMEOUT"], "全局继承") || !strings.Contains(hints["SECURITY_GATEWAY_TIMEOUT"], "50s") ||
+		!strings.Contains(hints["SECURITY_CLASSIFIER_TIMEOUT"], "实例配置") || !strings.Contains(hints["SECURITY_CLASSIFIER_TIMEOUT"], "35s") ||
+		!strings.HasPrefix(hints["GROUP_COMPACT_MAX_BUFFER_SIZE"], "300") {
 		t.Fatalf("reset hints do not match actual fallbacks: %#v", hints)
 	}
 }

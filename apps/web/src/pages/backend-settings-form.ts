@@ -12,8 +12,6 @@ export function renderBackendSettingsForm(
   values: SettingValue[],
   isGlobal: (key: string) => boolean,
   change: (key: string, value: string) => void,
-  clear: (key: string) => void,
-  isCleared: (key: string) => boolean,
 ): void {
   const groups = new Map<string, SettingValue[]>();
   for (const value of values) {
@@ -34,20 +32,20 @@ export function renderBackendSettingsForm(
             const field = settingFields[item.key];
             const label = escapeHtml(field.label);
             const key = escapeHtml(item.key);
-            const status = isCleared(item.key) ? '待恢复默认值' : field.hot ? '保存后生效' : '保存时重载实例';
+            const status = field.hot ? '保存后生效' : '保存时重载实例';
             const kind = field.type ?? 'text';
             const input = kind === 'switch'
-              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${item.value === 'true' ? 'checked' : ''} ${isCleared(item.key) ? 'disabled' : ''} /><span aria-hidden="true"></span></label>`
+              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${item.value === 'true' ? 'checked' : ''} /><span aria-hidden="true"></span></label>`
               : kind === 'select'
-                ? `<div class="flex items-center gap-2"><select id="setting-${key}" class="input input-sm flex-1" data-setting-input="${key}" aria-label="${label}" ${isCleared(item.key) ? 'disabled' : ''}>
-                    ${field.options?.map((option) => `<option value="${escapeHtml(option.value)}" ${item.value === option.value || (!item.value && option.value === 'simple') ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('') ?? ''}
+                ? `<div class="flex items-center gap-2"><select id="setting-${key}" class="input input-sm settings-default-select flex-1" data-default="${!item.value}" data-setting-input="${key}" aria-label="${label}">
+                    <option value="" ${!item.value ? 'selected' : ''}>默认（${escapeHtml(item.resetHint || '')}）</option>
+                    ${field.options?.map((option) => `<option value="${escapeHtml(option.value)}" ${item.value === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('') ?? ''}
                   </select></div>`
               : `<div class="flex items-center gap-2 min-w-0">
-                   <input id="setting-${key}" class="input input-sm flex-1 min-w-0" data-setting-input="${key}" aria-label="${label}"
+                   <input id="setting-${key}" class="input input-sm settings-default-input flex-1 min-w-0" data-setting-input="${key}" aria-label="${label}"
                      type="${kind === 'secret' ? 'password' : kind === 'number' ? 'number' : 'text'}"
                      value="${escapeHtml(item.value)}"
-                     ${isCleared(item.key) ? 'disabled' : ''}
-                     ${item.key === 'MAX_CONTEXT_MESSAGES' ? 'required' : ''}
+                     placeholder="${escapeHtml(item.resetHint || '默认')}"
                      ${field.min === undefined ? '' : `min="${field.min}"`}
                      ${field.max === undefined ? '' : `max="${field.max}"`}
                      ${field.step === undefined ? '' : `step="${field.step}"`} />
@@ -60,8 +58,6 @@ export function renderBackendSettingsForm(
               </div>
               ${input}
               ${field.hint ? `<p class="text-[11px] text-muted mt-1">${escapeHtml(field.hint)}</p>` : ''}
-              <p class="text-[11px] text-muted mt-1">删除自定义配置后：${escapeHtml(item.resetHint || '使用代码回退值或继承值')}</p>
-              <button type="button" class="text-[11px] text-muted hover:text-destructive mt-1" data-setting-clear="${key}">${isCleared(item.key) ? '撤销删除' : '删除自定义配置'}</button>
             </div>`;
           }).join('')}
         </div>
@@ -77,15 +73,15 @@ export function renderBackendSettingsForm(
     const input = row.querySelector<HTMLInputElement | HTMLSelectElement>('[data-setting-input]');
     const toggle = row.querySelector<HTMLInputElement>('[data-setting-switch]');
     toggle?.addEventListener('change', () => change(item.key, toggle.checked ? 'true' : 'false'));
-    input?.addEventListener(input instanceof HTMLSelectElement ? 'change' : 'input', () => change(item.key, input.value));
+    input?.addEventListener(field.type === 'select' ? 'change' : 'input', () => {
+      if (field.type === 'select') input.dataset.default = String(!input.value);
+      change(item.key, input.value);
+    });
     row.querySelector<HTMLButtonElement>('[data-setting-reveal]')?.addEventListener('click', (event) => {
       if (!(input instanceof HTMLInputElement)) return;
       const button = event.currentTarget as HTMLButtonElement;
       input.type = input.type === 'password' ? 'text' : 'password';
       button.textContent = input.type === 'password' ? '显示' : '隐藏';
-    });
-    row.querySelector<HTMLButtonElement>('[data-setting-clear]')?.addEventListener('click', () => {
-      clear(item.key);
     });
   }
 }

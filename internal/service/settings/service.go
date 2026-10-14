@@ -228,6 +228,7 @@ func (s *Service) ListEnvVars(
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
 		val := os.Getenv(key)
+		inherited := false
 		if s.config != nil {
 			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" || key == "ASTRBOT_WS_PATH" {
 				continue
@@ -238,15 +239,17 @@ func (s *Service) ListEnvVars(
 			}
 			if instanceconfig.SharedKeys[key] && strings.TrimSpace(val) == "" && s.global != nil {
 				val = s.global.Get(key)
+				inherited = strings.TrimSpace(val) != ""
 			}
 		} else if s.global != nil {
 			val = s.global.Get(key)
 		}
 		vars = append(vars, &v1.EnvVar{
-			Key:       key,
-			Value:     val,
-			IsSecret:  meta.IsSecret,
-			ResetHint: s.resetHint(key),
+			Key:         key,
+			Value:       val,
+			IsSecret:    meta.IsSecret,
+			ResetHint:   s.resetHint(key),
+			IsInherited: inherited,
 		})
 	}
 	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars}), nil

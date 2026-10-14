@@ -1174,6 +1174,13 @@ dialog.dialog-modal::backdrop {
   .backup-feature > .btn { align-self: flex-start; }
 }
 /* Pending server settings stay visible while the page scrolls. */
+.settings-default-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+.settings-default-select[data-default="true"] { color: var(--muted-foreground); }
+.settings-default-select option { color: var(--foreground); }
+.settings-default-select option[value=""] { color: var(--muted-foreground); }
 .settings-draft-banner {
   position: sticky;
   top: 0.75rem;

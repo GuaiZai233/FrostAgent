@@ -3,6 +3,7 @@ export interface SettingValue {
   value: string;
   isSecret: boolean;
   resetHint?: string;
+  isInherited?: boolean;
 }
 
 export interface SettingChange {
@@ -18,7 +19,7 @@ export class SettingsDraft {
   private extra = new Map<string, string>();
 
   constructor(values: SettingValue[], extra: { key: string; value: string }[]) {
-    values.forEach((value) => this.saved.set(value.key, { ...value }));
+    values.forEach((value) => this.saved.set(value.key, { ...value, value: value.isInherited ? '' : value.value }));
     extra.forEach(({ key, value }) => this.savedExtra.set(key, value));
     this.extra = new Map(this.savedExtra);
   }
@@ -30,15 +31,9 @@ export class SettingsDraft {
 
   set(key: string, value: string): void {
     if (value === (this.saved.get(key)?.value ?? '')) this.changes.delete(key);
-    else this.changes.set(key, { key, value, isSecret: this.saved.get(key)?.isSecret ?? false });
+    else this.changes.set(key, { key, value: value === '' ? null : value, isSecret: this.saved.get(key)?.isSecret ?? false });
   }
 
-  clear(key: string): void {
-    if (this.isCleared(key)) this.changes.delete(key);
-    else this.changes.set(key, { key, value: null, isSecret: this.saved.get(key)?.isSecret ?? false });
-  }
-
-  isCleared(key: string): boolean { return this.changes.get(key)?.value === null; }
   values(): SettingValue[] { return [...this.saved.values()].map((value) => ({ ...value, value: this.get(value.key) })); }
   pending(): SettingChange[] { return [...this.changes.values()].map((value) => ({ ...value })); }
   extraEntries(): { key: string; value: string }[] { return [...this.extra].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({ key, value })); }

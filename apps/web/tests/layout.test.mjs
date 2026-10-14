@@ -201,7 +201,10 @@ assert.doesNotMatch(backendSettings, /被 @ 时触发回复|永远不触发自�
 assert.match(settingFields, /100 单位＝1 雪花＝0.01 元/);
 assert.match(settingFields, /BILLING_PROMPT_PRICE_PER_MILLION: \{[^\n]*step: 1/);
 assert.match(settingFields, /BILLING_SAFETY_MULTIPLIER: \{[^\n]*positive: true/);
-assert.match(backendSettingsForm, /删除自定义配置后：[\s\S]*item.resetHint/);
+assert.match(backendSettingsForm, /placeholder="\$\{escapeHtml\(item.resetHint/);
+assert.doesNotMatch(backendSettingsForm, /data-setting-clear|删除自定义配置|恢复默认值|撤销删除|\brequired\b/);
+assert.doesNotMatch(backendSettings, /删除自定义配置|回退提示按已保存配置计算|\brequired\b/);
+assert.match(components, /\.settings-default-input::placeholder\s*{[^}]*color: var\(--muted-foreground\)/);
 
 assert.match(
   backendSettings,

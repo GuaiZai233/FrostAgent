@@ -110,7 +110,7 @@ func TestScopedSettingsSharedKeys(t *testing.T) {
 	for _, ev := range listResp.Msg.EnvVars {
 		if ev.Key == "SECURITY_GATEWAY_TIMEOUT" {
 			foundTimeout = true
-			if ev.Value != "50s" {
+			if ev.Value != "50s" || !ev.IsInherited || !strings.Contains(ev.ResetHint, "50s") {
 				t.Fatalf("expected inherited global value 50s, got %q", ev.Value)
 			}
 		}
@@ -141,7 +141,7 @@ func TestScopedSettingsSharedKeys(t *testing.T) {
 	}
 	for _, ev := range listResp.Msg.EnvVars {
 		if ev.Key == "SECURITY_GATEWAY_TIMEOUT" {
-			if ev.Value != "35s" {
+			if ev.Value != "35s" || ev.IsInherited {
 				t.Fatalf("expected instance override value 35s, got %q", ev.Value)
 			}
 		}
@@ -159,5 +159,14 @@ func TestScopedSettingsSharedKeys(t *testing.T) {
 	}
 	if g.Get("SECURITY_GATEWAY_TIMEOUT") != "50s" {
 		t.Fatalf("global store must remain 50s after instance delete, got %q", g.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+	listResp, err = svcInstance.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range listResp.Msg.EnvVars {
+		if value.Key == "SECURITY_GATEWAY_TIMEOUT" && (value.Value != "50s" || !value.IsInherited || !strings.Contains(value.ResetHint, "50s")) {
+			t.Fatalf("cleared override must return to the inherited placeholder: %#v", value)
+		}
 	}
 }
