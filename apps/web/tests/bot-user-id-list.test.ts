@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mountBackendSettingsPage } from '../src/pages/backend-settings';
-import type { createInstanceAPI } from '../src/api/client';
+import { createInstanceAPI } from '../src/api/client';
 import { toast } from '../src/components/toast';
 import { instanceState } from '../src/instance-state';
 
@@ -9,6 +9,7 @@ class MockElement {
   value = '';
   disabled = false;
   checked = false;
+  hidden = false;
   textContent = '';
   className = '';
   style: Record<string, string> = {};
@@ -50,7 +51,7 @@ class MockElement {
 
 const errors: string[] = [];
 Object.assign(globalThis, {
-  window: new EventTarget(),
+  window: Object.assign(new EventTarget(), { location: { origin: 'http://localhost' } }),
   document: { querySelectorAll: () => [] },
 });
 instanceState.select({ id: 'fixture-instance', name: 'fixture', enabled: false, created_at: '' });
@@ -60,14 +61,22 @@ const values = new Map([
   ['BOT_LOOP_USER_IDS', 'bot-a; Telegram:CaseID\nbot-a,bot-b'],
   ['BOT_LOOP_MAX_TURNS', '3'],
   ['BOT_LOOP_MODE', 'soft'],
+  ['ENABLE_EMBEDDING', 'true'],
 ]);
 const writes: Array<{ key: string; value: string; isSecret: boolean }> = [];
 let releaseWrite: (() => void) | undefined;
 let blockWrite = false;
 let failKey = '';
+let storageBackend = 'sqlite';
+let storageReads = 0;
+const readEnvVars = () => [...values].map(([key, value]) => ({ key, value, isSecret: false }));
 const api = {
   async listEnvVars() {
-    return [...values].map(([key, value]) => ({ key, value, isSecret: false }));
+    return readEnvVars();
+  },
+  async listEnvVarsWithStorage() {
+    storageReads++;
+    return { envVars: readEnvVars(), storageBackend };
   },
   async getSessions() { return { sessions: [] }; },
   async updateEnvVar(params: { key: string; value: string; isSecret: boolean }) {
@@ -84,6 +93,11 @@ const api = {
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const root = new MockElement();
 const cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api);
+const hasEmbeddingSettings = root.innerHTML.includes('id="embedding-enabled"');
+// Require the UI once the storage-aware API ships, even if the settings markup was lost.
+if ('listEnvVarsWithStorage' in createInstanceAPI() || process.env.FROSTAGENT_TEST_EMBEDDING_SETTINGS === 'true') {
+  assert.ok(hasEmbeddingSettings, 'the combined page must retain the Embedding settings');
+}
 const input = root.querySelector('#bot-loop-user-id-input');
 const add = root.querySelector('#bot-loop-add-user');
 const save = root.querySelector('#bot-loop-save');
@@ -98,6 +112,12 @@ assert.equal(add.disabled, false);
 assert.equal(input.value, '', 'existing IDs belong in the list, not the add input');
 assert.equal(removeButtons().length, 3, 'load legacy separators and remove duplicates');
 assert.match(tags.innerHTML, /telegram:CaseID/);
+if (hasEmbeddingSettings) {
+  assert.equal(storageReads, 1, 'load configuration through the storage-aware API');
+  assert.equal(root.querySelector('#embedding-enabled').checked, true);
+  assert.equal(root.querySelector('#embedding-enabled').disabled, false);
+  assert.equal(root.querySelector('#embedding-sqlite-warning').hidden, false);
+}
 
 type(' bot-c ');
 add.click();
@@ -163,6 +183,7 @@ assert.deepEqual(writes, [
 ]);
 assert.equal(removeButtons().length, 5, 'saved IDs must reload into the list');
 assert.equal(save.disabled, false);
+assert.equal(values.get('ENABLE_EMBEDDING'), 'true', 'Bot list saves must preserve Embedding configuration');
 
 type('bot-failed');
 add.click();
@@ -179,4 +200,25 @@ await settle();
 assert.equal(values.get('BOT_LOOP_USER_IDS'), '', 'removing all IDs must persist an empty list');
 assert.equal(removeButtons().length, 0);
 assert.match(tags.innerHTML, /尚未添加用户 ID/);
+if (hasEmbeddingSettings) {
+  const embeddingToggle = root.querySelector('#embedding-enabled');
+  const embeddingWarning = root.querySelector('#embedding-sqlite-warning');
+  assert.equal(embeddingToggle.checked, true, 'Bot list saves must retain the enabled switch');
+  assert.equal(embeddingWarning.hidden, false, 'Bot list saves must retain the SQLite warning');
+  embeddingToggle.checked = false;
+  await embeddingToggle.fire('change');
+  assert.equal(values.get('ENABLE_EMBEDDING'), 'false');
+  assert.equal(embeddingWarning.hidden, true);
+  assert.equal(removeButtons().length, 0, 'Embedding changes must preserve the Bot ID list');
+  embeddingToggle.checked = true;
+  await embeddingToggle.fire('change');
+  assert.equal(values.get('ENABLE_EMBEDDING'), 'true');
+  assert.equal(embeddingWarning.hidden, false);
+  storageBackend = 'postgres';
+  root.querySelector('#backend-refresh-btn').click();
+  await settle();
+  assert.equal(embeddingToggle.checked, true);
+  assert.equal(embeddingWarning.hidden, true, 'PostgreSQL must not display the SQLite warning');
+  assert.equal(add.disabled, false, 'storage-aware reload must leave the Bot ID editor usable');
+}
 cleanup();
