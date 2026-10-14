@@ -86,6 +86,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
+	if !s.client.IsEnabled() && path != "/status" && path != "/status/" {
+		s.writeError(w, http.StatusForbidden, client.ErrDisabled.Error())
+		return
+	}
 
 	switch {
 	case path == "/status" || path == "/status/":
@@ -765,4 +769,3 @@ func remoteAddr(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.RemoteAddr)
 }
-

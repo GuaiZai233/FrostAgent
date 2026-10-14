@@ -49,7 +49,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
       </div>
 
       <!-- Agent Tools Info Card -->
-      <section class="card p-5">
+      <section class="card p-5" id="actionscat-tools-card">
         <div class="flex items-center justify-between gap-4 flex-wrap mb-3">
           <div class="flex items-center gap-2">
             <span class="text-primary inline-flex">${icon('bot')}</span>
@@ -319,6 +319,22 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
   function renderStatus(): void {
     if (!status) return;
 
+    container.querySelector<HTMLElement>('#actionscat-tools-card')!.hidden = !!status.disabled;
+    for (const id of ['actionscat-dispatch-btn', 'actionscat-create-action-btn']) {
+      const button = container.querySelector<HTMLButtonElement>(`#${id}`);
+      if (button) button.disabled = !!status.disabled;
+    }
+    if (status.disabled) {
+      statusContainer.innerHTML = `
+        <div class="card p-5">
+          <h3 class="text-sm font-bold">ActionsCat已被FrostAgent管理员禁用。</h3>
+          <p class="text-xs text-muted-foreground mt-2">当前实例不提供 ActionsCat 工具。可在 Bot 服务端设置中重新开启。</p>
+          <a href="#/settings/backend" class="btn btn-outline btn-sm mt-3">前往设置</a>
+        </div>
+      `;
+      return;
+    }
+
     if (!status.configured) {
       toolsBadgeEl.className = 'badge badge-warning inline-flex items-center gap-1.5';
       toolsBadgeEl.innerHTML = `
@@ -459,7 +475,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
     if (loadingActions) return;
     loadingActions = true;
     try {
-      if (!status?.configured) {
+      if (!status?.configured || status.disabled) {
         actions = [];
         renderActions();
         return;
@@ -679,7 +695,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
     if (loadingRuns) return;
     loadingRuns = true;
     try {
-      if (!status?.configured) {
+      if (!status?.configured || status.disabled) {
         runs = [];
         renderRuns();
         return;

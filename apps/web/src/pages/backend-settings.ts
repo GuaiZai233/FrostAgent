@@ -17,6 +17,7 @@ const globalKeys = new Set([
   'SECURITY_CONTROL_MODE',
 ]);
 const booleanKeys = new Set([
+  'ACTIONSCAT_ENABLED',
   'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG', 'ENABLE_QUOTE_TRACE',
   'ENABLE_ONEBOT_ADAPTER', 'ENABLE_ASTRBOT_ADAPTER', 'BILLING_ENABLED', 'ENABLE_PROACTIVE_REPLY',
   'ENABLE_PROACTIVE_REPLY_WHITELIST',
@@ -701,6 +702,10 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         const isEditing = editingKey === item.key;
         const isSecret = item.isSecret;
         const isVisible = visibleSecrets.has(item.key);
+        const isEnabled = item.value === 'true'
+          || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false')
+          || (item.key === 'ACTIONSCAT_ENABLED'
+            && !['false', '0', 'no', 'off'].includes(item.value.trim().toLowerCase()));
 
         if (isEditing) {
           const isMultiline =
@@ -780,7 +785,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               </div>
             </td>
             <td class="align-top">
-              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? 'checked' : ''} /><span>${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? '开启' : '关闭'}</span></label>` : `
+              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${isEnabled ? 'checked' : ''} /><span>${isEnabled ? '开启' : '关闭'}</span></label>` : `
               <div class="flex items-start gap-1.5 min-w-0">
                 <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
                 ${
@@ -956,7 +961,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
         isSecret: false,
       });
       if (res.success) {
-        toast.success('群聊设置已更新');
+        toast.success('设置已更新');
         void loadData();
       } else {
         toast.error('更新失败: ' + res.error);

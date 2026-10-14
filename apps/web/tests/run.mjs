@@ -8,6 +8,7 @@ const esbuildPath = require.resolve('esbuild', {
 const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
+  'actionscat-disabled.test.ts',
   'model-router-editor.test.ts',
   'prompt-merge.test.ts',
   'group-model-config.test.ts',

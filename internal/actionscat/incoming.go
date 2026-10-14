@@ -18,7 +18,7 @@ type MessageEvent struct {
 
 // DispatchIncoming makes a single bounded attempt; it never retries an uncertain result.
 func (c *Client) DispatchIncoming(ctx context.Context, message core.IncomingMessage) error {
-	if !c.IsConfigured() || strings.TrimSpace(message.Content) == "" ||
+	if !c.IsEnabled() || !c.IsConfigured() || strings.TrimSpace(message.Content) == "" ||
 		(message.MessageType != "private" && message.MessageType != "group") {
 		return nil
 	}
