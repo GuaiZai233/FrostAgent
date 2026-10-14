@@ -2,6 +2,7 @@ package instance
 
 import (
 	"FrostAgent/internal/instanceconfig"
+	"FrostAgent/internal/proactive"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,46 @@ func applySettingsDraft(m *Manager, id, body string) *httptest.ResponseRecorder 
 	response := httptest.NewRecorder()
 	m.ServeHTTP(response, request)
 	return response
+}
+
+func TestSQLSettingsDraftReenableProactiveUsesDefaultAfterClearingLegacyProbability(t *testing.T) {
+	for _, probability := range []string{"0", "-0.1", "invalid", "NaN"} {
+		t.Run(probability, func(t *testing.T) {
+			m, err := NewDatabase(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			info, err := m.Create("Proactive Draft")
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := m.instances[info.ID].config
+			if err := config.Update("PROACTIVE_REPLY_PROBABILITY", probability, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := config.Update("ENABLE_PROACTIVE_REPLY", "false", false); err != nil {
+				t.Fatal(err)
+			}
+			runtime := m.instances[info.ID].runtime
+			if proactive.GetProbability(runtime.Scope.Getenv) != 0 {
+				t.Fatal("disabled proactive replies must have zero probability")
+			}
+			response := applySettingsDraft(m, info.ID, `{"updates":[{"key":"ENABLE_PROACTIVE_REPLY","value":"true"}],"clearKeys":["PROACTIVE_REPLY_PROBABILITY"]}`)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+				t.Fatalf("reenable failed: %s", response.Body.String())
+			}
+			if _, exists := config.Snapshot()["PROACTIVE_REPLY_PROBABILITY"]; exists {
+				t.Fatal("legacy probability override was retained")
+			}
+			if got := proactive.GetProbability(runtime.Scope.Getenv); got != proactive.MinProbability {
+				t.Fatalf("reenabling with the default must take effect: got %v", got)
+			}
+			if m.instances[info.ID].runtime != runtime {
+				t.Fatal("proactive draft unnecessarily rebuilt the runtime")
+			}
+		})
+	}
 }
 
 func TestSQLSettingsDraftAppliesOnceWithoutRebuildingHotRuntime(t *testing.T) {

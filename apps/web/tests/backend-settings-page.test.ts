@@ -12,7 +12,12 @@ class Element {
   private children = new Map<string, Element>();
   private rows: Element[] = [];
   private listeners = new Map<string, (event: unknown) => void>();
-  value = '';
+  private inputValue = '';
+  get value() { return this.inputValue; }
+  set value(value: string) {
+    const numeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) && Number.isFinite(Number(value));
+    this.inputValue = this.type === 'number' && value && !numeric ? '' : value;
+  }
   textContent = '';
   disabled = false;
   checked = false;
@@ -307,6 +312,66 @@ cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI
 await settle();
 assert.equal(el('settings-draft-banner').hidden, true, 'returning does not recover discarded page drafts');
 assert.equal(el('group-at-cb').checked, false);
+cleanup();
+
+holdExtra = false;
+for (const storedProbability of ['0', '-0.1', 'invalid', 'NaN', 'Infinity', '0x1', '', '0.42', ' 0.42 ']) {
+  values = values.map((item) => item.key === 'ENABLE_PROACTIVE_REPLY'
+    ? { ...item, value: 'false' }
+    : item.key === 'PROACTIVE_REPLY_PROBABILITY' ? { ...item, value: storedProbability } : item);
+  cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+  await settle();
+  assert.equal(el('proactive-reply-cb').checked, false);
+  const before = writes.length;
+  const needsDefault = storedProbability !== '' && storedProbability.trim() !== '0.42';
+  el('proactive-reply-cb').checked = true;
+  el('proactive-reply-cb').emit('change');
+  assert.equal(writes.length, before, 'normalizing a legacy probability must remain a local draft');
+  assert.equal(el('proactive-reply-number').value, needsDefault ? '' : storedProbability.trim());
+  assert.equal(el('proactive-reply-number').placeholder, '0.01');
+  if (storedProbability === '0') {
+    el('settings-draft-restore').click();
+    assert.equal(el('proactive-reply-cb').checked, false);
+    assert.equal(el('proactive-reply-number').value, '0');
+    el('proactive-reply-cb').checked = true;
+    el('proactive-reply-cb').emit('change');
+    fail = true;
+    el('settings-draft-save').click();
+    await settle();
+    assert.equal(el('settings-draft-banner').hidden, false);
+    assert.equal(el('proactive-reply-number').value, '');
+    assert.equal(values.find(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY')?.value, '0');
+    fail = false;
+  }
+  el('settings-draft-save').click();
+  await settle();
+  const saved = writes.at(-1)!;
+  assert.equal(saved.find(({ key }) => key === 'ENABLE_PROACTIVE_REPLY')?.value, 'true');
+  assert.equal(saved.find(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY')?.value, needsDefault ? null : undefined);
+  assert.equal(values.find(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY')?.value, needsDefault ? '' : storedProbability);
+  assert.equal(el('proactive-reply-cb').checked, true);
+  assert.equal(el('proactive-reply-number').value, needsDefault ? '' : storedProbability.trim());
+  cleanup();
+}
+
+values = values.map((item) => item.key === 'ENABLE_PROACTIVE_REPLY'
+  ? { ...item, value: 'false' }
+  : item.key === 'PROACTIVE_REPLY_PROBABILITY' ? { ...item, value: '0.42' } : item);
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+el('proactive-reply-cb').checked = true;
+el('proactive-reply-cb').emit('change');
+el('proactive-reply-number').value = '0';
+el('proactive-reply-number').emit('input');
+el('proactive-reply-cb').checked = false;
+el('proactive-reply-cb').emit('change');
+el('proactive-reply-cb').checked = true;
+el('proactive-reply-cb').emit('change');
+assert.equal(el('proactive-reply-number').value, '0', 'enabling must preserve an invalid unsaved edit for correction');
+const beforeEditedProbability = writes.length;
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.length, beforeEditedProbability, 'an invalid unsaved probability must still block saving');
 cleanup();
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);

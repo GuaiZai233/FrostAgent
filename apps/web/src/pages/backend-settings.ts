@@ -390,7 +390,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     const value = (key: string) => draft!.get(key);
     proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
       (value('ENABLE_PROACTIVE_REPLY') !== 'false' && Number(value('PROACTIVE_REPLY_PROBABILITY')) > 0);
-    probability.value = value('PROACTIVE_REPLY_PROBABILITY');
+    probability.value = value('PROACTIVE_REPLY_PROBABILITY').trim();
     probabilitySlider.value = probability.value || '0.01';
     probability.disabled = probabilitySlider.disabled = !proactive.checked;
     element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
@@ -594,6 +594,18 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   });
   proactive.addEventListener('change', () => {
     change('ENABLE_PROACTIVE_REPLY', proactive.checked ? 'true' : 'false');
+    const rawProbability = draft?.get('PROACTIVE_REPLY_PROBABILITY') ?? '';
+    const editedProbability = draft?.pending().some(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY');
+    const trimmedProbability = rawProbability.trim();
+    const numericProbability = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmedProbability)
+      ? Number(trimmedProbability) : Number.NaN;
+    if (proactive.checked && !editedProbability && trimmedProbability &&
+      (!Number.isFinite(numericProbability) || numericProbability <= 0)) {
+      change('PROACTIVE_REPLY_PROBABILITY', '');
+      probability.value = '';
+      probabilitySlider.value = '0.01';
+      updateProbabilityDisplay();
+    }
     probability.disabled = probabilitySlider.disabled = !proactive.checked;
     element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
   });
