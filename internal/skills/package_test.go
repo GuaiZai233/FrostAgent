@@ -196,3 +196,34 @@ func TestSandboxTransfersResourcesAndPreservesCommandFailure(t *testing.T) {
 		t.Fatal("missing session succeeded")
 	}
 }
+
+func TestExecutableFlagsSurviveImportStoreAndValidation(t *testing.T) {
+	_, store := skillTestStore(t)
+	archive := archiveFor(t,
+		zipEntry{"sample/SKILL.md", "---\nname: sample\ndescription: Sample\n---\nRun ./scripts/task.sh", 0644},
+		zipEntry{"sample/scripts/task.sh", "#!/bin/sh\nprintf 'synthetic\\n'\n", os.ModeSetuid | 0755},
+		zipEntry{"sample/references/plain.txt", "plain", 0644},
+	)
+	if _, err := store.ImportZIP(archive); err != nil {
+		t.Fatal(err)
+	}
+	packages, err := store.Export()
+	if err != nil || len(packages) != 1 {
+		t.Fatalf("export: %v", err)
+	}
+	pkg := packages[0]
+	if len(pkg.Executables) != 1 || pkg.Executables[0] != "scripts/task.sh" {
+		t.Fatalf("executable flags lost: %v", pkg.Executables)
+	}
+	plain, err := ParsePackage(pkg.Files, pkg.Info.Name)
+	if err != nil || plain.Info.Revision == pkg.Info.Revision {
+		t.Fatal("executable flag missing from revision")
+	}
+	for _, flags := range [][]string{{"missing.sh"}, {"../escape"}, {"scripts/task.sh", "scripts/task.sh"}} {
+		corrupt := pkg
+		corrupt.Executables = flags
+		if _, err := ValidatePackages([]Package{corrupt}); err == nil {
+			t.Fatalf("invalid executable metadata accepted: %v", flags)
+		}
+	}
+}

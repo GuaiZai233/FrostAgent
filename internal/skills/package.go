@@ -44,9 +44,10 @@ type Info struct {
 }
 
 type Package struct {
-	Info  Info              `json:"info"`
-	Body  string            `json:"body"`
-	Files map[string][]byte `json:"files"`
+	Info        Info              `json:"info"`
+	Body        string            `json:"body"`
+	Files       map[string][]byte `json:"files"`
+	Executables []string          `json:"executables,omitempty"`
 }
 
 // ValidPath applies the same portable path rules during import, restore and resource lookup.
@@ -74,6 +75,7 @@ func ParseZIP(data []byte) ([]Package, error) {
 		return nil, fmt.Errorf("ZIP 文件数量超过 %d", MaxFiles)
 	}
 	files := map[string][]byte{}
+	executables := map[string]bool{}
 	seen := map[string]bool{}
 	total := 0
 	for _, member := range reader.File {
@@ -117,6 +119,7 @@ func ParseZIP(data []byte) ([]Package, error) {
 		}
 		total += len(content)
 		files[name] = content
+		executables[name] = mode.Perm()&0111 != 0
 	}
 	var roots []string
 	for name := range files {
@@ -140,16 +143,21 @@ func ParseZIP(data []byte) ([]Package, error) {
 			}
 		}
 		bundled := map[string][]byte{}
+		var executableNames []string
 		for name, content := range files {
 			if strings.HasPrefix(name, root) {
-				bundled[strings.TrimPrefix(name, root)] = content
+				relative := strings.TrimPrefix(name, root)
+				bundled[relative] = content
+				if executables[name] {
+					executableNames = append(executableNames, relative)
+				}
 			}
 		}
 		fallback := path.Base(strings.TrimSuffix(root, "/"))
 		if root == "" {
 			fallback = ""
 		}
-		pkg, err := ParsePackage(bundled, fallback)
+		pkg, err := ParsePackage(bundled, fallback, executableNames...)
 		if err != nil {
 			return nil, fmt.Errorf("%sSKILL.md: %w", root, err)
 		}
@@ -163,7 +171,7 @@ func ParseZIP(data []byte) ([]Package, error) {
 }
 
 // ParsePackage derives metadata from the original files; backup metadata is never trusted.
-func ParsePackage(files map[string][]byte, fallback string) (Package, error) {
+func ParsePackage(files map[string][]byte, fallback string, executables ...string) (Package, error) {
 	pkg := Package{Files: files, Info: Info{UserInvocable: true, Warnings: []string{}, Files: []string{}}}
 	if len(files) == 0 || len(files) > MaxFiles {
 		return pkg, fmt.Errorf("技能文件数量无效")
@@ -189,6 +197,15 @@ func ParsePackage(files map[string][]byte, fallback string) (Package, error) {
 			}
 		}
 	}
+	executableSeen := map[string]bool{}
+	for _, name := range executables {
+		if _, exists := files[name]; !ValidPath(name) || !exists || executableSeen[name] {
+			return pkg, fmt.Errorf("可执行资源路径无效或重复: %q", name)
+		}
+		executableSeen[name] = true
+		pkg.Executables = append(pkg.Executables, name)
+	}
+	sort.Strings(pkg.Executables)
 	original, ok := files["SKILL.md"]
 	if !ok || len(original) > MaxInstructionBytes || !utf8.Valid(original) {
 		return pkg, fmt.Errorf("SKILL.md 必须为 UTF-8 文本且不超过 32 KiB")
@@ -272,7 +289,10 @@ func ParsePackage(files map[string][]byte, fallback string) (Package, error) {
 	if pkg.Body == "" {
 		return pkg, fmt.Errorf("技能正文不能为空")
 	}
-	encoded, err := json.Marshal(files)
+	encoded, err := json.Marshal(struct {
+		Files       map[string][]byte `json:"files"`
+		Executables []string          `json:"executables,omitempty"`
+	}{pkg.Files, pkg.Executables})
 	if err != nil {
 		return pkg, err
 	}

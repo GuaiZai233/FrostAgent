@@ -138,7 +138,7 @@ func ValidatePackages(packages []Package) ([]Package, error) {
 	total := 0
 	result := make([]Package, 0, len(packages))
 	for _, original := range packages {
-		pkg, err := ParsePackage(original.Files, original.Info.Name)
+		pkg, err := ParsePackage(original.Files, original.Info.Name, original.Executables...)
 		if err != nil {
 			return nil, err
 		}

@@ -36,9 +36,9 @@ func TestSkillsZIPRestore(t *testing.T) {
 			}
 			pkg, err := skills.ParsePackage(map[string][]byte{
 				"SKILL.md":          []byte("---\nname: portable\ndescription: Portable test\n---\nExecute scripts/task.py"),
-				"scripts/task.py":   []byte("print('synthetic')"),
+				"scripts/task.py":   []byte("#!/usr/bin/env python3\nprint('synthetic')"),
 				"assets/binary.bin": {0, 1, 255},
-			}, "")
+			}, "", "scripts/task.py")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -58,7 +58,7 @@ func TestSkillsZIPRestore(t *testing.T) {
 				t.Fatal("restored instance enabled")
 			}
 			actual, err := skills.NewStore(db, restored.ID).Enabled("portable")
-			if err != nil || string(actual.Files["scripts/task.py"]) != "print('synthetic')" || len(actual.Files["assets/binary.bin"]) != 3 {
+			if err != nil || string(actual.Files["scripts/task.py"]) != "#!/usr/bin/env python3\nprint('synthetic')" || len(actual.Files["assets/binary.bin"]) != 3 || len(actual.Executables) != 1 || actual.Executables[0] != "scripts/task.py" || actual.Info.Revision != pkg.Info.Revision {
 				t.Fatalf("skill resources not restored: %v", err)
 			}
 			if err := skills.NewStore(db, restored.ID).Delete("portable"); err != nil {
