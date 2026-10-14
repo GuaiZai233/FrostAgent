@@ -28,6 +28,7 @@ except ConnectionRefusedError:
     sys.exit(0)
 if request.get('tls'):
     context = ssl.create_default_context(cadata=request['ca'])
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     connection = context.wrap_socket(connection, server_hostname='localhost')
 body = json.dumps(request['payload']) if request.get('payload') is not None else ''
 headers = {'Host': '127.0.0.1:8080', 'Connection': 'close',
@@ -73,6 +74,7 @@ def wait_ready(base, authorization, context):
 def websocket(port, instance_id, adapter, context=None, authorization=None):
     connection = socket.create_connection(("127.0.0.1", port), timeout=5)
     if context:
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         connection = context.wrap_socket(connection, server_hostname="127.0.0.1")
     with connection:
         scheme = "https" if context else "http"
@@ -152,6 +154,7 @@ def main():
                 time.sleep(0.2)
             assert certificate, "gateway did not create its TLS authority"
             context = ssl.create_default_context(cadata=certificate)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             base = f"https://127.0.0.1:{port(8080)}"
 
             def authenticated(path, payload=None):
