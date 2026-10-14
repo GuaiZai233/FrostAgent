@@ -17,7 +17,7 @@ FrostAgent 使用 Go 服务端、ConnectRPC / Protobuf 协议、Vite + 原生 Ty
 | `internal/service/`                     | ConnectRPC / REST 服务实现           |
 | `internal/mcp/`、`internal/sandbox/`    | 外部工具和沙箱接入                   |
 | `apps/web/`                             | 控制台页面、路由、实例状态与样式     |
-| `proto/`、`libs/frostagent-proto/`      | 协议定义和 TypeScript 生成代码       |
+| `api/proto/`、`libs/frostagent-proto/`  | 协议定义和 TypeScript 生成代码       |
 | `adapters/astrbot_plugin_frostagent/`   | AstrBot 宿主插件                     |
 | `.frostagent/whitepaper/`               | 设计材料；历史存储描述需结合源码核对 |
 | `docs/`                                 | 独立 VitePress 文档站                |
@@ -33,7 +33,7 @@ make proto-tools
 make proto-generate
 ```
 
-修改 `.proto` 后同步生成 Go 和 TypeScript 协议。Go 输出 `gen/` 为构建产物，TypeScript 生成目录按仓库现有跟踪规则处理。
+协议定义位于 `api/proto/frostagent/v1/`，Buf 模块根目录是 `api/proto/`。修改 `.proto` 后同步生成 Go 和 TypeScript 协议：Go 输出到 `gen/proto/frostagent/v1/`，TypeScript 输出到 `libs/frostagent-proto/src/generated/frostagent/v1/`。生成目录不能作为协议定义的修改入口，按仓库现有跟踪规则处理生成产物。
 
 ## 开发服务
 

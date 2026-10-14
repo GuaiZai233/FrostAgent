@@ -4,7 +4,7 @@
 
 ## 环境
 
-准备 Go ≥ 1.25.3、Node.js 22+、pnpm 10.33.0、Buf、Make 和 Bash。控制台采用 Vite + 原生 TypeScript；Go 协议输出和嵌入前端资源需先生成。
+准备 Go ≥ 1.27.0、Node.js 22+、pnpm 10.33.0、Buf、Make 和 Bash。控制台采用 Vite + 原生 TypeScript；Go 协议输出和嵌入前端资源需先生成。
 
 ```bash
 pnpm install --frozen-lockfile

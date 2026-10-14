@@ -4,7 +4,7 @@ FrostAgent 是用 Go 编写的 AI 角色扮演与智能体调度框架，支持 
 
 [English](README.md) | [中文](README_zh_CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
 [![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENSE)
 
@@ -27,7 +27,7 @@ pnpm docs:dev
 
 ## 快速开始
 
-准备 Go ≥ 1.25.3、Node.js 22+、pnpm 10.33.0、Buf、Make 与 Bash：
+准备 Go ≥ 1.27.0、Node.js 22+、pnpm 10.33.0、Buf、Make 与 Bash：
 
 ```bash
 pnpm install --frozen-lockfile
@@ -41,6 +41,14 @@ Windows 无 Make / Bash 的构建步骤见[安装与构建](docs/guide/installat
 打开 `http://127.0.0.1:8080`，创建并选择实例，在「模型路由器」添加供应商、模型和主对话绑定，发布后在「概览」启用实例。可以先通过「直接对话」验证，再连接真实平台。
 
 当前配置和持久化业务数据由 SQL 管理，默认使用 `data/frostagent.db`，可在控制台选择 PostgreSQL。无需复制 `.env.example`；旧 `.env` 和 JSON 目录不会自动迁移，参见[升级说明](docs/operations/upgrading.md)。模型供应商和密钥由实例共享，人格、路由、记忆、会话与 MCP 配置属于实例。
+
+## Embedding 记忆检索
+
+包含 [#194](https://github.com/GuaiZai233/FrostAgent/pull/194) 的版本增加第七类工作负载 `embedding`。在共享目录配置支持 OpenAI 兼容 `/embeddings` 的模型，标记 `embedding` 能力，发布实例默认或群级路由，再到「记忆设置」开启 `ENABLE_EMBEDDING`。标签、摘要提取与反思保留；启用后按向量相似度召回，工具支持 `query` / `tags` 且优先 `query`，网页继续分页。未包含该更新的版本仍使用原有关键词检索。
+
+SQLite 向量仅存内存、重启后重建。PostgreSQL 需要部署者预先安装 pgvector 并在目标库执行 `CREATE EXTENSION vector`，FrostAgent 不安装扩展；关闭功能恢复关键词检索并保留兼容的 PostgreSQL 向量。应用导出和 ZIP 不携带向量。
+
+模型的「最大输入 Tokens」可选，使用保守 UTF-8 字节预算截断请求副本，完整原文保留；明确超限时跳过本次相关处理。Schema v12 保存输入限额和摘要待刷新标记。完整步骤、索引更新和排障见[Embedding 使用指南](docs/usage/embedding.md)。
 
 ## 适配器
 

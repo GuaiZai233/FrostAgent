@@ -1,6 +1,6 @@
 # API 入口
 
-管理控制台使用 ConnectRPC 和少量 REST 入口。扩展客户端应以仓库 `proto/frostagent/v1/` 与当前服务实现为准，先区分全局控制面和实例路径。
+管理控制台使用 ConnectRPC 和少量 REST 入口。扩展客户端应以仓库 `api/proto/frostagent/v1/` 与当前服务实现为准，先区分全局控制面和实例路径。`gen/proto/frostagent/v1/` 是生成的 Go 代码，不是协议源码目录。
 
 ## 路由范围
 

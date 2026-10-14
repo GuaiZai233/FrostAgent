@@ -42,6 +42,7 @@ export default defineConfig({
           { text: '人格与示例对话', link: '/usage/persona' },
           { text: '群聊与回复策略', link: '/usage/group-chat' },
           { text: '记忆管理', link: '/usage/memory' },
+          { text: 'Embedding 语义检索', link: '/usage/embedding' },
           { text: '会话与 Prompt', link: '/usage/sessions' },
           { text: '表情包', link: '/usage/stickers' },
           { text: '直接对话', link: '/usage/direct-chat' },

@@ -40,6 +40,8 @@
 
 需要核对上下文时打开「会话与 Prompt」，再比对实际 `LLM_REQUEST`。命令和 stdout / stderr 会出现在工具日志，不能假设全部日志已脱敏。
 
+包含 #194 的版本使用 Embedding 时，开启失败先检查独立路由与 PostgreSQL 的 pgvector 扩展；提示「向量索引尚未就绪」时检查后台重建、模型认证与输入限额。SQLite 重启后重建是预期行为；关闭实例开关可恢复关键词检索，详见[Embedding 使用指南](../usage/embedding)。
+
 ## 网络、图片与备份
 
 - WebSocket 404：检查实例 ID、路径和端口，旧 `/ws/astrbot` 地址不适用。

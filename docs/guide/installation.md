@@ -4,7 +4,7 @@
 
 | 工具        | 要求与用途                                                         |
 | ----------- | ------------------------------------------------------------------ |
-| Go          | `go.mod` 要求 ≥ 1.25.3；编译服务端与协议工具                       |
+| Go          | `go.mod` 要求 ≥ 1.27.0；编译服务端与协议工具                       |
 | Node.js     | 使用 22 或更高版本；构建控制台和文档站                             |
 | pnpm        | 根 `package.json` 固定为 10.33.0；使用仓库的 `pnpm-lock.yaml`      |
 | Buf         | 编译 Protobuf；`go install github.com/bufbuild/buf/cmd/buf@latest` |

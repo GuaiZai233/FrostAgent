@@ -4,7 +4,7 @@ FrostAgent is a Go framework for AI role-playing and agent orchestration. It con
 
 [English](README.md) | [中文](README_zh_CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
 [![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENSE)
 
@@ -23,7 +23,7 @@ Use `pnpm docs:build` and `pnpm docs:preview` for production output and preview.
 
 ## Quick Start
 
-Prepare Go ≥ 1.25.3, Node.js 22+, pnpm 10.33.0, Buf, Make, and Bash:
+Prepare Go ≥ 1.27.0, Node.js 22+, pnpm 10.33.0, Buf, Make, and Bash:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -37,6 +37,14 @@ For a Windows PowerShell build without Make or Bash, see [installation](docs/gui
 Open `http://127.0.0.1:8080`, create and select an instance, add a provider and model in **模型路由器**, publish its dialogue binding, and enable it from **概览**. Validate a temporary session through **直接对话** before connecting a real platform.
 
 Current application settings and durable data use SQL, with `data/frostagent.db` as the default SQLite database and PostgreSQL selectable in the dashboard. No `.env.example` is required. Legacy `.env` and JSON directories are not automatically migrated; see [upgrade notes](docs/operations/upgrading.md). Providers, credentials, and models are shared; personas, routes, memory, sessions, and MCP configuration belong to each instance.
+
+## Embedding Memory Retrieval
+
+Versions containing [#194](https://github.com/GuaiZai233/FrostAgent/pull/194) add the seventh workload, `embedding`. Configure an OpenAI-compatible `/embeddings` model with the `embedding` capability, publish its independent instance or group binding, and enable `ENABLE_EMBEDDING` in memory settings. Tags, extraction, summaries, and reflection remain; enabled searches use vector similarity, tools prefer `query` over `tags`, and web pagination remains. Earlier versions use keyword retrieval.
+
+SQLite vectors stay in memory and rebuild after a process restart. PostgreSQL requires deployment administrators to install pgvector and enable `CREATE EXTENSION vector` in the target database; FrostAgent does not install extensions. Disabling restores keyword search and retains compatible PostgreSQL vectors. Application exports and ZIP backups exclude vectors.
+
+Models may configure an optional maximum input token budget. A conservative UTF-8 byte budget truncates request copies while preserving stored text; explicit length rejections skip the relevant processing. Schema v12 stores input limits and summary refresh markers. See the [Embedding guide](docs/usage/embedding.md) for setup, index updates, and troubleshooting.
 
 ## Adapters
 
