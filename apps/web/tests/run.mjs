@@ -13,6 +13,7 @@ for (const testFile of [
   'group-model-config.test.ts',
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
+  'skills.test.ts',
 ]) {
   const result = await build({
     entryPoints: [resolve('tests', testFile)],

@@ -7,6 +7,8 @@
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
 计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
+技能系统与 ZIP 导入见 [skills.md](skills.md)。
+
 ## FrostAgent 的组成
 
 ### 并发回归验证
