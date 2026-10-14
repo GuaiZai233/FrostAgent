@@ -39,7 +39,7 @@ COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X FrostAgent/internal/instanceconfig.DefaultListenAddr=0.0.0.0:8080 -X FrostAgent/internal/instanceconfig.DefaultWSListenAddr=0.0.0.0:1234" \
+    -ldflags="-s -w -X FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8081 -X FrostAgent/internal/instanceconfig.DefaultWSListenAddr=0.0.0.0:1234 -X FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
     -o /out/frostagent ./cmd/app
 
 FROM debian:bookworm-slim AS runtime
@@ -52,6 +52,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
 USER 10001:10001
-EXPOSE 8080 1234
+EXPOSE 1234
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/frostagent"]

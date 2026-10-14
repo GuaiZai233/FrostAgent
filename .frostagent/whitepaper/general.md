@@ -13,9 +13,11 @@
 
 根目录 `Dockerfile` 分别构建 TypeScript 前端和 Go protobuf，并将前端嵌入 `cmd/app` 静态二进制。运行镜像以 UID/GID `10001:10001` 启动，提供 CA 证书和时区数据；数据统一挂载到 `/app/data`，默认 Compose 使用命名卷，同时保存 SQL 引导信息与贴图字节。
 
-镜像通过 Go 链接参数仅将缺省监听地址改为 `0.0.0.0:8080`、`0.0.0.0:1234`；普通构建保持 `127.0.0.1`。SQL 中的监听设置始终优先，不引入环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布端口；已有 Host、Origin 和控制面鉴权规则继续生效，远程部署需通过设置与外部访问控制显式配置。
+Compose 使用 Caddy HTTPS Basic Auth 代理，管理页面、API 与控制台 WebSocket 一律要求认证；无默认密码，部署前必须设置用户名与 bcrypt 密码哈希。代理与后端共享网络空间，后端默认仅在 `127.0.0.1:8081` 提供管理服务，代理关闭自身管理 API，并在认证后移除 Basic Authorization 请求头。其他同网络容器无法直接访问后端管理监听；独立的 `0.0.0.0:1234` 仍只提供适配器 WebSocket。TLS 本地 CA 在独立命名卷中保存。
 
-Docker CI 构建镜像并以临时命名卷验证前端资源、非 root 启动、适配器端口隔离、WebSocket 握手、SQL 监听设置优先级、正常退出和重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+镜像通过 Go 链接参数启用管理监听隔离校验：SQL 配置优先，但管理地址必须使用数值回环 IP，并与适配器使用不同端口；启动、热更新和数据库切换时先校验再监听，拒绝存量或新增配置绕过代理。普通构建保持原有默认值与监听能力，不引入应用环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布 HTTPS 和适配器端口；已有 Host、Origin 与后端控制令牌规则继续生效。
+
+Docker CI 使用临时项目、随机合成凭据和命名卷，验证 HTTPS 证书、缺失/错误认证、同网络容器伪造 Host 的管理访问被拒、后端管理与代理管理端口不可达、SQL 不安全监听的启动与热更新拒绝、前端资源、非 root 启动、适配器与控制台 WebSocket、正常退出及重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
 ### 并发回归验证
 
@@ -373,9 +375,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
-  - HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`；
-  - WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
-  - 杜绝默认监听 `0.0.0.0` 或通配端口导致的未授权公网暴露。
+  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；

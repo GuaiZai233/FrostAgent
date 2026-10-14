@@ -71,33 +71,33 @@ Open the dashboard at `http://localhost:8080`. It starts with no instances. Use 
 
 ## Docker deployment
 
-From the repository root, start the service with Docker Compose:
+Compose starts FrostAgent behind a Caddy HTTPS authentication gateway. First copy `docker.env.example` to `.env` (or add its two gateway fields to an existing file), then generate a password hash interactively:
+
+```bash
+docker run --rm -it caddy:2-alpine caddy hash-password
+```
+
+Set `FROSTAGENT_ADMIN_USER` and put the generated bcrypt hash in `FROSTAGENT_ADMIN_PASSWORD_HASH='...'` in `.env`. Keep the single quotes to preserve dollar signs. There is no default password; Compose refuses to start without a hash. These two fields configure only the gateway. Application settings continue to come from SQL.
 
 ```bash
 docker compose up -d --build
-docker compose logs -f frostagent
+docker compose logs -f gateway frostagent
+docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-gateway-root.crt
 ```
 
-Open `http://localhost:8080` and create an instance as described above. The adapter endpoint is `ws://localhost:1234/instances/<instance-id>/ws/onebot` (or `/ws/astrbot`). An upstream client on the same Compose network can use `ws://frostagent:1234/instances/<instance-id>/ws/onebot`.
+Trust the exported local CA certificate in the browser's certificate store, then open `https://localhost:8080` and sign in with the gateway username and password. The certificate is local to this deployment and survives recreation through its named volume. The gateway requires authentication for every page, API and dashboard WebSocket; it consumes the Basic Authorization header before forwarding. Leave the frontend control token empty for this gateway. If existing SQL settings enforce a local backend token, configure Caddy to supply that Bearer token after gateway authentication.
 
-The Dockerfile builds protobuf code and the embedded frontend from source. The runtime runs as UID/GID `10001:10001` and includes CA certificates and timezone data. Only the image's fallback listeners use `0.0.0.0:8080` and `0.0.0.0:1234`; ordinary builds keep their loopback defaults. Saved SQL settings take precedence. Configure settings in the dashboard; `.env` files and application environment variables are not loaded.
+The gateway and FrostAgent share a network namespace. FrostAgent's management listener defaults to `127.0.0.1:8081` and cannot be reached directly by other network peers; the gateway proxies to that listener. Container builds reject non-loopback management addresses and shared management/adapter ports, both on startup and when settings change. Saved SQL settings remain authoritative within these constraints. Ordinary builds keep their existing defaults and allow the original listener configuration.
 
-Compose publishes both ports on the host's `127.0.0.1` by default. For access from another machine, adjust the host port bindings and configure the exact dashboard URL in `HTTP_ALLOWED_ORIGINS` through the dashboard, with your existing access control in front of the management interface. Adjust `WS_ALLOWED_ORIGINS` if a browser adapter uses a different origin. When reusing a database with loopback listener settings, change those settings to `0.0.0.0` before moving it into the container. If you change container-side ports in SQL, update the Compose mappings as well.
+The adapter listener defaults to `0.0.0.0:1234`. Use `ws://localhost:1234/instances/<instance-id>/ws/onebot` (or `/ws/astrbot`). A client on the same Compose network can use the alias `ws://frostagent:1234/instances/<instance-id>/ws/onebot`. The adapter port serves only adapter WebSockets; management routes are not exposed there.
 
-Requests through Docker's bridge network reach FrostAgent from a non-loopback address, even when the browser uses `localhost`. For token-protected MCP and security APIs, configure `MCP_CONTROL_TOKEN` or `ADMIN_TOKEN` in backend settings and enter the matching token in frontend settings.
+Compose publishes HTTPS port 8080 and adapter port 1234 on the host's `127.0.0.1` by default. For remote deployment, configure the gateway hostname and certificate, publish the required ports, and add the exact dashboard URL to `HTTP_ALLOWED_ORIGINS` through the local dashboard. Keep gateway authentication and the loopback backend listener. Configure `WS_ALLOWED_ORIGINS` for browser adapters with a different origin.
 
-The `frostagent-data` named volume stores `/app/data`, including SQLite, the PostgreSQL bootstrap selection and sticker files. `docker compose down` retains it; `docker compose down -v` deletes it. Back up the volume and any external PostgreSQL database before upgrading. For a bind mount instead, grant UID/GID `10001:10001` write access to its directory.
+Before reusing an existing database, set `LISTEN_ADDR` to `127.0.0.1:8081` and `WS_LISTEN_ADDR` to `0.0.0.0:1234` in the original deployment. Unsafe saved addresses cause container startup to fail; no settings are automatically rewritten. If you choose a different loopback management port, update Caddy's upstream; adapter port changes require matching Compose mappings.
 
-To use Docker directly:
+The runtime uses UID/GID `10001:10001`, CA certificates and timezone data. The `frostagent-data` volume stores `/app/data`, including SQLite, PostgreSQL bootstrap selection and sticker files. The `frostagent-gateway-data` volume stores gateway certificates. `docker compose down` retains both; `docker compose down -v` deletes them. Back up these volumes and any external PostgreSQL database before upgrading. Bind-mounted application data must be writable by UID/GID `10001:10001`.
 
-```bash
-docker build -t frostagent:local .
-docker run -d --name frostagent --init --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 -p 127.0.0.1:1234:1234 \
-  -v frostagent-data:/app/data frostagent:local
-```
-
-From inside the container, `localhost` refers to the container itself. Use a service name or a reachable host address for PostgreSQL, model providers and sandbox gateways. The image does not include Node.js, Python or other stdio MCP executables; use HTTP MCP servers or extend the image with the tools you need. Command execution continues to use the external sandbox gateway.
+The Dockerfile generates protobuf and builds the embedded frontend from source. Use Compose to include the protected gateway when deploying this image. Container `localhost` refers to the shared gateway/backend namespace; use reachable service names or host addresses for external databases, models and sandbox gateways. Node.js/Python stdio MCP tools are not included; use HTTP MCP servers or extend the image. Shell execution continues to use the external sandbox gateway.
 
 ## Shared providers and instance routing
 

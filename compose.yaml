@@ -1,15 +1,36 @@
 services:
+  gateway:
+    image: caddy:2-alpine
+    init: true
+    restart: unless-stopped
+    environment:
+      FROSTAGENT_ADMIN_USER: ${FROSTAGENT_ADMIN_USER:-admin}
+      FROSTAGENT_ADMIN_PASSWORD_HASH: ${FROSTAGENT_ADMIN_PASSWORD_HASH:?Set a bcrypt password hash in .env before starting}
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:1234:1234"
+    networks:
+      default:
+        aliases:
+          - frostagent
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - frostagent-gateway-data:/data
+
   frostagent:
     build: .
     image: frostagent:local
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
-    ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:1234:1234"
+    network_mode: service:gateway
+    depends_on:
+      gateway:
+        condition: service_started
+        restart: true
     volumes:
       - frostagent-data:/app/data
 
 volumes:
   frostagent-data:
+  frostagent-gateway-data:

@@ -75,33 +75,33 @@ go run ./cmd/app
 
 ## Docker 部署
 
-在仓库根目录使用 Docker Compose 启动：
+Compose 通过 Caddy HTTPS 鉴权代理提供管理访问。先将 `docker.env.example` 复制为 `.env`；如果已有 `.env`，只追加其中两个代理字段。然后交互式生成密码哈希：
+
+```bash
+docker run --rm -it caddy:2-alpine caddy hash-password
+```
+
+在 `.env` 中设置 `FROSTAGENT_ADMIN_USER`，并将生成的 bcrypt 哈希填入 `FROSTAGENT_ADMIN_PASSWORD_HASH='...'`，保留单引号以避免美元符号被插值。没有默认密码，未设置哈希时 Compose 拒绝启动。这两个字段仅配置代理，应用设置仍从 SQL 加载。
 
 ```bash
 docker compose up -d --build
-docker compose logs -f frostagent
+docker compose logs -f gateway frostagent
+docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-gateway-root.crt
 ```
 
-打开 `http://localhost:8080`，按上面的步骤创建实例。适配器地址为 `ws://localhost:1234/instances/<实例ID>/ws/onebot`（或 `/ws/astrbot`）。同一 Compose 网络中的上游客户端可使用 `ws://frostagent:1234/instances/<实例ID>/ws/onebot`。
+将导出的本地 CA 证书加入浏览器信任的证书存储，再打开 `https://localhost:8080`，输入代理用户名和密码。该证书属于当前部署，通过命名卷在重建后保留。所有管理页面、API 和控制台 WebSocket 都要求代理认证；代理认证后会移除 Basic Authorization 请求头。使用此代理时，前端控制令牌留空。如果已有 SQL 设置强制后端本地令牌校验，需要配置 Caddy 在代理认证后注入相应 Bearer Token。
 
-Dockerfile 从源码生成 protobuf 并构建嵌入前端。运行时使用 UID/GID `10001:10001`，包含 CA 证书与时区数据。仅镜像的缺省监听地址为 `0.0.0.0:8080`、`0.0.0.0:1234`；普通构建仍默认监听本地回环地址。已有 SQL 设置优先，请通过控制台配置；`.env` 文件及应用环境变量不会被加载。
+代理与 FrostAgent 共享网络空间。后端管理端口默认只监听 `127.0.0.1:8081`，其他同网络容器无法直接访问；代理转发到该回环地址。容器构建在启动及设置变更时拒绝非回环管理地址，以及管理与适配器共用端口。SQL 设置在此约束内仍优先；普通构建保留原有默认值与监听配置能力。
 
-Compose 默认只将两个端口发布到宿主机的 `127.0.0.1`。如需其他机器访问，请调整宿主机端口绑定，在控制台将完整的控制台地址填入 `HTTP_ALLOWED_ORIGINS`，并在管理界面前部署已有的访问控制。浏览器适配器跨域时需配置 `WS_ALLOWED_ORIGINS`。复用已保存本地回环监听设置的数据库前，请先将监听地址改为 `0.0.0.0`；修改 SQL 中的容器监听端口后，还需同步修改 Compose 端口映射。
+适配器默认监听 `0.0.0.0:1234`。地址为 `ws://localhost:1234/instances/<实例ID>/ws/onebot`（或 `/ws/astrbot`）；同一 Compose 网络的客户端可使用别名 `ws://frostagent:1234/instances/<实例ID>/ws/onebot`。该端口仅提供适配器 WebSocket，不暴露管理路由。
 
-经 Docker 桥接网络转发的请求在 FrostAgent 看来来自非回环地址，即使浏览器使用 `localhost`。使用受令牌保护的 MCP、安全等接口时，请在后端设置配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN`，并在前端设置填写相同令牌。
+Compose 默认只将 HTTPS 端口 8080 和适配器端口 1234 发布到宿主机的 `127.0.0.1`。远程部署时，请配置代理域名和证书、发布所需端口，并先通过本地控制台将完整的控制台地址填入 `HTTP_ALLOWED_ORIGINS`；保留代理鉴权和后端回环监听。浏览器适配器跨域时需配置 `WS_ALLOWED_ORIGINS`。
 
-`frostagent-data` 命名卷保存 `/app/data`，包含 SQLite、PostgreSQL 引导选择和贴图文件。`docker compose down` 会保留数据，`docker compose down -v` 会删除数据。升级前请备份数据卷及外部 PostgreSQL 数据库。如果改用宿主机目录挂载，请确保 UID/GID `10001:10001` 对目录具有写权限。
+复用已有数据库前，请在原部署中将 `LISTEN_ADDR` 设为 `127.0.0.1:8081`，将 `WS_LISTEN_ADDR` 设为 `0.0.0.0:1234`。不安全的存量监听地址会导致容器拒绝启动，不会自动改写设置。改用其他回环管理端口时需同步修改 Caddy 上游；适配器端口变化需同步修改 Compose 映射。
 
-也可直接使用 Docker：
+运行时使用 UID/GID `10001:10001`，包含 CA 证书和时区数据。`frostagent-data` 卷保存 `/app/data`，包含 SQLite、PostgreSQL 引导选择和贴图文件；`frostagent-gateway-data` 卷保存代理证书。`docker compose down` 保留两个卷，`docker compose down -v` 删除它们。升级前请备份数据卷及外部 PostgreSQL 数据库。改用目录挂载时，应用数据目录需允许 UID/GID `10001:10001` 写入。
 
-```bash
-docker build -t frostagent:local .
-docker run -d --name frostagent --init --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 -p 127.0.0.1:1234:1234 \
-  -v frostagent-data:/app/data frostagent:local
-```
-
-容器内的 `localhost` 指向容器自身。连接 PostgreSQL、模型供应商和沙箱网关时，请使用服务名或容器可达的宿主机地址。镜像不包含 Node.js、Python 等 stdio MCP 所需程序，可使用 HTTP MCP 服务，或自行扩展镜像安装所需工具。命令执行仍通过外部沙箱网关进行。
+Dockerfile 从源码生成 protobuf 并构建嵌入前端，部署时使用 Compose 以包含受保护的代理。容器内 `localhost` 指向代理与后端共享的网络空间；外部数据库、模型和沙箱网关需使用可达的服务名或宿主机地址。镜像不包含 Node.js/Python 等 stdio MCP 程序，可使用 HTTP MCP 服务或自行扩展镜像。命令执行仍通过外部沙箱网关进行。
 
 ## 共享模型供应商与实例路由
 
