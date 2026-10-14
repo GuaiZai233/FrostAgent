@@ -1,0 +1,22 @@
+:root {
+  --vp-c-brand-1: #3f3f46;
+  --vp-c-brand-2: #52525b;
+  --vp-c-brand-3: #27272a;
+  --vp-c-brand-soft: rgba(82, 82, 91, 0.12);
+  --vp-home-hero-name-color: var(--vp-c-text-1);
+  --vp-font-family-base: 'Inter', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+}
+
+.dark {
+  --vp-c-brand-1: #d4d4d8;
+  --vp-c-brand-2: #e4e4e7;
+  --vp-c-brand-3: #a1a1aa;
+  --vp-c-brand-soft: rgba(161, 161, 170, 0.16);
+  --vp-button-brand-text: #18181b;
+  --vp-button-brand-hover-text: #18181b;
+  --vp-button-brand-active-text: #18181b;
+}
+
+.vp-doc table {
+  width: 100%;
+}

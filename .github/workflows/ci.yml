@@ -85,6 +85,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check and build documentation
+        run: |
+          pnpm docs:check
+          pnpm docs:build
+
       # buf compiles protobuf schemas into Go and TypeScript code as part of Makefile targets
       - name: Install buf
         run: go install github.com/bufbuild/buf/cmd/buf@latest

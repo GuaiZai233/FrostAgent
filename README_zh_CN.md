@@ -1,86 +1,68 @@
 # FrostAgent
 
-FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框架，支持适配 Onebot 等多种协议，可以接入即时通信软件使用。
+FrostAgent 是用 Go 编写的 AI 角色扮演与智能体调度框架，支持 OneBot v11 和 AstrBot 接入，通过 Web 控制台管理多实例、人格、模型路由、记忆与工具。
 
 [English](README.md) | [中文](README_zh_CN.md)
 
 [![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
-[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
-[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
+[![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENSE)
 
-## 数据库
+## 文档
 
-默认使用 `data/frostagent.db`。在“系统设置 > 数据库设置”中可以填写 PostgreSQL 连接地址并立即切换；切换只加载目标数据库已有的数据，不会自动迁移，实例可通过“备份与还原”手动搬迁。数据库选择保存在本地 SQLite 引导表中，连接地址为空时拒绝切换。
+完整中文文档位于 [`docs/`](docs/index.md)，包含：
 
-# 适配器
+- [项目介绍](docs/guide/introduction.md)、[快速开始](docs/guide/quick-start.md)、[安装与构建](docs/guide/installation.md)、[部署与网络](docs/guide/deployment.md)。
+- [OneBot](docs/adapters/onebot.md) / [AstrBot](docs/adapters/astrbot.md) 接入，以及模型、人格、群聊、记忆、贴图与管理员指令。
+- [配置参考](docs/reference/configuration.md)、[数据库与备份](docs/operations/storage.md)、[安全控制](docs/operations/security.md)和[故障排查](docs/operations/troubleshooting.md)。
 
-## Websocket
+本地查看 VitePress 文档站：
 
-在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
+```bash
+pnpm install --frozen-lockfile
+pnpm docs:dev
+```
 
-## 与 ActionsCat 协同
-
-[ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
-
-在 ActionsCat 接入适配器后，您可以二者并行，智能体将发挥优秀的能力。
-
-注意，由于 ActionsCat 项目暂缓维护，您可以选择其他方案实现 Bot 的插件生态。
-
-## 与 AstrBot 等框架协同
-
-在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
-
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+构建与预览使用 `pnpm docs:build`、`pnpm docs:preview`。文档站与运行中的 Bot 控制台分别构建。
 
 ## 快速开始
 
-### 1. 构建项目
-
-本项目使用根目录 `Makefile` 进行构建编排。
+准备 Go ≥ 1.27.0、Node.js 22+、pnpm 10.33.0、Buf、Make 与 Bash：
 
 ```bash
-# 安装 Node.js 依赖（Angular 工具链等）
-# 本项目使用 pnpm 作为包管理器
-pnpm install
-
-# 安装 buf 用于 protobuf 代码生成
+pnpm install --frozen-lockfile
 go install github.com/bufbuild/buf/cmd/buf@latest
-
-# 构建全部 - 后端 Go 二进制文件 + 前端 Angular 应用
 make build
-```
-
-编译后的后端二进制文件位于 `./bin/`，前端静态资源位于 `internal/frontend/dist/`。
-
-也可以单独构建：
-
-```bash
-make build-api    # 构建后端和嵌入的前端
-make build-web    # 仅构建前端
-```
-
-### 2. 选择数据库
-
-默认使用 SQLite，首次启动会创建 `data/frostagent.db`。在「设置 > 数据库设置」可选择 PostgreSQL 并填写连接地址；空地址会被拒绝。数据库选择保存在本地 SQLite 引导表中，以便连接 PostgreSQL 前读取。切换时连接目标数据库并加载其中已有的设置与实例，不自动迁移数据；需要迁移时请手动使用实例备份与还原功能。同一个 PostgreSQL 数据库只允许一个 FrostAgent 进程使用。
-
-**破坏性更新：**旧版 JSON 和 `.env` 运行数据不再加载，也不会自动迁移；替换旧版本前请自行备份。SQL Schema 从 v7 基线开始通过顺序、无损的 Migration 升级；新版程序创建的更高版本数据库或低于 v7 的库会原样保留并拒绝加载。在「设置 > 备份与还原」可下载带版本号的实例全量 ZIP、`setting.json` 和 `memory.json`。导出时密钥及凭据来源置空；全量还原会创建一个默认停用的新实例，启用前需重新配置凭据和适配器。
-
-### 3. 启动服务
-
-```bash
 go run ./cmd/app
 ```
 
-打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，在“模型供应商”中统一配置 Provider 和模型，再在“实例模型路由”中选择当前 Bot 的模型，最后打开概览中的「是否启用」。设置、记忆、模型路由、MCP、示例对话、贴图元数据和群摘要存入 SQL；贴图图片字节仍在实例文件目录中。设置修改后自动应用，无需手动重启进程。
+Windows 无 Make / Bash 的构建步骤见[安装与构建](docs/guide/installation.md)。
 
-## 共享模型供应商与实例路由
+打开 `http://127.0.0.1:8080`，创建并选择实例，在「模型路由器」添加供应商、模型和主对话绑定，发布后在「概览」启用实例。可以先通过「直接对话」验证，再连接真实平台。
 
-“模型供应商”无需选中实例即可使用。Provider 的地址、凭据、启停状态和模型目录在当前数据库内共享；每个实例独立保存六类任务的默认模型与群覆盖。修改 Provider 后所有实例的新请求即时使用新配置，已开始的对话保留其地址与凭据快照。删除实例不会删除共享供应商；删除仍被实例路由引用的模型会被拒绝。
+当前配置和持久化业务数据由 SQL 管理，默认使用 `data/frostagent.db`，可在控制台选择 PostgreSQL。无需复制 `.env.example`；旧 `.env` 和 JSON 目录不会自动迁移，参见[升级说明](docs/operations/upgrading.md)。模型供应商和密钥由实例共享，人格、路由、记忆、会话与 MCP 配置属于实例。
 
-Schema v11 使用 `provider_endpoints`、`provider_models`、`provider_secrets`、`provider_revision` 保存共享目录，`model_bindings` 与 `model_revisions` 继续按实例隔离。v7–v10 升级在事务内复制 Provider、重映射冲突 ID/名称和路由，旧表保留为不再使用的迁移存档；新建数据库直接使用新结构。若人工改库导致重复的 Windows 凭据 Endpoint ID，则拒绝升级并保留原版本与数据，不猜测或覆盖系统凭据。
+## Embedding 记忆检索
 
-实例备份只携带该实例引用的供应商和模型定义，密钥及凭据来源置空。还原或复制时，匹配的共享定义保留已有凭据；相同 ID 的定义有冲突时创建新 ID，更新导入实例的路由，并要求补填密钥。其他实例的策略和共享凭据不被改写。
+包含 [#194](https://github.com/GuaiZai233/FrostAgent/pull/194) 的版本增加第七类工作负载 `embedding`。在共享目录配置支持 OpenAI 兼容 `/embeddings` 的模型，标记 `embedding` 能力，发布实例默认或群级路由，再到「记忆设置」开启 `ENABLE_EMBEDDING`。标签、摘要提取与反思保留；启用后按向量相似度召回，工具支持 `query` / `tags` 且优先 `query`，网页继续分页。未包含该更新的版本仍使用原有关键词检索。
 
-## 许可证
+SQLite 向量仅存内存、重启后重建。PostgreSQL 需要部署者预先安装 pgvector 并在目标库执行 `CREATE EXTENSION vector`，FrostAgent 不安装扩展；关闭功能恢复关键词检索并保留兼容的 PostgreSQL 向量。应用导出和 ZIP 不携带向量。
 
-MPL-2.0 (see LICENSE file)
+模型的「最大输入 Tokens」可选，使用保守 UTF-8 字节预算截断请求副本，完整原文保留；明确超限时跳过本次相关处理。Schema v12 保存输入限额和摘要待刷新标记。完整步骤、索引更新和排障见[Embedding 使用指南](docs/usage/embedding.md)。
+
+## 适配器
+
+从实例概览复制地址，上游启用反向 WebSocket 客户端：
+
+```text
+ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot
+ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot
+```
+
+AstrBot 使用仓库的 [专用插件](adapters/astrbot_plugin_frostagent)，并关闭 AstrBot 自带 LLM 回复。分容器时替换为可达主机，同时配置贴图 HTTP 根地址。
+
+## 开发与许可
+
+开发入口见 [Development.md](Development.md) 和[完整开发指南](docs/development/index.md)。控制台采用 Vite + 原生 TypeScript，构建后嵌入 Go 主程序。
+
+基于 [MPL-2.0](LICENSE) 许可证发布。
