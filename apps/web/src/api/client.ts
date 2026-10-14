@@ -1,4 +1,6 @@
 import { instanceState } from '../instance-state';
+import { getControlToken } from './control-auth';
+export { getControlToken, setControlToken } from './control-auth';
 import { createClient } from '@connectrpc/connect';
 import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
@@ -71,30 +73,67 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
+export interface ExtraEnvEntry {
+  key: string;
+  value: string;
+}
+
+async function extraEnvRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Accept', 'application/json');
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/extra-env${path}`, {
+    ...init,
+    headers,
+    signal: init.signal ? AbortSignal.any([instanceState.signal, init.signal]) : instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const extraEnvAPI = {
+  async list(): Promise<ExtraEnvEntry[]> {
+    const response = await extraEnvRequest<{ entries: ExtraEnvEntry[] }>('', { method: 'GET' });
+    return response.entries;
+  },
+  async put(entry: ExtraEnvEntry, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest('', { method: 'PUT', body: JSON.stringify(entry), signal });
+  },
+  async delete(key: string, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE', signal });
+  },
+};
+
+async function globalSettingsRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/${path}`, {
+    ...init,
+    headers,
+    signal: instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  return response;
+}
+
+export const globalSettingsAPI = {
+  async download(): Promise<Blob> {
+    return (await globalSettingsRequest('backup/settings')).blob();
+  },
+  async import(settings: unknown): Promise<void> {
+    await globalSettingsRequest('import/settings', { method: 'POST', body: JSON.stringify(settings) });
+  },
+};
+
 export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
-
-const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
-
-export function getControlToken(): string {
-  try {
-    return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export function setControlToken(token: string): void {
-  try {
-    const trimmed = token.trim();
-    if (trimmed) {
-      localStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, trimmed);
-    } else {
-      localStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // localStorage errors ignored
-  }
-}
 
 export interface LockedPrincipal {
   principal: { platform: string; user_id: string };
@@ -717,6 +756,13 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
     deleteEnvVar(key: string): Promise<{ success: boolean; error: string }> {
       return settingsClient.deleteEnvVar({ key });
+    },
+
+    updateEnvVars(changes: { key: string; value: string | null; isSecret: boolean }[], signal?: AbortSignal): Promise<{ success: boolean; error: string }> {
+      return settingsClient.updateEnvVars({
+        updates: changes.filter((change) => change.value !== null).map(({ key, value, isSecret }) => ({ key, value: value!, isSecret })),
+        clearKeys: changes.filter((change) => change.value === null).map(({ key }) => key),
+      }, { signal });
     },
 
     getRawEnvFile(): Promise<string> {

@@ -101,10 +101,16 @@ func CheckControlPlaneAuth(peerAddr string, header http.Header) error {
 // CheckControlPlaneAuthScoped validates control plane peer address and token authorization
 // using the provided environment/configuration lookup function.
 func CheckControlPlaneAuthScoped(peerAddr string, header http.Header, getenv func(string) string) error {
-	return checkControlPlaneAuth(peerAddr, header, getenv)
+	return checkControlPlaneAuth(peerAddr, header, getenv, true)
 }
 
-func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(string) string) error {
+// CheckSensitiveControlPlaneAuthScoped requires a token for remote access to
+// routes that expose plaintext credentials, regardless of the remote MCP setting.
+func CheckSensitiveControlPlaneAuthScoped(peerAddr string, header http.Header, getenv func(string) string) error {
+	return checkControlPlaneAuth(peerAddr, header, getenv, false)
+}
+
+func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(string) string, allowRemoteWithoutToken bool) error {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
@@ -119,6 +125,7 @@ func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(stri
 	}
 
 	isLoopback := isLoopbackAddr(peerAddr)
+	remoteWithoutToken := allowRemoteWithoutToken && getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true"
 
 	// If client provided an Authorization header:
 	if authHeader != "" {
@@ -130,7 +137,7 @@ func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(stri
 			return nil
 		}
 		// No token configured on server, but client sent one:
-		if isLoopback || getenv("ALLOW_REMOTE_MCP_MANAGEMENT") == "true" {
+		if isLoopback || remoteWithoutToken {
 			return nil
 		}
 		return connect.NewError(connect.CodePermissionDenied, errors.New("MCP control plane access is restricted to localhost"))
@@ -138,7 +145,7 @@ func checkControlPlaneAuth(peerAddr string, header http.Header, getenv func(stri
 
 	// Client did NOT provide an Authorization header:
 	// If the request comes from a remote address:
-	if !isLoopback && getenv("ALLOW_REMOTE_MCP_MANAGEMENT") != "true" {
+	if !isLoopback && !remoteWithoutToken {
 		if token != "" {
 			return connect.NewError(connect.CodeUnauthenticated, errors.New("missing MCP control plane token for remote access"))
 		}
@@ -173,7 +180,7 @@ func NewScoped(manager *mcp.Manager, getenv func(string) string) *Service {
 }
 
 func (s *Service) checkAuth(peerAddr string, header http.Header) error {
-	return checkControlPlaneAuth(peerAddr, header, s.getenv)
+	return checkControlPlaneAuth(peerAddr, header, s.getenv, true)
 }
 
 func (s *Service) ListMCPServers(

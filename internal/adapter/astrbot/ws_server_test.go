@@ -2570,7 +2570,7 @@ func TestAstrBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
 }
 
 func TestAstrBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testing.T) {
-	chatStarted := make(chan struct{})
+	chatStarted := make(chan struct{}, 1)
 	finishChat := make(chan struct{})
 
 	mockLLM := &mockLLMProvider{

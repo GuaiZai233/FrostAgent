@@ -724,8 +724,8 @@ func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
 	mockLLM := &mockCompactorLLM{
 		customReply: func(req core.ChatRequest) (string, error) {
 			var p string
-			if len(req.Messages) > 0 {
-				p, _ = req.Messages[0].Content.(string)
+			if len(req.Messages) > 1 {
+				p, _ = req.Messages[1].Content.(string)
 			}
 			select {
 			case promptCh <- p:
