@@ -1,3 +1,5 @@
+import { controlPlaneFetch } from './api/control-auth';
+
 export interface InstanceInfo {
   id: string;
   name: string;
@@ -56,7 +58,7 @@ export async function instanceRequest<T = { success: boolean }>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(
+  const response = await controlPlaneFetch(
     '/api/instances' + path,
     body === undefined
       ? undefined

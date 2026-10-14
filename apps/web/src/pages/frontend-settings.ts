@@ -79,7 +79,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
         <section class="card p-4 flex flex-col gap-4 mt-1" style="max-width: 42rem;">
           <div>
             <h2 class="text-sm font-semibold text-foreground">API / 控制平面访问凭据</h2>
-            <p class="text-xs text-muted mt-0.5">当服务端启用了 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN，或通过非本地网络远程访问时，网页端将自动在请求头中携带此 Bearer Token 进行身份认证。</p>
+            <p class="text-xs text-muted mt-0.5">远程管理需要控制令牌。在本机的 Bot 服务端设置中配置管理 Token，再在这里填写相同值。</p>
           </div>
 
           <div class="flex flex-col gap-2.5">
@@ -88,7 +88,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
                 id="control-token-input"
                 type="password"
                 class="input text-xs flex-1"
-                placeholder="输入 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN (留空清除)"
+                placeholder="输入管理 Token（留空清除）"
                 value="${escapeHtml(currentToken)}"
               />
               <button id="toggle-token-visibility" class="btn btn-secondary btn-sm" type="button" title="切换可见性">
