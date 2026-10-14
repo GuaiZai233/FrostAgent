@@ -2,7 +2,7 @@
 
 ## 环境准备
 
-需安装 Go ≥ 1.25.3、pnpm、buf、Make，并确保在 PATH 中。
+需安装 Go ≥ 1.27.0、pnpm、buf、Make，并确保在 PATH 中。
 
 ```bash
 pnpm install       # 前端依赖 + protoc-gen-es

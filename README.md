@@ -4,7 +4,7 @@ FrostAgent is an AI role-playing and agent orchestration framework written in Go
 
 [English](README.md) | [中文](README_zh_CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
