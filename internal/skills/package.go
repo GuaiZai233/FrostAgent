@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"regexp"
 	"sort"
@@ -86,6 +87,9 @@ func ParseZIP(data []byte) ([]Package, error) {
 		}
 		seen[key] = true
 		mode := member.Mode()
+		if kind := mode.Type(); kind != 0 && kind != fs.ModeDir {
+			return nil, fmt.Errorf("ZIP 不允许链接或特殊文件 %q", name)
+		}
 		if member.FileInfo().IsDir() {
 			continue
 		}

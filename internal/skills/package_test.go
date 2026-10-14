@@ -64,6 +64,7 @@ func TestUnsafeAndAmbiguousZIPRejected(t *testing.T) {
 	for _, bad := range []zipEntry{
 		{"../escape", "", 0600}, {"/absolute", "", 0600}, {"C:/drive", "", 0600}, {"review/../escape", "", 0600},
 		{"review\\script", "", 0600}, {"review/link", "elsewhere", os.ModeSymlink | 0777},
+		{"review/link/", "", os.ModeSymlink | 0777},
 		{"review/SKILL.md", "duplicate", 0600}, {"REVIEW/skill.md", "case collision", 0600},
 		{"review/nested/SKILL.md", "---\nname: nested\ndescription: Nested\n---\nInstructions", 0600},
 	} {
