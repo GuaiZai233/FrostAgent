@@ -1,6 +1,7 @@
 package main
 
 import (
+	"FrostAgent/internal/envinject"
 	"FrostAgent/internal/instance"
 	secsvc "FrostAgent/internal/service/security"
 	"FrostAgent/internal/storage"
@@ -37,7 +38,7 @@ func newStorageGateway(ctx context.Context, root string) (*storageGateway, error
 		bootstrap.Close()
 		return nil, err
 	}
-	manager, err := openSelectedManager(ctx, root, config)
+	manager, err := openSelectedManager(ctx, root, config, true)
 	if err != nil {
 		bootstrap.Close()
 		return nil, err
@@ -47,13 +48,19 @@ func newStorageGateway(ctx context.Context, root string) (*storageGateway, error
 }
 
 func securityHandlerFor(manager *instance.Manager) http.Handler {
-	return secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig())
+	return manager.SettingsWriteHandler(secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig()))
 }
 
-func openSelectedManager(ctx context.Context, root string, config storage.Config) (*instance.Manager, error) {
+func openSelectedManager(ctx context.Context, root string, config storage.Config, injectEnv bool) (*instance.Manager, error) {
 	db, err := storage.OpenWithConfig(ctx, root, config)
 	if err != nil {
 		return nil, err
+	}
+	if injectEnv {
+		if err := envinject.ApplyAtStartup(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return instance.NewDatabaseWithDB(root, db)
 }
@@ -83,7 +90,8 @@ func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.serveStorage(w, r)
 		return
 	}
-	if r.URL.Path == "/api/instances/global/import/settings" ||
+	if strings.HasPrefix(r.URL.Path, "/api/instances/global/extra-env") ||
+		r.URL.Path == "/api/instances/global/import/settings" ||
 		(strings.Contains(r.URL.Path, "/frostagent.v1.SettingsService/") && r.Method == http.MethodPost) {
 		g.switchMu.Lock()
 		defer g.switchMu.Unlock()
@@ -93,23 +101,39 @@ func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database is switching", http.StatusServiceUnavailable)
 		return
 	}
-	manager.ServeHTTP(w, r)
+	managementAuthMiddleware(manager, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
 }
 
 func (g *storageGateway) SecurityHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			g.switchMu.Lock()
+			defer g.switchMu.Unlock()
+		}
 		g.mu.RLock()
 		handler := g.security
+		manager := g.current
 		g.mu.RUnlock()
-		if handler == nil {
+		if handler == nil || manager == nil {
 			http.Error(w, "database is switching", http.StatusServiceUnavailable)
 			return
 		}
-		handler.ServeHTTP(w, r)
+		managementAuthMiddleware(handler, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
 	})
 }
 
 func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	manager, _, _ := g.snapshot()
+	if manager == nil {
+		http.Error(w, "database is switching", http.StatusServiceUnavailable)
+		return
+	}
+	managementAuthMiddleware(http.HandlerFunc(g.serveStorageLocked), manager.ControlPlaneGetenv()).ServeHTTP(w, r)
+}
+
+func (g *storageGateway) serveStorageLocked(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case http.MethodGet:
@@ -121,7 +145,7 @@ func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
 			writeStorageError(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := g.switchTo(r.Context(), config); err != nil {
+		if err := g.switchToLocked(r.Context(), config); err != nil {
 			writeStorageError(w, http.StatusServiceUnavailable, err)
 			return
 		}
@@ -140,12 +164,16 @@ func writeStorageError(w http.ResponseWriter, status int, err error) {
 }
 
 func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config) error {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	return g.switchToLocked(ctx, requested)
+}
+
+func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.Config) error {
 	config, err := storage.NormalizeConfig(requested)
 	if err != nil {
 		return err
 	}
-	g.switchMu.Lock()
-	defer g.switchMu.Unlock()
 	old, previous, _ := g.snapshot()
 	if old == nil {
 		return errors.New("database is unavailable")
@@ -160,7 +188,8 @@ func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config)
 	g.security = nil
 	g.mu.Unlock()
 	old.Close()
-	manager, err := openSelectedManager(ctx, g.root, config)
+	previousInjection := envinject.Suspend()
+	manager, err := openSelectedManager(ctx, g.root, config, false)
 	if err == nil && g.apply != nil {
 		manager.SetGlobalApplyHook(func() error { return g.apply(manager) })
 	}
@@ -174,7 +203,10 @@ func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config)
 		if manager != nil {
 			manager.Close()
 		}
-		recovered, recoveryErr := openSelectedManager(context.Background(), g.root, previous)
+		if restoreErr := envinject.Restore(previousInjection); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+		recovered, recoveryErr := openSelectedManager(context.Background(), g.root, previous, false)
 		if recoveryErr == nil && g.apply != nil {
 			recovered.SetGlobalApplyHook(func() error { return g.apply(recovered) })
 		}

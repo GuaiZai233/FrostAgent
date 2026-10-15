@@ -1,10 +1,16 @@
 # FrostAgent
 
+除下文所述的隔离 Docker 鉴权代理部署外，远程管理 API 必须提供有效控制令牌，覆盖设置、备份、日志、实例操作和数据库切换。
+先在本机的 Bot 服务端设置中配置“管理控制令牌”，再在网页“前端设置”中填写相同值。
+`MCP_CONTROL_TOKEN` 优先于兼容的 `ADMIN_TOKEN`，`ALLOW_REMOTE_MCP_MANAGEMENT` 无法绕过管理入口鉴权。
+本机访问默认免令牌；启用 `MCP_ENFORCE_LOCAL_TOKEN` 后本机也必须认证。
+反向代理应保留原 Host 或转发标识。如果代理把 Host 改成本机地址并清除全部转发标识，必须启用本机强制令牌，避免远程请求被识别成本机请求。
+
 FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框架，支持适配 Onebot 等多种协议，可以接入即时通信软件使用。
 
 [English](README.md) | [中文](README_zh_CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
@@ -91,7 +97,7 @@ docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-ga
 
 将导出的本地 CA 证书加入浏览器信任的证书存储，再打开 `https://localhost:8080`，输入代理用户名和密码。该证书属于当前部署，通过命名卷在重建后保留。所有管理页面、API 和控制台 WebSocket 都要求代理认证；代理认证后会移除 Basic Authorization 请求头。使用此代理时，前端控制令牌留空。如果已有 SQL 设置强制后端本地令牌校验，需要配置 Caddy 在代理认证后注入相应 Bearer Token。
 
-代理与 FrostAgent 共享网络空间。后端管理端口默认只监听 `127.0.0.1:8081`，其他同网络容器无法直接访问；代理转发到该回环地址。容器构建在启动及设置变更时拒绝非回环管理地址，以及管理与适配器共用端口。SQL 设置在此约束内仍优先；普通构建保留原有默认值与监听配置能力。
+代理与 FrostAgent 共享网络空间。后端管理端口默认只监听 `127.0.0.1:8081`，其他同网络容器无法直接访问；代理转发到该回环地址。容器构建在启动及设置变更时拒绝非回环管理地址，以及管理与适配器共用端口。在此隔离部署中，即使带有转发标识，后端也将已认证代理的回环连接视为本地访问；启用 `MCP_ENFORCE_LOCAL_TOKEN` 后仍须校验后端令牌。SQL 设置在此约束内仍优先；普通构建保留原有监听默认值和远程管理令牌校验。
 
 适配器默认监听 `0.0.0.0:1234`。地址为 `ws://localhost:1234/instances/<实例ID>/ws/onebot`（或 `/ws/astrbot`）；同一 Compose 网络的客户端可使用别名 `ws://frostagent:1234/instances/<实例ID>/ws/onebot`。该端口仅提供适配器 WebSocket，不暴露管理路由。
 
@@ -102,6 +108,12 @@ Compose 默认只将 HTTPS 端口 8080 和适配器端口 1234 发布到宿主�
 运行时使用 UID/GID `10001:10001`，包含 CA 证书和时区数据。`frostagent-data` 卷保存 `/app/data`，包含 SQLite、PostgreSQL 引导选择和贴图文件；`frostagent-gateway-data` 卷保存代理证书。`docker compose down` 保留两个卷，`docker compose down -v` 删除它们。升级前请备份数据卷及外部 PostgreSQL 数据库。改用目录挂载时，应用数据目录需允许 UID/GID `10001:10001` 写入。
 
 Dockerfile 从源码生成 protobuf 并构建嵌入前端，部署时使用 Compose 以包含受保护的代理。容器内 `localhost` 指向代理与后端共享的网络空间；外部数据库、模型和沙箱网关需使用可达的服务名或宿主机地址。镜像不包含 Node.js/Python 等 stdio MCP 程序，可使用 HTTP MCP 服务或自行扩展镜像。命令执行仍通过外部沙箱网关进行。
+
+## Bot 设置与人格
+
+Bot 名称、唤醒别名和系统提示词在「人格设定」中配置。Bot 服务端设置使用中文表单；修改后会出现顶部红色提示，点击「保存」统一应用，点击「还原」或离开页面丢弃未保存更改。额外 env 注入项也在保存时写入，重启 FrostAgent 后生效。
+
+旧的 `MAX_CONTEXT_CHARS`、`UPSTREAM_API_KEY`、`CODER_API_KEY`、`ALLOW_REMOTE_MCP_MANAGEMENT` 和适配器选择开关不再作为常规设置提供。模型凭据在「模型路由器」的端点中设置，Coder 使用子智能体模型绑定。计费价格填非负整数最小单位（100 单位＝1 雪花＝0.01 元），安全倍率必须大于 0。默认值以输入框内的灰色占位显示，留空保存就使用默认值或继承值。
 
 ## 共享模型供应商与实例路由
 

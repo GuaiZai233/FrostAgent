@@ -943,8 +943,8 @@ function renderPromptImages(images: PromptImage[]): string {
         .map(
           (image) => `
         <figure class="prompt-image-row">
-          <a class="prompt-image-preview" href="${escapeHtml(image.url)}" target="_blank" rel="noopener noreferrer">
-            <img src="${escapeHtml(image.url)}" alt="请求图片" loading="lazy" decoding="async" />
+          <a class="prompt-image-preview" ${image.hash ? 'data-auth-preview' : ''} href="${image.hash ? '#' : escapeHtml(image.url)}" target="_blank" rel="noopener noreferrer">
+            <img ${image.hash ? 'data-auth-src' : 'src'}="${escapeHtml(image.url)}" alt="请求图片" loading="lazy" decoding="async" />
           </a>
           <figcaption class="prompt-image-meta">
             <span>${escapeHtml(image.mimeType)}</span>

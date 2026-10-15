@@ -195,7 +195,7 @@ func TestGlobalSettingsBackupImportIsRedactedAndAtomic(t *testing.T) {
 	if err := m.global.Update("ALCYONE_SERVICE_TOKEN", "synthetic-secret", false); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/instances/global/backup/settings", nil)
+	req := localSettingsRequest(http.MethodGet, "/api/instances/global/backup/settings", nil)
 	response := httptest.NewRecorder()
 	m.api(response, req)
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("synthetic-secret")) {
@@ -478,7 +478,7 @@ func TestSQLGlobalSettingsImportReportsApplyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
+	m.ServeHTTP(response, localSettingsRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
 	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), `"success":true`) ||
 		applyCount != 2 || m.global.Get("WS_ALLOWED_ORIGINS") != "" || m.global.Get("SECURITY_CLASSIFIER_TIMEOUT") != "15s" {
 		t.Fatalf("failed import was not rolled back: status=%d body=%s calls=%d", response.Code, response.Body.String(), applyCount)

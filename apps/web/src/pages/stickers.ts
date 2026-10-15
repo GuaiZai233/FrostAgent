@@ -305,7 +305,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
           <div class="sticker-card" data-id="${escapeHtml(s.id)}">
             <div class="sticker-thumb-wrap">
               <img
-                src="${stickerImageUrl(s.id)}"
+                data-auth-src="${stickerImageUrl(s.id)}"
                 alt="${escapeHtml(s.description || '表情包')}"
                 loading="lazy"
               />
@@ -406,7 +406,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
         <div class="flex flex-col gap-3.5">
           <div style="text-align: center;">
             <img
-              src="${stickerImageUrl(s.id)}"
+              data-auth-src="${stickerImageUrl(s.id)}"
               alt="表情包预览"
               style="max-width: 12rem; max-height: 12rem; border-radius: var(--radius-md); border: 1px solid var(--border);"
             />

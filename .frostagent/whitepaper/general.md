@@ -7,6 +7,12 @@
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
 计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
+### 当前服务端设置界面与生效边界
+
+当前 SQL 版本把常规设置保存在数据库 `settings` 表中，管理界面使用中文名称和按类型选择的输入框、数值框、圆形开关。群聊回复、主动回复、机器人名称、上下文消息数、记忆提取阈值、ActionsCat 连接参数，以及大部分全局安全与沙箱设置直接更新现有运行对象，不停止实例或断开已有连接。需要在构造时装配的适配器、计费和部分压缩参数保存后由实例管理器自动重载；界面逐项标明这一点。
+
+额外 env 注入用于数据库设置目录之外的自定义环境变量，存储在 SQL 的独立 `extra_env` 作用域中。它们只在 FrostAgent 启动时写入进程环境，并可供环境变量来源的模型凭据读取；编辑和删除不会修改当前进程，必须重启 FrostAgent。宿主进程已有的同名变量优先。常规设置键不可通过额外 env 注入覆盖。全局设置 JSON 备份包含额外 env 的明文值，导入时恢复其数据库记录；旧版备份没有此字段时保留当前额外 env。
+
 ## FrostAgent 的组成
 
 ### Docker 部署
@@ -16,6 +22,8 @@
 Compose 使用 Caddy HTTPS Basic Auth 代理，管理页面、API 与控制台 WebSocket 一律要求认证；无默认密码，部署前必须设置用户名与 bcrypt 密码哈希。代理与后端共享网络空间，后端默认仅在 `127.0.0.1:8081` 提供管理服务，代理关闭自身管理 API，并在认证后移除 Basic Authorization 请求头。其他同网络容器无法直接访问后端管理监听；独立的 `0.0.0.0:1234` 仍只提供适配器 WebSocket。TLS 本地 CA 在独立命名卷中保存。
 
 镜像通过 Go 链接参数启用管理监听隔离校验：SQL 配置优先，但管理地址必须使用数值回环 IP，并与适配器使用不同端口；启动、热更新和数据库切换时先校验再监听，拒绝存量或新增配置绕过代理。普通构建保持原有默认值与监听能力，不引入应用环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布 HTTPS 和适配器端口；已有 Host、Origin 与后端控制令牌规则继续生效。
+
+容器构建的管理鉴权将已认证代理的回环连接视为本地跳转，保留 `X-Forwarded-*` 供同源校验使用；同网络远程对端不能凭转发头取得这一身份，普通构建仍要求代理流量提供控制令牌。`MCP_ENFORCE_LOCAL_TOKEN` 在容器构建中同样有效，启用后需由代理在认证后注入后端 Bearer Token。
 
 Docker CI 使用临时项目、随机合成凭据和命名卷，验证 HTTPS 证书、缺失/错误认证、同网络容器伪造 Host 的管理访问被拒、后端管理与代理管理端口不可达、SQL 不安全监听的启动与热更新拒绝、前端资源、非 root 启动、适配器与控制台 WebSocket、正常退出及重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
@@ -105,6 +113,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
 
 - **无感后台摄入与总结**：各平台适配器（OneBot、AstrBot）在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
+- **压缩指令与会话数据分层**：自动与手动压缩共用同一请求构造：固定压缩规则单独作为 `system` 消息，已有群聊总结与新消息 JSONL 作为 `user` 消息发送。群友正文、图片描述和旧摘要不拼入系统指令，JSONL 内的角色元数据与原始内容保持不变。失败时仍按既有策略保留缓冲并重试，不将空响应视为成功摘要。
 - **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
 - **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
 - **失败容错与自动退避重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息在 safety buffer 容量范围内继续保留在内存缓冲区中；Compactor 依据 `max(retryDelay, remaining cooldown)` 延迟在后台自动重新调度压缩（其中 `retryDelay` 为最小失败退避时间，实际重试仍严格遵循 `minInterval` 冷却期），或在后续新消息到达时合并重试。

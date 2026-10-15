@@ -51,7 +51,7 @@ def command(*args, env=None):
 
 def request(base, path, payload=None, authorization=None, context=None):
     data = None if payload is None else json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "Origin": base}
     if authorization:
         headers["Authorization"] = authorization
     req = urllib.request.Request(base + path, data=data, headers=headers)

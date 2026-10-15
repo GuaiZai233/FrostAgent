@@ -8,6 +8,11 @@ import { confirmDialog } from '../components/confirm';
 
 export function mountDialoguePage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
+  let identityLoaded = false;
+  let identitySaving = false;
+  let savedName = '';
+  let savedAliases = '';
+  const identityController = new AbortController();
   let systemPrompt = '';
   let systemPromptLoaded = false;
   let systemPromptEditing = false;
@@ -58,6 +63,19 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
           </button>
         </div>
       </header>
+
+      <article class="card p-4 flex flex-col gap-3">
+        <h2 class="card-title text-sm font-semibold">名称与唤醒别名</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1.5 text-xs font-semibold">机器人名称
+            <input id="persona-bot-name" class="input text-sm" type="text" disabled />
+          </label>
+          <label class="flex flex-col gap-1.5 text-xs font-semibold">唤醒别名
+            <input id="persona-bot-aliases" class="input text-sm" type="text" placeholder="多个名称用英文逗号分隔" disabled />
+          </label>
+        </div>
+        <div class="flex justify-end"><button id="persona-identity-save" type="button" class="btn btn-primary btn-sm" disabled>保存名称与别名</button></div>
+      </article>
 
       <article class="card p-4 flex flex-col gap-3">
         <div class="flex items-center justify-between gap-3">
@@ -177,14 +195,58 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
   const exportBtn = container.querySelector<HTMLButtonElement>('#dialogue-export-btn')!;
   const importInput = container.querySelector<HTMLInputElement>('#dialogue-import-input')!;
   const refreshBtn = container.querySelector<HTMLButtonElement>('#dialogue-refresh-btn')!;
+  const nameInput = container.querySelector<HTMLInputElement>('#persona-bot-name')!;
+  const aliasesInput = container.querySelector<HTMLInputElement>('#persona-bot-aliases')!;
+  const identitySave = container.querySelector<HTMLButtonElement>('#persona-identity-save')!;
+
+  function renderIdentity(): void {
+    nameInput.disabled = aliasesInput.disabled = !identityLoaded || identitySaving;
+    identitySave.disabled = !identityLoaded || identitySaving || (nameInput.value === savedName && aliasesInput.value === savedAliases);
+    identitySave.textContent = identitySaving ? '保存中…' : '保存名称与别名';
+  }
+
+  async function saveIdentity(): Promise<void> {
+    if (!identityLoaded || identitySaving) return;
+    const name = nameInput.value;
+    const aliases = aliasesInput.value;
+    const changes = [
+      { key: 'BOT_NAME', value: name, isSecret: false },
+      { key: 'BOT_ALIASES', value: aliases, isSecret: false },
+    ].filter(({ key, value }) => value !== (key === 'BOT_NAME' ? savedName : savedAliases));
+    if (!changes.length) return;
+    identitySaving = true;
+    refreshBtn.disabled = true;
+    renderIdentity();
+    renderSystemPrompt();
+    try {
+      const response = await api.updateEnvVars(changes, identityController.signal);
+      if (isUnmounted) return;
+      if (!response.success) throw new Error(response.error);
+      savedName = name;
+      savedAliases = aliases;
+      toast.success('名称与别名已保存并生效');
+    } catch (error) {
+      if (!isUnmounted) toast.error('保存名称与别名失败: ' + String(error));
+    } finally {
+      identitySaving = false;
+      if (!isUnmounted) {
+        refreshBtn.disabled = systemPromptSaving;
+        renderIdentity();
+        renderSystemPrompt();
+      }
+    }
+  }
+  nameInput.addEventListener('input', renderIdentity);
+  aliasesInput.addEventListener('input', renderIdentity);
+  identitySave.addEventListener('click', () => void saveIdentity());
 
   function renderSystemPrompt() {
     systemPromptDisplay.style.display = systemPromptEditing ? 'none' : 'block';
     systemPromptEditor.style.display = systemPromptEditing ? 'flex' : 'none';
-    systemPromptEditBtn.disabled = !systemPromptLoaded || systemPromptEditing || systemPromptSaving;
-    systemPromptInput.disabled = systemPromptSaving;
-    systemPromptCancelBtn.disabled = systemPromptSaving;
-    systemPromptSaveBtn.disabled = systemPromptSaving;
+    systemPromptEditBtn.disabled = !systemPromptLoaded || systemPromptEditing || systemPromptSaving || identitySaving;
+    systemPromptInput.disabled = systemPromptSaving || identitySaving;
+    systemPromptCancelBtn.disabled = systemPromptSaving || identitySaving;
+    systemPromptSaveBtn.disabled = systemPromptSaving || identitySaving;
     if (!systemPromptEditing) {
       systemPromptDisplay.textContent = systemPromptLoaded ? systemPrompt || '（未设置）' : '加载中...';
     }
@@ -199,6 +261,14 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
       const vars = await api.listEnvVars();
       if (isUnmounted || loadSeq !== systemPromptLoadSeq) return;
       systemPrompt = vars.find((item) => item.key === 'SYSTEM_PROMPT')?.value ?? '';
+      if (!identitySaving && (!identityLoaded || (nameInput.value === savedName && aliasesInput.value === savedAliases))) {
+        savedName = vars.find((item) => item.key === 'BOT_NAME')?.value ?? '';
+        savedAliases = vars.find((item) => item.key === 'BOT_ALIASES')?.value ?? '';
+        nameInput.value = savedName;
+        aliasesInput.value = savedAliases;
+      }
+      identityLoaded = true;
+      renderIdentity();
       systemPromptLoaded = true;
       renderSystemPrompt();
     } catch (err) {
@@ -230,7 +300,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
       }
     } finally {
       systemPromptSaving = false;
-      refreshBtn.disabled = false;
+      refreshBtn.disabled = identitySaving;
       if (!isUnmounted) renderSystemPrompt();
     }
   }
@@ -713,6 +783,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
 
   return () => {
     isUnmounted = true;
+    identityController.abort();
     systemPromptLoadSeq++;
   };
 }
