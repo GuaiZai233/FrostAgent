@@ -1,10 +1,20 @@
 # FrostAgent
 
+Remote management API requests require a valid control token, including settings,
+backups, logs, instance operations and database selection. Configure the management
+token locally in Bot server settings, then enter it in the web console's frontend
+settings. `MCP_CONTROL_TOKEN` takes priority over the compatible `ADMIN_TOKEN`.
+`ALLOW_REMOTE_MCP_MANAGEMENT` does not bypass management API authentication.
+Local loopback access remains available unless `MCP_ENFORCE_LOCAL_TOKEN` is enabled.
+Reverse proxies must preserve the public Host or a forwarding header. If a proxy
+rewrites Host to localhost and removes all forwarding metadata, enable
+`MCP_ENFORCE_LOCAL_TOKEN` so its requests cannot use the local exemption.
+
 FrostAgent is an AI role-playing and agent orchestration framework written in Golang. It supports multiple protocol adapters, such as OneBot, and can be integrated with various instant messaging applications.
 
 [English](README.md) | [中文](README_zh_CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.27.0+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
 
@@ -68,6 +78,12 @@ go run ./cmd/app
 ```
 
 Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure providers, models and instance routing together under **模型路由器**, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
+
+## Bot settings and persona
+
+Configure the Bot name, wake aliases and system prompt under **人格设定**. Server settings use Chinese forms with a red sticky bar for pending changes. **保存** applies the draft; **还原** or leaving the page discards unsaved edits. Additional environment injection is saved with the draft and takes effect after restarting FrostAgent.
+
+`MAX_CONTEXT_CHARS`, `UPSTREAM_API_KEY`, `CODER_API_KEY`, `ALLOW_REMOTE_MCP_MANAGEMENT` and adapter selection switches are no longer offered as regular settings. Configure credentials on model endpoints and bind Coder through the subagent workload in **模型路由器**. Billing prices use nonnegative integer minor units (100 units = 1 snowflake = 0.01 CNY); the safety multiplier must be positive. Defaults appear as gray placeholders inside inputs. Leave an input empty and save to use its default or inherited value.
 
 ## Shared providers and instance routing
 

@@ -4,8 +4,10 @@ import (
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/sandbox"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,9 +37,7 @@ var knownEnvVars = map[string]envEntry{
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
 	"SYSTEM_PROMPT":                        {"系统提示词", false, false, true},
-	"DIALOGUE_PATH":                        {"示例对话 YAML 文件路径（用于少样本人设提示词引导）", false, true, false},
 	"MAX_CONTEXT_MESSAGES":                 {"最多保留的消息数", false, false, false},
-	"MAX_CONTEXT_CHARS":                    {"近似字符上限", false, false, false},
 	"ENABLE_AT_IN_GROUP_MSG":               {"是否开启群聊回复前艾特", false, false, false},
 	"GROUP_REPLY_ON_MENTION":               {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false, false},
 	"BOT_NAME":                             {"机器人主名称，用于群聊文本唤醒", false, false, false},
@@ -62,11 +62,7 @@ var knownEnvVars = map[string]envEntry{
 	"GROUP_RAW_CONTEXT_MAX_CHARS":          {"群聊未压缩原消息临时上下文的最大字符数（默认 12000）", false, false, false},
 	"MEMORY_EXTRACT_BATCH_MIN":             {"自动记忆提取的最小累计轮数", false, false, false},
 	"MEMORY_EXTRACT_BATCH_MAX":             {"自动记忆提取的最大累计轮数", false, false, false},
-	"ENABLE_ONEBOT_ADAPTER":                {"是否启用 OneBot WebSocket 适配器", false, true, false},
-	"ONEBOT_WS_PATH":                       {"OneBot WebSocket 监听路径 (默认 /ws/frostagent)", false, true, false},
 	"ONEBOT_ACTION_TIMEOUT":                {"OneBot API 动作确认超时时间（默认 10s）", false, false, false},
-	"ENABLE_ASTRBOT_ADAPTER":               {"是否启用 AstrBot WebSocket 适配器", false, true, false},
-	"ASTRBOT_WS_PATH":                      {"AstrBot WebSocket 监听路径 (默认 /ws/astrbot)", false, true, false},
 	"BILLING_ENABLED":                      {"是否启用 Alcyone 计费", false, true, false},
 	"ALCYONE_BASE_URL":                     {"Alcyone 计费服务地址", false, true, false},
 	"ALCYONE_SERVICE_TOKEN":                {"Alcyone 计费服务通信 Token", true, true, false},
@@ -77,22 +73,25 @@ var knownEnvVars = map[string]envEntry{
 	"SANDBOX_SESSION_NAMESPACE":            {"Sandbox 会话基础命名空间", false, true, false},
 	"MCP_CONTROL_TOKEN":                    {"MCP 管理面认证 Token", true, true, false},
 	"ADMIN_TOKEN":                          {"MCP 管理面兼容认证 Token", true, true, false},
-	"ALLOW_REMOTE_MCP_MANAGEMENT":          {"是否允许远程管理 MCP", false, true, false},
 	"MCP_ENFORCE_LOCAL_TOKEN":              {"本机 MCP 管理是否也强制 Token", false, true, false},
 	"BILLING_MAX_OUTPUT_TOKENS":            {"计费预扣款最大预留输出 Token", false, true, false},
 	"BILLING_SAFETY_MULTIPLIER":            {"计费预扣款输入 Token 安全倍率", false, true, false},
 	"BILLING_PROMPT_PRICE_PER_MILLION":     {"每百万输入 Token 的计费价格", false, false, false},
 	"BILLING_COMPLETION_PRICE_PER_MILLION": {"每百万输出 Token 的计费价格", false, false, false},
 	"MEMORY_REFLECTION_TIMEOUT":            {"记忆反思独立超时时间", false, true, false},
-	"BRAIN_PATH":                           {"记忆存储 brain.json 路径", false, true, false},
-	"UPSTREAM_API_KEY":                     {"上游 API 认证密钥", true, true, false},
-	"CODER_API_KEY":                        {"Coder API 密钥", true, true, false},
 	"SECURITY_GATEWAY_TIMEOUT":             {"安全审查网关独立超时时间", false, true, false},
 	"SECURITY_CLASSIFIER_TIMEOUT":          {"安全审查分类器独立超时时间", false, true, false},
 	"AGENT_MAX_ITERATIONS":                 {"智能体单次处理允许的最大迭代轮数（默认 35）", false, true, false},
 	"ACTIONSCAT_ENDPOINT":                  {"ActionsCat 核心服务地址", false, true, false},
 	"ACTIONSCAT_MANAGEMENT_TOKEN":          {"ActionsCat 管理 API 认证 Token", true, true, false},
 	"ACTIONSCAT_DISPATCH_TOKEN":            {"ActionsCat 事件调度 Token（可选，默认复用管理 Token）", true, true, false},
+}
+
+// IsManagedKey reports whether a key already belongs to the structured
+// application settings catalog rather than additional process environment.
+func IsManagedKey(key string) bool {
+	_, ok := knownEnvVars[strings.ToUpper(key)]
+	return ok
 }
 
 // ExportableValueKeys lists classified non-secret setting values. Unknown
@@ -229,6 +228,7 @@ func (s *Service) ListEnvVars(
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
 		val := os.Getenv(key)
+		inherited := false
 		if s.config != nil {
 			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" || key == "ASTRBOT_WS_PATH" {
 				continue
@@ -239,14 +239,17 @@ func (s *Service) ListEnvVars(
 			}
 			if instanceconfig.SharedKeys[key] && strings.TrimSpace(val) == "" && s.global != nil {
 				val = s.global.Get(key)
+				inherited = strings.TrimSpace(val) != ""
 			}
 		} else if s.global != nil {
 			val = s.global.Get(key)
 		}
 		vars = append(vars, &v1.EnvVar{
-			Key:      key,
-			Value:    val,
-			IsSecret: meta.IsSecret,
+			Key:         key,
+			Value:       val,
+			IsSecret:    meta.IsSecret,
+			ResetHint:   s.resetHint(key),
+			IsInherited: inherited,
 		})
 	}
 	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars}), nil
@@ -260,58 +263,8 @@ func (s *Service) UpdateEnvVar(
 	key := strings.TrimSpace(req.Msg.GetKey())
 	value := req.Msg.GetValue()
 
-	if key == "" {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   "key is required",
-		}), nil
-	}
-
-	entry, ok := knownEnvVars[key]
-	if !ok {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
-		}), nil
-	}
-	if key == "QUOTE_TRACE_DEPTH" {
-		depth, err := strconv.Atoi(value)
-		if err != nil || depth < 1 || depth > 10 || strconv.Itoa(depth) != value {
-			return connect.NewResponse(&v1.UpdateEnvVarResponse{
-				Success: false,
-				Error:   "引用追溯深度必须是 1 到 10 的整数",
-			}), nil
-		}
-	}
-	if key == "STICKER_ACTIVITY" {
-		level, err := strconv.Atoi(value)
-		if err != nil || level < 0 || level > 10 || strconv.Itoa(level) != value {
-			return connect.NewResponse(&v1.UpdateEnvVarResponse{
-				Success: false,
-				Error:   "表情包使用积极度必须是 0 到 10 的整数",
-			}), nil
-		}
-	}
-
-	if key == "STICKER_ACTIVITY_MODE" && value != "bot_turns" && value != "all_messages" {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   "表情包积极度计数模式必须是 bot_turns 或 all_messages",
-		}), nil
-	}
-
-	if strings.ContainsRune(value, 0) {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   "value contains null byte (NUL) which cannot be represented in environment",
-		}), nil
-	}
-
-	if !entry.AllowMultiline && strings.ContainsAny(value, "\r\n") {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{
-			Success: false,
-			Error:   fmt.Sprintf("key %q does not allow multiline values or newlines", key),
-		}), nil
+	if err := validateUpdate(key, value); err != nil {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
 	}
 
 	if s.config != nil || s.global != nil {
@@ -600,4 +553,141 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0600)
+}
+
+// UpdateEnvVars validates the whole draft before writing. The instance gateway
+// applies the resulting runtime and listener changes once after this RPC.
+func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.UpdateEnvVarsRequest]) (*connect.Response[v1.UpdateEnvVarsResponse], error) {
+	type change struct {
+		key, value, previous string
+		clear, existed       bool
+		store                *instanceconfig.Store
+	}
+	changes := make([]change, 0, len(req.Msg.Updates)+len(req.Msg.ClearKeys))
+	seen := make(map[string]bool)
+	failure := func(err error) (*connect.Response[v1.UpdateEnvVarsResponse], error) {
+		return connect.NewResponse(&v1.UpdateEnvVarsResponse{Error: err.Error()}), nil
+	}
+	if len(req.Msg.Updates)+len(req.Msg.ClearKeys) > len(knownEnvVars) {
+		return failure(errors.New("too many setting changes"))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	add := func(key, value string, clear bool) error {
+		key = strings.TrimSpace(key)
+		if _, ok := knownEnvVars[key]; !ok {
+			return fmt.Errorf("key %q is not in the allowed environment variables list", key)
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate setting %q", key)
+		}
+		if !clear {
+			if err := validateUpdate(key, value); err != nil {
+				return err
+			}
+		}
+		store := s.store(key)
+		if store == nil {
+			return errors.New("batch updates require scoped settings")
+		}
+		previous, existed := store.Snapshot()[key]
+		changes = append(changes, change{key: key, value: value, clear: clear, store: store, previous: previous, existed: existed})
+		seen[key] = true
+		return nil
+	}
+	for _, update := range req.Msg.Updates {
+		if err := add(update.GetKey(), update.GetValue(), false); err != nil {
+			return failure(err)
+		}
+	}
+	for _, key := range req.Msg.ClearKeys {
+		if err := add(key, "", true); err != nil {
+			return failure(err)
+		}
+	}
+	databaseChanges := make([]instanceconfig.DatabaseChange, 0, len(changes))
+	hasDatabase := false
+	for _, change := range changes {
+		hasDatabase = hasDatabase || change.store.IsDatabase()
+		databaseChanges = append(databaseChanges, instanceconfig.DatabaseChange{Store: change.store, Key: change.key, Value: change.value, Clear: change.clear})
+	}
+	if hasDatabase {
+		if err := instanceconfig.ApplyDatabaseChanges(ctx, databaseChanges); err != nil {
+			return failure(err)
+		}
+	} else {
+		for index, change := range changes {
+			err := ctx.Err()
+			if err == nil {
+				err = change.store.Update(change.key, change.value, change.clear)
+			}
+			if err != nil {
+				for _, previous := range changes[:index] {
+					err = errors.Join(err, previous.store.Update(previous.key, previous.previous, !previous.existed))
+				}
+				return failure(err)
+			}
+		}
+	}
+	if seen["SANDBOX_ENABLED"] && s.sandboxManager != nil {
+		s.sandboxManager.RefreshEnabled(func() bool { return sandbox.ParseBool(s.store("SANDBOX_ENABLED").Get("SANDBOX_ENABLED"), false) })
+	}
+	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true}), nil
+}
+
+func validateUpdate(key, value string) error {
+	if key == "" {
+		return errors.New("key is required")
+	}
+
+	entry, ok := knownEnvVars[key]
+	if !ok {
+		return fmt.Errorf("key %q is not in the allowed environment variables list", key)
+	}
+	if key == "MAX_CONTEXT_MESSAGES" {
+		count, err := strconv.Atoi(value)
+		if err != nil || count < 4 {
+			return errors.New("保留消息条数必须是不小于 4 的整数")
+		}
+	}
+	if key == "QUOTE_TRACE_DEPTH" {
+		depth, err := strconv.Atoi(value)
+		if err != nil || depth < 1 || depth > 10 || strconv.Itoa(depth) != value {
+			return errors.New("引用追溯深度必须是 1 到 10 的整数")
+		}
+	}
+	if key == "STICKER_ACTIVITY" {
+		level, err := strconv.Atoi(value)
+		if err != nil || level < 0 || level > 10 || strconv.Itoa(level) != value {
+			return errors.New("表情包使用积极度必须是 0 到 10 的整数")
+		}
+	}
+
+	if key == "STICKER_ACTIVITY_MODE" && value != "bot_turns" && value != "all_messages" {
+		return errors.New("表情包积极度计数模式必须是 bot_turns 或 all_messages")
+	}
+	if value != "" {
+		switch key {
+		case "BILLING_PROMPT_PRICE_PER_MILLION", "BILLING_COMPLETION_PRICE_PER_MILLION":
+			price, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || price < 0 {
+				return errors.New("每百万 Token 价格必须是非负整数，100 单位＝1 雪花＝0.01 元")
+			}
+		case "BILLING_SAFETY_MULTIPLIER":
+			multiplier, err := strconv.ParseFloat(value, 64)
+			if err != nil || multiplier <= 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+				return errors.New("输入 Token 安全倍率必须是大于 0 的有限数值")
+			}
+		}
+	}
+
+	if strings.ContainsRune(value, 0) {
+		return errors.New("value contains null byte (NUL) which cannot be represented in environment")
+	}
+
+	if !entry.AllowMultiline && strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("key %q does not allow multiline values or newlines", key)
+	}
+
+	return nil
 }
