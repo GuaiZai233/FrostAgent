@@ -1,5 +1,15 @@
 # FrostAgent
 
+Outside the isolated Docker gateway deployment described below, remote management API requests require a valid control token, including settings,
+backups, logs, instance operations and database selection. Configure the management
+token locally in Bot server settings, then enter it in the web console's frontend
+settings. `MCP_CONTROL_TOKEN` takes priority over the compatible `ADMIN_TOKEN`.
+`ALLOW_REMOTE_MCP_MANAGEMENT` does not bypass management API authentication.
+Local loopback access remains available unless `MCP_ENFORCE_LOCAL_TOKEN` is enabled.
+Reverse proxies must preserve the public Host or a forwarding header. If a proxy
+rewrites Host to localhost and removes all forwarding metadata, enable
+`MCP_ENFORCE_LOCAL_TOKEN` so its requests cannot use the local exemption.
+
 FrostAgent is an AI role-playing and agent orchestration framework written in Golang. It supports multiple protocol adapters, such as OneBot, and can be integrated with various instant messaging applications.
 
 [English](README.md) | [中文](README_zh_CN.md)
@@ -68,6 +78,42 @@ go run ./cmd/app
 ```
 
 Open the dashboard at `http://localhost:8080`. It starts with no instances. Use **实例管理** in the sidebar to create and select an instance, configure providers, models and instance routing together under **模型路由器**, then turn on **是否启用** in Overview. Settings, memory, model routing, MCP configuration, dialogue examples, sticker metadata, and group summaries are stored in SQL. Sticker image bytes remain in the instance file directory. Settings changes apply without a manual process restart.
+
+## Docker deployment
+
+Compose starts FrostAgent behind a Caddy HTTPS authentication gateway. First copy `docker.env.example` to `.env` (or add its two gateway fields to an existing file), then generate a password hash interactively:
+
+```bash
+docker run --rm -it caddy:2-alpine caddy hash-password
+```
+
+Set `FROSTAGENT_ADMIN_USER` and put the generated bcrypt hash in `FROSTAGENT_ADMIN_PASSWORD_HASH='...'` in `.env`. Keep the single quotes to preserve dollar signs. There is no default password; Compose refuses to start without a hash. These two fields configure only the gateway. Application settings continue to come from SQL.
+
+```bash
+docker compose up -d --build
+docker compose logs -f gateway frostagent
+docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-gateway-root.crt
+```
+
+Trust the exported local CA certificate in the browser's certificate store, then open `https://localhost:8080` and sign in with the gateway username and password. The certificate is local to this deployment and survives recreation through its named volume. The gateway requires authentication for every page, API and dashboard WebSocket; it consumes the Basic Authorization header before forwarding. Leave the frontend control token empty for this gateway. If existing SQL settings enforce a local backend token, configure Caddy to supply that Bearer token after gateway authentication.
+
+The gateway and FrostAgent share a network namespace. FrostAgent's management listener defaults to `127.0.0.1:8081` and cannot be reached directly by other network peers; the gateway proxies to that listener. Container builds reject non-loopback management addresses and shared management/adapter ports, both on startup and when settings change. In this isolated deployment, the backend treats the authenticated gateway's loopback connection as local even when forwarding headers are present; `MCP_ENFORCE_LOCAL_TOKEN` still applies when enabled. Saved SQL settings remain authoritative within these constraints. Ordinary builds keep their existing listener defaults and remote management token checks.
+
+The adapter listener defaults to `0.0.0.0:1234`. Use `ws://localhost:1234/instances/<instance-id>/ws/onebot` (or `/ws/astrbot`). A client on the same Compose network can use the alias `ws://frostagent:1234/instances/<instance-id>/ws/onebot`. The adapter port serves only adapter WebSockets; management routes are not exposed there.
+
+Compose publishes HTTPS port 8080 and adapter port 1234 on the host's `127.0.0.1` by default. For remote deployment, configure the gateway hostname and certificate, publish the required ports, and add the exact dashboard URL to `HTTP_ALLOWED_ORIGINS` through the local dashboard. Keep gateway authentication and the loopback backend listener. Configure `WS_ALLOWED_ORIGINS` for browser adapters with a different origin.
+
+Before reusing an existing database, set `LISTEN_ADDR` to `127.0.0.1:8081` and `WS_LISTEN_ADDR` to `0.0.0.0:1234` in the original deployment. Unsafe saved addresses cause container startup to fail; no settings are automatically rewritten. If you choose a different loopback management port, update Caddy's upstream; adapter port changes require matching Compose mappings.
+
+The runtime uses UID/GID `10001:10001`, CA certificates and timezone data. The `frostagent-data` volume stores `/app/data`, including SQLite, PostgreSQL bootstrap selection and sticker files. The `frostagent-gateway-data` volume stores gateway certificates. `docker compose down` retains both; `docker compose down -v` deletes them. Back up these volumes and any external PostgreSQL database before upgrading. Bind-mounted application data must be writable by UID/GID `10001:10001`.
+
+The Dockerfile generates protobuf and builds the embedded frontend from source. Use Compose to include the protected gateway when deploying this image. Container `localhost` refers to the shared gateway/backend namespace; use reachable service names or host addresses for external databases, models and sandbox gateways. Node.js/Python stdio MCP tools are not included; use HTTP MCP servers or extend the image. Shell execution continues to use the external sandbox gateway.
+
+## Bot settings and persona
+
+Configure the Bot name, wake aliases and system prompt under **人格设定**. Server settings use Chinese forms with a red sticky bar for pending changes. **保存** applies the draft; **还原** or leaving the page discards unsaved edits. Additional environment injection is saved with the draft and takes effect after restarting FrostAgent.
+
+`MAX_CONTEXT_CHARS`, `UPSTREAM_API_KEY`, `CODER_API_KEY`, `ALLOW_REMOTE_MCP_MANAGEMENT` and adapter selection switches are no longer offered as regular settings. Configure credentials on model endpoints and bind Coder through the subagent workload in **模型路由器**. Billing prices use nonnegative integer minor units (100 units = 1 snowflake = 0.01 CNY); the safety multiplier must be positive. Defaults appear as gray placeholders inside inputs. Leave an input empty and save to use its default or inherited value.
 
 ## Shared providers and instance routing
 

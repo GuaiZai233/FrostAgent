@@ -57,6 +57,10 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/instance -run '^TestSkillsZIPRestore$' -count=1 -v
+      - name: Test PostgreSQL settings draft transaction and rollback
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/instance -run '^TestPostgresSettingsDraftCommitAndRollback$' -count=1 -v
       - name: Test PostgreSQL memory writes
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable

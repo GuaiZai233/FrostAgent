@@ -2229,10 +2229,12 @@ func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
 	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
 	// （见 agent.go effectiveMaxHistory）。
 	if v := scope.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory && (scope == nil || scope.Config == nil || !scope.Config.IsDatabase()) {
 			sm.MaxHistory = n
 		}
 	}
+	// SQL scopes read the current limit on every trim; retain the code fallback
+	// here so deleting an override does not keep the startup value indefinitely.
 	// 启动定时清理协程
 	sm.Go(sm.startCleanupRoutine)
 	return sm

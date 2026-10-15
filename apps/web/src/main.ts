@@ -1,5 +1,6 @@
 import { instanceState } from './instance-state';
 import { openInstanceManagement } from './components/instances';
+import { mountAuthenticatedResources } from './components/authenticated-resources';
 import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
@@ -345,5 +346,6 @@ function initAppShell(): void {
 
 // Start application
 document.addEventListener('DOMContentLoaded', () => {
+  mountAuthenticatedResources();
   initAppShell();
 });

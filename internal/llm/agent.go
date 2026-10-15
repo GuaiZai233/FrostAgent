@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"FrostAgent/internal/actionscat"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
@@ -1207,7 +1208,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							Usage:         totalUsage,
 						}
 					}
-					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+					if errors.Is(err, actionscat.ErrDisabled) {
+						toolResult = err.Error()
+					} else {
+						toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+					}
 				} else {
 					toolSucceeded = true
 					toolResult = execution.Content
@@ -1414,6 +1419,9 @@ func (e *Engine) EffectiveTools() []core.Tool {
 	var modelTools []core.Tool
 	if len(e.ToolRegistry) > 0 {
 		for _, t := range e.ToolRegistry {
+			if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
+				continue
+			}
 			modelTools = append(modelTools, core.Tool{
 				Name:        t.Name(),
 				Description: t.Description(),

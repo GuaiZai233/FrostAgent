@@ -52,6 +52,7 @@ node_modules
 
 # Local runtime data
 /data/
+/docker-gateway-root.crt
 
 # Python artifacts
 __pycache__/
