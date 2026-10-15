@@ -29,29 +29,34 @@ func run() error {
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 	listeners := newListenerSet()
-	desiredHandlers := func(global *instanceconfig.Store) map[string]http.Handler {
+	applyListeners := func(global *instanceconfig.Store) error {
 		listen := global.Get("LISTEN_ADDR")
 		if listen == "" {
-			listen = "127.0.0.1:8080"
+			listen = instanceconfig.DefaultListenAddr
 		}
 		wsListen := global.Get("WS_LISTEN_ADDR")
 		if wsListen == "" {
-			wsListen = "127.0.0.1:1234"
+			wsListen = instanceconfig.DefaultWSListenAddr
+		}
+		if instanceconfig.ManagementLoopbackOnly == "true" {
+			if err := instanceconfig.ValidateListenerIsolation(listen, wsListen); err != nil {
+				return err
+			}
 		}
 		handlers := map[string]http.Handler{listen: corsMiddleware(mux, global.Get)}
 		if wsListen != listen {
 			handlers[wsListen] = wsMux
 		}
-		return handlers
+		return listeners.Apply(handlers)
 	}
 	gateway.apply = func(next *instance.Manager) error {
-		if err := listeners.Apply(desiredHandlers(next.GlobalConfig())); err != nil {
+		if err := applyListeners(next.GlobalConfig()); err != nil {
 			return err
 		}
 		return next.ApplyGlobalSettings()
 	}
 	manager.SetGlobalApplyHook(func() error { return gateway.apply(manager) })
-	if err := listeners.Apply(desiredHandlers(global)); err != nil {
+	if err := applyListeners(global); err != nil {
 		return err
 	}
 	lastApplied := global.Snapshot()
@@ -75,7 +80,7 @@ func run() error {
 			}
 			current := global.Snapshot()
 			if !maps.Equal(lastApplied, current) {
-				applyErr := listeners.Apply(desiredHandlers(global))
+				applyErr := applyListeners(global)
 				if applyErr == nil {
 					applyErr = manager.ApplyGlobalSettings()
 					if applyErr == nil {
@@ -88,7 +93,7 @@ func run() error {
 						err = rollbackErr
 					}
 					if err == nil {
-						err = listeners.Apply(desiredHandlers(global))
+						err = applyListeners(global)
 					}
 					if err == nil {
 						err = manager.ApplyGlobalSettings()
@@ -170,7 +175,9 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 			return
 		}
 		peer := r.RemoteAddr
-		if !isLoopbackHost(r.Host) || hasProxyHeaders(r) {
+		// Container builds isolate this listener behind the authenticated gateway.
+		trustedLocalGateway := instanceconfig.ManagementLoopbackOnly == "true" && isLoopbackHost(peer)
+		if !trustedLocalGateway && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
 			peer = "remote-management"
 		}
 		w.Header().Set("Cache-Control", "no-store")

@@ -131,7 +131,7 @@ func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, c
 	if m.db == nil {
 		wsListenAddr = m.legacyWSListenAddr
 	} else if wsListenAddr == "" {
-		wsListenAddr = "127.0.0.1:1234"
+		wsListenAddr = instanceconfig.DefaultWSListenAddr
 	}
 	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
 }
@@ -150,7 +150,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	}
 	legacyWSListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
 	if legacyWSListenAddr == "" {
-		legacyWSListenAddr = "127.0.0.1:1234"
+		legacyWSListenAddr = instanceconfig.DefaultWSListenAddr
 	}
 	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
 	if db != nil {
