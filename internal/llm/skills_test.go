@@ -150,3 +150,141 @@ func TestManualSkillUsesCurrentRawMessageInsteadOfTransportContext(t *testing.T)
 		t.Fatal("transport context invoked manual skill")
 	}
 }
+
+func TestManualSkillActivationReclaimsInvalidSlotsBeforeCapacityCheck(t *testing.T) {
+	for _, change := range []string{"disabled", "deleted", "replaced", "all-valid"} {
+		t.Run(change, func(t *testing.T) {
+			db, err := storage.Open(context.Background(), t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.SQL.Exec("INSERT INTO instances(id,name,created_at) VALUES ('synthetic-instance','Synthetic','now')"); err != nil {
+				t.Fatal(err)
+			}
+			store := skills.NewStore(db, "synthetic-instance")
+			var packages []skills.Package
+			for _, name := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
+				pkg, err := skills.ParsePackage(map[string][]byte{"SKILL.md": []byte("---\nname: " + name + "\ndescription: Synthetic\n---\nINSTRUCTIONS-" + name + " $ARGUMENTS")}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				pkg.Info.Enabled = true
+				packages = append(packages, pkg)
+			}
+			if err := store.ImportPackages(packages); err != nil {
+				t.Fatal(err)
+			}
+			sessions := NewSessionManager()
+			session := sessions.GetOrCreate("synthetic-session")
+			engine := &Engine{Skills: store, SessionManager: sessions, Provider: &mockTraceProvider{}, ModelName: "synthetic-model", MaxIterations: 2}
+			invoke := func(name string) AgentRunResult {
+				prompt := "/" + name + " synthetic-" + name
+				run := RunContext{SessionID: "synthetic-session", ActorUserID: "synthetic-actor"}
+				run.MemorySource.Content = prompt
+				return engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "User Message: " + prompt}}, run)
+			}
+			for _, pkg := range packages[:4] {
+				if result := invoke(pkg.Info.Name); result.Error != nil {
+					t.Fatalf("initial activation %s: %v", pkg.Info.Name, result.Error)
+				}
+			}
+			before := session.skillSnapshot()
+			if len(before) != 4 {
+				t.Fatalf("expected four active skills, got %d", len(before))
+			}
+			switch change {
+			case "disabled":
+				err = store.SetEnabled("alpha", false)
+			case "deleted":
+				err = store.Delete("alpha")
+			case "replaced":
+				if err = store.Delete("alpha"); err != nil {
+					t.Fatal(err)
+				}
+				replacement, parseErr := skills.ParsePackage(map[string][]byte{"SKILL.md": []byte("---\nname: alpha\ndescription: Replacement\n---\nREPLACEMENT-INSTRUCTIONS")}, "")
+				if parseErr != nil {
+					t.Fatal(parseErr)
+				}
+				replacement.Info.Enabled = true
+				err = store.ImportPackages([]skills.Package{replacement})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// No ordinary message or prompt refresh occurs between mutation and /echo.
+			result := invoke("echo")
+			if change == "all-valid" {
+				if result.Error == nil || !strings.Contains(result.Error.Error(), "最多加载 4 个技能") {
+					t.Fatalf("valid capacity limit was bypassed: %+v", result)
+				}
+				if session.HasActiveSkill("echo", packages[4].Info.Revision) || len(session.skillSnapshot()) != 4 {
+					t.Fatal("rejected activation changed the active skill set")
+				}
+			} else {
+				if result.Error != nil {
+					t.Fatalf("invalid skill still occupies a slot: %v", result.Error)
+				}
+				if !session.HasActiveSkill("echo", packages[4].Info.Revision) || len(session.skillSnapshot()) != 4 {
+					t.Fatal("new skill did not take the invalid slot")
+				}
+				if _, exists := session.skillSnapshot()["alpha"]; exists {
+					t.Fatal("invalid skill retained or replacement implicitly activated")
+				}
+				prompt, _ := session.LastPromptTrace()
+				if !strings.Contains(prompt, "INSTRUCTIONS-echo synthetic-echo") || strings.Contains(prompt, "INSTRUCTIONS-alpha") || strings.Contains(prompt, "REPLACEMENT-INSTRUCTIONS") {
+					t.Fatalf("unexpected active instructions: %s", prompt)
+				}
+			}
+			after := session.skillSnapshot()
+			for _, name := range []string{"bravo", "charlie", "delta"} {
+				if after[name] != before[name] {
+					t.Fatalf("valid skill changed: %s", name)
+				}
+			}
+		})
+	}
+}
+
+func TestSkillCapacityCleanupPreservesNewerActivation(t *testing.T) {
+	session := &SessionContext{}
+	_, epoch, cancel := session.BeginRun(context.Background())
+	defer cancel()
+	for _, name := range []string{"alpha", "bravo", "charlie", "delta"} {
+		if err := session.ActivateSkill(name, "original", "", epoch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invalid := map[string]activeSkill{"alpha": session.skillSnapshot()["alpha"]}
+	if err := session.ActivateSkill("alpha", "replacement", "new arguments", epoch); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.activateSkill("echo", "new", "", epoch, invalid); err == nil {
+		t.Fatal("stale cleanup removed a newer activation to make room")
+	}
+	if !session.HasActiveSkill("alpha", "replacement") || session.HasActiveSkill("echo", "new") || len(session.skillSnapshot()) != 4 {
+		t.Fatal("stale cleanup changed the current active skill set")
+	}
+}
+
+func TestSkillCapacityCleanupRejectsStaleEpochBeforeMutation(t *testing.T) {
+	session := &SessionContext{}
+	_, epoch, cancel := session.BeginRun(context.Background())
+	defer cancel()
+	if err := session.ActivateSkill("alpha", "revision", "arguments", epoch); err != nil {
+		t.Fatal(err)
+	}
+	invalid := session.skillSnapshot()
+	if err := session.ResetSession(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ActivateSkill("alpha", "revision", "arguments", session.Epoch()); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.activateSkill("echo", "new", "", epoch, invalid); err == nil {
+		t.Fatal("old run activated a skill after reset")
+	}
+	if !session.HasActiveSkill("alpha", "revision") || session.HasActiveSkill("echo", "new") || len(session.skillSnapshot()) != 1 {
+		t.Fatal("old run removed a skill from the new session")
+	}
+}

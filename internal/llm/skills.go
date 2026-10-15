@@ -14,6 +14,12 @@ type activeSkill struct {
 }
 
 func (s *SessionContext) ActivateSkill(name, revision, arguments string, epoch uint64) error {
+	return s.activateSkill(name, revision, arguments, epoch, nil)
+}
+
+// activateSkill removes only unchanged entries from an invalid snapshot before
+// checking capacity. Epoch validation protects both cleanup and activation.
+func (s *SessionContext) activateSkill(name, revision, arguments string, epoch uint64, invalid map[string]activeSkill) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if epoch != 0 && s.epoch != epoch {
@@ -21,6 +27,11 @@ func (s *SessionContext) ActivateSkill(name, revision, arguments string, epoch u
 	}
 	if s.activeSkills == nil {
 		s.activeSkills = map[string]activeSkill{}
+	}
+	for name, observed := range invalid {
+		if current, exists := s.activeSkills[name]; exists && current == observed {
+			delete(s.activeSkills, name)
+		}
 	}
 	if _, exists := s.activeSkills[name]; !exists && len(s.activeSkills) >= 4 {
 		return fmt.Errorf("当前会话最多加载 4 个技能，请重置会话后再试")
@@ -85,8 +96,23 @@ func (e *Engine) activateRequestedSkill(ctx context.Context, messages []ChatMess
 	if sess == nil {
 		return fmt.Errorf("技能手动调用需要当前会话")
 	}
+	invalid := sess.skillSnapshot()
+	if len(invalid) > 0 {
+		infos, err := e.Skills.List()
+		if err != nil {
+			return fmt.Errorf("技能状态读取失败: %w", err)
+		}
+		for _, info := range infos {
+			if info.Enabled && info.Revision == invalid[info.Name].Revision {
+				delete(invalid, info.Name)
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	arguments := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(prompt), fields[0]))
-	return sess.ActivateSkill(name, pkg.Info.Revision, arguments, run.Epoch)
+	return sess.activateSkill(name, pkg.Info.Revision, arguments, run.Epoch, invalid)
 }
 
 const skillsContextPrefix = "<frostagent_skills>"
