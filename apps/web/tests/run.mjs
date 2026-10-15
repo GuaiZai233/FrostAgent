@@ -14,6 +14,7 @@ for (const testFile of [
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
   'backend-settings-page.test.ts',
+  'bot-user-id-list.test.ts',
   'control-auth.test.ts',
   'authenticated-resources.test.ts',
 ]) {

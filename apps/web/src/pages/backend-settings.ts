@@ -188,10 +188,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
             <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              <label class="flex flex-col gap-1.5">
-                <span class="text-xs font-medium">标记为 Bot 的用户 ID</span>
-                <input id="bot-loop-user-ids" type="text" class="input input-sm font-mono text-xs" placeholder="用户 ID，多个用逗号分隔" />
-              </label>
+              <div class="flex flex-col gap-1.5 min-w-0">
+                <label for="bot-loop-user-id-input" class="text-xs font-medium">标记为 Bot 的用户 ID</label>
+                <div class="flex items-center gap-2">
+                  <input id="bot-loop-user-id-input" type="text" class="input input-sm font-mono text-xs flex-1 min-w-0" placeholder="输入用户 ID" autocomplete="off" />
+                  <button type="button" id="bot-loop-add-user" class="btn btn-outline btn-sm shrink-0">添加</button>
+                </div>
+              </div>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">最多连续轮数</span>
                 <input id="bot-loop-max-turns" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="1" step="1" placeholder="3" />
@@ -205,8 +208,9 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
                 </select>
               </label>
             </div>
+            <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
             <div class="flex items-center justify-between gap-2 mt-2">
-              <span class="text-[11px] text-muted">留空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
             </div>
           </div>
 
@@ -311,6 +315,9 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   const groupInput = element<HTMLInputElement>('proactive-whitelist-input');
   const groupAdd = element<HTMLButtonElement>('proactive-whitelist-add-btn');
   const groupTags = element<HTMLElement>('proactive-whitelist-tags');
+  const botUserInput = element<HTMLInputElement>('bot-loop-user-id-input');
+  const botUserAdd = element<HTMLButtonElement>('bot-loop-add-user');
+  const botUserTags = element<HTMLElement>('bot-loop-user-tags');
   const stickerSlider = element<HTMLInputElement>('sticker-activity-slider');
   const stickerNumber = element<HTMLInputElement>('sticker-activity-number');
   const stickerMode = element<HTMLSelectElement>('sticker-activity-mode');
@@ -324,7 +331,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function invalidNumbers(): HTMLInputElement[] {
     return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
   }
-  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || invalidNumbers().length > 0; }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || invalidNumbers().length > 0; }
   function updateBanner(): void {
     banner.hidden = !dirty();
     saveBtn.disabled = saving || loading || !draft;
@@ -371,6 +378,53 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     renderGroups();
   }
 
+  function normalizeBotUserID(userID: string): string {
+    const colon = userID.indexOf(':');
+    return colon < 0 ? userID : userID.slice(0, colon).toLowerCase() + userID.slice(colon);
+  }
+
+  function botUserIDs(): string[] {
+    return [...new Set((draft?.get('BOT_LOOP_USER_IDS') ?? '').split(/[,;\s]+/).filter(Boolean).map(normalizeBotUserID))];
+  }
+
+  function renderBotUsers(): void {
+    const ids = botUserIDs();
+    const disabled = !draft || saving || loading;
+    botUserTags.innerHTML = ids.length === 0
+      ? '<span class="text-[11px] text-muted">尚未添加用户 ID</span>'
+      : ids.map((userID, index) => `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono min-w-0">
+            <span class="break-all">${escapeHtml(userID)}</span>
+            <button type="button" class="text-muted hover:text-danger shrink-0 cursor-pointer" data-bot-user-index="${index}" aria-label="移除 ${escapeHtml(userID)}" title="移除用户 ID" ${disabled ? 'disabled' : ''}>&times;</button>
+          </span>`).join('');
+    botUserTags.querySelectorAll<HTMLButtonElement>('[data-bot-user-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!draft || saving || loading) return;
+        change('BOT_LOOP_USER_IDS', ids.filter((_, index) => index !== Number(button.dataset.botUserIndex)).join(','));
+        renderBotUsers();
+      });
+    });
+  }
+
+  function addBotUser(): boolean {
+    if (!draft || saving || loading) return false;
+    const userID = normalizeBotUserID(botUserInput.value.trim());
+    if (!userID || /[,;\s]/.test(userID)) {
+      toast.error(userID ? '每次添加一个用户 ID' : '请输入用户 ID');
+      return false;
+    }
+    const ids = botUserIDs();
+    if (ids.includes(userID)) {
+      toast.error('该用户 ID 已添加');
+      return false;
+    }
+    botUserInput.value = '';
+    change('BOT_LOOP_USER_IDS', [...ids, userID].join(','));
+    renderBotUsers();
+    botUserInput.focus();
+    return true;
+  }
+
   function updateProbabilityDisplay(): void {
     const text = probability.value || '0.01';
     const value = Number(text);
@@ -406,7 +460,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
     quoteDepth.value = value('QUOTE_TRACE_DEPTH');
     quoteDepth.disabled = !quote.checked;
-    element<HTMLInputElement>('bot-loop-user-ids').value = value('BOT_LOOP_USER_IDS');
+    renderBotUsers();
     element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
     const loopMode = element<HTMLSelectElement>('bot-loop-mode');
     loopMode.value = value('BOT_LOOP_MODE');
@@ -509,6 +563,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
   async function saveDraft(): Promise<void> {
     if (!draft || saving || loading) return;
+    if (botUserInput.value && !addBotUser()) return;
     if (groupInput.value) addGroup();
     if ((extraKey.value || extraValue.value) && !addExtra()) return;
     for (const input of invalidNumbers()) {
@@ -581,7 +636,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     });
   }
   const texts: Record<string, string> = {
-    'bot-loop-user-ids': 'BOT_LOOP_USER_IDS', 'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
+    'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
   };
   for (const [id, key] of Object.entries(texts)) {
     const input = element<HTMLInputElement>(id);
@@ -645,6 +700,11 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   groupAdd.addEventListener('click', addGroup);
   groupInput.addEventListener('input', updateBanner);
   groupInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addGroup(); } });
+  botUserAdd.addEventListener('click', () => { addBotUser(); });
+  botUserInput.addEventListener('input', updateBanner);
+  botUserInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); addBotUser(); }
+  });
   extraKey.addEventListener('input', updateBanner);
   extraValue.addEventListener('input', updateBanner);
   extraAdd.addEventListener('click', addExtra);
@@ -653,6 +713,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     draft?.restore();
     extraKey.value = extraValue.value = '';
     groupInput.value = groupSelect.value = '';
+    botUserInput.value = '';
     renderAll();
   });
   saveBtn.addEventListener('click', () => void saveDraft());
