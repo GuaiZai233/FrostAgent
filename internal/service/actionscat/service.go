@@ -736,6 +736,8 @@ func (s *Service) handleDispatch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleClientError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, client.ErrDisabled):
+		s.writeError(w, http.StatusForbidden, client.ErrDisabled.Error())
 	case errors.Is(err, client.ErrNotFound):
 		s.writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, client.ErrNotConfigured):
