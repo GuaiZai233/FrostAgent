@@ -1,6 +1,8 @@
 package instance
 
 import (
+	"FrostAgent/internal/actionscat"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,5 +97,53 @@ func TestSQLExtraEnvRouteRejectsManagedSettingKeys(t *testing.T) {
 		"/api/instances/global/extra-env/SYNTHETIC_EXTERNAL_TOKEN", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("extra env delete failed: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSQLActionsCatDraftSwitchKeepsRunningRuntime(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("ActionsCat Hot Switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	runtime := m.instances[info.ID].runtime
+	for _, step := range []struct {
+		body    string
+		enabled bool
+	}{
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false},
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"true"}]}`, true},
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false},
+		{`{"clearKeys":["ACTIONSCAT_ENABLED"]}`, true},
+	} {
+		response := applySettingsDraft(m, info.ID, step.body)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+			t.Fatalf("save failed: %d %s", response.Code, response.Body.String())
+		}
+		if m.instances[info.ID].runtime != runtime || runtime.Scope.Context().Err() != nil {
+			t.Fatal("ActionsCat draft rebuilt or stopped the runtime")
+		}
+		count := 0
+		for _, tool := range runtime.Engine.ModelTools() {
+			if strings.HasPrefix(tool.Name, "actionscat_") {
+				count++
+			}
+		}
+		if (step.enabled && count != 16) || (!step.enabled && count != 0) {
+			t.Fatalf("enabled=%v exposes %d ActionsCat tools", step.enabled, count)
+		}
+		if !step.enabled {
+			_, err := runtime.Engine.ToolRegistry["actionscat_list_actions"].Execute("{}")
+			if !errors.Is(err, actionscat.ErrDisabled) {
+				t.Fatalf("retained tool did not reject disabled call: %v", err)
+			}
+		}
 	}
 }

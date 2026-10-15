@@ -93,7 +93,9 @@ func toAgentRunDTO(run *actionscat.Run, includeLogs bool) AgentRunDTO {
 // ActionsCatListActionsTool creates a Tool that lists registered ActionsCat actions.
 func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_list_actions",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_list_actions",
 		description: "列出 ActionsCat 自动化平台中已注册的 Actions。返回各 Action 的 ID、名称、描述、" +
 			"启用状态及是否可运行（runnable）。注意：只有 runnable=true（已关联并激活构建 active_build_id）" +
 			"的 Action 才能被 actionscat_run_action 成功运行；未构建/未激活版本的 Action 仅为元数据，执行会失败。",
@@ -159,7 +161,9 @@ func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 // ActionsCatRunActionTool creates a Tool that triggers an action in ActionsCat.
 func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_run_action",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_run_action",
 		description: "在 ActionsCat 中触发执行指定的 Action。支持传入自定义环境变量及元数据。" +
 			"默认等待执行完成并返回输出结果（最长等待 25 秒），若任务仍在运行则返回当前状态及 run_id 供后续查询。",
 		parameter: map[string]any{
@@ -252,7 +256,9 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 // ActionsCatGetRunTool creates a Tool that inspects a run's status and logs.
 func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_get_run",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_get_run",
 		description: "获取 ActionsCat 某次运行任务 (Run) 的状态、耗时、退出码及详细日志 (stdout/stderr)。" +
 			"可用于轮询未完成的任务或分析执行失败原因。",
 		parameter: map[string]any{
@@ -314,7 +320,9 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 // This is a management-plane control operation and is strictly restricted to configured administrators (ADMIN_QQ_IDS).
 func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_create_action",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_create_action",
 		description: "在 ActionsCat 中注册 Action 动作元数据（仅限配置了 ADMIN_QQ_IDS 的管理员使用）。" +
 			"可指定动作名称、描述及最大并发数。注意：新建的 Action 为元数据壳，后续需在 ActionsCat 中构建并激活版本后方可由 actionscat_run_action 实际执行。",
 		parameter: map[string]any{
@@ -537,7 +545,9 @@ func toAgentBuildDTO(bld *actionscat.ArtifactBuild, includeLogs bool) AgentBuild
 // ActionsCatCreateVersionTool creates a Tool that registers an immutable ActionVersion.
 func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_create_version",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_create_version",
 		description: "在 ActionsCat 中为指定的 Action 创建一个不可变代码版本 (ActionVersion)（仅限管理员 ADMIN_QQ_IDS）。" +
 			"支持传入源代码文件映射 (files)、构建规约 (build_spec)、运行规约 (runtime_spec)、状态注入 (state_injections) 和运行能力 (runtime_capabilities)。" +
 			"注意：版本一旦创建永久不可变；创建后需调用 actionscat_build_version 编译生成制品，随后激活方可运行。",
@@ -675,7 +685,9 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 // ActionsCatBuildVersionTool creates a Tool that compiles an ActionVersion in a builder sandbox.
 func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_build_version",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_build_version",
 		description: "在 ActionsCat 中为指定的 ActionVersion 触发沙箱编译构建（仅限管理员 ADMIN_QQ_IDS）。" +
 			"构建为同步过程，耗时较长。若构建成功 (status=succeeded)，后续需使用 actionscat_activate_build 激活。" +
 			"若构建失败，将返回详细的编译错误日志（stderr/stdout）。由于版本不可变，严禁在当前版本重复重试构建或尝试激活失败构建；" +
@@ -759,7 +771,9 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 // ActionsCatGetBuildTool creates a Tool that inspects a build's status and logs.
 func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_get_build",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_get_build",
 		description: "获取 ActionsCat 某次编译构建 (Build) 的状态、制品哈希、退出码及详细编译日志 (stdout/stderr)。" +
 			"可用于检查超时未决的构建任务或分析编译错误原因。",
 		parameter: map[string]any{
@@ -822,7 +836,9 @@ func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
 // without triggering duplicate builds.
 func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_list_builds",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_list_builds",
 		description: "列出 ActionsCat 指定 Action 下的历史编译构建列表（按创建时间倒序排列）。" +
 			"当 actionscat_build_version 或 actionscat_deploy_action 因超时或网络中断返回未知结果时，" +
 			"必须先调用本工具检查对应 version_id 是否已创建构建及其实时状态（succeeded/failed/building），" +
@@ -841,56 +857,58 @@ func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
 			},
 			"required": []string{"action_id"},
 		},
-	executeContext: func(ctx context.Context, args string) (string, error) {
-		if client == nil || !client.IsConfigured() {
-			return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
-		}
-
-		var input struct {
-			ActionID  string `json:"action_id"`
-			VersionID string `json:"version_id"`
-		}
-		if err := json.Unmarshal([]byte(args), &input); err != nil {
-			return fmt.Sprintf("参数解析错误: %v", err), nil
-		}
-		if strings.TrimSpace(input.ActionID) == "" {
-			return "缺少必填参数 'action_id'", nil
-		}
-
-		builds, err := client.ListBuilds(ctx, input.ActionID)
-		if err != nil {
-			return fmt.Sprintf("查询构建列表失败: %v", err), nil
-		}
-
-		var filtered []AgentBuildDTO
-		for i := range builds {
-			bld := &builds[i]
-			if input.VersionID != "" && bld.VersionID != input.VersionID {
-				continue
+		executeContext: func(ctx context.Context, args string) (string, error) {
+			if client == nil || !client.IsConfigured() {
+				return "ActionsCat 尚未配置。请在实例设置中配置 ACTIONSCAT_ENDPOINT 和 ACTIONSCAT_MANAGEMENT_TOKEN。", nil
 			}
-			filtered = append(filtered, toAgentBuildDTO(bld, false))
-		}
 
-		if len(filtered) == 0 {
-			if input.VersionID != "" {
-				return fmt.Sprintf("未查询到 Action %s 中版本 %s 的任何构建记录。若刚发生构建请求异常，可能记录尚未入库，建议等待短暂间隔后再查询一次；在确认未生成构建前请勿盲目重试构建。", input.ActionID, input.VersionID), nil
+			var input struct {
+				ActionID  string `json:"action_id"`
+				VersionID string `json:"version_id"`
 			}
-			return fmt.Sprintf("未查询到 Action %s 的任何构建记录。", input.ActionID), nil
-		}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				return fmt.Sprintf("参数解析错误: %v", err), nil
+			}
+			if strings.TrimSpace(input.ActionID) == "" {
+				return "缺少必填参数 'action_id'", nil
+			}
 
-		data, err := json.MarshalIndent(filtered, "", "  ")
-		if err != nil {
-			return "", fmt.Errorf("serialize builds response: %w", err)
-		}
-		return string(data), nil
-	},
+			builds, err := client.ListBuilds(ctx, input.ActionID)
+			if err != nil {
+				return fmt.Sprintf("查询构建列表失败: %v", err), nil
+			}
+
+			var filtered []AgentBuildDTO
+			for i := range builds {
+				bld := &builds[i]
+				if input.VersionID != "" && bld.VersionID != input.VersionID {
+					continue
+				}
+				filtered = append(filtered, toAgentBuildDTO(bld, false))
+			}
+
+			if len(filtered) == 0 {
+				if input.VersionID != "" {
+					return fmt.Sprintf("未查询到 Action %s 中版本 %s 的任何构建记录。若刚发生构建请求异常，可能记录尚未入库，建议等待短暂间隔后再查询一次；在确认未生成构建前请勿盲目重试构建。", input.ActionID, input.VersionID), nil
+				}
+				return fmt.Sprintf("未查询到 Action %s 的任何构建记录。", input.ActionID), nil
+			}
+
+			data, err := json.MarshalIndent(filtered, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("serialize builds response: %w", err)
+			}
+			return string(data), nil
+		},
 	}
 }
 
 // ActionsCatActivateBuildTool creates a Tool that activates a build for an Action.
 func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_activate_build",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_activate_build",
 		description: "将 ActionsCat 中指定的成功构建 (build_id) 激活为 Action 的当前运行版本（仅限管理员 ADMIN_QQ_IDS）。" +
 			"激活后 Action 变为可运行状态 (runnable=true)，方可由 actionscat_run_action 实际执行。" +
 			"注意：严格校验构建状态，只有 status 为 'succeeded' 的成功构建才允许被激活。",
@@ -983,7 +1001,9 @@ func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimesc
 // create_version -> build_version -> inspect status -> activate_build.
 func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_deploy_action",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_deploy_action",
 		description: "一站式完成 ActionsCat Action 的完整部署生命周期（仅限管理员 ADMIN_QQ_IDS）：" +
 			"创建新代码版本 (create_version) -> 触发编译构建 (build_version) -> 校验构建状态 -> 激活成功构建 (activate_build)。" +
 			"若编译失败，将返回详细错误日志并中止激活；若构建超时，将返回未知状态提示以防止重复构建。" +
@@ -1169,7 +1189,9 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 // ActionsCatCreateScheduleTool creates a Tool that registers a cron schedule trigger for an Action.
 func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_create_schedule",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_create_schedule",
 		description: "在 ActionsCat 中为指定的 Action 创建定时触发器 (Schedule)（仅限管理员 ADMIN_QQ_IDS）。" +
 			"基于 5 段式标准 Cron 表达式（分 时 日 月 周）及 IANA 时区（默认 Asia/Shanghai）在后台定时触发任务执行，无需 LLM 常驻或唤醒。" +
 			"从当前私聊或群聊保存收件上下文；Action 请用 actionscat.Reply 回复，不需要在源码中写收件人 ID。",
@@ -1286,7 +1308,9 @@ func scheduleDeliveryContext(run llm.RunContext) *actionscat.DeliveryContext {
 // ActionsCatListSchedulesTool creates a Tool that lists schedules for an Action.
 func ActionsCatListSchedulesTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_list_schedules",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_list_schedules",
 		description: "列出 ActionsCat 指定 Action 下的所有定时调度配置 (Schedules)。" +
 			"返回各 Schedule 的 ID、Cron 表达式、时区、下次预计执行时间 (next_run_at) 及启用状态。",
 		parameter: map[string]any{
@@ -1339,7 +1363,9 @@ func ActionsCatListSchedulesTool(client *actionscat.Client) Tool {
 // ActionsCatDeleteScheduleTool creates a Tool that deletes a schedule trigger.
 func ActionsCatDeleteScheduleTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_delete_schedule",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_delete_schedule",
 		description: "删除 ActionsCat 中指定的定时触发器 (Schedule)（仅限管理员 ADMIN_QQ_IDS）。" +
 			"删除后立即停止该定时任务的后台调度。",
 		parameter: map[string]any{
@@ -1389,7 +1415,9 @@ func ActionsCatDeleteScheduleTool(client *actionscat.Client, scopes ...*runtimes
 // ActionsCatCreateMatcherTool creates a Tool that registers an event matcher trigger for an Action.
 func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_create_matcher",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_create_matcher",
 		description: "在 ActionsCat 中为指定的 Action 创建事件匹配器 (Matcher)（仅限管理员 ADMIN_QQ_IDS）。" +
 			"当平台收到平台中立事件且目标字段匹配规则时（exact/contains/regex），可直接触发 Action 运行（冷启动零 LLM 消耗），" +
 			"并支持将正则命名捕获组自动映射为 Action 运行环境变量 (capture_env_map)。",
@@ -1541,7 +1569,9 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 // ActionsCatListMatchersTool creates a Tool that lists event matchers for an Action.
 func ActionsCatListMatchersTool(client *actionscat.Client) Tool {
 	return Tool{
-		name: "actionscat_list_matchers",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_list_matchers",
 		description: "列出 ActionsCat 指定 Action 下的所有事件匹配器 (Matchers)。" +
 			"返回各 Matcher 的 ID、名称、匹配类型、规则模式、捕获映射、优先级及启用状态。",
 		parameter: map[string]any{
@@ -1594,7 +1624,9 @@ func ActionsCatListMatchersTool(client *actionscat.Client) Tool {
 // ActionsCatDeleteMatcherTool creates a Tool that deletes an event matcher.
 func ActionsCatDeleteMatcherTool(client *actionscat.Client, scopes ...*runtimescope.Scope) Tool {
 	return Tool{
-		name: "actionscat_delete_matcher",
+		enabled:       client.IsEnabled,
+		disabledError: actionscat.ErrDisabled,
+		name:          "actionscat_delete_matcher",
 		description: "删除 ActionsCat 中指定的事件匹配器 (Matcher)（仅限管理员 ADMIN_QQ_IDS）。" +
 			"删除后该事件规则不再生效。",
 		parameter: map[string]any{
@@ -1640,4 +1672,3 @@ func ActionsCatDeleteMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 		},
 	}
 }
-

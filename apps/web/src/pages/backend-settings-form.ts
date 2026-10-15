@@ -34,8 +34,11 @@ export function renderBackendSettingsForm(
             const key = escapeHtml(item.key);
             const status = field.hot ? '保存后生效' : '保存时重载实例';
             const kind = field.type ?? 'text';
+            const enabled = item.key === 'ACTIONSCAT_ENABLED'
+              ? !['false', '0', 'no', 'off'].includes(item.value.trim().toLowerCase())
+              : item.value === 'true';
             const input = kind === 'switch'
-              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${item.value === 'true' ? 'checked' : ''} /><span aria-hidden="true"></span></label>`
+              ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${enabled ? 'checked' : ''} /><span aria-hidden="true"></span></label>`
               : kind === 'select'
                 ? `<div class="flex items-center gap-2"><select id="setting-${key}" class="input input-sm settings-default-select flex-1" data-default="${!item.value}" data-setting-input="${key}" aria-label="${label}">
                     <option value="" ${!item.value ? 'selected' : ''}>默认（${escapeHtml(item.resetHint || '')}）</option>

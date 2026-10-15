@@ -52,7 +52,9 @@ class Element {
       child.required = /\brequired\b/.test(attrs);
       child.disabled = /\bdisabled\b/.test(attrs);
       child.hidden = /\bhidden\b/.test(attrs);
+      child.checked = /\bchecked\b/.test(attrs);
       child.dataset.settingInput = attr('data-setting-input');
+      child.dataset.settingSwitch = attr('data-setting-switch');
       child.dataset.default = attr('data-default');
       this.children.set(match[3], child);
     }
@@ -70,6 +72,7 @@ class Element {
   querySelector(selector: string): Element | null {
     if (selector.startsWith('#')) return this.children.get(selector.slice(1)) ?? [...this.children.values()].map((child) => child.querySelector(selector)).find(Boolean) ?? null;
     if (selector === '[data-setting-input]') return this.all().find((child) => child.dataset.settingInput) ?? null;
+    if (selector === '[data-setting-switch]') return this.all().find((child) => child.dataset.settingSwitch) ?? null;
     const key = selector.match(/data-setting-input="([^"]+)"/)?.[1];
     return key ? this.all().find((input) => input.type === 'number' && input.dataset.settingInput === key) ?? null : null;
   }
@@ -373,6 +376,34 @@ el('settings-draft-save').click();
 await settle();
 assert.equal(writes.length, beforeEditedProbability, 'an invalid unsaved probability must still block saving');
 cleanup();
+
+for (const storedValue of ['', 'true', 'false', ' OFF ']) {
+  values = [{ key: 'ACTIONSCAT_ENABLED', value: storedValue, isSecret: false }];
+  cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+  await settle();
+  const enabled = storedValue === '' || storedValue === 'true';
+  const switchControl = el('setting-ACTIONSCAT_ENABLED');
+  assert.equal(switchControl.type, 'checkbox', 'ActionsCat must use a switch in the new form');
+  assert.equal(switchControl.checked, enabled, 'ActionsCat display must match runtime defaults and aliases');
+  assert.match(el('settings-form').innerHTML, /启用 ActionsCat/);
+  assert.match(el('settings-form').innerHTML, /当前实例 · 保存后生效/);
+  const before = writes.length;
+  switchControl.checked = !enabled;
+  switchControl.emit('change');
+  assert.equal(writes.length, before, 'switch edits must remain in the new local draft');
+  assert.equal(el('settings-draft-banner').hidden, false);
+  el('settings-draft-restore').click();
+  assert.equal(el('setting-ACTIONSCAT_ENABLED').checked, enabled, 'restore must revert switch edits');
+  el('setting-ACTIONSCAT_ENABLED').checked = !enabled;
+  el('setting-ACTIONSCAT_ENABLED').emit('change');
+  el('settings-draft-save').click();
+  await settle();
+  assert.equal(writes.length, before + 1);
+  assert.deepEqual(writes.at(-1), [{ key: 'ACTIONSCAT_ENABLED', value: enabled ? 'false' : 'true', isSecret: false }]);
+  assert.equal(el('setting-ACTIONSCAT_ENABLED').checked, !enabled, 'saved state must remain visible');
+  assert.equal(el('settings-draft-banner').hidden, true);
+  cleanup();
+}
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);
 draft.set('BOT_NAME', '');

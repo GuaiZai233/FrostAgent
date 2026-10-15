@@ -41,6 +41,7 @@ var resetHints = map[string]string{
 	"ADMIN_TOKEN":                          "未配置兼容令牌",
 	"MCP_ENFORCE_LOCAL_TOKEN":              "关闭本机强制令牌；远程管理仍需令牌",
 	"AGENT_MAX_ITERATIONS":                 "35",
+	"ACTIONSCAT_ENABLED":                   "开启",
 	"ACTIONSCAT_ENDPOINT":                  "未配置服务地址",
 	"ACTIONSCAT_MANAGEMENT_TOKEN":          "未配置管理 Token",
 	"ACTIONSCAT_DISPATCH_TOKEN":            "复用 ActionsCat 管理 Token",

@@ -180,6 +180,7 @@ export const securityAPI = {
 };
 
 export interface ActionsCatStatus {
+  disabled?: boolean;
   configured: boolean;
   healthy: boolean;
   authenticated?: boolean;

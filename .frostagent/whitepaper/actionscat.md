@@ -202,6 +202,10 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 向大模型 Agent Loop 暴露 16 个标准化工具，涵盖完整生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行 -> 定时调度 -> 事件匹配）：
 
+实例设置 `ACTIONSCAT_ENABLED` 默认开启；关闭后立即从 `EffectiveTools` / `ModelTools` 和后续模型请求中移除全部 16 个 ActionsCat 工具。工具执行入口仍保留，以拒绝旧模型响应或直接调用：`Execute`、`ExecuteContext`、`ExecuteResult` 均返回错误 `ActionsCat已被FrostAgent管理员禁用。`，错误优先于参数解析、管理员和模拟会话检查，且不会产生后端请求。重新开启后工具立即恢复，不需要重启实例，也不影响其他实例。
+
+客户端在每次出站请求前再次读取开关，阻断后续管理、构建、执行和事件分发；自动消息事件分发直接跳过。控制台代理在原有认证后返回 HTTP 403 和同样的错误，状态接口仍可查询并返回 `disabled: true`，不会发起健康检查。禁用开关仅控制本实例的 FrostAgent 集成，不撤销已提交到 ActionsCat 的任务、远端调度计划或已在执行中的请求，也不改变通用消息回传接口的授权规则。
+
 #### 1. `actionscat_list_actions`
 - **功能**：列出已注册的 Action 列表；
 - **参数**：
@@ -360,6 +364,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 | 环境变量配置名 | 说明 | 默认值 | 作用域 | 敏感度 |
 | :--- | :--- | :--- | :--- | :--- |
+| `ACTIONSCAT_ENABLED` | 是否启用 ActionsCat；关闭后隐藏工具并拒绝调用，保存后立即生效 | `true`（旧实例未设置时也开启） | 实例级 | 否 |
 | `ACTIONSCAT_ENDPOINT` | ActionsCat 核心服务地址（如 `http://127.0.0.1:8080`） | 空（未配置） | 实例级 | 否 |
 | `ACTIONSCAT_MANAGEMENT_TOKEN` | ActionsCat 管理 API Bearer Token | 空 | 实例级 | 是（脱敏显示） |
 | `ACTIONSCAT_DISPATCH_TOKEN` | ActionsCat 事件分发 Token（可选，默认复用管理 Token） | 空 | 实例级 | 是（脱敏显示） |
