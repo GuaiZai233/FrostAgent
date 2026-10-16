@@ -15,14 +15,16 @@ import (
 )
 
 const (
-	defaultTimeout       = 15 * time.Second
-	defaultBuildTimeout  = 180 * time.Second
-	defaultMaxBodyBytes  = 10 * 1024 * 1024 // 10 MiB
-	maxWaitDuration      = 30 * time.Second
-	defaultPollInterval  = 600 * time.Millisecond
+	defaultTimeout      = 15 * time.Second
+	defaultBuildTimeout = 180 * time.Second
+	defaultMaxBodyBytes = 10 * 1024 * 1024 // 10 MiB
+	maxWaitDuration     = 30 * time.Second
+	defaultPollInterval = 600 * time.Millisecond
 )
 
 var (
+	// ErrDisabled indicates that the instance administrator disabled ActionsCat.
+	ErrDisabled = errors.New("ActionsCat已被FrostAgent管理员禁用。")
 	// ErrNotConfigured indicates that ACTIONSCAT_ENDPOINT is unset or empty.
 	ErrNotConfigured = errors.New("actionscat: endpoint is not configured")
 	// ErrInvalidURL indicates that ACTIONSCAT_ENDPOINT is not a valid HTTP/HTTPS URL.
@@ -123,9 +125,9 @@ type RuntimeSpec struct {
 
 // StateInjection declares a persistent state file to read and inject as an env var before Run.
 type StateInjection struct {
-	StatePath string `json:"state_path"`           // relative path inside action's state namespace, e.g. "html.json"
-	EnvVar    string `json:"env_var"`              // target env var name, e.g. "PREVIOUS_HTML"
-	Optional  bool   `json:"optional,omitempty"`   // if true, empty string if missing; if false, fail run if missing
+	StatePath string `json:"state_path"`         // relative path inside action's state namespace, e.g. "html.json"
+	EnvVar    string `json:"env_var"`            // target env var name, e.g. "PREVIOUS_HTML"
+	Optional  bool   `json:"optional,omitempty"` // if true, empty string if missing; if false, fail run if missing
 }
 
 // ActionVersion represents an immutable version snapshot of an Action.
@@ -265,6 +267,7 @@ type HealthStatus struct {
 
 // StatusResponse is the summarized connection status.
 type StatusResponse struct {
+	Disabled      bool   `json:"disabled,omitempty"`
 	Configured    bool   `json:"configured"`
 	Endpoint      string `json:"endpoint"`
 	Healthy       bool   `json:"healthy"`
@@ -299,7 +302,7 @@ func New(getenv func(string) string, opts ...Option) *Client {
 		getenv = func(string) string { return "" }
 	}
 	c := &Client{
-		getenv: getenv,
+		getenv:     getenv,
 		httpClient: &http.Client{
 			// Note: timeout is managed per-request via context deadlines
 			// (defaultTimeout for metadata, defaultBuildTimeout for synchronous compilation)
@@ -336,6 +339,20 @@ func (c *Client) IsConfigured() bool {
 	return c.Endpoint() != ""
 }
 
+// IsEnabled reads the instance switch on every use. Missing settings preserve
+// the existing enabled behavior for instances created before this switch.
+func (c *Client) IsEnabled() bool {
+	if c == nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(c.getenv("ACTIONSCAT_ENABLED"))) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 func (c *Client) validateURL(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, ErrNotConfigured
@@ -358,6 +375,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any, t
 }
 
 func (c *Client) doRequestWithTimeout(ctx context.Context, method, path string, body any, token string, timeout time.Duration) ([]byte, int, error) {
+	if !c.IsEnabled() {
+		return nil, 0, ErrDisabled
+	}
 	endpoint := c.Endpoint()
 	if endpoint == "" {
 		return nil, 0, ErrNotConfigured
@@ -452,6 +472,12 @@ func (c *Client) Health(ctx context.Context) (*HealthStatus, error) {
 // distinguishing between anonymous reachability (/healthz) and management API readiness.
 func (c *Client) Status(ctx context.Context) StatusResponse {
 	endpoint := c.Endpoint()
+	if !c.IsEnabled() {
+		return StatusResponse{
+			Disabled: true, Configured: endpoint != "", Endpoint: endpoint,
+			Error: ErrDisabled.Error(),
+		}
+	}
 	if endpoint == "" {
 		return StatusResponse{
 			Configured:    false,
@@ -742,7 +768,7 @@ func (c *Client) BuildVersion(ctx context.Context, actionID, versionID string) (
 	path := fmt.Sprintf("/api/v1/actions/%s/versions/%s/builds", url.PathEscape(actionID), url.PathEscape(versionID))
 	data, statusCode, err := c.doRequestWithTimeout(ctx, http.MethodPost, path, nil, c.ManagementToken(), defaultBuildTimeout)
 	if err != nil {
-		if errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrInvalidURL) {
+		if errors.Is(err, ErrDisabled) || errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrInvalidURL) {
 			return nil, err
 		}
 		// 4xx responses are definite rejections (validation error, conflict, not found, unauthorized)

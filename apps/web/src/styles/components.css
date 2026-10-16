@@ -394,43 +394,6 @@ input[type="checkbox"].checkbox:indeterminate::after {
   table-layout: fixed;
 }
 
-.env-table {
-  table-layout: fixed;
-  width: 100%;
-}
-
-.env-table th,
-.env-table td {
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
-
-.table.env-table td,
-.env-table td {
-  vertical-align: top;
-}
-
-.env-table-key-col {
-  width: 11rem;
-}
-
-@media (min-width: 640px) {
-  .env-table-key-col {
-    width: 14rem;
-  }
-}
-
-@media (min-width: 1024px) {
-  .env-table-key-col {
-    width: 17rem;
-  }
-}
-
-.env-table-action-col {
-  width: 5.5rem;
-  text-align: right;
-}
-
 /* ==================== DIALOGUE SPECIALIZED CARDS ==================== */
 .dialogue-card > header {
   padding-inline: 0;
@@ -1209,4 +1172,37 @@ dialog.dialog-modal::backdrop {
 @container (max-width: 42rem) {
   .card.backup-feature { flex-direction: column; align-items: flex-start; padding: 1.25rem; }
   .backup-feature > .btn { align-self: flex-start; }
+}
+/* Pending server settings stay visible while the page scrolls. */
+.settings-default-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+.settings-default-select[data-default="true"] { color: var(--muted-foreground); }
+.settings-default-select option { color: var(--foreground); }
+.settings-default-select option[value=""] { color: var(--muted-foreground); }
+.settings-draft-banner {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius-md);
+  background: #b91c1c;
+  color: #fff;
+  box-shadow: var(--shadow-md);
+  font-size: 0.875rem;
+}
+.settings-draft-banner[hidden] { display: none; }
+.settings-draft-banner .btn {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.12);
+}
+@media (max-width: 640px) {
+  .settings-draft-banner { flex-wrap: wrap; top: 0.5rem; }
 }

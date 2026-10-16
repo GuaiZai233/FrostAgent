@@ -7,7 +7,25 @@
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
 计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
+### 当前服务端设置界面与生效边界
+
+当前 SQL 版本把常规设置保存在数据库 `settings` 表中，管理界面使用中文名称和按类型选择的输入框、数值框、圆形开关。群聊回复、主动回复、机器人名称、上下文消息数、记忆提取阈值、ActionsCat 连接参数，以及大部分全局安全与沙箱设置直接更新现有运行对象，不停止实例或断开已有连接。需要在构造时装配的适配器、计费和部分压缩参数保存后由实例管理器自动重载；界面逐项标明这一点。
+
+额外 env 注入用于数据库设置目录之外的自定义环境变量，存储在 SQL 的独立 `extra_env` 作用域中。它们只在 FrostAgent 启动时写入进程环境，并可供环境变量来源的模型凭据读取；编辑和删除不会修改当前进程，必须重启 FrostAgent。宿主进程已有的同名变量优先。常规设置键不可通过额外 env 注入覆盖。全局设置 JSON 备份包含额外 env 的明文值，导入时恢复其数据库记录；旧版备份没有此字段时保留当前额外 env。
+
 ## FrostAgent 的组成
+
+### Docker 部署
+
+根目录 `Dockerfile` 分别构建 TypeScript 前端和 Go protobuf，并将前端嵌入 `cmd/app` 静态二进制。运行镜像以 UID/GID `10001:10001` 启动，提供 CA 证书和时区数据；数据统一挂载到 `/app/data`，默认 Compose 使用命名卷，同时保存 SQL 引导信息与贴图字节。
+
+Compose 使用 Caddy HTTPS Basic Auth 代理，管理页面、API 与控制台 WebSocket 一律要求认证；无默认密码，部署前必须设置用户名与 bcrypt 密码哈希。代理与后端共享网络空间，后端默认仅在 `127.0.0.1:8081` 提供管理服务，代理关闭自身管理 API，并在认证后移除 Basic Authorization 请求头。其他同网络容器无法直接访问后端管理监听；独立的 `0.0.0.0:1234` 仍只提供适配器 WebSocket。TLS 本地 CA 在独立命名卷中保存。
+
+镜像通过 Go 链接参数启用管理监听隔离校验：SQL 配置优先，但管理地址必须使用数值回环 IP，并与适配器使用不同端口；启动、热更新和数据库切换时先校验再监听，拒绝存量或新增配置绕过代理。普通构建保持原有默认值与监听能力，不引入应用环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布 HTTPS 和适配器端口；已有 Host、Origin 与后端控制令牌规则继续生效。
+
+容器构建的管理鉴权将已认证代理的回环连接视为本地跳转，保留 `X-Forwarded-*` 供同源校验使用；同网络远程对端不能凭转发头取得这一身份，普通构建仍要求代理流量提供控制令牌。`MCP_ENFORCE_LOCAL_TOKEN` 在容器构建中同样有效，启用后需由代理在认证后注入后端 Bearer Token。
+
+Docker CI 使用临时项目、随机合成凭据和命名卷，验证 HTTPS 证书、缺失/错误认证、同网络容器伪造 Host 的管理访问被拒、后端管理与代理管理端口不可达、SQL 不安全监听的启动与热更新拒绝、前端资源、非 root 启动、适配器与控制台 WebSocket、正常退出及重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
 ### 并发回归验证
 
@@ -95,6 +113,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
 
 - **无感后台摄入与总结**：各平台适配器（OneBot、AstrBot）在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
+- **压缩指令与会话数据分层**：自动与手动压缩共用同一请求构造：固定压缩规则单独作为 `system` 消息，已有群聊总结与新消息 JSONL 作为 `user` 消息发送。群友正文、图片描述和旧摘要不拼入系统指令，JSONL 内的角色元数据与原始内容保持不变。失败时仍按既有策略保留缓冲并重试，不将空响应视为成功摘要。
 - **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
 - **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
 - **失败容错与自动退避重试**：当异步 LLM 调用遭遇超时、网络波动或错误时，快照中的原始消息在 safety buffer 容量范围内继续保留在内存缓冲区中；Compactor 依据 `max(retryDelay, remaining cooldown)` 延迟在后台自动重新调度压缩（其中 `retryDelay` 为最小失败退避时间，实际重试仍严格遵循 `minInterval` 冷却期），或在后续新消息到达时合并重试。
@@ -172,7 +191,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 ### Bot 连续对话防循环
 
-- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可配置实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
+- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可输入用户 ID，点击「添加」或按回车逐个加入 Bot 标记列表，并逐项移除。列表编辑加入页面统一草稿；点击顶部草稿栏的「保存」时，与其他设置批量提交，包含输入框中尚未添加的 ID；「还原」可撤销列表和待添加输入。列表为空即关闭。配置仍使用实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
 - OneBot 与 AstrBot 按入站顺序、按会话统计同一标记用户触发的对话请求；其他用户的任意消息（包括未唤醒的群聊消息）打断计数。AstrBot 插件关闭完整群消息转发时，仍发送不含内容的打断事件。被安全或路由规则静默拒绝的消息不增加轮数；安全规则直接发出的拒绝回复则计入轮数。
 - 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
 
@@ -204,7 +223,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。`
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。`
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
@@ -365,9 +384,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
-  - HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`；
-  - WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
-  - 杜绝默认监听 `0.0.0.0` 或通配端口导致的未授权公网暴露。
+  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；

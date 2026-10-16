@@ -5,7 +5,7 @@ import (
 	"FrostAgent/internal/instance"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/logs"
-	secsvc "FrostAgent/internal/service/security"
+	mcpsvc "FrostAgent/internal/service/mcp"
 	"context"
 	"fmt"
 	"maps"
@@ -29,29 +29,34 @@ func run() error {
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 	listeners := newListenerSet()
-	desiredHandlers := func(global *instanceconfig.Store) map[string]http.Handler {
+	applyListeners := func(global *instanceconfig.Store) error {
 		listen := global.Get("LISTEN_ADDR")
 		if listen == "" {
-			listen = "127.0.0.1:8080"
+			listen = instanceconfig.DefaultListenAddr
 		}
 		wsListen := global.Get("WS_LISTEN_ADDR")
 		if wsListen == "" {
-			wsListen = "127.0.0.1:1234"
+			wsListen = instanceconfig.DefaultWSListenAddr
+		}
+		if instanceconfig.ManagementLoopbackOnly == "true" {
+			if err := instanceconfig.ValidateListenerIsolation(listen, wsListen); err != nil {
+				return err
+			}
 		}
 		handlers := map[string]http.Handler{listen: corsMiddleware(mux, global.Get)}
 		if wsListen != listen {
 			handlers[wsListen] = wsMux
 		}
-		return handlers
+		return listeners.Apply(handlers)
 	}
 	gateway.apply = func(next *instance.Manager) error {
-		if err := listeners.Apply(desiredHandlers(next.GlobalConfig())); err != nil {
+		if err := applyListeners(next.GlobalConfig()); err != nil {
 			return err
 		}
 		return next.ApplyGlobalSettings()
 	}
 	manager.SetGlobalApplyHook(func() error { return gateway.apply(manager) })
-	if err := listeners.Apply(desiredHandlers(global)); err != nil {
+	if err := applyListeners(global); err != nil {
 		return err
 	}
 	lastApplied := global.Snapshot()
@@ -75,7 +80,7 @@ func run() error {
 			}
 			current := global.Snapshot()
 			if !maps.Equal(lastApplied, current) {
-				applyErr := listeners.Apply(desiredHandlers(global))
+				applyErr := applyListeners(global)
 				if applyErr == nil {
 					applyErr = manager.ApplyGlobalSettings()
 					if applyErr == nil {
@@ -88,7 +93,7 @@ func run() error {
 						err = rollbackErr
 					}
 					if err == nil {
-						err = listeners.Apply(desiredHandlers(global))
+						err = applyListeners(global)
 					}
 					if err == nil {
 						err = manager.ApplyGlobalSettings()
@@ -134,14 +139,14 @@ func restoreGlobalSettings(global *instanceconfig.Store, previous map[string]str
 	return nil
 }
 
-func managementMux(manager http.Handler) *http.ServeMux {
+func managementMux(manager http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/storage", manager)
 	mux.Handle("/api/instances", manager)
 	if gateway, ok := manager.(interface{ SecurityHandler() http.Handler }); ok {
 		mux.Handle("/api/security/", gateway.SecurityHandler())
 	} else if registry, ok := manager.(*instance.Manager); ok {
-		mux.Handle("/api/security/", secsvc.NewWithStore(registry.SecurityController(), registry.ControlPlaneGetenv(), registry.GlobalConfig()))
+		mux.Handle("/api/security/", securityHandlerFor(registry))
 	}
 	mux.Handle("/api/instances/", manager)
 	mux.Handle("/instances/", manager)
@@ -153,7 +158,52 @@ func managementMux(manager http.Handler) *http.ServeMux {
 	mux.Handle("/frostagent.v1.MCPService/", http.NotFoundHandler())
 	mux.Handle("/api/log-images/", manager)
 	mux.Handle("/", frontend.Handler())
+	if provider, ok := manager.(interface{ ControlPlaneGetenv() func(string) string }); ok {
+		return managementAuthMiddleware(mux, provider.ControlPlaneGetenv())
+	}
 	return mux
+}
+
+func managementAuthMiddleware(next http.Handler, getenv func(string) string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		management := strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/instances/") ||
+			strings.HasPrefix(path, "/frostagent.v1.")
+		if !management || path == "/api/v1/messages/send" || strings.HasPrefix(path, "/frostagent.v1.MCPService/") ||
+			isAdapterOrMessagePath(path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		peer := r.RemoteAddr
+		// Container builds isolate this listener behind the authenticated gateway.
+		trustedLocalGateway := instanceconfig.ManagementLoopbackOnly == "true" && isLoopbackHost(peer)
+		if !trustedLocalGateway && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
+			peer = "remote-management"
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(peer, r.Header, getenv); err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func hasProxyHeaders(r *http.Request) bool {
+	for _, name := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP"} {
+		if strings.TrimSpace(r.Header.Get(name)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isAdapterOrMessagePath(path string) bool {
+	parts := strings.SplitN(strings.TrimPrefix(path, "/instances/"), "/", 2)
+	if len(parts) != 2 || !strings.HasPrefix(path, "/instances/") {
+		return false
+	}
+	return parts[1] == "ws/onebot" || parts[1] == "ws/astrbot" || parts[1] == "api/v1/messages/send"
 }
 
 // Keep the adapter listener separate from the HTTP management surface.
