@@ -25,6 +25,49 @@ func TestSQLiteOpenIgnoresCustomDSN(t *testing.T) {
 	}
 }
 
+func TestBootstrapRetainsPostgresAddressWhileSQLiteIsSelected(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	bootstrap, err := OpenBootstrap(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const address = "postgres://synthetic:synthetic@localhost/synthetic"
+	if err := bootstrap.Save(ctx, Config{Backend: Postgres, DSN: address}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrap.Save(ctx, Config{Backend: SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err = OpenBootstrap(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bootstrap.Close()
+	config, err := bootstrap.Load(ctx)
+	if err != nil || config.Backend != SQLite || config.DSN != "" {
+		t.Fatalf("SQLite runtime configuration changed: %#v, %v", config, err)
+	}
+	saved, err := bootstrap.PostgresDSN(ctx)
+	if err != nil || saved != address {
+		t.Fatal("PostgreSQL address was lost after selecting SQLite and reopening bootstrap")
+	}
+	const edited = "postgres://synthetic:edited@localhost/synthetic"
+	if err := bootstrap.Save(ctx, Config{Backend: SQLite, DSN: " " + edited + " "}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrap.Save(ctx, Config{Backend: Postgres}); err == nil {
+		t.Fatal("empty PostgreSQL address was accepted")
+	}
+	saved, err = bootstrap.PostgresDSN(ctx)
+	if err != nil || saved != edited {
+		t.Fatal("edited address was lost while SQLite was selected")
+	}
+}
+
 func TestBootstrapKeepsDatabaseSelectionAcrossSchemaMigration(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
