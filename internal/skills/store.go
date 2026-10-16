@@ -13,10 +13,11 @@ import (
 type Store struct {
 	db         *storage.DB
 	instanceID string
+	state      *storage.SkillState
 }
 
 func NewStore(db *storage.DB, instanceID string) *Store {
-	return &Store{db: db, instanceID: instanceID}
+	return &Store{db: db, instanceID: instanceID, state: db.SkillState(instanceID)}
 }
 
 func (s *Store) List() ([]Info, error) {
@@ -79,6 +80,9 @@ func (s *Store) ImportPackages(packages []Package) error {
 	if err != nil {
 		return err
 	}
+	s.state.Mu.Lock()
+	defer s.state.Mu.Unlock()
+	s.state.Generation++ // Invalidate old snapshots even if a write outcome is uncertain.
 	tx, err := s.db.SQL.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
@@ -159,6 +163,9 @@ func ValidatePackages(packages []Package) ([]Package, error) {
 }
 
 func (s *Store) SetEnabled(name string, enabled bool) error {
+	s.state.Mu.Lock()
+	defer s.state.Mu.Unlock()
+	s.state.Generation++
 	value := 0
 	if enabled {
 		value = 1
@@ -167,6 +174,9 @@ func (s *Store) SetEnabled(name string, enabled bool) error {
 	return changed(result, err)
 }
 func (s *Store) Delete(name string) error {
+	s.state.Mu.Lock()
+	defer s.state.Mu.Unlock()
+	s.state.Generation++
 	result, err := s.db.SQL.Exec(s.db.Bind("DELETE FROM skills WHERE instance_id = ? AND name = ?"), s.instanceID, name)
 	return changed(result, err)
 }
