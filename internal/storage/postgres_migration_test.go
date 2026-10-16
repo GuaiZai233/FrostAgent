@@ -43,7 +43,7 @@ func postgresMigrationConfig(t *testing.T) Config {
 
 func TestPostgresMigrationPreservesData(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9, 10} {
+	for _, previous := range []int{7, 8, 9, 10, 11} {
 		t.Run(fmt.Sprint(previous), func(t *testing.T) {
 			config := postgresMigrationConfig(t)
 			db, err := OpenWithConfig(ctx, t.TempDir(), config)

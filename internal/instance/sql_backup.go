@@ -6,6 +6,7 @@ import (
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/skills"
 	"context"
 	"encoding/json"
 	"errors"
@@ -270,6 +271,9 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 		return Info{}, err
 	}
 	if _, err := backup.ImportMemories(m.db, info.ID, decoded.Memories, false); err != nil {
+		return Info{}, err
+	}
+	if err := skills.NewStore(m.db, info.ID).ImportPackages(decoded.Skills); err != nil {
 		return Info{}, err
 	}
 	if err := backup.ImportSummaries(m.db, info.ID, decoded.Summaries); err != nil {

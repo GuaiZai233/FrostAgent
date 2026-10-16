@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"FrostAgent/internal/skills"
 	"archive/zip"
 	"bytes"
 	"encoding/json"
@@ -18,6 +19,7 @@ type DecodedInstance struct {
 	Summaries Summaries
 	Stickers  Stickers
 	Images    map[string][]byte
+	Skills    []skills.Package
 }
 
 // DecodeInstanceZIP accepts only the documented archive members and checks
@@ -39,7 +41,7 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, fmt.Errorf("duplicate or invalid ZIP member %q", name)
 		}
 		if name != "manifest.json" && name != "setting.json" && name != "memory.json" &&
-			name != "group_summaries.json" && name != "sticker/metadata.json" {
+			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" {
 			if !strings.HasPrefix(name, "sticker/files/") || !validStickerFilename(strings.TrimPrefix(name, "sticker/files/")) {
 				return decoded, fmt.Errorf("unexpected ZIP member %q", name)
 			}
@@ -82,6 +84,16 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 		if err := json.Unmarshal(files[item.name], item.value); err != nil {
 			return decoded, fmt.Errorf("decode %s: %w", item.name, err)
 		}
+	}
+	if data, ok := files["skills.json"]; ok {
+		if err := json.Unmarshal(data, &decoded.Skills); err != nil {
+			return decoded, fmt.Errorf("decode skills.json: %w", err)
+		}
+		validated, err := skills.ValidatePackages(decoded.Skills)
+		if err != nil {
+			return decoded, err
+		}
+		decoded.Skills = validated
 	}
 	if decoded.Manifest.Kind != "instance" {
 		return decoded, fmt.Errorf("ZIP is not an instance backup")

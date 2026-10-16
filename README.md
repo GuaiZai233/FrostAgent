@@ -126,3 +126,7 @@ Instance backups include only referenced provider/model definitions and omit cre
 ## License
 
 MPL-2.0 (see LICENSE file)
+
+## Skills
+
+Select an instance and use **Skills → 导入 ZIP** to import portable SKILL.md bundles from Claude Code, Gemini CLI and other Agent Skills harnesses. Enable an imported skill to make it available to the agent, or invoke it with `/skill-name arguments`. Bundled scripts run only in the enabled isolated sandbox. See [Skills format and runtime](.frostagent/whitepaper/skills.md) for supported layouts, limits and compatibility warnings.

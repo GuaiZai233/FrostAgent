@@ -180,6 +180,12 @@ var migrations = []migration{
 		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
 	}},
 	{11, providerSchema},
+	{12, []string{`CREATE TABLE skills (
+		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+		name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
+		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
+		size_bytes INTEGER NOT NULL, PRIMARY KEY (instance_id, name)
+	)`}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

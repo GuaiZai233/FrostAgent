@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 11
+const SchemaVersion = 12
 
 type Backend string
 
@@ -25,6 +25,7 @@ const (
 )
 
 type DB struct {
+	skillStates sync.Map
 	// CatalogMutationMu protects a full restore from concurrent catalog writes.
 	// Acquire it before ModelRouterMu when both are needed.
 	CatalogMutationMu sync.Mutex
