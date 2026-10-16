@@ -182,6 +182,8 @@ var migrations = []migration{
 	{11, providerSchema},
 	{12, []string{`ALTER TABLE provider_models ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE memory_entries ADD COLUMN summary_dirty INTEGER NOT NULL DEFAULT 0`}},
+	// Development branches previously shared v12 with different schemas.
+	{13, nil},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
@@ -247,6 +249,11 @@ func (d *DB) createSchema(ctx context.Context) error {
 				return fmt.Errorf("create schema v%d: %w", step.version, err)
 			}
 		}
+		if step.version == 13 {
+			if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version) VALUES (1, ?)`), SchemaVersion); err != nil {
 		return fmt.Errorf("write schema version: %w", err)
@@ -274,6 +281,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	}
 	if step.version == 11 {
 		if err := d.migrateProviders(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if step.version == 13 {
+		if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
 			return err
 		}
 	}
