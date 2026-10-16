@@ -117,6 +117,13 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 	if !bytes.Equal(files["sticker/files/image.png"], image) {
 		t.Fatal("sticker image bytes were not preserved")
 	}
+	var manifest Manifest
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.InstanceName != "Test" {
+		t.Fatalf("instance name missing from backup manifest: %q", manifest.InstanceName)
+	}
 	var exported Settings
 	if err := json.Unmarshal(files["setting.json"], &exported); err != nil {
 		t.Fatal(err)

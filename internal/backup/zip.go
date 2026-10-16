@@ -17,6 +17,10 @@ import (
 // BuildInstanceZIP returns a self-contained backup without creating a server
 // side archive. Sticker bytes are separate members, never embedded in JSON.
 func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+	var instanceName string
+	if err := db.SQL.QueryRow(db.Bind(`SELECT name FROM instances WHERE id = ?`), instanceID).Scan(&instanceName); err != nil {
+		return nil, err
+	}
 	settings, err := ExportSettings(db, instanceID)
 	if err != nil {
 		return nil, err
@@ -37,7 +41,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
-	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
+	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	for _, file := range []struct {
 		name string
 		data any
