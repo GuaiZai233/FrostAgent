@@ -40,6 +40,7 @@ import (
 )
 
 var ErrBusy = errors.New("实例正忙")
+var ErrNameExists = errors.New("实例名称已存在")
 var ErrDeleting = errors.New("实例正在删除，请重试删除操作")
 var ErrClosing = errors.New("Control Plane 正在关闭")
 var idPattern = regexp.MustCompile("^[a-f0-9]{8}$")
@@ -586,7 +587,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	for _, v := range m.registry.Instances {
 		if strings.EqualFold(v.Name, name) {
-			return Info{}, fmt.Errorf("实例名称已存在")
+			return Info{}, ErrNameExists
 		}
 	}
 	var id string

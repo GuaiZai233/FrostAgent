@@ -1,6 +1,7 @@
 import {
   instanceState,
   instanceRequest,
+  restoreInstanceZIP,
   type InstanceInfo,
 } from '../instance-state';
 import { openDialog } from './dialog';
@@ -96,9 +97,10 @@ async function nameDialog(item?: InstanceInfo): Promise<void> {
   const state = await instanceState.refresh();
   await openDialog({
     title: item ? '重命名实例' : '创建实例',
-    bodyHtml: `<label class="form-label" for="instance-name">实例名称</label><input class="input" id="instance-name" maxlength="32" value="${escapeHtml(item?.name || state.next_name)}"><p class="text-xs text-muted">1–32 个字符，名称不可重复。</p>`,
-    footerHtml:
-      '<button class="btn btn-primary" id="instance-save">保存</button>',
+    bodyHtml: `<label class="form-label" for="instance-name">实例名称</label><input class="input" id="instance-name" maxlength="32" value="${escapeHtml(item?.name || state.next_name)}"><p class="text-xs text-muted">1–32 个字符，名称不可重复。</p>${item ? '' : '<div class="mt-5"><label class="form-label" for="instance-restore-file">或从全量备份创建</label><input class="input" id="instance-restore-file" type="file" accept=".zip,application/zip"><p class="text-xs text-muted mt-2">上传 ZIP 后使用备份中的实例名创建，实例 ID 随机生成；新实例默认停用。</p></div>'}`,
+    footerHtml: item
+      ? '<button class="btn btn-primary" id="instance-save">保存</button>'
+      : '<button class="btn btn-outline" id="instance-save">创建空白实例</button><button class="btn btn-primary" id="instance-restore" disabled>上传 ZIP 并创建</button>',
     onMount(dialog, close) {
       const save = async () => {
         try {
@@ -119,6 +121,27 @@ async function nameDialog(item?: InstanceInfo): Promise<void> {
       ) => {
         if (e.key === 'Enter') void save();
       };
+      if (!item) {
+        const fileInput = dialog.querySelector<HTMLInputElement>('#instance-restore-file')!;
+        const restoreButton = dialog.querySelector<HTMLButtonElement>('#instance-restore')!;
+        fileInput.onchange = () => { restoreButton.disabled = !fileInput.files?.length; };
+        restoreButton.onclick = () => {
+          void (async () => {
+            const file = fileInput.files?.[0];
+            if (!file) return;
+            restoreButton.disabled = true;
+            try {
+              const created = await restoreInstanceZIP(file);
+              close();
+              instanceState.select(created);
+              toast.success('已从备份创建停用实例；请检查供应商凭据和适配器');
+            } catch (err) {
+              toast.error('全量还原失败: ' + String(err));
+              restoreButton.disabled = !fileInput.files?.length;
+            }
+          })();
+        };
+      }
     },
   });
 }

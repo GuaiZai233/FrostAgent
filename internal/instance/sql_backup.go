@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func (m *Manager) InstanceZIP(id string) ([]byte, error) {
@@ -210,7 +211,26 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if err != nil {
 		return Info{}, err
 	}
+	autoName := name == ""
+	if autoName {
+		name = decoded.Manifest.InstanceName
+	}
 	info, err := m.Create(name)
+	if autoName && errors.Is(err, ErrNameExists) {
+		baseName := strings.TrimSpace(name)
+		if baseName == "" {
+			_, next := m.List()
+			baseName = fmt.Sprintf("实例%d", next)
+		}
+		for duplicate := 2; errors.Is(err, ErrNameExists); duplicate++ {
+			suffix := fmt.Sprintf(" (%d)", duplicate)
+			base := []rune(baseName)
+			if len(base) > 32-len([]rune(suffix)) {
+				base = base[:32-len([]rune(suffix))]
+			}
+			info, err = m.Create(string(base) + suffix)
+		}
+	}
 	if err != nil {
 		return Info{}, err
 	}

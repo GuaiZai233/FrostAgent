@@ -1,6 +1,6 @@
-import { instanceState, instanceRequest } from '../instance-state';
+import { instanceState, instanceRequest, restoreInstanceZIP } from '../instance-state';
 import { globalSettingsAPI } from '../api/client';
-import { controlPlaneFetch, saveDownloadedBlob } from '../api/control-auth';
+import { saveDownloadedBlob } from '../api/control-auth';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
@@ -55,8 +55,6 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
             <div class="backup-panel-heading">${icon('upload', 'w-4 h-4')}<h3>全量还原为新实例</h3></div>
             <p class="backup-description">从全量 ZIP 创建一个新实例。新实例默认停用，检查供应商凭据与适配器后再启用。</p>
             <div class="backup-form">
-              <label for="restore-instance-name">新实例名称 <span class="text-muted font-normal">（可选）</span></label>
-              <input id="restore-instance-name" class="input" type="text" maxlength="32" placeholder="留空自动命名" />
               <label for="restore-instance-file">全量备份 ZIP</label>
               <input id="restore-instance-file" class="input" type="file" accept=".zip,application/zip" />
               <button id="restore-instance-button" class="btn btn-outline" disabled>还原为新实例</button>
@@ -199,7 +197,6 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
     })();
   };
   const restoreFile = container.querySelector<HTMLInputElement>('#restore-instance-file')!;
-  const restoreName = container.querySelector<HTMLInputElement>('#restore-instance-name')!;
   const restoreButton = container.querySelector<HTMLButtonElement>('#restore-instance-button')!;
   restoreFile.onchange = () => { restoreButton.disabled = !restoreFile.files?.length; };
   restoreButton.onclick = () => {
@@ -208,12 +205,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       if (!file) return;
       restoreButton.disabled = true;
       try {
-        const name = restoreName.value.trim();
-        const response = await controlPlaneFetch(`/api/instances/restore?name=${encodeURIComponent(name)}`, {
-          method: 'POST', body: file,
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || response.statusText);
+        const result = await restoreInstanceZIP(file);
         await instanceState.refresh();
         instanceState.select(result);
         toast.success('已创建停用的新实例；请检查供应商凭据和适配器');
