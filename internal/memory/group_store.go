@@ -402,6 +402,55 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 	return s.saveProfileLocked(profile)
 }
 
+// SetObservedMemberPreferredName changes only the calling name of an existing
+// member. When expected is non-nil, it applies only if the calling name has not
+// changed since the caller took its snapshot. Reflection may also require its
+// cited memories to remain unchanged at the time of the name update.
+func (s *GroupStore) SetObservedMemberPreferredName(userID, preferredName string, expected *string, sourceSnapshots ...MemoryEntry) (bool, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false, errors.New("empty user_id")
+	}
+	preferredName = SanitizeProfileText(preferredName)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(sourceSnapshots) > 0 {
+		brain, err := s.loadMemoryLocked()
+		if err != nil {
+			return false, err
+		}
+		currentByID := make(map[string]MemoryEntry, len(brain.Entries))
+		for _, entry := range brain.Entries {
+			currentByID[entry.ID] = entry
+		}
+		for _, snapshot := range sourceSnapshots {
+			current, found := currentByID[snapshot.ID]
+			if !found || !sameMergeSource(current, snapshot) {
+				return false, nil
+			}
+		}
+	}
+	if s.sql != nil {
+		return s.setSQLObservedMemberPreferredName(userID, preferredName, expected, sourceSnapshots)
+	}
+
+	profile, err := s.loadProfileLocked()
+	if err != nil {
+		return false, err
+	}
+	member := profile.Members[userID]
+	if member == nil || (expected != nil && member.PreferredName != *expected) {
+		return false, nil
+	}
+	if member.PreferredName == preferredName {
+		return true, nil
+	}
+	member.PreferredName = preferredName
+	member.UpdatedAt = time.Now()
+	return true, s.saveProfileLocked(profile)
+}
+
 // loadMemoryLocked reads the group memory entries from disk.
 func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 	if s.sql != nil {
