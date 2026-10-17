@@ -8,6 +8,7 @@ import (
 
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/memory"
+	"FrostAgent/internal/modelrouter"
 )
 
 func TestMemoryToolSearchIncrementsAccessCount(t *testing.T) {
@@ -79,6 +80,66 @@ func TestMemoryToolSearchIncrementsAccessCount(t *testing.T) {
 	}
 	if len(results2) != 1 || results2[0].AccessCount != 2 {
 		t.Errorf("expected returned memory AccessCount = 2 on second search, got %v", results2)
+	}
+}
+
+func TestMemoryToolSetMemberNameCurrentGroupOnly(t *testing.T) {
+	manager := memory.NewGroupManager(t.TempDir(), nil)
+	group, err := manager.GetGroupStoreForPlatform("qq", "group-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := group.ObserveMember("user-one", "Nickname", "CardOnly", "member", "test"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := manager.GetGroupStoreForPlatform("qq", "group-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.ObserveMember("user-one", "OtherNickname", "", "member", "test"); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewMemoryTool(&llm.Engine{GroupManager: manager})
+	groupCtx := llm.WithRunContext(context.Background(), llm.RunContext{
+		Owner: "group:group-one", OwnerType: memory.OwnerGroup, ActorUserID: "user-one",
+		RouteScope: modelrouter.Scope{Platform: "qq", GroupID: "group-one"},
+	})
+	result, err := tool.ExecuteContext(groupCtx, `{"action":"set_member_name","preferred_name":"小狐"}`)
+	if err != nil || result != "成员优先称呼已更新" {
+		t.Fatalf("set current member name: %q, %v", result, err)
+	}
+	profile, err := group.GetProfile()
+	if err != nil || profile.Members["user-one"].PreferredName != "小狐" || profile.Members["user-one"].Card != "CardOnly" {
+		t.Fatalf("unexpected current group profile: %#v, %v", profile, err)
+	}
+	otherProfile, err := other.GetProfile()
+	if err != nil || otherProfile.Members["user-one"].PreferredName != "" {
+		t.Fatalf("changed another group: %#v, %v", otherProfile, err)
+	}
+	result, err = tool.ExecuteContext(groupCtx, `{"action":"set_member_name","user_id":"unobserved","preferred_name":"伪造"}`)
+	if err != nil || result != "当前群尚未观察到该成员，无法设置称呼" {
+		t.Fatalf("unobserved member should be rejected: %q, %v", result, err)
+	}
+	result, err = tool.ExecuteContext(groupCtx, `{"action":"set_member_name","preferred_name":""}`)
+	if err != nil || result != "成员优先称呼已清除" {
+		t.Fatalf("clear current member name: %q, %v", result, err)
+	}
+	profile, err = group.GetProfile()
+	if err != nil || profile.Members["user-one"].PreferredName != "" || profile.Members["user-one"].ResolveCallingName() != "Nickname" {
+		t.Fatalf("cleared name did not fall back to nickname: %#v, %v", profile, err)
+	}
+	privateCtx := llm.WithRunContext(context.Background(), llm.RunContext{Owner: "user-one", OwnerType: memory.OwnerUser, ActorUserID: "user-one"})
+	result, err = tool.ExecuteContext(privateCtx, `{"action":"set_member_name","preferred_name":"Private"}`)
+	if err != nil || result != "只能在群聊中设置成员称呼" {
+		t.Fatalf("private call should be rejected: %q, %v", result, err)
+	}
+	mockCtx := llm.WithRunContext(context.Background(), llm.RunContext{
+		Owner: "group:group-one", OwnerType: memory.OwnerGroup, ActorUserID: "user-one", Mock: true,
+		RouteScope: modelrouter.Scope{Platform: "qq", GroupID: "group-one"},
+	})
+	result, err = tool.ExecuteContext(mockCtx, `{"action":"set_member_name","preferred_name":"Mock"}`)
+	if err != nil || result != "模拟会话模式下不能持久化成员称呼" {
+		t.Fatalf("mock call should be rejected: %q, %v", result, err)
 	}
 }
 
