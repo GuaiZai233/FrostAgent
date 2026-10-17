@@ -32,12 +32,24 @@ export async function controlPlaneFetch(input: RequestInfo | URL, init: RequestI
 export async function downloadControlPlaneFile(url: string, filename: string): Promise<void> {
   const response = await controlPlaneFetch(url);
   if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
-  const blobURL = URL.createObjectURL(await response.blob());
+  saveDownloadedBlob(await response.blob(), filename);
+}
+
+export function saveDownloadedBlob(blob: Blob, filename: string): void {
+  if (blob.size === 0) throw new Error('下载文件为空，请重试');
+  const blobURL = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = blobURL;
   link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(blobURL), 1000);
+  try {
+    document.body.appendChild(link);
+    link.click();
+  } catch (error) {
+    URL.revokeObjectURL(blobURL);
+    throw error;
+  } finally {
+    link.remove();
+  }
+  // Firefox may still be handing the blob to its download UI after click().
+  setTimeout(() => URL.revokeObjectURL(blobURL), 60_000);
 }

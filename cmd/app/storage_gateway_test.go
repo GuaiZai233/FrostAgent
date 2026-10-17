@@ -24,6 +24,56 @@ func hasInstance(instances []instance.Info, id string) bool {
 	return false
 }
 
+func TestStorageGatewayRetainsPostgresAddressWithSQLite(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gateway, err := newStorageGateway(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { gateway.Close() }()
+	before, _, generation := gateway.snapshot()
+	const address = "postgres://synthetic:synthetic@localhost/synthetic"
+	requestBody, err := json.Marshal(storage.Config{Backend: storage.SQLite, DSN: address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	gateway.ServeHTTP(response, localManagementRequest(http.MethodPost, "/api/storage", strings.NewReader(string(requestBody))))
+	if response.Code != http.StatusOK {
+		t.Fatalf("save SQLite selection failed: %d", response.Code)
+	}
+	after, config, nextGeneration := gateway.snapshot()
+	if before != after || generation != nextGeneration || config.DSN != "" {
+		t.Fatal("saving a remembered address reopened SQLite or changed its connection parameters")
+	}
+	assertSavedAddress := func() {
+		t.Helper()
+		response := httptest.NewRecorder()
+		gateway.ServeHTTP(response, localManagementRequest(http.MethodGet, "/api/storage", nil))
+		var view storage.Config
+		if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil || response.Code != http.StatusOK ||
+			view.Backend != storage.SQLite || view.DSN != address {
+			t.Fatal("storage API did not return the saved PostgreSQL address while SQLite was selected")
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("storage address response allowed caching")
+		}
+	}
+	assertSavedAddress()
+	if err := gateway.switchTo(ctx, storage.Config{Backend: storage.Postgres,
+		DSN: "postgres://synthetic:synthetic@127.0.0.1:1/unavailable?connect_timeout=1"}); err == nil {
+		t.Fatal("unavailable PostgreSQL connection was accepted")
+	}
+	assertSavedAddress()
+	gateway.Close()
+	gateway, err = newStorageGateway(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSavedAddress()
+}
+
 func TestStorageGatewayFailedSwitchKeepsSQLiteData(t *testing.T) {
 	root := t.TempDir()
 	gateway, err := newStorageGateway(context.Background(), root)
@@ -130,6 +180,13 @@ func TestPostgresGatewaySwitchLoadsEachDatabaseWithoutMigration(t *testing.T) {
 	}
 	if err := gateway.switchTo(context.Background(), storage.Config{Backend: storage.SQLite}); err != nil {
 		t.Fatal(err)
+	}
+	selection := httptest.NewRecorder()
+	gateway.ServeHTTP(selection, localManagementRequest(http.MethodGet, "/api/storage", nil))
+	var remembered storage.Config
+	if err := json.Unmarshal(selection.Body.Bytes(), &remembered); err != nil || selection.Code != http.StatusOK ||
+		remembered.Backend != storage.SQLite || remembered.DSN != dsn {
+		t.Fatal("switching from PostgreSQL to SQLite lost the saved PostgreSQL address")
 	}
 	sqlite, _, _ = gateway.snapshot()
 	sqliteRows, _ := sqlite.List()

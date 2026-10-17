@@ -15,6 +15,7 @@ export const workloads = [
   { value: ModelWorkload.REFLECTION, label: '反思' },
   { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取' },
   { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩' },
+  { value: ModelWorkload.EMBEDDING, label: 'Embedding' },
 ] as const;
 
 export function bindingFor(bindings: ModelBinding[], workload: ModelWorkload): ModelBinding | undefined {

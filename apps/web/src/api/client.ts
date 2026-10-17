@@ -736,6 +736,8 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
     },
 
     // Settings & Env Vars
+    listEnvVarsWithStorage() { return settingsClient.listEnvVars({}); },
+
     listEnvVars(): Promise<EnvVar[]> {
       return settingsClient
         .listEnvVars({})
