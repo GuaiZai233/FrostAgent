@@ -566,6 +566,100 @@ func TestJSONGroupManagerCanonicalIDUsedOnce(t *testing.T) {
 	}
 }
 
+func TestJSONGroupManagerRepeatedKnownPrefixes(t *testing.T) {
+	aliases := []string{
+		"group:group:review_test_group",
+		"qq:group:qq:group:review_test_group",
+		"group:onebot:group:aiocqhttp:group:review_test_group",
+	}
+	for _, platform := range []string{"qq", "telegram"} {
+		for _, alias := range aliases {
+			t.Run(platform+"/"+alias, func(t *testing.T) {
+				baseDir := t.TempDir()
+				manager := NewGroupManager(baseDir, nil)
+				store, err := manager.GetGroupStoreForPlatform(platform, alias)
+				if err != nil {
+					t.Fatalf("open repeated-prefix group: %v", err)
+				}
+				canonical, err := manager.GetGroupStoreForPlatform(platform, "review_test_group")
+				if err != nil || canonical != store || store.GroupID() != "review_test_group" {
+					t.Fatalf("cache and store identity diverged: id=%q same=%v err=%v", store.GroupID(), canonical == store, err)
+				}
+				if platform == "qq" {
+					direct, err := NewGroupStore(baseDir, alias)
+					if err != nil || direct.dir != store.dir || direct.GroupID() != store.GroupID() {
+						t.Fatalf("direct QQ constructor used a different identity: err=%v", err)
+					}
+				}
+				if err := store.UpdateGroupName("Repeated prefix group"); err != nil {
+					t.Fatal(err)
+				}
+				manager = NewGroupManager(baseDir, nil)
+				reopened, err := manager.GetGroupStoreForPlatform(platform, alias)
+				if err != nil || reopened.dir != store.dir {
+					t.Fatalf("reopen repeated-prefix group: err=%v", err)
+				}
+				profile, err := reopened.GetProfile()
+				if err != nil || profile.GroupName != "Repeated prefix group" || profile.GroupID != "review_test_group" {
+					t.Fatalf("profile identity or data changed: profile=%+v err=%v", profile, err)
+				}
+				groups, err := manager.ListGroups()
+				if err != nil || len(groups) != 1 || groups[0].GroupID != "review_test_group" {
+					t.Fatalf("listed repeated-prefix group: groups=%+v err=%v", groups, err)
+				}
+				if err := manager.DeleteGroupForPlatform(platform, alias); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(store.dir); !os.IsNotExist(err) {
+					t.Fatalf("delete missed canonical directory: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestJSONGroupManagerExplicitLegacyPlatformRecovery(t *testing.T) {
+	baseDir := t.TempDir()
+	legacy, err := NewGroupStore(baseDir, "recovery_test_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.UpdateMemberPreferredName("recovery_test_member", "Recovered member", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Save(MemoryEntry{ID: "recovery_test_memory", Owner: GroupOwnerExplicit, GroupID: "recovery_test_group", Content: "Recovered fact", Source: SourceManual}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.CatalogStore().Replace(UserMemoryCatalog{Owner: GroupOwnerExplicit, Topics: []MemoryTopic{{Name: "Recovered topic"}}}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(baseDir, "groups", "p_74656c656772616d_"+filepath.Base(legacy.dir))
+	if err := os.Rename(legacy.dir, target); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewGroupManager(baseDir, nil)
+	groups, err := manager.ListGroups()
+	if err != nil || len(groups) != 1 || groups[0].Platform != "telegram" || groups[0].GroupID != "recovery_test_group" || groups[0].MemoryCount != 1 {
+		t.Fatalf("recovered group list = %+v, err=%v", groups, err)
+	}
+	recovered, err := manager.GetGroupStoreForPlatform("telegram", "recovery_test_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := recovered.GetProfile()
+	if err != nil || profile.GetMember("recovery_test_member") == nil || profile.GetMember("recovery_test_member").PreferredName != "Recovered member" {
+		t.Fatalf("recovered profile = %+v, err=%v", profile, err)
+	}
+	entries, err := recovered.ListAll()
+	if err != nil || len(entries) != 1 || entries[0].Content != "Recovered fact" {
+		t.Fatalf("recovered memories = %+v, err=%v", entries, err)
+	}
+	catalog, err := recovered.CatalogStore().Get(GroupOwnerExplicit)
+	if err != nil || catalog == nil || len(catalog.Topics) != 1 || catalog.Topics[0].Name != "Recovered topic" {
+		t.Fatalf("recovered catalog = %+v, err=%v", catalog, err)
+	}
+}
+
 func TestJSONGroupManagerLegacyQQAndPlatformAliases(t *testing.T) {
 	baseDir := t.TempDir()
 	legacy, err := NewGroupStore(baseDir, "legacy_group")

@@ -122,7 +122,15 @@ func jsonGroupDir(baseDir, platform, groupID string) (string, error) {
 }
 
 func canonicalPlatformGroupID(platform, groupID string) string {
-	return CanonicalGroupID(strings.TrimPrefix(strings.TrimSpace(groupID), platform+":group:"))
+	canon := strings.TrimPrefix(strings.TrimSpace(groupID), platform+":group:")
+	// Reach a stable ID before SafeGroupKey and profile identity checks use it.
+	for {
+		next := CanonicalGroupID(canon)
+		if next == canon {
+			return canon
+		}
+		canon = next
+	}
 }
 
 // GroupStore manages independent persistent storage for a single platform group.
@@ -146,7 +154,7 @@ type GroupStore struct {
 
 // NewGroupStore creates a QQ GroupStore using its legacy directory under baseDir.
 func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
-	return newJSONGroupStore(baseDir, "qq", CanonicalGroupID(groupID))
+	return newJSONGroupStore(baseDir, "qq", canonicalPlatformGroupID("qq", groupID))
 }
 
 // newJSONGroupStore receives the same canonical ID used by the manager cache.
