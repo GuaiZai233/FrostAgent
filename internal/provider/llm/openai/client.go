@@ -62,9 +62,8 @@ type Client struct {
 // HTTPError preserves the upstream response body so the agent can relay the
 // provider's original error text according to the current product contract.
 type HTTPError struct {
-	Status     string
-	StatusCode int
-	Body       string
+	Status string
+	Body   string
 }
 
 func (e *HTTPError) Error() string {
@@ -181,7 +180,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)), req.TraceID)
-		return nil, &HTTPError{Status: resp.Status, StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, &HTTPError{Status: resp.Status, Body: string(body)}
 	}
 
 	respBody, err := io.ReadAll(resp.Body)

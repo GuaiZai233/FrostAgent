@@ -61,7 +61,7 @@ func (m *Manager) loadSQL() error {
 		}
 	}
 	rows, err = m.db.SQL.QueryContext(ctx, m.db.Bind(`SELECT id, display_name, endpoint_id,
-		upstream_model, enabled, capabilities, max_input_tokens FROM provider_models ORDER BY position, id`))
+		upstream_model, enabled, capabilities FROM provider_models ORDER BY position, id`))
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (m *Manager) loadSQL() error {
 		var capabilities string
 		var enabled int
 		if err := rows.Scan(&model.ID, &model.DisplayName, &model.EndpointID,
-			&model.UpstreamModel, &enabled, &capabilities, &model.MaxInputTokens); err != nil {
+			&model.UpstreamModel, &enabled, &capabilities); err != nil {
 			rows.Close()
 			return err
 		}

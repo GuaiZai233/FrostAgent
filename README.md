@@ -123,12 +123,6 @@ Schema v11 stores the shared catalog in `provider_endpoints`, `provider_models`,
 
 Instance backups include only referenced provider/model definitions and omit credentials. Copying or restoring an instance reuses matching shared definitions and their existing credentials. Conflicting definitions receive new IDs and empty credentials, with imported routes remapped accordingly; other instances and shared credentials remain unchanged.
 
-## Embedding memory retrieval
-
-Configure an OpenAI-compatible `/embeddings` model in the shared catalog, mark its `embedding` capability, bind the Embedding route, and enable the instance memory setting. Group routes may inherit or select a model. Existing tags, extraction, summaries and reflection remain; enabled searches use vector similarity, with 20 results for the bot/tools and unchanged web pagination. Indexes refresh after the existing extraction windows and reflection, with background rebuilding when missing or incompatible.
-
-SQLite vectors remain in memory. PostgreSQL requires pgvector installed and enabled by the deployment administrator (`CREATE EXTENSION vector`); FrostAgent does not install extensions. Disabling restores keyword search and retains compatible PostgreSQL indexes. Exports and ZIP backups exclude vectors. Models may set an optional maximum input token budget; the conservative UTF-8 byte budget truncates request copies. Explicit upstream length rejections skip processing without deleting stored text. Schema v12 adds input limits and summary refresh markers.
-
 ## License
 
 MPL-2.0 (see LICENSE file)

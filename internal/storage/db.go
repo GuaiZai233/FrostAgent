@@ -9,14 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 13
+const SchemaVersion = 11
 
 type Backend string
 
@@ -26,7 +25,6 @@ const (
 )
 
 type DB struct {
-	EmbeddingStorageReady atomic.Bool
 	// CatalogMutationMu protects a full restore from concurrent catalog writes.
 	// Acquire it before ModelRouterMu when both are needed.
 	CatalogMutationMu sync.Mutex

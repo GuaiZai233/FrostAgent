@@ -14,7 +14,6 @@ const (
 	WorkloadReflection    Workload = "reflection"
 	WorkloadMemoryExtract Workload = "memory_extract"
 	WorkloadGroupCompact  Workload = "group_compact"
-	WorkloadEmbedding     Workload = "embedding"
 )
 
 var Workloads = []Workload{
@@ -24,7 +23,6 @@ var Workloads = []Workload{
 	WorkloadReflection,
 	WorkloadMemoryExtract,
 	WorkloadGroupCompact,
-	WorkloadEmbedding,
 }
 
 type BindingMode string
@@ -59,13 +57,12 @@ type Endpoint struct {
 }
 
 type Model struct {
-	ID             string   `json:"id"`
-	DisplayName    string   `json:"display_name"`
-	EndpointID     string   `json:"endpoint_id"`
-	UpstreamModel  string   `json:"upstream_model"`
-	Enabled        bool     `json:"enabled"`
-	Capabilities   []string `json:"capabilities,omitempty"`
-	MaxInputTokens int      `json:"max_input_tokens,omitempty"`
+	ID            string   `json:"id"`
+	DisplayName   string   `json:"display_name"`
+	EndpointID    string   `json:"endpoint_id"`
+	UpstreamModel string   `json:"upstream_model"`
+	Enabled       bool     `json:"enabled"`
+	Capabilities  []string `json:"capabilities,omitempty"`
 }
 
 type Binding struct {
@@ -109,7 +106,6 @@ type Target struct {
 	ModelDisplayName    string
 	BaseURL             string
 	UpstreamModel       string
-	MaxInputTokens      int
 }
 
 type EffectiveBinding struct {

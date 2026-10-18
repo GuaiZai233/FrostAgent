@@ -78,7 +78,6 @@ var knownEnvVars = map[string]envEntry{
 	"BILLING_SAFETY_MULTIPLIER":            {"计费预扣款输入 Token 安全倍率", false, true, false},
 	"BILLING_PROMPT_PRICE_PER_MILLION":     {"每百万输入 Token 的计费价格", false, false, false},
 	"BILLING_COMPLETION_PRICE_PER_MILLION": {"每百万输出 Token 的计费价格", false, false, false},
-	"ENABLE_EMBEDDING":                     {"启用记忆向量检索", false, false, false},
 	"MEMORY_REFLECTION_TIMEOUT":            {"记忆反思独立超时时间", false, true, false},
 	"SECURITY_GATEWAY_TIMEOUT":             {"安全审查网关独立超时时间", false, true, false},
 	"SECURITY_CLASSIFIER_TIMEOUT":          {"安全审查分类器独立超时时间", false, true, false},
@@ -140,8 +139,6 @@ func CaptureInitialEnv() {
 
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
-	storageBackend    string
-	validateEmbedding func(context.Context) error
 	envPath           string
 	config, global    *instanceconfig.Store
 	sandboxManager    SandboxManager
@@ -151,18 +148,6 @@ type Service struct {
 
 func NewScoped(c, g *instanceconfig.Store, sandboxManager SandboxManager) *Service {
 	return &Service{config: c, global: g, sandboxManager: sandboxManager}
-}
-
-func (s *Service) SetEmbeddingStorage(backend string, validate func(context.Context) error) {
-	s.storageBackend = backend
-	s.validateEmbedding = validate
-}
-
-func (s *Service) validateEmbeddingUpdate(ctx context.Context, key, value string) error {
-	if key == "ENABLE_EMBEDDING" && value == "true" && s.validateEmbedding != nil {
-		return s.validateEmbedding(ctx)
-	}
-	return nil
 }
 
 // SetSandboxConfigManager wires the shared sandbox configuration manager.
@@ -268,7 +253,7 @@ func (s *Service) ListEnvVars(
 			IsInherited: inherited,
 		})
 	}
-	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars, StorageBackend: s.storageBackend}), nil
+	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars}), nil
 }
 
 // UpdateEnvVar updates a single env var in the .env file.
@@ -280,9 +265,6 @@ func (s *Service) UpdateEnvVar(
 	value := req.Msg.GetValue()
 
 	if err := validateUpdate(key, value); err != nil {
-		return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
-	}
-	if err := s.validateEmbeddingUpdate(ctx, key, value); err != nil {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
 	}
 
@@ -604,9 +586,6 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 			if err := validateUpdate(key, value); err != nil {
 				return err
 			}
-			if err := s.validateEmbeddingUpdate(ctx, key, value); err != nil {
-				return err
-			}
 		}
 		store := s.store(key)
 		if store == nil {
@@ -665,9 +644,6 @@ func validateUpdate(key, value string) error {
 	entry, ok := knownEnvVars[key]
 	if !ok {
 		return fmt.Errorf("key %q is not in the allowed environment variables list", key)
-	}
-	if key == "ENABLE_EMBEDDING" && value != "true" && value != "false" {
-		return errors.New("启用 Embedding 必须为 true 或 false")
 	}
 	if key == "MAX_CONTEXT_MESSAGES" {
 		count, err := strconv.Atoi(value)

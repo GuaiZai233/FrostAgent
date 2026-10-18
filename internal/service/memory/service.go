@@ -17,7 +17,6 @@ import (
 
 // Service implements frostagent.v1.MemoryServiceHandler.
 type Service struct {
-	embeddings   *memory.Embeddings
 	store        *memory.Store
 	groupManager *memory.GroupManager
 	reflections  *memory.ReflectionManager
@@ -31,8 +30,6 @@ func New(store *memory.Store, groupManager *memory.GroupManager, reflections *me
 		reflections:  reflections,
 	}
 }
-
-func (s *Service) SetEmbeddings(embeddings *memory.Embeddings) { s.embeddings = embeddings }
 
 // ListMemories returns a paginated list of memories, optionally filtered by owner and scope.
 func (s *Service) ListMemories(
@@ -107,17 +104,9 @@ func (s *Service) SearchMemories(
 		if gErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get group store: %w", gErr))
 		}
-		if s.embeddings != nil {
-			entries, err = s.embeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: req.Msg.GetPlatform(), GroupID: groupID}, query, 0)
-		} else {
-			entries, err = groupStore.Search(query, 0)
-		}
+		entries, err = groupStore.Search(query, 0)
 	} else {
-		if s.embeddings != nil {
-			entries, err = s.embeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate}, query, 0)
-		} else {
-			entries, err = s.store.Search(query, 0)
-		}
+		entries, err = s.store.Search(query, 0)
 	}
 
 	if err != nil {

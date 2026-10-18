@@ -57,7 +57,6 @@ export const settingFields: Record<string, SettingField> = {
 };
 
 export const dedicatedSettingKeys = new Set([
-  'ENABLE_EMBEDDING',
   'SYSTEM_PROMPT',
   'BOT_NAME', 'BOT_ALIASES',
   'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG',

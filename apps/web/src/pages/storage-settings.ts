@@ -67,7 +67,7 @@ export function mountStorageSettingsPage(container: HTMLElement): () => void {
       const response = await controlPlaneFetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backend: backend.value, dsn: dsn.value.trim() }),
+        body: JSON.stringify({ backend: backend.value, dsn: backend.value === 'postgres' ? dsn.value.trim() : '' }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || response.statusText);

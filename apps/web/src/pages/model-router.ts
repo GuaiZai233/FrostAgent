@@ -348,7 +348,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
               <strong class="text-sm">${workload.label}</strong>
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
-            <select class="select" data-global-workload="${workload.value}">${bindingOptions(draft, binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select>
+            <select class="select" data-global-workload="${workload.value}">${bindingOptions(draft, binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
           </div>`;
         }).join('')}
       </div>`;
@@ -605,8 +605,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
-        <div class="form-group"><label class="form-label" for="model-max-input">最大输入 Tokens（可选）</label><input class="input" id="model-max-input" type="number" min="0" step="1" value="${model.maxInputTokens || ''}" placeholder="未配置时，超限输入将跳过处理"></div>
-        <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision', 'embedding'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
+        <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存</button>`,
       onMount: (dialog, close) => {
@@ -698,10 +697,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
           model.endpointId = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!.value;
           model.upstreamModel = dialog.querySelector<HTMLInputElement>('#model-upstream')!.value;
           model.enabled = dialog.querySelector<HTMLInputElement>('#model-enabled')!.checked;
-          const maximumInput=dialog.querySelector<HTMLInputElement>("#model-max-input")!.value;
-          const maxInputTokens=maximumInput===""?0:Number(maximumInput);
-          if(!Number.isInteger(maxInputTokens)||maxInputTokens<0||maxInputTokens>2147483647){toast.error("最大输入 Tokens 必须是非负整数");return;}
-          model.maxInputTokens=maxInputTokens;
           model.capabilities = Array.from(dialog.querySelectorAll<HTMLInputElement>('.model-cap:checked')).map((item) => item.value);
           const index = draft.models.findIndex((item) => item.id === model.id);
           if (index >= 0) draft.models[index] = model;
@@ -724,7 +719,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card router-group-card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(draft, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION && workload.value !== ModelWorkload.EMBEDDING, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(draft, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select></div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {

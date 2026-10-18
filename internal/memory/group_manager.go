@@ -29,13 +29,12 @@ type GroupSummary struct {
 // (e.g. "123456" vs "group:123456" vs "qq:group:123456") resolve to the exact same
 // GroupStore pointer and synchronization lock.
 type GroupManager struct {
-	refreshEditedSummaries bool
-	baseDir                string
-	db                     *storage.DB
-	instanceID             string
-	scope                  *runtimescope.Scope
-	mu                     sync.RWMutex
-	groups                 map[string]*GroupStore // keyed by SafeGroupKey
+	baseDir    string
+	db         *storage.DB
+	instanceID string
+	scope      *runtimescope.Scope
+	mu         sync.RWMutex
+	groups     map[string]*GroupStore // keyed by SafeGroupKey
 }
 
 // NewGroupManager creates a new GroupManager rooted at baseDir.
@@ -62,7 +61,6 @@ func (m *GroupManager) CarrySQLStoresFrom(old *GroupManager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, store := range old.groups {
-		store.refreshEditedSummaries = m.refreshEditedSummaries
 		m.groups[key] = store
 	}
 }
@@ -114,7 +112,6 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 		}
 		return nil, err
 	}
-	store.refreshEditedSummaries = m.refreshEditedSummaries
 	m.groups[safeKey] = store
 	return store, nil
 }

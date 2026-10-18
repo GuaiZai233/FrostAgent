@@ -110,11 +110,6 @@ func ImportSQLSnapshot(db *storage.DB, instanceID string, snapshot Snapshot, mer
 		return ImportResult{}, err
 	}
 	defer tx.Rollback()
-	if db.EmbeddingStorageReady.Load() {
-		if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM memory_embedding_scopes WHERE instance_id=?`), instanceID); err != nil {
-			return ImportResult{}, err
-		}
-	}
 	var present int
 	if err := tx.QueryRowContext(ctx, db.Bind(`SELECT COUNT(*) FROM instances WHERE id = ? AND deleting = 0`), instanceID).Scan(&present); err != nil {
 		return ImportResult{}, err

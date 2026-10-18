@@ -1,6 +1,5 @@
 import { instanceState, instanceRequest, restoreInstanceZIP } from '../instance-state';
 import { globalSettingsAPI } from '../api/client';
-import { saveDownloadedBlob } from '../api/control-auth';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { escapeHtml } from '../utils/formatters';
@@ -27,7 +26,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
             <p class="text-sm text-muted mt-1">一次保存设置、记忆、档案、摘要和贴图，图片作为 ZIP 内的独立文件保留。</p>
           </div>
         </div>
-        <button type="button" data-control-download="${base}" data-download-filename="frostagent-${id}.zip" class="btn btn-primary">${icon('download', 'w-4 h-4')} 下载全量 ZIP</button>
+        <a href="${base}" download="frostagent-${id}.zip" class="btn btn-primary">${icon('download', 'w-4 h-4')} 下载全量 ZIP</a>
       </article>
       <p class="backup-note">${icon('info', 'w-4 h-4')}<span>备份直接下载到浏览器，密钥与凭据来源置空；只包含当前实例引用的共享供应商与模型。</span></p>
 
@@ -40,11 +39,11 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
             { path: 'stickers', file: 'stickers.zip', title: '贴图', detail: '贴图信息与原始图片', format: 'ZIP', symbol: 'image' },
             { path: 'summaries', file: 'group_summaries.json', title: '群摘要', detail: '群聊的运行摘要', format: 'JSON', symbol: 'file_text' },
           ].map((part) => `
-            <button type="button" data-control-download="${base}/${part.path}" data-download-filename="${part.file}" class="card backup-download text-left">
+            <a href="${base}/${part.path}" download="${part.file}" class="card backup-download">
               <div class="backup-download-top">${icon(part.symbol, 'w-5 h-5')}<span class="badge badge-outline">${part.format}</span></div>
               <div><h3 class="text-sm font-semibold">${part.title}</h3><p class="text-xs text-muted mt-1">${part.detail}</p></div>
               <span class="backup-download-action">下载 ${part.format} ${icon('arrow_down', 'w-3.5 h-3.5')}</span>
-            </button>`).join('')}
+            </a>`).join('')}
         </div>
       </section>
 
@@ -98,7 +97,7 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
           <article class="card backup-panel">
             <div class="backup-panel-heading">${icon('lock', 'w-4 h-4')}<h3>全局访问锁与审计</h3></div>
             <p class="backup-description">包含全局访问状态和安全审计记录。导入会替换当前记录。</p>
-            <button type="button" data-control-download="/api/instances/global/backup/security" data-download-filename="global-security.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载访问与审计 JSON</button>
+            <a href="/api/instances/global/backup/security" download="global-security.json" class="btn btn-outline">${icon('download', 'w-4 h-4')} 下载访问与审计 JSON</a>
             <div class="backup-form backup-form-separated">
               <label for="security-import-file">访问与审计文件</label>
               <input id="security-import-file" class="input" type="file" accept=".json,application/json" />
@@ -115,7 +114,14 @@ export function mountBackupRestorePage(container: HTMLElement): () => void {
       globalDownloadButton.disabled = true;
       try {
         const blob = await globalSettingsAPI.download();
-        saveDownloadedBlob(blob, 'global-setting.json');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'global-setting.json';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (error) {
         toast.error('下载全局设置失败: ' + String(error));
       } finally {

@@ -200,7 +200,7 @@ func readCatalogTx(ctx context.Context, tx *sql.Tx) (Configuration, error) {
 	if err != nil {
 		return cfg, err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT id, display_name, endpoint_id, upstream_model, enabled, capabilities, max_input_tokens FROM provider_models ORDER BY position, id`)
+	rows, err = tx.QueryContext(ctx, `SELECT id, display_name, endpoint_id, upstream_model, enabled, capabilities FROM provider_models ORDER BY position, id`)
 	if err != nil {
 		return cfg, err
 	}
@@ -209,7 +209,7 @@ func readCatalogTx(ctx context.Context, tx *sql.Tx) (Configuration, error) {
 		var model Model
 		var enabled int
 		var capabilities string
-		if err := rows.Scan(&model.ID, &model.DisplayName, &model.EndpointID, &model.UpstreamModel, &enabled, &capabilities, &model.MaxInputTokens); err != nil {
+		if err := rows.Scan(&model.ID, &model.DisplayName, &model.EndpointID, &model.UpstreamModel, &enabled, &capabilities); err != nil {
 			return cfg, err
 		}
 		if err := json.Unmarshal([]byte(capabilities), &model.Capabilities); err != nil {

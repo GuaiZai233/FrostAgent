@@ -24,7 +24,7 @@ func TestSQLModelRouterPersistsConfigurationAndManualSecret(t *testing.T) {
 	}
 	cfg := manager.Draft()
 	cfg.Endpoints = []Endpoint{{ID: "endpoint-a", DisplayName: "Endpoint", BaseURL: "https://example.com/v1", Enabled: true}}
-	cfg.Models = []Model{{ID: "model-a", DisplayName: "Model", EndpointID: "endpoint-a", UpstreamModel: "model-a", Enabled: true, MaxInputTokens: 8192}}
+	cfg.Models = []Model{{ID: "model-a", DisplayName: "Model", EndpointID: "endpoint-a", UpstreamModel: "model-a", Enabled: true}}
 	if err := manager.SaveDraft(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,6 @@ func TestSQLModelRouterPersistsConfigurationAndManualSecret(t *testing.T) {
 	if len(active.Endpoints) != 1 || !active.Endpoints[0].APIKeyConfigured ||
 		len(active.Models) != 1 || len(active.GroupOverrides) != 1 || active.Revision != 1 {
 		t.Fatalf("model router SQL round trip failed: %#v", active)
-	}
-	if active.Models[0].MaxInputTokens != 8192 {
-		t.Fatalf("model input limit was not recovered: %#v", active.Models[0])
 	}
 	secret, err := reopened.secrets.Resolve(active.Endpoints[0])
 	if err != nil || secret != "synthetic-secret" {

@@ -12,11 +12,6 @@ type LLMProvider interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 }
 
-// EmbeddingProvider vectorizes text without using the chat API.
-type EmbeddingProvider interface {
-	Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error)
-}
-
 // AgentService defines the interface for agent message handling.
 // - 输入：一条平台无关的 IncomingMessage（用户来的消息）
 // - 输出：一个或多个 OutgoingMessage(返回 slice 是关键设计——支持分条回复、图文混合、流式分段等)

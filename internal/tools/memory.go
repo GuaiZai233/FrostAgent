@@ -39,7 +39,6 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					"type":        "string",
 					"description": "write 时可提供当前用户文字或图片识别结果中的原文片段。图文混合消息中，写入文字摘要时应提供文字原文作为 evidence。",
 				},
-				"query": map[string]any{"type": "string", "description": "搜索时的自然语言查询。与tags同时提供时优先使用query；未提供query时使用tags。"},
 				"tags": map[string]any{
 					"type":        "array",
 					"description": "write 时写入标签，search 时搜索标签（如[\"maimai\",\"游戏版本\"]）。每个标签应是实体、主题、属性、版本名、别名或同义词，去掉\"当前、什么、帮我查\"等无检索价值的语气词，固定名称保持完整不要拆分。1～6个。",
@@ -52,7 +51,6 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 		},
 		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			var params struct {
-				Query       string   `json:"query"`
 				Action      string   `json:"action"`
 				Content     string   `json:"content"`
 				Tags        []string `json:"tags"`
@@ -129,11 +127,10 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 			case "search":
 				// Clean and validate tags
 				tags := cleanSearchTags(params.Tags)
-				query := strings.TrimSpace(params.Query)
-				if len(tags) == 0 && query == "" {
-					return textResult("搜索需要提供 query 或 tags 参数（1～6个标签）"), nil
+				if len(tags) == 0 {
+					return textResult("搜索需要提供 tags 参数（1～6个标签）"), nil
 				}
-				if query == "" && len(tags) > 6 {
+				if len(tags) > 6 {
 					return textResult("搜索最多支持 6 个不同的 tags 标签"), nil
 				}
 				if groupID != "" {
@@ -144,17 +141,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					if err != nil {
 						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
 					}
-					var entries []memory.MemoryEntry
-					if engine.MemoryEmbeddings != nil {
-						if query == "" {
-							query = strings.Join(tags, ", ")
-						}
-						entries, err = engine.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, query, 20)
-					} else if query != "" {
-						entries, err = groupStore.Search(query, 0)
-					} else {
-						entries, err = groupStore.SearchByTags(tags, 0)
-					}
+					entries, err := groupStore.SearchByTags(tags, 0)
 					if err != nil {
 						return textResult(fmt.Sprintf("搜索群记忆失败: %v", err)), nil
 					}
@@ -179,18 +166,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				if engine.MemoryReader == nil {
 					return textResult("记忆搜索功能未启用"), nil
 				}
-				var entries []memory.MemoryEntry
-				var err error
-				if engine.MemoryEmbeddings != nil {
-					if query == "" {
-						query = strings.Join(tags, ", ")
-					}
-					entries, err = engine.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: currentUser}, query, 20)
-				} else if query != "" {
-					entries, err = engine.MemoryReader.Recall(ctx, query)
-				} else {
-					entries, err = engine.MemoryReader.SearchByTags(ctx, tags)
-				}
+				entries, err := engine.MemoryReader.SearchByTags(context.Background(), tags)
 				if err != nil {
 					return textResult(fmt.Sprintf("搜索失败: %v", err)), nil
 				}

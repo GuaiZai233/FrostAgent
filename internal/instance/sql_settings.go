@@ -164,12 +164,10 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	if err == nil {
 		if old != nil && old.Engine != nil && r != nil && r.Engine != nil {
 			r.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
-			r.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 			old.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
 		}
 		i.mu.Lock()
 		i.runtime, i.config = r, c
-		r.StartEmbeddings()
 		i.mu.Unlock()
 		return nil
 	}
@@ -198,12 +196,10 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	}
 	if fallbackErr == nil && old != nil && old.Engine != nil && fallback != nil && fallback.Engine != nil {
 		fallback.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
-		fallback.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 		old.Engine.SessionManager.TransferSessionsTo(fallback.Engine.SessionManager)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = fallback, fallbackConfig
-	fallback.StartEmbeddings()
 	i.mu.Unlock()
 	if fallbackErr != nil {
 		applyErr = errors.Join(applyErr, fallbackErr)

@@ -148,7 +148,7 @@ async function nameDialog(item?: InstanceInfo): Promise<void> {
 async function deleteDialog(item: InstanceInfo): Promise<void> {
   const pendingBody = `
     <p class="text-sm">此实例已暂停。确认删除会永久移除设置、记忆、摘要和贴图。</p>
-    <button type="button" class="btn btn-outline mt-3" data-control-download="/api/instances/${item.id}/backup" data-download-filename="frostagent-${item.id}.zip">下载一键全量备份 ZIP</button>
+    <a class="btn btn-outline mt-3" href="/api/instances/${item.id}/backup" download="frostagent-${item.id}.zip">下载一键全量备份 ZIP</a>
     <p class="text-xs text-muted mt-2">备份中的密钥已置空；还原后需重新配置。下载后请确认文件可用。</p>
     <label class="flex items-center gap-2 text-sm mt-4"><input type="checkbox" class="checkbox" id="instance-delete-ack">我确认删除此实例的全部数据</label>`;
   await openDialog({
