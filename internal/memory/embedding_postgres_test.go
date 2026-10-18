@@ -23,7 +23,11 @@ func newEmbeddingPostgresDB(t *testing.T) *storage.DB {
 
 func newEmbeddingPostgresDBWithConfig(t *testing.T) (*storage.DB, storage.Config) {
 	t.Helper()
-	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
+	return newEmbeddingPostgresDBAt(t, os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN"))
+}
+
+func newEmbeddingPostgresDBAt(t *testing.T, base string) (*storage.DB, storage.Config) {
+	t.Helper()
 	if base == "" {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
 	}

@@ -39,6 +39,21 @@ func (d *DB) EnsureEmbeddingStorage(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
+	var vectorsExist, vectorColumnExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT pg_catalog.to_regclass('memory_embeddings') IS NOT NULL,
+		EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+			WHERE attrelid=pg_catalog.to_regclass('memory_embeddings')
+			AND attname='embedding' AND NOT attisdropped)`).Scan(&vectorsExist, &vectorColumnExists); err != nil {
+		return "", err
+	}
+	if vectorsExist && !vectorColumnExists {
+		// DROP EXTENSION vector CASCADE removes the vector column, leaving a
+		// table of unusable derived rows. Recreate it; source memories are separate.
+		if _, err := tx.ExecContext(ctx, `DROP TABLE memory_embeddings`); err != nil {
+			return "", err
+		}
+		vectorsExist = false
+	}
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS memory_embedding_scopes (
 			instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -56,6 +71,13 @@ func (d *DB) EnsureEmbeddingStorage(ctx context.Context) (string, error) {
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return "", err
+		}
+	}
+	if !vectorsExist {
+		// A surviving scope marker cannot certify a newly created, empty table.
+		// Invalidate it in the same transaction so the next search rebuilds.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_embedding_scopes`); err != nil {
 			return "", err
 		}
 	}

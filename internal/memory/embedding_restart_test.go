@@ -2,9 +2,15 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"testing"
 	"time"
 
+	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/storage"
 )
 
@@ -93,5 +99,123 @@ func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPostgresEmbeddingRebuildAfterVectorStorageLoss(t *testing.T) {
+	for _, loss := range []struct{ name, statement string }{
+		{"table", `DROP TABLE memory_embeddings`},
+		{"column", `ALTER TABLE memory_embeddings DROP COLUMN embedding`},
+	} {
+		t.Run(loss.name, func(t *testing.T) {
+			exercisePostgresEmbeddingStorageLoss(t, loss.statement, os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN"))
+		})
+	}
+}
+
+func TestPostgresEmbeddingRebuildAfterExtensionReinstall(t *testing.T) {
+	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
+	if base == "" {
+		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+	// Extension removal affects the whole database, so never run it in the
+	// shared test database even though the source fixture has its own schema.
+	name := fmt.Sprintf("fa_vector_loss_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(`CREATE DATABASE ` + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(`DROP DATABASE ` + name + ` WITH (FORCE)`); err != nil {
+			t.Errorf("remove extension recovery database: %v", err)
+		}
+	})
+	parsed.Path = "/" + name
+	query := parsed.Query()
+	query.Del("search_path")
+	parsed.RawQuery = query.Encode()
+	extensionAdmin, err := sql.Open("pgx", parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = extensionAdmin.Exec(`CREATE EXTENSION vector`)
+	extensionAdmin.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exercisePostgresEmbeddingStorageLoss(t, `DROP EXTENSION vector CASCADE`, parsed.String())
+}
+
+func exercisePostgresEmbeddingStorageLoss(t *testing.T, lossStatement, base string) {
+	t.Helper()
+	ctx := context.Background()
+	db, config := newEmbeddingPostgresDBAt(t, base)
+	f := newSQLEmbeddingFixture(t, db, embeddingHandler)
+	seedEmbeddingMemory(t, f.store, "synthetic-memory", "synthetic-owner", "remembered tea")
+	s := SearchScope{Type: ScopePrivate, Owner: "synthetic-owner"}
+	rebuildFixture(t, f, s)
+	before, err := f.manager.Search(ctx, s, "tea", 20)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("initial index: %v %v", before, err)
+	}
+	// Simulate loss of the derived vectors, retaining the previously valid
+	// fingerprint and source hash. The source memories must remain untouched.
+	if _, err := db.SQL.Exec(lossStatement); err != nil {
+		t.Fatal(err)
+	}
+	var markers int
+	if err := db.SQL.QueryRow(`SELECT count(*) FROM memory_embedding_scopes`).Scan(&markers); err != nil || markers != 1 {
+		t.Fatalf("missing orphan scope fixture: count=%d: %v", markers, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = storage.OpenWithConfig(ctx, t.TempDir(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if lossStatement == `DROP TABLE memory_embeddings` && db.EmbeddingStorageReady.Load() {
+		t.Fatal("missing vector table was reported ready after reopening")
+	}
+	if lossStatement == `DROP EXTENSION vector CASCADE` {
+		// Deployment, not application initialization, reinstalls the extension.
+		if _, err := db.SQL.Exec(`CREATE EXTENSION vector WITH SCHEMA public`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := runtimescope.New(nil, nil, nil)
+	defer func() { scope.Cancel(); scope.Wait() }()
+	store := NewSQLStore(db, "synthetic-recovery-instance")
+	restored, err := NewEmbeddings(scope, store, NewSQLGroupManager(db, "synthetic-recovery-instance", scope), f.router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, searchErr := restored.Search(ctx, s, "tea", 20)
+	if !errors.Is(searchErr, ErrEmbeddingNotReady) {
+		t.Fatalf("lost vector storage did not trigger a rebuild: %v", searchErr)
+	}
+	restored.Wait()
+	result, err := restored.Search(ctx, s, "tea", 20)
+	if err != nil || len(result) != 1 || result[0].ID != "synthetic-memory" || result[0].Content != "remembered tea" {
+		t.Fatalf("search did not rebuild the missing index: %v %v", result, err)
+	}
+	// A subsequent enable/storage check must preserve the healthy rebuilt index.
+	if _, err := db.EnsureEmbeddingStorage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if fp, err := restored.persistedFingerprint(ctx, s); err != nil || fp == "" {
+		t.Fatalf("healthy scope was discarded: fingerprint=%q: %v", fp, err)
+	}
+	if result, err := restored.Search(ctx, s, "tea", 20); err != nil || len(result) != 1 {
+		t.Fatalf("healthy index was not reusable: %v %v", result, err)
 	}
 }
