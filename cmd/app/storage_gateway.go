@@ -135,9 +135,16 @@ func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
 
 func (g *storageGateway) serveStorageLocked(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
 	case http.MethodGet:
 		_, config, _ := g.snapshot()
+		dsn, err := g.bootstrap.PostgresDSN(r.Context())
+		if err != nil {
+			writeStorageError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		config.DSN = dsn
 		_ = json.NewEncoder(w).Encode(config)
 	case http.MethodPost:
 		var config storage.Config
@@ -179,7 +186,7 @@ func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.C
 		return errors.New("database is unavailable")
 	}
 	if config == previous {
-		return nil
+		return g.bootstrap.Save(ctx, requested)
 	}
 	// Drain the old manager before opening a new PostgreSQL connection; the
 	// single-process lease also covers a DSN edit targeting the same database.
@@ -197,7 +204,7 @@ func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.C
 		err = g.apply(manager)
 	}
 	if err == nil {
-		err = g.bootstrap.Save(ctx, config)
+		err = g.bootstrap.Save(ctx, requested)
 	}
 	if err != nil {
 		if manager != nil {

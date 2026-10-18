@@ -18,10 +18,15 @@ import (
 const configurationVersion = 1
 
 type Snapshot struct {
-	config      Configuration
-	err         error
-	credentials map[string]snapshotCredential
+	config          Configuration
+	err             error
+	credentials     map[string]snapshotCredential
+	catalogRevision int64
 }
+
+// CatalogRevision identifies a published provider configuration, independently
+// of an instance's route revision and without including credential values.
+func (s *Snapshot) CatalogRevision() int64 { return s.catalogRevision }
 
 type snapshotCredential struct {
 	value string
@@ -234,7 +239,7 @@ func (m *Manager) Snapshot() *Snapshot {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return &Snapshot{config: cloneConfiguration(m.active)}
+	return &Snapshot{config: cloneConfiguration(m.active), catalogRevision: m.active.Revision}
 }
 
 func (m *Manager) SaveDraft(cfg Configuration) error {
@@ -556,6 +561,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
 		UpstreamModel:       model.UpstreamModel,
+		MaxInputTokens:      model.MaxInputTokens,
 	}, nil
 }
 
@@ -728,6 +734,9 @@ func validateConfiguration(cfg Configuration) error {
 		if _, exists := endpointIDs[model.EndpointID]; !exists {
 			return fmt.Errorf("model %q references a missing endpoint", model.DisplayName)
 		}
+		if model.MaxInputTokens < 0 {
+			return fmt.Errorf("model maximum input tokens must be nonnegative")
+		}
 		modelIDs[model.ID] = model
 	}
 	for workload := range cfg.GlobalBindings {
@@ -740,7 +749,7 @@ func validateConfiguration(cfg Configuration) error {
 		if workload == WorkloadReflection && binding.Mode == BindingDisabled {
 			return fmt.Errorf("global reflection binding cannot be disabled")
 		}
-		if err := validateBinding(binding, modelIDs, endpointIDs, false, workload != WorkloadDialogue); err != nil {
+		if err := validateBinding(binding, modelIDs, endpointIDs, false, workload != WorkloadDialogue && workload != WorkloadEmbedding); err != nil {
 			return fmt.Errorf("global %s binding: %w", workload, err)
 		}
 	}
@@ -763,10 +772,10 @@ func validateConfiguration(cfg Configuration) error {
 			if !knownWorkload(workload) {
 				return fmt.Errorf("group %s/%s has unknown workload %q", group.Platform, group.GroupID, workload)
 			}
-			if workload == WorkloadReflection && binding.Mode == BindingDisabled {
-				return fmt.Errorf("group %s/%s reflection binding cannot be disabled", group.Platform, group.GroupID)
+			if (workload == WorkloadReflection || workload == WorkloadEmbedding) && binding.Mode == BindingDisabled {
+				return fmt.Errorf("group %s/%s %s binding cannot be disabled", group.Platform, group.GroupID, workload)
 			}
-			if err := validateBinding(binding, modelIDs, endpointIDs, true, workload != WorkloadDialogue); err != nil {
+			if err := validateBinding(binding, modelIDs, endpointIDs, true, workload != WorkloadDialogue && workload != WorkloadEmbedding); err != nil {
 				return fmt.Errorf("group %s/%s %s binding: %w", group.Platform, group.GroupID, workload, err)
 			}
 		}

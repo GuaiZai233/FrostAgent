@@ -64,7 +64,7 @@ export function openGroupModelConfig(
           body.innerHTML = workloads.map((workload) => `
             <div class="form-group">
               <label class="form-label" for="group-model-${workload.value}">${workload.label}</label>
-              <select class="select group-model-binding" id="group-model-${workload.value}" data-workload="${workload.value}">${bindingOptions(configuration, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE)}</select>
+              <select class="select group-model-binding" id="group-model-${workload.value}" data-workload="${workload.value}">${bindingOptions(configuration, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION && workload.value !== ModelWorkload.EMBEDDING, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select>
             </div>`).join('');
           publishButton.disabled = false;
           publishButton.addEventListener('click', async () => {

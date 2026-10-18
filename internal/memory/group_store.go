@@ -84,18 +84,19 @@ func SafeGroupKey(groupID string) string {
 // It stores group profile, group memory entries, and group topic catalog
 // in an isolated directory under groups/<safe_group_key>/.
 type GroupStore struct {
-	groupID          string
-	platform         string
-	sql              *sqlBrainStore
-	dir              string
-	profilePath      string
-	memoryPath       string
-	catalogPath      string
-	mu               sync.RWMutex
-	routeMu          sync.RWMutex
-	routes           map[string]core.RouteContext
-	catalog          *CatalogStore
-	beforeCommitHook func()
+	refreshEditedSummaries bool
+	groupID                string
+	platform               string
+	sql                    *sqlBrainStore
+	dir                    string
+	profilePath            string
+	memoryPath             string
+	catalogPath            string
+	mu                     sync.RWMutex
+	routeMu                sync.RWMutex
+	routes                 map[string]core.RouteContext
+	catalog                *CatalogStore
+	beforeCommitHook       func()
 }
 
 // NewGroupStore creates a GroupStore for the given groupID under baseDir.
@@ -774,6 +775,10 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 	for i, e := range brain.Entries {
 		if e.ID == entry.ID {
 			if brain.Entries[i].Content != entry.Content {
+				if s.refreshEditedSummaries {
+					brain.Entries[i].Summary = ""
+				}
+				brain.Entries[i].SummaryNeedsRefresh = true
 				brain.Entries[i].Content = entry.Content
 				if brain.Entries[i].Source == SourceExtract || brain.Entries[i].Source == SourceDistill {
 					brain.Entries[i].Source = SourceManual

@@ -23,11 +23,12 @@ var (
 // Store implements a file-based unified memory store.
 // All memories are stored in a single brain.json file.
 type Store struct {
-	path    string
-	sql     *sqlBrainStore
-	mu      sync.RWMutex
-	routeMu sync.RWMutex
-	routes  map[string]core.RouteContext
+	refreshEditedSummaries bool
+	path                   string
+	sql                    *sqlBrainStore
+	mu                     sync.RWMutex
+	routeMu                sync.RWMutex
+	routes                 map[string]core.RouteContext
 }
 
 // NewStore creates a new file-based memory store.
@@ -564,6 +565,13 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 			updated.ScopeType = entry.ScopeType
 			updated.GroupID = entry.GroupID
 			updated.Summary = entry.Summary
+			updated.SummaryNeedsRefresh = entry.SummaryNeedsRefresh
+			if updated.Content != entry.Content {
+				if s.refreshEditedSummaries {
+					updated.Summary = ""
+				}
+				updated.SummaryNeedsRefresh = true
+			}
 			updated.Evidence = entry.Evidence
 			updated.SourceMedia = entry.SourceMedia
 			updated.SourceMessageID = entry.SourceMessageID

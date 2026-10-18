@@ -210,12 +210,13 @@ func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration
 	}
 	for _, model := range cfg.Models {
 		result.Models = append(result.Models, &v1.ModelTarget{
-			Id:            model.ID,
-			DisplayName:   model.DisplayName,
-			EndpointId:    model.EndpointID,
-			UpstreamModel: model.UpstreamModel,
-			Enabled:       model.Enabled,
-			Capabilities:  append([]string(nil), model.Capabilities...),
+			Id:             model.ID,
+			DisplayName:    model.DisplayName,
+			EndpointId:     model.EndpointID,
+			UpstreamModel:  model.UpstreamModel,
+			Enabled:        model.Enabled,
+			Capabilities:   append([]string(nil), model.Capabilities...),
+			MaxInputTokens: int32(model.MaxInputTokens),
 		})
 	}
 	for _, workload := range router.Workloads {
@@ -253,12 +254,13 @@ func configurationFromProto(cfg *v1.ModelRouterConfiguration) router.Configurati
 	}
 	for _, model := range cfg.GetModels() {
 		result.Models = append(result.Models, router.Model{
-			ID:            model.GetId(),
-			DisplayName:   model.GetDisplayName(),
-			EndpointID:    model.GetEndpointId(),
-			UpstreamModel: model.GetUpstreamModel(),
-			Enabled:       model.GetEnabled(),
-			Capabilities:  append([]string(nil), model.GetCapabilities()...),
+			ID:             model.GetId(),
+			DisplayName:    model.GetDisplayName(),
+			EndpointID:     model.GetEndpointId(),
+			UpstreamModel:  model.GetUpstreamModel(),
+			Enabled:        model.GetEnabled(),
+			Capabilities:   append([]string(nil), model.GetCapabilities()...),
+			MaxInputTokens: int(model.GetMaxInputTokens()),
 		})
 	}
 	for _, binding := range cfg.GetGlobalBindings() {
@@ -311,6 +313,8 @@ func workloadToProto(workload router.Workload) v1.ModelWorkload {
 		return v1.ModelWorkload_MODEL_WORKLOAD_REFLECTION
 	case router.WorkloadMemoryExtract:
 		return v1.ModelWorkload_MODEL_WORKLOAD_MEMORY_EXTRACT
+	case router.WorkloadEmbedding:
+		return v1.ModelWorkload_MODEL_WORKLOAD_EMBEDDING
 	case router.WorkloadGroupCompact:
 		return v1.ModelWorkload_MODEL_WORKLOAD_GROUP_COMPACT
 	default:
@@ -330,6 +334,8 @@ func workloadFromProto(workload v1.ModelWorkload) router.Workload {
 		return router.WorkloadReflection
 	case v1.ModelWorkload_MODEL_WORKLOAD_MEMORY_EXTRACT:
 		return router.WorkloadMemoryExtract
+	case v1.ModelWorkload_MODEL_WORKLOAD_EMBEDDING:
+		return router.WorkloadEmbedding
 	case v1.ModelWorkload_MODEL_WORKLOAD_GROUP_COMPACT:
 		return router.WorkloadGroupCompact
 	default:

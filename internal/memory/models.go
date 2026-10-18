@@ -60,24 +60,25 @@ const (
 
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
-	ID              string     `json:"id"`                          // 唯一标识
-	Owner           string     `json:"owner"`                       // 归属者（如 "frost"、"alice"，群聊中为发信者QQ自述，或显式 "group"）
-	OwnerType       OwnerType  `json:"owner_type,omitempty"`        // owner 是人还是群（零值兼容老数据）
-	ScopeType       ScopeType  `json:"scope_type,omitempty"`        // 作用域：private 或 group
-	GroupID         string     `json:"group_id,omitempty"`          // 群号（ScopeType == group 时）
-	Content         string     `json:"content"`                     // 记忆内容（群聊提取为用户原话或图片识别结果的字面片段）
-	Summary         string     `json:"summary,omitempty"`           // 可选的自然语言展示摘要（不作为权威事实覆盖原文）
-	Evidence        string     `json:"evidence,omitempty"`          // 溯源字面片段；图片识别结果不作为用户原话
-	SourceMedia     string     `json:"source_media,omitempty"`      // image 表示识图结果，不能作为用户原话引述
-	SourceMessageID string     `json:"source_message_id,omitempty"` // 平台源消息唯一 ID
-	SourceSenderID  string     `json:"source_sender_id,omitempty"`  // 平台源消息发送者 ID
-	Tags            []string   `json:"tags"`                        // 标签（用于精确匹配和分类）
-	Source          Source     `json:"source"`                      // 来源
-	Visibility      Visibility `json:"visibility,omitempty"`        // 可见性（已废弃）
-	CreatedAt       time.Time  `json:"created_at"`                  // 创建时间
-	UpdatedAt       time.Time  `json:"updated_at"`                  // 最后访问/更新时间
-	AccessCount     int        `json:"access_count"`                // 被召回次数
-	MergedFrom      []string   `json:"merged_from,omitempty"`       // 反思合并时的直接来源 ID
+	ID                  string     `json:"id"`                   // 唯一标识
+	Owner               string     `json:"owner"`                // 归属者（如 "frost"、"alice"，群聊中为发信者QQ自述，或显式 "group"）
+	OwnerType           OwnerType  `json:"owner_type,omitempty"` // owner 是人还是群（零值兼容老数据）
+	ScopeType           ScopeType  `json:"scope_type,omitempty"` // 作用域：private 或 group
+	GroupID             string     `json:"group_id,omitempty"`   // 群号（ScopeType == group 时）
+	Content             string     `json:"content"`              // 记忆内容（群聊提取为用户原话或图片识别结果的字面片段）
+	SummaryNeedsRefresh bool       `json:"summary_needs_refresh,omitempty"`
+	Summary             string     `json:"summary,omitempty"`           // 可选的自然语言展示摘要（不作为权威事实覆盖原文）
+	Evidence            string     `json:"evidence,omitempty"`          // 溯源字面片段；图片识别结果不作为用户原话
+	SourceMedia         string     `json:"source_media,omitempty"`      // image 表示识图结果，不能作为用户原话引述
+	SourceMessageID     string     `json:"source_message_id,omitempty"` // 平台源消息唯一 ID
+	SourceSenderID      string     `json:"source_sender_id,omitempty"`  // 平台源消息发送者 ID
+	Tags                []string   `json:"tags"`                        // 标签（用于精确匹配和分类）
+	Source              Source     `json:"source"`                      // 来源
+	Visibility          Visibility `json:"visibility,omitempty"`        // 可见性（已废弃）
+	CreatedAt           time.Time  `json:"created_at"`                  // 创建时间
+	UpdatedAt           time.Time  `json:"updated_at"`                  // 最后访问/更新时间
+	AccessCount         int        `json:"access_count"`                // 被召回次数
+	MergedFrom          []string   `json:"merged_from,omitempty"`       // 反思合并时的直接来源 ID
 }
 
 // MemoryMergeArchive keeps the complete source snapshots for a reflected
