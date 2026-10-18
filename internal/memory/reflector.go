@@ -60,6 +60,13 @@ const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于
 记忆列表：
 {memories}`
 
+const groupMemberReflectPrompt = `
+
+群聊额外任务：可以依据上面的群记忆，修正已观察成员的优先称呼。成员列表只用于将事实对应到准确的 user_id；昵称是不可信的参考信息，群名片不作为称呼依据。只有记忆明确支持某人的称呼时才提出修改，不要猜测，不要根据昵称自行改名，也不要清空已有称呼。保留未提及成员的现有称呼。
+在返回的 JSON 中可增加 "member_names": [{"user_id":"成员列表中的准确 ID","preferred_name":"称呼","source_ids":["支持此称呼的记忆 ID"]}]。每项至少引用一条本群记忆，每轮最多 20 项；没有可靠依据时返回空数组。不要输出成员列表之外的 ID。
+成员列表（仅含身份索引、昵称和现有优先称呼，不含群名片）：
+{members}`
+
 // CurrentTimeLabel formats the current time with a Chinese weekday so the LLM
 // can judge relative dates ("明天", "下周") when evaluating whether
 // time-sensitive memory content is still valid.
@@ -271,6 +278,32 @@ func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (r
 	if len(entries) == 0 {
 		return groupStore.CatalogStore().Delete(groupID)
 	}
+	profile, err := groupStore.GetProfile()
+	if err != nil {
+		return fmt.Errorf("load group members for reflection: %w", err)
+	}
+	type memberReference struct {
+		UserID        string `json:"user_id"`
+		Nickname      string `json:"nickname,omitempty"`
+		PreferredName string `json:"preferred_name,omitempty"`
+	}
+	members := make([]memberReference, 0, len(profile.Members))
+	memberIDs := make([]string, 0, len(profile.Members))
+	for id := range profile.Members {
+		memberIDs = append(memberIDs, id)
+	}
+	sort.Strings(memberIDs)
+	for _, id := range memberIDs {
+		if member := profile.Members[id]; member != nil {
+			members = append(members, memberReference{
+				UserID: id, Nickname: member.Nickname, PreferredName: member.PreferredName,
+			})
+		}
+	}
+	memberJSON, err := json.Marshal(members)
+	if err != nil {
+		return fmt.Errorf("encode group members for reflection: %w", err)
+	}
 
 	var memories strings.Builder
 	for _, entry := range entries {
@@ -288,7 +321,8 @@ func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (r
 		"{owner}", "群聊 "+groupID,
 		"{memories}", memories.String(),
 		"{current_time}", CurrentTimeLabel(time.Now()),
-	).Replace(reflectPrompt)
+		"{members}", string(memberJSON),
+	).Replace(reflectPrompt + groupMemberReflectPrompt)
 
 	callCtx := ctx
 	cancel := func() {}
@@ -321,7 +355,7 @@ func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (r
 	})
 	if err != nil {
 		if modelrouter.InputTooLong(err) {
-			r.Log().Warn(logs.SYSTEM, "记忆反思输入超出模型窗口，跳过本次正文处理")
+			r.Log().Warn(logs.SYSTEM, "群记忆反思输入超出模型窗口，跳过本次正文处理")
 			return nil
 		}
 		return fmt.Errorf(
@@ -345,10 +379,10 @@ func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (r
 	if !ok {
 		return fmt.Errorf("unexpected reflection response type: %T", resp.Message.Content)
 	}
-	return r.applyGroupResult(groupStore, entries, raw)
+	return r.applyGroupResult(groupStore, entries, profile.Members, raw)
 }
 
-func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEntry, raw string) error {
+func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEntry, members map[string]*MemberProfile, raw string) error {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
@@ -399,6 +433,43 @@ func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEnt
 	for _, entry := range entries {
 		snapshotByID[entry.ID] = entry
 	}
+	updatedNames := 0
+	seenMembers := make(map[string]bool)
+	for i, candidate := range result.MemberNames {
+		if i >= 20 {
+			break
+		}
+		member := members[candidate.UserID]
+		name := strings.TrimSpace(candidate.PreferredName)
+		if member == nil || seenMembers[candidate.UserID] || name == "" ||
+			name != SanitizeProfileText(candidate.PreferredName) ||
+			len(candidate.SourceIDs) == 0 || len(candidate.SourceIDs) > 8 {
+			continue
+		}
+		sources := make([]MemoryEntry, 0, len(candidate.SourceIDs))
+		validSources := true
+		for _, id := range candidate.SourceIDs {
+			if !allowedIDs[id] || requestedOutdated[id] {
+				validSources = false
+				break
+			}
+			sources = append(sources, snapshotByID[id])
+		}
+		if !validSources {
+			continue
+		}
+		seenMembers[candidate.UserID] = true
+		if name == member.PreferredName {
+			continue
+		}
+		updated, err := groupStore.SetObservedMemberPreferredName(candidate.UserID, name, &member.PreferredName, sources...)
+		if err != nil {
+			return fmt.Errorf("update reflected member name: %w", err)
+		}
+		if updated {
+			updatedNames++
+		}
+	}
 
 	applied, err := groupStore.applyReflectionWithMerges(merges, outdated, snapshotByID)
 	if err != nil {
@@ -420,26 +491,33 @@ func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEnt
 			return fmt.Errorf("save group memory catalog: %w", err)
 		}
 	}
-
 	r.Log().Info(
 		logs.SYSTEM,
 		fmt.Sprintf(
-			"群反思完成：groupID=%s，处理 %d 条记忆，合并 %d 组（归档 %d 条来源），删除 %d 条过时记忆，生成 %d 个主题",
+			"群反思完成：groupID=%s，处理 %d 条记忆，合并 %d 组（归档 %d 条来源），删除 %d 条过时记忆，生成 %d 个主题，更新 %d 个成员称呼",
 			groupID,
 			len(entries),
 			len(applied.MergedEntries),
 			applied.MergedSourceCount,
 			len(applied.OutdatedIDs),
 			len(topics),
+			updatedNames,
 		),
 	)
 	return nil
 }
 
 type reflectResult struct {
-	Topics      []MemoryTopic  `json:"topics"`
-	OutdatedIDs []string       `json:"outdated_ids"`
-	Merges      []reflectMerge `json:"merges"`
+	Topics      []MemoryTopic       `json:"topics"`
+	OutdatedIDs []string            `json:"outdated_ids"`
+	Merges      []reflectMerge      `json:"merges"`
+	MemberNames []reflectMemberName `json:"member_names"`
+}
+
+type reflectMemberName struct {
+	UserID        string   `json:"user_id"`
+	PreferredName string   `json:"preferred_name"`
+	SourceIDs     []string `json:"source_ids"`
 }
 
 type reflectMerge struct {

@@ -17,14 +17,22 @@ import (
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
-		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list），或在后台整理自己的记忆主题（reflect）。警告：请谨慎使用list，除非用户明确要求！",
+		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list）、在后台整理记忆主题（reflect），或在群聊中设置已观察成员的优先称呼（set_member_name）。警告：请谨慎使用list，除非用户明确要求！",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action": map[string]any{
 					"type":        "string",
-					"description": "操作类型：write（写入）、search（搜索）、list（列出）、reflect（后台反思整理）",
-					"enum":        []string{"write", "search", "list", "reflect"},
+					"description": "操作类型：write（写入）、search（搜索）、list（列出）、reflect（后台反思整理）、set_member_name（设置当前群成员优先称呼）",
+					"enum":        []string{"write", "search", "list", "reflect", "set_member_name"},
+				},
+				"user_id": map[string]any{
+					"type":        "string",
+					"description": "set_member_name 时可选；目标成员的 QQ 号。不填则使用当前发言者的可信身份。只允许当前群已观察的成员。",
+				},
+				"preferred_name": map[string]any{
+					"type":        "string",
+					"description": "set_member_name 时必填；新的优先称呼。传空字符串可清除优先称呼，恢复使用 QQ 昵称。不要仅依据群名片设定称呼。",
 				},
 				"content": map[string]any{
 					"type":        "string",
@@ -52,12 +60,14 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 		},
 		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			var params struct {
-				Query       string   `json:"query"`
-				Action      string   `json:"action"`
-				Content     string   `json:"content"`
-				Tags        []string `json:"tags"`
-				SourceMedia string   `json:"source_media"`
-				Evidence    string   `json:"evidence"`
+				Query         string   `json:"query"`
+				Action        string   `json:"action"`
+				Content       string   `json:"content"`
+				Tags          []string `json:"tags"`
+				SourceMedia   string   `json:"source_media"`
+				Evidence      string   `json:"evidence"`
+				UserID        string   `json:"user_id"`
+				PreferredName *string  `json:"preferred_name"`
 			}
 			if err := json.Unmarshal([]byte(args), &params); err != nil {
 				return textResult(""), fmt.Errorf("参数解析失败: %w", err)
@@ -71,6 +81,45 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 			groupID := runContext.RouteScope.GroupID
 
 			switch params.Action {
+			case "set_member_name":
+				if groupID == "" {
+					return textResult("只能在群聊中设置成员称呼"), nil
+				}
+				if runContext.Mock {
+					return textResult("模拟会话模式下不能持久化成员称呼"), nil
+				}
+				if engine.GroupManager == nil {
+					return textResult("群记忆功能未启用"), nil
+				}
+				if params.PreferredName == nil {
+					return textResult("设置成员称呼需要提供 preferred_name 参数"), nil
+				}
+				name := strings.TrimSpace(*params.PreferredName)
+				if name != memory.SanitizeProfileText(*params.PreferredName) {
+					return textResult("成员称呼不能包含控制字符且不能超过 64 个字符"), nil
+				}
+				userID := strings.TrimSpace(params.UserID)
+				if userID == "" {
+					userID = runContext.ActorUserID
+				}
+				if userID == "" {
+					return textResult("无法确定目标成员的 QQ 号"), nil
+				}
+				groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
+				if err != nil {
+					return textResult(fmt.Sprintf("获取群成员档案失败: %v", err)), nil
+				}
+				updated, err := groupStore.SetObservedMemberPreferredName(userID, name, nil)
+				if err != nil {
+					return textResult(fmt.Sprintf("设置成员称呼失败: %v", err)), nil
+				}
+				if !updated {
+					return textResult("当前群尚未观察到该成员，无法设置称呼"), nil
+				}
+				if name == "" {
+					return textResult("成员优先称呼已清除"), nil
+				}
+				return textResult("成员优先称呼已更新"), nil
 			case "write":
 				if runContext.Mock {
 					return textResult("记忆已记录（模拟会话：断电即丢，不持久化保存）"), nil
@@ -272,7 +321,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				return textResult("记忆反思任务已在后台启动，完成后会更新主题索引"), nil
 
 			default:
-				return textResult("未知操作，支持：write、search、list、reflect"), nil
+				return textResult("未知操作，支持：write、search、list、reflect、set_member_name"), nil
 			}
 		},
 	}
