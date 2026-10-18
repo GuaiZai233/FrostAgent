@@ -415,6 +415,216 @@ func TestGroupManager_SynchronizationAndAliasing(t *testing.T) {
 	}
 }
 
+func TestJSONGroupManagerPlatformIsolation(t *testing.T) {
+	baseDir := t.TempDir()
+	manager := NewGroupManager(baseDir, nil)
+	qq, err := manager.GetGroupStoreForPlatform("onebot", "shared_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	telegram, err := manager.GetGroupStoreForPlatform("telegram", "shared_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qq == telegram || qq.dir == telegram.dir {
+		t.Fatal("distinct platforms share a JSON group store or directory")
+	}
+	if qq.platform != "qq" || telegram.platform != "telegram" {
+		t.Fatalf("unexpected store platforms: qq=%q telegram=%q", qq.platform, telegram.platform)
+	}
+	if err := qq.UpdateGroupName("QQ group"); err != nil {
+		t.Fatal(err)
+	}
+	if err := telegram.UpdateGroupName("Telegram group"); err != nil {
+		t.Fatal(err)
+	}
+	if err := qq.UpdateMemberPreferredName("test_member", "QQ member", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := telegram.UpdateMemberPreferredName("test_member", "Telegram member", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := qq.Save(MemoryEntry{ID: "qq_memory", Owner: GroupOwnerExplicit, GroupID: "shared_group", Content: "QQ fact", Source: SourceManual}); err != nil {
+		t.Fatal(err)
+	}
+	if err := telegram.Save(MemoryEntry{ID: "telegram_memory", Owner: GroupOwnerExplicit, GroupID: "shared_group", Content: "Telegram fact", Source: SourceManual}); err != nil {
+		t.Fatal(err)
+	}
+	if err := telegram.CatalogStore().Replace(UserMemoryCatalog{Owner: GroupOwnerExplicit, Topics: []MemoryTopic{{Name: "telegram topic"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager = NewGroupManager(baseDir, nil)
+	qq, err = manager.GetGroupStoreForPlatform("qq", "shared_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	telegram, err = manager.GetGroupStoreForPlatform("telegram", "shared_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		name       string
+		store      *GroupStore
+		wantName   string
+		wantMemory string
+		wantMember string
+	}{
+		{"qq", qq, "QQ group", "QQ fact", "QQ member"},
+		{"telegram", telegram, "Telegram group", "Telegram fact", "Telegram member"},
+	} {
+		profile, err := check.store.GetProfile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if profile.GroupName != check.wantName {
+			t.Errorf("%s group name = %q, want %q", check.name, profile.GroupName, check.wantName)
+		}
+		if member := profile.GetMember("test_member"); member == nil || member.PreferredName != check.wantMember {
+			t.Errorf("%s member = %+v, want preferred name %q", check.name, member, check.wantMember)
+		}
+		entries, err := check.store.ListAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Content != check.wantMemory {
+			t.Errorf("%s memories = %+v", check.name, entries)
+		}
+	}
+	if catalog, err := qq.CatalogStore().Get(GroupOwnerExplicit); err != nil || catalog != nil {
+		t.Fatalf("QQ catalog includes Telegram data: catalog=%+v err=%v", catalog, err)
+	}
+	if catalog, err := telegram.CatalogStore().Get(GroupOwnerExplicit); err != nil || catalog == nil || len(catalog.Topics) != 1 || catalog.Topics[0].Name != "telegram topic" {
+		t.Fatalf("Telegram catalog missing: catalog=%+v err=%v", catalog, err)
+	}
+	groups, err := manager.ListGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("listed groups = %+v, want both platforms", groups)
+	}
+	listed := make(map[string]GroupSummary)
+	for _, group := range groups {
+		listed[group.Platform] = group
+	}
+	if listed["qq"].GroupName != "QQ group" || listed["telegram"].GroupName != "Telegram group" ||
+		listed["qq"].MemoryCount != 1 || listed["telegram"].MemoryCount != 1 {
+		t.Fatalf("listed groups lost platform identity or data: %+v", groups)
+	}
+	if manager.TotalMemoriesCount() != 2 {
+		t.Fatal("memory statistics did not count both platforms")
+	}
+	if err := manager.DeleteGroupForPlatform(" Telegram ", "telegram:group:shared_group"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(qq.dir); err != nil {
+		t.Fatalf("deleting Telegram group removed QQ data: %v", err)
+	}
+	if _, err := os.Stat(telegram.dir); !os.IsNotExist(err) {
+		t.Fatalf("Telegram directory still exists after deletion: %v", err)
+	}
+	groups, err = NewGroupManager(baseDir, nil).ListGroups()
+	if err != nil || len(groups) != 1 || groups[0].Platform != "qq" || groups[0].MemoryCount != 1 {
+		t.Fatalf("remaining groups = %+v, err=%v", groups, err)
+	}
+}
+
+func TestJSONGroupManagerLegacyQQAndPlatformAliases(t *testing.T) {
+	baseDir := t.TempDir()
+	legacy, err := NewGroupStore(baseDir, "legacy_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.UpdateGroupName("Legacy QQ group"); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.dir != filepath.Join(baseDir, "groups", SafeGroupKey("legacy_group")) {
+		t.Fatal("legacy QQ path changed")
+	}
+	manager := NewGroupManager(baseDir, nil)
+	qq, err := manager.GetGroupStoreForPlatform(" AIOCQHTTP ", "onebot:group:legacy_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := qq.GetProfile()
+	if err != nil || profile.GroupName != "Legacy QQ group" || qq.dir != legacy.dir {
+		t.Fatalf("legacy QQ data unavailable: profile=%+v err=%v", profile, err)
+	}
+	alias, err := manager.GetGroupStoreForPlatform("", "qq:group:legacy_group")
+	if err != nil || alias != qq {
+		t.Fatalf("QQ aliases do not share the cached store: err=%v", err)
+	}
+	telegram, err := manager.GetGroupStoreForPlatform(" Telegram ", " telegram:group:legacy_group ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = telegram.GetProfile()
+	if err != nil || profile.GroupName != "" {
+		t.Fatalf("non-QQ store read unscoped legacy data: profile=%+v err=%v", profile, err)
+	}
+	alias, err = manager.GetGroupStoreForPlatform("telegram", "legacy_group")
+	if err != nil || alias != telegram {
+		t.Fatalf("Telegram aliases do not share the cached store: err=%v", err)
+	}
+	if err := manager.DeleteGroupForPlatform("onebot", "qq:group:legacy_group"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy.dir); !os.IsNotExist(err) {
+		t.Fatalf("QQ alias deletion missed legacy directory: %v", err)
+	}
+	if _, err := os.Stat(telegram.dir); err != nil {
+		t.Fatalf("QQ alias deletion touched Telegram directory: %v", err)
+	}
+	qqAgain, err := manager.GetGroupStore("legacy_group")
+	if err != nil || qqAgain == qq {
+		t.Fatalf("QQ alias deletion did not invalidate cached store: err=%v", err)
+	}
+}
+
+func TestJSONGroupManagerPlatformPathsAndMemoryOnlyListing(t *testing.T) {
+	baseDir := t.TempDir()
+	manager := NewGroupManager(baseDir, nil)
+	platforms := []string{"qq", "telegram", "discord", "../telegram", `C:\platform`, "telegram:group:"}
+	paths := make(map[string]string)
+	for _, platform := range platforms {
+		store, err := manager.GetGroupStoreForPlatform(platform, "test_group")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous, exists := paths[strings.ToLower(store.dir)]; exists {
+			t.Fatalf("platforms %q and %q share a directory", previous, platform)
+		}
+		paths[strings.ToLower(store.dir)] = platform
+		rel, err := filepath.Rel(filepath.Join(baseDir, "groups"), store.dir)
+		if err != nil || filepath.Dir(rel) != "." || strings.ContainsAny(rel, `/\:`) {
+			t.Fatalf("unsafe platform group directory: %q err=%v", store.dir, err)
+		}
+		if err := store.Save(MemoryEntry{ID: "test_memory", Owner: GroupOwnerExplicit, GroupID: "test_group", Content: platform + " fact", Source: SourceManual}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(store.profilePath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	groups, err := NewGroupManager(baseDir, nil).ListGroups()
+	if err != nil || len(groups) != len(platforms) {
+		t.Fatalf("memory-only groups = %+v, err=%v", groups, err)
+	}
+	listed := make(map[string]bool)
+	for _, group := range groups {
+		if group.GroupID != "test_group" || group.MemoryCount != 1 || listed[group.Platform] {
+			t.Fatalf("invalid memory-only group summary: %+v", group)
+		}
+		listed[group.Platform] = true
+	}
+	for _, platform := range platforms {
+		if !listed[CanonicalPlatform(platform)] {
+			t.Errorf("missing platform %q in group list", platform)
+		}
+	}
+}
+
 func TestLegacyGroupMemoriesMigration(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "frostagent_migration_test_*")
 	if err != nil {
