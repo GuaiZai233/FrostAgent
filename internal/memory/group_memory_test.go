@@ -530,6 +530,42 @@ func TestJSONGroupManagerPlatformIsolation(t *testing.T) {
 	}
 }
 
+func TestJSONGroupManagerCanonicalIDUsedOnce(t *testing.T) {
+	baseDir := t.TempDir()
+	manager := NewGroupManager(baseDir, nil)
+	nested, err := manager.GetGroupStoreForPlatform("telegram", "telegram:group:telegram:group:test_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := manager.GetGroupStoreForPlatform("telegram", "test_group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nested != plain && nested.dir == plain.dir {
+		t.Fatal("different cached stores share a directory after repeated platform normalization")
+	}
+	if nested.GroupID() != "telegram:group:test_group" || plain.GroupID() != "test_group" {
+		t.Fatalf("group ID was normalized more than once: nested=%q plain=%q", nested.GroupID(), plain.GroupID())
+	}
+	if err := nested.UpdateGroupName("Nested prefix group"); err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.UpdateGroupName("Plain group"); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := NewGroupManager(baseDir, nil).ListGroups()
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("groups after reopening = %+v, err=%v", groups, err)
+	}
+	names := make(map[string]string)
+	for _, group := range groups {
+		names[group.GroupID] = group.GroupName
+	}
+	if names["telegram:group:test_group"] != "Nested prefix group" || names["test_group"] != "Plain group" {
+		t.Fatalf("listing normalized a persisted ID again: %+v", groups)
+	}
+}
+
 func TestJSONGroupManagerLegacyQQAndPlatformAliases(t *testing.T) {
 	baseDir := t.TempDir()
 	legacy, err := NewGroupStore(baseDir, "legacy_group")

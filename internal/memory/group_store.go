@@ -146,12 +146,12 @@ type GroupStore struct {
 
 // NewGroupStore creates a QQ GroupStore using its legacy directory under baseDir.
 func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
-	return newJSONGroupStore(baseDir, "qq", groupID)
+	return newJSONGroupStore(baseDir, "qq", CanonicalGroupID(groupID))
 }
 
-func newJSONGroupStore(baseDir, platform, groupID string) (*GroupStore, error) {
+// newJSONGroupStore receives the same canonical ID used by the manager cache.
+func newJSONGroupStore(baseDir, platform, canon string) (*GroupStore, error) {
 	platform = CanonicalPlatform(platform)
-	canon := canonicalPlatformGroupID(platform, groupID)
 	if canon == "" {
 		return nil, errors.New("group_id cannot be empty")
 	}

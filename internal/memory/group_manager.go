@@ -83,7 +83,11 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 	if canon == "" {
 		return nil, fmt.Errorf("canonical group_id cannot be empty")
 	}
+	return m.getCanonicalGroupStore(platform, canon)
+}
 
+// getCanonicalGroupStore keeps persisted canonical IDs intact when listing stores.
+func (m *GroupManager) getCanonicalGroupStore(platform, canon string) (*GroupStore, error) {
 	safeKey := platform + ":" + SafeGroupKey(canon)
 
 	m.mu.RLock()
@@ -208,7 +212,7 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 			continue
 		}
 
-		store, err := m.GetGroupStoreForPlatform(platform, resolvedGroupID)
+		store, err := m.getCanonicalGroupStore(platform, resolvedGroupID)
 		if err != nil {
 			continue
 		}
