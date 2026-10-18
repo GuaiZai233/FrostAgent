@@ -80,9 +80,62 @@ func SafeGroupKey(groupID string) string {
 	return fmt.Sprintf("g_%s_%s", rawPrefix, hashHex)
 }
 
-// GroupStore manages independent persistent storage for a single QQ group.
+// jsonGroupKey preserves legacy QQ paths and prefixes other platforms with a
+// reversible, Windows-safe encoding. Platform bytes are separate from group IDs.
+func jsonGroupKey(platform, groupID string) string {
+	platform = CanonicalPlatform(platform)
+	key := SafeGroupKey(groupID)
+	if platform == "qq" {
+		return key
+	}
+	return "p_" + hex.EncodeToString([]byte(platform)) + "_" + key
+}
+
+func jsonGroupPlatform(key string) (string, bool) {
+	if strings.HasPrefix(key, "g_") {
+		return "qq", true
+	}
+	encoded, ok := strings.CutPrefix(key, "p_")
+	if !ok {
+		return "", false
+	}
+	encoded, _, ok = strings.Cut(encoded, "_")
+	if !ok {
+		return "", false
+	}
+	raw, err := hex.DecodeString(encoded)
+	platform := string(raw)
+	if err != nil || platform == "" || platform == "qq" || CanonicalPlatform(platform) != platform {
+		return "", false
+	}
+	return platform, true
+}
+
+func jsonGroupDir(baseDir, platform, groupID string) (string, error) {
+	groupsBase := filepath.Clean(filepath.Join(baseDir, "groups"))
+	groupDir := filepath.Clean(filepath.Join(groupsBase, jsonGroupKey(platform, groupID)))
+	rel, err := filepath.Rel(groupsBase, groupDir)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return "", fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	}
+	return groupDir, nil
+}
+
+func canonicalPlatformGroupID(platform, groupID string) string {
+	canon := strings.TrimPrefix(strings.TrimSpace(groupID), platform+":group:")
+	// Reach a stable ID before SafeGroupKey and profile identity checks use it.
+	for {
+		next := CanonicalGroupID(canon)
+		if next == canon {
+			return canon
+		}
+		canon = next
+	}
+}
+
+// GroupStore manages independent persistent storage for a single platform group.
 // It stores group profile, group memory entries, and group topic catalog
-// in an isolated directory under groups/<safe_group_key>/.
+// in a platform-scoped directory under groups/.
 type GroupStore struct {
 	refreshEditedSummaries bool
 	groupID                string
@@ -99,19 +152,20 @@ type GroupStore struct {
 	beforeCommitHook       func()
 }
 
-// NewGroupStore creates a GroupStore for the given groupID under baseDir.
+// NewGroupStore creates a QQ GroupStore using its legacy directory under baseDir.
 func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
-	canon := CanonicalGroupID(groupID)
+	return newJSONGroupStore(baseDir, "qq", canonicalPlatformGroupID("qq", groupID))
+}
+
+// newJSONGroupStore receives the same canonical ID used by the manager cache.
+func newJSONGroupStore(baseDir, platform, canon string) (*GroupStore, error) {
+	platform = CanonicalPlatform(platform)
 	if canon == "" {
 		return nil, errors.New("group_id cannot be empty")
 	}
-	safeKey := SafeGroupKey(canon)
-	groupsBase := filepath.Clean(filepath.Join(baseDir, "groups"))
-	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
-
-	rel, err := filepath.Rel(groupsBase, groupDir)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
-		return nil, fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	groupDir, err := jsonGroupDir(baseDir, platform, canon)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := os.MkdirAll(groupDir, 0755); err != nil {
@@ -121,6 +175,7 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 	catalogPath := filepath.Join(groupDir, "catalog.json")
 	store := &GroupStore{
 		groupID:     canon,
+		platform:    platform,
 		dir:         groupDir,
 		profilePath: filepath.Join(groupDir, "profile.json"),
 		memoryPath:  filepath.Join(groupDir, "memory.json"),
