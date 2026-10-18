@@ -115,6 +115,10 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 		db.Close()
 		return nil, err
 	}
+	if err = db.detectEmbeddingStorage(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 

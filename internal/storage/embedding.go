@@ -6,6 +6,20 @@ import (
 	"strings"
 )
 
+// Existing derived rows need transactional invalidation even when Embedding is
+// disabled after a restart. Catalog lookup neither requires nor installs pgvector.
+func (d *DB) detectEmbeddingStorage(ctx context.Context) error {
+	if d.Backend != Postgres {
+		return nil
+	}
+	var exists bool
+	if err := d.SQL.QueryRowContext(ctx, `SELECT pg_catalog.to_regclass('memory_embeddings') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("detect existing embedding storage: %w", err)
+	}
+	d.EmbeddingStorageReady.Store(exists)
+	return nil
+}
+
 // EnsureEmbeddingStorage never installs extensions. Ordinary SQL startup does
 // not depend on pgvector; this schema is created only when Embedding is enabled.
 func (d *DB) EnsureEmbeddingStorage(ctx context.Context) (string, error) {

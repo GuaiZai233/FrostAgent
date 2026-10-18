@@ -17,6 +17,12 @@ import (
 
 func newEmbeddingPostgresDB(t *testing.T) *storage.DB {
 	t.Helper()
+	db, _ := newEmbeddingPostgresDBWithConfig(t)
+	return db
+}
+
+func newEmbeddingPostgresDBWithConfig(t *testing.T) (*storage.DB, storage.Config) {
+	t.Helper()
 	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
 	if base == "" {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
@@ -43,12 +49,13 @@ func newEmbeddingPostgresDB(t *testing.T) *storage.DB {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	db, err := storage.OpenWithConfig(context.Background(), t.TempDir(), storage.Config{Backend: storage.Postgres, DSN: parsed.String()})
+	config := storage.Config{Backend: storage.Postgres, DSN: parsed.String()}
+	db, err := storage.OpenWithConfig(context.Background(), t.TempDir(), config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return db
+	return db, config
 }
 
 func TestPostgresEmbeddingPersistenceAndIsolation(t *testing.T) {
