@@ -3,6 +3,7 @@ package memory
 import (
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/logs"
+	"FrostAgent/internal/modelrouter"
 	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -77,11 +79,13 @@ func CurrentTimeLabel(t time.Time) string {
 // catalog. It never injects a full summary into the conversation.
 type Reflector struct {
 	*runtimescope.Scope
-	store    *Store
-	catalog  *CatalogStore
-	provider core.LLMProvider
-	model    string
-	config   Config
+	jobMu      sync.Mutex
+	embeddings *Embeddings
+	store      *Store
+	catalog    *CatalogStore
+	provider   core.LLMProvider
+	model      string
+	config     Config
 }
 
 // NewReflector creates a memory reflector.
@@ -147,7 +151,14 @@ func (r *Reflector) Reflect(ctx context.Context) error {
 }
 
 // ReflectOwner reflects only one owner's memories.
-func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
+func (r *Reflector) ReflectOwner(ctx context.Context, owner string) (resultErr error) {
+	r.jobMu.Lock()
+	defer r.jobMu.Unlock()
+	defer func() {
+		if resultErr == nil && r.embeddings != nil && ctx.Value(embeddingBootstrapKey{}) == nil {
+			r.embeddings.Update(SearchScope{Type: ScopePrivate, Owner: owner})
+		}
+	}()
 	if !r.Available() {
 		return fmt.Errorf("LLM provider or model not configured for reflector")
 	}
@@ -211,6 +222,10 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 		Route:       r.store.RouteForOwner(owner),
 	})
 	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			r.Log().Warn(logs.SYSTEM, "记忆反思输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
 		return fmt.Errorf(
 			"call reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
 			time.Since(startedAt).Round(time.Millisecond),
@@ -240,7 +255,14 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 // removes outdated entries, saves to the group's isolated catalog.json,
 // and records merge archives in the group's memory.json.
 // It strictly never accesses or mutates private Store or private CatalogStore.
-func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) error {
+func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (resultErr error) {
+	r.jobMu.Lock()
+	defer r.jobMu.Unlock()
+	defer func() {
+		if resultErr == nil && r.embeddings != nil && groupStore != nil && ctx.Value(embeddingBootstrapKey{}) == nil {
+			r.embeddings.Update(SearchScope{Type: ScopeGroup, Platform: groupStore.platform, GroupID: groupStore.groupID})
+		}
+	}()
 	if !r.Available() {
 		return fmt.Errorf("LLM provider or model not configured for reflector")
 	}
@@ -332,6 +354,10 @@ func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) er
 		Route:       groupStore.RouteForOwner(GroupOwnerExplicit),
 	})
 	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			r.Log().Warn(logs.SYSTEM, "群记忆反思输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
 		return fmt.Errorf(
 			"call group reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
 			time.Since(startedAt).Round(time.Millisecond),

@@ -129,6 +129,7 @@ const extraWrites: string[] = [];
 const extras = new Map<string, string>();
 const api = {
   async listEnvVars() { if (failLoad) throw new Error('synthetic initial load failure'); return values; },
+  async listEnvVarsWithStorage() { if (failLoad) throw new Error('synthetic initial load failure'); return { envVars: values, storageBackend: 'sqlite' }; },
   async getSessions() { return { sessions: [] }; },
   async updateEnvVars(changes: typeof writes[number], signal: AbortSignal) {
     signal.throwIfAborted();

@@ -33,6 +33,7 @@ import {
 export function mountBackendSettingsPage(container: HTMLElement, api = createInstanceAPI(), extraAPI = extraEnvAPI): () => void {
   let isUnmounted = false;
   let loading = false;
+  let storageBackend = '';
   let saving = false;
   let loadSeq = 0;
   let draft: SettingsDraft | null = null;
@@ -66,6 +67,17 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       </header>
 
       <div class="flex flex-col gap-4">
+        <article class="card p-4">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="card-title text-sm font-semibold">记忆设置</h2>
+            <small class="badge badge-outline">当前实例</small>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-3">
+            <label class="text-xs font-semibold" for="embedding-enabled">启用Embedding</label>
+            <label class="toggle-switch"><input type="checkbox" id="embedding-enabled" role="switch" aria-label="启用Embedding" disabled><span aria-hidden="true"></span></label>
+          </div>
+          <p id="embedding-sqlite-warning" class="text-xs text-destructive mt-2" hidden>sqlite不支持向量存储，反思后embedding的结果将不会持久化！</p>
+        </article>
         <!-- Group Behavior Settings Card -->
         <article class="card p-4">
           <div class="card-header border-b border-border pb-3 mb-3">
@@ -323,6 +335,11 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   const stickerMode = element<HTMLSelectElement>('sticker-activity-mode');
   const quote = element<HTMLInputElement>('quote-trace-cb');
   const quoteDepth = element<HTMLInputElement>('quote-trace-depth');
+  const embeddingToggle = element<HTMLInputElement>('embedding-enabled');
+  const embeddingWarning = element<HTMLElement>('embedding-sqlite-warning');
+  function updateEmbeddingWarning(): void {
+    embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
+  }
   const numericControls: Record<string, HTMLInputElement> = {
     PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
     QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
@@ -442,6 +459,8 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function renderControls(): void {
     if (!draft) return;
     const value = (key: string) => draft!.get(key);
+    embeddingToggle.checked = value('ENABLE_EMBEDDING') === 'true';
+    updateEmbeddingWarning();
     proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
       (value('ENABLE_PROACTIVE_REPLY') !== 'false' && Number(value('PROACTIVE_REPLY_PROBABILITY')) > 0);
     probability.value = value('PROACTIVE_REPLY_PROBABILITY').trim();
@@ -542,11 +561,12 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     loading = true;
     renderAll();
     try {
-      const [values, extra, sessions] = await Promise.all([
-        api.listEnvVars(), extraAPI.list(), api.getSessions(100).catch(() => ({ sessions: [] })),
+      const [memorySettings, extra, sessions] = await Promise.all([
+        api.listEnvVarsWithStorage(), extraAPI.list(), api.getSessions(100).catch(() => ({ sessions: [] })),
       ]);
       if (isUnmounted || sequence !== loadSeq) return;
-      draft = new SettingsDraft(values, extra);
+      storageBackend = memorySettings.storageBackend;
+      draft = new SettingsDraft(memorySettings.envVars, extra);
       sessionGroupMap.clear();
       for (const session of sessions.sessions ?? []) {
         const id = groupIdFromSessionId(session.sessionId);
@@ -624,6 +644,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   const binds: Record<string, string> = {
+    'embedding-enabled': 'ENABLE_EMBEDDING',
     'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
     'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
     'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
@@ -632,6 +653,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     const input = element<HTMLInputElement>(id);
     input.addEventListener('change', () => {
       change(key, input.checked ? 'true' : 'false');
+      if (input === embeddingToggle) updateEmbeddingWarning();
       if (input === quote) quoteDepth.disabled = !quote.checked;
     });
   }
