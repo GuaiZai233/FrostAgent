@@ -63,7 +63,7 @@ func fixtureSecretInsert(db *DB) string {
 // Only used on fresh disposable test databases to reconstruct historical schemas.
 func prepareOldSchema(t *testing.T, db *DB, version int) {
 	t.Helper()
-	if version <= 11 {
+	if version < 14 {
 		if _, err := db.SQL.Exec(`DROP TABLE skills`); err != nil {
 			t.Fatal(err)
 		}
@@ -81,6 +81,16 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 						t.Fatal(err)
 					}
 				}
+			}
+		}
+	}
+	if version <= 11 {
+		if _, err := db.SQL.Exec(`ALTER TABLE memory_entries DROP COLUMN summary_dirty`); err != nil {
+			t.Fatal(err)
+		}
+		if version == 11 {
+			if _, err := db.SQL.Exec(`ALTER TABLE provider_models DROP COLUMN max_input_tokens`); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
@@ -106,7 +116,7 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 
 func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9, 10, 11} {
+	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13} {
 		t.Run(strconv.Itoa(previous), func(t *testing.T) {
 			root := t.TempDir()
 			db, err := Open(ctx, root)
@@ -124,6 +134,7 @@ func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 					t.Fatalf("startup %d: %v", start, err)
 				}
 				assertMigrationFixture(t, db)
+				assertSkillsEmbeddingSchema(t, db)
 				var media string
 				if err := db.SQL.QueryRow(`SELECT source_media FROM memory_entries WHERE id = 'memory-1'`).Scan(&media); err != nil || media != "" {
 					t.Fatalf("migrated text evidence source = %q, %v", media, err)

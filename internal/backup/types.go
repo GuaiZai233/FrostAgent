@@ -18,6 +18,7 @@ const SecretNotice = "密钥、凭据及其来源不包含在导出文件中；�
 type Manifest struct {
 	FormatVersion int       `json:"format_version"`
 	Kind          string    `json:"kind"`
+	InstanceName  string    `json:"instance_name,omitempty"`
 	ExportedAt    time.Time `json:"exported_at"`
 	SecretNotice  string    `json:"secret_notice"`
 }

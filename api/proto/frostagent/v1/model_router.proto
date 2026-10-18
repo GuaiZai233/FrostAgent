@@ -21,6 +21,7 @@ enum ModelWorkload {
   MODEL_WORKLOAD_REFLECTION = 4;
   MODEL_WORKLOAD_MEMORY_EXTRACT = 5;
   MODEL_WORKLOAD_GROUP_COMPACT = 6;
+  MODEL_WORKLOAD_EMBEDDING = 7;
 }
 
 enum ModelBindingMode {
@@ -58,6 +59,7 @@ message ModelTarget {
   string upstream_model = 4;
   bool enabled = 5;
   repeated string capabilities = 6;
+  int32 max_input_tokens = 7;
 }
 
 message ModelBinding {

@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: frostagent
           POSTGRES_PASSWORD: synthetic-test-password
@@ -65,6 +65,13 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/memory -run '^TestPostgresMemoryHotpaths$' -count=1 -v
+
+      - name: Test PostgreSQL vector storage
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: |
+          psql "$FROSTAGENT_TEST_POSTGRES_DSN" -c "CREATE EXTENSION IF NOT EXISTS vector"
+          go test ./internal/memory -run '^TestPostgresEmbedding' -count=1 -v
 
   ci:
     runs-on: ubuntu-latest

@@ -30,6 +30,10 @@ func (m *Manager) sqlRuntimeSnapshot() *Snapshot {
 	defer m.mu.Unlock()
 	m.loadErr = m.loadSQL()
 	snapshot := &Snapshot{config: cloneConfiguration(m.active), err: m.loadErr, credentials: make(map[string]snapshotCredential)}
+	if snapshot.err == nil {
+		snapshot.err = m.db.SQL.QueryRow(`SELECT revision FROM provider_revision WHERE id = 1`).Scan(&snapshot.catalogRevision)
+		m.loadErr = snapshot.err
+	}
 	if m.loadErr == nil {
 		for _, endpoint := range m.active.Endpoints {
 			value, err := m.secrets.Resolve(endpoint)
@@ -297,8 +301,8 @@ func writeCatalogTx(ctx context.Context, db *storage.DB, tx *sql.Tx, cfg Configu
 			enabled = 1
 		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO provider_models
-   (id, display_name, endpoint_id, upstream_model, enabled, capabilities, position) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			model.ID, model.DisplayName, model.EndpointID, model.UpstreamModel, enabled, string(capabilities), pos); err != nil {
+   (id, display_name, endpoint_id, upstream_model, enabled, capabilities, position, max_input_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			model.ID, model.DisplayName, model.EndpointID, model.UpstreamModel, enabled, string(capabilities), pos, model.MaxInputTokens); err != nil {
 			return err
 		}
 	}

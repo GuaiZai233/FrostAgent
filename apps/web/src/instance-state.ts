@@ -54,6 +54,15 @@ export function instanceURL(path: string): string {
     ? '/instances/' + instanceState.selected.id + path
     : path;
 }
+export async function restoreInstanceZIP(file: Blob): Promise<InstanceInfo> {
+  const response = await controlPlaneFetch('/api/instances/restore', {
+    method: 'POST',
+    body: file,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || response.statusText);
+  return result as InstanceInfo;
+}
 export async function instanceRequest<T = { success: boolean }>(
   path: string,
   body?: unknown,

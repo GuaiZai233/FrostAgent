@@ -20,6 +20,7 @@ var ErrStorageUnavailable = errors.New("memory storage unavailable")
 // Writer handles memory writing.
 type Writer struct {
 	*runtimescope.Scope
+	embeddings   *Embeddings
 	store        *Store
 	groupManager *GroupManager
 	// LLM fields (set via SetLLM)
@@ -129,7 +130,12 @@ func (w *Writer) ExtractByOwnerWithRouteContext(
 	route core.RouteContext,
 	messages []core.ChatMessage,
 	validator func() bool,
-) error {
+) (resultErr error) {
+	defer func() {
+		if resultErr == nil && w.embeddings != nil && ctx != nil && ctx.Err() == nil && (validator == nil || validator()) {
+			w.embeddings.Update(SearchScope{Type: ScopePrivate, Owner: owner})
+		}
+	}()
 	if ctx == nil {
 		ctx = w.Context()
 	}
@@ -178,6 +184,10 @@ func (w *Writer) ExtractByOwnerWithRouteContext(
 
 	resp, err := w.provider.Chat(ctx, req)
 	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			w.Log().Warn(logs.SYSTEM, "记忆提取输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
 		if errors.Is(err, modelrouter.ErrDisabled) {
 			return nil
 		}
@@ -347,7 +357,12 @@ func (w *Writer) ExtractGroupMemories(
 	messages []GroupMessage,
 	source Source,
 	validator func() bool,
-) error {
+) (resultErr error) {
+	defer func() {
+		if resultErr == nil && w.embeddings != nil && ctx != nil && ctx.Err() == nil && (validator == nil || validator()) {
+			w.embeddings.Update(SearchScope{Type: ScopeGroup, Platform: route.Platform, GroupID: groupID})
+		}
+	}()
 	if ctx == nil {
 		ctx = w.Context()
 	}
@@ -421,6 +436,10 @@ func (w *Writer) ExtractGroupMemories(
 
 	resp, err := w.provider.Chat(ctx, req)
 	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			w.Log().Warn(logs.SYSTEM, "记忆提取输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
 		if errors.Is(err, modelrouter.ErrDisabled) {
 			return nil
 		}

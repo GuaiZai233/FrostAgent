@@ -43,7 +43,7 @@ func postgresMigrationConfig(t *testing.T) Config {
 
 func TestPostgresMigrationPreservesData(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9, 10, 11} {
+	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13} {
 		t.Run(fmt.Sprint(previous), func(t *testing.T) {
 			config := postgresMigrationConfig(t)
 			db, err := OpenWithConfig(ctx, t.TempDir(), config)
@@ -61,6 +61,7 @@ func TestPostgresMigrationPreservesData(t *testing.T) {
 					t.Fatalf("startup %d: %v", start, err)
 				}
 				assertMigrationFixture(t, db)
+				assertSkillsEmbeddingSchema(t, db)
 				var media string
 				if err := db.SQL.QueryRow(`SELECT source_media FROM memory_entries WHERE id = 'memory-1'`).Scan(&media); err != nil || media != "" {
 					t.Fatalf("migrated text evidence source = %q, %v", media, err)

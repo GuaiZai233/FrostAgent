@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -24,17 +23,18 @@ type GroupSummary struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// GroupManager coordinates all QQ group memory stores and profiles within an instance.
-// It synchronizes all access by canonical group ID and safe key, ensuring that aliases
+// GroupManager coordinates all group memory stores and profiles within an instance.
+// It synchronizes all access by canonical platform and group ID, ensuring that aliases
 // (e.g. "123456" vs "group:123456" vs "qq:group:123456") resolve to the exact same
 // GroupStore pointer and synchronization lock.
 type GroupManager struct {
-	baseDir    string
-	db         *storage.DB
-	instanceID string
-	scope      *runtimescope.Scope
-	mu         sync.RWMutex
-	groups     map[string]*GroupStore // keyed by SafeGroupKey
+	refreshEditedSummaries bool
+	baseDir                string
+	db                     *storage.DB
+	instanceID             string
+	scope                  *runtimescope.Scope
+	mu                     sync.RWMutex
+	groups                 map[string]*GroupStore // keyed by canonical platform and SafeGroupKey
 }
 
 // NewGroupManager creates a new GroupManager rooted at baseDir.
@@ -61,6 +61,7 @@ func (m *GroupManager) CarrySQLStoresFrom(old *GroupManager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, store := range old.groups {
+		store.refreshEditedSummaries = m.refreshEditedSummaries
 		m.groups[key] = store
 	}
 }
@@ -78,11 +79,15 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 	}
 
 	platform = CanonicalPlatform(platform)
-	canon := CanonicalGroupID(strings.TrimPrefix(groupID, platform+":group:"))
+	canon := canonicalPlatformGroupID(platform, groupID)
 	if canon == "" {
 		return nil, fmt.Errorf("canonical group_id cannot be empty")
 	}
+	return m.getCanonicalGroupStore(platform, canon)
+}
 
+// getCanonicalGroupStore keeps persisted canonical IDs intact when listing stores.
+func (m *GroupManager) getCanonicalGroupStore(platform, canon string) (*GroupStore, error) {
 	safeKey := platform + ":" + SafeGroupKey(canon)
 
 	m.mu.RLock()
@@ -104,7 +109,7 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 	if m.db != nil {
 		store, err = newSQLGroupStore(m.db, m.instanceID, platform, canon)
 	} else {
-		store, err = NewGroupStore(m.baseDir, canon)
+		store, err = newJSONGroupStore(m.baseDir, platform, canon)
 	}
 	if err != nil {
 		if m.scope != nil {
@@ -112,6 +117,7 @@ func (m *GroupManager) GetGroupStoreForPlatform(platform, groupID string) (*Grou
 		}
 		return nil, err
 	}
+	store.refreshEditedSummaries = m.refreshEditedSummaries
 	m.groups[safeKey] = store
 	return store, nil
 }
@@ -177,6 +183,10 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 		}
 
 		dirName := entry.Name()
+		platform, ok := jsonGroupPlatform(dirName)
+		if !ok {
+			continue
+		}
 		profilePath := filepath.Join(groupsDir, dirName, "profile.json")
 
 		var resolvedGroupID string
@@ -198,11 +208,11 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 			}
 		}
 
-		if resolvedGroupID == "" {
+		if resolvedGroupID == "" || dirName != jsonGroupKey(platform, resolvedGroupID) {
 			continue
 		}
 
-		store, err := m.GetGroupStore(resolvedGroupID)
+		store, err := m.getCanonicalGroupStore(platform, resolvedGroupID)
 		if err != nil {
 			continue
 		}
@@ -224,6 +234,7 @@ func (m *GroupManager) ListGroups() ([]GroupSummary, error) {
 		}
 
 		result = append(result, GroupSummary{
+			Platform:    platform,
 			GroupID:     groupID,
 			GroupName:   profile.GroupName,
 			MemberCount: len(profile.Members),
@@ -240,11 +251,11 @@ func (m *GroupManager) DeleteGroup(groupID string) error {
 }
 
 func (m *GroupManager) DeleteGroupForPlatform(platform, groupID string) error {
-	canon := CanonicalGroupID(groupID)
+	platform = CanonicalPlatform(platform)
+	canon := canonicalPlatformGroupID(platform, groupID)
 	if canon == "" {
 		return fmt.Errorf("canonical group_id cannot be empty")
 	}
-	platform = strings.ToLower(strings.TrimSpace(platform))
 	safeKey := platform + ":" + SafeGroupKey(canon)
 	if m.db != nil {
 		ctx := context.Background()
@@ -279,18 +290,13 @@ func (m *GroupManager) DeleteGroupForPlatform(platform, groupID string) error {
 		m.mu.Unlock()
 		return nil
 	}
-	cacheKey := safeKey
-	safeKey = SafeGroupKey(canon)
-	groupsBase := filepath.Clean(filepath.Join(m.baseDir, "groups"))
-	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
-
-	rel, err := filepath.Rel(groupsBase, groupDir)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
-		return fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	groupDir, err := jsonGroupDir(m.baseDir, platform, canon)
+	if err != nil {
+		return err
 	}
 
 	m.mu.Lock()
-	delete(m.groups, cacheKey)
+	delete(m.groups, safeKey)
 	m.mu.Unlock()
 
 	if err := os.RemoveAll(groupDir); err != nil {

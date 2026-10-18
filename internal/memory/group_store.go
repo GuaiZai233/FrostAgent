@@ -80,37 +80,92 @@ func SafeGroupKey(groupID string) string {
 	return fmt.Sprintf("g_%s_%s", rawPrefix, hashHex)
 }
 
-// GroupStore manages independent persistent storage for a single QQ group.
-// It stores group profile, group memory entries, and group topic catalog
-// in an isolated directory under groups/<safe_group_key>/.
-type GroupStore struct {
-	groupID          string
-	platform         string
-	sql              *sqlBrainStore
-	dir              string
-	profilePath      string
-	memoryPath       string
-	catalogPath      string
-	mu               sync.RWMutex
-	routeMu          sync.RWMutex
-	routes           map[string]core.RouteContext
-	catalog          *CatalogStore
-	beforeCommitHook func()
+// jsonGroupKey preserves legacy QQ paths and prefixes other platforms with a
+// reversible, Windows-safe encoding. Platform bytes are separate from group IDs.
+func jsonGroupKey(platform, groupID string) string {
+	platform = CanonicalPlatform(platform)
+	key := SafeGroupKey(groupID)
+	if platform == "qq" {
+		return key
+	}
+	return "p_" + hex.EncodeToString([]byte(platform)) + "_" + key
 }
 
-// NewGroupStore creates a GroupStore for the given groupID under baseDir.
+func jsonGroupPlatform(key string) (string, bool) {
+	if strings.HasPrefix(key, "g_") {
+		return "qq", true
+	}
+	encoded, ok := strings.CutPrefix(key, "p_")
+	if !ok {
+		return "", false
+	}
+	encoded, _, ok = strings.Cut(encoded, "_")
+	if !ok {
+		return "", false
+	}
+	raw, err := hex.DecodeString(encoded)
+	platform := string(raw)
+	if err != nil || platform == "" || platform == "qq" || CanonicalPlatform(platform) != platform {
+		return "", false
+	}
+	return platform, true
+}
+
+func jsonGroupDir(baseDir, platform, groupID string) (string, error) {
+	groupsBase := filepath.Clean(filepath.Join(baseDir, "groups"))
+	groupDir := filepath.Clean(filepath.Join(groupsBase, jsonGroupKey(platform, groupID)))
+	rel, err := filepath.Rel(groupsBase, groupDir)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return "", fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	}
+	return groupDir, nil
+}
+
+func canonicalPlatformGroupID(platform, groupID string) string {
+	canon := strings.TrimPrefix(strings.TrimSpace(groupID), platform+":group:")
+	// Reach a stable ID before SafeGroupKey and profile identity checks use it.
+	for {
+		next := CanonicalGroupID(canon)
+		if next == canon {
+			return canon
+		}
+		canon = next
+	}
+}
+
+// GroupStore manages independent persistent storage for a single platform group.
+// It stores group profile, group memory entries, and group topic catalog
+// in a platform-scoped directory under groups/.
+type GroupStore struct {
+	refreshEditedSummaries bool
+	groupID                string
+	platform               string
+	sql                    *sqlBrainStore
+	dir                    string
+	profilePath            string
+	memoryPath             string
+	catalogPath            string
+	mu                     sync.RWMutex
+	routeMu                sync.RWMutex
+	routes                 map[string]core.RouteContext
+	catalog                *CatalogStore
+	beforeCommitHook       func()
+}
+
+// NewGroupStore creates a QQ GroupStore using its legacy directory under baseDir.
 func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
-	canon := CanonicalGroupID(groupID)
+	return newJSONGroupStore(baseDir, "qq", canonicalPlatformGroupID("qq", groupID))
+}
+
+// newJSONGroupStore receives the same canonical ID used by the manager cache.
+func newJSONGroupStore(baseDir, platform, canon string) (*GroupStore, error) {
+	platform = CanonicalPlatform(platform)
 	if canon == "" {
 		return nil, errors.New("group_id cannot be empty")
 	}
-	safeKey := SafeGroupKey(canon)
-	groupsBase := filepath.Clean(filepath.Join(baseDir, "groups"))
-	groupDir := filepath.Clean(filepath.Join(groupsBase, safeKey))
-
-	rel, err := filepath.Rel(groupsBase, groupDir)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
-		return nil, fmt.Errorf("group directory escapes groups boundary: %s", groupDir)
+	groupDir, err := jsonGroupDir(baseDir, platform, canon)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := os.MkdirAll(groupDir, 0755); err != nil {
@@ -120,6 +175,7 @@ func NewGroupStore(baseDir, groupID string) (*GroupStore, error) {
 	catalogPath := filepath.Join(groupDir, "catalog.json")
 	store := &GroupStore{
 		groupID:     canon,
+		platform:    platform,
 		dir:         groupDir,
 		profilePath: filepath.Join(groupDir, "profile.json"),
 		memoryPath:  filepath.Join(groupDir, "memory.json"),
@@ -400,6 +456,55 @@ func (s *GroupStore) UpdateMemberPreferredName(userID, preferredName string, ali
 	member.Aliases = cleanAliases
 	member.UpdatedAt = time.Now()
 	return s.saveProfileLocked(profile)
+}
+
+// SetObservedMemberPreferredName changes only the calling name of an existing
+// member. When expected is non-nil, it applies only if the calling name has not
+// changed since the caller took its snapshot. Reflection may also require its
+// cited memories to remain unchanged at the time of the name update.
+func (s *GroupStore) SetObservedMemberPreferredName(userID, preferredName string, expected *string, sourceSnapshots ...MemoryEntry) (bool, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false, errors.New("empty user_id")
+	}
+	preferredName = SanitizeProfileText(preferredName)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(sourceSnapshots) > 0 {
+		brain, err := s.loadMemoryLocked()
+		if err != nil {
+			return false, err
+		}
+		currentByID := make(map[string]MemoryEntry, len(brain.Entries))
+		for _, entry := range brain.Entries {
+			currentByID[entry.ID] = entry
+		}
+		for _, snapshot := range sourceSnapshots {
+			current, found := currentByID[snapshot.ID]
+			if !found || !sameMergeSource(current, snapshot) {
+				return false, nil
+			}
+		}
+	}
+	if s.sql != nil {
+		return s.setSQLObservedMemberPreferredName(userID, preferredName, expected, sourceSnapshots)
+	}
+
+	profile, err := s.loadProfileLocked()
+	if err != nil {
+		return false, err
+	}
+	member := profile.Members[userID]
+	if member == nil || (expected != nil && member.PreferredName != *expected) {
+		return false, nil
+	}
+	if member.PreferredName == preferredName {
+		return true, nil
+	}
+	member.PreferredName = preferredName
+	member.UpdatedAt = time.Now()
+	return true, s.saveProfileLocked(profile)
 }
 
 // loadMemoryLocked reads the group memory entries from disk.
@@ -774,6 +879,10 @@ func (s *GroupStore) UpdateEntry(entry MemoryEntry) error {
 	for i, e := range brain.Entries {
 		if e.ID == entry.ID {
 			if brain.Entries[i].Content != entry.Content {
+				if s.refreshEditedSummaries {
+					brain.Entries[i].Summary = ""
+				}
+				brain.Entries[i].SummaryNeedsRefresh = true
 				brain.Entries[i].Content = entry.Content
 				if brain.Entries[i].Source == SourceExtract || brain.Entries[i].Source == SourceDistill {
 					brain.Entries[i].Source = SourceManual

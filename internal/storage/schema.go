@@ -180,7 +180,12 @@ var migrations = []migration{
 		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
 	}},
 	{11, providerSchema},
-	{12, []string{`CREATE TABLE skills (
+	{12, []string{`ALTER TABLE provider_models ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE memory_entries ADD COLUMN summary_dirty INTEGER NOT NULL DEFAULT 0`}},
+	// Development branches previously shared v12 with different schemas.
+	{13, nil},
+	// Preserve Skills data already created by the development v12 branch.
+	{14, []string{`CREATE TABLE IF NOT EXISTS skills (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
 		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
@@ -251,6 +256,11 @@ func (d *DB) createSchema(ctx context.Context) error {
 				return fmt.Errorf("create schema v%d: %w", step.version, err)
 			}
 		}
+		if step.version == 13 {
+			if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version) VALUES (1, ?)`), SchemaVersion); err != nil {
 		return fmt.Errorf("write schema version: %w", err)
@@ -278,6 +288,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	}
 	if step.version == 11 {
 		if err := d.migrateProviders(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if step.version == 13 {
+		if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
 			return err
 		}
 	}

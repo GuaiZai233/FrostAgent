@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func (m *Manager) InstanceZIP(id string) ([]byte, error) {
@@ -125,10 +126,12 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	}
 	if buildErr == nil && oldRuntime != nil && oldRuntime.Engine != nil && r != nil && r.Engine != nil {
 		r.Engine.GroupManager.CarrySQLStoresFrom(oldRuntime.Engine.GroupManager)
+		r.Engine.MemoryEmbeddings.CarryIndexesFrom(oldRuntime.Engine.MemoryEmbeddings)
 		oldRuntime.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
+	r.StartEmbeddings()
 	i.mu.Unlock()
 	if buildErr != nil {
 		_ = m.update(i.id, func(info *Info) { info.Enabled = false; info.Error = buildErr.Error() })
@@ -209,7 +212,26 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if err != nil {
 		return Info{}, err
 	}
+	autoName := name == ""
+	if autoName {
+		name = decoded.Manifest.InstanceName
+	}
 	info, err := m.Create(name)
+	if autoName && errors.Is(err, ErrNameExists) {
+		baseName := strings.TrimSpace(name)
+		if baseName == "" {
+			_, next := m.List()
+			baseName = fmt.Sprintf("实例%d", next)
+		}
+		for duplicate := 2; errors.Is(err, ErrNameExists); duplicate++ {
+			suffix := fmt.Sprintf(" (%d)", duplicate)
+			base := []rune(baseName)
+			if len(base) > 32-len([]rune(suffix)) {
+				base = base[:32-len([]rune(suffix))]
+			}
+			info, err = m.Create(string(base) + suffix)
+		}
+	}
 	if err != nil {
 		return Info{}, err
 	}
@@ -366,6 +388,7 @@ func (m *Manager) CancelDeletion(id string) error {
 	r, c, err := m.buildFresh(i.id, i, false, m.dir(i.id))
 	i.mu.Lock()
 	i.runtime, i.config = r, c
+	r.StartEmbeddings()
 	i.mu.Unlock()
 	if err != nil {
 		_ = m.update(i.id, func(info *Info) { info.Error = err.Error() })
