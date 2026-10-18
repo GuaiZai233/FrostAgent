@@ -130,6 +130,7 @@ type Engine struct {
 	BillingConfig billing.Config
 
 	// Memory components (optional, nil = memory disabled)
+	MemoryEmbeddings  *memory.Embeddings
 	MemoryReader      *memory.Reader
 	MemoryWriter      *memory.Writer
 	MemoryGateway     *memory.Gateway
@@ -349,9 +350,20 @@ func (e *Engine) RunMessagesWithContext(
 
 					if e.MemoryGateway != nil {
 						lastUserMsg := extractLastUserMessage(messages)
-						raw, sErr := groupStore.Search(lastUserMsg, 0)
+						var raw []memory.MemoryEntry
+						var sErr error
+						if e.MemoryEmbeddings != nil {
+							raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
+						} else {
+							raw, sErr = groupStore.Search(lastUserMsg, 0)
+						}
 						if sErr != nil {
-							return e.memoryFailure("search group memory", sErr)
+							if e.MemoryEmbeddings != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
+								raw = nil
+							} else {
+								return e.memoryFailure("search group memory", sErr)
+							}
 						}
 						if len(raw) > 0 {
 							filtered := e.MemoryGateway.FilterGroup(raw)
@@ -384,9 +396,20 @@ func (e *Engine) RunMessagesWithContext(
 			// 召回 → 网关过滤 → 注入
 			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 				lastUserMsg := extractLastUserMessage(messages)
-				raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
+				var raw []memory.MemoryEntry
+				var err error
+				if e.MemoryEmbeddings != nil {
+					raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
+				} else {
+					raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
+				}
 				if err != nil {
-					return e.memoryFailure("recall memory", err)
+					if e.MemoryEmbeddings != nil {
+						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
+						raw = nil
+					} else {
+						return e.memoryFailure("recall memory", err)
+					}
 				}
 				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
 				filtered = e.MemoryReader.Limit(filtered)

@@ -26,6 +26,7 @@ message ListEnvVarsRequest {}
 
 message ListEnvVarsResponse {
   repeated EnvVar env_vars = 1;
+  string storage_backend = 2;
 }
 
 message UpdateEnvVarRequest {
