@@ -17,6 +17,8 @@ for (const testFile of [
   'backend-settings-page.test.ts',
   'bot-user-id-list.test.ts',
   'control-auth.test.ts',
+  'backup-download.test.ts',
+  'storage-settings-page.test.ts',
   'authenticated-resources.test.ts',
 ]) {
   const result = await build({

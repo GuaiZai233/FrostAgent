@@ -74,6 +74,13 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	if err != nil {
 		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", target.EndpointDisplayName, err)
 	}
+	if p.workload == WorkloadMemoryExtract || p.workload == WorkloadReflection {
+		var limitErr error
+		req, limitErr = limitMemoryChat(req, target.MaxInputTokens)
+		if limitErr != nil {
+			return nil, limitErr
+		}
+	}
 	req.Model = target.UpstreamModel
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
 	client.Logger = p.manager.Log()
@@ -146,6 +153,15 @@ func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duratio
 	client := openai.NewClient(endpoint.BaseURL, apiKey)
 	client.Logger = m.Log()
 	started := time.Now()
+	for _, capability := range model.Capabilities {
+		if capability == "embedding" {
+			result, err := client.Embed(context.Background(), core.EmbeddingRequest{Model: model.UpstreamModel, Input: []string{"Embedding connectivity test"}})
+			if err != nil {
+				return "", time.Since(started), err
+			}
+			return fmt.Sprintf("Embedding 已返回 %d 维向量", len(result.Vectors[0])), time.Since(started), nil
+		}
+	}
 	response, err := client.Chat(context.Background(), core.ChatRequest{
 		Model: model.UpstreamModel,
 		Messages: []core.ChatMessage{{

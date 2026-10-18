@@ -338,6 +338,10 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		} else if c != nil && c.Error() != nil {
 			m.registry.Instances[index].Enabled = false
 			m.registry.Instances[index].Error = c.Error().Error()
+		} else if info.Error != "" {
+			if err := m.update(info.ID, func(info *Info) { info.Error = "" }); err != nil {
+				i.logger.Warn(logs.SYSTEM, fmt.Sprintf("保存实例恢复状态失败: %v", err))
+			}
 		}
 	}
 	for _, info := range append([]Info{}, m.registry.Instances...) {
@@ -827,6 +831,7 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	i.runtime = r
 	i.config = c
 	i.mu.Unlock()
+	r.StartEmbeddings()
 	if m.shutdown.Err() != nil {
 		r.Stop()
 		if i.mcp != nil {
@@ -1095,6 +1100,7 @@ func (m *Manager) Copy(target, source string) error {
 		item.runtime = r
 		item.config = c
 		item.mu.Unlock()
+		r.StartEmbeddings()
 	}
 	if dst.runtime == nil || src.runtime == nil {
 		return fmt.Errorf("实例配置不可用")
