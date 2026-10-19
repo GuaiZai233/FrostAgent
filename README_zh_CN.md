@@ -134,3 +134,7 @@ SQLite 向量仅保留在内存中，重启后重建。PostgreSQL 需要部署�
 ## 许可证
 
 MPL-2.0 (see LICENSE file)
+
+## Skills 技能系统
+
+选择实例后，在 **Skills → 导入 ZIP** 上传 Claude Code、Gemini CLI 等 harness 的 SKILL.md 技能包，支持单个技能、多个技能及仓库外层目录。导入后默认禁用，启用后由 Agent 按需加载，也可使用 `/skill-name 参数` 手动调用。随包脚本仅通过已启用的隔离沙箱执行。支持范围、大小限制和专属字段兼容提示见 [Skills 文档](.frostagent/whitepaper/skills.md)。

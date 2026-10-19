@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"FrostAgent/internal/skills"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"archive/zip"
@@ -38,6 +39,11 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		return nil, err
 	}
 
+	skillPackages, err := skills.NewStore(db, instanceID).Export()
+	if err != nil {
+		return nil, err
+	}
+
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
@@ -48,6 +54,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 	}{
 		{"manifest.json", manifest},
 		{"setting.json", settings},
+		{"skills.json", skillPackages},
 		{"memory.json", memories},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},

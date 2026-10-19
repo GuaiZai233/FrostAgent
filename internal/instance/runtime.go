@@ -26,7 +26,9 @@ import (
 	"FrostAgent/internal/service/messages"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
+	skillservice "FrostAgent/internal/service/skills"
 	stickersvc "FrostAgent/internal/service/sticker"
+	"FrostAgent/internal/skills"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"FrostAgent/internal/tools"
@@ -189,6 +191,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflections := memory.NewReflectionManager(reflector)
 	reflections.Scope = scope
 
+	var skillStore *skills.Store
+	if db != nil {
+		skillStore = skills.NewStore(db, instanceID)
+	}
+
 	// Register tools
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
@@ -279,6 +286,14 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 	}
 
+	var skillBackend sandbox.Backend
+	if dynamicSandbox != nil {
+		skillBackend = dynamicSandbox
+	}
+	for _, tool := range tools.SkillTools(skillStore, skillBackend, sessionManager) {
+		registry[tool.Name()] = tool
+	}
+
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
 		executorMap[name] = tool
@@ -323,6 +338,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		Skills:         skillStore,
 		SandboxBackend: dynamicSandbox,
 		Security:       securityController,
 		InstanceID:     instanceID,
@@ -362,6 +378,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	mux := http.NewServeMux()
+	if skillStore != nil {
+		mux.Handle("/api/skills", skillservice.New(skillStore, mcpGetenv))
+		mux.Handle("/api/skills/", skillservice.New(skillStore, mcpGetenv))
+	}
 	// ConnectRPC 服务注册
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version, wsListenAddr))
 	mux.Handle(botPath, botHandler)

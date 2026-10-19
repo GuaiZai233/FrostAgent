@@ -184,6 +184,13 @@ var migrations = []migration{
 		`ALTER TABLE memory_entries ADD COLUMN summary_dirty INTEGER NOT NULL DEFAULT 0`}},
 	// Development branches previously shared v12 with different schemas.
 	{13, nil},
+	// Preserve Skills data already created by the development v12 branch.
+	{14, []string{`CREATE TABLE IF NOT EXISTS skills (
+		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+		name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
+		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
+		size_bytes INTEGER NOT NULL, PRIMARY KEY (instance_id, name)
+	)`}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

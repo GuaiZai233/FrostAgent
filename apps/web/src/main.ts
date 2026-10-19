@@ -37,6 +37,10 @@ const mountActionsCatPage = lazyMount(() =>
   import('./pages/actionscat').then(({ mountActionsCatPage }) => mountActionsCatPage),
 );
 
+const mountSkillsPage = lazyMount(() =>
+  import('./pages/skills').then(({ mountSkillsPage }) => mountSkillsPage),
+);
+
 // Initialize Theme
 themeManager.init();
 
@@ -48,6 +52,7 @@ const navItems = [
   { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
+  { path: '/skills', label: 'Skills', iconName: 'sparkles' },
   { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
   { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
@@ -262,6 +267,7 @@ function initAppShell(): void {
   router.register('/dialogue', '人格设定', mountDialoguePage);
   router.register('/prompt', '会话与 Prompt', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
+  router.register('/skills', 'Skills', mountSkillsPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
   router.register('/settings/storage', '数据库设置', mountStorageSettingsPage);

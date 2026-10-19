@@ -251,6 +251,7 @@ func (f *DeliveryFailure) FormatDeliveryContext() string {
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
+	activeSkills   map[string]activeSkill
 	ConversationID string
 	History        []ChatMessage
 	CreatedAt      time.Time
@@ -993,6 +994,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	}
 
 	s.History = nil
+	s.activeSkills = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
@@ -2482,6 +2484,7 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.activeSkills = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil

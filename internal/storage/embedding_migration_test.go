@@ -15,6 +15,7 @@ func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 	for _, statement := range []string{
 		`INSERT INTO provider_endpoints(id,display_name,base_url,api_key_source,enabled,position) VALUES ('synthetic-provider','Synthetic','https://model.invalid/v1','manual',1,0)`,
 		`INSERT INTO provider_models(id,display_name,endpoint_id,upstream_model,enabled,capabilities,position) VALUES ('synthetic-model','Synthetic','synthetic-provider','synthetic-model',1,'[]',0)`,
+		`DROP TABLE skills`,
 		`CREATE TABLE skills (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, info_json TEXT NOT NULL,
 		body TEXT NOT NULL, package_json TEXT NOT NULL, size_bytes INTEGER NOT NULL,

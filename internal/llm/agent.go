@@ -12,6 +12,7 @@ import (
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/skills"
 	"context"
 	"errors"
 	"fmt"
@@ -146,6 +147,7 @@ type Engine struct {
 
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
+	Skills     *skills.Store
 
 	// Sandbox integration (optional, nil = sandbox disabled)
 	SandboxBackend sandbox.Backend
@@ -756,6 +758,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		modelName = target.UpstreamModel
 	}
 
+	if err := e.activateRequestedSkill(ctx, messages); err != nil {
+		return AgentRunResult{Content: err.Error(), Error: err}
+	}
+
 	// 主循环
 	maxIterations := e.EffectiveMaxIterations()
 	baseMaxIterations := maxIterations
@@ -791,6 +797,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
+		if e.Skills != nil {
+			var skillErr error
+			messages, skillErr = e.skillMessages(ctx, messages)
+			if skillErr != nil {
+				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
+			}
+			if sess := e.skillSession(ctx); sess != nil {
+				var system []string
+				for _, message := range messages {
+					if message.Role == "system" {
+						if content, ok := message.Content.(string); ok {
+							system = append(system, content)
+						}
+					}
+				}
+				sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
+			}
+		}
 		modelTools := e.EffectiveTools()
 		if hasRunCtx && runCtx.Proactive {
 			var proactiveTools []core.Tool

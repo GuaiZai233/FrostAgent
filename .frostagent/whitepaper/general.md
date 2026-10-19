@@ -7,6 +7,8 @@
 全局安全控制体系见 [security-controls.md](security-controls.md)，涵盖可信身份、全局锁定、Watchdog、统一工具门禁与评估入口。
 计费系统设计见 [count.md](count.md)；记忆系统设计见 [memory.md](memory.md)；ActionsCat 自动化任务与沙箱集成体系见 [actionscat.md](actionscat.md)。
 
+技能系统与 ZIP 导入见 [skills.md](skills.md)。
+
 ### 当前服务端设置界面与生效边界
 
 当前 SQL 版本把常规设置保存在数据库 `settings` 表中，管理界面使用中文名称和按类型选择的输入框、数值框、圆形开关。群聊回复、主动回复、机器人名称、上下文消息数、记忆提取阈值、ActionsCat 连接参数，以及大部分全局安全与沙箱设置直接更新现有运行对象，不停止实例或断开已有连接。需要在构造时装配的适配器、计费和部分压缩参数保存后由实例管理器自动重载；界面逐项标明这一点。
