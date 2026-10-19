@@ -41,6 +41,24 @@ func postgresMigrationConfig(t *testing.T) Config {
 	return Config{Backend: Postgres, DSN: parsed.String()}
 }
 
+func TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage(t *testing.T) {
+	config := postgresMigrationConfig(t)
+	for startup := range 2 {
+		db, err := OpenWithConfig(context.Background(), t.TempDir(), config)
+		if err != nil {
+			t.Fatalf("startup %d without embedding tables: %v", startup, err)
+		}
+		var exists bool
+		err = db.SQL.QueryRow(`SELECT pg_catalog.to_regclass('memory_embeddings') IS NOT NULL
+			OR pg_catalog.to_regclass('memory_embedding_scopes') IS NOT NULL`).Scan(&exists)
+		ready := db.EmbeddingStorageReady.Load()
+		closeErr := db.Close()
+		if err != nil || closeErr != nil || exists || ready {
+			t.Fatalf("ordinary startup created embedding storage: exists=%v ready=%v query=%v close=%v", exists, ready, err, closeErr)
+		}
+	}
+}
+
 func TestPostgresMigrationPreservesData(t *testing.T) {
 	ctx := context.Background()
 	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13} {
