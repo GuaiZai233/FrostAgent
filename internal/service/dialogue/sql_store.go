@@ -9,8 +9,8 @@ import (
 )
 
 func LoadExamplesSQL(db *storage.DB, instanceID string) ([]llm.DialogueExample, error) {
-	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT id, scene, relation,
-		user_text, preferred FROM dialogues WHERE instance_id = ? ORDER BY position`), instanceID)
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT id, user_text, preferred
+		FROM dialogues WHERE instance_id = ? ORDER BY position`), instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -19,7 +19,7 @@ func LoadExamplesSQL(db *storage.DB, instanceID string) ([]llm.DialogueExample, 
 	for rows.Next() {
 		var id string
 		var example llm.DialogueExample
-		if err := rows.Scan(&id, &example.Scene, &example.Relation, &example.User, &example.Preferred); err != nil {
+		if err := rows.Scan(&id, &example.User, &example.Preferred); err != nil {
 			return nil, err
 		}
 		example.ID = id
@@ -51,9 +51,8 @@ func WriteExamplesTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID
 			id = fmt.Sprint(example.ID)
 		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO dialogues
-			(instance_id, position, id, scene, relation, user_text, preferred)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`), instanceID, position, id,
-			example.Scene, example.Relation, example.User, example.Preferred); err != nil {
+			(instance_id, position, id, user_text, preferred)
+			VALUES (?, ?, ?, ?, ?)`), instanceID, position, id, example.User, example.Preferred); err != nil {
 			return err
 		}
 	}
