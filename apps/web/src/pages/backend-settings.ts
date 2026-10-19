@@ -87,6 +87,26 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             </div>
           </div>
 
+          <div class="mb-4 pb-4 border-b border-border" id="poke-card">
+            <div class="flex items-center gap-2.5 mb-3">
+              <label class="toggle-switch"><input type="checkbox" id="poke-enabled" role="switch" aria-label="允许发送戳一戳行为" /><span aria-hidden="true"></span></label>
+              <label for="poke-enabled" class="text-xs font-semibold text-foreground">允许发送戳一戳行为</label>
+            </div>
+            <div id="poke-controls" class="flex flex-col gap-2.5">
+              <label for="poke-custom-text" class="text-xs font-medium">行为附加自定义文本</label>
+              <p id="poke-text-description" class="text-[11px] text-muted">一旦Bot被戳，发送给LLM的附加消息。</p>
+              <input type="text" id="poke-custom-text" class="input input-sm settings-default-input w-full min-w-0" placeholder="的..." aria-describedby="poke-text-description poke-preview" />
+              <p id="poke-preview" class="text-[11px] text-muted break-all" aria-live="polite"></p>
+              <div class="flex items-center gap-2 flex-wrap">
+                <label for="poke-cooldown" class="text-xs font-medium">冷却时间</label>
+                <input type="number" id="poke-cooldown" class="input input-sm settings-default-input font-mono" style="width: 6rem; flex: none;" min="0" max="86400" step="1" placeholder="30" />
+                <span class="text-xs text-muted">秒</span>
+              </div>
+              <p class="text-[11px] text-muted">每个群/私聊独立冷却，同一群内所有人共享。默认 30 秒，0 表示不冷却；冷却期间不会向 LLM 发送消息。</p>
+            </div>
+            <p class="text-[11px] text-muted mt-2">此行为会被雪花计费。</p>
+          </div>
+
           <!-- Proactive Reply Section -->
           <div class="mb-4 pb-4 border-b border-border" id="proactive-reply-card">
             <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -319,6 +339,17 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   const extraKey = element<HTMLInputElement>('extra-env-key');
   const extraValue = element<HTMLInputElement>('extra-env-value');
   const extraAdd = element<HTMLButtonElement>('extra-env-add');
+  const pokeEnabled = element<HTMLInputElement>('poke-enabled');
+  const pokeText = element<HTMLInputElement>('poke-custom-text');
+  const pokeCooldown = element<HTMLInputElement>('poke-cooldown');
+  function updatePokePreview(): void {
+    const text = pokeText.value.trim();
+    element<HTMLElement>('poke-preview').textContent = '发送预览：user:（用户戳了戳你' + (text ? ' ' + text : '') + '）';
+  }
+  function updatePokeControls(): void {
+    pokeText.disabled = pokeCooldown.disabled = !pokeEnabled.checked;
+    element<HTMLElement>('poke-controls').style.opacity = pokeEnabled.checked ? '1' : '0.55';
+  }
   const proactive = element<HTMLInputElement>('proactive-reply-cb');
   const probability = element<HTMLInputElement>('proactive-reply-number');
   const probabilitySlider = element<HTMLInputElement>('proactive-reply-slider');
@@ -341,6 +372,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
   }
   const numericControls: Record<string, HTMLInputElement> = {
+    POKE_COOLDOWN_SECONDS: pokeCooldown,
     PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
     QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
   };
@@ -459,6 +491,11 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function renderControls(): void {
     if (!draft) return;
     const value = (key: string) => draft!.get(key);
+    pokeEnabled.checked = value('ENABLE_POKE') === 'true';
+    pokeText.value = value('POKE_CUSTOM_TEXT');
+    pokeCooldown.value = value('POKE_COOLDOWN_SECONDS');
+    updatePokePreview();
+    updatePokeControls();
     embeddingToggle.checked = value('ENABLE_EMBEDDING') === 'true';
     updateEmbeddingWarning();
     proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
@@ -644,6 +681,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   const binds: Record<string, string> = {
+    'poke-enabled': 'ENABLE_POKE',
     'embedding-enabled': 'ENABLE_EMBEDDING',
     'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
     'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
@@ -653,11 +691,17 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     const input = element<HTMLInputElement>(id);
     input.addEventListener('change', () => {
       change(key, input.checked ? 'true' : 'false');
+      if (input === pokeEnabled) updatePokeControls();
       if (input === embeddingToggle) updateEmbeddingWarning();
       if (input === quote) quoteDepth.disabled = !quote.checked;
     });
   }
+  pokeText.addEventListener('input', () => {
+    change('POKE_CUSTOM_TEXT', pokeText.value);
+    updatePokePreview();
+  });
   const texts: Record<string, string> = {
+    'poke-cooldown': 'POKE_COOLDOWN_SECONDS',
     'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
   };
   for (const [id, key] of Object.entries(texts)) {

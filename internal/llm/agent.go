@@ -9,6 +9,7 @@ import (
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/poke"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
@@ -111,6 +112,7 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
+	PokeGate poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -376,7 +377,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.3",
+    "0.1.4",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -430,14 +431,25 @@ class FrostAgentAdapter(Star):
                     if previous is not None and previous != payload["user_id"]:
                         self._bot_loop_interrupted.add(session_key)
 
-                if not payload.get("content") and not payload.get("attachments"):
+                is_poke = payload.get("event_type") == "notice"
+                if is_poke and (
+                    payload.get("notice_type") != "notify" or payload.get("sub_type") != "poke"
+                    or not payload.get("self_id") or payload.get("target_id") != payload["self_id"]
+                    or payload.get("user_id") == payload["self_id"]
+                ):
+                    return
+                if is_poke:
+                    # A poke is owned by FrostAgent even when routing rejects it,
+                    # transport fails, or the response times out.
+                    event.should_call_llm(True)
+                if not is_poke and not payload.get("content") and not payload.get("attachments"):
                     is_group_interaction = payload.get("message_type") == "group" and (
                         payload.get("is_wake") or payload.get("is_at")
                     )
                     if not is_group_interaction:
                         return
 
-                if session_key and not self.settings.forward_all_group_messages:
+                if session_key and not is_poke and not self.settings.forward_all_group_messages:
                     if not payload.get("is_wake") and not payload.get("is_at"):
                         return
 
@@ -453,7 +465,7 @@ class FrostAgentAdapter(Star):
                     self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
-            frostagent_replied = False
+            frostagent_replied = is_poke
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)
@@ -482,7 +494,7 @@ class FrostAgentAdapter(Star):
                 # 防止下游产生回复、产生 Token 消耗及污染会话历史；
                 # 若为普通群聊压缩缓冲的 noop，则保持原有事件传播语义。
                 if action.get("action") == "noop":
-                    if action.get("subtype") == "admin_silent_drop" or action.get("suppress_llm"):
+                    if (action.get("subtype") == "admin_silent_drop" or action.get("suppress_llm")) and not frostagent_replied:
                         event.should_call_llm(True)
                     break
 
@@ -529,6 +541,24 @@ class FrostAgentAdapter(Star):
 
 async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     """从 AstrBot 事件中构造符合 FrostAgent 专有协议的 Event 结构。"""
+    raw_event = first_attr(getattr_chain(event, "message_obj"), "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    if _extract_platform_name(event) == "aiocqhttp" and isinstance(raw_event, dict) and raw_event.get("post_type") == "notice":
+        group_id = str(raw_event.get("group_id") or "")
+        return {
+            "type": "event", "event_type": "notice",
+            "notice_type": str(raw_event.get("notice_type") or ""),
+            "sub_type": str(raw_event.get("sub_type") or ""),
+            "self_id": str(raw_event.get("self_id") or ""),
+            "target_id": str(raw_event.get("target_id") or ""),
+            "user_id": str(raw_event.get("user_id") or ""),
+            "group_id": group_id,
+            "message_type": "group" if group_id else "private",
+            "platform": "aiocqhttp",
+            "message_id": str(getattr_chain(event, "message_obj", "message_id") or uuid.uuid4().hex),
+            "content": "", "attachments": [], "timestamp": int(time.time()),
+        }
     user_id = extract_sender_id(event)
     group_id = extract_group_id(event)
     message_type = "group" if group_id else "private"

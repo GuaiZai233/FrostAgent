@@ -180,6 +180,73 @@ def load_plugin_module():
         yield module
 
 
+class PokeTests(unittest.TestCase):
+    def test_poke_notice_preserves_actor_and_target_without_fake_content(self):
+        with load_plugin_module() as module:
+            event = InboundEvent([])
+            event.platform = "aiocqhttp"
+            event.message_obj.raw_message = {
+                "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 101, "target_id": 101, "user_id": 202, "group_id": 404,
+            }
+            event.message_obj.message_id = "notice-test"
+            payload = asyncio.run(module.build_frostagent_payload(event))
+            self.assertEqual(payload["event_type"], "notice")
+            self.assertEqual(payload["user_id"], "202")
+            self.assertEqual(payload["target_id"], payload["self_id"])
+            self.assertEqual(payload["group_id"], "404")
+            self.assertEqual(payload["message_type"], "group")
+            self.assertEqual(payload["content"], "")
+            self.assertEqual(payload["attachments"], [])
+            event.message_obj.raw_message.pop("group_id")
+            payload = asyncio.run(module.build_frostagent_payload(event))
+            self.assertEqual(payload["message_type"], "private")
+
+    def test_poke_forwarding_bypasses_empty_content_filter_and_finishes_noop(self):
+        async def run(module, target_id, send_succeeds=True):
+            event = InboundEvent([])
+            event.platform = "aiocqhttp"
+            event.message_obj.raw_message = {
+                "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 101, "target_id": target_id, "user_id": 202, "group_id": 404,
+            }
+            event.message_obj.message_id = "notice-test"
+            event.get_group_id = lambda: "404"
+            suppressed = []
+            event.should_call_llm = suppressed.append
+
+            test_case = self
+            class Client:
+                sent = []
+                def register_waiter(self, message_id):
+                    self.queue = asyncio.Queue()
+                    return self.queue
+                async def send_event(self, payload):
+                    test_case.assertEqual(suppressed, [True], "suppress default LLM before forwarding")
+                    self.sent.append(payload)
+                    if not send_succeeds:
+                        return False
+                    await self.queue.put({"action": "noop", "suppress_llm": False})
+                    return True
+                def unregister_waiter(self, message_id):
+                    pass
+
+            plugin = object.__new__(module.FrostAgentAdapter)
+            plugin._configuration_error = None
+            plugin.settings = types.SimpleNamespace(forward_all_group_messages=False)
+            plugin.client = Client()
+            plugin.client.sent = []
+            results = [result async for result in plugin.forward_to_frostagent(event)]
+            self.assertEqual(results, [])
+            self.assertEqual(len(plugin.client.sent), 1 if target_id == 101 else 0)
+            self.assertEqual(suppressed, [True] if target_id == 101 else [])
+
+        with load_plugin_module() as module:
+            asyncio.run(run(module, 101))
+            asyncio.run(run(module, 303))
+            asyncio.run(run(module, 101, send_succeeds=False))
+
+
 class MessageComponentTests(unittest.TestCase):
 
     def test_instance_sticker_endpoint_keeps_prefix_and_origin(self) -> None:

@@ -365,6 +365,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			if event.PostType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+				var accepted bool
+				event, accepted = a.normalizePoke(event, wsConn.mock)
+				if !accepted {
+					continue
+				}
+			}
+
 			var warningNotice string
 			var botLoopSoft bool
 			var botLoopObservation *llm.BotLoopObservation
@@ -377,7 +385,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if !wsConn.mock {
 					a.engine.RecordIncomingMessage()
 				}
-				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
+				if event.PokeID == "" {
+					wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
+				}
 				var scope *runtimescope.Scope
 				if a.engine != nil {
 					scope = a.engine.Scope

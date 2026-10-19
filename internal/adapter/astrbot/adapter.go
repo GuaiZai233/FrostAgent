@@ -343,6 +343,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				continue
 			}
+
+			if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+				normalized, accepted := a.normalizePoke(event, c.mock)
+				if !accepted {
+					_ = sendTerminalNoopWithSuppress(event, c)
+					continue
+				}
+				event = normalized
+			}
 			if !c.mock && (event.Type == "" || event.Type == "event") &&
 				(event.EventType == "" || event.EventType == "message") &&
 				(event.MessageType == "group" || event.MessageType == "private") {
@@ -400,7 +409,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				principal, principalErr := security.NewPrincipal(platform, event.UserID)
 				if principalErr != nil {
 					botLoopObservation.Finish(false, botLoopConfig.Limit())
-					if isProactiveReply(&event) {
+					if isProactiveReply(&event) || event.pokeID != "" {
 						_ = sendTerminalNoopWithSuppress(event, c)
 					}
 					continue
@@ -436,7 +445,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					if directReply {
 						msg := a.engine.Security.RejectMessage(principal, decision)
 						_ = sendDirectReply(event, c, msg)
-					} else if isProactiveReply(&event) {
+					} else if isProactiveReply(&event) || event.pokeID != "" {
 						_ = sendTerminalNoopWithSuppress(event, c)
 					}
 					continue
@@ -481,10 +490,13 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if routeSnapshot != nil {
 				if err := routeSnapshot.LoadError(); err != nil {
 					a.engine.PauseOnStorageError(err)
+					if event.pokeID != "" {
+						_ = sendTerminalNoopWithSuppress(event, c)
+					}
 					continue
 				}
 				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
-					if isProactiveReply(&event) {
+					if isProactiveReply(&event) || event.pokeID != "" {
 						_ = sendTerminalNoopWithSuppress(event, c)
 					}
 					continue
@@ -548,7 +560,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if turn != nil {
 					turn.Done()
 				}
-				if isProactiveReply(&event) {
+				if isProactiveReply(&event) || event.pokeID != "" {
 					_ = sendTerminalNoopWithSuppress(event, c)
 				}
 			}

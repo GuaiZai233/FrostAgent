@@ -17,6 +17,9 @@ func buildResponseContext(
 	if event.MessageType == "private" {
 		triggers = append(triggers, "private_message")
 	} else {
+		if wakeSignals.Poke {
+			triggers = append(triggers, "poke")
+		}
 		if wakeSignals.AtBot {
 			triggers = append(triggers, "at")
 		}

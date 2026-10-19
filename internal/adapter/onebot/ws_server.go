@@ -215,7 +215,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
-	if event.PostType != "message" {
+	if event.PostType != "message" || (event.PokeID != "" && engine.Getenv("ENABLE_POKE") != "true") {
 		return
 	}
 	var notice string
@@ -723,6 +723,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		var billingState *llm.BillingRunState
 		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
+			if event.PokeID != "" {
+				taskID = fmt.Sprintf("qq_%d_%s", event.UserID, event.PokeID)
+			}
 			billingState = &llm.BillingRunState{
 				Platform:      "qq",
 				ExternalID:    strconv.FormatInt(event.UserID, 10),
