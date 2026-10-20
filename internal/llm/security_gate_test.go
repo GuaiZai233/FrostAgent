@@ -82,6 +82,9 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-001",
 	})
+	if result.LLMFailed {
+		t.Fatal("security classifier failure must not be classified as dialogue LLM failure")
+	}
 	want := "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
 	if result.Content != want {
 		t.Fatalf("expected classifier failure message %q, got %q", want, result.Content)

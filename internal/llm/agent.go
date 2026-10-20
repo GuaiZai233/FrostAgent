@@ -80,6 +80,7 @@ type AgentRunResult struct {
 	OutputBlocked    bool
 	Usage            core.Usage
 	Error            error
+	LLMFailed        bool // Dialogue route resolution or provider call failed; excludes security, billing, and tool errors.
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
@@ -753,8 +754,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content: fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
-				Error:   err,
+				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Error:     err,
+				LLMFailed: true,
 			}
 		}
 		modelName = target.UpstreamModel
@@ -992,6 +994,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         err,

@@ -36,6 +36,7 @@ type Adapter struct {
 	mu                 sync.RWMutex
 	conns              map[*wsConnection]struct{}
 	incomingDispatcher core.IncomingDispatcher
+	llmErrorReplies    llmErrorReplyLimiter
 }
 
 // NewAdapter 创建一个新的 OneBot 适配器实例。
@@ -272,6 +273,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn = newWSConnection(conn)
 		}
 		wsConn.stealer = a.stealer
+		wsConn.llmErrorReplies = &a.llmErrorReplies
 		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
 			wsConn.mock = true
 		}
