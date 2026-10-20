@@ -64,3 +64,46 @@ func TestPokeMessageAndCooldownDefaults(t *testing.T) {
 		t.Fatal("poke task identifiers collided")
 	}
 }
+
+func TestReadyDoesNotReserveOrExtendCooldown(t *testing.T) {
+	var gate Gate
+	now := time.Now()
+	for range 3 {
+		if !gate.Ready("group", now, 30*time.Second) {
+			t.Fatal("eligibility checks reserved cooldown")
+		}
+	}
+	if !gate.Allow("group", now, 30*time.Second) {
+		t.Fatal("first accepted request blocked")
+	}
+	if gate.Ready("group", now.Add(29*time.Second), 30*time.Second) {
+		t.Fatal("cooldown lost")
+	}
+	if !gate.Ready("group", now.Add(30*time.Second), 30*time.Second) {
+		t.Fatal("checks extended cooldown")
+	}
+}
+func TestConcurrentReadyStillNeedsAtomicAdmission(t *testing.T) {
+	var gate Gate
+	now := time.Now()
+	start := make(chan struct{})
+	var checked, done sync.WaitGroup
+	var admitted atomic.Int32
+	checked.Add(64)
+	for range 64 {
+		done.Go(func() {
+			ready := gate.Ready("group", now, 30*time.Second)
+			checked.Done()
+			<-start
+			if ready && gate.Allow("group", now, 30*time.Second) {
+				admitted.Add(1)
+			}
+		})
+	}
+	checked.Wait()
+	close(start)
+	done.Wait()
+	if admitted.Load() != 1 {
+		t.Fatalf("admitted %d concurrent eligible requests", admitted.Load())
+	}
+}

@@ -42,6 +42,15 @@ type Gate struct {
 	last map[string]time.Time
 }
 
+// Ready checks an existing cooldown without reserving or extending it.
+// Callers must still use Allow after eligibility checks for atomic admission.
+func (g *Gate) Ready(key string, now time.Time, cooldown time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	last, ok := g.last[key]
+	return !ok || now.Sub(last) >= cooldown
+}
+
 func (g *Gate) Allow(key string, now time.Time, cooldown time.Duration) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

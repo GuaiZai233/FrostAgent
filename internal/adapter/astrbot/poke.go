@@ -27,15 +27,11 @@ func (a *Adapter) normalizePoke(event Event, mock bool) (Event, bool) {
 		(event.MessageType == "private" && event.GroupID != "") {
 		return event, false
 	}
-	conversation := fmt.Sprintf("qq:%s:private:%s", event.SelfID, event.UserID)
-	if event.MessageType == "group" {
-		conversation = fmt.Sprintf("qq:%s:group:%s", event.SelfID, event.GroupID)
-	}
-	if !a.engine.PokeGate.Allow(conversation, time.Now(), poke.Cooldown(a.engine.Getenv)) {
+	if !a.engine.PokeGate.Ready(pokeConversation(event), time.Now(), poke.Cooldown(a.engine.Getenv)) {
 		return event, false
 	}
 	return Event{
-		Type: "event", EventType: "message", MessageID: event.MessageID,
+		Type: "event", EventType: "message", MessageID: event.MessageID, SelfID: event.SelfID,
 		Platform: event.Platform, MessageType: event.MessageType,
 		GroupID: event.GroupID, UserID: event.UserID, SenderName: event.SenderName,
 		SenderCard: event.SenderCard, GroupName: event.GroupName,
@@ -51,4 +47,17 @@ func (event Event) replyMessageID() string {
 		return ""
 	}
 	return event.MessageID
+}
+
+// admitPoke reserves cooldown only after ingress and dialogue eligibility pass.
+func (a *Adapter) admitPoke(event Event) bool {
+	return a.engine.Getenv("ENABLE_POKE") == "true" &&
+		a.engine.PokeGate.Allow(pokeConversation(event), time.Now(), poke.Cooldown(a.engine.Getenv))
+}
+
+func pokeConversation(event Event) string {
+	if event.MessageType == "group" {
+		return fmt.Sprintf("qq:%s:group:%s", event.SelfID, event.GroupID)
+	}
+	return fmt.Sprintf("qq:%s:private:%s", event.SelfID, event.UserID)
 }

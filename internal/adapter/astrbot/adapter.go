@@ -467,7 +467,24 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
 				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
-			botLoopExceeded := botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+			var botLoopExceeded bool
+			if event.pokeID != "" {
+				var admitted bool
+				botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
+					botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
+						return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
+					},
+				)
+				if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
+					if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
+						a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+					}
+					_ = sendTerminalNoopWithSuppress(event, c)
+					continue
+				}
+			} else {
+				botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+			}
 			if botLoopExceeded && !botLoopConfig.Hard() {
 				event.botLoopSoft = true
 			}

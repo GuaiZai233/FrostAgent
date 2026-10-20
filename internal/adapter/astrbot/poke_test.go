@@ -4,6 +4,8 @@ import (
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/security"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/websocket"
@@ -40,6 +42,9 @@ func TestNormalizePokeFiltersAndCooldown(t *testing.T) {
 	normalized, ok := a.normalizePoke(e, false)
 	if !ok || normalized.Content != "（用户戳了戳你）" || normalized.pokeID == "" || normalized.replyMessageID() != "" || normalized.Metadata != nil || len(normalized.Attachments) > 0 {
 		t.Fatalf("bad normalization: %+v", normalized)
+	}
+	if !a.admitPoke(normalized) {
+		t.Fatal("eligible poke must reserve cooldown")
 	}
 	e.UserID = "303"
 	if _, ok := a.normalizePoke(e, false); ok {
@@ -227,5 +232,178 @@ func TestWSPokeBillingAndFailureClosed(t *testing.T) {
 				t.Fatalf("billing failure boundary: model=%d reserves=%d commits=%d", len(provider.requests), reserves.Load(), commits.Load())
 			}
 		})
+	}
+}
+
+func TestWSPokeSecurityRejectionDoesNotConsumeCooldown(t *testing.T) {
+	t.Setenv("ENABLE_POKE", "true")
+	t.Setenv("POKE_COOLDOWN_SECONDS", "30")
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeOff)
+	principal, err := security.NewPrincipal("aiocqhttp", "202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Security.Lock(principal, "synthetic test lock"); err != nil {
+		t.Fatal(err)
+	}
+	srv, _, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.WriteJSON(pokeNotice()); err != nil {
+		t.Fatal(err)
+	}
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+		t.Fatalf("missing security result: %+v", action)
+	}
+	provider.mu.Lock()
+	count := len(provider.requests)
+	provider.mu.Unlock()
+	if count != 0 {
+		t.Fatal("locked actor invoked dialogue")
+	}
+	valid := pokeNotice()
+	valid.UserID = "303"
+	valid.MessageID = "valid-after-rejection"
+	if err := conn.WriteJSON(valid); err != nil {
+		t.Fatal(err)
+	}
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+		t.Fatalf("valid actor must wake after rejected poke: %+v", action)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 1 {
+		t.Fatalf("valid poke after rejected actor: dialogue calls=%d", len(provider.requests))
+	}
+}
+
+type pokeTestDispatcher struct{ calls atomic.Int32 }
+
+func (*pokeTestDispatcher) IsConfigured() bool { return true }
+func (d *pokeTestDispatcher) DispatchIncoming(context.Context, core.IncomingMessage) error {
+	d.calls.Add(1)
+	return nil
+}
+
+// Each server in these tests receives exactly one connection.
+func startPokeAdapterServer(adapter *Adapter) (*httptest.Server, string, <-chan struct{}) {
+	done := make(chan struct{})
+	handler := adapter.Handler()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(done)
+		handler(w, r)
+	}))
+	return server, "ws" + strings.TrimPrefix(server.URL, "http"), done
+}
+func closePokeConnection(t *testing.T, conn *websocket.Conn, done <-chan struct{}) {
+	t.Helper()
+	if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("adapter did not finish rejected notification")
+	}
+}
+func TestWSPokeIneligibleDoesNotConsumeOrDispatch(t *testing.T) {
+	for _, reason := range []string{"group-disabled", "route-disabled"} {
+		t.Run(reason, func(t *testing.T) {
+			t.Setenv("ENABLE_POKE", "true")
+			t.Setenv("POKE_COOLDOWN_SECONDS", "30")
+			provider := &mockLLMProvider{}
+			engine := newTestEngine(provider)
+			if reason == "group-disabled" {
+				t.Setenv("GROUP_REPLY_ON_MENTION", "false")
+			} else {
+				engine.ModelRouter = modelrouter.New(filepath.Join(t.TempDir(), "router.json"))
+			}
+			dispatch := &pokeTestDispatcher{}
+			adapter := NewAdapter(engine)
+			adapter.SetIncomingDispatcher(dispatch)
+			server, wsURL, done := startPokeAdapterServer(adapter)
+			defer server.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.WriteJSON(pokeNotice()); err != nil {
+				t.Fatal(err)
+			}
+			action := readBotLoopAction(t, conn)
+			if action.Action != "noop" || !action.SuppressLLM {
+				t.Fatalf("ineligible poke must terminate: %+v", action)
+			}
+			closePokeConnection(t, conn, done)
+			if dispatch.calls.Load() != 0 {
+				t.Fatal("ineligible poke dispatched externally")
+			}
+			// The handler has returned, so changing the route pointer cannot race reads.
+			engine.ModelRouter = nil
+			if reason == "group-disabled" {
+				t.Setenv("GROUP_REPLY_ON_MENTION", "true")
+			}
+			server2, wsURL2, _ := startPokeAdapterServer(adapter)
+			defer server2.Close()
+			conn2, _, err := websocket.DefaultDialer.Dial(wsURL2, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn2.Close()
+			valid := pokeNotice()
+			valid.UserID = "303"
+			valid.MessageID = "valid-after-ineligible"
+			if err := conn2.WriteJSON(valid); err != nil {
+				t.Fatal(err)
+			}
+			if action := readBotLoopAction(t, conn2); action.Action != "send_message" {
+				t.Fatalf("valid poke blocked by old cooldown: %+v", action)
+			}
+			provider.mu.Lock()
+			defer provider.mu.Unlock()
+			if len(provider.requests) != 1 || dispatch.calls.Load() != 1 {
+				t.Fatalf("expected only one eligible dispatch/dialogue: requests=%d dispatches=%d", len(provider.requests), dispatch.calls.Load())
+			}
+		})
+	}
+}
+func TestWSPokeHardDropDoesNotDispatch(t *testing.T) {
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{
+		"ENABLE_POKE": "true", "POKE_COOLDOWN_SECONDS": "0", "BOT_LOOP_USER_IDS": "202", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
+	})
+	dispatch := &pokeTestDispatcher{}
+	adapter := NewAdapter(engine)
+	adapter.SetIncomingDispatcher(dispatch)
+	server, wsURL, done := startPokeAdapterServer(adapter)
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(pokeNotice()); err != nil {
+		t.Fatal(err)
+	}
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+		t.Fatalf("first poke must reply: %+v", action)
+	}
+	if err := conn.WriteJSON(pokeNotice()); err != nil {
+		t.Fatal(err)
+	}
+	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
+		t.Fatalf("hard drop must suppress LLM: %+v", action)
+	}
+	closePokeConnection(t, conn, done)
+	if dispatch.calls.Load() != 1 {
+		t.Fatalf("hard-rejected poke dispatched: %d", dispatch.calls.Load())
 	}
 }
