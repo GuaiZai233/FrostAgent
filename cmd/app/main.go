@@ -175,9 +175,10 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 			return
 		}
 		peer := r.RemoteAddr
-		// Container builds isolate this listener behind the authenticated gateway.
-		trustedLocalGateway := instanceconfig.ManagementLoopbackOnly == "true" && isLoopbackHost(peer)
-		if !trustedLocalGateway && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
+		// Container builds isolate this listener on loopback shared with the connector.
+		// Authentication belongs to the deployment's Cloudflare Access policy.
+		trustedLocalConnector := instanceconfig.ManagementLoopbackOnly == "true" && isLoopbackHost(peer)
+		if !trustedLocalConnector && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
 			peer = "remote-management"
 		}
 		w.Header().Set("Cache-Control", "no-store")

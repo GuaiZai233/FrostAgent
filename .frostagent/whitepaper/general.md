@@ -23,15 +23,17 @@
 
 ### Docker 部署
 
-根目录 `Dockerfile` 分别构建 TypeScript 前端和 Go protobuf，并将前端嵌入 `cmd/app` 静态二进制。运行镜像以 UID/GID `10001:10001` 启动，提供 CA 证书和时区数据；数据统一挂载到 `/app/data`，默认 Compose 使用命名卷，同时保存 SQL 引导信息与贴图字节。
+管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-Compose 使用 Caddy HTTPS Basic Auth 代理，管理页面、API 与控制台 WebSocket 一律要求认证；无默认密码，部署前必须设置用户名与 bcrypt 密码哈希。代理与后端共享网络空间，后端默认仅在 `127.0.0.1:8081` 提供管理服务，代理关闭自身管理 API，并在认证后移除 Basic Authorization 请求头。其他同网络容器无法直接访问后端管理监听；独立的 `0.0.0.0:1234` 仍只提供适配器 WebSocket。TLS 本地 CA 在独立命名卷中保存。
+默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:1234`，宿主机仅发布到 `127.0.0.1:1234`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
 
-镜像通过 Go 链接参数启用管理监听隔离校验：SQL 配置优先，但管理地址必须使用数值回环 IP，并与适配器使用不同端口；启动、热更新和数据库切换时先校验再监听，拒绝存量或新增配置绕过代理。普通构建保持原有默认值与监听能力，不引入应用环境变量配置源或数据库迁移。Compose 默认仅向宿主机 `127.0.0.1` 发布 HTTPS 和适配器端口；已有 Host、Origin 与后端控制令牌规则继续生效。
+Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
 
-容器构建的管理鉴权将已认证代理的回环连接视为本地跳转，保留 `X-Forwarded-*` 供同源校验使用；同网络远程对端不能凭转发头取得这一身份，普通构建仍要求代理流量提供控制令牌。`MCP_ENFORCE_LOCAL_TOKEN` 在容器构建中同样有效，启用后需由代理在认证后注入后端 Bearer Token。
+生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
 
-Docker CI 使用临时项目、随机合成凭据和命名卷，验证 HTTPS 证书、缺失/错误认证、同网络容器伪造 Host 的管理访问被拒、后端管理与代理管理端口不可达、SQL 不安全监听的启动与热更新拒绝、前端资源、非 root 启动、适配器与控制台 WebSocket、正常退出及重建后的持久化。部署步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+SQL 保持优先；Docker 镜像在启动、热更新和换库前强制管理数值回环与独立端口，拒绝不安全配置且不迁移数据。旧 `127.0.0.1:8081` 设置仍有效，Tunnel 使用其实际端口；新库默认 8080。host 镜像的回环适配器默认值不覆盖已有 SQL 通配监听，切换模式前须检查。UID/GID `10001:10001` 与 `/app/data` 持久卷保留；不自动删除旧代理证书卷或应用数据。
+
+Docker CI 分别构建桥接/host 镜像，以临时数据运行真实网络回归：共享命名空间回源、公共 Host/Origin 正反例、恶意同网络容器不可达、适配器管理路由拒绝、OneBot/AstrBot 握手、SQL 不安全监听启动/热更拒绝、非 root、退出与重建持久化。真实 cloudflared 镜像只执行 version，合成客户端验证其网络路径，不打开公网 Tunnel。Cloudflare Access 云端鉴权、真实 IM 与 Desktop 宿主机转发仍须由部署用户实测。步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
 ### 戳一戳唤醒
 
@@ -410,7 +412,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
   - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
-  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；若必须远程访问，应在前置部署具备身份鉴权的反向代理（如 Nginx / Caddy 配合 Basic Auth 或 OAuth）。
+  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；远程管理使用前置 Cloudflare Access，并按部署说明隔离回源监听，不把 Host/Origin 检查作为用户认证。
 - **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
   - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：

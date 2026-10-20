@@ -10,12 +10,12 @@ import (
 var (
 	DefaultListenAddr   = "127.0.0.1:8080"
 	DefaultWSListenAddr = "127.0.0.1:1234"
-	// Container builds require a loopback management listener behind the gateway.
+	// Container builds require a loopback management listener in the connector's network namespace.
 	ManagementLoopbackOnly = "false"
 )
 
 // ValidateListenerIsolation prevents SQL settings from exposing management routes
-// outside the proxy's shared network namespace, including through a shared port.
+// outside the connector's shared network namespace, including through a shared port.
 func ValidateListenerIsolation(listenAddr, wsListenAddr string) error {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {

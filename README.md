@@ -1,6 +1,6 @@
 # FrostAgent
 
-Outside the isolated Docker gateway deployment described below, remote management API requests require a valid control token, including settings,
+Outside the isolated Cloudflare Access deployment described below, remote management API requests require a valid control token, including settings,
 backups, logs, instance operations and database selection. Configure the management
 token locally in Bot server settings, then enter it in the web console's frontend
 settings. `MCP_CONTROL_TOKEN` takes priority over the compatible `ADMIN_TOKEN`.
@@ -81,33 +81,87 @@ Open the dashboard at `http://localhost:8080`. It starts with no instances. Use 
 
 ## Docker deployment
 
-Compose starts FrostAgent behind a Caddy HTTPS authentication gateway. First copy `docker.env.example` to `.env` (or add its two gateway fields to an existing file), then generate a password hash interactively:
+Management authentication follows the PR #165 decision: put **Cloudflare Access** in front of FrostAgent. The deployment no longer includes Caddy, Basic Auth administrator accounts or a local CA. Operators choose where cloudflared runs; a working Tunnel alone does not configure Access.
+
+### Local testing or host cloudflared (native Linux)
+
+Use the standalone host-network file, without merging it with the bridge files:
 
 ```bash
-docker run --rm -it caddy:2-alpine caddy hash-password
+docker compose -f compose.host.yaml up -d --build
 ```
 
-Set `FROSTAGENT_ADMIN_USER` and put the generated bcrypt hash in `FROSTAGENT_ADMIN_PASSWORD_HASH='...'` in `.env`. Keep the single quotes to preserve dollar signs. There is no default password; Compose refuses to start without a hash. These two fields configure only the gateway. Application settings continue to come from SQL.
+With a new database, open `http://127.0.0.1:8080`. Adapter URLs are `ws://127.0.0.1:1234/instances/<instance-id>/ws/onebot` or `/ws/astrbot`. This image defaults both listeners to loopback. Host mode has no port publishing: the application's actual loopback binds provide isolation. Local tests need no Tunnel.
+
+An existing cloudflared process on the same Linux host can use `http://127.0.0.1:8080` directly. The production path is `browser → Cloudflare Access → Tunnel → host cloudflared → loopback management listener`. Add the complete public origin, for example `https://frostagent.example.com`, to `HTTP_ALLOWED_ORIGINS` using the local console before enabling its public route.
+
+This isolation guarantee targets native Linux Engine. Docker Desktop host networking requires explicit user opt-in and uses a different layer-four forwarding implementation; do not infer Windows/macOS external-interface exposure from the container bind. Desktop host forwarding is not verified here. Windows/macOS users can use the native build above for a local console. See [Docker host networking](https://docs.docker.com/engine/network/drivers/host/).
+
+### Container cloudflared (bridge networking)
+
+The default `compose.yaml` starts only FrostAgent:
 
 ```bash
 docker compose up -d --build
-docker compose logs -f gateway frostagent
-docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-gateway-root.crt
 ```
 
-Trust the exported local CA certificate in the browser's certificate store, then open `https://localhost:8080` and sign in with the gateway username and password. The certificate is local to this deployment and survives recreation through its named volume. The gateway requires authentication for every page, API and dashboard WebSocket; it consumes the Basic Authorization header before forwarding. Leave the frontend control token empty for this gateway. If existing SQL settings enforce a local backend token, configure Caddy to supply that Bearer token after gateway authentication.
+Management listens on **container** `127.0.0.1:8080` without a published port, so the host browser cannot reach it directly. Adapters listen on container `0.0.0.0:1234`, published only at host `127.0.0.1:1234`. Same-network adapters can use `ws://frostagent:1234/instances/<instance-id>/ws/onebot` or `/ws/astrbot`. Port 1234 serves adapter WebSockets only, excluding management pages, APIs and RPCs.
 
-The gateway and FrostAgent share a network namespace. FrostAgent's management listener defaults to `127.0.0.1:8081` and cannot be reached directly by other network peers; the gateway proxies to that listener. Container builds reject non-loopback management addresses and shared management/adapter ports, both on startup and when settings change. In this isolated deployment, the backend treats the authenticated gateway's loopback connection as local even when forwarding headers are present; `MCP_ENFORCE_LOCAL_TOKEN` still applies when enabled. Saved SQL settings remain authoritative within these constraints. Ordinary builds keep their existing listener defaults and remote management token checks.
+cloudflared must **share FrostAgent's network namespace**, rather than merely join its bridge network. To run your existing Tunnel connector with this Compose project, put the `TUNNEL_TOKEN` from `docker.env.example` in `.env`, and opt into:
 
-The adapter listener defaults to `0.0.0.0:1234`. Use `ws://localhost:1234/instances/<instance-id>/ws/onebot` (or `/ws/astrbot`). A client on the same Compose network can use the alias `ws://frostagent:1234/instances/<instance-id>/ws/onebot`. The adapter port serves only adapter WebSockets; management routes are not exposed there.
+```bash
+docker compose -f compose.yaml -f compose.cloudflare.yaml up -d --build
+```
 
-Compose publishes HTTPS port 8080 and adapter port 1234 on the host's `127.0.0.1` by default. For remote deployment, configure the gateway hostname and certificate, publish the required ports, and add the exact dashboard URL to `HTTP_ALLOWED_ORIGINS` through the local dashboard. Keep gateway authentication and the loopback backend listener. Configure `WS_ALLOWED_ORIGINS` for browser adapters with a different origin.
+This adds only the operator's chosen cloudflared, without another proxy or authentication component. Do not start a duplicate if the connector already runs elsewhere: configure it with `network_mode: container:<FrostAgent-container-ID>` instead. Recreate the connector whenever FrostAgent is recreated so it joins the new namespace. When using the supplied files, always include both during updates; the optional file declares this recreation dependency.
 
-Before reusing an existing database, set `LISTEN_ADDR` to `127.0.0.1:8081` and `WS_LISTEN_ADDR` to `0.0.0.0:1234` in the original deployment. Unsafe saved addresses cause container startup to fail; no settings are automatically rewritten. If you choose a different loopback management port, update Caddy's upstream; adapter port changes require matching Compose mappings.
+Set the Cloudflare origin to `http://127.0.0.1:8080`. Before publishing the route, configure an Access application and allow policy covering **every path on the entire management hostname**, without API/RPC Bypass paths. The production path is `browser → Cloudflare Access → Tunnel → cloudflared → shared-namespace loopback management listener`. Ordinary bridge peers cannot connect to this listener; spoofed Host or Cloudflare headers cannot change network reachability.
 
-The runtime uses UID/GID `10001:10001`, CA certificates and timezone data. The `frostagent-data` volume stores `/app/data`, including SQLite, PostgreSQL bootstrap selection and sticker files. The `frostagent-gateway-data` volume stores gateway certificates. `docker compose down` retains both; `docker compose down -v` deletes them. Back up these volumes and any external PostgreSQL database before upgrading. Bind-mounted application data must be writable by UID/GID `10001:10001`.
+Bootstrap the public Host/Origin through the Linux local console above, or this one-time management request (Bash example; replace the hostname and adjust `base` for a saved custom management port). The disposable Python helper is a configuration tool, not a deployment component:
 
-The Dockerfile generates protobuf and builds the embedded frontend from source. Use Compose to include the protected gateway when deploying this image. Container `localhost` refers to the shared gateway/backend namespace; use reachable service names or host addresses for external databases, models and sandbox gateways. Node.js/Python stdio MCP tools are not included; use HTTP MCP servers or extend the image. Shell execution continues to use the external sandbox gateway.
+If `MCP_ENFORCE_LOCAL_TOKEN` is enabled, first enter the existing management control token in the current Bash session without echoing it. Skip this step for the default token-free deployment:
+
+```bash
+read -r -s -p 'Existing management control token: ' FROSTAGENT_BOOTSTRAP_TOKEN
+printf '\n'
+export FROSTAGENT_BOOTSTRAP_TOKEN
+```
+
+```bash
+docker run --rm -i --env FROSTAGENT_BOOTSTRAP_TOKEN --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
+import json, os, sys, urllib.request as http
+base = "http://127.0.0.1:8080/api/instances/global/"
+headers = {"Content-Type": "application/json"}
+token = os.environ.get("FROSTAGENT_BOOTSTRAP_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = "Bearer " + token
+request = http.Request(base + "backup/settings", headers=headers)
+with http.urlopen(request, timeout=10) as response:
+    config = json.load(response)
+config.pop("extra_env", None)
+origins = set(filter(None, config["settings"].get("HTTP_ALLOWED_ORIGINS", "").split(",")))
+config["settings"]["HTTP_ALLOWED_ORIGINS"] = ",".join(sorted(origins | {sys.argv[1]}))
+request = http.Request(base + "import/settings", json.dumps(config).encode(), headers)
+with http.urlopen(request, timeout=10) as response:
+    print(response.read().decode())
+PY
+```
+
+If you set the temporary token variable, run `unset FROSTAGENT_BOOTSTRAP_TOKEN` afterwards.
+
+A host-loopback publish does not isolate a container network. Conversely, publishing a port cannot make a container-loopback listener reachable from the host. Keep management off wildcard binds when fixing Tunnel connectivity: host cloudflared uses the host topology, while a separately networked container connector uses the shared namespace topology.
+
+### Settings, upgrades and verification boundaries
+
+SQL settings retain precedence. Startup, hot updates and database switches require a numeric loopback management IP and a different adapter port. Unsafe saved settings fail closed without automatic migration. PR #192's saved `127.0.0.1:8081` remains valid; point the Tunnel at that actual port. New databases default to management port 8080 again. The host image's loopback default does not override saved `WS_LISTEN_ADDR=0.0.0.0:1234`: before switching an existing bridge database to host mode, set it to `127.0.0.1:1234` if adapters should remain host-local.
+
+Container builds trust only actual loopback connector connections, retaining public Host/Origin and forwarding headers. This trust comes from network isolation, not authentication of Cloudflare headers. Access-protected requests need no additional local login by default. Existing explicit `MCP_ENFORCE_LOCAL_TOKEN` remains effective; if enabled, the frontend and one-time management requests still need the existing Bearer token. Ordinary builds retain their remote control-token rules.
+
+The runtime uses UID/GID `10001:10001`; the system CA bundle supports outbound TLS and does not generate a deployment CA. `frostagent-data` preserves `/app/data`, including database/bootstrap selection and sticker files. `docker compose down` retains it; use `down -v` only when intending to delete data. Back up the application volume and external PostgreSQL before upgrades. The old `frostagent-gateway-data` certificate volume is unused and is not automatically deleted. When upgrading PR #192, run `down` with the old files (without `-v`) to stop the old gateway, then choose a new topology, keeping the same Compose project name to reuse application data.
+
+Application settings remain in SQL. The optional connector alone consumes `.env`'s `TUNNEL_TOKEN`. Container `localhost` refers to the current namespace; use reachable addresses for external databases, models and sandboxes. The image has no Node.js/Python stdio MCP runtime; command execution still uses the external sandbox.
+
+CI builds bridge and host images and uses disposable data to verify origin reachability, public Host/Origin, management isolation, port exposure, OneBot/AstrBot WebSockets, SQL listener guards, non-root operation, shutdown and persistence. It uses a synthetic local origin client and a real cloudflared image running only `version`, without opening a public Tunnel. Live Access login/policies, real IM integration and Desktop host forwarding remain unverified.
 
 ## Bot settings and persona
 
