@@ -1,6 +1,6 @@
 # FrostAgent
 
-除下文所述的隔离 Docker 鉴权代理部署外，远程管理 API 必须提供有效控制令牌，覆盖设置、备份、日志、实例操作和数据库切换。
+除下文所述的隔离 Cloudflare Access 部署外，远程管理 API 必须提供有效控制令牌，覆盖设置、备份、日志、实例操作和数据库切换。
 先在本机的 Bot 服务端设置中配置“管理控制令牌”，再在网页“前端设置”中填写相同值。
 `MCP_CONTROL_TOKEN` 优先于兼容的 `ADMIN_TOKEN`，`ALLOW_REMOTE_MCP_MANAGEMENT` 无法绕过管理入口鉴权。
 本机访问默认免令牌；启用 `MCP_ENFORCE_LOCAL_TOKEN` 后本机也必须认证。
@@ -81,33 +81,73 @@ go run ./cmd/app
 
 ## Docker 部署
 
-Compose 通过 Caddy HTTPS 鉴权代理提供管理访问。先将 `docker.env.example` 复制为 `.env`；如果已有 `.env`，只追加其中两个代理字段。然后交互式生成密码哈希：
+管理认证沿用 PR #165 的决定，由前置 **Cloudflare Access** 负责。部署不再包含 Caddy、Basic Auth 管理员账号或本地 CA。Tunnel 的运行位置由部署用户选择；Tunnel 连通本身不代表已经配置 Access。
+
+### 本地测试或宿主机 cloudflared（原生 Linux）
+
+单独使用 host 网络文件，不与桥接文件叠加：
 
 ```bash
-docker run --rm -it caddy:2-alpine caddy hash-password
+docker compose -f compose.host.yaml up -d --build
 ```
 
-在 `.env` 中设置 `FROSTAGENT_ADMIN_USER`，并将生成的 bcrypt 哈希填入 `FROSTAGENT_ADMIN_PASSWORD_HASH='...'`，保留单引号以避免美元符号被插值。没有默认密码，未设置哈希时 Compose 拒绝启动。这两个字段仅配置代理，应用设置仍从 SQL 加载。
+新数据库默认可在 `http://127.0.0.1:8080` 打开控制台；适配器为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot` 或 `/ws/astrbot`。该镜像将管理与适配器默认地址都设为回环；host 模式没有端口映射，隔离来自应用实际监听的 `127.0.0.1`。本地测试无需配置 Tunnel。
+
+若 cloudflared 已运行在同一 Linux 宿主机，它直接回源到 `http://127.0.0.1:8080`。生产路径为：`浏览器 → Cloudflare Access → Tunnel → 宿主机 cloudflared → 回环管理监听`。先通过本地控制台把完整的公开地址（例如 `https://frostagent.example.com`）加入 `HTTP_ALLOWED_ORIGINS`，再启用公网路由。
+
+此回环隔离方案针对原生 Linux Engine。Docker Desktop 的 host networking 需用户主动启用，且是不同的四层转发实现，不能据此保证 Windows/macOS 外部接口的暴露范围；本 PR 不验证 Desktop 宿主机转发。Windows/macOS 本地控制台可按上文使用原生构建。参见 [Docker host 网络说明](https://docs.docker.com/engine/network/drivers/host/)。
+
+### 容器内 cloudflared（桥接网络）
+
+默认 `compose.yaml` 只启动 FrostAgent：
 
 ```bash
 docker compose up -d --build
-docker compose logs -f gateway frostagent
-docker compose cp gateway:/data/caddy/pki/authorities/local/root.crt ./docker-gateway-root.crt
 ```
 
-将导出的本地 CA 证书加入浏览器信任的证书存储，再打开 `https://localhost:8080`，输入代理用户名和密码。该证书属于当前部署，通过命名卷在重建后保留。所有管理页面、API 和控制台 WebSocket 都要求代理认证；代理认证后会移除 Basic Authorization 请求头。使用此代理时，前端控制令牌留空。如果已有 SQL 设置强制后端本地令牌校验，需要配置 Caddy 在代理认证后注入相应 Bearer Token。
+管理只监听**容器内** `127.0.0.1:8080`，不发布管理端口，因此宿主机浏览器不能直接访问。适配器监听容器内 `0.0.0.0:1234`，仅映射到宿主机 `127.0.0.1:1234`；同一 Docker 网络的适配器可用 `ws://frostagent:1234/instances/<实例ID>/ws/onebot` 或 `/ws/astrbot`。1234 只提供适配器 WebSocket，管理页面、API 和 RPC 均不可通过此端口使用。
 
-代理与 FrostAgent 共享网络空间。后端管理端口默认只监听 `127.0.0.1:8081`，其他同网络容器无法直接访问；代理转发到该回环地址。容器构建在启动及设置变更时拒绝非回环管理地址，以及管理与适配器共用端口。在此隔离部署中，即使带有转发标识，后端也将已认证代理的回环连接视为本地访问；启用 `MCP_ENFORCE_LOCAL_TOKEN` 后仍须校验后端令牌。SQL 设置在此约束内仍优先；普通构建保留原有监听默认值和远程管理令牌校验。
+cloudflared 必须与 FrostAgent **共享网络命名空间**，而不只是加入同一桥接网络。若希望由此 Compose 运行已有的 Tunnel connector，将 `docker.env.example` 中的 `TUNNEL_TOKEN` 填入 `.env`，并使用可选文件：
 
-适配器默认监听 `0.0.0.0:1234`。地址为 `ws://localhost:1234/instances/<实例ID>/ws/onebot`（或 `/ws/astrbot`）；同一 Compose 网络的客户端可使用别名 `ws://frostagent:1234/instances/<实例ID>/ws/onebot`。该端口仅提供适配器 WebSocket，不暴露管理路由。
+```bash
+docker compose -f compose.yaml -f compose.cloudflare.yaml up -d --build
+```
 
-Compose 默认只将 HTTPS 端口 8080 和适配器端口 1234 发布到宿主机的 `127.0.0.1`。远程部署时，请配置代理域名和证书、发布所需端口，并先通过本地控制台将完整的控制台地址填入 `HTTP_ALLOWED_ORIGINS`；保留代理鉴权和后端回环监听。浏览器适配器跨域时需配置 `WS_ALLOWED_ORIGINS`。
+它只增加用户选择的 cloudflared，没有额外反向代理或认证组件。已在其他部署中运行的 connector 不必重复启动；可为其设置 `network_mode: container:<FrostAgent容器ID>`。FrostAgent 被重新创建后，connector 也须重新创建以加入新的命名空间；同一 Compose 中请始终带上两个文件执行更新，可选文件声明了此重建依赖。
 
-复用已有数据库前，请在原部署中将 `LISTEN_ADDR` 设为 `127.0.0.1:8081`，将 `WS_LISTEN_ADDR` 设为 `0.0.0.0:1234`。不安全的存量监听地址会导致容器拒绝启动，不会自动改写设置。改用其他回环管理端口时需同步修改 Caddy 上游；适配器端口变化需同步修改 Compose 映射。
+在 Cloudflare 配置回源地址 `http://127.0.0.1:8080`，并在发布路由前为**整个管理域名的全部路径**配置 Access 应用与允许策略，不留管理 API/RPC 的 Bypass 路径。生产路径为：`浏览器 → Cloudflare Access → Tunnel → cloudflared → 同命名空间回环管理监听`。普通桥接网络容器无法连接该回环监听，伪造 Host 或 Cloudflare 请求头不能改变网络可达性。
 
-运行时使用 UID/GID `10001:10001`，包含 CA 证书和时区数据。`frostagent-data` 卷保存 `/app/data`，包含 SQLite、PostgreSQL 引导选择和贴图文件；`frostagent-gateway-data` 卷保存代理证书。`docker compose down` 保留两个卷，`docker compose down -v` 删除它们。升级前请备份数据卷及外部 PostgreSQL 数据库。改用目录挂载时，应用数据目录需允许 UID/GID `10001:10001` 写入。
+首次配置公开 Host/Origin 可先使用上述 Linux 本地控制台，或者执行以下一次性管理请求（Bash 示例；替换域名，现有自定义管理端口需同步修改 `base`）。辅助 Python 容器仅用于本次配置，不是运行组件：
 
-Dockerfile 从源码生成 protobuf 并构建嵌入前端，部署时使用 Compose 以包含受保护的代理。容器内 `localhost` 指向代理与后端共享的网络空间；外部数据库、模型和沙箱网关需使用可达的服务名或宿主机地址。镜像不包含 Node.js/Python 等 stdio MCP 程序，可使用 HTTP MCP 服务或自行扩展镜像。命令执行仍通过外部沙箱网关进行。
+```bash
+docker run --rm -i --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
+import json, sys, urllib.request as http
+base = "http://127.0.0.1:8080/api/instances/global/"
+with http.urlopen(base + "backup/settings", timeout=10) as response:
+    config = json.load(response)
+config.pop("extra_env", None)
+origins = set(filter(None, config["settings"].get("HTTP_ALLOWED_ORIGINS", "").split(",")))
+config["settings"]["HTTP_ALLOWED_ORIGINS"] = ",".join(sorted(origins | {sys.argv[1]}))
+request = http.Request(base + "import/settings", json.dumps(config).encode(),
+                       {"Content-Type": "application/json"})
+with http.urlopen(request, timeout=10) as response:
+    print(response.read().decode())
+PY
+```
+
+只设置宿主机 `127.0.0.1` 发布地址不能隔离容器网络；反过来，将端口发布到宿主机也不能让容器内回环监听变得可达。不要把管理监听改成 `0.0.0.0` 来修复 Tunnel 连接。宿主机 cloudflared 使用 host 方案；独立网络的容器 cloudflared 使用共享命名空间方案。
+
+### 配置、升级和验证边界
+
+SQL 设置仍优先；启动、热更新和数据库切换必须保持管理地址为数值回环 IP，且与适配器不同端口。不安全的存量地址拒绝启动，不自动迁移。PR #192 已有的 `127.0.0.1:8081` 仍有效，需让 Tunnel 回源到该实际端口；新库默认管理端口改回 8080。host 镜像的回环默认值不会覆盖 SQL 中已保存的 `WS_LISTEN_ADDR=0.0.0.0:1234`；从桥接部署切换到 host 前，须按需要先改为 `127.0.0.1:1234`，避免适配器监听宿主机所有接口。
+
+容器构建仅信任实际来自回环的 connector 连接，保留公共 Host/Origin 和转发头；这份信任来自网络隔离，不是对 Cloudflare 请求头的认证。通过 Access 的正常请求默认无需另一套本地登录。既有 `MCP_ENFORCE_LOCAL_TOKEN` 仍有效；若用户显式启用了它，前端及一次性管理请求仍需原有 Bearer Token。普通构建的远程控制令牌规则保持不变。
+
+镜像使用 UID/GID `10001:10001`，系统 CA 信任包用于出站 TLS，不生成部署 CA。`frostagent-data` 保留 `/app/data` 中的数据库、引导选择和贴图文件。`docker compose down` 保留卷；只有明确要删除数据时才使用 `down -v`。升级前备份应用卷与外部 PostgreSQL；旧 `frostagent-gateway-data` 证书卷不再使用，不自动删除。PR #192 升级时先用旧部署文件执行 `down`（不带 `-v`），停用旧 gateway，再选择新拓扑启动，保留相同 Compose 项目名以复用数据卷。
+
+应用配置仍来自 SQL，`.env` 中的 `TUNNEL_TOKEN` 只供可选 connector 使用。容器内 `localhost` 指向当前网络命名空间；外部数据库、模型与沙箱使用可达地址。镜像不包含 Node.js/Python 等 stdio MCP 运行时，命令执行仍交给外部沙箱。
+
+CI 构建桥接及 host 镜像，使用临时数据验证回源路径、公共 Host/Origin、管理隔离、端口暴露、OneBot/AstrBot WebSocket、SQL 监听约束、非 root、退出与持久化。测试使用本地合成回源客户端和只运行 `version` 的真实 cloudflared 镜像，不建立公网 Tunnel；Cloudflare Access 云端登录/策略、真实 IM 接入及 Desktop 宿主机转发不属于已验证范围。
 
 ## Bot 设置与人格
 

@@ -26,5 +26,13 @@ jobs:
           tags: frostagent:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Build opt-in host-network image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: frostagent:host
+          build-args: DOCKER_WS_LISTEN_ADDR=127.0.0.1:1234
+          cache-from: type=gha
       - name: Test Compose deployment
-        run: python3 scripts/docker-smoke.py
+        run: python3 scripts/docker-smoke.py --host-network

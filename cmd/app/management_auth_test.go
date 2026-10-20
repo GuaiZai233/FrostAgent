@@ -19,7 +19,7 @@ func localManagementRequest(method, path string, body io.Reader) *http.Request {
 	return request
 }
 
-func TestContainerGatewayKeepsLoopbackAuthenticationBoundary(t *testing.T) {
+func TestContainerConnectorKeepsLoopbackAuthenticationBoundary(t *testing.T) {
 	previous := instanceconfig.ManagementLoopbackOnly
 	instanceconfig.ManagementLoopbackOnly = "true"
 	t.Cleanup(func() { instanceconfig.ManagementLoopbackOnly = previous })
@@ -32,10 +32,10 @@ func TestContainerGatewayKeepsLoopbackAuthenticationBoundary(t *testing.T) {
 		enforceLocal        bool
 		status              int
 	}{
-		{"authenticated gateway hop", "127.0.0.1:12345", "", false, http.StatusNoContent},
-		{"remote cannot claim gateway", "198.51.100.10:12345", "", false, http.StatusUnauthorized},
+		{"connector loopback hop", "127.0.0.1:12345", "", false, http.StatusNoContent},
+		{"remote cannot claim connector", "198.51.100.10:12345", "", false, http.StatusUnauthorized},
 		{"local token enforcement remains", "127.0.0.1:12345", "", true, http.StatusUnauthorized},
-		{"configured gateway bearer token", "127.0.0.1:12345", "Bearer synthetic-control-token", true, http.StatusNoContent},
+		{"explicit local bearer token", "127.0.0.1:12345", "Bearer synthetic-control-token", true, http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values["MCP_ENFORCE_LOCAL_TOKEN"] = fmt.Sprint(tc.enforceLocal)
