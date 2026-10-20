@@ -59,7 +59,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
             <h2 class="card-title text-sm font-semibold">全局安全控制模式</h2>
           </div>
           <div class="flex items-center gap-2">
-            <span id="security-mode-spinner" class="spinner hidden" style="width: 0.875rem; height: 0.875rem;"></span>
             <span id="security-mode-status" class="badge badge-outline text-xs">加载中…</span>
           </div>
         </div>
@@ -88,7 +87,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
 
   const radioContainer = container.querySelector<HTMLElement>('#security-mode-radios');
   const modeStatusBadge = container.querySelector<HTMLElement>('#security-mode-status');
-  const modeSpinner = container.querySelector<HTMLElement>('#security-mode-spinner');
   const lockedTableBody = container.querySelector<HTMLElement>('#security-locked-body');
 
   function renderModeOptions(selectedMode: SecurityControlMode, disabled: boolean): string {
@@ -159,7 +157,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
     currentMode = nextMode;
     isSavingMode = true;
 
-    if (modeSpinner) modeSpinner.classList.remove('hidden');
     updateModeUI(nextMode, true);
 
     try {
@@ -177,7 +174,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
     } finally {
       if (!disposed) {
         isSavingMode = false;
-        if (modeSpinner) modeSpinner.classList.add('hidden');
         updateModeUI(currentMode, false);
       }
     }
@@ -219,7 +215,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
   const loadMode = async () => {
     if (isSavingMode) return;
     isLoadingMode = true;
-    if (modeSpinner) modeSpinner.classList.remove('hidden');
     if (modeStatusBadge) {
       modeStatusBadge.textContent = '获取中…';
       modeStatusBadge.className = 'badge badge-outline text-xs';
@@ -239,7 +234,6 @@ export function mountSecurityPage(container: HTMLElement): () => void {
     } finally {
       if (!disposed) {
         isLoadingMode = false;
-        if (modeSpinner && !isSavingMode) modeSpinner.classList.add('hidden');
       }
     }
   };
