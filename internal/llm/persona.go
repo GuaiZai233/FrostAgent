@@ -14,8 +14,6 @@ const DefaultDialogueInstruction = "以下是示例对话，请仿照句子格�
 // DialogueExample 表示 YAML 中的单条示例对话数据结构。
 type DialogueExample struct {
 	ID        any    `yaml:"id" json:"id"`
-	Scene     string `yaml:"scene" json:"scene"`
-	Relation  string `yaml:"relation" json:"relation"`
 	User      string `yaml:"user" json:"user"`
 	Preferred string `yaml:"preferred" json:"preferred"`
 }

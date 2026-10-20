@@ -20,6 +20,9 @@ class MockElement {
   }
   input() { this.listeners.get('input')?.(); }
   focus() {}
+  showModal() {}
+  close() {}
+  remove() {}
   querySelector(selector: string): MockElement {
     if (!this.children.has(selector))
       this.children.set(selector, new MockElement());
@@ -45,6 +48,8 @@ let deferSave = false;
 let resolvePendingSave: (() => void) | undefined;
 let envLoads = 0;
 let dialogueLoads = 0;
+let storedDialogues = [{ id: 'example-1', user: 'Example question', preferred: 'Example answer' }];
+const savedDialogueLists: Array<typeof storedDialogues> = [];
 let storedName = '示例 Bot';
 let storedAliases = '示例,小狐狸';
 const identityUpdates: Array<Array<{ key: string; value: string }>> = [];
@@ -60,7 +65,12 @@ const api = {
   },
   async listDialogues() {
     dialogueLoads++;
-    return { dialogues: [], promptPreview: '', filePath: '' };
+    return { dialogues: storedDialogues, promptPreview: '', filePath: '' };
+  },
+  async saveDialogues(items: typeof storedDialogues) {
+    savedDialogueLists.push(items);
+    storedDialogues = items;
+    return { success: true, error: '', promptPreview: '' };
   },
   async updateEnvVar(update: {
     key: string;
@@ -203,8 +213,49 @@ assert.equal(
   '外部更新',
   'refresh loads the latest instance value',
 );
+const cards = root.querySelector('#dialogue-cards-container');
+assert.doesNotMatch(root.innerHTML, /relation-filters/);
+assert.match(cards.innerHTML, /Example question/);
+assert.match(cards.innerHTML, /Example answer/);
+const search = root.querySelector('#dialogue-search-input');
+for (const query of ['QUESTION', 'answer', 'example-1']) {
+  search.value = query;
+  search.input();
+  assert.match(cards.innerHTML, /Example question/, `search supports ${query}`);
+}
+search.value = 'no matching example';
+search.input();
+assert.match(cards.innerHTML, /暂无匹配/);
+search.value = '';
+search.input();
+
+const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const modal = new MockElement();
+Object.defineProperty(globalThis, 'document', {
+  configurable: true,
+  value: { createElement: () => modal, body: { appendChild() {} } },
+});
+try {
+  root.querySelector('#dialogue-add-btn').click();
+  assert.match(modal.innerHTML, /id="dlg-id"/);
+  assert.match(modal.innerHTML, /id="dlg-user"/);
+  assert.match(modal.innerHTML, /id="dlg-preferred"/);
+  assert.doesNotMatch(modal.innerHTML, /dlg-scene|dlg-relation|data-preset/);
+  modal.querySelector('#dlg-id').value = 'new-example';
+  modal.querySelector('#dlg-user').value = ' New question ';
+  modal.querySelector('#dlg-preferred').value = ' New answer ';
+  modal.querySelector('#dlg-save-btn').click();
+  await settle();
+  assert.deepEqual(savedDialogueLists.at(-1)?.at(-1), {
+    id: 'new-example', user: 'New question', preferred: 'New answer',
+  });
+  assert.match(cards.innerHTML, /New question/);
+} finally {
+  if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+  else Reflect.deleteProperty(globalThis, 'document');
+}
 cleanup();
 
 process.stdout.write(
-  'PASS: persona system prompt display, save, failure, and refresh\n',
+  'PASS: persona system prompt and dialogue editing, search, and save\n',
 );

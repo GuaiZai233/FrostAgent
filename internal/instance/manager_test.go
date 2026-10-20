@@ -1597,7 +1597,7 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 		t.Fatalf("instance B dialogue file missing: %v", err)
 	}
 
-	saveBodyA := `{"dialogues":[{"id":"1","scene":"日常问候","relation":"master","user":"早上好","preferred":"主人早上好呀嗷呜~"}]}`
+	saveBodyA := `{"dialogues":[{"id":"1","user":"早上好","preferred":"主人早上好呀嗷呜~"}]}`
 	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
 	if wA.Code != http.StatusOK {
 		t.Fatalf("SaveDialogues for A failed: %d %s", wA.Code, wA.Body.String())
@@ -1938,7 +1938,7 @@ func TestInstanceDialogueLogProvenance(t *testing.T) {
 	aBefore := len(m.instances[a.ID].logger.Snapshot())
 	bBefore := len(m.instances[b.ID].logger.Snapshot())
 
-	saveBodyA := `{"dialogues":[{"id":"1","scene":"问候","relation":"master","user":"你好","preferred":"你好喵"}]}`
+	saveBodyA := `{"dialogues":[{"id":"1","user":"你好","preferred":"你好喵"}]}`
 	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
 	if wA.Code != http.StatusOK {
 		t.Fatalf("SaveDialogues failed: %d %s", wA.Code, wA.Body.String())
