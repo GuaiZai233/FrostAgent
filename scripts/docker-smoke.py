@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import tempfile
@@ -87,6 +88,27 @@ def wait_ready(read):
     raise AssertionError('origin did not become ready')
 
 
+def bootstrap_from_readme(root, readme, app, origin, token=None, success=True):
+    blocks = re.findall(r"```bash\n(.*?)\n```", (root / readme).read_text(encoding='utf-8'), re.S)
+    snippet, = [block for block in blocks if "<<'PY'" in block]
+    command_line, code = snippet.split('\n', 1)
+    code, trailer = code.rsplit('\nPY', 1)
+    assert not trailer.strip(), 'unexpected bootstrap shell commands'
+    args = shlex.split(command_line.removesuffix(" <<'PY'").replace(
+        '$(docker compose ps -q frostagent)', app))
+    args[-1] = origin
+    env = {key: value for key, value in os.environ.items() if key != 'FROSTAGENT_BOOTSTRAP_TOKEN'}
+    if token is not None:
+        env['FROSTAGENT_BOOTSTRAP_TOKEN'] = token
+    result = subprocess.run(args, input=code, capture_output=True, text=True,
+                            encoding='utf-8', env=env, timeout=30)
+    if success:
+        assert result.returncode == 0, (readme, result.stderr)
+        assert json.loads(result.stdout).get('success'), (readme, result.stdout)
+    else:
+        assert result.returncode != 0 and 'HTTP Error 401' in result.stderr, (readme, result)
+
+
 def exercise(root, temporary, host_mode=False):
     project = 'frostagent-smoke-' + uuid.uuid4().hex[:12]
     env = {**os.environ, 'TUNNEL_TOKEN': 'synthetic-unusable-test-token'}
@@ -144,6 +166,9 @@ def exercise(root, temporary, host_mode=False):
         asset = re.search(r'<script[^>]+src="([^"]+)"', html)
         assert asset and read(asset.group(1))['status'] == 200
         assert read('/api/instances', headers=FORWARDED)['status'] == 403
+        if not host_mode:
+            for readme in ('README.md', 'README_zh_CN.md'):
+                bootstrap_from_readme(root, readme, app, PUBLIC_ORIGIN)
         settings = api('/api/instances/global/backup/settings')
         settings['settings'].update({'HTTP_ALLOWED_ORIGINS': PUBLIC_ORIGIN,
                                      'WS_ALLOWED_ORIGINS': PUBLIC_ORIGIN})
@@ -214,6 +239,20 @@ def exercise(root, temporary, host_mode=False):
         assert read('/api/instances', headers=FORWARDED)['status'] == 401
         bearer = {**FORWARDED, 'Authorization': 'Bearer synthetic-control-token'}
         assert read('/api/instances', headers=bearer)['status'] == 200
+        for index, readme in enumerate(('README.md', 'README_zh_CN.md')):
+            before = api('/api/instances/global/backup/settings', headers=bearer)
+            bootstrap_origin = f'https://bootstrap-{index}.example.com'
+            for token in (None, 'synthetic-incorrect-token'):
+                bootstrap_from_readme(root, readme, app, bootstrap_origin, token, success=False)
+                assert api('/api/instances/global/backup/settings', headers=bearer) == before
+            bootstrap_from_readme(root, readme, app, bootstrap_origin, 'synthetic-control-token')
+            after = api('/api/instances/global/backup/settings', headers=bearer)
+            origins_before = set(before['settings']['HTTP_ALLOWED_ORIGINS'].split(','))
+            origins_after = set(after['settings'].pop('HTTP_ALLOWED_ORIGINS').split(','))
+            before['settings'].pop('HTTP_ALLOWED_ORIGINS')
+            assert origins_after == origins_before | {bootstrap_origin}
+            assert after == before, 'bootstrap changed unrelated settings'
+        print('PASS: both README bootstrap commands, optional token, 401 failures and settings preservation')
         settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'false'
         assert api('/api/instances/global/import/settings', settings, bearer).get('success')
         command(*compose, 'exec', '-T', 'frostagent', 'sh', '-c',

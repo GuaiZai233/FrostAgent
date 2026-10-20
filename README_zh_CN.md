@@ -119,21 +119,35 @@ docker compose -f compose.yaml -f compose.cloudflare.yaml up -d --build
 
 首次配置公开 Host/Origin 可先使用上述 Linux 本地控制台，或者执行以下一次性管理请求（Bash 示例；替换域名，现有自定义管理端口需同步修改 `base`）。辅助 Python 容器仅用于本次配置，不是运行组件：
 
+若已启用 `MCP_ENFORCE_LOCAL_TOKEN`，先在当前 Bash 会话输入现有的管理控制令牌（不回显）；默认免令牌部署跳过这一步：
+
 ```bash
-docker run --rm -i --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
-import json, sys, urllib.request as http
+read -r -s -p 'Existing management control token: ' FROSTAGENT_BOOTSTRAP_TOKEN
+printf '\n'
+export FROSTAGENT_BOOTSTRAP_TOKEN
+```
+
+```bash
+docker run --rm -i --env FROSTAGENT_BOOTSTRAP_TOKEN --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
+import json, os, sys, urllib.request as http
 base = "http://127.0.0.1:8080/api/instances/global/"
-with http.urlopen(base + "backup/settings", timeout=10) as response:
+headers = {"Content-Type": "application/json"}
+token = os.environ.get("FROSTAGENT_BOOTSTRAP_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = "Bearer " + token
+request = http.Request(base + "backup/settings", headers=headers)
+with http.urlopen(request, timeout=10) as response:
     config = json.load(response)
 config.pop("extra_env", None)
 origins = set(filter(None, config["settings"].get("HTTP_ALLOWED_ORIGINS", "").split(",")))
 config["settings"]["HTTP_ALLOWED_ORIGINS"] = ",".join(sorted(origins | {sys.argv[1]}))
-request = http.Request(base + "import/settings", json.dumps(config).encode(),
-                       {"Content-Type": "application/json"})
+request = http.Request(base + "import/settings", json.dumps(config).encode(), headers)
 with http.urlopen(request, timeout=10) as response:
     print(response.read().decode())
 PY
 ```
+
+若设置了临时令牌变量，完成后执行 `unset FROSTAGENT_BOOTSTRAP_TOKEN`。
 
 只设置宿主机 `127.0.0.1` 发布地址不能隔离容器网络；反过来，将端口发布到宿主机也不能让容器内回环监听变得可达。不要把管理监听改成 `0.0.0.0` 来修复 Tunnel 连接。宿主机 cloudflared 使用 host 方案；独立网络的容器 cloudflared 使用共享命名空间方案。
 

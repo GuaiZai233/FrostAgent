@@ -119,21 +119,35 @@ Set the Cloudflare origin to `http://127.0.0.1:8080`. Before publishing the rout
 
 Bootstrap the public Host/Origin through the Linux local console above, or this one-time management request (Bash example; replace the hostname and adjust `base` for a saved custom management port). The disposable Python helper is a configuration tool, not a deployment component:
 
+If `MCP_ENFORCE_LOCAL_TOKEN` is enabled, first enter the existing management control token in the current Bash session without echoing it. Skip this step for the default token-free deployment:
+
 ```bash
-docker run --rm -i --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
-import json, sys, urllib.request as http
+read -r -s -p 'Existing management control token: ' FROSTAGENT_BOOTSTRAP_TOKEN
+printf '\n'
+export FROSTAGENT_BOOTSTRAP_TOKEN
+```
+
+```bash
+docker run --rm -i --env FROSTAGENT_BOOTSTRAP_TOKEN --network container:$(docker compose ps -q frostagent) python:3.13-alpine python - https://frostagent.example.com <<'PY'
+import json, os, sys, urllib.request as http
 base = "http://127.0.0.1:8080/api/instances/global/"
-with http.urlopen(base + "backup/settings", timeout=10) as response:
+headers = {"Content-Type": "application/json"}
+token = os.environ.get("FROSTAGENT_BOOTSTRAP_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = "Bearer " + token
+request = http.Request(base + "backup/settings", headers=headers)
+with http.urlopen(request, timeout=10) as response:
     config = json.load(response)
 config.pop("extra_env", None)
 origins = set(filter(None, config["settings"].get("HTTP_ALLOWED_ORIGINS", "").split(",")))
 config["settings"]["HTTP_ALLOWED_ORIGINS"] = ",".join(sorted(origins | {sys.argv[1]}))
-request = http.Request(base + "import/settings", json.dumps(config).encode(),
-                       {"Content-Type": "application/json"})
+request = http.Request(base + "import/settings", json.dumps(config).encode(), headers)
 with http.urlopen(request, timeout=10) as response:
     print(response.read().decode())
 PY
 ```
+
+If you set the temporary token variable, run `unset FROSTAGENT_BOOTSTRAP_TOKEN` afterwards.
 
 A host-loopback publish does not isolate a container network. Conversely, publishing a port cannot make a container-loopback listener reachable from the host. Keep management off wildcard binds when fixing Tunnel connectivity: host cloudflared uses the host topology, while a separately networked container connector uses the shared namespace topology.
 
