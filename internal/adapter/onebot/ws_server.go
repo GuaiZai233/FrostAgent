@@ -999,7 +999,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		if !conn.allowLLMErrorReply(runResult) {
 			engine.TrimSession(session)
-			return
+			if receiptText == "" {
+				return
+			}
+			// Suppress only the LLM error body; settled usage still needs a receipt.
+			replyText = ""
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It

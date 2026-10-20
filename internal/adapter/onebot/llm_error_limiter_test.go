@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,6 +201,132 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				for i := 0; i < 4; i++ {
 					send(second, 104, "blocked")
 					read(second, "Request rejected by security gateway")
+				}
+			})
+		}
+	}
+}
+
+func TestWSLLMErrorLimitPreservesSettledReceipt(t *testing.T) {
+	for _, messageType := range []string{"private", "group"} {
+		for _, exhausted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/exhausted=%v", messageType, exhausted), func(t *testing.T) {
+				billingServer, state := mockAlcyoneBillingServer(t)
+				defer billingServer.Close()
+				tool := &mockTestTool{name: "test_tool", result: "synthetic tool result"}
+				provider := &mockLLMProvider{
+					responses: []*core.ChatResponse{{
+						Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+							ID: "test-call", Type: "function", Function: core.ToolCallFunction{Name: tool.name, Arguments: "{}"},
+						}}},
+						Usage: &core.Usage{PromptTokens: 500, CompletionTokens: 50, TotalTokens: 550},
+					}},
+					errs: []error{nil, errors.New("synthetic failure after settled iteration")},
+				}
+				engine := newTestEngine(provider)
+				engine.Scope = newTestScopeWithEnv(t, map[string]string{
+					"PROACTIVE_REPLY_PROBABILITY": "0",
+					"ENABLE_AT_IN_GROUP_MSG":      "true",
+					"ENABLE_REPLY_IN_GROUP_MSG":   "true",
+				})
+				engine.ToolRegistry[tool.name] = tool
+				engine.BillingClient = billing.NewClient(billingServer.URL, "test-token", 2*time.Second)
+				engine.BillingConfig = billing.Config{Enabled: true, Timeout: 2 * time.Second, MaxOutputTokens: 2048, SafetyMultiplier: 1.2, ModelName: "test-model"}
+				adapter := NewAdapter(engine)
+				if exhausted {
+					for i := 0; i < 3; i++ {
+						if !adapter.llmErrorReplies.allow() {
+							t.Fatal("could not fill error quota")
+						}
+					}
+				}
+				server := httptest.NewServer(adapter.Handler())
+				defer server.Close()
+				conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				event := model.OneBotEvent{SelfID: 103, PostType: "message", MessageType: messageType, UserID: 101, MessageID: 1,
+					Message: json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"run tool then fail"}}]`)}
+				if messageType == "group" {
+					event.GroupID = 201
+				}
+				if err := conn.WriteJSON(event); err != nil {
+					t.Fatal(err)
+				}
+				if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				var action model.OneBotAction
+				for {
+					if err := conn.ReadJSON(&action); err != nil {
+						t.Fatalf("expected receipt after settled iteration: %v", err)
+					}
+					if action.Action != "get_group_info" {
+						break
+					}
+					if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"group_id": event.GroupID, "group_name": "synthetic group"}, "echo": action.Echo}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if action.Action != "send_"+messageType+"_msg" {
+					t.Fatalf("unexpected action: %+v", action)
+				}
+				state.mu.Lock()
+				reserves, commits, releases := state.reserveCount, state.commitCount, state.releaseCount
+				var cost int64
+				if len(state.committedActuals) > 0 {
+					cost = state.committedActuals[0]
+				}
+				reasons := append([]string(nil), state.releasedReasons...)
+				state.mu.Unlock()
+				if reserves != 2 || commits != 1 || releases != 1 || cost <= 0 || len(reasons) != 1 || reasons[0] != billing.ReasonModelFailed {
+					t.Fatalf("unexpected billing: reserves=%d commits=%d releases=%d cost=%d reasons=%v", reserves, commits, releases, cost, reasons)
+				}
+				receipt := billing.FormatReceipt(cost, 500, 50, 10000, false)
+				params := action.Params.(map[string]any)
+				raw, _ := json.Marshal(params["message"])
+				if !strings.Contains(string(raw), receipt) {
+					t.Fatalf("missing settled receipt %q in %s", receipt, raw)
+				}
+				if exhausted {
+					// Receipt-only group messages must not acquire @ or reply decoration.
+					if params["message"] != receipt {
+						t.Fatalf("expected plain receipt only, got %s", raw)
+					}
+				} else if !strings.Contains(string(raw), "LLM 响应失败") {
+					t.Fatalf("unlimited error body should remain visible: %s", raw)
+				}
+				if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"message_id": 301}, "echo": action.Echo}); err != nil {
+					t.Fatal(err)
+				}
+				// A following turn waits for receipt delivery and exposes committed history.
+				event.MessageID = 2
+				event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"sentinel"}}]`)
+				if err := conn.WriteJSON(event); err != nil {
+					t.Fatal(err)
+				}
+				if err := conn.ReadJSON(&action); err != nil {
+					t.Fatal(err)
+				}
+				if action.Action != "send_"+messageType+"_msg" {
+					t.Fatalf("unexpected sentinel action: %+v", action)
+				}
+				provider.mu.Lock()
+				if len(provider.requests) != 3 {
+					t.Errorf("expected 3 provider calls, got %d", len(provider.requests))
+				}
+				if exhausted && len(provider.requests) == 3 {
+					for _, msg := range provider.requests[2].Messages {
+						if msg.Role == core.RoleAssistant {
+							t.Errorf("receipt-only failure wrote assistant history: %+v", msg)
+						}
+					}
+				}
+				provider.mu.Unlock()
+				if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"message_id": 302}, "echo": action.Echo}); err != nil {
+					t.Fatal(err)
 				}
 			})
 		}
