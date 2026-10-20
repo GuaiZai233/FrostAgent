@@ -406,6 +406,60 @@ for (const storedValue of ['', 'true', 'false', ' OFF ']) {
   cleanup();
 }
 
+values = [
+  { key: 'ENABLE_POKE', value: '', isSecret: false },
+  { key: 'POKE_CUSTOM_TEXT', value: '', isSecret: false },
+  { key: 'POKE_COOLDOWN_SECONDS', value: '', isSecret: false },
+];
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+assert.equal(el('poke-enabled').checked, false);
+assert.equal(el('poke-custom-text').placeholder, '的...');
+assert.equal(el('poke-cooldown').placeholder, '30');
+assert.equal(el('poke-custom-text').disabled, true);
+assert.equal(el('poke-preview').textContent, '发送预览：user:（用户戳了戳你）');
+const beforePoke = writes.length;
+el('poke-enabled').checked = true;
+el('poke-enabled').emit('change');
+assert.equal(el('poke-custom-text').disabled, false);
+el('poke-custom-text').value = '的耳朵<script>';
+el('poke-custom-text').emit('input');
+el('poke-cooldown').value = '15';
+el('poke-cooldown').emit('input');
+assert.equal(writes.length, beforePoke, 'poke edits stay in the draft');
+assert.equal(el('poke-preview').textContent, '发送预览：user:（用户戳了戳你 的耳朵<script>）');
+el('settings-draft-save').click();
+await settle();
+assert.deepEqual(writes.at(-1), [
+  { key: 'ENABLE_POKE', value: 'true', isSecret: false },
+  { key: 'POKE_CUSTOM_TEXT', value: '的耳朵<script>', isSecret: false },
+  { key: 'POKE_COOLDOWN_SECONDS', value: '15', isSecret: false },
+]);
+el('poke-custom-text').value = '';
+el('poke-custom-text').emit('input');
+el('poke-cooldown').value = '';
+el('poke-cooldown').emit('input');
+el('settings-draft-restore').click();
+assert.equal(el('poke-custom-text').value, '的耳朵<script>');
+el('poke-custom-text').value = '';
+el('poke-custom-text').emit('input');
+el('poke-cooldown').value = '';
+el('poke-cooldown').emit('input');
+el('settings-draft-save').click();
+await settle();
+assert.deepEqual(writes.at(-1), [
+  { key: 'POKE_CUSTOM_TEXT', value: null, isSecret: false },
+  { key: 'POKE_COOLDOWN_SECONDS', value: null, isSecret: false },
+]);
+assert.equal(el('poke-preview').textContent, '发送预览：user:（用户戳了戳你）');
+const beforeInvalidPoke = writes.length;
+el('poke-cooldown').value = '-1';
+el('poke-cooldown').emit('input');
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.length, beforeInvalidPoke, 'invalid cooldown blocks save');
+cleanup();
+
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);
 draft.set('BOT_NAME', '');
 assert.equal(draft.pending()[0].value, null);

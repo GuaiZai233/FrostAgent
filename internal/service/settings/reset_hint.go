@@ -10,6 +10,9 @@ import (
 
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
+	"ENABLE_POKE":                          "关闭",
+	"POKE_CUSTOM_TEXT":                     "的...",
+	"POKE_COOLDOWN_SECONDS":                "30",
 	"LISTEN_ADDR":                          "127.0.0.1:8080",
 	"WS_LISTEN_ADDR":                       "127.0.0.1:1234",
 	"HTTP_ALLOWED_ORIGINS":                 "不额外放行跨域来源",

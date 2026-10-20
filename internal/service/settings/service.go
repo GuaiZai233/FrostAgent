@@ -40,6 +40,9 @@ var knownEnvVars = map[string]envEntry{
 	"MAX_CONTEXT_MESSAGES":                 {"最多保留的消息数", false, false, false},
 	"ENABLE_AT_IN_GROUP_MSG":               {"是否开启群聊回复前艾特", false, false, false},
 	"GROUP_REPLY_ON_MENTION":               {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false, false},
+	"ENABLE_POKE":                          {"允许发送戳一戳行为", false, false, false},
+	"POKE_CUSTOM_TEXT":                     {"一旦Bot被戳，发送给LLM的附加消息。", false, false, false},
+	"POKE_COOLDOWN_SECONDS":                {"戳一戳冷却时间（秒），每个群/私聊独立，同群所有人共享；默认 30 秒", false, false, false},
 	"BOT_NAME":                             {"机器人主名称，用于群聊文本唤醒", false, false, false},
 	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
@@ -668,6 +671,16 @@ func validateUpdate(key, value string) error {
 	}
 	if key == "ENABLE_EMBEDDING" && value != "true" && value != "false" {
 		return errors.New("启用 Embedding 必须为 true 或 false")
+	}
+
+	if key == "ENABLE_POKE" && value != "" && value != "true" && value != "false" {
+		return errors.New("允许发送戳一戳行为必须为 true 或 false")
+	}
+	if key == "POKE_COOLDOWN_SECONDS" && value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil || seconds < 0 || seconds > 86400 || strconv.Itoa(seconds) != value {
+			return errors.New("戳一戳冷却时间必须是 0 到 86400 的整数秒")
+		}
 	}
 	if key == "MAX_CONTEXT_MESSAGES" {
 		count, err := strconv.Atoi(value)

@@ -704,6 +704,10 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		return
 	}
 
+	if event.pokeID != "" && engine.Getenv("ENABLE_POKE") != "true" {
+		_ = sendTerminalNoopWithSuppress(event, conn)
+		return
+	}
 	if event.Type != "event" && event.Type != "" {
 		return
 	}
@@ -1157,6 +1161,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
+			if event.pokeID != "" {
+				taskID = parity.BillingTaskID(billingPlatform, event.UserID, event.pokeID)
+			}
 			billingState = &llm.BillingRunState{
 				Platform:      billingPlatform,
 				ExternalID:    event.UserID,
@@ -1240,7 +1247,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Attachments:    attachments,
 				IsIntermediate: true,
 				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
-				ReplyMessageID: event.MessageID,
+				ReplyMessageID: event.replyMessageID(),
 			}
 			if session != nil && session.Epoch() != startEpoch {
 				return errors.New("会话已重置，取消发送中间消息")
@@ -1638,7 +1645,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Content:        text,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
-		ReplyMessageID: event.MessageID,
+		ReplyMessageID: event.replyMessageID(),
 	}
 	if err := conn.WriteJSON(action); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))

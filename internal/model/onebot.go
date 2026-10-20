@@ -17,6 +17,8 @@ type OneBotSender struct {
 }
 
 type OneBotEvent struct {
+	TargetID      int64           `json:"target_id,omitempty"`
+	PokeID        string          `json:"-"` // Assigned only after validating an inbound poke notice.
 	SelfID        int64           `json:"self_id"`
 	PostType      string          `json:"post_type"`
 	MetaEventType string          `json:"meta_event_type,omitempty"`
