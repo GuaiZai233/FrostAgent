@@ -6,14 +6,19 @@
 
 在当前实例设置以下值，SQL 模式保存后自动应用，必要时重建运行时：
 
-| 设置                          | 用途                             |
-| ----------------------------- | -------------------------------- |
-| `ACTIONSCAT_ENDPOINT`         | ActionsCat 核心服务地址          |
-| `ACTIONSCAT_MANAGEMENT_TOKEN` | 管理 API 凭据                    |
-| `ACTIONSCAT_DISPATCH_TOKEN`   | 事件调度凭据；留空复用管理 Token |
-| `AGENT_MAX_ITERATIONS`        | 多步骤工具循环上限，默认 35      |
+| 设置                          | 用途                                                |
+| ----------------------------- | --------------------------------------------------- |
+| `ACTIONSCAT_ENABLED`          | 默认开启；实例级总开关，保存后热生效                |
+| `ACTIONSCAT_ENDPOINT`         | ActionsCat 核心服务地址                             |
+| `ACTIONSCAT_MANAGEMENT_TOKEN` | 管理 API 凭据                                       |
+| `ACTIONSCAT_DISPATCH_TOKEN`   | 事件调度凭据；留空复用管理 Token                    |
+| `AGENT_MAX_ITERATIONS`        | 工具循环基础预算，默认 35；贴图约束可能追加有限轮数 |
 
 进入「ActionsCat」检查网络联通和认证状态，再查看动作、版本、构建与运行日志。服务地址使用核心 API 地址；它与沙箱网关、FrostAgent HTTP 地址属于不同用途。
+
+关闭「启用 ActionsCat」后，模型目录隐藏全部 ActionsCat 工具，旧会话中的后续调用也会被拒绝；管理代理拒绝业务操作，入站事件不再分发到 ActionsCat，状态查询仍可显示停用原因。此时不会因为仅保留了服务地址而继续向后端发送请求。
+
+开关控制 FrostAgent 这一实例的接入，不等于停止外部 ActionsCat 服务或取消它已经受理的任务。重新启用后检查连接和凭据。
 
 ## 运行一个动作
 

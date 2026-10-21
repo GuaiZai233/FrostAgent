@@ -33,6 +33,8 @@ AstrBot 自己的唤醒词与 `/help` 等命令前缀不作为 FrostAgent 唤醒
 
 关闭 `forward_all_group_messages` 后，插件只转发 @或引用机器人的完整群消息。未转发的消息无法进入 FrostAgent 的名称唤醒、群摘要与消息计数。插件可通过下一条转发消息携带的打断标记重置已标记 Bot 的连续对话计数；这个标记不会附带过滤消息正文。
 
+插件 0.1.4 起，aiocqhttp 还会单独转发指向当前 Bot 的戳一戳通知，不受「转发全部群消息」开关限制。后端默认不唤醒，需要另行开启并配置[戳一戳冷却](../usage/group-chat#戳一戳唤醒)。这些通知不会回落到 AstrBot 默认 LLM。
+
 ## 引用与贴图
 
 引用追溯由 FrostAgent 的 `ENABLE_QUOTE_TRACE` 与 `QUOTE_TRACE_DEPTH` 控制，默认开启、深度 5，最大 10。aiocqhttp 平台通过新版插件的 `quote_lookup` 能力按需回查消息；旧插件不声明该能力时不会额外等待。

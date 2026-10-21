@@ -67,6 +67,8 @@ make dev
 
 每个 Schema PR 要验证已填充的上一版 SQLite 和真实 PostgreSQL 数据库，覆盖业务数据和密钥保留、顺序跨版本升级、重复启动幂等、失败回滚后重试，以及未来版本拒绝且不改库。CI 的 `PostgreSQL Migrations` job 提供一次性 PostgreSQL 服务，不能仅因缺少 DSN 而跳过真实数据库验证。
 
+当前 SchemaVersion 为 14，Skills 的 v14 迁移保留已发布 Embedding v12 / v13 历史。群存储的兼容恢复说明见[JSON 群存储](../operations/upgrading#json-群存储兼容与人工恢复)，不属于正常 SQL 运行时的自动迁移。
+
 ## 修改与验证边界
 
 实例页面需要正确绑定当前实例，异步请求和卸载逻辑应避免旧实例结果覆盖新页面。群记忆身份与来源由可信适配器上下文决定，不能通过模型文字推断。持久化、路由、并发与失败路径改动要覆盖相应回归测试。

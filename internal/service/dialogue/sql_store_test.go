@@ -5,6 +5,7 @@ import (
 	"FrostAgent/internal/storage"
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -19,16 +20,33 @@ func TestSQLDialogueExamplesRoundTrip(t *testing.T) {
 	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
 		t.Fatal(err)
 	}
-	examples := []llm.DialogueExample{{ID: "example-a", Scene: "meeting", Relation: "friend", User: "hello", Preferred: "hi"}}
+	examples := []llm.DialogueExample{{ID: "example-a", User: "hello", Preferred: "hi"}}
+	// Existing databases may still contain the retired metadata columns.
+	if _, err := db.SQL.Exec(`INSERT INTO dialogues
+		(instance_id, position, id, scene, relation, user_text, preferred)
+		VALUES ('test-instance', 0, 'example-a', 'meeting', 'friend', 'hello', 'hi')`); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := LoadExamplesSQL(db, "test-instance")
+	if err != nil || !reflect.DeepEqual(legacy, examples) {
+		t.Fatalf("legacy dialogue not recovered: %#v, %v", legacy, err)
+	}
 	if err := SaveExamplesSQL(db, "test-instance", examples); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadExamplesSQL(db, "test-instance")
-	if err != nil || len(loaded) != 1 || loaded[0].Relation != "friend" {
+	if err != nil || !reflect.DeepEqual(loaded, examples) {
 		t.Fatalf("SQL dialogue not recovered: %#v, %v", loaded, err)
 	}
+	var scene, relation string
+	if err := db.SQL.QueryRow(`SELECT scene, relation FROM dialogues WHERE instance_id = 'test-instance'`).Scan(&scene, &relation); err != nil {
+		t.Fatal(err)
+	}
+	if scene != "" || relation != "" {
+		t.Fatalf("save retained retired metadata: scene=%q relation=%q", scene, relation)
+	}
 	prompt, err := LoadPromptSQL(db, "test-instance")
-	if err != nil || prompt == "" {
+	if err != nil || prompt != llm.DefaultDialogueInstruction+"\n\nUser: hello\nAssistant: hi" {
 		t.Fatalf("dialogue prompt not generated: %q, %v", prompt, err)
 	}
 }

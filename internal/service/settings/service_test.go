@@ -38,7 +38,7 @@ func TestSQLExportableSettingsIncludeCompactAndBillingPrices(t *testing.T) {
 }
 
 func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
-	t.Setenv("UPSTREAM_API_KEY", "sk-secret-key-123456789")
+	t.Setenv("ACTIONSCAT_MANAGEMENT_TOKEN", "sk-secret-key-123456789")
 	t.Setenv("BOT_NAME", "FrostFox")
 
 	svc := mustNew(t, ".env.nonexistent")
@@ -49,13 +49,13 @@ func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 
 	var foundKey, foundName bool
 	for _, envVar := range resp.Msg.GetEnvVars() {
-		if envVar.GetKey() == "UPSTREAM_API_KEY" {
+		if envVar.GetKey() == "ACTIONSCAT_MANAGEMENT_TOKEN" {
 			foundKey = true
 			if envVar.GetValue() != "sk-secret-key-123456789" {
 				t.Fatalf("expected unmasked secret value for single-admin console, got %q", envVar.GetValue())
 			}
 			if !envVar.GetIsSecret() {
-				t.Fatalf("expected UPSTREAM_API_KEY to have isSecret=true")
+				t.Fatalf("expected ACTIONSCAT_MANAGEMENT_TOKEN to have isSecret=true")
 			}
 		}
 		if envVar.GetKey() == "BOT_NAME" {
@@ -67,7 +67,7 @@ func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 	}
 
 	if !foundKey || !foundName {
-		t.Fatalf("expected to find UPSTREAM_API_KEY and BOT_NAME in response")
+		t.Fatalf("expected to find ACTIONSCAT_MANAGEMENT_TOKEN and BOT_NAME in response")
 	}
 }
 
@@ -270,7 +270,7 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 		"BOT_NAME",
 		"SYSTEM_PROMPT",
 		"MAX_CONTEXT_MESSAGES",
-		"MAX_CONTEXT_CHARS",
+		"BOT_ALIASES",
 		"GROUP_COMPACT_BUFFER_SIZE",
 	}
 
@@ -283,6 +283,9 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 			go func(k string, round int) {
 				defer wg.Done()
 				val := fmt.Sprintf("val_%s_%d", k, round)
+				if k == "MAX_CONTEXT_MESSAGES" {
+					val = fmt.Sprintf("%d", round+4)
+				}
 				resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
 					Key:   k,
 					Value: val,

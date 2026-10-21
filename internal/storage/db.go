@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 11
+const SchemaVersion = 14
 
 type Backend string
 
@@ -25,6 +26,8 @@ const (
 )
 
 type DB struct {
+	skillStates           sync.Map
+	EmbeddingStorageReady atomic.Bool
 	// CatalogMutationMu protects a full restore from concurrent catalog writes.
 	// Acquire it before ModelRouterMu when both are needed.
 	CatalogMutationMu sync.Mutex
@@ -110,6 +113,10 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 		}
 	}
 	if err = db.initSchema(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = db.detectEmbeddingStorage(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}

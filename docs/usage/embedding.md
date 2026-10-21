@@ -2,10 +2,6 @@
 
 Embedding 将记忆内容与查询转换成向量，按语义相似度召回相关条目。它是可选的实例功能，启用后仍保留原有标签、摘要、提取和反思流程。
 
-::: tip 版本范围
-本页适用于包含 [#194](https://github.com/GuaiZai233/FrostAgent/pull/194) 更新的版本。未包含该更新的版本没有 Embedding 路由和「启用Embedding」开关，应使用既有关键词检索。
-:::
-
 ## 启用步骤
 
 1. 准备实际支持 OpenAI 兼容 `/embeddings` 接口的模型服务。
@@ -59,4 +55,8 @@ FrostAgent 不执行扩展安装；缺少 pgvector 时开启操作会报错。�
 
 关闭「启用Embedding」恢复关键词检索，不删除兼容的 PostgreSQL 向量。应用层 JSON 导出和全量 ZIP 都不携带向量；还原后配置模型与凭据，再开启功能重建。SQLite 重启后的重建也需要模型服务可用。
 
-包含该更新的版本使用 Schema v12 保存输入限额和摘要待刷新标记，SQL 升级仍遵守[迁移规则](../operations/upgrading)。数据库级完整备份与应用导出用途不同，参见[数据库与备份](../operations/storage)。
+PostgreSQL 重启后可复用与当前路由、内容和维度兼容的已保存向量。即使关闭 Embedding 后再修改或删除原记忆，相关派生索引也会失效，重新启用时按最新内容处理，不会继续返回已删除的旧记忆。
+
+若向量表缺失，或删除 pgvector 扩展后残留表已失去 `embedding` 列，先由数据库管理员恢复扩展，再重新启用 Embedding。程序会修复派生存储并清除过期的作用域就绪标记，随后重建；原始记忆保留。不要手工伪造就绪状态或删原记忆来处理索引故障。
+
+当前 SQL Schema 为 v14；v12 / v13 维护 Embedding 输入限额及兼容迁移，v14 增加 Skills。升级仍遵守[迁移规则](../operations/upgrading)。数据库级完整备份与应用导出用途不同，参见[数据库与备份](../operations/storage)。

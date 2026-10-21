@@ -59,6 +59,9 @@ func (s *Service) GetOverview(
 	// Build tool list
 	var toolInfos []*v1.ToolInfo
 	for _, t := range s.engine.ToolRegistry {
+		if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
+			continue
+		}
 		toolInfos = append(toolInfos, &v1.ToolInfo{
 			Name:        t.Name(),
 			Description: t.Description(),

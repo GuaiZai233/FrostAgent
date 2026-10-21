@@ -8,9 +8,10 @@ import (
 
 // GlobalSettings is separate from the per-instance setting.json contract.
 type GlobalSettings struct {
-	FormatVersion int               `json:"format_version"`
-	Values        map[string]string `json:"settings"`
-	SecretNotice  string            `json:"secret_notice"`
+	FormatVersion int                `json:"format_version"`
+	Values        map[string]string  `json:"settings"`
+	ExtraEnv      *map[string]string `json:"extra_env,omitempty"`
+	SecretNotice  string             `json:"secret_notice"`
 }
 
 func globalExportableKeys() map[string]bool {
@@ -25,8 +26,9 @@ func globalExportableKeys() map[string]bool {
 }
 
 func ExportGlobalSettings(global *instanceconfig.Store) GlobalSettings {
-	result := GlobalSettings{FormatVersion: FormatVersion, SecretNotice: SecretNotice,
-		Values: make(map[string]string)}
+	result := GlobalSettings{FormatVersion: FormatVersion,
+		SecretNotice: "常规设置中的密钥与凭据来源仍被排除；额外 env 注入项会以明文导出，请妥善保管备份文件。",
+		Values:       make(map[string]string)}
 	for key, value := range global.Snapshot() {
 		if globalExportableKeys()[key] {
 			result.Values[key] = value

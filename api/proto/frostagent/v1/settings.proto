@@ -6,6 +6,7 @@ package frostagent.v1;
 service SettingsService {
   rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
   rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
+  rpc UpdateEnvVars(UpdateEnvVarsRequest) returns (UpdateEnvVarsResponse);
   rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
   rpc GetRawEnvFile(GetRawEnvFileRequest) returns (GetRawEnvFileResponse);
   rpc UpdateRawEnvFile(UpdateRawEnvFileRequest) returns (UpdateRawEnvFileResponse);
@@ -15,12 +16,17 @@ message EnvVar {
   string key = 1;
   string value = 2;
   bool is_secret = 3;
+  // Input placeholder for the effective default or inherited value.
+  string reset_hint = 4;
+  // Value comes from global inheritance rather than an instance override.
+  bool is_inherited = 5;
 }
 
 message ListEnvVarsRequest {}
 
 message ListEnvVarsResponse {
   repeated EnvVar env_vars = 1;
+  string storage_backend = 2;
 }
 
 message UpdateEnvVarRequest {
@@ -30,6 +36,16 @@ message UpdateEnvVarRequest {
 }
 
 message UpdateEnvVarResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateEnvVarsRequest {
+  repeated EnvVar updates = 1;
+  repeated string clear_keys = 2;
+}
+
+message UpdateEnvVarsResponse {
   bool success = 1;
   string error = 2;
 }

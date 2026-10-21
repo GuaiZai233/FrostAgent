@@ -37,6 +37,9 @@ func (r *Registry) GetExecutor(name string) (func(args string) (string, error), 
 func (r *Registry) ListTools() []Tool {
 	list := make([]Tool, 0, len(r.tools))
 	for _, t := range r.tools {
+		if !t.IsEnabled() {
+			continue
+		}
 		list = append(list, t)
 	}
 	return list

@@ -4,19 +4,26 @@
 
 ## 路由范围
 
-| 入口                                               | 用途                                         |
-| -------------------------------------------------- | -------------------------------------------- |
-| `/api/instances`                                   | 实例列表与创建                               |
-| `/api/instances/<ID>/...`                          | 实例启停、配置复制、备份与导入等生命周期操作 |
-| `/api/storage`                                     | 读取 / 切换数据库，`GET` / `POST`            |
-| `/api/security/...`                                | 全局安全状态与审计                           |
-| `/instances/<ID>/frostagent.v1.<Service>/<Method>` | 实例 ConnectRPC 服务                         |
-| `/instances/<ID>/ws/onebot`                        | OneBot v11 WebSocket                         |
-| `/instances/<ID>/ws/astrbot`                       | AstrBot WebSocket                            |
-| `/instances/<ID>/api/v1/messages/send`             | 外部业务发送消息                             |
-| `/instances/<ID>/api/actionscat/...`               | ActionsCat 管理代理                          |
+| 入口                                               | 用途                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------- |
+| `/api/instances`                                   | 实例列表与创建                                             |
+| `/api/instances/restore`                           | `POST` 原始全量 ZIP 为新实例；可选查询参数 `name` 指定名称 |
+| `/api/instances/global/extra-env`                  | 全局额外 env 注入项，保存后重启进程生效                    |
+| `/api/instances/<ID>/...`                          | 实例启停、配置复制、备份与导入等生命周期操作               |
+| `/api/storage`                                     | 读取 / 切换数据库，`GET` / `POST`                          |
+| `/api/security/...`                                | 全局安全状态与审计                                         |
+| `/instances/<ID>/frostagent.v1.<Service>/<Method>` | 实例 ConnectRPC 服务                                       |
+| `/instances/<ID>/ws/onebot`                        | OneBot v11 WebSocket                                       |
+| `/instances/<ID>/ws/astrbot`                       | AstrBot WebSocket                                          |
+| `/instances/<ID>/api/v1/messages/send`             | 外部业务发送消息                                           |
+| `/instances/<ID>/api/actionscat/...`               | ActionsCat 管理代理                                        |
+| `/instances/<ID>/api/skills...`                    | Skills REST：列表、ZIP 导入、详情、启停和删除              |
 
-服务包括 BotStatus、Settings、ModelRouter、Memory、Dialogue、Sticker、Log 与 MCP。全局模型路由入口用于共享目录；业务调用优先使用明确实例路径，避免全局兼容入口选择默认实例。
+ConnectRPC 服务包括 BotStatus、Settings、ModelRouter、Memory、Dialogue、Sticker、Log 与 MCP。Skills 使用 REST：`GET /api/skills` 列表、`POST /api/skills/import` 上传原始 ZIP，`/api/skills/items/<name>` 支持 GET 详情、POST `{"enabled": true}` 启停与 DELETE 删除；调用时加上实例路径前缀。
+
+全局模型路由入口用于共享目录；业务调用优先使用明确实例路径，避免全局兼容入口选择默认实例。
+
+普通构建远程管理调用统一携带 `Authorization: Bearer <管理控制令牌>`，包括生命周期、备份、存储、日志和 ConnectRPC。容器构建的 Cloudflare Access 拓扑、本机令牌例外及代理要求见[管理面认证](../operations/security#管理面认证)。
 
 ## 外部消息发送
 

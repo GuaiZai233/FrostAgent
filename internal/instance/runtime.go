@@ -26,10 +26,13 @@ import (
 	"FrostAgent/internal/service/messages"
 	routersvc "FrostAgent/internal/service/modelrouter"
 	"FrostAgent/internal/service/settings"
+	skillservice "FrostAgent/internal/service/skills"
 	stickersvc "FrostAgent/internal/service/sticker"
+	"FrostAgent/internal/skills"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"FrostAgent/internal/tools"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -188,6 +191,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflections := memory.NewReflectionManager(reflector)
 	reflections.Scope = scope
 
+	var skillStore *skills.Store
+	if db != nil {
+		skillStore = skills.NewStore(db, instanceID)
+	}
+
 	// Register tools
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
@@ -278,6 +286,14 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 	}
 
+	var skillBackend sandbox.Backend
+	if dynamicSandbox != nil {
+		skillBackend = dynamicSandbox
+	}
+	for _, tool := range tools.SkillTools(skillStore, skillBackend, sessionManager) {
+		registry[tool.Name()] = tool
+	}
+
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
 		executorMap[name] = tool
@@ -322,6 +338,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		Skills:         skillStore,
 		SandboxBackend: dynamicSandbox,
 		Security:       securityController,
 		InstanceID:     instanceID,
@@ -340,6 +357,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		// Persona dialogue prompt
 		DialoguePrompt: dialoguePrompt,
 	}
+	if strings.EqualFold(scope.Getenv("ENABLE_EMBEDDING"), "true") {
+		embeddings, err := memory.NewEmbeddings(scope, store, groupManager, routerManager, reflector)
+		if err != nil {
+			return nil, err
+		}
+		engine.MemoryEmbeddings = embeddings
+		embeddings.BindWriter(writer)
+
+	}
 	compactSummary := fmt.Sprintf(
 		"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
 		groupCompactBufferSize,
@@ -352,11 +378,30 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	mux := http.NewServeMux()
+	if skillStore != nil {
+		mux.Handle("/api/skills", skillservice.New(skillStore, mcpGetenv))
+		mux.Handle("/api/skills/", skillservice.New(skillStore, mcpGetenv))
+	}
 	// ConnectRPC 服务注册
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version, wsListenAddr))
 	mux.Handle(botPath, botHandler)
 
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.NewScoped(config, global, sandboxManager))
+	settingsService := settings.NewScoped(config, global, sandboxManager)
+	backend := "sqlite"
+	if db != nil {
+		backend = string(db.Backend)
+	}
+	settingsService.SetEmbeddingStorage(backend, func(ctx context.Context) error {
+		if _, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{}); err != nil {
+			return fmt.Errorf("请先配置可用的 Embedding 模型路由: %w", err)
+		}
+		if db != nil {
+			_, err := db.EnsureEmbeddingStorage(ctx)
+			return err
+		}
+		return nil
+	})
+	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsService)
 	mux.Handle(settingsPath, settingsHandler)
 
 	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(engine.ModelRouter))
@@ -369,9 +414,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.NewScoped(mcpManager, mcpGetenv))
 	mux.Handle(mcpPath, mcpHandler)
 
-	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
-		memsvc.New(store, groupManager, engine.MemoryReflections),
-	)
+	memoryService := memsvc.New(store, groupManager, engine.MemoryReflections)
+	memoryService.SetEmbeddings(engine.MemoryEmbeddings)
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memoryService)
 	mux.Handle(memoryPath, memoryHandler)
 
 	var dialogueSvc *dialogue.Service
@@ -421,6 +466,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	success = true
 	return &Runtime{scope, engine, mux, ob, ab}, nil
 }
+func (r *Runtime) StartEmbeddings() {
+	if r != nil && r.Engine != nil && r.Engine.MemoryEmbeddings != nil && r.Scope.Context().Err() == nil {
+		r.Engine.MemoryEmbeddings.Start()
+	}
+}
+
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
 	r.Onebot.CloseConnections()

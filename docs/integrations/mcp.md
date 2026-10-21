@@ -38,12 +38,12 @@ Stdio 命令由管理员配置并在 FrostAgent 服务账号下启动。每个 a
 
 ## 管理入口权限
 
-本机管理默认允许可信回环访问。远程 MCP 管理默认受限制，可以配置全局 `MCP_CONTROL_TOKEN`（兼容 `ADMIN_TOKEN`）并发送：
+本机管理默认允许可信回环访问。普通构建的远程管理统一要求全局 `MCP_CONTROL_TOKEN`（未设置时兼容 `ADMIN_TOKEN`），客户端发送：
 
 ```http
 Authorization: Bearer <控制Token>
 ```
 
-`MCP_ENFORCE_LOCAL_TOKEN=true` 会让本机管理也需要 Token；`ALLOW_REMOTE_MCP_MANAGEMENT=true` 放宽远程限制，应只在已有可信认证层的部署中使用。配置会影响 MCP / ActionsCat 等复用此鉴权的管理接口，不能代替整个控制台的认证。
+网页在「系统设置 → 前端设置」保存相同令牌。`MCP_ENFORCE_LOCAL_TOKEN=true` 会让本机管理也需要 Token；旧 `ALLOW_REMOTE_MCP_MANAGEMENT` 不能绕过统一鉴权。容器的 Cloudflare Access 部署另有回环隔离要求，详见[管理面认证](../operations/security#管理面认证)。
 
 无法操作时先区分连接服务失败和管理请求 401 / 403，再检查 Token、服务账号权限、工作目录与服务日志。

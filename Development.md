@@ -41,3 +41,5 @@ pnpm docs:preview
 ```
 
 文档静态输出位于 `docs/.vitepress/dist/`，支持通过 `DOCS_BASE` 指定部署子路径。
+
+当前 SQL Schema 为 v14：保留已发布 Embedding v12 / v13 迁移，Skills 使用 v14。兼容旧 JSON 群目录的人工恢复边界见[升级说明](docs/operations/upgrading.md#json-群存储兼容与人工恢复)；这不会把旧 JSON 自动导入 SQL。

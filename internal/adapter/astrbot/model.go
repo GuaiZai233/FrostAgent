@@ -11,6 +11,11 @@ import (
 
 // Event 表示 AstrBot 插件发送给 FrostAgent 的入站事件。
 type Event struct {
+	NoticeType             string `json:"notice_type,omitempty"`
+	SubType                string `json:"sub_type,omitempty"`
+	SelfID                 string `json:"self_id,omitempty"`
+	TargetID               string `json:"target_id,omitempty"`
+	pokeID                 string
 	Type                   string            `json:"type"`                           // "event" 或 "heartbeat"
 	EventType              string            `json:"event_type,omitempty"`           // "message", "heartbeat", "notice"
 	MessageID              string            `json:"message_id,omitempty"`           // 消息唯一 ID

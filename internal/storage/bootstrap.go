@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// Bootstrap keeps only the database selection in the default local SQLite
-// database. Application settings and instance data live in the selected DB.
+// Bootstrap keeps the database selection and saved PostgreSQL address in the
+// default local SQLite database. Application data lives in the selected DB.
 type Bootstrap struct {
 	db *sql.DB
 }
@@ -81,13 +81,25 @@ func (b *Bootstrap) Load(ctx context.Context) (Config, error) {
 }
 
 func (b *Bootstrap) Save(ctx context.Context, config Config) error {
+	dsn := strings.TrimSpace(config.DSN)
 	var err error
 	config, err = NormalizeConfig(config)
 	if err != nil {
 		return err
 	}
 	_, err = b.db.ExecContext(ctx, `INSERT INTO storage_selection(id, backend, dsn)
-		VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET backend = excluded.backend, dsn = excluded.dsn`,
-		config.Backend, config.DSN)
+		VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET backend = excluded.backend,
+		dsn = CASE WHEN excluded.dsn <> '' THEN excluded.dsn ELSE storage_selection.dsn END`,
+		config.Backend, dsn)
 	return err
+}
+
+// PostgresDSN returns the saved PostgreSQL address, including when SQLite is selected.
+func (b *Bootstrap) PostgresDSN(ctx context.Context) (string, error) {
+	var dsn string
+	err := b.db.QueryRowContext(ctx, `SELECT dsn FROM storage_selection WHERE id = 1`).Scan(&dsn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return dsn, err
 }

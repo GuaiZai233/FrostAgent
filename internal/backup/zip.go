@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"FrostAgent/internal/skills"
 	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/storage"
 	"archive/zip"
@@ -17,6 +18,10 @@ import (
 // BuildInstanceZIP returns a self-contained backup without creating a server
 // side archive. Sticker bytes are separate members, never embedded in JSON.
 func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+	var instanceName string
+	if err := db.SQL.QueryRow(db.Bind(`SELECT name FROM instances WHERE id = ?`), instanceID).Scan(&instanceName); err != nil {
+		return nil, err
+	}
 	settings, err := ExportSettings(db, instanceID)
 	if err != nil {
 		return nil, err
@@ -34,16 +39,22 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		return nil, err
 	}
 
+	skillPackages, err := skills.NewStore(db, instanceID).Export()
+	if err != nil {
+		return nil, err
+	}
+
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
-	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
+	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	for _, file := range []struct {
 		name string
 		data any
 	}{
 		{"manifest.json", manifest},
 		{"setting.json", settings},
+		{"skills.json", skillPackages},
 		{"memory.json", memories},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},

@@ -18,7 +18,11 @@ class MockElement {
   click() {
     if (!this.disabled) this.listeners.get('click')?.();
   }
+  input() { this.listeners.get('input')?.(); }
   focus() {}
+  showModal() {}
+  close() {}
+  remove() {}
   querySelector(selector: string): MockElement {
     if (!this.children.has(selector))
       this.children.set(selector, new MockElement());
@@ -44,15 +48,29 @@ let deferSave = false;
 let resolvePendingSave: (() => void) | undefined;
 let envLoads = 0;
 let dialogueLoads = 0;
+let storedDialogues = [{ id: 'example-1', user: 'Example question', preferred: 'Example answer' }];
+const savedDialogueLists: Array<typeof storedDialogues> = [];
+let storedName = '示例 Bot';
+let storedAliases = '示例,小狐狸';
+const identityUpdates: Array<Array<{ key: string; value: string }>> = [];
 const updates: Array<{ key: string; value: string; isSecret: boolean }> = [];
 const api = {
   async listEnvVars() {
     envLoads++;
-    return [{ key: 'SYSTEM_PROMPT', value: storedPrompt, isSecret: false }];
+    return [
+      { key: 'SYSTEM_PROMPT', value: storedPrompt, isSecret: false },
+      { key: 'BOT_NAME', value: storedName, isSecret: false },
+      { key: 'BOT_ALIASES', value: storedAliases, isSecret: false },
+    ];
   },
   async listDialogues() {
     dialogueLoads++;
-    return { dialogues: [], promptPreview: '', filePath: '' };
+    return { dialogues: storedDialogues, promptPreview: '', filePath: '' };
+  },
+  async saveDialogues(items: typeof storedDialogues) {
+    savedDialogueLists.push(items);
+    storedDialogues = items;
+    return { success: true, error: '', promptPreview: '' };
   },
   async updateEnvVar(update: {
     key: string;
@@ -70,6 +88,16 @@ const api = {
     }
     if (!saveSucceeds) return { success: false, error: 'write failed' };
     storedPrompt = update.value;
+    return { success: true, error: '' };
+  },
+  async updateEnvVars(changes: Array<{ key: string; value: string }>, signal: AbortSignal) {
+    signal.throwIfAborted();
+    identityUpdates.push(changes);
+    if (!saveSucceeds) return { success: false, error: 'identity write failed' };
+    for (const change of changes) {
+      if (change.key === 'BOT_NAME') storedName = change.value;
+      if (change.key === 'BOT_ALIASES') storedAliases = change.value;
+    }
     return { success: true, error: '' };
   },
 } as unknown as ReturnType<typeof createInstanceAPI>;
@@ -94,6 +122,38 @@ await settle();
 assert.equal(display.textContent, storedPrompt);
 assert.equal(display.style.display, 'block');
 assert.equal(edit.disabled, false);
+const name = root.querySelector('#persona-bot-name');
+const aliases = root.querySelector('#persona-bot-aliases');
+const identitySave = root.querySelector('#persona-identity-save');
+assert.equal(name.value, storedName);
+assert.equal(aliases.value, storedAliases);
+name.value = '草稿名称';
+name.input();
+aliases.value = '草稿别名';
+aliases.input();
+assert.equal(identityUpdates.length, 0, 'identity typing must not save');
+refresh.click();
+await settle();
+assert.equal(name.value, '草稿名称', 'refresh must preserve identity drafts');
+identitySave.click();
+await settle();
+assert.deepEqual(identityUpdates[0].map(({ key, value }) => ({ key, value })), [
+  { key: 'BOT_NAME', value: '草稿名称' }, { key: 'BOT_ALIASES', value: '草稿别名' },
+]);
+assert.equal(identitySave.disabled, true);
+saveSucceeds = false;
+aliases.value = '失败草稿';
+aliases.input();
+identitySave.click();
+await settle();
+assert.equal(aliases.value, '失败草稿');
+assert.equal(identitySave.disabled, false);
+assert.equal(storedAliases, '草稿别名');
+aliases.value = storedAliases;
+aliases.input();
+saveSucceeds = true;
+const loadsBeforePromptEdit = envLoads;
+const dialogueLoadsBeforePromptEdit = dialogueLoads;
 
 edit.click();
 assert.equal(input.value, '原有人格\n第二行');
@@ -103,8 +163,8 @@ refresh.click();
 await settle();
 assert.equal(editor.style.display, 'flex', 'refresh keeps the prompt editor open');
 assert.equal(input.value, '未保存草稿', 'refresh preserves the unsaved draft');
-assert.equal(envLoads, 1, 'refresh does not reload the prompt during editing');
-assert.equal(dialogueLoads, 2, 'refresh still reloads dialogue examples');
+assert.equal(envLoads, loadsBeforePromptEdit, 'refresh does not reload the prompt during editing');
+assert.equal(dialogueLoads, dialogueLoadsBeforePromptEdit + 1, 'refresh still reloads dialogue examples');
 
 input.value = '新的人格\n第二行';
 deferSave = true;
@@ -153,8 +213,49 @@ assert.equal(
   '外部更新',
   'refresh loads the latest instance value',
 );
+const cards = root.querySelector('#dialogue-cards-container');
+assert.doesNotMatch(root.innerHTML, /relation-filters/);
+assert.match(cards.innerHTML, /Example question/);
+assert.match(cards.innerHTML, /Example answer/);
+const search = root.querySelector('#dialogue-search-input');
+for (const query of ['QUESTION', 'answer', 'example-1']) {
+  search.value = query;
+  search.input();
+  assert.match(cards.innerHTML, /Example question/, `search supports ${query}`);
+}
+search.value = 'no matching example';
+search.input();
+assert.match(cards.innerHTML, /暂无匹配/);
+search.value = '';
+search.input();
+
+const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const modal = new MockElement();
+Object.defineProperty(globalThis, 'document', {
+  configurable: true,
+  value: { createElement: () => modal, body: { appendChild() {} } },
+});
+try {
+  root.querySelector('#dialogue-add-btn').click();
+  assert.match(modal.innerHTML, /id="dlg-id"/);
+  assert.match(modal.innerHTML, /id="dlg-user"/);
+  assert.match(modal.innerHTML, /id="dlg-preferred"/);
+  assert.doesNotMatch(modal.innerHTML, /dlg-scene|dlg-relation|data-preset/);
+  modal.querySelector('#dlg-id').value = 'new-example';
+  modal.querySelector('#dlg-user').value = ' New question ';
+  modal.querySelector('#dlg-preferred').value = ' New answer ';
+  modal.querySelector('#dlg-save-btn').click();
+  await settle();
+  assert.deepEqual(savedDialogueLists.at(-1)?.at(-1), {
+    id: 'new-example', user: 'New question', preferred: 'New answer',
+  });
+  assert.match(cards.innerHTML, /New question/);
+} finally {
+  if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+  else Reflect.deleteProperty(globalThis, 'document');
+}
 cleanup();
 
 process.stdout.write(
-  'PASS: persona system prompt display, save, failure, and refresh\n',
+  'PASS: persona system prompt and dialogue editing, search, and save\n',
 );

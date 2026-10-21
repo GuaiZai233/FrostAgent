@@ -13,7 +13,7 @@
 3. 对未知信息、工具调用与记忆的处理习惯。
 4. 场景限制与需要遵守的约定。
 
-实例的 `BOT_NAME` 与 `BOT_ALIASES` 控制群聊文本唤醒；修改系统提示词中的名字不会自动修改这两个设置。管理员身份来自 `ADMIN_QQ_IDS`，在提示词里声明管理员不会授予权限。
+在本页编辑 Bot 名称和唤醒别名，分别对应 `BOT_NAME` 与 `BOT_ALIASES`；修改系统提示词中的名字不会自动修改这两个值。管理员身份来自 `ADMIN_QQ_IDS`，在提示词里声明管理员不会授予权限。
 
 ## 示例对话
 
@@ -22,6 +22,16 @@
 新实例从默认 `eval/dialogue/dialogue.yml` 模板初始化，之后保存到数据库并独立管理。修改模板文件不会持续覆盖已有实例。全局 `DEFAULT_DIALOGUE_TEMPLATE` 可指定新实例使用的模板路径。
 
 用少量清晰、彼此一致的例子覆盖问候、回答问题、拒绝不合适请求和工具结果说明。保存后检查页面中的「注入 System Prompt 的对话示例预览」。YAML 结构可参考仓库的 [默认模板](https://github.com/GuaiZai233/FrostAgent/blob/main/eval/dialogue/dialogue.yml)。
+
+当前示例条目使用 `id`、`user` 和 `preferred`：
+
+```yaml
+- id: 1
+  user: 你好，可以介绍一下自己吗？
+  preferred: 你好，我是你的聊天助手。今天想聊些什么？
+```
+
+旧 `scene` 和 `relation` 字段已从示例数据结构、协议和页面移除。需要表达场景或关系时，写入系统提示词或示例正文。
 
 ## 验证效果
 

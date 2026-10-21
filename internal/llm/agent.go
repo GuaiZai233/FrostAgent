@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"FrostAgent/internal/actionscat"
 	"FrostAgent/internal/billing"
 	"FrostAgent/internal/core"
 	"FrostAgent/internal/groupsummary"
@@ -8,9 +9,11 @@ import (
 	"FrostAgent/internal/mcp"
 	"FrostAgent/internal/memory"
 	"FrostAgent/internal/modelrouter"
+	"FrostAgent/internal/poke"
 	"FrostAgent/internal/runtimescope"
 	"FrostAgent/internal/sandbox"
 	"FrostAgent/internal/security"
+	"FrostAgent/internal/skills"
 	"context"
 	"errors"
 	"fmt"
@@ -77,6 +80,7 @@ type AgentRunResult struct {
 	OutputBlocked    bool
 	Usage            core.Usage
 	Error            error
+	LLMFailed        bool // Dialogue route resolution or provider call failed; excludes security, billing, and tool errors.
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
@@ -109,6 +113,7 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
+	PokeGate poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
@@ -129,6 +134,7 @@ type Engine struct {
 	BillingConfig billing.Config
 
 	// Memory components (optional, nil = memory disabled)
+	MemoryEmbeddings  *memory.Embeddings
 	MemoryReader      *memory.Reader
 	MemoryWriter      *memory.Writer
 	MemoryGateway     *memory.Gateway
@@ -144,6 +150,7 @@ type Engine struct {
 
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
+	Skills     *skills.Store
 
 	// Sandbox integration (optional, nil = sandbox disabled)
 	SandboxBackend sandbox.Backend
@@ -348,9 +355,20 @@ func (e *Engine) RunMessagesWithContext(
 
 					if e.MemoryGateway != nil {
 						lastUserMsg := extractLastUserMessage(messages)
-						raw, sErr := groupStore.Search(lastUserMsg, 0)
+						var raw []memory.MemoryEntry
+						var sErr error
+						if e.MemoryEmbeddings != nil {
+							raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
+						} else {
+							raw, sErr = groupStore.Search(lastUserMsg, 0)
+						}
 						if sErr != nil {
-							return e.memoryFailure("search group memory", sErr)
+							if e.MemoryEmbeddings != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
+								raw = nil
+							} else {
+								return e.memoryFailure("search group memory", sErr)
+							}
 						}
 						if len(raw) > 0 {
 							filtered := e.MemoryGateway.FilterGroup(raw)
@@ -383,9 +401,20 @@ func (e *Engine) RunMessagesWithContext(
 			// 召回 → 网关过滤 → 注入
 			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
 				lastUserMsg := extractLastUserMessage(messages)
-				raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
+				var raw []memory.MemoryEntry
+				var err error
+				if e.MemoryEmbeddings != nil {
+					raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
+				} else {
+					raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
+				}
 				if err != nil {
-					return e.memoryFailure("recall memory", err)
+					if e.MemoryEmbeddings != nil {
+						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
+						raw = nil
+					} else {
+						return e.memoryFailure("recall memory", err)
+					}
 				}
 				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
 				filtered = e.MemoryReader.Limit(filtered)
@@ -725,11 +754,16 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content: fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
-				Error:   err,
+				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Error:     err,
+				LLMFailed: true,
 			}
 		}
 		modelName = target.UpstreamModel
+	}
+
+	if err := e.activateRequestedSkill(ctx, messages); err != nil {
+		return AgentRunResult{Content: err.Error(), Error: err}
 	}
 
 	// 主循环
@@ -767,6 +801,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
+		if e.Skills != nil {
+			var skillErr error
+			messages, skillErr = e.skillMessages(ctx, messages)
+			if skillErr != nil {
+				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
+			}
+			if sess := e.skillSession(ctx); sess != nil {
+				var system []string
+				for _, message := range messages {
+					if message.Role == "system" {
+						if content, ok := message.Content.(string); ok {
+							system = append(system, content)
+						}
+					}
+				}
+				sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
+			}
+		}
 		modelTools := e.EffectiveTools()
 		if hasRunCtx && runCtx.Proactive {
 			var proactiveTools []core.Tool
@@ -942,6 +994,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         err,
@@ -1183,7 +1236,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							Usage:         totalUsage,
 						}
 					}
-					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+					if errors.Is(err, actionscat.ErrDisabled) {
+						toolResult = err.Error()
+					} else {
+						toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+					}
 				} else {
 					toolSucceeded = true
 					toolResult = execution.Content
@@ -1390,6 +1447,9 @@ func (e *Engine) EffectiveTools() []core.Tool {
 	var modelTools []core.Tool
 	if len(e.ToolRegistry) > 0 {
 		for _, t := range e.ToolRegistry {
+			if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
+				continue
+			}
 			modelTools = append(modelTools, core.Tool{
 				Name:        t.Name(),
 				Description: t.Description(),

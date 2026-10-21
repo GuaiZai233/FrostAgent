@@ -13,8 +13,9 @@ service DialogueService {
 // DialogueItem represents a single few-shot persona dialogue example.
 message DialogueItem {
   string id = 1;
-  string scene = 2;
-  string relation = 3;
+  reserved 2, 3;
+  reserved "scene", "relation";
+
   string user = 4;
   string preferred = 5;
 }

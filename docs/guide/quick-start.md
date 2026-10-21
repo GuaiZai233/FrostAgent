@@ -2,6 +2,8 @@
 
 本页的目标是先让一个实例完成对话，再接入真实聊天平台。命令均在仓库根目录运行。
 
+本页使用原生源码构建；容器运行方式见[Docker 与 Cloudflare](./docker)。已有全量 ZIP 可在「实例管理 → 创建」直接上传恢复，无需先建空实例。
+
 ## 1. 获取与构建
 
 准备 Go ≥ 1.27.0、Node.js 22 或更高版本、pnpm 10.33.0、Buf、Make 与 Bash。Windows 可以使用 Git Bash 执行 Make，或按[安装与构建](./installation)中的 PowerShell 步骤构建。

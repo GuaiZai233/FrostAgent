@@ -88,6 +88,7 @@ var nextConnGeneration uint64
 type wsConnection struct {
 	*runtimescope.Scope
 	engine              *llm.Engine
+	llmErrorReplies     *llmErrorReplyLimiter
 	conn                *websocket.Conn
 	generation          string
 	stealer             *sticker.Stealer
@@ -215,7 +216,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
-	if event.PostType != "message" {
+	if event.PostType != "message" || (event.PokeID != "" && engine.Getenv("ENABLE_POKE") != "true") {
 		return
 	}
 	var notice string
@@ -723,6 +724,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		var billingState *llm.BillingRunState
 		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 			taskID := fmt.Sprintf("qq_%d_%d", event.UserID, event.MessageID)
+			if event.PokeID != "" {
+				taskID = fmt.Sprintf("qq_%d_%s", event.UserID, event.PokeID)
+			}
 			billingState = &llm.BillingRunState{
 				Platform:      "qq",
 				ExternalID:    strconv.FormatInt(event.UserID, 10),
@@ -976,7 +980,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if runResult.Error != nil && billingState.IterationsBilled == 0 {
 				// 首次迭代即失败且无任何消费记录，不污染历史并直接回复
 				session.TrimHistory(len(session.Snapshot()) - 1)
-				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+				if conn.allowLLMErrorReply(runResult) {
+					sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+				}
 				return
 			}
 			receiptText = billing.FormatReceipt(
@@ -992,6 +998,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.TrimSession(session)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
+		}
+
+		if !conn.allowLLMErrorReply(runResult) {
+			engine.TrimSession(session)
+			if receiptText == "" {
+				return
+			}
+			// Suppress only the LLM error body; settled usage still needs a receipt.
+			replyText = ""
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It

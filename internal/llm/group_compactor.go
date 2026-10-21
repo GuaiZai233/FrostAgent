@@ -62,9 +62,7 @@ const (
 5. 不要增加对话中没有的信息。
 
 如果旧话题已经结束，删除它优先于为了信息完整性而保留它。
-只输出新的群聊总结正文，不要 Markdown 标题或解释。
-
-{conversation}`
+只输出新的群聊总结正文，不要 Markdown 标题或解释。`
 
 	DefaultGroupCompactMaxBufferSize = 200
 	DefaultGroupCompactMinInterval   = 30 * time.Second
@@ -521,10 +519,10 @@ func (c *GroupCompactor) compact(
 	conversation := formatGroupCompactInput(snapshot)
 	request := core.ChatRequest{
 		Model: c.model,
-		Messages: []core.ChatMessage{{
-			Role:    core.RoleUser,
-			Content: strings.Replace(groupCompactPrompt, "{conversation}", conversation, 1),
-		}},
+		Messages: []core.ChatMessage{
+			{Role: core.RoleSystem, Content: groupCompactPrompt},
+			{Role: core.RoleUser, Content: conversation},
+		},
 		MaxTokens:   1024,
 		Temperature: 0.2,
 		Route: core.RouteContext{

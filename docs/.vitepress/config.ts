@@ -25,6 +25,7 @@ export default defineConfig({
           { text: '快速开始', link: '/guide/quick-start' },
           { text: '安装与构建', link: '/guide/installation' },
           { text: '部署与网络', link: '/guide/deployment' },
+          { text: 'Docker 与 Cloudflare', link: '/guide/docker' },
         ],
       },
       {
@@ -38,6 +39,7 @@ export default defineConfig({
         text: '日常使用',
         items: [
           { text: '控制台与实例', link: '/usage/dashboard' },
+          { text: '设置与生效方式', link: '/usage/settings' },
           { text: '模型路由器', link: '/usage/model-router' },
           { text: '人格与示例对话', link: '/usage/persona' },
           { text: '群聊与回复策略', link: '/usage/group-chat' },
@@ -54,6 +56,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: 'MCP 服务器', link: '/integrations/mcp' },
+          { text: 'Skills 技能包', link: '/integrations/skills' },
           { text: '隔离沙箱', link: '/integrations/sandbox' },
           { text: 'ActionsCat', link: '/integrations/actionscat' },
           { text: 'Alcyone 计费', link: '/integrations/billing' },

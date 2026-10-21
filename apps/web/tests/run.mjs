@@ -8,11 +8,19 @@ const esbuildPath = require.resolve('esbuild', {
 const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
+  'actionscat-disabled.test.ts',
   'model-router-editor.test.ts',
   'prompt-merge.test.ts',
   'group-model-config.test.ts',
   'prompt-page.test.ts',
   'dialogue-page.test.ts',
+  'skills.test.ts',
+  'backend-settings-page.test.ts',
+  'bot-user-id-list.test.ts',
+  'control-auth.test.ts',
+  'backup-download.test.ts',
+  'storage-settings-page.test.ts',
+  'authenticated-resources.test.ts',
 ]) {
   const result = await build({
     entryPoints: [resolve('tests', testFile)],

@@ -4,6 +4,7 @@ import (
 	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"FrostAgent/internal/backup"
 	"FrostAgent/internal/billing"
+	"FrostAgent/internal/envinject"
 	"FrostAgent/internal/instanceconfig"
 	"FrostAgent/internal/llm"
 	"FrostAgent/internal/logs"
@@ -15,6 +16,7 @@ import (
 	logsvc "FrostAgent/internal/service/logs"
 	mcpsvc "FrostAgent/internal/service/mcp"
 	routersvc "FrostAgent/internal/service/modelrouter"
+	settingssvc "FrostAgent/internal/service/settings"
 	"FrostAgent/internal/storage"
 	"bytes"
 	"context"
@@ -38,6 +40,7 @@ import (
 )
 
 var ErrBusy = errors.New("实例正忙")
+var ErrNameExists = errors.New("实例名称已存在")
 var ErrDeleting = errors.New("实例正在删除，请重试删除操作")
 var ErrClosing = errors.New("Control Plane 正在关闭")
 var idPattern = regexp.MustCompile("^[a-f0-9]{8}$")
@@ -79,6 +82,8 @@ type Manager struct {
 	templateDialogue   string
 	billing            atomic.Pointer[billing.Client]
 	globalApplyMu      sync.Mutex
+	settingsWriteMu    sync.Mutex
+	appliedGlobal      map[string]string
 	globalApplyHook    func() error
 	mcpGetenv          func(string) string
 	sandbox            *sandbox.ConfigManager
@@ -127,7 +132,7 @@ func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, c
 	if m.db == nil {
 		wsListenAddr = m.legacyWSListenAddr
 	} else if wsListenAddr == "" {
-		wsListenAddr = "127.0.0.1:1234"
+		wsListenAddr = instanceconfig.DefaultWSListenAddr
 	}
 	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
 }
@@ -146,10 +151,11 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	}
 	legacyWSListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
 	if legacyWSListenAddr == "" {
-		legacyWSListenAddr = "127.0.0.1:1234"
+		legacyWSListenAddr = instanceconfig.DefaultWSListenAddr
 	}
 	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
 	if db != nil {
+		m.appliedGlobal = global.Snapshot()
 		m.security = security.NewControllerSQL(db)
 	} else {
 		m.security = security.NewController(abs)
@@ -332,6 +338,10 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		} else if c != nil && c.Error() != nil {
 			m.registry.Instances[index].Enabled = false
 			m.registry.Instances[index].Error = c.Error().Error()
+		} else if info.Error != "" {
+			if err := m.update(info.ID, func(info *Info) { info.Error = "" }); err != nil {
+				i.logger.Warn(logs.SYSTEM, fmt.Sprintf("保存实例恢复状态失败: %v", err))
+			}
 		}
 	}
 	for _, info := range append([]Info{}, m.registry.Instances...) {
@@ -345,7 +355,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
 
-var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command"}
+var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command", "load_skill", "read_skill_resource", "run_skill"}
 
 func (m *Manager) ensureInstanceMCP(i *managed) {
 	i.mu.Lock()
@@ -577,7 +587,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	for _, v := range m.registry.Instances {
 		if strings.EqualFold(v.Name, name) {
-			return Info{}, fmt.Errorf("实例名称已存在")
+			return Info{}, ErrNameExists
 		}
 	}
 	var id string
@@ -821,6 +831,7 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	i.runtime = r
 	i.config = c
 	i.mu.Unlock()
+	r.StartEmbeddings()
 	if m.shutdown.Err() != nil {
 		r.Stop()
 		if i.mcp != nil {
@@ -1089,6 +1100,7 @@ func (m *Manager) Copy(target, source string) error {
 		item.runtime = r
 		item.config = c
 		item.mu.Unlock()
+		r.StartEmbeddings()
 	}
 	if dst.runtime == nil || src.runtime == nil {
 		return fmt.Errorf("实例配置不可用")
@@ -1314,6 +1326,11 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			readOnly = true
 		}
 	}
+	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	if settingsWrite {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
 	var opUnlock func()
 	if !ws && !stream {
 		var locked bool
@@ -1371,7 +1388,8 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	urlCopy.Path = path
 	req.URL = &urlCopy
 	var before, globalBefore map[string]string
-	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	settingsDraft := settingsWrite && strings.HasSuffix(path, "/UpdateEnvVars")
+	wasRunning := rt.Scope.Context().Err() == nil
 	if !ws && !stream {
 		before = i.config.Snapshot()
 	}
@@ -1388,10 +1406,17 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	if !ws && !stream {
 		after := i.config.Snapshot()
 		if m.db != nil {
-			if !readOnly && !equalSettings(before, after) {
-				if err := m.reloadSQLRuntimeLocked(i, rt.Scope.Context().Err() == nil, before); err != nil {
+			globalAfter := m.global.Snapshot()
+			instanceReload := !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after)
+			if instanceReload {
+				if err := m.reloadSQLRuntimeLocked(i, wasRunning, before); err != nil {
 					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
 					if settingsWrite {
+						if settingsDraft {
+							opUnlock()
+							opUnlock = nil
+							err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
+						}
 						writeError(w, err)
 					}
 					return
@@ -1402,6 +1427,10 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 					opUnlock()
 					opUnlock = nil
 					if err := m.applyGlobalSettings(); err != nil {
+						if settingsDraft {
+							writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
+							return
+						}
 						rollbackErr := m.restoreGlobalSnapshot(globalBefore)
 						if rollbackErr == nil {
 							rollbackErr = m.applyGlobalSettings()
@@ -1590,7 +1619,23 @@ func writeError(w http.ResponseWriter, err error) {
 }
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
+	if m.db != nil && path == "global/import/settings" && r.Method == http.MethodPost {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
 	if m.db != nil {
+		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
+			path == "global/backup/settings" || path == "global/import/settings" {
+			w.Header().Set("Cache-Control", "no-store")
+			if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") {
+			m.serveExtraEnv(w, r, path)
+			return
+		}
 		if path == "global/backup/security" && r.Method == http.MethodGet {
 			var state backup.GlobalSecurity
 			err := m.security.WithStateLock(func() error {
@@ -1629,7 +1674,18 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if path == "global/backup/settings" && r.Method == http.MethodGet {
-			data, err := json.MarshalIndent(backup.ExportGlobalSettings(m.global), "", "  ")
+			settings := backup.ExportGlobalSettings(m.global)
+			entries, err := envinject.List(r.Context(), m.db)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			extra := make(map[string]string, len(entries))
+			for _, entry := range entries {
+				extra[entry.Key] = entry.Value
+			}
+			settings.ExtraEnv = &extra
+			data, err := json.MarshalIndent(settings, "", "  ")
 			if err != nil {
 				writeError(w, err)
 				return
@@ -1647,12 +1703,45 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 				writeError(w, err)
 				return
 			}
+			var previousExtra map[string]string
+			if data.ExtraEnv != nil {
+				for key, value := range *data.ExtraEnv {
+					if settingssvc.IsManagedKey(key) {
+						writeError(w, fmt.Errorf("%s belongs to managed settings", key))
+						return
+					}
+					if err := envinject.Validate(key, value); err != nil {
+						writeError(w, err)
+						return
+					}
+				}
+				entries, err := envinject.List(r.Context(), m.db)
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				previousExtra = make(map[string]string, len(entries))
+				for _, entry := range entries {
+					previousExtra[entry.Key] = entry.Value
+				}
+			}
 			if err := backup.ImportGlobalSettings(m.global, data); err != nil {
 				writeError(w, err)
 				return
 			}
+			if data.ExtraEnv != nil {
+				if err := envinject.Replace(r.Context(), m.db, *data.ExtraEnv); err != nil {
+					writeError(w, errors.Join(err, m.restoreGlobalSnapshot(before)))
+					return
+				}
+			}
 			if err := m.applyGlobalSettings(); err != nil {
 				rollbackErr := m.restoreGlobalSnapshot(before)
+				if data.ExtraEnv != nil {
+					rollbackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					rollbackErr = errors.Join(rollbackErr, envinject.Replace(rollbackCtx, m.db, previousExtra))
+					cancel()
+				}
 				if rollbackErr == nil {
 					rollbackErr = m.applyGlobalSettings()
 				}

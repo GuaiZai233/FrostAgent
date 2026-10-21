@@ -22,16 +22,17 @@ type GroupWakeSignals struct {
 	AtBot     bool
 	Alias     bool
 	Proactive bool
+	Poke      bool
 }
 
 // Explicit reports whether the bot was explicitly addressed (via at or alias/name).
 func (s GroupWakeSignals) Explicit() bool {
-	return s.AtBot || s.Alias
+	return s.AtBot || s.Alias || s.Poke
 }
 
 // Any reports whether at least one direct group wake signal was detected.
 func (s GroupWakeSignals) Any() bool {
-	return s.AtBot || s.Alias || s.Proactive
+	return s.AtBot || s.Alias || s.Poke || s.Proactive
 }
 
 // DetectGroupWakeSignals evaluates the OneBot at segment, configured
@@ -43,6 +44,9 @@ func DetectGroupWakeSignals(event model.OneBotEvent, scopes ...*runtimescope.Sco
 
 // DetectGroupWakeSignalsWithRNG evaluates group wake signals using an optional RNG function.
 func DetectGroupWakeSignalsWithRNG(event model.OneBotEvent, rng func() float64, scopes ...*runtimescope.Scope) GroupWakeSignals {
+	if event.PokeID != "" {
+		return GroupWakeSignals{Poke: true}
+	}
 	atBot := IsMentionedBot(event)
 	alias := IsBotNameMentioned(event, scopes...)
 	if atBot || alias || event.MessageType != "group" {

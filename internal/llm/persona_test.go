@@ -7,21 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseDialogueYAML_Success(t *testing.T) {
 	yamlData := []byte(`
 - id: 1
-  scene:
-  relation: 熟人
   user: |
     你不觉得草迪拉熊很神圣吗
   preferred: |
     咦惹！这啥奇怪的话，才不神圣呢！
 
 - id: 2
-  scene:
-  relation: 熟人
   user: |
     老公
   preferred: |
@@ -42,6 +40,31 @@ func TestParseDialogueYAML_Success(t *testing.T) {
 	}
 	if strings.TrimSpace(examples[0].Preferred) != "咦惹！这啥奇怪的话，才不神圣呢！" {
 		t.Errorf("unexpected example 0 preferred: %q", examples[0].Preferred)
+	}
+}
+
+func TestParseDialogueYAML_LegacyFields(t *testing.T) {
+	examples, err := ParseDialogueYAML([]byte(`- id: legacy
+  scene: retired scene
+  relation: retired relation
+  user: question
+  preferred: answer
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(examples) != 1 || examples[0].ID != "legacy" || examples[0].User != "question" || examples[0].Preferred != "answer" {
+		t.Fatalf("legacy YAML lost supported fields: %#v", examples)
+	}
+	if prompt := FormatDialoguePrompt(examples); prompt != DefaultDialogueInstruction+"\n\nUser: question\nAssistant: answer" {
+		t.Fatalf("legacy metadata affected prompt: %q", prompt)
+	}
+	encoded, err := yaml.Marshal(examples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "scene:") || strings.Contains(string(encoded), "relation:") {
+		t.Fatalf("removed fields survived YAML export: %s", encoded)
 	}
 }
 
@@ -224,5 +247,3 @@ func TestEngine_DialoguePromptInjection(t *testing.T) {
 		t.Errorf("engine.RunMessages missing dialogue instruction: %q", sysContentRunMsgs)
 	}
 }
-
-

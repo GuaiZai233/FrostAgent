@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,7 +196,7 @@ func TestGlobalSettingsBackupImportIsRedactedAndAtomic(t *testing.T) {
 	if err := m.global.Update("ALCYONE_SERVICE_TOKEN", "synthetic-secret", false); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/instances/global/backup/settings", nil)
+	req := localSettingsRequest(http.MethodGet, "/api/instances/global/backup/settings", nil)
 	response := httptest.NewRecorder()
 	m.api(response, req)
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("synthetic-secret")) {
@@ -478,7 +479,7 @@ func TestSQLGlobalSettingsImportReportsApplyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	m.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
+	m.ServeHTTP(response, localSettingsRequest(http.MethodPost, "/api/instances/global/import/settings", bytes.NewReader(body)))
 	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), `"success":true`) ||
 		applyCount != 2 || m.global.Get("WS_ALLOWED_ORIGINS") != "" || m.global.Get("SECURITY_CLASSIFIER_TIMEOUT") != "15s" {
 		t.Fatalf("failed import was not rolled back: status=%d body=%s calls=%d", response.Code, response.Body.String(), applyCount)
@@ -758,6 +759,96 @@ func TestSQLFullZIPRestoresNewDisabledInstance(t *testing.T) {
 	storedImage, err := os.ReadFile(filepath.Join(root, "instance_"+restored.ID, "sticker", "picture.png"))
 	if err != nil || !bytes.Equal(storedImage, image) {
 		t.Fatalf("sticker image not restored: %v", err)
+	}
+}
+
+func TestSQLFullZIPUploadUsesBackupNameAndFreshID(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	name := strings.Repeat("霜", 32)
+	source, err := m.Create(name)
+	if err != nil || source.Error != "" {
+		t.Fatalf("create source: %#v, %v", source, err)
+	}
+	archive, err := m.InstanceZIP(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload := func(data []byte) Info {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/instances/restore", bytes.NewReader(data))
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("restore upload: %d %s", response.Code, response.Body.String())
+		}
+		var info Info
+		if err := json.Unmarshal(response.Body.Bytes(), &info); err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	first := upload(archive)
+	second := upload(archive)
+	if first.Name != strings.Repeat("霜", 28)+" (2)" || second.Name != strings.Repeat("霜", 28)+" (3)" {
+		t.Fatalf("duplicate backup names were not made unique: %q, %q", first.Name, second.Name)
+	}
+	if first.Enabled || second.Enabled || first.ID == source.ID || second.ID == source.ID || first.ID == second.ID ||
+		!idPattern.MatchString(first.ID) || !idPattern.MatchString(second.ID) {
+		t.Fatalf("restored identities or enabled states are wrong: %#v %#v", first, second)
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy bytes.Buffer
+	writer := zip.NewWriter(&legacy)
+	for _, member := range reader.File {
+		stream, err := member.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(stream)
+		stream.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if member.Name == "manifest.json" {
+			var manifest map[string]json.RawMessage
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			delete(manifest, "instance_name")
+			data, err = json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := writer.Create(member.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := out.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, next := m.List()
+	legacyDefaultName := fmt.Sprintf("实例%d", next)
+	if err := m.Rename(source.ID, legacyDefaultName); err != nil {
+		t.Fatal(err)
+	}
+	oldBackup := upload(legacy.Bytes())
+	if oldBackup.Name != legacyDefaultName+" (2)" || oldBackup.ID == source.ID || oldBackup.Enabled {
+		t.Fatalf("legacy backup did not avoid the occupied default name: %#v", oldBackup)
 	}
 }
 

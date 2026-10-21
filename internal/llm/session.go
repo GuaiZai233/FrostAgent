@@ -251,6 +251,7 @@ func (f *DeliveryFailure) FormatDeliveryContext() string {
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
+	activeSkills   map[string]activeSkill
 	ConversationID string
 	History        []ChatMessage
 	CreatedAt      time.Time
@@ -334,6 +335,7 @@ type BotLoopObservation struct {
 	done        chan struct{}
 	once        sync.Once
 	exceeded    bool
+	admitted    bool
 }
 
 // BeginBotLoop records ingress order across connections sharing a session.
@@ -355,8 +357,16 @@ func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config strin
 // Finish settles an ingress event after policy and routing decisions are known.
 // Every reserved event must be finished, including events rejected before dialogue.
 func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
+	exceeded, _ := o.FinishWithAdmission(eligible, limit, nil)
+	return exceeded
+}
+
+// FinishWithAdmission keeps admission and the candidate bot-loop state in the
+// same ingress order. Rejected admission leaves sender/count/interruption state
+// unchanged. admit must not wait for another observation on this session.
+func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit func(exceeded bool) bool) (bool, bool) {
 	if o == nil {
-		return false
+		return false, admit == nil || admit(false)
 	}
 	o.once.Do(func() {
 		if o.previous != nil {
@@ -365,30 +375,31 @@ func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
 		s := o.session
 		s.mu.Lock()
 		if o.epoch == s.botLoopEpoch {
-			if s.botLoopConfig != o.config {
-				s.botLoopConfig = o.config
-				s.botLoopSender = ""
-				s.botLoopTurns = 0
+			config, sender, turns := s.botLoopConfig, s.botLoopSender, s.botLoopTurns
+			if config != o.config {
+				config, sender, turns = o.config, "", 0
 			}
 			if o.interrupted {
-				s.botLoopSender = ""
-				s.botLoopTurns = 0
+				sender, turns = "", 0
 			}
-			if s.botLoopSender != o.senderID {
-				s.botLoopSender = o.senderID
-				s.botLoopTurns = 0
+			if sender != o.senderID {
+				sender, turns = o.senderID, 0
 			}
 			if !o.marked {
-				s.botLoopTurns = 0
+				turns = 0
 			} else if eligible {
-				s.botLoopTurns++
-				o.exceeded = limit > 0 && s.botLoopTurns > limit
+				turns++
+				o.exceeded = limit > 0 && turns > limit
+			}
+			o.admitted = admit == nil || admit(o.exceeded)
+			if o.admitted {
+				s.botLoopConfig, s.botLoopSender, s.botLoopTurns = config, sender, turns
 			}
 		}
 		s.mu.Unlock()
 		close(o.done)
 	})
-	return o.exceeded
+	return o.exceeded, o.admitted
 }
 
 // ObserveBotLoop applies a synchronous observation, used when no ingress checks are pending.
@@ -993,6 +1004,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	}
 
 	s.History = nil
+	s.activeSkills = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
@@ -2227,10 +2239,12 @@ func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
 	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
 	// （见 agent.go effectiveMaxHistory）。
 	if v := scope.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory && (scope == nil || scope.Config == nil || !scope.Config.IsDatabase()) {
 			sm.MaxHistory = n
 		}
 	}
+	// SQL scopes read the current limit on every trim; retain the code fallback
+	// here so deleting an override does not keep the startup value indefinitely.
 	// 启动定时清理协程
 	sm.Go(sm.startCleanupRoutine)
 	return sm
@@ -2480,6 +2494,7 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.activeSkills = nil
 	s.historySeq = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil

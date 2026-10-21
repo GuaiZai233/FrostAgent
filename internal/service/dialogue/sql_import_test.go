@@ -78,7 +78,7 @@ func TestSQLDialogueYAMLImportExport(t *testing.T) {
 		t.Fatalf("import did not refresh the prompt: %v", response)
 	}
 	expected := []llm.DialogueExample{
-		{ID: "7", Scene: "问候", Relation: "朋友", User: "你好\n今天怎么样？", Preferred: "你好呀！\n一切顺利。"},
+		{ID: "7", User: "你好\n今天怎么样？", Preferred: "你好呀！\n一切顺利。"},
 		{ID: "second", User: "test: question", Preferred: "test: answer"},
 	}
 	loaded, err := LoadExamplesSQL(db, "instance-a")
@@ -91,6 +91,9 @@ func TestSQLDialogueYAMLImportExport(t *testing.T) {
 		t.Fatal("fresh service cannot load imported prompt")
 	}
 	exported := exportYAML()
+	if strings.Contains(exported, "scene:") || strings.Contains(exported, "relation:") {
+		t.Fatalf("export retained removed fields from legacy YAML: %s", exported)
+	}
 	parsed, err := llm.ParseDialogueYAML([]byte(exported))
 	if err != nil || !reflect.DeepEqual(parsed, expected) {
 		t.Fatalf("export lost fields: %#v, %v", parsed, err)

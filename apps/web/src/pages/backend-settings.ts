@@ -12,68 +12,43 @@ const globalKeys = new Set([
   'SANDBOX_SESSION_NAMESPACE',
   'MCP_CONTROL_TOKEN',
   'ADMIN_TOKEN',
-  'ALLOW_REMOTE_MCP_MANAGEMENT',
   'MCP_ENFORCE_LOCAL_TOKEN',
   'SECURITY_CONTROL_MODE',
 ]);
-const booleanKeys = new Set([
-  'ENABLE_AT_IN_GROUP_MSG', 'GROUP_REPLY_ON_MENTION', 'ENABLE_REPLY_IN_GROUP_MSG', 'ENABLE_QUOTE_TRACE',
-  'ENABLE_ONEBOT_ADAPTER', 'ENABLE_ASTRBOT_ADAPTER', 'BILLING_ENABLED', 'ENABLE_PROACTIVE_REPLY',
-  'ENABLE_PROACTIVE_REPLY_WHITELIST',
-  'SANDBOX_ENABLED', 'ALLOW_REMOTE_MCP_MANAGEMENT', 'MCP_ENFORCE_LOCAL_TOKEN',
-]);
-import { createInstanceAPI } from '../api/client';
+import { createInstanceAPI, extraEnvAPI, setControlToken } from '../api/client';
 import { instanceState } from '../instance-state';
-import { EnvVar } from '@frostagent/proto';
-import { escapeHtml, maskSecret } from '../utils/formatters';
+import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
-import { confirmDialog } from '../components/confirm';
-import { ProactiveSettingsSync } from './proactive-settings-sync';
+import { renderBackendSettingsForm } from './backend-settings-form';
+import { SettingsDraft } from './settings-draft';
+import { dedicatedSettingKeys, settingFields } from './backend-setting-fields';
 import {
   groupIdFromSessionId,
   parseWhitelistGroups,
   formatGroupOption,
   isWhitelistEnabled,
-  parseExplicitWhitelistSwitch,
-  ProactiveWhitelistSync,
 } from './proactive-whitelist';
 
-function configurationBadges(key: string): string {
-  const ownership = globalKeys.has(key)
-    ? '<small class="badge badge-outline">全局共享</small>'
-    : '<small class="badge badge-outline">当前实例</small>';
-  return ownership;
-}
-
-export function mountBackendSettingsPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountBackendSettingsPage(container: HTMLElement, api = createInstanceAPI(), extraAPI = extraEnvAPI): () => void {
   let isUnmounted = false;
   let loading = false;
-  let envVars: EnvVar[] = [];
-  const visibleSecrets = new Set<string>();
-  let editingKey: string | null = null;
-  let editingValue = '';
-  let editingIsSecret = false;
-
-  let groupReplyOnMention = false;
-  let enableAtOther = false;
-  let enableReplyOther = false;
-  let quoteTraceDepth = 5;
-  let quoteTraceSaving = false;
-  let proactiveReplyEnabled = false;
-  let proactiveReplyProbability = 0.05;
-  let stickerActivity = 0;
-  let stickerActivityMode: 'bot_turns' | 'all_messages' = 'bot_turns';
-  let stickerSaving = false;
-  let stickerEditSeq = 0;
-  let proactiveWhitelistEnabled = false;
-  let proactiveWhitelistGroups: string[] = [];
-  let botLoopSaving = false;
+  let storageBackend = '';
+  let saving = false;
+  let loadSeq = 0;
+  let draft: SettingsDraft | null = null;
+  const controller = new AbortController();
   const sessionGroupMap = new Map<string, string>();
 
   container.innerHTML = `
     <div class="page-container fade-in">
+      <div id="settings-draft-banner" class="settings-draft-banner" role="alert" hidden>
+        <span>当前更改尚未保存，离开将丢弃。</span>
+        <div class="flex gap-2 shrink-0">
+          <button type="button" id="settings-draft-restore" class="btn btn-outline btn-sm">还原</button>
+          <button type="button" id="settings-draft-save" class="btn btn-outline btn-sm">保存</button>
+        </div>
+      </div>
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div class="flex items-center gap-2.5">
           <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置" style="text-decoration: none;">
@@ -92,6 +67,17 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
       </header>
 
       <div class="flex flex-col gap-4">
+        <article class="card p-4">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="card-title text-sm font-semibold">记忆设置</h2>
+            <small class="badge badge-outline">当前实例</small>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-3">
+            <label class="text-xs font-semibold" for="embedding-enabled">启用Embedding</label>
+            <label class="toggle-switch"><input type="checkbox" id="embedding-enabled" role="switch" aria-label="启用Embedding" disabled><span aria-hidden="true"></span></label>
+          </div>
+          <p id="embedding-sqlite-warning" class="text-xs text-destructive mt-2" hidden>sqlite不支持向量存储，反思后embedding的结果将不会持久化！</p>
+        </article>
         <!-- Group Behavior Settings Card -->
         <article class="card p-4">
           <div class="card-header border-b border-border pb-3 mb-3">
@@ -99,6 +85,26 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               <span class="text-primary flex items-center">${icon('bot', 'w-4 h-4')}</span>
               <h2 class="card-title text-sm font-semibold">Bot 行为与回复策略</h2>
             </div>
+          </div>
+
+          <div class="mb-4 pb-4 border-b border-border" id="poke-card">
+            <div class="flex items-center gap-2.5 mb-3">
+              <label class="toggle-switch"><input type="checkbox" id="poke-enabled" role="switch" aria-label="允许发送戳一戳行为" /><span aria-hidden="true"></span></label>
+              <label for="poke-enabled" class="text-xs font-semibold text-foreground">允许发送戳一戳行为</label>
+            </div>
+            <div id="poke-controls" class="flex flex-col gap-2.5">
+              <label for="poke-custom-text" class="text-xs font-medium">行为附加自定义文本</label>
+              <p id="poke-text-description" class="text-[11px] text-muted">一旦Bot被戳，发送给LLM的附加消息。</p>
+              <input type="text" id="poke-custom-text" class="input input-sm settings-default-input w-full min-w-0" placeholder="的..." aria-describedby="poke-text-description poke-preview" />
+              <p id="poke-preview" class="text-[11px] text-muted break-all" aria-live="polite"></p>
+              <div class="flex items-center gap-2 flex-wrap">
+                <label for="poke-cooldown" class="text-xs font-medium">冷却时间</label>
+                <input type="number" id="poke-cooldown" class="input input-sm settings-default-input font-mono" style="width: 6rem; flex: none;" min="0" max="86400" step="1" placeholder="30" />
+                <span class="text-xs text-muted">秒</span>
+              </div>
+              <p class="text-[11px] text-muted">每个群/私聊独立冷却，同一群内所有人共享。默认 30 秒，0 表示不冷却；冷却期间不会向 LLM 发送消息。</p>
+            </div>
+            <p class="text-[11px] text-muted mt-2">此行为会被雪花计费。</p>
           </div>
 
           <!-- Proactive Reply Section -->
@@ -123,7 +129,6 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5">
                   <span class="text-xs font-semibold text-foreground">触发概率</span>
-                  <span class="text-[11px] text-muted font-mono">(PROACTIVE_REPLY_PROBABILITY)</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="text-xs font-mono font-semibold text-primary" id="proactive-reply-prob-display">0.05 (5%)</span>
@@ -144,12 +149,11 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                   <input
                     type="number"
                     id="proactive-reply-number"
-                    class="input input-sm font-mono text-right"
+                    class="input input-sm settings-default-input font-mono text-right"
                     min="0.01"
                     max="1.00"
                     step="0.01"
-                    value="0.05"
-                    placeholder="0.05"
+                    placeholder="0.01"
                     style="width: 5.5rem;"
                   />
                   <span class="text-xs text-muted">/ 1.0</span>
@@ -176,7 +180,7 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
                   </div>
                 </div>
                 <p class="text-[11px] text-muted">
-                  启用白名单模式后，仅白名单内的群聊才会触发主动回复；非白名单中的群永远不触发自动回复。
+                  启用后，非白名单群不会触发主动回复；正常被唤醒的回复不受此限制。
                 </p>
 
                 <div class="flex flex-col gap-2 pt-1" id="proactive-whitelist-controls">
@@ -216,39 +220,48 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
             <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
             <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              <label class="flex flex-col gap-1.5">
-                <span class="text-xs font-medium">标记为 Bot 的用户 ID</span>
-                <input id="bot-loop-user-ids" type="text" class="input input-sm font-mono text-xs" placeholder="用户 ID，多个用逗号分隔" />
-              </label>
+              <div class="flex flex-col gap-1.5 min-w-0">
+                <label for="bot-loop-user-id-input" class="text-xs font-medium">标记为 Bot 的用户 ID</label>
+                <div class="flex items-center gap-2">
+                  <input id="bot-loop-user-id-input" type="text" class="input input-sm font-mono text-xs flex-1 min-w-0" placeholder="输入用户 ID" autocomplete="off" />
+                  <button type="button" id="bot-loop-add-user" class="btn btn-outline btn-sm shrink-0">添加</button>
+                </div>
+              </div>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">最多连续轮数</span>
-                <input id="bot-loop-max-turns" type="number" class="input input-sm font-mono text-xs w-28" min="1" step="1" value="3" />
+                <input id="bot-loop-max-turns" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="1" step="1" placeholder="3" />
               </label>
               <label class="flex flex-col gap-1.5">
                 <span class="text-xs font-medium">超限处理</span>
-                <select id="bot-loop-mode" class="input input-sm text-xs">
+                <select id="bot-loop-mode" class="input input-sm settings-default-select text-xs">
+                  <option value="">默认（提示静默）</option>
                   <option value="soft">非强制：提示静默</option>
                   <option value="hard">强制：丢弃请求</option>
                 </select>
               </label>
             </div>
+            <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
             <div class="flex items-center justify-between gap-2 mt-2">
-              <span class="text-[11px] text-muted">留空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
-              <button type="button" id="bot-loop-save" class="btn btn-primary btn-sm shrink-0">保存</button>
+              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
             </div>
           </div>
 
           <div class="mb-4 pb-4 border-b border-border" id="sticker-activity-card">
             <div class="flex items-center justify-between mb-3 gap-2">
               <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
-              <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+                <input type="number" id="sticker-activity-number" class="input input-sm settings-default-input w-16 text-right" min="0" max="10" step="1" placeholder="0" aria-label="表情包使用积极度数值" />
+              </div>
             </div>
             <label for="sticker-activity-mode" class="text-xs font-medium text-foreground">计数方式</label>
-            <select id="sticker-activity-mode" class="select w-full mt-1 mb-2">
-              <option value="bot_turns">强制 Bot 对话轮次</option>
-              <option value="all_messages">全部轮次</option>
+            <select id="sticker-activity-mode" class="select settings-default-select w-full mt-1 mb-2">
+              <option value="">默认（按 Bot 对话轮次）</option>
+              <option value="bot_turns">按 Bot 对话轮次</option>
+              <option value="all_messages">按收到的消息条数</option>
             </select>
             <p id="sticker-activity-mode-description" class="text-[11px] text-muted mb-3">每次唤醒或触发主动回复计一轮。</p>
+            <p class="text-[11px] text-muted mb-3">积极度控制发送约束的间隔，不是概率；计数在实例内共享，不按群分别计数。</p>
             <input type="range" id="sticker-activity-slider" class="slider w-full" min="0" max="10" step="1" value="0" aria-label="表情包使用积极度" />
             <div class="flex justify-between text-[11px] text-muted mt-1">
               <span>0 · 禁用</span><span>10 · 每 5 轮</span>
@@ -259,932 +272,518 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           <div>
             <h3 class="text-xs font-semibold text-foreground mb-2.5">群聊回复规则</h3>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-mention-cb" role="switch" aria-label="启用群聊对话回复" /><span aria-hidden="true"></span></span>
                 <div>
-                  <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
+                  <span class="text-xs font-semibold text-foreground">启用群聊对话回复</span>
                 </div>
               </label>
 
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-at-cb" role="switch" aria-label="回复时 @ 对方" /><span aria-hidden="true"></span></span>
                 <div>
                   <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
                 </div>
               </label>
 
-              <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-                <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-reply-cb" role="switch" aria-label="引用对方消息" /><span aria-hidden="true"></span></span>
                 <div>
                   <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
-                  <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
                 </div>
               </label>
             </div>
+            <p class="text-[11px] text-muted mt-2">关闭群聊对话回复后，@、名称或别名唤醒及主动回复均不响应。</p>
           </div>
 
           <div class="mt-4 p-3.5 rounded-lg border border-border flex flex-col gap-3">
-            <label class="flex items-center gap-2.5 cursor-pointer">
-              <input type="checkbox" id="quote-trace-cb" class="checkbox" />
+            <div class="flex items-center justify-between gap-2.5">
               <span class="text-xs font-semibold text-foreground">引用追溯</span>
-            </label>
+              <label class="toggle-switch" title="引用追溯">
+                <input type="checkbox" id="quote-trace-cb" role="switch" aria-label="引用追溯" />
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
             <div class="flex items-center gap-2">
               <label for="quote-trace-depth" class="text-xs text-muted">追溯深度</label>
-              <input type="number" id="quote-trace-depth" class="input input-sm font-mono w-20"
-                min="1" max="10" step="1" value="5" />
+              <input type="number" id="quote-trace-depth" class="input input-sm settings-default-input font-mono w-20"
+                min="1" max="10" step="1" placeholder="5" />
               <span class="text-xs text-muted">层（1～10，默认 5）</span>
             </div>
           </div>
         </article>
 
-        <!-- Settings table -->
-        <div class="card table-card overflow-hidden">
-          <div class="table-container">
-            <table class="table env-table">
-              <thead>
-                <tr>
-                  <th class="env-table-key-col">设置项</th>
-                  <th class="env-table-val-col">值</th>
-                  <th class="env-table-action-col">操作</th>
-                </tr>
-              </thead>
-              <tbody id="env-table-body">
-                <tr>
-                  <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-                    <span class="spinner"></span>
-                    <span style="margin-left: 0.5rem;">加载中...</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div id="settings-form" class="flex flex-col gap-4"></div>
+        <article class="card p-4">
+          <h2 class="card-title text-sm font-semibold">额外 env 注入</h2>
+          <p class="text-xs text-muted mt-1 mb-4">供外部组件读取的环境变量。保存或删除后需重启 FrostAgent 才会生效；宿主环境中已有的同名变量优先。</p>
+          <div id="extra-env-list" class="flex flex-col gap-2 mb-4"></div>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <input id="extra-env-key" class="input input-sm sm:w-48" aria-label="额外环境变量名" placeholder="变量名" autocomplete="off" />
+            <input id="extra-env-value" class="input input-sm flex-1" type="password" aria-label="额外环境变量值" placeholder="变量值" autocomplete="off" />
+            <button id="extra-env-add" type="button" class="btn btn-outline btn-sm">添加</button>
           </div>
-        </div>
+        </article>
       </div>
 
     </div>
   `;
 
-  // Elements
-  const refreshBtn = container.querySelector<HTMLButtonElement>(
-    '#backend-refresh-btn',
-  )!;
-
-  const proactiveReplyCb =
-    container.querySelector<HTMLInputElement>('#proactive-reply-cb')!;
-  const proactiveReplyStatusText = container.querySelector<HTMLElement>(
-    '#proactive-reply-status-text',
-  )!;
-  const proactiveReplyControls = container.querySelector<HTMLElement>(
-    '#proactive-reply-controls',
-  )!;
-  const proactiveReplySlider = container.querySelector<HTMLInputElement>(
-    '#proactive-reply-slider',
-  )!;
-  const proactiveReplyNumber = container.querySelector<HTMLInputElement>(
-    '#proactive-reply-number',
-  )!;
-  const proactiveReplyProbDisplay = container.querySelector<HTMLElement>(
-    '#proactive-reply-prob-display',
-  )!;
-  const stickerActivityModeSelect = container.querySelector<HTMLSelectElement>(
-    '#sticker-activity-mode',
-  )!;
-  const stickerActivityModeDescription = container.querySelector<HTMLElement>(
-    '#sticker-activity-mode-description',
-  )!;
-  const stickerActivitySlider = container.querySelector<HTMLInputElement>(
-    '#sticker-activity-slider',
-  )!;
-  const stickerActivityDisplay = container.querySelector<HTMLElement>(
-    '#sticker-activity-display',
-  )!;
-
-  const proactiveWhitelistCb =
-    container.querySelector<HTMLInputElement>('#proactive-whitelist-cb')!;
-  const proactiveWhitelistStatusText = container.querySelector<HTMLElement>(
-    '#proactive-whitelist-status-text',
-  )!;
-  const proactiveWhitelistSelect = container.querySelector<HTMLSelectElement>(
-    '#proactive-whitelist-select',
-  )!;
-  const proactiveWhitelistInput = container.querySelector<HTMLInputElement>(
-    '#proactive-whitelist-input',
-  )!;
-  const proactiveWhitelistAddBtn = container.querySelector<HTMLButtonElement>(
-    '#proactive-whitelist-add-btn',
-  )!;
-  const proactiveWhitelistTags = container.querySelector<HTMLElement>(
-    '#proactive-whitelist-tags',
-  )!;
-
-  const botLoopUserIDsInput = container.querySelector<HTMLInputElement>('#bot-loop-user-ids')!;
-  const botLoopMaxTurnsInput = container.querySelector<HTMLInputElement>('#bot-loop-max-turns')!;
-  const botLoopModeSelect = container.querySelector<HTMLSelectElement>('#bot-loop-mode')!;
-  const botLoopSaveButton = container.querySelector<HTMLButtonElement>('#bot-loop-save')!;
-
-  const groupMentionCb =
-    container.querySelector<HTMLInputElement>('#group-mention-cb')!;
-  const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
-  const groupReplyCb =
-    container.querySelector<HTMLInputElement>('#group-reply-cb')!;
-  const quoteTraceCb = container.querySelector<HTMLInputElement>('#quote-trace-cb')!;
-  const quoteTraceDepthInput = container.querySelector<HTMLInputElement>('#quote-trace-depth')!;
-
-  const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
-
-  function updateProactiveUI(
-    enabled: boolean,
-    prob: number,
-    isSaving = false,
-  ) {
-    proactiveReplyCb.checked = enabled;
-    proactiveReplyCb.disabled = isSaving;
-    proactiveReplyStatusText.textContent = isSaving ? '保存中...' : '';
-    proactiveReplyStatusText.style.display = isSaving ? 'inline' : 'none';
-    proactiveReplyStatusText.className = 'text-xs font-medium text-muted';
-
-    const clampedProb = Math.min(
-      1.0,
-      Math.max(0.01, Math.round(prob * 100) / 100),
-    );
-    const probStr = clampedProb.toFixed(2);
-    proactiveReplySlider.value = probStr;
-    proactiveReplyNumber.value = probStr;
-    proactiveReplyProbDisplay.textContent = `${probStr} (${Math.round(clampedProb * 100)}%)`;
-
-    proactiveReplySlider.disabled = !enabled || isSaving;
-    proactiveReplyNumber.disabled = !enabled || isSaving;
-    proactiveReplyControls.style.opacity = !enabled || isSaving ? '0.55' : '1';
-    proactiveReplyControls.style.pointerEvents =
-      enabled && !isSaving ? 'auto' : 'none';
-    updateWhitelistUI(isSaving);
+  const element = <T extends HTMLElement>(id: string) => container.querySelector<T>('#' + id)!;
+  const refreshBtn = element<HTMLButtonElement>('backend-refresh-btn');
+  const banner = element<HTMLElement>('settings-draft-banner');
+  const restoreBtn = element<HTMLButtonElement>('settings-draft-restore');
+  const saveBtn = element<HTMLButtonElement>('settings-draft-save');
+  const settingsRoot = element<HTMLElement>('settings-form');
+  const extraList = element<HTMLElement>('extra-env-list');
+  const extraKey = element<HTMLInputElement>('extra-env-key');
+  const extraValue = element<HTMLInputElement>('extra-env-value');
+  const extraAdd = element<HTMLButtonElement>('extra-env-add');
+  const pokeEnabled = element<HTMLInputElement>('poke-enabled');
+  const pokeText = element<HTMLInputElement>('poke-custom-text');
+  const pokeCooldown = element<HTMLInputElement>('poke-cooldown');
+  function updatePokePreview(): void {
+    const text = pokeText.value.trim();
+    element<HTMLElement>('poke-preview').textContent = '发送预览：user:（用户戳了戳你' + (text ? ' ' + text : '') + '）';
   }
-
-  function updateStickerActivityUI(level: number) {
-    stickerActivitySlider.value = String(level);
-    stickerActivitySlider.disabled = stickerSaving;
-    stickerActivityModeSelect.value = stickerActivityMode;
-    stickerActivityModeSelect.disabled = stickerSaving;
-    stickerActivityModeDescription.textContent =
-      stickerActivityMode === 'all_messages'
-        ? '每条传入消息计一轮，无需唤醒 Bot。'
-        : '每次唤醒或触发主动回复计一轮。';
-    stickerActivityDisplay.textContent =
-      level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 轮`;
+  function updatePokeControls(): void {
+    pokeText.disabled = pokeCooldown.disabled = !pokeEnabled.checked;
+    element<HTMLElement>('poke-controls').style.opacity = pokeEnabled.checked ? '1' : '0.55';
   }
-
-  function updateWhitelistUI(isSaving = false) {
-    const state = whitelistSync.getState();
-    const enabled = state.enabled;
-    const groups = state.groups;
-    const isUnverified = state.isUnverified;
-
-    proactiveWhitelistCb.checked = enabled;
-    proactiveWhitelistCb.disabled = isSaving;
-    proactiveWhitelistSelect.disabled = isSaving;
-    proactiveWhitelistInput.disabled = isSaving;
-    proactiveWhitelistAddBtn.disabled = isSaving;
-
-    proactiveWhitelistStatusText.textContent = isSaving
-      ? '保存中...'
-      : isUnverified
-        ? '状态未确认（已恢复）'
-        : '';
-    proactiveWhitelistStatusText.style.display =
-      isSaving || isUnverified ? 'inline' : 'none';
-    proactiveWhitelistStatusText.className = isSaving
-      ? 'text-xs font-medium text-muted'
-      : isUnverified
-        ? 'text-xs font-medium text-warning'
-        : 'text-xs font-medium text-muted';
-
-    // Update select options
-    const currentSelected = proactiveWhitelistSelect.value;
-    const optionsHtml = ['<option value="">-- 从最近会话选择群聊 --</option>'];
-    for (const [gid, gname] of sessionGroupMap.entries()) {
-      const label = formatGroupOption(gid, gname);
-      optionsHtml.push(
-        `<option value="${escapeHtml(gid)}">${escapeHtml(label)}</option>`,
-      );
-    }
-    proactiveWhitelistSelect.innerHTML = optionsHtml.join('');
-    if (sessionGroupMap.has(currentSelected)) {
-      proactiveWhitelistSelect.value = currentSelected;
-    }
-
-    // Render tags
-    if (groups.length === 0) {
-      proactiveWhitelistTags.innerHTML =
-        '<span class="text-[11px] text-muted">白名单为空（开启状态下所有群聊均不会触发主动回复）</span>';
-    } else {
-      proactiveWhitelistTags.innerHTML = groups
-        .map((gid) => {
-          const cachedName = sessionGroupMap.get(gid);
-          const label = formatGroupOption(gid, cachedName);
-          return `
-            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono">
-              <span>${escapeHtml(label)}</span>
-              <button
-                type="button"
-                class="text-muted hover:text-danger ml-0.5 transition-colors cursor-pointer proactive-remove-group-btn"
-                data-group-id="${escapeHtml(gid)}"
-                title="移除群号"
-                ${isSaving ? 'disabled' : ''}
-              >&times;</button>
-            </span>
-          `;
-        })
-        .join('');
-
-      proactiveWhitelistTags
-        .querySelectorAll<HTMLButtonElement>('.proactive-remove-group-btn')
-        .forEach((btn) => {
-          btn.disabled = isSaving;
-          btn.addEventListener('click', () => {
-            if (isSaving) return;
-            const gid = btn.dataset.groupId;
-            if (gid) {
-              void whitelistSync.removeGroup(gid);
-            }
-          });
-        });
-    }
+  const proactive = element<HTMLInputElement>('proactive-reply-cb');
+  const probability = element<HTMLInputElement>('proactive-reply-number');
+  const probabilitySlider = element<HTMLInputElement>('proactive-reply-slider');
+  const whitelist = element<HTMLInputElement>('proactive-whitelist-cb');
+  const groupSelect = element<HTMLSelectElement>('proactive-whitelist-select');
+  const groupInput = element<HTMLInputElement>('proactive-whitelist-input');
+  const groupAdd = element<HTMLButtonElement>('proactive-whitelist-add-btn');
+  const groupTags = element<HTMLElement>('proactive-whitelist-tags');
+  const botUserInput = element<HTMLInputElement>('bot-loop-user-id-input');
+  const botUserAdd = element<HTMLButtonElement>('bot-loop-add-user');
+  const botUserTags = element<HTMLElement>('bot-loop-user-tags');
+  const stickerSlider = element<HTMLInputElement>('sticker-activity-slider');
+  const stickerNumber = element<HTMLInputElement>('sticker-activity-number');
+  const stickerMode = element<HTMLSelectElement>('sticker-activity-mode');
+  const quote = element<HTMLInputElement>('quote-trace-cb');
+  const quoteDepth = element<HTMLInputElement>('quote-trace-depth');
+  const embeddingToggle = element<HTMLInputElement>('embedding-enabled');
+  const embeddingWarning = element<HTMLElement>('embedding-sqlite-warning');
+  function updateEmbeddingWarning(): void {
+    embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
   }
-
-  const whitelistSync = new ProactiveWhitelistSync(
-    api,
-    { enabled: proactiveWhitelistEnabled, groups: proactiveWhitelistGroups },
-    {
-      onStateChange: (state) => {
-        proactiveWhitelistEnabled = state.enabled;
-        proactiveWhitelistGroups = state.groups;
-        updateWhitelistUI(state.isSaving);
-      },
-      onError: (err) => {
-        toast.error('白名单更新失败: ' + err.message);
-      },
-      onSuccess: (msg) => {
-        toast.success(msg);
-      },
-      onReloadNeeded: async () => {
-        const ok = await loadData();
-        if (!ok) {
-          throw new Error('重新加载配置失败');
-        }
-      },
-    },
-  );
-
-  const proactiveSync = new ProactiveSettingsSync(
-    api,
-    { enabled: proactiveReplyEnabled, probability: proactiveReplyProbability },
-    {
-      onStateChange: (state) => {
-        proactiveReplyEnabled = state.enabled;
-        proactiveReplyProbability = state.probability;
-        updateProactiveUI(state.enabled, state.probability, state.isSaving);
-      },
-      onError: (err) => {
-        toast.error('更新失败: ' + err.message);
-      },
-      onSuccess: (msg) => {
-        toast.success(msg);
-      },
-      onReloadNeeded: async () => {
-        await loadData();
-      },
-    },
-  );
-
-  async function loadData() {
-    if (isUnmounted) return;
-    const loadSeq = proactiveSync.nextLoadSeq();
-    const stickerLoadSeq = stickerEditSeq;
-    const whitelistLoadSeq = whitelistSync.nextLoadSeq();
-    loading = true;
-    renderTable();
-
-    try {
-      const [vars, sessionsResp] = await Promise.all([
-        api.listEnvVars(),
-        api.getSessions(100).catch(() => ({ sessions: [] })),
-      ]);
-      if (isUnmounted) return;
-      envVars = vars.filter((item) => item.key !== 'SYSTEM_PROMPT');
-
-      sessionGroupMap.clear();
-      for (const sess of sessionsResp.sessions || []) {
-        const gid = groupIdFromSessionId(sess.sessionId);
-        if (gid) {
-          if (sess.groupName) {
-            sessionGroupMap.set(gid, sess.groupName);
-          } else if (!sessionGroupMap.has(gid)) {
-            sessionGroupMap.set(gid, '');
-          }
-        }
-      }
-
-      const getVal = (k: string) => vars.find((v) => v.key === k)?.value ?? '';
-      if (!stickerSaving && stickerLoadSeq === stickerEditSeq) {
-        const parsedActivity = Number(getVal('STICKER_ACTIVITY'));
-        stickerActivity =
-          Number.isInteger(parsedActivity) &&
-          parsedActivity >= 0 &&
-          parsedActivity <= 10
-            ? parsedActivity
-            : 0;
-        stickerActivityMode =
-          getVal('STICKER_ACTIVITY_MODE') === 'all_messages'
-            ? 'all_messages'
-            : 'bot_turns';
-        updateStickerActivityUI(stickerActivity);
-      }
-      groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
-      enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
-      enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
-      const depthValue = Number(getVal('QUOTE_TRACE_DEPTH'));
-      quoteTraceDepth = Number.isInteger(depthValue) && depthValue >= 1 && depthValue <= 10
-        ? depthValue : 5;
-      quoteTraceCb.checked = getVal('ENABLE_QUOTE_TRACE') !== 'false';
-      quoteTraceDepthInput.value = String(quoteTraceDepth);
-      quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
-      botLoopUserIDsInput.value = getVal('BOT_LOOP_USER_IDS');
-      botLoopMaxTurnsInput.value = getVal('BOT_LOOP_MAX_TURNS') || '3';
-      botLoopModeSelect.value = getVal('BOT_LOOP_MODE') === 'hard' ? 'hard' : 'soft';
-
-      const probValStr = getVal('PROACTIVE_REPLY_PROBABILITY');
-      const enabledValStr = getVal('ENABLE_PROACTIVE_REPLY');
-      const parsedProb = parseFloat(probValStr);
-
-      let serverEnabled = false;
-      if (enabledValStr === 'false') {
-        serverEnabled = false;
-      } else if (enabledValStr === 'true') {
-        serverEnabled = true;
-      } else {
-        serverEnabled = !isNaN(parsedProb) && parsedProb > 0;
-      }
-
-      let serverProb = 0.05;
-      if (!isNaN(parsedProb) && parsedProb >= 0.01 && parsedProb <= 1.0) {
-        serverProb = Math.round(parsedProb * 100) / 100;
-      } else if (serverEnabled) {
-        serverProb = 0.01;
-      } else {
-        serverProb = 0.05;
-      }
-
-      const whitelistEnStr = getVal('ENABLE_PROACTIVE_REPLY_WHITELIST');
-      const whitelistGroupsStr = getVal('PROACTIVE_REPLY_GROUP_WHITELIST');
-      const parsedWhitelistGroups = parseWhitelistGroups(whitelistGroupsStr);
-      const serverWhitelistEnabled = isWhitelistEnabled(
-        whitelistEnStr,
-        parsedWhitelistGroups.length,
-      );
-      const serverExplicitSwitch = parseExplicitWhitelistSwitch(whitelistEnStr);
-
-      groupMentionCb.checked = groupReplyOnMention;
-      groupAtCb.checked = enableAtOther;
-      groupReplyCb.checked = enableReplyOther;
-      proactiveSync.applyServerConfig(serverEnabled, serverProb, loadSeq);
-      whitelistSync.applyServerConfig(
-        serverWhitelistEnabled,
-        parsedWhitelistGroups,
-        whitelistLoadSeq,
-        serverExplicitSwitch,
-      );
-      return true;
-    } catch (err) {
-      if (isUnmounted) return false;
-      toast.error(
-        '加载设置失败: ' +
-          (err instanceof Error ? err.message : String(err)),
-      );
-      envVars = [];
-      return false;
-    } finally {
-      if (!isUnmounted) {
-        loading = false;
-        renderTable();
-      }
-    }
-  }
-
-  function renderTable() {
-    if (loading && envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-            <span class="spinner"></span>
-            <span style="margin-left: 0.5rem;">加载中...</span>
-          </td>
-        </tr>
-      `;
-      return;
-    }
-
-    if (envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 3rem;">
-            暂无设置项。
-          </td>
-        </tr>
-      `;
-      return;
-    }
-
-    tbody.innerHTML = envVars
-      .map((item) => {
-        const isEditing = editingKey === item.key;
-        const isSecret = item.isSecret;
-        const isVisible = visibleSecrets.has(item.key);
-
-        if (isEditing) {
-          const isMultiline =
-            !editingIsSecret &&
-            (editingValue.includes('\n') || editingValue.length > 60);
-
-          return `
-            <tr class="bg-muted">
-              <td class="align-top">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="font-mono text-xs font-semibold text-foreground break-all">${escapeHtml(item.key)}</span>
-                  <div class="flex items-center gap-1 flex-wrap">
-                    ${configurationBadges(item.key)}
-                  </div>
-                </div>
-              </td>
-              <td class="align-top">
-                <div class="flex items-start gap-2 min-w-0">
-                  ${
-                    editingIsSecret
-                      ? `
-                    <input
-                      type="password"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                      : isMultiline
-                        ? `
-                    <textarea
-                      class="textarea font-mono text-xs flex-1 min-w-0 leading-relaxed"
-                      id="edit-env-val-input"
-                      rows="${Math.min(8, Math.max(3, editingValue.split('\n').length))}"
-                      style="resize: vertical; min-height: 2.25rem;"
-                    >${escapeHtml(editingValue)}</textarea>
-                  `
-                        : `
-                    <input
-                      type="text"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                  }
-                </div>
-              </td>
-              <td class="align-top" style="text-align: right;">
-                <div class="flex items-center justify-end gap-1">
-                  <button class="btn btn-primary btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="save-inline-btn" title="保存">
-                    ${icon('check', 'w-3.5 h-3.5')}
-                  </button>
-                  <button class="btn btn-outline btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="cancel-inline-btn" title="取消">
-                    ${icon('close', 'w-3.5 h-3.5')}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          `;
-        }
-
-        const displayVal =
-          isSecret && !isVisible ? maskSecret(item.value) : item.value;
-
-        return `
-          <tr>
-            <td class="align-top">
-              <div class="flex items-center gap-1.5 flex-wrap">
-                ${isSecret ? `<span class="text-muted flex items-center shrink-0" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground break-all">${escapeHtml(item.key)}</span>
-                <div class="flex items-center gap-1 flex-wrap">
-                  ${configurationBadges(item.key)}
-                </div>
-              </div>
-            </td>
-            <td class="align-top">
-              ${booleanKeys.has(item.key) ? `<label class="flex items-center gap-2 text-xs"><input type="checkbox" class="checkbox" data-action="toggle-setting" data-key="${escapeHtml(item.key)}" ${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? 'checked' : ''} /><span>${item.value === 'true' || (item.key === 'ENABLE_QUOTE_TRACE' && item.value !== 'false') ? '开启' : '关闭'}</span></label>` : `
-              <div class="flex items-start gap-1.5 min-w-0">
-                <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
-                ${
-                  isSecret
-                    ? `
-                  <button class="btn btn-ghost btn-icon-sm text-muted shrink-0" style="width: 1.5rem; height: 1.5rem; padding: 0; flex-shrink: 0;" data-action="toggle-secret" data-key="${escapeHtml(
-                    item.key,
-                  )}" title="${isVisible ? '隐藏' : '显示'}">
-                    ${icon(isVisible ? 'eye_off' : 'eye', 'w-3 h-3')}
-                  </button>
-                `
-                    : ''
-                }
-              </div>
-              `}
-            </td>
-            <td class="align-top" style="text-align: right;">
-              ${booleanKeys.has(item.key) ? '' : `
-              <div class="flex items-center justify-end gap-1">
-                <button class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" data-action="edit-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="修改">
-                  ${icon('pencil', 'w-3.5 h-3.5')}
-                </button>
-                <button class="btn btn-ghost btn-icon-sm text-destructive" style="width: 1.75rem; height: 1.75rem;" data-action="delete-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="删除">
-                  ${icon('trash', 'w-3.5 h-3.5')}
-                </button>
-              </div>
-              `}
-            </td>
-          </tr>
-        `;
-      })
-      .join('');
-
-    // Attach inline edit handlers if active
-    if (editingKey) {
-      const editInput = tbody.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-        '#edit-env-val-input',
-      );
-      const saveInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
-      const cancelInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
-
-      editInput?.focus();
-      if (editInput && typeof editInput.setSelectionRange === 'function') {
-        const len = editInput.value.length;
-        editInput.setSelectionRange(len, len);
-      }
-      editInput?.addEventListener('input', () => {
-        editingValue = editInput.value;
-      });
-
-      saveInlineBtn?.addEventListener('click', async () => {
-        await saveEnvVar(editingKey!, editingValue, editingIsSecret);
-        editingKey = null;
-        renderTable();
-      });
-
-      cancelInlineBtn?.addEventListener('click', () => {
-        editingKey = null;
-        renderTable();
-      });
-
-      editInput?.addEventListener('keydown', ((e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          cancelInlineBtn?.click();
-        } else if (
-          (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ||
-          (e.key === 'Enter' && editInput instanceof HTMLInputElement)
-        ) {
-          e.preventDefault();
-          saveInlineBtn?.click();
-        }
-      }) as EventListener);
-    }
-
-    // Attach row button events
-    tbody
-      .querySelectorAll<HTMLInputElement>('[data-action="toggle-setting"]')
-      .forEach((input) => {
-        input.addEventListener('change', () => {
-          if (input.dataset.key) void toggleGroupSetting(input.dataset.key, input.checked);
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="toggle-secret"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          if (visibleSecrets.has(key)) visibleSecrets.delete(key);
-          else visibleSecrets.add(key);
-          renderTable();
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="edit-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          const item = envVars.find((v) => v.key === key);
-          if (item) {
-            editingKey = item.key;
-            editingValue = item.value;
-            editingIsSecret = item.isSecret;
-            renderTable();
-          }
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="delete-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          const confirmed = await confirmDialog({
-            title: '清除设置项',
-            message: `确认清除设置项 ${key} 吗？`,
-            confirmLabel: '删除',
-            destructive: true,
-          });
-          if (confirmed) {
-            try {
-              const res = await api.deleteEnvVar(key);
-              if (res.success) {
-                toast.success('设置项已清除');
-                void loadData();
-              } else {
-                toast.error('删除失败: ' + res.error);
-              }
-            } catch (err) {
-              toast.error(
-                '删除失败: ' +
-                  (err instanceof Error ? err.message : String(err)),
-              );
-            }
-          }
-        });
-      });
-  }
-
-  async function saveEnvVar(key: string, value: string, isSecret: boolean) {
-    if (!key) return;
-    try {
-      const res = await api.updateEnvVar({ key, value, isSecret });
-      if (res.success) {
-        toast.success('设置已保存');
-        void loadData();
-      } else {
-        toast.error('保存失败: ' + res.error);
-      }
-    } catch (err) {
-      toast.error(
-        '保存失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }
-
-  // Toggle behavior settings
-  async function toggleGroupSetting(key: string, value: boolean) {
-    try {
-      const res = await api.updateEnvVar({
-        key,
-        value: value ? 'true' : 'false',
-        isSecret: false,
-      });
-      if (res.success) {
-        toast.success('群聊设置已更新');
-        void loadData();
-      } else {
-        toast.error('更新失败: ' + res.error);
-      }
-    } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }
-
-  // Proactive reply handlers
-  async function handleProactiveToggle(enabled: boolean) {
-    let prob = parseFloat(proactiveReplyNumber.value);
-    if (isNaN(prob) || prob < 0.01) {
-      prob = 0.01;
-    }
-    if (prob > 1.0) {
-      prob = 1.0;
-    }
-    await proactiveSync.setTarget(enabled, prob);
-  }
-
-  async function handleProactiveProbChange(val: number) {
-    await proactiveSync.setTarget(proactiveReplyEnabled, val);
-  }
-
-  function setBotLoopSaving(saving: boolean) {
-    botLoopSaving = saving;
-    botLoopUserIDsInput.disabled = saving;
-    botLoopMaxTurnsInput.disabled = saving;
-    botLoopModeSelect.disabled = saving;
-    botLoopSaveButton.disabled = saving;
-    botLoopSaveButton.textContent = saving ? '保存中...' : '保存';
-  }
-
-  botLoopSaveButton.addEventListener('click', () => {
-    if (botLoopSaving) return;
-    const maxTurns = Number(botLoopMaxTurnsInput.value);
-    if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
-      toast.error('最多连续轮数必须为正整数');
-      return;
-    }
-    const userIDs = botLoopUserIDsInput.value.split(/[,;\s]+/).filter(Boolean).join(',');
-    const mode = botLoopModeSelect.value === 'hard' ? 'hard' : 'soft';
-    void (async () => {
-      setBotLoopSaving(true);
-      try {
-        for (const [key, value] of [
-          ['BOT_LOOP_MAX_TURNS', String(maxTurns)],
-          ['BOT_LOOP_MODE', mode],
-          ['BOT_LOOP_USER_IDS', userIDs],
-        ]) {
-          const res = await api.updateEnvVar({ key, value, isSecret: false });
-          if (!res.success) throw new Error(res.error || key + ' 保存失败');
-        }
-        toast.success('Bot 连续对话设置已保存');
-      } catch (err) {
-        toast.error(
-          '保存未完成，部分设置可能已生效；正在重新加载实际设置: ' +
-            (err instanceof Error ? err.message : String(err)),
-        );
-      } finally {
-        await loadData();
-        if (!isUnmounted) setBotLoopSaving(false);
-      }
-    })();
-  });
-
-  // Group cb handlers
-  groupMentionCb.addEventListener(
-    'change',
-    () =>
-      void toggleGroupSetting('GROUP_REPLY_ON_MENTION', groupMentionCb.checked),
-  );
-  groupAtCb.addEventListener(
-    'change',
-    () => void toggleGroupSetting('ENABLE_AT_IN_GROUP_MSG', groupAtCb.checked),
-  );
-  groupReplyCb.addEventListener(
-    'change',
-    () =>
-      void toggleGroupSetting(
-        'ENABLE_REPLY_IN_GROUP_MSG',
-        groupReplyCb.checked,
-      ),
-  );
-
-  quoteTraceCb.addEventListener('change', () => {
-    quoteTraceDepthInput.disabled = !quoteTraceCb.checked || quoteTraceSaving;
-    void toggleGroupSetting('ENABLE_QUOTE_TRACE', quoteTraceCb.checked);
-  });
-  quoteTraceDepthInput.addEventListener('change', async () => {
-    const depth = Number(quoteTraceDepthInput.value);
-    if (!Number.isInteger(depth) || depth < 1 || depth > 10) {
-      toast.error('引用追溯深度必须是 1 到 10 的整数');
-      quoteTraceDepthInput.value = String(quoteTraceDepth);
-      return;
-    }
-    quoteTraceSaving = true;
-    quoteTraceDepthInput.disabled = true;
-    try {
-      const result = await api.updateEnvVar({
-        key: 'QUOTE_TRACE_DEPTH', value: String(depth), isSecret: false,
-      });
-      if (!result.success) throw new Error(result.error || '保存失败');
-      quoteTraceDepth = depth;
-      toast.success('引用追溯深度已更新');
-    } catch (err) {
-      toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
-      quoteTraceDepthInput.value = String(quoteTraceDepth);
-    } finally {
-      quoteTraceSaving = false;
-      if (!isUnmounted) quoteTraceDepthInput.disabled = !quoteTraceCb.checked;
-    }
-  });
-
-  // Proactive reply event handlers
-  stickerActivitySlider.addEventListener('input', () => {
-    updateStickerActivityUI(Number(stickerActivitySlider.value));
-  });
-
-  stickerActivitySlider.addEventListener('change', () => {
-    void saveStickerSetting('STICKER_ACTIVITY', stickerActivitySlider.value);
-  });
-
-  stickerActivityModeSelect.addEventListener('change', () => {
-    void saveStickerSetting(
-      'STICKER_ACTIVITY_MODE',
-      stickerActivityModeSelect.value,
-    );
-  });
-
-  async function saveStickerSetting(
-    key: 'STICKER_ACTIVITY' | 'STICKER_ACTIVITY_MODE',
-    value: string,
-  ) {
-    if (stickerSaving) return;
-    stickerEditSeq++;
-    stickerSaving = true;
-    updateStickerActivityUI(
-      key === 'STICKER_ACTIVITY' ? Number(value) : stickerActivity,
-    );
-    let reload = false;
-    try {
-      const res = await api.updateEnvVar({ key, value, isSecret: false });
-      if (!res.success)
-        throw new Error(res.error || '更新表情包使用积极度失败');
-      if (key === 'STICKER_ACTIVITY') stickerActivity = Number(value);
-      else
-        stickerActivityMode =
-          value === 'all_messages' ? 'all_messages' : 'bot_turns';
-      if (!isUnmounted) toast.success('表情包使用积极度已更新');
-    } catch (err) {
-      if (!isUnmounted)
-        toast.error(
-          '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-        );
-      reload = true;
-    } finally {
-      stickerSaving = false;
-      if (!isUnmounted) updateStickerActivityUI(stickerActivity);
-    }
-    if (reload && !isUnmounted) await loadData();
-  }
-
-  proactiveReplyCb.addEventListener('change', () => {
-    void handleProactiveToggle(proactiveReplyCb.checked);
-  });
-  proactiveReplySlider.addEventListener('input', () => {
-    const val = parseFloat(proactiveReplySlider.value);
-    if (!isNaN(val)) {
-      const clamped = Math.min(1, Math.max(0.01, Math.round(val * 100) / 100));
-      proactiveReplyNumber.value = clamped.toFixed(2);
-      proactiveReplyProbDisplay.textContent = `${clamped.toFixed(2)} (${Math.round(clamped * 100)}%)`;
-    }
-  });
-  proactiveReplySlider.addEventListener('change', () => {
-    void handleProactiveProbChange(parseFloat(proactiveReplySlider.value));
-  });
-  proactiveReplyNumber.addEventListener('change', () => {
-    void handleProactiveProbChange(parseFloat(proactiveReplyNumber.value));
-  });
-  proactiveReplyNumber.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      proactiveReplyNumber.blur();
-    }
-  });
-  // Whitelist mode event handlers
-  proactiveWhitelistCb.addEventListener('change', () => {
-    void whitelistSync.toggleEnabled(proactiveWhitelistCb.checked);
-  });
-
-  proactiveWhitelistSelect.addEventListener('change', () => {
-    if (proactiveWhitelistSelect.value) {
-      proactiveWhitelistInput.value = proactiveWhitelistSelect.value;
-    }
-  });
-
-  proactiveWhitelistAddBtn.addEventListener('click', () => {
-    const val =
-      proactiveWhitelistInput.value.trim() || proactiveWhitelistSelect.value;
-    if (val) {
-      proactiveWhitelistInput.value = '';
-      proactiveWhitelistSelect.value = '';
-      void whitelistSync.addGroup(val);
-    }
-  });
-
-  proactiveWhitelistInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const val =
-        proactiveWhitelistInput.value.trim() || proactiveWhitelistSelect.value;
-      if (val) {
-        proactiveWhitelistInput.value = '';
-        proactiveWhitelistSelect.value = '';
-        void whitelistSync.addGroup(val);
-      }
-    }
-  });
-
-  refreshBtn.addEventListener('click', () => void loadData());
-
-  void loadData();
-
-  return () => {
-    isUnmounted = true;
+  const numericControls: Record<string, HTMLInputElement> = {
+    POKE_COOLDOWN_SECONDS: pokeCooldown,
+    PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
+    QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
   };
+
+  function invalidNumbers(): HTMLInputElement[] {
+    return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
+  }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || invalidNumbers().length > 0; }
+  function updateBanner(): void {
+    banner.hidden = !dirty();
+    saveBtn.disabled = saving || loading || !draft;
+    restoreBtn.disabled = saving || loading;
+    saveBtn.textContent = saving ? '保存中…' : '保存';
+    refreshBtn.disabled = saving || loading || dirty();
+  }
+
+  function change(key: string, value: string): void {
+    if (!draft || saving || loading) return;
+    draft.set(key, value);
+    updateBanner();
+  }
+
+  function renderForm(): void {
+    if (!draft) {
+      settingsRoot.innerHTML = '<div class="card p-8 text-center text-muted">加载设置后即可编辑</div>';
+      return;
+    }
+    renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
+  }
+
+  function renderGroups(): void {
+    const groups = parseWhitelistGroups(draft?.get('PROACTIVE_REPLY_GROUP_WHITELIST') ?? '');
+    whitelist.checked = isWhitelistEnabled(draft?.get('ENABLE_PROACTIVE_REPLY_WHITELIST'), groups.length);
+    groupTags.innerHTML = groups.length === 0 ? '<span class="text-[11px] text-muted">白名单为空。</span>' : groups.map((id) => `
+      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs">
+        ${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))}
+        <button type="button" data-group-id="${escapeHtml(id)}" aria-label="移除群聊" class="proactive-remove-group-btn">×</button>
+      </span>`).join('');
+    groupTags.querySelectorAll<HTMLButtonElement>('[data-group-id]').forEach((button) => {
+      button.addEventListener('click', () => {
+        changeGroups(groups.filter((id) => id !== button.dataset.groupId));
+      });
+    });
+  }
+
+  function changeGroups(groups: string[]): void {
+    if (!draft) return;
+    if (!draft.get('ENABLE_PROACTIVE_REPLY_WHITELIST')) {
+      change('ENABLE_PROACTIVE_REPLY_WHITELIST', whitelist.checked ? 'true' : 'false');
+    }
+    change('PROACTIVE_REPLY_GROUP_WHITELIST', groups.join(','));
+    renderGroups();
+  }
+
+  function normalizeBotUserID(userID: string): string {
+    const colon = userID.indexOf(':');
+    return colon < 0 ? userID : userID.slice(0, colon).toLowerCase() + userID.slice(colon);
+  }
+
+  function botUserIDs(): string[] {
+    return [...new Set((draft?.get('BOT_LOOP_USER_IDS') ?? '').split(/[,;\s]+/).filter(Boolean).map(normalizeBotUserID))];
+  }
+
+  function renderBotUsers(): void {
+    const ids = botUserIDs();
+    const disabled = !draft || saving || loading;
+    botUserTags.innerHTML = ids.length === 0
+      ? '<span class="text-[11px] text-muted">尚未添加用户 ID</span>'
+      : ids.map((userID, index) => `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono min-w-0">
+            <span class="break-all">${escapeHtml(userID)}</span>
+            <button type="button" class="text-muted hover:text-danger shrink-0 cursor-pointer" data-bot-user-index="${index}" aria-label="移除 ${escapeHtml(userID)}" title="移除用户 ID" ${disabled ? 'disabled' : ''}>&times;</button>
+          </span>`).join('');
+    botUserTags.querySelectorAll<HTMLButtonElement>('[data-bot-user-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!draft || saving || loading) return;
+        change('BOT_LOOP_USER_IDS', ids.filter((_, index) => index !== Number(button.dataset.botUserIndex)).join(','));
+        renderBotUsers();
+      });
+    });
+  }
+
+  function addBotUser(): boolean {
+    if (!draft || saving || loading) return false;
+    const userID = normalizeBotUserID(botUserInput.value.trim());
+    if (!userID || /[,;\s]/.test(userID)) {
+      toast.error(userID ? '每次添加一个用户 ID' : '请输入用户 ID');
+      return false;
+    }
+    const ids = botUserIDs();
+    if (ids.includes(userID)) {
+      toast.error('该用户 ID 已添加');
+      return false;
+    }
+    botUserInput.value = '';
+    change('BOT_LOOP_USER_IDS', [...ids, userID].join(','));
+    renderBotUsers();
+    botUserInput.focus();
+    return true;
+  }
+
+  function updateProbabilityDisplay(): void {
+    const text = probability.value || '0.01';
+    const value = Number(text);
+    element<HTMLElement>('proactive-reply-prob-display').textContent = Number.isFinite(value)
+      ? `${text} (${Math.round(value * 100)}%)` : '待填写';
+  }
+
+  function updateStickerDisplay(): void {
+    const level = Number(stickerNumber.value);
+    element<HTMLElement>('sticker-activity-display').textContent = level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 轮`;
+    element<HTMLElement>('sticker-activity-mode-description').textContent = stickerMode.value === 'all_messages'
+      ? '每条传入消息计一轮，无需唤醒 Bot。' : '每次唤醒或触发主动回复计一轮。';
+  }
+
+  function renderControls(): void {
+    if (!draft) return;
+    const value = (key: string) => draft!.get(key);
+    pokeEnabled.checked = value('ENABLE_POKE') === 'true';
+    pokeText.value = value('POKE_CUSTOM_TEXT');
+    pokeCooldown.value = value('POKE_COOLDOWN_SECONDS');
+    updatePokePreview();
+    updatePokeControls();
+    embeddingToggle.checked = value('ENABLE_EMBEDDING') === 'true';
+    updateEmbeddingWarning();
+    proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
+      (value('ENABLE_PROACTIVE_REPLY') !== 'false' && Number(value('PROACTIVE_REPLY_PROBABILITY')) > 0);
+    probability.value = value('PROACTIVE_REPLY_PROBABILITY').trim();
+    probabilitySlider.value = probability.value || '0.01';
+    probability.disabled = probabilitySlider.disabled = !proactive.checked;
+    element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
+    element<HTMLElement>('proactive-reply-status-text').style.display = 'none';
+    element<HTMLElement>('proactive-whitelist-status-text').style.display = 'none';
+    const toggles: Record<string, string> = {
+      'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
+      'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
+    };
+    for (const [id, key] of Object.entries(toggles)) {
+      element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
+    }
+    quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
+    quoteDepth.value = value('QUOTE_TRACE_DEPTH');
+    quoteDepth.disabled = !quote.checked;
+    renderBotUsers();
+    element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    const loopMode = element<HTMLSelectElement>('bot-loop-mode');
+    loopMode.value = value('BOT_LOOP_MODE');
+    loopMode.dataset.default = String(!loopMode.value);
+    stickerNumber.value = value('STICKER_ACTIVITY');
+    stickerSlider.value = stickerNumber.value || '0';
+    stickerMode.value = value('STICKER_ACTIVITY_MODE');
+    stickerMode.dataset.default = String(!stickerMode.value);
+    renderGroups();
+    updateProbabilityDisplay();
+    updateStickerDisplay();
+  }
+
+  function validateExtra(key: string, value: string): void {
+    if (key.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('请填写有效的环境变量名');
+    const upper = key.toUpperCase();
+    if (settingFields[upper] || dedicatedSettingKeys.has(upper) || draft?.values().some((item) => item.key === upper) ||
+      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(upper)) {
+      throw new Error('此项应在常规设置中修改');
+    }
+    if (new TextEncoder().encode(value).length > 16 * 1024 || /[\r\n\0]/.test(value)) {
+      throw new Error('环境变量值不得超过 16 KiB，也不能包含换行或 NUL');
+    }
+  }
+
+  function addExtra(): boolean {
+    if (!draft) return false;
+    try {
+      const key = extraKey.value.trim();
+      validateExtra(key, extraValue.value);
+      draft.setExtra(key, extraValue.value);
+      extraKey.value = extraValue.value = '';
+      renderExtra();
+      updateBanner();
+      return true;
+    } catch (error) {
+      toast.error(String(error));
+      return false;
+    }
+  }
+
+  function renderExtra(): void {
+    const entries = draft?.extraEntries() ?? [];
+    extraList.innerHTML = entries.length === 0 ? '<p class="text-xs text-muted">暂无额外注入项。</p>' : entries.map(({ key, value }) => `
+      <div class="flex items-center gap-2 min-w-0" data-extra-key="${escapeHtml(key)}">
+        <span class="font-mono text-xs w-40 shrink-0 break-all">${escapeHtml(key)}</span>
+        <input class="input input-sm flex-1 min-w-0" type="password" value="${escapeHtml(value)}" aria-label="${escapeHtml(key)}的值" />
+        <button type="button" class="btn btn-outline btn-sm" data-extra-show>显示</button>
+        <button type="button" class="btn btn-ghost btn-sm text-destructive" data-extra-delete>删除</button>
+      </div>`).join('');
+    extraList.querySelectorAll<HTMLElement>('[data-extra-key]').forEach((row) => {
+      const key = row.dataset.extraKey!;
+      const input = row.querySelector<HTMLInputElement>('input')!;
+      input.addEventListener('input', () => { draft!.setExtra(key, input.value); updateBanner(); });
+      row.querySelector<HTMLButtonElement>('[data-extra-show]')!.addEventListener('click', (event) => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        (event.currentTarget as HTMLButtonElement).textContent = input.type === 'password' ? '显示' : '隐藏';
+      });
+      row.querySelector<HTMLButtonElement>('[data-extra-delete]')!.addEventListener('click', () => {
+        draft!.deleteExtra(key);
+        renderExtra();
+        updateBanner();
+      });
+    });
+  }
+
+  function renderAll(): void {
+    container.querySelectorAll<HTMLInputElement>('input, select, button').forEach((input) => { input.disabled = false; });
+    renderForm();
+    renderControls();
+    renderExtra();
+    if (saving || loading || !draft) container.querySelectorAll<HTMLInputElement>('input, select, button').forEach((input) => { input.disabled = true; });
+    refreshBtn.disabled = loading || saving || dirty();
+    updateBanner();
+  }
+
+  async function loadData(): Promise<void> {
+    const sequence = ++loadSeq;
+    loading = true;
+    renderAll();
+    try {
+      const [memorySettings, extra, sessions] = await Promise.all([
+        api.listEnvVarsWithStorage(), extraAPI.list(), api.getSessions(100).catch(() => ({ sessions: [] })),
+      ]);
+      if (isUnmounted || sequence !== loadSeq) return;
+      storageBackend = memorySettings.storageBackend;
+      draft = new SettingsDraft(memorySettings.envVars, extra);
+      sessionGroupMap.clear();
+      for (const session of sessions.sessions ?? []) {
+        const id = groupIdFromSessionId(session.sessionId);
+        if (id) sessionGroupMap.set(id, session.groupName || '');
+      }
+      groupSelect.innerHTML = '<option value="">-- 从最近会话选择群聊 --</option>' +
+        [...sessionGroupMap].map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(formatGroupOption(id, name))}</option>`).join('');
+    } catch (error) {
+      if (!isUnmounted) toast.error('加载设置失败: ' + String(error));
+    } finally {
+      if (!isUnmounted && sequence === loadSeq) { loading = false; renderAll(); }
+    }
+  }
+
+  async function saveDraft(): Promise<void> {
+    if (!draft || saving || loading) return;
+    if (botUserInput.value && !addBotUser()) return;
+    if (groupInput.value) addGroup();
+    if ((extraKey.value || extraValue.value) && !addExtra()) return;
+    for (const input of invalidNumbers()) {
+      const disabled = input.disabled;
+      input.disabled = false;
+      input.reportValidity();
+      input.disabled = disabled;
+      return;
+    }
+    for (const { key, value } of draft.pending()) {
+      if (value === null) continue;
+      const input = numericControls[key] ?? container.querySelector<HTMLInputElement>(`input[type="number"][data-setting-input="${key}"]`);
+      if (!input) continue;
+      const disabled = input.disabled;
+      if (value !== '' && settingFields[key]?.positive && !(Number(value) > 0)) {
+        toast.error(`${settingFields[key].label}必须大于 0`);
+        return;
+      }
+      input.disabled = false;
+      const valid = input.reportValidity();
+      input.disabled = disabled;
+      if (!valid) return;
+    }
+    const current = draft;
+    const extraChanges = current.extraChanges();
+    try {
+      extraChanges.forEach(({ key, value }) => validateExtra(key, value ?? ''));
+    } catch (error) { toast.error(String(error)); return; }
+    const changes = current.pending();
+    saving = true;
+    renderAll();
+    try {
+      for (const { key, value } of extraChanges) {
+        controller.signal.throwIfAborted();
+        if (value === null) await extraAPI.delete(key, controller.signal);
+        else await extraAPI.put({ key, value }, controller.signal);
+        current.acknowledgeExtra(key, value);
+      }
+      if (changes.length) {
+        controller.signal.throwIfAborted();
+        const response = await api.updateEnvVars(changes, controller.signal);
+        if (!response.success) throw new Error(response.error);
+        current.acknowledgeSettings(changes);
+        if (changes.some(({ key }) => key === 'MCP_CONTROL_TOKEN' || key === 'ADMIN_TOKEN')) {
+          setControlToken(current.get('MCP_CONTROL_TOKEN').trim() || current.get('ADMIN_TOKEN'));
+        }
+      }
+      if (isUnmounted) return;
+      toast.success(extraChanges.length ? '设置已保存；额外 env 注入项重启 FrostAgent 后生效' : '设置已保存');
+      saving = false;
+      await loadData();
+    } catch (error) {
+      if (!isUnmounted) toast.error('保存未完成，剩余更改仍保留在草稿中: ' + String(error));
+    } finally {
+      saving = false;
+      if (!isUnmounted) renderAll();
+    }
+  }
+
+  const binds: Record<string, string> = {
+    'poke-enabled': 'ENABLE_POKE',
+    'embedding-enabled': 'ENABLE_EMBEDDING',
+    'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
+    'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
+    'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
+  };
+  for (const [id, key] of Object.entries(binds)) {
+    const input = element<HTMLInputElement>(id);
+    input.addEventListener('change', () => {
+      change(key, input.checked ? 'true' : 'false');
+      if (input === pokeEnabled) updatePokeControls();
+      if (input === embeddingToggle) updateEmbeddingWarning();
+      if (input === quote) quoteDepth.disabled = !quote.checked;
+    });
+  }
+  pokeText.addEventListener('input', () => {
+    change('POKE_CUSTOM_TEXT', pokeText.value);
+    updatePokePreview();
+  });
+  const texts: Record<string, string> = {
+    'poke-cooldown': 'POKE_COOLDOWN_SECONDS',
+    'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
+  };
+  for (const [id, key] of Object.entries(texts)) {
+    const input = element<HTMLInputElement>(id);
+    input.addEventListener('input', () => change(key, input.value));
+  }
+  element<HTMLSelectElement>('bot-loop-mode').addEventListener('change', () => {
+    const input = element<HTMLSelectElement>('bot-loop-mode');
+    input.dataset.default = String(!input.value);
+    change('BOT_LOOP_MODE', input.value);
+  });
+  proactive.addEventListener('change', () => {
+    change('ENABLE_PROACTIVE_REPLY', proactive.checked ? 'true' : 'false');
+    const rawProbability = draft?.get('PROACTIVE_REPLY_PROBABILITY') ?? '';
+    const editedProbability = draft?.pending().some(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY');
+    const trimmedProbability = rawProbability.trim();
+    const numericProbability = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmedProbability)
+      ? Number(trimmedProbability) : Number.NaN;
+    if (proactive.checked && !editedProbability && trimmedProbability &&
+      (!Number.isFinite(numericProbability) || numericProbability <= 0)) {
+      change('PROACTIVE_REPLY_PROBABILITY', '');
+      probability.value = '';
+      probabilitySlider.value = '0.01';
+      updateProbabilityDisplay();
+    }
+    probability.disabled = probabilitySlider.disabled = !proactive.checked;
+    element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
+  });
+  probabilitySlider.addEventListener('input', () => {
+    probability.value = probabilitySlider.value;
+    change('PROACTIVE_REPLY_PROBABILITY', probability.value);
+    updateProbabilityDisplay();
+  });
+  probability.addEventListener('input', () => {
+    probabilitySlider.value = probability.value || '0.01';
+    change('PROACTIVE_REPLY_PROBABILITY', probability.value);
+    updateProbabilityDisplay();
+  });
+  stickerSlider.addEventListener('input', () => {
+    stickerNumber.value = stickerSlider.value;
+    change('STICKER_ACTIVITY', stickerSlider.value);
+    updateStickerDisplay();
+  });
+  stickerNumber.addEventListener('input', () => {
+    stickerSlider.value = stickerNumber.value || '0';
+    change('STICKER_ACTIVITY', stickerNumber.value);
+    updateStickerDisplay();
+  });
+  stickerMode.addEventListener('change', () => {
+    stickerMode.dataset.default = String(!stickerMode.value);
+    change('STICKER_ACTIVITY_MODE', stickerMode.value);
+    updateStickerDisplay();
+  });
+  groupSelect.addEventListener('change', () => { groupInput.value = groupSelect.value; updateBanner(); });
+  const addGroup = () => {
+    if (!groupInput.value.trim()) return;
+    const groups = parseWhitelistGroups((draft?.get('PROACTIVE_REPLY_GROUP_WHITELIST') ?? '') + ',' + groupInput.value);
+    changeGroups(groups);
+    groupInput.value = groupSelect.value = '';
+    updateBanner();
+  };
+  groupAdd.addEventListener('click', addGroup);
+  groupInput.addEventListener('input', updateBanner);
+  groupInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addGroup(); } });
+  botUserAdd.addEventListener('click', () => { addBotUser(); });
+  botUserInput.addEventListener('input', updateBanner);
+  botUserInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); addBotUser(); }
+  });
+  extraKey.addEventListener('input', updateBanner);
+  extraValue.addEventListener('input', updateBanner);
+  extraAdd.addEventListener('click', addExtra);
+  restoreBtn.addEventListener('click', () => {
+    if (saving) return;
+    draft?.restore();
+    extraKey.value = extraValue.value = '';
+    groupInput.value = groupSelect.value = '';
+    botUserInput.value = '';
+    renderAll();
+  });
+  saveBtn.addEventListener('click', () => void saveDraft());
+  refreshBtn.addEventListener('click', () => { if (!dirty()) void loadData(); });
+  void loadData();
+  return () => { isUnmounted = true; controller.abort(); draft = null; banner.hidden = true; };
 }

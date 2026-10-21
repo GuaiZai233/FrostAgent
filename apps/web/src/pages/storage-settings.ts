@@ -1,6 +1,7 @@
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { instanceState } from '../instance-state';
+import { controlPlaneFetch } from '../api/control-auth';
 
 interface StorageConfig {
   backend: 'sqlite' | 'postgres';
@@ -42,7 +43,7 @@ export function mountStorageSettingsPage(container: HTMLElement): () => void {
     dsnGroup.hidden = backend.value !== 'postgres';
   };
   backend.onchange = updateVisibility;
-  fetch('/api/storage')
+  controlPlaneFetch('/api/storage')
     .then(async response => {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || response.statusText);
@@ -63,10 +64,10 @@ export function mountStorageSettingsPage(container: HTMLElement): () => void {
     }
     save.disabled = true;
     try {
-      const response = await fetch('/api/storage', {
+      const response = await controlPlaneFetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backend: backend.value, dsn: backend.value === 'postgres' ? dsn.value.trim() : '' }),
+        body: JSON.stringify({ backend: backend.value, dsn: dsn.value.trim() }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || response.statusText);

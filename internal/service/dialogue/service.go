@@ -96,8 +96,6 @@ func (s *Service) ListDialogues(
 		}
 		dialogues = append(dialogues, &v1.DialogueItem{
 			Id:        idStr,
-			Scene:     ex.Scene,
-			Relation:  ex.Relation,
 			User:      ex.User,
 			Preferred: ex.Preferred,
 		})
@@ -124,8 +122,6 @@ func (s *Service) SaveDialogues(
 	for _, item := range items {
 		examples = append(examples, llm.DialogueExample{
 			ID:        item.GetId(),
-			Scene:     item.GetScene(),
-			Relation:  item.GetRelation(),
 			User:      item.GetUser(),
 			Preferred: item.GetPreferred(),
 		})
