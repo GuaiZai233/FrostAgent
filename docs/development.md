@@ -1,5 +1,7 @@
 # 开发指南
 
+以下命令均在仓库根目录执行。
+
 ## 环境准备
 
 需安装 Go ≥ 1.27.0、pnpm、buf、Make，并确保在 PATH 中。
@@ -22,7 +24,7 @@ make proto-generate-web    # 仅 TypeScript
 ## 开发
 
 ```bash
-make dev          # 全栈热重载 (Go + Angular)
+make dev          # 启动 Go 后端与 Vite 开发服务器
 make serve-web    # 仅前端 (端口 4200)
 make serve-api    # 仅后端
 ```

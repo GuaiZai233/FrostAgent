@@ -42,17 +42,17 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 ### 1. 构建项目
 
-本项目使用根目录 `Makefile` 进行构建编排。
+本项目使用根目录 `Makefile` 进行构建编排。本地开发与验证命令见[开发指南](docs/development.md)。
 
 ```bash
-# 安装 Node.js 依赖（Angular 工具链等）
+# 安装 Node.js 依赖（Vite 与 TypeScript）
 # 本项目使用 pnpm 作为包管理器
 pnpm install
 
 # 安装 buf 用于 protobuf 代码生成
 go install github.com/bufbuild/buf/cmd/buf@latest
 
-# 构建全部 - 后端 Go 二进制文件 + 前端 Angular 应用
+# 构建全部 - 后端 Go 二进制文件 + 前端 Vite 应用
 make build
 ```
 

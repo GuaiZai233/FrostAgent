@@ -19,6 +19,9 @@
     "serve:agent": "make serve-agent",
     "serve:web": "make serve-web"
   },
+  "prettier": {
+    "singleQuote": true
+  },
   "dependencies": {},
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "2.12.0",
