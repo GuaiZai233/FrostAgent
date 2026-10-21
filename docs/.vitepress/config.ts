@@ -1,15 +1,23 @@
 import { defineConfig } from 'vitepress';
 
+const base = process.env.DOCS_BASE || '/';
+
 export default defineConfig({
   lang: 'zh-CN',
   title: 'FrostAgent',
   description: 'FrostAgent 项目介绍、安装部署、配置参考与使用指南。',
-  base: process.env.DOCS_BASE || '/',
+  base,
   lastUpdated: true,
   markdown: { codeCopyButtonTitle: '复制代码' },
-  head: [['meta', { name: 'theme-color', content: '#18181b' }]],
+  head: [
+    ['meta', { name: 'theme-color', content: '#bd2a2e' }],
+    [
+      'link',
+      { rel: 'icon', type: 'image/png', href: `${base}frostagent-mascot.png` },
+    ],
+  ],
   themeConfig: {
-    logo: '/logo.svg',
+    logo: '/frostagent-mascot.png',
     nav: [
       { text: '项目介绍', link: '/guide/introduction' },
       { text: '快速开始', link: '/guide/quick-start' },
