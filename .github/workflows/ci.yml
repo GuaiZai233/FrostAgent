@@ -34,8 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version: '1.27.3'
           cache-dependency-path: 'go.sum'
       - name: Test PostgreSQL migrations
         env:
@@ -93,8 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version: '1.27.3'
           cache-dependency-path: 'go.sum'
 
       - name: Install dependencies
@@ -139,8 +137,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version: '1.27.3'
           cache-dependency-path: 'go.sum'
 
       - name: Install dependencies
