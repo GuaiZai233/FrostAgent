@@ -42,17 +42,17 @@ You can use the dedicated AstrBot plugin: [astrbot_plugin_frostagent](adapters/a
 
 ### 1. Build the Project
 
-This project uses the root `Makefile` for build orchestration.
+This project uses the root `Makefile` for build orchestration. See the [development guide](docs/development.md) for local development and verification commands.
 
 ```bash
-# Install Node.js dependencies (Angular toolchain, etc.)
+# Install Node.js dependencies (Vite and TypeScript)
 # This project uses pnpm as the package manager
 pnpm install
 
 # Install buf for protobuf code generation
 go install github.com/bufbuild/buf/cmd/buf@latest
 
-# Build everything - backend Go binaries + frontend Angular app
+# Build everything - backend Go binaries + frontend Vite app
 make build
 ```
 

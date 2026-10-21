@@ -15,7 +15,7 @@ COPY libs/frostagent-proto/package.json ./libs/frostagent-proto/package.json
 COPY patches ./patches
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
-COPY buf.yaml buf.gen.web.yaml tsconfig.base.json ./
+COPY buf.yaml buf.gen.web.yaml ./
 COPY api/proto ./api/proto
 COPY apps/web ./apps/web
 COPY libs/frostagent-proto ./libs/frostagent-proto
