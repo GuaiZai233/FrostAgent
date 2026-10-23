@@ -114,20 +114,98 @@ func TestOneBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 	waitOneBotRequests(t, provider, 1)
 	send(2, 11, true, "blocked")
 	send(3, 12, false, "interrupt")
-	send(4, 11, true, "after interrupt")
-	send(5, 12, true, "barrier")
-	waitOneBotRequests(t, provider, 3)
+	send(4, 11, true, "still blocked after chatter")
+	send(5, 12, true, "explicit human wake")
+	send(6, 11, true, "after explicit wake")
+	send(7, 12, true, "barrier")
+	waitOneBotRequests(t, provider, 4)
 	provider.mu.Lock()
 	requests := append([]core.ChatRequest(nil), provider.requests...)
 	provider.mu.Unlock()
-	if len(requests) != 3 {
-		t.Fatalf("hard mode allowed unexpected request: got %d, want 3", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("hard mode allowed unexpected request: got %d, want 4", len(requests))
 	}
 	for _, request := range requests {
 		last, _ := request.Messages[len(request.Messages)-1].Content.(string)
 		if strings.Contains(last, "blocked") {
 			t.Fatal("hard-dropped message reached the model")
 		}
+	}
+}
+
+func TestOneBotBotLoopIndependentBudgetsAndExplicitWake(t *testing.T) {
+	for _, wake := range []string{"at", "alias", "poke"} {
+		t.Run(wake, func(t *testing.T) {
+			provider := botLoopSilentProvider()
+			reachedBarrier := make(chan struct{})
+			silent := provider.customChat
+			provider.customChat = func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				last, _ := req.Messages[len(req.Messages)-1].Content.(string)
+				if strings.Contains(last, "budget-barrier") {
+					close(reachedBarrier)
+				}
+				return silent(ctx, req)
+			}
+			engine := newTestEngine(provider)
+			engine.Scope = newTestScopeWithEnv(t, map[string]string{
+				"BOT_LOOP_USER_IDS": "onebot:11,onebot:13", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
+				"BOT_ALIASES": "synthetic-assistant", "ENABLE_POKE": "true", "POKE_COOLDOWN_SECONDS": "0",
+				"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1",
+			})
+			engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
+			srv, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			var id int32
+			send := func(sender int64, trigger, text string) {
+				t.Helper()
+				id++
+				event := model.OneBotEvent{SelfID: 99, PostType: "message", MessageType: "group", GroupID: 20, UserID: sender, MessageID: id}
+				segments := []map[string]any{{"type": "text", "data": map[string]any{"text": text}}}
+				switch trigger {
+				case "at":
+					segments = append(segments, map[string]any{"type": "at", "data": map[string]any{"qq": "99"}})
+				case "alias":
+					segments = append(segments, map[string]any{"type": "text", "data": map[string]any{"text": "synthetic-assistant"}})
+				case "poke":
+					event.PostType, event.NoticeType, event.SubType, event.TargetID = "notice", "notify", "poke", 99
+				}
+				event.Message, _ = json.Marshal(segments)
+				if err := conn.WriteJSON(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			send(11, "at", "first-a")
+			send(13, "at", "first-b")
+			send(12, "", "proactive human chatter")
+			send(11, "at", "blocked-a")
+			send(13, "at", "blocked-b")
+			send(12, wake, "human wake")
+			send(11, "at", "resumed-a")
+			send(13, "at", "resumed-b")
+			send(11, "at", "blocked-again")
+			send(12, "at", "budget-barrier")
+			select {
+			case <-reachedBarrier:
+			case <-time.After(5 * time.Second):
+				t.Fatal("final group turn did not reach the model")
+			}
+			provider.mu.Lock()
+			defer provider.mu.Unlock()
+			if len(provider.requests) != 7 {
+				t.Fatalf("model requests=%d, want 7", len(provider.requests))
+			}
+			for _, request := range provider.requests {
+				last, _ := request.Messages[len(request.Messages)-1].Content.(string)
+				if strings.Contains(last, "blocked-") {
+					t.Fatal("exhausted Bot reached the model")
+				}
+			}
+		})
 	}
 }
 

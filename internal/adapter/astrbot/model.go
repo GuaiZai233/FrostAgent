@@ -32,7 +32,7 @@ type Event struct {
 	Attachments            []core.Attachment `json:"attachments,omitempty"`          // 多媒体附件
 	IsWake                 bool              `json:"is_wake,omitempty"`              // 是否触发唤醒 (At, 唤醒词, 引用等)
 	IsAt                   bool              `json:"is_at,omitempty"`                // 是否 @ 了机器人
-	BotLoopInterrupted     bool              `json:"bot_loop_interrupted,omitempty"` // 过滤消息已打断连续对话
+	BotLoopInterrupted     bool              `json:"bot_loop_interrupted,omitempty"` // 旧插件字段；不再用于恢复 Bot 额度
 	Timestamp              int64             `json:"timestamp,omitempty"`            // 时间戳 (秒)
 	Metadata               map[string]any    `json:"metadata,omitempty"`             // 扩展元数据
 	StickerDeliveryReceipt bool              `json:"sticker_delivery_receipt,omitempty"`

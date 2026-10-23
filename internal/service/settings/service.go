@@ -51,7 +51,7 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_QUOTE_TRACE":                   {"是否追溯收到消息的引用链（默认开启）", false, false, false},
 	"QUOTE_TRACE_DEPTH":                    {"引用追溯深度（1~10，默认 5）", false, false, false},
 	"BOT_LOOP_USER_IDS":                    {"管理员标记的 Bot 用户 ID，逗号分隔；可用 platform:ID 限定平台", false, false, false},
-	"BOT_LOOP_MAX_TURNS":                   {"与标记 Bot 连续对话的最多轮数", false, false, false},
+	"BOT_LOOP_MAX_TURNS":                   {"每个标记 Bot 在未标记用户明确唤醒之间的最多对话轮数", false, false, false},
 	"BOT_LOOP_MODE":                        {"超限处理：hard 静默丢弃，soft 注入静默建议", false, false, false},
 	"PROACTIVE_REPLY_PROBABILITY":          {"主动回复触发概率（0.01~1.00，0 为关闭）", false, false, false},
 	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
