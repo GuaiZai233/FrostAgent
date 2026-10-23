@@ -44,14 +44,15 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 frostagent \
     && useradd --uid 10001 --gid frostagent --create-home --shell /usr/sbin/nologin frostagent \
     && install -d -o frostagent -g frostagent -m 0700 /app/data
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/frostagent
 USER 10001:10001
-EXPOSE 8080 1234
+EXPOSE 8080 1023
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/frostagent"]

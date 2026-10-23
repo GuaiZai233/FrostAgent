@@ -67,6 +67,17 @@ test('dashboardWebSocketURL handles calls without query string', () => {
   );
 });
 
+test('instanceWebSocketURL defaults empty listen addresses to adapter port 1023', () => {
+  for (const listenAddress of ['', '   ']) {
+    for (const adapter of ['onebot', 'astrbot'] as const) {
+      assert.equal(
+        instanceWebSocketURL(listenAddress, 'inst_test_1', adapter, 'http://localhost:8080'),
+        `ws://127.0.0.1:1023/instances/inst_test_1/ws/${adapter}`,
+      );
+    }
+  }
+});
+
 test('instanceWebSocketURL preserves external listen address formatting for overview copy', () => {
   const onebotURL = instanceWebSocketURL(
     '127.0.0.1:1234',

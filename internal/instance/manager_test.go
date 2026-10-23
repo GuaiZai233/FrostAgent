@@ -129,14 +129,14 @@ func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testi
 		}
 	}
 
-	assertAddress(m, "127.0.0.1:1234")
+	assertAddress(m, "127.0.0.1:1023")
 	if err := m.global.Update("WS_LISTEN_ADDR", ":4321", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	assertAddress(m, "127.0.0.1:1234")
+	assertAddress(m, "127.0.0.1:1023")
 
 	m.Close()
 	next, err := New(

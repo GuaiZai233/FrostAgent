@@ -28,7 +28,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 ## Websocket
 
-在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
+在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1023/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
 
 ## 与 ActionsCat 协同
 
@@ -42,7 +42,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
 
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1023/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 快速开始
 
@@ -85,13 +85,15 @@ go run ./cmd/app
 
 打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，在“模型供应商”中统一配置 Provider 和模型，再在“实例模型路由”中选择当前 Bot 的模型，最后打开概览中的「是否启用」。设置、记忆、模型路由、MCP、示例对话、贴图元数据和群摘要存入 SQL；贴图图片字节仍在实例文件目录中。设置修改后自动应用，无需手动重启进程。
 
+Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再执行 `sudo setcap cap_net_bind_service=+ep ./bin/app`，使用 `./bin/app` 代替 `go run ./cmd/app` 启动。重新构建后需重新授权；Docker 镜像已配置此能力，仍以非 root 用户运行。
+
 ## Docker 部署
 
 ```bash
 docker compose up -d --build
 ```
 
-使用 host 网络，适用于 Linux；Docker Desktop 需先启用 host networking。新数据库默认管理地址为 `http://localhost:8080`，适配器监听 `127.0.0.1:1234`。已有 SQL 监听设置优先，从桥接部署升级前请检查监听地址，数据仍保存在 `frostagent-data` 卷中。
+使用 host 网络，适用于 Linux；Docker Desktop 需先启用 host networking。新数据库默认管理地址为 `http://localhost:8080`，适配器监听 `127.0.0.1:1023`。已有 SQL 监听设置优先，从桥接部署升级前请检查监听地址，数据仍保存在 `frostagent-data` 卷中。
 建议前置 **Cloudflare Access** 负责管理认证；远程请求仍需应用管理控制令牌。
 
 ## Bot 设置与人格

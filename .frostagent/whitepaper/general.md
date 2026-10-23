@@ -29,11 +29,13 @@
 
 部署统一使用根目录 `Dockerfile` 与 `compose.yaml`，执行 `docker compose up -d --build` 即可构建并启动单个 FrostAgent 服务。唯一的 Compose 使用 `network_mode: host`，面向 Linux；Docker Desktop 需要主动启用 host networking，其四层转发行为不视为原生 Linux 的隔离保证。不再维护桥接网络变体、cloudflared 编排、Tunnel 环境变量模板、镜像专属监听默认值或 Docker 认证旁路。
 
-Docker 与原生二进制采用相同的回环默认值：管理 `127.0.0.1:8080`、适配器 `127.0.0.1:1234`。host 网络无需端口映射，本机控制台地址为 `http://localhost:8080`。1234 仍仅提供适配器 WebSocket，不提供管理页面、API 或 RPC。SQL 中已有的自定义监听设置仍优先，不自动改写；Docker 保留启动、热更新与换库前的强制校验，管理地址必须是数值回环 IP，且不得与适配器共用端口。从桥接部署升级前须检查，尤其是原先的 `WS_LISTEN_ADDR=0.0.0.0:1234` 会在 host 模式监听宿主机全部接口。
+Docker 与原生二进制采用相同的回环默认值：管理 `127.0.0.1:8080`、适配器 `127.0.0.1:1023`。host 网络无需端口映射，本机控制台地址为 `http://localhost:8080`。1023 仍仅提供适配器 WebSocket，不提供管理页面、API 或 RPC。SQL 中已有的自定义监听设置仍优先，不自动改写；Docker 保留启动、热更新与换库前的强制校验，管理地址必须是数值回环 IP，且不得与适配器共用端口。从桥接部署升级前须检查，尤其是原先的 `WS_LISTEN_ADDR=0.0.0.0:1234` 会在 host 模式监听宿主机全部接口。
 
 Cloudflare Access 建议由部署者在外部配置；Tunnel 不等于 Access，应用原有的管理控制令牌、Host/Origin 和适配器权限检查继续生效。宿主机反向代理可回源 `http://127.0.0.1:8080`；发布公共域名前，先在本机控制台配置管理控制令牌和 `HTTP_ALLOWED_ORIGINS`，保留公共 Host 或转发头，浏览器在前端设置中填写相同令牌。显式本地强制令牌设置仍有效，不凭 Cloudflare 请求头认定认证成功。
 
-镜像保留多阶段构建、系统 CA 信任包、UID/GID `10001:10001` 非 root 运行和 `/app/data` 持久卷。`docker compose down` 保留 `frostagent-data`；仅在明确删除数据时使用 `down -v`。不内置反向代理、数据库或脚本运行时，也不自动删除任何已有数据卷。
+镜像保留多阶段构建、系统 CA 信任包、UID/GID `10001:10001` 非 root 运行和 `/app/data` 持久卷。默认适配器端口调整为 1023；后端、概览回退、设置默认提示与前端地址生成保持一致，只影响未配置 `WS_LISTEN_ADDR` 的部署，不迁移已有 SQL 自定义地址。1023 是 Linux 特权端口，镜像通过 `libcap2-bin` 为程序设置 `cap_net_bind_service=+ep`，不改用 root 或 privileged 容器。原生 Linux 若限制低端口绑定，需对构建出的 `bin/app` 授予同一能力后直接运行，重新构建后重新授权，不使用临时的 `go run` 二进制。
+
+`docker compose down` 保留 `frostagent-data`；仅在明确删除数据时使用 `down -v`。不内置反向代理、数据库或脚本运行时，也不自动删除任何已有数据卷。
 
 Docker CI 只验证单个镜像构建，删除依赖旧拓扑和 README 内嵌脚本的烟测，不再拉取 cloudflared 或辅助 Python 镜像。不据此宣称验证了容器运行时网络、Cloudflare Access 登录策略或 Docker Desktop 转发。使用步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
@@ -403,7 +405,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
-  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1023`；
   - Docker 使用同一回环默认值与 host 网络，并保留管理地址必须为数值回环 IP、管理与适配器端口分离的强制校验；适配器 SQL 设置仍可改变其暴露范围，具体升级检查与部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；

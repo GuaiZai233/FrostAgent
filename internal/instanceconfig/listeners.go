@@ -8,7 +8,7 @@ import (
 // Default listener addresses bind management and adapters to loopback.
 const (
 	DefaultListenAddr   = "127.0.0.1:8080"
-	DefaultWSListenAddr = "127.0.0.1:1234"
+	DefaultWSListenAddr = "127.0.0.1:1023"
 )
 
 // Container builds require a loopback management listener and a separate adapter port.

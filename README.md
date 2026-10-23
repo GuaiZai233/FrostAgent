@@ -18,13 +18,13 @@ See the [1.0.0 release notes](docs/releases/v1.0.0.md) and the [source installat
 
 ### WebSocket
 
-Enable a reverse WebSocket client in your local upstream OneBot implementation, such as NapCat, and set its URL to `ws://127.0.0.1:1234/instances/<instance-id>/ws/onebot` (the port depends on the listen address configured on the settings page).
+Enable a reverse WebSocket client in your local upstream OneBot implementation, such as NapCat, and set its URL to `ws://127.0.0.1:1023/instances/<instance-id>/ws/onebot` (the port depends on the listen address configured on the settings page).
 
 ### Integration with AstrBot and Similar Frameworks
 
 Through an adapter, FrostAgent can replace the LLM response module of agent frameworks such as AstrBot while preserving their plugin ecosystems.
 
-Use the [astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) plugin to connect AstrBot. The default FrostAgent endpoint is `ws://127.0.0.1:1234/instances/<instance-id>/ws/astrbot`. Configure communication between AstrBot and its upstream platform, and FrostAgent can take over message processing. **Note: Disable AstrBot's built-in LLM functionality!**
+Use the [astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) plugin to connect AstrBot. The default FrostAgent endpoint is `ws://127.0.0.1:1023/instances/<instance-id>/ws/astrbot`. Configure communication between AstrBot and its upstream platform, and FrostAgent can take over message processing. **Note: Disable AstrBot's built-in LLM functionality!**
 
 ## Quick Start
 
@@ -50,13 +50,15 @@ go run ./cmd/app
 
 Open `http://localhost:8080`. No instances are created on first start; create them manually.
 
+On Linux systems that restrict ports below 1024, build the binary and grant it permission to bind the default adapter port: `sudo setcap cap_net_bind_service=+ep ./bin/app`. Then start `./bin/app` instead of `go run ./cmd/app`. Reapply the capability after rebuilding. The Docker image already grants this capability while retaining its non-root user.
+
 ## Docker Deployment
 
 ```bash
 docker compose up -d --build
 ```
 
-The deployment uses host networking and is intended for Linux; Docker Desktop requires host networking to be enabled first. With a new database, the default management URL is `http://localhost:8080`, and adapters listen on `127.0.0.1:1234`. Existing SQL listener settings take precedence, so check listen addresses before upgrading from a bridge deployment. Data remains in the `frostagent-data` volume.
+The deployment uses host networking and is intended for Linux; Docker Desktop requires host networking to be enabled first. With a new database, the default management URL is `http://localhost:8080`, and adapters listen on `127.0.0.1:1023`. Existing SQL listener settings take precedence, so check listen addresses before upgrading from a bridge deployment. Data remains in the `frostagent-data` volume.
 
 We recommend placing **Cloudflare Access** in front of the service for management authentication. Remote requests still require the application's management control token.
 
