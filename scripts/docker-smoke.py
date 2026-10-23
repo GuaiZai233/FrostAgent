@@ -38,6 +38,7 @@ connection.close()
 UPGRADE = {'Connection': 'Upgrade', 'Upgrade': 'websocket',
            'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='}
 PUBLIC_ORIGIN = 'https://frostagent.example.com'
+BOOTSTRAP_DOCS = ('docs/docker.en.md', 'docs/docker.md')
 FORWARDED = {'Host': 'frostagent.example.com', 'Origin': PUBLIC_ORIGIN,
              'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '198.51.100.20',
              'Cf-Access-Authenticated-User-Email': 'synthetic@example.invalid'}
@@ -88,8 +89,8 @@ def wait_ready(read):
     raise AssertionError('origin did not become ready')
 
 
-def bootstrap_from_readme(root, readme, app, origin, token=None, success=True):
-    blocks = re.findall(r"```bash\n(.*?)\n```", (root / readme).read_text(encoding='utf-8'), re.S)
+def bootstrap_from_docs(root, document, app, origin, token=None, success=True):
+    blocks = re.findall(r"```bash\n(.*?)\n```", (root / document).read_text(encoding='utf-8'), re.S)
     snippet, = [block for block in blocks if "<<'PY'" in block]
     command_line, code = snippet.split('\n', 1)
     code, trailer = code.rsplit('\nPY', 1)
@@ -103,10 +104,10 @@ def bootstrap_from_readme(root, readme, app, origin, token=None, success=True):
     result = subprocess.run(args, input=code, capture_output=True, text=True,
                             encoding='utf-8', env=env, timeout=30)
     if success:
-        assert result.returncode == 0, (readme, result.stderr)
-        assert json.loads(result.stdout).get('success'), (readme, result.stdout)
+        assert result.returncode == 0, (document, result.stderr)
+        assert json.loads(result.stdout).get('success'), (document, result.stdout)
     else:
-        assert result.returncode != 0 and 'HTTP Error 401' in result.stderr, (readme, result)
+        assert result.returncode != 0 and 'HTTP Error 401' in result.stderr, (document, result)
 
 
 def exercise(root, temporary, host_mode=False):
@@ -167,8 +168,8 @@ def exercise(root, temporary, host_mode=False):
         assert asset and read(asset.group(1))['status'] == 200
         assert read('/api/instances', headers=FORWARDED)['status'] == 403
         if not host_mode:
-            for readme in ('README.md', 'README_zh_CN.md'):
-                bootstrap_from_readme(root, readme, app, PUBLIC_ORIGIN)
+            for document in BOOTSTRAP_DOCS:
+                bootstrap_from_docs(root, document, app, PUBLIC_ORIGIN)
         settings = api('/api/instances/global/backup/settings')
         settings['settings'].update({'HTTP_ALLOWED_ORIGINS': PUBLIC_ORIGIN,
                                      'WS_ALLOWED_ORIGINS': PUBLIC_ORIGIN})
@@ -239,20 +240,20 @@ def exercise(root, temporary, host_mode=False):
         assert read('/api/instances', headers=FORWARDED)['status'] == 401
         bearer = {**FORWARDED, 'Authorization': 'Bearer synthetic-control-token'}
         assert read('/api/instances', headers=bearer)['status'] == 200
-        for index, readme in enumerate(('README.md', 'README_zh_CN.md')):
+        for index, document in enumerate(BOOTSTRAP_DOCS):
             before = api('/api/instances/global/backup/settings', headers=bearer)
             bootstrap_origin = f'https://bootstrap-{index}.example.com'
             for token in (None, 'synthetic-incorrect-token'):
-                bootstrap_from_readme(root, readme, app, bootstrap_origin, token, success=False)
+                bootstrap_from_docs(root, document, app, bootstrap_origin, token, success=False)
                 assert api('/api/instances/global/backup/settings', headers=bearer) == before
-            bootstrap_from_readme(root, readme, app, bootstrap_origin, 'synthetic-control-token')
+            bootstrap_from_docs(root, document, app, bootstrap_origin, 'synthetic-control-token')
             after = api('/api/instances/global/backup/settings', headers=bearer)
             origins_before = set(before['settings']['HTTP_ALLOWED_ORIGINS'].split(','))
             origins_after = set(after['settings'].pop('HTTP_ALLOWED_ORIGINS').split(','))
             before['settings'].pop('HTTP_ALLOWED_ORIGINS')
             assert origins_after == origins_before | {bootstrap_origin}
             assert after == before, 'bootstrap changed unrelated settings'
-        print('PASS: both README bootstrap commands, optional token, 401 failures and settings preservation')
+        print('PASS: both Docker guide bootstrap commands, optional token, 401 failures and settings preservation')
         settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'false'
         assert api('/api/instances/global/import/settings', settings, bearer).get('success')
         command(*compose, 'exec', '-T', 'frostagent', 'sh', '-c',

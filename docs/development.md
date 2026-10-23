@@ -1,10 +1,12 @@
 # 开发指南
 
+[返回首页](../README_zh_CN.md) · [配置与数据](configuration.md) · [Docker 部署](docker.md)
+
 以下命令均在仓库根目录执行。
 
 ## 环境准备
 
-需安装 Go ≥ 1.27.0、pnpm、buf、Make，并确保在 PATH 中。
+需安装 Go ≥ 1.27.3、Node.js、pnpm、buf、Make 和 Bash，并确保在 PATH 中。
 
 ```bash
 pnpm install       # 前端依赖 + protoc-gen-es
