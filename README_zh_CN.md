@@ -12,7 +12,13 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 [![Go Version](https://img.shields.io/badge/Go-1.27.3+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
-[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
+[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENCE)
+
+## 版本发布
+
+1.0.0 按源码版本准备。`package.json` 中的版本号不代表已经发布，实际可用版本以 [GitHub Releases](https://github.com/GuaiZai233/FrostAgent/releases) 为准。发布后可下载源码归档或检出 `v1.0.0` tag，再在本地构建。预编译程序和镜像仓库分发延后；仓库中的 Dockerfile、Compose 继续从源码构建。
+
+参见 [1.0.0 发布说明](docs/releases/v1.0.0.md)和[源码安装、升级及维护者发布指南](docs/releasing.md)。三个私有 workspace 包与项目版本保持一致，AstrBot 适配器继续使用独立插件版本。
 
 ## 数据库
 
@@ -47,7 +53,7 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 ```bash
 # 安装 Node.js 依赖（Vite 与 TypeScript）
 # 本项目使用 pnpm 作为包管理器
-pnpm install
+pnpm install --frozen-lockfile
 
 # 安装 buf 用于 protobuf 代码生成
 go install github.com/bufbuild/buf/cmd/buf@latest
@@ -187,7 +193,7 @@ SQLite 向量仅保留在内存中，重启后重建。PostgreSQL 需要部署�
 
 ## 许可证
 
-MPL-2.0 (see LICENSE file)
+MPL-2.0（见 [LICENCE](LICENCE)）
 
 ## Skills 技能系统
 

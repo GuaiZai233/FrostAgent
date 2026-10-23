@@ -16,7 +16,13 @@ FrostAgent is an AI role-playing and agent orchestration framework written in Go
 
 [![Go Version](https://img.shields.io/badge/Go-1.27.3+-blue.svg)](https://go.dev)
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
-[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
+[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENCE)
+
+## Releases
+
+Version 1.0.0 is prepared as a source-only release. A version in `package.json` does not mean it has been published; use the [GitHub Releases](https://github.com/GuaiZai233/FrostAgent/releases) page to check availability. Download the source archive or check out the published `v1.0.0` tag, then build locally. Prebuilt executables and registry-hosted Docker images are deferred; the Dockerfiles and Compose files build from source.
+
+See the [1.0.0 release notes](docs/releases/v1.0.0.md) and the [source installation, upgrade and maintainer release guide](docs/releasing.md). The three private workspace packages share the project version; the AstrBot adapter keeps its independent plugin version.
 
 ## Adapters
 
@@ -47,7 +53,7 @@ This project uses the root `Makefile` for build orchestration. See the [developm
 ```bash
 # Install Node.js dependencies (Vite and TypeScript)
 # This project uses pnpm as the package manager
-pnpm install
+pnpm install --frozen-lockfile
 
 # Install buf for protobuf code generation
 go install github.com/bufbuild/buf/cmd/buf@latest
@@ -185,7 +191,7 @@ SQLite vectors remain in memory. PostgreSQL requires pgvector installed and enab
 
 ## License
 
-MPL-2.0 (see LICENSE file)
+MPL-2.0 (see [LICENCE](LICENCE))
 
 ## Skills
 
