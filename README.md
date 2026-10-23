@@ -8,13 +8,17 @@ English | [中文](README_zh_CN.md)
 [![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENCE)
 
+## Releases
+
+1.0.0 is prepared as a source-only release: build from the published source archive or tag; prebuilt binaries and registry images are deferred. A version in the repository does not prove publication—check [GitHub Releases](https://github.com/GuaiZai233/FrostAgent/releases). See [release notes](docs/releases/v1.0.0.md) and the [installation, upgrade and release guide](docs/releasing.md).
+
 ## Quick Start
 
-Run from the repository root with Go ≥ 1.27.3, Node.js, pnpm, Make and Bash installed. On Windows, use Git Bash with Make.
+Run this Bash example from the repository root with Go ≥ 1.27.3, Node.js 22, pnpm 10.33.0 and Make installed. For native Windows PowerShell commands, see the [installation guide](docs/releasing.md#windows--powershell).
 
 ```bash
-pnpm install
-go install github.com/bufbuild/buf/cmd/buf@latest
+pnpm install --frozen-lockfile
+go install github.com/bufbuild/buf/cmd/buf@v1.46.0
 make build
 go run ./cmd/app
 ```

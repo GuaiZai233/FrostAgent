@@ -6,10 +6,10 @@
 
 ## 环境准备
 
-需安装 Go ≥ 1.27.3、Node.js、pnpm、buf、Make 和 Bash，并确保在 PATH 中。
+需安装 Go ≥ 1.27.3、Node.js 22、pnpm 10.33.0、buf、Make，并确保在 PATH 中。`Makefile` 使用 Bash；Windows 原生 PowerShell 构建方法和固定版本安装见[发布指南](releasing.md)。
 
 ```bash
-pnpm install       # 前端依赖 + protoc-gen-es
+pnpm install --frozen-lockfile # 前端依赖 + protoc-gen-es
 make proto-tools   # Go proto 插件 (protoc-gen-go, protoc-gen-connect-go)
 ```
 

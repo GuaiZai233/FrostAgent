@@ -54,7 +54,7 @@ Backup and restore boundaries:
 
 ## Before upgrading
 
-Back up application data and external PostgreSQL first. For Docker volume handling, see [upgrades and data](docker.en.md#upgrades-and-data).
+Back up complete application data, external PostgreSQL and credential sources first. Instance ZIPs omit secrets and are not full rollback backups. Rollback requires both the old binary and its pre-upgrade data; do not connect an old binary to an upgraded database. See the [upgrade and rollback steps](releasing.md#升级备份与回退) and [Docker volume handling](docker.en.md#upgrades-and-data).
 
 - Legacy JSON and `.env` runtime data are not imported automatically. Back them up before replacing older versions.
 - SQL schemas upgrade transactionally in order from v7. Databases below v7 or newer than the running binary supports are rejected without modification.

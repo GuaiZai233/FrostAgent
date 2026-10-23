@@ -8,13 +8,17 @@
 [![CI](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/GuaiZai233/FrostAgent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](LICENCE)
 
+## 版本发布
+
+1.0.0 按源码版本准备：发布后下载源码归档或检出 tag，自行构建；暂不分发预编译程序或镜像。仓库版本号不代表已经发布，以 [GitHub Releases](https://github.com/GuaiZai233/FrostAgent/releases) 为准。参见[发布说明](docs/releases/v1.0.0.md)和[安装、升级与发布指南](docs/releasing.md)。
+
 ## 快速开始
 
-在仓库根目录执行。需 Go ≥ 1.27.3、Node.js、pnpm、Make 和 Bash；Windows 可使用 Git Bash 配合 Make。
+以下 Bash 命令在仓库根目录执行，需 Go ≥ 1.27.3、Node.js 22、pnpm 10.33.0 和 Make。Windows 原生 PowerShell 命令见[安装指南](docs/releasing.md#windows--powershell)。
 
 ```bash
-pnpm install
-go install github.com/bufbuild/buf/cmd/buf@latest
+pnpm install --frozen-lockfile
+go install github.com/bufbuild/buf/cmd/buf@v1.46.0
 make build
 go run ./cmd/app
 ```
