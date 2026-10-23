@@ -5,17 +5,17 @@ import (
 	"net"
 )
 
-// Default listener addresses can be overridden at link time for container builds.
-// SQL settings take precedence, subject to container listener isolation.
-var (
+// Default listener addresses bind management and adapters to loopback.
+const (
 	DefaultListenAddr   = "127.0.0.1:8080"
 	DefaultWSListenAddr = "127.0.0.1:1234"
-	// Container builds require a loopback management listener in the connector's network namespace.
-	ManagementLoopbackOnly = "false"
 )
 
-// ValidateListenerIsolation prevents SQL settings from exposing management routes
-// outside the connector's shared network namespace, including through a shared port.
+// Container builds require a loopback management listener and a separate adapter port.
+var ManagementLoopbackOnly = "false"
+
+// ValidateListenerIsolation prevents container settings from exposing management
+// routes outside loopback or reusing the adapter port.
 func ValidateListenerIsolation(listenAddr, wsListenAddr string) error {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {

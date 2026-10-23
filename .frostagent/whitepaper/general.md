@@ -27,17 +27,15 @@
 
 ### Docker 部署
 
-管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
+部署统一使用根目录 `Dockerfile` 与 `compose.yaml`，执行 `docker compose up -d --build` 即可构建并启动单个 FrostAgent 服务。唯一的 Compose 使用 `network_mode: host`，面向 Linux；Docker Desktop 需要主动启用 host networking，其四层转发行为不视为原生 Linux 的隔离保证。不再维护桥接网络变体、cloudflared 编排、Tunnel 环境变量模板、镜像专属监听默认值或 Docker 认证旁路。
 
-默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:1234`，宿主机仅发布到 `127.0.0.1:1234`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
+Docker 与原生二进制采用相同的回环默认值：管理 `127.0.0.1:8080`、适配器 `127.0.0.1:1234`。host 网络无需端口映射，本机控制台地址为 `http://localhost:8080`。1234 仍仅提供适配器 WebSocket，不提供管理页面、API 或 RPC。SQL 中已有的自定义监听设置仍优先，不自动改写；Docker 保留启动、热更新与换库前的强制校验，管理地址必须是数值回环 IP，且不得与适配器共用端口。从桥接部署升级前须检查，尤其是原先的 `WS_LISTEN_ADDR=0.0.0.0:1234` 会在 host 模式监听宿主机全部接口。
 
-Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
+Cloudflare Access 建议由部署者在外部配置；Tunnel 不等于 Access，应用原有的管理控制令牌、Host/Origin 和适配器权限检查继续生效。宿主机反向代理可回源 `http://127.0.0.1:8080`；发布公共域名前，先在本机控制台配置管理控制令牌和 `HTTP_ALLOWED_ORIGINS`，保留公共 Host 或转发头，浏览器在前端设置中填写相同令牌。显式本地强制令牌设置仍有效，不凭 Cloudflare 请求头认定认证成功。
 
-生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
+镜像保留多阶段构建、系统 CA 信任包、UID/GID `10001:10001` 非 root 运行和 `/app/data` 持久卷。`docker compose down` 保留 `frostagent-data`；仅在明确删除数据时使用 `down -v`。不内置反向代理、数据库或脚本运行时，也不自动删除任何已有数据卷。
 
-SQL 保持优先；Docker 镜像在启动、热更新和换库前强制管理数值回环与独立端口，拒绝不安全配置且不迁移数据。旧 `127.0.0.1:8081` 设置仍有效，Tunnel 使用其实际端口；新库默认 8080。host 镜像的回环适配器默认值不覆盖已有 SQL 通配监听，切换模式前须检查。UID/GID `10001:10001` 与 `/app/data` 持久卷保留；不自动删除旧代理证书卷或应用数据。
-
-Docker CI 分别构建桥接/host 镜像，以临时数据运行真实网络回归：共享命名空间回源、公共 Host/Origin 正反例、恶意同网络容器不可达、适配器管理路由拒绝、OneBot/AstrBot 握手、SQL 不安全监听启动/热更拒绝、非 root、退出与重建持久化。真实 cloudflared 镜像只执行 version，合成客户端验证其网络路径，不打开公网 Tunnel。Cloudflare Access 云端鉴权、真实 IM 与 Desktop 宿主机转发仍须由部署用户实测。步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+Docker CI 只验证单个镜像构建，删除依赖旧拓扑和 README 内嵌脚本的烟测，不再拉取 cloudflared 或辅助 Python 镜像。不据此宣称验证了容器运行时网络、Cloudflare Access 登录策略或 Docker Desktop 转发。使用步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
 
 ### 戳一戳唤醒
 
@@ -406,7 +404,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
   - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
-  - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
+  - Docker 使用同一回环默认值与 host 网络，并保留管理地址必须为数值回环 IP、管理与适配器端口分离的强制校验；适配器 SQL 设置仍可改变其暴露范围，具体升级检查与部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；
@@ -415,9 +413,9 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
   - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
-  - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
+  - **当前真实边界**：默认仅回环绑定，配合 Host 校验/DNS Rebinding 防护与严格同源/CORS；管理 API 与 RPC 的远程请求必须携带有效 Bearer 控制令牌，优先使用 `MCP_CONTROL_TOKEN`，兼容 `ADMIN_TOKEN`。本机同源回环请求默认免令牌，`MCP_ENFORCE_LOCAL_TOKEN` 可强制本机也认证；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
-  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；远程管理使用前置 Cloudflare Access，并按部署说明隔离回源监听，不把 Host/Origin 检查作为用户认证。
+  - **网络暴露风险警示**：显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP 会改变暴露范围；远程管理建议前置 Cloudflare Access，保留应用控制令牌校验，不把 Tunnel、转发头或 Host/Origin 检查作为用户认证。
 - **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
   - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：

@@ -2,9 +2,7 @@ package main
 
 import (
 	"FrostAgent/internal/instance"
-	"FrostAgent/internal/instanceconfig"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,40 +15,6 @@ func localManagementRequest(method, path string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, path, body)
 	request.RemoteAddr, request.Host = "127.0.0.1:12345", "localhost:8080"
 	return request
-}
-
-func TestContainerConnectorKeepsLoopbackAuthenticationBoundary(t *testing.T) {
-	previous := instanceconfig.ManagementLoopbackOnly
-	instanceconfig.ManagementLoopbackOnly = "true"
-	t.Cleanup(func() { instanceconfig.ManagementLoopbackOnly = previous })
-	values := map[string]string{"MCP_CONTROL_TOKEN": "synthetic-control-token"}
-	handler := managementAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), func(key string) string { return values[key] })
-	for _, tc := range []struct {
-		name, remote, token string
-		enforceLocal        bool
-		status              int
-	}{
-		{"connector loopback hop", "127.0.0.1:12345", "", false, http.StatusNoContent},
-		{"remote cannot claim connector", "198.51.100.10:12345", "", false, http.StatusUnauthorized},
-		{"local token enforcement remains", "127.0.0.1:12345", "", true, http.StatusUnauthorized},
-		{"explicit local bearer token", "127.0.0.1:12345", "Bearer synthetic-control-token", true, http.StatusNoContent},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			values["MCP_ENFORCE_LOCAL_TOKEN"] = fmt.Sprint(tc.enforceLocal)
-			request := httptest.NewRequest(http.MethodGet, "/api/instances", nil)
-			request.RemoteAddr, request.Host = tc.remote, "panel.example"
-			request.Header.Set("X-Forwarded-For", "198.51.100.20")
-			request.Header.Set("X-Forwarded-Proto", "https")
-			request.Header.Set("Authorization", tc.token)
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != tc.status {
-				t.Fatalf("status %d, want %d", response.Code, tc.status)
-			}
-		})
-	}
 }
 
 func TestManagementRoutesRequireRemoteControlToken(t *testing.T) {
