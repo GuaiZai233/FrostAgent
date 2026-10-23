@@ -218,7 +218,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
           <!-- Bot loop guard -->
           <div class="mb-4 pb-4 border-b border-border">
             <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
-            <p class="text-[11px] text-muted mb-3">同一标记用户连续触发对话超过上限时执行所选处理；其他用户发话后重新计数。</p>
+            <p class="text-[11px] text-muted mb-3">按会话分别累计各标记 Bot 的轮数；仅未标记用户明确唤醒（@、名称/别名或戳一戳）后恢复额度，普通闲聊不会重置。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
               <div class="flex flex-col gap-1.5 min-w-0">
                 <label for="bot-loop-user-id-input" class="text-xs font-medium">标记为 Bot 的用户 ID</label>
@@ -228,7 +228,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
                 </div>
               </div>
               <label class="flex flex-col gap-1.5">
-                <span class="text-xs font-medium">最多连续轮数</span>
+                <span class="text-xs font-medium">每个 Bot 最多轮数</span>
                 <input id="bot-loop-max-turns" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="1" step="1" placeholder="3" />
               </label>
               <label class="flex flex-col gap-1.5">

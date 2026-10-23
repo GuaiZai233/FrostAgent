@@ -404,7 +404,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						botLoopUserID = strconv.FormatInt(event.UserID, 10)
 						botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
 						botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
-							botLoopUserID, botLoopMarked, botLoopConfig.Revision(),
+							botLoopUserID, botLoopMarked, botLoopConfig.Revision(), isExplicitlyWoken(event, a.engine, routing),
 						)
 					}
 				}

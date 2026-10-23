@@ -288,8 +288,7 @@ type SessionContext struct {
 	pendingTurns            [][]memory.PendingExtractionItem
 	extractionThreshold     int
 	deliveryFailure         *DeliveryFailure
-	botLoopSender           string
-	botLoopTurns            int
+	botLoopTurns            map[string]int
 	botLoopConfig           string
 	botLoopTail             chan struct{}
 	botLoopEpoch            uint64
@@ -325,21 +324,22 @@ func (s *SessionContext) SetGroupName(name string) {
 
 // BotLoopObservation reserves the sender's position before asynchronous ingress checks.
 type BotLoopObservation struct {
-	session     *SessionContext
-	senderID    string
-	marked      bool
-	config      string
-	interrupted bool
-	epoch       uint64
-	previous    <-chan struct{}
-	done        chan struct{}
-	once        sync.Once
-	exceeded    bool
-	admitted    bool
+	session      *SessionContext
+	senderID     string
+	marked       bool
+	config       string
+	explicitWake bool
+	epoch        uint64
+	previous     <-chan struct{}
+	done         chan struct{}
+	once         sync.Once
+	exceeded     bool
+	admitted     bool
 }
 
 // BeginBotLoop records ingress order across connections sharing a session.
-func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string, interrupted ...bool) *BotLoopObservation {
+// Only an eligible, unmarked sender's explicit wake restores Bot budgets.
+func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string, explicitWake ...bool) *BotLoopObservation {
 	if s == nil || senderID == "" {
 		return nil
 	}
@@ -348,7 +348,7 @@ func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config strin
 	observation := &BotLoopObservation{
 		session: s, senderID: senderID, marked: marked, config: config,
 		epoch: s.botLoopEpoch, previous: s.botLoopTail, done: make(chan struct{}),
-		interrupted: len(interrupted) > 0 && interrupted[0],
+		explicitWake: len(explicitWake) > 0 && explicitWake[0],
 	}
 	s.botLoopTail = observation.done
 	return observation
@@ -362,7 +362,7 @@ func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
 }
 
 // FinishWithAdmission keeps admission and the candidate bot-loop state in the
-// same ingress order. Rejected admission leaves sender/count/interruption state
+// same ingress order. Rejected admission leaves budget/configuration state
 // unchanged. admit must not wait for another observation on this session.
 func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit func(exceeded bool) bool) (bool, bool) {
 	if o == nil {
@@ -375,25 +375,27 @@ func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit
 		s := o.session
 		s.mu.Lock()
 		if o.epoch == s.botLoopEpoch {
-			config, sender, turns := s.botLoopConfig, s.botLoopSender, s.botLoopTurns
-			if config != o.config {
-				config, sender, turns = o.config, "", 0
+			turns := s.botLoopTurns
+			if s.botLoopConfig != o.config || (!o.marked && o.explicitWake && eligible) {
+				turns = nil
 			}
-			if o.interrupted {
-				sender, turns = "", 0
-			}
-			if sender != o.senderID {
-				sender, turns = o.senderID, 0
-			}
-			if !o.marked {
-				turns = 0
-			} else if eligible {
-				turns++
-				o.exceeded = limit > 0 && turns > limit
+			count := turns[o.senderID]
+			if o.marked && eligible {
+				o.exceeded = limit > 0 && count >= limit
+				if !o.exceeded {
+					count++
+				}
 			}
 			o.admitted = admit == nil || admit(o.exceeded)
 			if o.admitted {
-				s.botLoopConfig, s.botLoopSender, s.botLoopTurns = config, sender, turns
+				// Commit map changes only after admission, including cooldown checks.
+				if o.marked && eligible {
+					if turns == nil {
+						turns = make(map[string]int)
+					}
+					turns[o.senderID] = count
+				}
+				s.botLoopConfig, s.botLoopTurns = o.config, turns
 			}
 		}
 		s.mu.Unlock()
@@ -403,8 +405,8 @@ func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit
 }
 
 // ObserveBotLoop applies a synchronous observation, used when no ingress checks are pending.
-func (s *SessionContext) ObserveBotLoop(senderID string, marked, eligible bool, limit int, config string) bool {
-	return s.BeginBotLoop(senderID, marked, config).Finish(eligible, limit)
+func (s *SessionContext) ObserveBotLoop(senderID string, marked, eligible bool, limit int, config string, explicitWake ...bool) bool {
+	return s.BeginBotLoop(senderID, marked, config, explicitWake...).Finish(eligible, limit)
 }
 
 // SetDeliveryFailure records a transient delivery failure on the session.
@@ -1017,8 +1019,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
-	s.botLoopSender = ""
-	s.botLoopTurns = 0
+	s.botLoopTurns = nil
 	s.botLoopConfig = ""
 	s.botLoopTail = nil
 	s.botLoopEpoch++
@@ -2503,8 +2504,7 @@ func (s *SessionContext) Clear() {
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
-	s.botLoopSender = ""
-	s.botLoopTurns = 0
+	s.botLoopTurns = nil
 	s.botLoopConfig = ""
 	s.botLoopTail = nil
 	s.botLoopEpoch++

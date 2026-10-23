@@ -45,7 +45,7 @@ func TestAstrBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 	send := func(id, user string, wake bool) {
 		t.Helper()
 		event := Event{Type: "event", EventType: "message", Platform: "astrbot", MessageType: "group",
-			GroupID: "room-a", UserID: user, MessageID: id, Content: id, IsWake: wake}
+			GroupID: "room-a", UserID: user, MessageID: id, Content: id, IsAt: wake}
 		if err := conn.WriteJSON(event); err != nil {
 			t.Fatal(err)
 		}
@@ -62,6 +62,14 @@ func TestAstrBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 	if action := readBotLoopAction(t, conn); action.Action != "noop" {
 		t.Fatalf("unwoken human turn: %+v", action)
 	}
+	send("still-blocked", "bot-a", true)
+	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
+		t.Fatalf("ordinary human chatter must not restore Bot budgets: %+v", action)
+	}
+	send("explicit-wake", "human-a", true)
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+		t.Fatalf("explicit human wake: %+v", action)
+	}
 	send("resumed", "bot-a", true)
 	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_resumed" {
 		t.Fatalf("bot turn after interruption: %+v", action)
@@ -69,8 +77,8 @@ func TestAstrBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 	provider.mu.Lock()
 	count := len(provider.requests)
 	provider.mu.Unlock()
-	if count != 2 {
-		t.Fatalf("expected two model requests, got %d", count)
+	if count != 3 {
+		t.Fatalf("expected three model requests, got %d", count)
 	}
 }
 
@@ -117,7 +125,7 @@ func TestAstrBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 	}
 }
 
-func TestAstrBotBotLoopFilteredHumanInterrupt(t *testing.T) {
+func TestAstrBotBotLoopIgnoresLegacyInterruption(t *testing.T) {
 	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	engine.Scope = newTestScopeWithEnv(t, map[string]string{
@@ -146,9 +154,67 @@ func TestAstrBotBotLoopFilteredHumanInterrupt(t *testing.T) {
 	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
 		t.Fatalf("second turn must be dropped: %+v", action)
 	}
-	sendBot("resumed", true)
-	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_resumed" {
-		t.Fatalf("in-band filtered-message marker must reset the streak: %+v", action)
+	sendBot("still-blocked", true)
+	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
+		t.Fatalf("legacy filtered-message marker must not restore the budget: %+v", action)
+	}
+}
+
+func TestAstrBotBotLoopIndependentBudgetsAndExplicitWake(t *testing.T) {
+	for _, wake := range []string{"at", "alias", "poke"} {
+		t.Run(wake, func(t *testing.T) {
+			provider := &mockLLMProvider{}
+			engine := newTestEngine(provider)
+			engine.Scope = newTestScopeWithEnv(t, map[string]string{
+				"BOT_LOOP_USER_IDS": "aiocqhttp:11,aiocqhttp:13", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
+				"BOT_ALIASES": "synthetic-assistant", "ENABLE_POKE": "true", "POKE_COOLDOWN_SECONDS": "0",
+				"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1",
+			})
+			srv, _, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			send := func(id, sender, trigger, want string) {
+				t.Helper()
+				event := Event{Type: "event", EventType: "message", Platform: "aiocqhttp", MessageType: "group",
+					SelfID: "99", GroupID: "20", UserID: sender, MessageID: id, Content: id, BotLoopInterrupted: true}
+				switch trigger {
+				case "at":
+					event.IsAt = true
+				case "alias":
+					event.Content += " synthetic-assistant"
+				case "quote":
+					event.IsWake = true
+				case "poke":
+					event.EventType, event.NoticeType, event.SubType, event.TargetID = "notice", "notify", "poke", "99"
+				}
+				if err := conn.WriteJSON(event); err != nil {
+					t.Fatal(err)
+				}
+				action := readBotLoopAction(t, conn)
+				if action.Action != want || (want == "noop" && !action.SuppressLLM) {
+					t.Fatalf("%s: got %+v, want %s", id, action, want)
+				}
+			}
+			send("first-a", "11", "at", "send_message")
+			send("first-b", "13", "at", "send_message")
+			send("proactive-human-chatter", "12", "", "send_message")
+			send("quote-only-human-wake", "12", "quote", "send_message")
+			send("blocked-a", "11", "at", "noop")
+			send("blocked-b", "13", "at", "noop")
+			send("human-wake", "12", wake, "send_message")
+			send("resumed-a", "11", "at", "send_message")
+			send("resumed-b", "13", "at", "send_message")
+			send("blocked-again", "11", "at", "noop")
+			provider.mu.Lock()
+			defer provider.mu.Unlock()
+			if len(provider.requests) != 7 {
+				t.Fatalf("model requests=%d, want 7", len(provider.requests))
+			}
+		})
 	}
 }
 
@@ -240,7 +306,7 @@ func TestAstrBotBotLoopCrossConnectionSecurityDelayPreservesOrder(t *testing.T) 
 		t.Helper()
 		if err := conn.WriteJSON(Event{Type: "event", EventType: "message", Platform: "astrbot",
 			MessageType: "group", GroupID: "room-a", UserID: user, MessageID: id,
-			Content: content, IsWake: wake}); err != nil {
+			Content: content, IsAt: wake}); err != nil {
 			t.Fatal(err)
 		}
 	}

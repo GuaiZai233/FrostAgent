@@ -139,7 +139,7 @@ func TestWSPokeDisabledRouteFinishes(t *testing.T) {
 		t.Fatal("disabled route invoked LLM")
 	}
 }
-func TestWSPokePreservesFilteredHumanInterrupt(t *testing.T) {
+func TestWSPokeIgnoresLegacyFilteredHumanInterrupt(t *testing.T) {
 	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	engine.Scope = newTestScopeWithEnv(t, map[string]string{
@@ -162,7 +162,7 @@ func TestWSPokePreservesFilteredHumanInterrupt(t *testing.T) {
 		}
 		action := readBotLoopAction(t, conn)
 		want := "send_message"
-		if i == 1 {
+		if i > 0 {
 			want = "noop"
 		}
 		if action.Action != want {
@@ -171,7 +171,7 @@ func TestWSPokePreservesFilteredHumanInterrupt(t *testing.T) {
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if len(provider.requests) != 2 {
+	if len(provider.requests) != 1 {
 		t.Fatalf("LLM calls=%d", len(provider.requests))
 	}
 }

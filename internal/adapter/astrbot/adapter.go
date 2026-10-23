@@ -384,7 +384,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 						}
 						botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
 						botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
-							event.UserID, botLoopMarked, botLoopConfig.Revision(), event.BotLoopInterrupted,
+							event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
 						)
 					}
 				}
@@ -640,6 +640,13 @@ func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
 		return false
 	}
 	return isExplicitWake(&event, scopes...)
+}
+
+// A generic plugin wake (for example, quoting the Bot) may trigger dialogue,
+// but only at/name/alias/poke wakes restore Bot budgets.
+func isBotLoopResetWake(event Event, scopes ...*runtimescope.Scope) bool {
+	event.IsWake = event.pokeID != ""
+	return isExplicitlyWoken(event, scopes...)
 }
 
 // sanitizeIngressMetadata strips reserved internal routing metadata keys from untrusted inbound payloads.
