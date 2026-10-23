@@ -136,7 +136,7 @@ func (b *SecretBackend) Resolve(endpoint Endpoint) (string, error) {
 		}
 		apiKey := strings.TrimSpace(getenv(ref))
 		if apiKey == "" {
-			return "", fmt.Errorf("环境变量 %s 为空", ref)
+			return "", fmt.Errorf("凭据环境变量为空或未设置")
 		}
 		return apiKey, nil
 	case APIKeyStorageSecretFile:
@@ -156,7 +156,7 @@ func (b *SecretBackend) Resolve(endpoint Endpoint) (string, error) {
 		apiKey, _, err := readWindowsCredential(ref)
 		return apiKey, err
 	default:
-		return "", fmt.Errorf("未知 Secret 来源 %q", endpoint.APIKeySource)
+		return "", fmt.Errorf("未知 Secret 来源")
 	}
 }
 
