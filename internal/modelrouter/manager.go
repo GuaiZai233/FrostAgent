@@ -710,7 +710,7 @@ func validateConfiguration(cfg Configuration) error {
 				return fmt.Errorf("endpoint %q secret file path is required", endpoint.DisplayName)
 			}
 		default:
-			return fmt.Errorf("endpoint %q has unknown api key source %q", endpoint.DisplayName, endpoint.APIKeySource)
+			return fmt.Errorf("endpoint %q has unknown api key source", endpoint.DisplayName)
 		}
 		if endpoint.APIKeyRef == "" {
 			return fmt.Errorf("endpoint %q api key reference is required", endpoint.DisplayName)
