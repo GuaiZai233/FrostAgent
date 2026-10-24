@@ -65,7 +65,7 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 	}
 	if run.Proactive {
 		var filtered bool
-		result.MessagePayload, filtered = filterStickerImages(result.MessagePayload)
+		result.MessagePayload, filtered = filterStickerMessages(result.MessagePayload)
 		if filtered && result.MessagePayload == "" {
 			return "主动回复禁止发送表情包。", false
 		}

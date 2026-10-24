@@ -1,11 +1,14 @@
 package llm
 
-import "encoding/json"
+import (
+	"FrostAgent/internal/sticker"
+	"encoding/json"
+)
 
-// filterStickerImages removes only sticker images from the shared outbound
+// filterStickerMessages removes sticker components from the shared outbound
 // message format. Ordinary text and images retain their fields and order.
 // An empty result means the entire message chain consisted of stickers.
-func filterStickerImages(content string) (string, bool) {
+func filterStickerMessages(content string) (string, bool) {
 	var payload struct {
 		Messages []json.RawMessage `json:"messages"`
 	}
@@ -15,11 +18,26 @@ func filterStickerImages(content string) (string, bool) {
 	kept := make([]json.RawMessage, 0, len(payload.Messages))
 	for _, raw := range payload.Messages {
 		var message struct {
-			Type      string `json:"type"`
-			IsSticker bool   `json:"is_sticker"`
+			Type         string          `json:"type"`
+			IsSticker    any             `json:"is_sticker"`
+			SubType      any             `json:"sub_type"`
+			CamelSubType any             `json:"subType"`
+			Data         json.RawMessage `json:"data"`
 		}
-		if json.Unmarshal(raw, &message) == nil && message.Type == "image" && message.IsSticker {
-			continue
+		if json.Unmarshal(raw, &message) == nil {
+			var data struct {
+				IsSticker    any `json:"is_sticker"`
+				SubType      any `json:"sub_type"`
+				CamelSubType any `json:"subType"`
+			}
+			// Optional or malformed nested data must not hide top-level markers.
+			_ = json.Unmarshal(message.Data, &data)
+			isSticker, _ := message.IsSticker.(bool)
+			dataSticker, _ := data.IsSticker.(bool)
+			if sticker.IsMessage(message.Type, isSticker || dataSticker,
+				message.SubType, message.CamelSubType, data.SubType, data.CamelSubType) {
+				continue
+			}
 		}
 		kept = append(kept, raw)
 	}

@@ -1,6 +1,7 @@
 package parity
 
 import (
+	"FrostAgent/internal/sticker"
 	"FrostAgent/internal/tools"
 	"encoding/json"
 	"strconv"
@@ -9,26 +10,12 @@ import (
 
 // IsStickerSubType reports whether sub_type or subType equals 1 (typical for stickers/market faces).
 func IsStickerSubType(value any) bool {
-	switch v := value.(type) {
-	case int:
-		return v == 1
-	case int64:
-		return v == 1
-	case float64:
-		return v == 1
-	case string:
-		return strings.TrimSpace(v) == "1"
-	case json.Number:
-		return v.String() == "1"
-	default:
-		return false
-	}
+	return sticker.IsImageSubType(value)
 }
 
 // IsStickerType reports whether the segment or message type represents a sticker / meme.
 func IsStickerType(msgType string) bool {
-	t := strings.ToLower(strings.TrimSpace(msgType))
-	return t == "mface" || t == "sticker"
+	return sticker.IsMessageType(msgType)
 }
 
 // IsQuoteType reports whether the segment or message type represents a quote or reply.
@@ -83,18 +70,8 @@ func PlanGroupDecoration(
 // ContainsStickerOneBot reports whether a sequence of OneBot segments contains a sticker or meme.
 func ContainsStickerOneBot(segments []tools.OneBotSegment) bool {
 	for _, seg := range segments {
-		if IsStickerType(seg.Type) {
-			return true
-		}
-		if seg.Type == "image" {
-			if IsStickerSubType(seg.Data["sub_type"]) || IsStickerSubType(seg.Data["subType"]) {
-				return true
-			}
-			if isSticker, ok := seg.Data["is_sticker"].(bool); ok && isSticker {
-				return true
-			}
-		}
-		if isSticker, ok := seg.Data["is_sticker"].(bool); ok && isSticker {
+		isSticker, _ := seg.Data["is_sticker"].(bool)
+		if sticker.IsMessage(seg.Type, isSticker, seg.Data["sub_type"], seg.Data["subType"]) {
 			return true
 		}
 	}

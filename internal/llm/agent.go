@@ -1106,7 +1106,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			if hasRunCtx && runCtx.Proactive {
-				contentStr, _ = filterStickerImages(contentStr)
+				contentStr, _ = filterStickerMessages(contentStr)
 			}
 			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
 			willSendFinalMessage := contentStr != "" || (hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive)

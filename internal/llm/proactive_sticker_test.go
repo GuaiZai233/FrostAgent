@@ -98,13 +98,30 @@ func TestProactiveRepliesSkipStickerEnforcement(t *testing.T) {
 	}
 }
 
-func TestProactiveMessagePathsFilterOnlyStickerImages(t *testing.T) {
+func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	for _, tc := range []struct{ name, payload, want string }{
 		{"sticker only", `{"messages":[{"type":"image","url":"https://example.invalid/sticker.png","is_sticker":true}]}`, ""},
+		{"mface type", `{"messages":[{"type":"mface","url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"sticker type", `{"messages":[{"type":"sticker","url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"normalized sticker type", `{"messages":[{"type":" STICKER ","url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"numeric subtype", `{"messages":[{"type":"image","sub_type":1,"url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"string subtype", `{"messages":[{"type":"image","sub_type":" 1 ","url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"numeric camel subtype", `{"messages":[{"type":"image","subType":1,"url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"string camel subtype", `{"messages":[{"type":"image","subType":"1","url":"https://example.invalid/sticker.png"}]}`, ""},
+		{"nested flag", `{"messages":[{"type":"image","data":{"is_sticker":true,"file":"https://example.invalid/sticker.png"}}]}`, ""},
+		{"nested numeric subtype", `{"messages":[{"type":"image","data":{"sub_type":1,"file":"https://example.invalid/sticker.png"}}]}`, ""},
+		{"nested string subtype", `{"messages":[{"type":"image","data":{"sub_type":"1","file":"https://example.invalid/sticker.png"}}]}`, ""},
+		{"nested numeric camel subtype", `{"messages":[{"type":"image","data":{"subType":1,"file":"https://example.invalid/sticker.png"}}]}`, ""},
+		{"nested string camel subtype", `{"messages":[{"type":"image","data":{"subType":" 1 ","file":"https://example.invalid/sticker.png"}}]}`, ""},
+		{"false flag cannot override subtype", `{"messages":[{"type":"image","is_sticker":false,"sub_type":0,"data":{"subType":1}}]}`, ""},
+		{"marked component", `{"messages":[{"type":"plain","text":"marked sticker","is_sticker":true}]}`, ""},
+		{"malformed optional data cannot hide type", `{"messages":[{"type":"mface","data":"invalid"}]}`, ""},
 		{"ordinary image", `{"messages":[{"type":"image","url":"https://example.invalid/image.png"}]}`, `{"messages":[{"type":"image","url":"https://example.invalid/image.png"}]}`},
 		{"explicit ordinary image", `{"messages":[{"type":"image","path":"/test/image.gif","is_sticker":false}]}`, `{"messages":[{"type":"image","path":"/test/image.gif","is_sticker":false}]}`},
+		{"ordinary image subtypes", `{"messages":[{"type":"image","url":"https://example.invalid/image.gif","sub_type":0,"subType":"0","data":{"sub_type":0,"subType":"0","is_sticker":false}}]}`, `{"messages":[{"type":"image","url":"https://example.invalid/image.gif","sub_type":0,"subType":"0","data":{"sub_type":0,"subType":"0","is_sticker":false}}]}`},
 		{"mixed", `{"messages":[{"type":"plain","text":"before"},{"type":"image","path":"/test/sticker.png","is_sticker":true},{"type":"image","url":"https://example.invalid/image.gif"},{"type":"plain","text":"after"}]}`, `{"messages":[{"type":"plain","text":"before"},{"type":"image","url":"https://example.invalid/image.gif"},{"type":"plain","text":"after"}]}`},
+		{"mixed representations", `{"messages":[{"type":"plain","text":"before"},{"type":"mface"},{"type":"image","sub_type":1},{"type":"image","data":{"subType":"1"}},{"type":"image","url":"https://example.invalid/image.gif","subType":0},{"type":"sticker"},{"type":"plain","text":"after"}]}`, `{"messages":[{"type":"plain","text":"before"},{"type":"image","url":"https://example.invalid/image.gif","subType":0},{"type":"plain","text":"after"}]}`},
 		{"text", "ordinary reply", "ordinary reply"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,9 +182,9 @@ func TestProactiveMessagePathsFilterOnlyStickerImages(t *testing.T) {
 	}
 }
 
-func TestFilterStickerImagesPreservesUnrelatedContent(t *testing.T) {
-	for _, input := range []string{"hello", `{"messages":[]}`, `{"messages":null}`, `{"messages":`, `"text"`, `{"other":true}`, `{"messages":[{"type":"plain","text":"text","is_sticker":true}]}`} {
-		if got, filtered := filterStickerImages(input); filtered || got != input {
+func TestFilterStickerMessagesPreservesUnrelatedContent(t *testing.T) {
+	for _, input := range []string{"hello", `{"messages":[]}`, `{"messages":null}`, `{"messages":`, `"text"`, `{"other":true}`, `{"messages":[{"type":"plain","text":"text","sub_type":1}]}`} {
+		if got, filtered := filterStickerMessages(input); filtered || got != input {
 			t.Fatalf("unrelated input changed: %q -> %q filtered=%t", input, got, filtered)
 		}
 	}

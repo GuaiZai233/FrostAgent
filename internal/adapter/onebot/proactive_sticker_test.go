@@ -39,7 +39,7 @@ func TestOneBotProactiveReplyKeepsImagesWithoutStickers(t *testing.T) {
 	}{
 		{
 			name: "structured mixed message", structured: true,
-			reply: `{"messages":[{"type":"plain","text":"hello"},{"type":"image","url":"https://example.invalid/sticker.png","is_sticker":true},{"type":"image","url":"https://example.invalid/photo.gif"}]}`,
+			reply: `{"messages":[{"type":"plain","text":"hello"},{"type":"image","url":"https://example.invalid/sticker.png","is_sticker":true},{"type":"mface"},{"type":"sticker"},{"type":"image","url":"https://example.invalid/sticker.png","sub_type":1},{"type":"image","url":"https://example.invalid/sticker.png","data":{"subType":"1"}},{"type":"image","url":"https://example.invalid/photo.gif"}]}`,
 		},
 		{
 			name:     "CQ mixed message",
