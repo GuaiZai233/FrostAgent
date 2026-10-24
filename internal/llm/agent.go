@@ -84,15 +84,13 @@ type AgentRunResult struct {
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
-// Proactive turns allow terminal silence, final text replies, memory, and
-// sticker delivery. Other external or privileged tools remain disallowed.
+// Proactive turns allow terminal silence and memory. Sticker delivery and
+// other external or privileged tools remain disallowed.
 func IsProactiveAllowedTool(name string) bool {
 	switch name {
 	case StaySilentToolName:
 		return true
 	case "memory":
-		return true
-	case "send_sticker":
 		return true
 	default:
 		return false
@@ -100,6 +98,10 @@ func IsProactiveAllowedTool(name string) bool {
 }
 
 func (e *Engine) isToolAllowedForProactive(name string) bool {
+	// The sticker ban cannot be overridden by a tool's proactive opt-in.
+	if name == "send_sticker" {
+		return false
+	}
 	if IsProactiveAllowedTool(name) {
 		return true
 	}
@@ -469,7 +471,7 @@ func (e *Engine) RunMessagesWithContext(
 		}
 	}
 
-	if !runContext.Mock {
+	if !runContext.Mock && !runContext.Proactive {
 		if notice := e.stickerActivityPrompt(); notice != "" {
 			messages = append([]ChatMessage(nil), messages...)
 			for i := len(messages) - 1; i >= 0; i-- {
@@ -776,7 +778,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 	stickerEnforcing := false
 	stickerAttempts := 0
-	if interval, remaining, grace := e.stickerActivitySnapshot(); hasRunCtx && !runCtx.Mock && interval > 0 && remaining == 0 && grace == 0 {
+	enforceStickerActivity := hasRunCtx && !runCtx.Mock && !runCtx.Proactive
+	if interval, remaining, grace := e.stickerActivitySnapshot(); enforceStickerActivity && interval > 0 && remaining == 0 && grace == 0 {
 		stickerEnforcing = true
 		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 	}
@@ -1102,9 +1105,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
+			if hasRunCtx && runCtx.Proactive {
+				contentStr, _ = filterStickerImages(contentStr)
+			}
 			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
 			willSendFinalMessage := contentStr != "" || (hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive)
-			if hasRunCtx && !runCtx.Mock && !outputBlocked {
+			if enforceStickerActivity && !outputBlocked {
 				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 					messages = messages[:len(messages)-1]
 					messages = appendStickerForgiveness(messages, i)
@@ -1185,7 +1191,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
-			if hasRunCtx && !runCtx.Mock && !runCtx.Proactive && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
+			if enforceStickerActivity && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
 				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
 					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
@@ -1301,7 +1307,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			if toolSucceeded {
 				deliverySticker := hasStickerImage(execution.MessagePayload)
-				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && !deliverySticker {
+				if enforceStickerActivity && execution.MessagePayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
 						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
 						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
@@ -1311,7 +1317,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				var delivered bool
 				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
 				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && delivered {
-					e.RecordBotMessage(deliverySticker)
+					e.RecordBotMessage(deliverySticker && !runCtx.Proactive)
 				}
 			}
 
@@ -1322,7 +1328,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			messages = append(messages, toolMsg)
 		}
-		if hasRunCtx && !runCtx.Mock && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+		if enforceStickerActivity && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
 				if remaining == interval {
 					// A sticker was sent in this batch; the quota is satisfied.

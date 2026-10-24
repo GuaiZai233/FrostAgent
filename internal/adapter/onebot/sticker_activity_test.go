@@ -108,8 +108,8 @@ func TestOneBotStickerCountModesAtIngress(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Fatalf("missing countdown %q: %+v", tc.countdown, provider.requests[0].Messages)
+			if found == tc.proactive {
+				t.Fatalf("countdown %q: found=%t proactive=%t", tc.countdown, found, tc.proactive)
 			}
 		})
 	}

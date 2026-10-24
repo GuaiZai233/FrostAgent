@@ -947,6 +947,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}()
 		replyText = runResult.Content
+		if wakeSignals.Proactive {
+			replyText = filterProactiveStickerCQ(replyText)
+		}
 		if session != nil && session.Epoch() != startEpoch {
 			return
 		}
