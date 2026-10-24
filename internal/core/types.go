@@ -15,6 +15,9 @@ type ChatRequest struct {
 	Temperature float64
 	Route       RouteContext
 	TraceID     string
+	// Sensitive suppresses ordinary content logging for privileged work
+	// sessions. Providers must not encode this local policy into wire requests.
+	Sensitive bool `json:"-"`
 }
 
 type EmbeddingRequest struct {
