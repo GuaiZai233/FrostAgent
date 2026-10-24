@@ -425,7 +425,7 @@ func TestIngressCreatesRunThroughRealActionsCatMatcher(t *testing.T) {
 		found := false
 		for _, run := range runs {
 			if run.PlannedEnv["ACTIONSCAT_EVENT_PLATFORM"] == map[string]string{"onebot": "onebot", "astrbot": "test-platform"}[name] {
-				found = run.PlannedEnv["ACTIONSCAT_EVENT_TEXT"] == "https://www.bilibili.com/video/test" && run.PlannedEnv["ACTIONSCAT_EVENT_GROUP_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_USER_ID"] != ""
+				found = run.PlannedEnv["ACTIONSCAT_EVENT_TEXT"] == "https://www.bilibili.com/video/test" && run.PlannedEnv["ACTIONSCAT_EVENT_GROUP_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_USER_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_ADAPTER_ID"] == name
 			}
 		}
 		if !found {

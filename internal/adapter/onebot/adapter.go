@@ -234,6 +234,7 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 		SenderCard:  senderCard,
 		Content:     string(event.Message),
 		Platform:    "onebot",
+		AdapterID:   "onebot",
 		MessageType: event.MessageType,
 		GroupID:     groupID,
 		CreatedAt:   time.Now(),
@@ -413,7 +414,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					continue
 				}
 			}
-			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
+			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 				event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 				(isWoken(event, a.engine, routing) || canDispatch) {

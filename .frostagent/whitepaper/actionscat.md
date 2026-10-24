@@ -44,11 +44,13 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 
 ### 入站消息自动分发
 
-每个实例将 OneBot 与 AstrBot 的入站文本接入既有 `POST /api/v1/dispatch`，在对话唤醒和模型路由之前单次分发。未唤醒对话或关闭对话路由的普通消息也可匹配。OneBot 只提取当前消息的 text 段；AstrBot 使用当前 `content`，不把历史上下文、附件、原始协议或凭据加入事件。事件携带真实适配器平台、会话、用户和群标识，发往实例配置的 `ACTIONSCAT_ENDPOINT`，使用现有 dispatch token。
+每个实例将 OneBot 与 AstrBot 的入站文本接入既有 `POST /api/v1/dispatch`，在对话唤醒和模型路由之前单次分发。未唤醒对话或关闭对话路由的普通消息也可匹配。OneBot 只提取当前消息的 text 段；AstrBot 使用当前 `content`，不把历史上下文、附件、原始协议或凭据加入事件。事件携带原始平台、可信传输适配器 `adapter_id`、会话、用户和群标识，发往实例配置的 `ACTIONSCAT_ENDPOINT`，使用现有 dispatch token。
 
-mock 会话、已处理的管理命令、心跳和非消息事件不分发。已配置 ActionsCat 时，待分发消息也经过现有安全入站门禁：锁定或被阻止的消息不分发，过滤后的消息使用脱敏正文。安全控制模式仍由现有设置决定；simple 模式不运行分类模型，aggressive 模式沿用分类门禁。Bot 连续对话防循环的强制模式仅抑制超限轮次的对话，已通过安全门禁的入站消息仍按原有规则分发至 ActionsCat。每个收到的合格事件只尝试一次，不对未知结果重试；请求最多等待 3 秒，错误仅记录并继续聊天。此保证针对单次接收，不是跨上游重发、重连或进程重启的去重。
+`adapter_id` 由 OneBot/AstrBot 适配器填写，不读取上游消息的 metadata。支持此字段的 ActionsCat Core 将其注入 `ACTIONSCAT_EVENT_ADAPTER_ID`，SDK `Reply` 再经 `metadata.adapter_id` 选择 FrostAgent 的传输适配器，同时保留原平台供 AstrBot 主动发送。应先部署配套 Core，再部署 FrostAgent；使用旧 SDK 的 Action 需重新构建。旧事件不带该可选字段时保留既有平台路由，无需数据库迁移；旧 Core 会忽略该字段，因此单独更新 FrostAgent 不能修复 AstrBot Matcher 回复。
 
-匹配语法由 ActionsCat 现有确定性 MatcherEngine 提供：`exact` 为全文相等，`contains` 为子串包含，`regex` 为 Go 正则表达式。比如包含 Bilibili 链接可用 `contains` + `bilibili.com`；`*.bilibili.com/*` 不是已支持的 glob 语法。
+mock 会话、已处理的管理命令、心跳和非消息事件不分发。已配置且启用 ActionsCat 时，待分发消息也经过现有安全入站门禁：锁定或被阻止的消息不分发，过滤后的消息使用脱敏正文。禁用集成后，不再因分发而额外审查未唤醒群消息；正常唤醒消息的安全门禁仍保留。安全控制模式仍由现有设置决定；simple 模式不运行分类模型，aggressive 模式沿用分类门禁。Bot 连续对话防循环的强制模式仅抑制超限轮次的对话，已通过安全门禁的入站消息仍按原有规则分发至 ActionsCat。每个收到的合格事件只尝试一次，不对未知结果重试；请求最多等待 3 秒，错误仅记录并继续聊天。此保证针对单次接收，不是跨上游重发、重连或进程重启的去重。
+
+匹配语法由 ActionsCat 现有确定性 MatcherEngine 提供：`exact` 为全文相等，`contains` 为子串包含，`regex` 为 Go 正则表达式。比如包含 Bilibili 链接可用 `contains` + `bilibili.com`；`*.bilibili.com/*` 不是已支持的 glob 语法。工具、代理与控制台只用去空白操作判断模式是否全空，非空模式的首尾空格、制表符和换行均按原文保留，不改变匹配语义。
 
 默认回归覆盖实际 WebSocket 入口、文本归一化、单次尝试、mock/锁定隔离、脱敏、分发失败继续对话。真实 MatcherEngine → SQLite Run 回归需可用 ActionsCat 源码：设置 `ACTIONSCAT_TEST_CHECKOUT` 为该 checkout 的绝对路径，执行 `go test -race ./internal/actionscat/...`。测试将编译短期本机 fixture，仅使用临时数据库、合成身份和 fake sandbox，实际执行既有匹配器和 Run 持久化，不启动真实 Action 或连接生产服务。未设置 checkout 时这项跨仓库测试会显式跳过。
 
@@ -256,7 +258,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 - **权限门禁**：管理员权限门禁，`Mock==true` 拦截。
 
 #### 9. `actionscat_run_action`
-- **功能**：触发指定 Action 执行并支持同步等待结果（最长 25 秒）；
+- **功能**：触发指定 Action 执行并支持同步等待结果（提交成功后的轮询窗口最长 25 秒，提交请求仍使用普通 API 超时）；每次轮询共享该窗口的 context deadline，窗口到期返回已创建的 Run 和最后已知状态，不重新提交任务；调用者取消仍向上传递；
 - **参数**：`action_id: string`（必填）, `extra_env: map[string]string`, `trigger_metadata: map[string]string`, `wait: bool`；
 - **安全检查**：
   - `RunContext.Mock == true` 拦截：直接拒绝执行；
@@ -390,6 +392,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
    - 当针对未构建动作触发时，前端弹出醒目警示横幅提示。
 4. **运行历史与实时日志查看器**：
    - 分页展示 Run 历史列表（触发类型、状态徽章、耗时、退出码、时间戳）；
+   - 首次加载与刷新先完成动作清单，再查询这些动作的运行历史；离开页面后不继续启动后续加载请求；
    - 独立弹窗拉取并实时展示终端标准输出（STDOUT）与标准错误（STDERR），支持一键全量复制。
 5. **事件分发测试工具**：
    - 快捷向 `/api/v1/dispatch` 发送 JSON Payload，便于调试自动化事件触发流。
@@ -397,5 +400,6 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
    - 允许管理员在控制台快捷创建 Action 名称、描述及最大并发数，文案明确提示其为元数据声明。
 7. **触发器与调度规则管理对话框 (Triggers & Schedules Dialog)**：
    - 每个 Action 卡片提供「触发器」配置入口；
+   - 捕获映射的键和值均以转义后的文本渲染，不把持久化规则内容当作 HTML 执行；
    - **定时调度管理**：以表格方式清晰呈现当前 Cron 表达式、时区、下次计算执行时间（`next_run_at`）及启用状态；支持一键注销调度，并提供便捷的「新增定时调度」表单（校验 Cron 表达式、时区与启用开关）；
    - **事件模式匹配管理**：实时拉取事件模式规则列表，展示匹配类型（contains / exact / regex）、Pattern 表达式、目标字段、命名捕获组映射与优先级；支持一键注销规则，并提供「新增事件匹配规则」表单（支持 regex / contains / exact 选择、正则语法校验及 `capture_env_map` 解析与受保护前缀防御）。

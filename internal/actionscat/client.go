@@ -612,19 +612,22 @@ func (c *Client) TriggerRunAndWait(ctx context.Context, actionID string, req Man
 		return run, nil
 	}
 
-	deadline := time.Now().Add(waitTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
+	defer cancel()
 	ticker := time.NewTicker(defaultPollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
+			// A local wait expiry is not a failed run; preserve its ID for later polling.
+			// Caller cancellation still propagates with the last known run.
 			return run, ctx.Err()
-		case now := <-ticker.C:
-			if now.After(deadline) {
-				return run, nil
+		case <-ticker.C:
+			if waitCtx.Err() != nil {
+				return run, ctx.Err()
 			}
-			latest, err := c.GetRun(ctx, actionID, run.ID)
+			latest, err := c.GetRun(waitCtx, actionID, run.ID)
 			if err == nil {
 				run = latest
 				if run.IsTerminal() {

@@ -471,8 +471,8 @@ func (s *Service) handleActionsSubpath(w http.ResponseWriter, r *http.Request, r
 					s.writeError(w, http.StatusBadRequest, "matcher name cannot be empty")
 					return
 				}
-				pattern := strings.TrimSpace(req.Pattern)
-				if pattern == "" {
+				pattern := req.Pattern
+				if strings.TrimSpace(pattern) == "" {
 					s.writeError(w, http.StatusBadRequest, "matcher pattern cannot be empty")
 					return
 				}

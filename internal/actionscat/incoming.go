@@ -10,6 +10,7 @@ import (
 // MessageEvent is the platform-neutral ActionsCat dispatch payload.
 type MessageEvent struct {
 	Platform  string `json:"platform"`
+	AdapterID string `json:"adapter_id,omitempty"`
 	SessionID string `json:"session_id"`
 	UserID    string `json:"user_id"`
 	GroupID   string `json:"group_id,omitempty"`
@@ -25,7 +26,7 @@ func (c *Client) DispatchIncoming(ctx context.Context, message core.IncomingMess
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	return c.Dispatch(requestCtx, MessageEvent{
-		Platform: message.Platform, SessionID: message.SessionID,
+		Platform: message.Platform, AdapterID: message.AdapterID, SessionID: message.SessionID,
 		UserID: message.UserID, GroupID: message.GroupID, Text: message.Content,
 	})
 }
