@@ -144,6 +144,10 @@ func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 }
 
 func (c *wsConn) WriteJSON(v any) error {
+	return c.writeTurnJSON(v, nil)
+}
+
+func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.conn == nil || c.isClosed() {
@@ -164,7 +168,13 @@ func (c *wsConn) WriteJSON(v any) error {
 			v = actionAlias(normalized)
 		}
 	}
-	return c.conn.WriteJSON(v)
+	return turn.WithAuthority(func() error {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		defer c.conn.SetWriteDeadline(time.Time{})
+		return c.conn.WriteJSON(v)
+	})
 }
 
 func (c *wsConn) Close() error {
@@ -195,16 +205,22 @@ func (c *wsConn) acceptDeliveryReceipt(receipt deliveryReceipt) {
 }
 
 func (c *wsConn) writeStickerActionAndWait(action Action) error {
+	return c.writeStickerActionAndWaitTurn(action, nil)
+}
+
+func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionTurn) error {
 	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
 	receipts := make(chan deliveryReceipt, 1)
 	c.pendingDeliveries.Store(action.DeliveryID, receipts)
 	defer c.pendingDeliveries.Delete(action.DeliveryID)
-	if err := c.WriteJSON(action); err != nil {
+	if err := c.writeTurnJSON(action, turn); err != nil {
 		return err
 	}
 	timer := time.NewTimer(60 * time.Second)
 	defer timer.Stop()
 	select {
+	case <-turn.Context().Done():
+		return context.Canceled
 	case receipt := <-receipts:
 		if !receipt.Delivered {
 			if receipt.Error != "" {
@@ -374,6 +390,8 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 	)
 	if turn != nil && turn.StagedGuard() != nil && seq > 0 {
 		turn.StagedGuard().AddSequence(seq)
+	} else {
+		session.PromoteGroupCompactSlot(seq, messageID)
 	}
 }
 
@@ -777,6 +795,20 @@ func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...strin
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
+	billingReported := false
+	defer func() {
+		if engine == nil || conn == nil || billingReported {
+			return
+		}
+		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
+			_ = sendDirectReply(event, conn, receipt, turn)
+		}
+	}()
+	defer func() {
+		if turn.Interrupted() {
+			engine.Go(func() { _ = sendTerminalNoopWithSuppress(event, conn) })
+		}
+	}()
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -863,16 +895,16 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if err != nil {
 					if errors.Is(err, billing.ErrInsufficientFunds) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
-						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
+						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
 						return
 					}
 					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
+					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage(), turn)
 					return
 				}
 				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
-					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
+					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
 					return
 				}
 			}
@@ -1149,12 +1181,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	var (
-		replyText            string
-		receiptText          string
-		deliveredToolReplies []string
-		runResult            llm.AgentRunResult
-		finalDelivered       bool
+		replyText   string
+		receiptText string
+		runResult   llm.AgentRunResult
 	)
+	deliveries := llm.NewPublicReplyLog(session, startEpoch)
 
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
@@ -1173,11 +1204,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 		}
 
-		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: durablePrompt})
-		messages := session.Snapshot()
-		if len(messages) > 0 {
-			messages[len(messages)-1].Content = requestPrompt
-		}
+		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+		defer func() { deliveries.Finish(turn.Interrupted()) }()
 
 		targetID := event.UserID
 		if event.MessageType == "group" {
@@ -1249,7 +1277,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
 				ReplyMessageID: event.replyMessageID(),
 			}
-			if session != nil && session.Epoch() != startEpoch {
+			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
 			}
 			var sendErr error
@@ -1257,9 +1285,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if !event.StickerDeliveryReceipt {
 					return errors.New("AstrBot 插件版本不支持表情包投递回执，请更新插件")
 				}
-				sendErr = conn.writeStickerActionAndWait(action)
+				sendErr = conn.writeStickerActionAndWaitTurn(action, turn)
 			} else {
-				sendErr = conn.WriteJSON(action)
+				sendErr = conn.writeTurnJSON(action, turn)
 			}
 			if sendErr != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", sendErr))
@@ -1269,10 +1297,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				return errors.New("会话已重置，取消发送中间消息")
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
-				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
-				if event.MessageType == "group" && !conn.mock {
-					stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, turn)
-				}
+				deliveries.Record(deliveredReply, func(live bool) {
+					if event.MessageType == "group" && !conn.mock {
+						ownerTurn := turn
+						if !live {
+							ownerTurn = nil
+						}
+						stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, ownerTurn)
+					}
+				})
 			}
 			return nil
 		}
@@ -1282,6 +1315,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
+			Turn:        turn,
 			Context:     runCtx,
 			Epoch:       startEpoch,
 			SessionID:   conn.sessionKey(event),
@@ -1304,19 +1338,17 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Mock:          conn.mock,
 			Proactive:     isProactiveReply(&event),
 		})
-		defer func() {
-			if !conn.mock && finalDelivered {
-				engine.RecordBotMessage(false)
-			}
-		}()
 		replyText = runResult.Content
-		if session != nil && session.Epoch() != startEpoch {
+		if turn.Interrupted() {
+			return
+		}
+		if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 
 		if runResult.Banned {
 			if session != nil {
-				session.DropLastMessage()
+				session.DropMessage(inputID)
 				if event.MessageType == "group" {
 					var guard *llm.StagedGroupCompactGuard
 					if turn != nil {
@@ -1331,23 +1363,24 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if isProactiveReply(&event) {
 				_ = sendTerminalNoopWithSuppress(event, conn)
 			} else {
-				_ = sendDirectReply(event, conn, runResult.Content)
+				_ = sendDirectReply(event, conn, runResult.Content, turn)
 			}
 			return
 		}
 
 		if billingState != nil && billingState.BillingActive {
-			if runResult.Error != nil && billingState.IterationsBilled == 0 {
-				session.TrimHistory(len(session.Snapshot()) - 1)
-				sendDirectReply(event, conn, runResult.Content)
+			receipt := billingState.Receipt()
+			if runResult.Error != nil && receipt.IterationsBilled == 0 {
+				session.DropMessage(inputID)
+				sendDirectReply(event, conn, runResult.Content, turn)
 				return
 			}
 			receiptText = billing.FormatReceipt(
-				billingState.TotalBilledMinor,
+				receipt.TotalBilledMinor,
 				runResult.Usage.PromptTokens,
 				runResult.Usage.CompletionTokens,
-				billingState.LastBalanceMinor,
-				billingState.WelcomeGranted,
+				receipt.LastBalanceMinor,
+				receipt.WelcomeGranted,
 			)
 		}
 
@@ -1429,126 +1462,130 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	historyReplyText := replyText
-	if strings.TrimSpace(historyReplyText) == "" && len(deliveredToolReplies) > 0 {
-		historyReplyText = strings.Join(deliveredToolReplies, "\n")
+	if strings.TrimSpace(historyReplyText) == "" {
+		historyReplyText = deliveries.Text()
 	}
 	sentReplyText := composeReplyWithReceipt(replyText, receiptText)
 
 	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
 	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
-	if session != nil && session.Epoch() != startEpoch {
+	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	var sendErr error
-	if strings.TrimSpace(sentReplyText) == "" {
-		sendErr = sendTerminalNoop(event, conn)
-	} else {
-		sendErr = sendDirectReply(event, conn, sentReplyText)
-	}
-	if session != nil && session.Epoch() != startEpoch {
-		return
-	}
-	if sendErr != nil {
-		if session != nil {
-			if event.MessageType == "group" {
-				var guard *llm.StagedGroupCompactGuard
-				if turn != nil {
-					guard = turn.StagedGuard()
-				}
-				engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
-			}
-			session.SetDeliveryFailure(llm.DeliveryFailure{
-				Platform: platform,
-				Action:   "send_message",
-				Wording:  sendErr.Error(),
-			})
-			if engine != nil {
-				engine.TrimSession(session)
-			}
-		}
-		return
-	}
-	finalDelivered = strings.TrimSpace(sentReplyText) != ""
-
-	if engine == nil || session == nil {
-		return
-	}
-	if session.Epoch() != startEpoch {
-		return
-	}
-
-	if event.MessageType == "group" && !runResult.Banned {
-		if session != nil {
-			if turn != nil && turn.StagedGuard() != nil {
-				turn.StagedGuard().Promote()
-			} else if event.MessageID != "" {
-				session.PromoteGroupCompactMessage(event.MessageID)
-			}
-		}
-	}
-	if strings.TrimSpace(historyReplyText) != "" {
-		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
-	}
-	engine.TrimSession(session)
-
-	if runResult.MemoryWritten {
-		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-	} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
-		if event.MessageType == "group" {
-			speakerName := senderDisplayName(event)
-			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-				{
-					Owner:            owner,
-					OwnerType:        memory.OwnerGroup,
-					ScopeType:        memory.ScopeGroup,
-					GroupID:          event.GroupID,
-					SpeakerID:        event.UserID,
-					SpeakerName:      speakerName,
-					Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-					Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
-					ImageDescription: memoryImageDescription,
-					MessageID:        event.MessageID,
-				},
-				{
-					Owner:       owner,
-					OwnerType:   memory.OwnerGroup,
-					ScopeType:   memory.ScopeGroup,
-					GroupID:     event.GroupID,
-					SpeakerID:   event.UserID,
-					SpeakerName: speakerName,
-					Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-					Message:     core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
-					MessageID:   event.MessageID,
-				},
-			})
+	billingReported = receiptText != ""
+	turn.AwaitDelivery(func() {
+		var sendErr error
+		if strings.TrimSpace(sentReplyText) == "" {
+			sendErr = sendTerminalNoop(event, conn)
 		} else {
-			engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-				{
-					Owner:     owner,
-					OwnerType: ownerType,
-					ScopeType: memory.ScopePrivate,
-					Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-					Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
-				},
-				{
-					Owner:     owner,
-					OwnerType: ownerType,
-					ScopeType: memory.ScopePrivate,
-					Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-					Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
-				},
-			})
+			sendErr = sendDirectReply(event, conn, sentReplyText, turn)
 		}
-	}
+		if (sendErr != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
+			return
+		}
+		if sendErr != nil {
+			if session != nil {
+				if event.MessageType == "group" {
+					var guard *llm.StagedGroupCompactGuard
+					if turn != nil {
+						guard = turn.StagedGuard()
+					}
+					engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
+				}
+				session.SetDeliveryFailure(llm.DeliveryFailure{
+					Platform: platform,
+					Action:   "send_message",
+					Wording:  sendErr.Error(),
+				})
+				if engine != nil {
+					engine.TrimSession(session)
+				}
+			}
+			return
+		}
+		if !conn.mock && strings.TrimSpace(sentReplyText) != "" {
+			engine.RecordBotMessage(false)
+		}
 
-	if event.MessageType == "group" && !conn.mock {
-		botReply := extractBotReplyText(replyText)
-		if strings.TrimSpace(botReply) != "" {
-			appendAssistantGroupMessage(session, engine, owner, botReply, routeScope)
-		} else if engine != nil && engine.GroupCompactor != nil {
-			engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+		if engine == nil || session == nil {
+			return
 		}
-	}
+		session.WithEpochCommit(startEpoch, func() {
+
+			if event.MessageType == "group" && !runResult.Banned {
+				if session != nil {
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else if event.MessageID != "" {
+						session.PromoteGroupCompactMessage(event.MessageID)
+					}
+				}
+			}
+			if strings.TrimSpace(historyReplyText) != "" {
+				deliveries.CommitFinal(historyReplyText, turn.Interrupted())
+			}
+			engine.TrimSession(session)
+
+			if runResult.MemoryWritten {
+				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+			} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
+				if event.MessageType == "group" {
+					speakerName := senderDisplayName(event)
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          event.GroupID,
+							SpeakerID:        event.UserID,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        event.MessageID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     event.GroupID,
+							SpeakerID:   event.UserID,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+							MessageID:   event.MessageID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+						},
+					})
+				}
+			}
+
+			if event.MessageType == "group" && !conn.mock {
+				botReply := extractBotReplyText(replyText)
+				if strings.TrimSpace(botReply) != "" {
+					appendAssistantGroupMessage(session, engine, owner, botReply, routeScope)
+				} else if engine != nil && engine.GroupCompactor != nil {
+					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+				}
+			}
+		})
+	})
 }
 
 func actionMessageFromToolMessage(m tools.Msg) ActionMessage {
@@ -1618,7 +1655,11 @@ func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) er
 // sendDirectReply sends a direct message to the AstrBot WebSocket connection.
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
-func sendDirectReply(event Event, conn *wsConn, text string) error {
+func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.SessionTurn) error {
+	var turn *llm.SessionTurn
+	if len(turns) > 0 {
+		turn = turns[0]
+	}
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
@@ -1647,7 +1688,7 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
 		ReplyMessageID: event.replyMessageID(),
 	}
-	if err := conn.WriteJSON(action); err != nil {
+	if err := conn.writeTurnJSON(action, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
 		return err
 	}

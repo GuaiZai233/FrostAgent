@@ -66,6 +66,19 @@ func (s *SessionContext) skillSnapshotAtEpoch() (map[string]activeSkill, uint64)
 
 func (e *Engine) skillSession(ctx context.Context) *SessionContext {
 	run, ok := RunContextFromContext(ctx)
+	if run.SkillState != nil {
+		return run.SkillState
+	}
+	if !ok {
+		return nil
+	}
+	return e.promptTraceSession(ctx)
+}
+
+// Prompt inspection belongs to the administrator's conversation diagnostic,
+// not to public history or another sender's execution context.
+func (e *Engine) promptTraceSession(ctx context.Context) *SessionContext {
+	run, ok := RunContextFromContext(ctx)
 	if !ok || run.SessionID == "" || e.SessionManager == nil {
 		return nil
 	}
@@ -85,6 +98,29 @@ func (e *Engine) activateRequestedSkill(ctx context.Context, messages []ChatMess
 	prompt := run.MemorySource.Content
 	if prompt == "" && run.ActorUserID == "" {
 		prompt = extractLastUserMessage(messages)
+	}
+	if run.Turn != nil && run.Turn.lane != nil {
+		lane := run.Turn.lane
+		lane.mu.Lock()
+		lane.skillInputs = append(lane.skillInputs, prompt)
+		inputs := append([]string(nil), lane.skillInputs...)
+		lane.mu.Unlock()
+		for _, input := range inputs {
+			if err := e.activateSkillInput(ctx, input); err != nil {
+				return err
+			}
+			lane.mu.Lock()
+			lane.skillInputs = lane.skillInputs[1:]
+			lane.mu.Unlock()
+		}
+		return nil
+	}
+	return e.activateSkillInput(ctx, prompt)
+}
+
+func (e *Engine) activateSkillInput(ctx context.Context, prompt string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	fields := strings.Fields(prompt)
 	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {

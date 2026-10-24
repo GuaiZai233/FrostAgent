@@ -179,8 +179,13 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				}
 				first.Close()
 				second := dial()
-				// The success in the same session waits for the preceding dropped turn.
+				// Exercise suppression after the failed call has actually run; a
+				// burst from the same sender now interrupts/coalesces pending input.
+				provider.mu.Lock()
+				before := len(provider.requests)
+				provider.mu.Unlock()
 				send(second, 102, "fail")
+				waitOneBotRequests(t, provider, before+1)
 				send(second, 102, "sentinel")
 				read(second, "sentinel success")
 				if state != nil {

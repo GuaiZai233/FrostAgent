@@ -2708,6 +2708,12 @@ func TestAstrBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *test
 	if err := json.Unmarshal(respBytes, &act); err != nil {
 		t.Fatalf("unmarshal action failed: %v", err)
 	}
+	// Background lanes may now acknowledge their noop before the active reply.
+	if act.Action == "noop" {
+		if err := conn.ReadJSON(&act); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if act.Content != "这是对唤醒消息的最终回复。" {
 		t.Fatalf("unexpected reply content: %q", act.Content)
 	}

@@ -24,10 +24,7 @@ func (e *Engine) deliverStickerPair(ctx context.Context, run *RunContext, textCa
 	if err != nil {
 		return "文字未发送：配对贴纸消息无效。", fmt.Sprintf("表情包未发送：%v", err)
 	}
-	result, delivered := e.deliverToolResult(ctx, core.ToolExecutionResult{MessagePayload: payload}, payload)
-	if delivered && !run.Mock {
-		e.RecordBotMessage(true)
-	}
+	result, _ := e.deliverToolResult(ctx, core.ToolExecutionResult{MessagePayload: payload}, payload)
 	return result, result
 }
 
@@ -48,7 +45,10 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 		return core.ToolExecutionResult{}, "FrostAgent错误：工具未找到"
 	}
 	e.Log().InfoWithConsoleSummary(logs.TOOL, formatToolCallLog(call.Function.Name, call.Function.Arguments), "【智能体调用工具】"+call.Function.Name)
-	output, err := executeToolResult(ctx, tool, call)
+	output, err := executeInterruptibleTool(ctx, tool, call)
+	if runCanceled(ctx) {
+		return core.ToolExecutionResult{}, "消息发送取消：执行已被打断"
+	}
 	if err != nil {
 		return core.ToolExecutionResult{}, fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
 	}
