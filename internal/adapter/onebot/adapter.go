@@ -555,7 +555,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 					if proactiveTurn {
 						lane = "proactive"
 					}
-					inject := event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias || proactiveTurn
+					inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
 					turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
 				}
 			}

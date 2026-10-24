@@ -222,6 +222,9 @@ func (t *SessionTurn) finishSequence() {
 	if lane.active == t {
 		lane.active = nil
 	}
+	// Only an interrupted attempt hands its task state to a successor. A queued
+	// ordinary wake starts a new task after this one has delivered its receipt;
+	// retaining that ledger would report completed charges a second time.
 	if lane.tail == t || !t.Interrupted() {
 		lane.transcript = nil
 		lane.billing = nil

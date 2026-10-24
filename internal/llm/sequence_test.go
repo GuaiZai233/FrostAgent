@@ -199,6 +199,64 @@ func TestSequenceCoalescesInputsAndRefreshesBackground(t *testing.T) {
 	}
 }
 
+func TestSequenceSuccessorTaskBoundary(t *testing.T) {
+	for _, interrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("interrupt=%v", interrupt), func(t *testing.T) {
+			s := NewSessionManager().GetOrCreate("group:task-boundary")
+			first := s.ReserveSequenceTurn("sender:synthetic", true, false)
+			oldBilling := &BillingRunState{TaskID: "first-task", TotalBilledMinor: 7, IterationsBilled: 1}
+			messages, _, inputID := s.PrepareTurnMessages(first, "first-input", "first-input transient", oldBilling)
+			messages = append(messages,
+				ChatMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "first-call", Type: "function", Function: ToolCallFunction{Name: "synthetic", Arguments: "{}"}}}},
+				ChatMessage{Role: "tool", ToolCallID: "first-call", Content: "private-tool-result"})
+			first.saveTranscript(messages)
+			first.memoryState(true)
+			first.lane.skillInputs = []string{"/synthetic first-args"}
+			if err := first.SkillSession().ActivateSkill("synthetic", "revision", "first-args", first.Epoch()); err != nil {
+				t.Fatal(err)
+			}
+			// Reserve before Done: the old turn is no longer the lane tail.
+			next := s.ReserveSequenceTurn("sender:synthetic", interrupt, false)
+			defer next.Done()
+			if first.Interrupted() != interrupt {
+				t.Fatalf("old turn interrupted=%v, want %v", first.Interrupted(), interrupt)
+			}
+			if !interrupt {
+				s.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: "delivered-answer"})
+			}
+			first.Done()
+			next.Wait()
+			lane := next.lane
+			if (lane.billing == oldBilling) != interrupt || lane.messageIDs[inputID] != interrupt || lane.memoryWritten != interrupt || (len(lane.skillInputs) != 0) != interrupt {
+				t.Fatalf("wrong task state after handoff: billing=%v inputs=%v memory=%v skills=%v", lane.billing, lane.messageIDs, lane.memoryWritten, lane.skillInputs)
+			}
+			newBilling := &BillingRunState{TaskID: "next-task"}
+			nextMessages, ledger, _ := s.PrepareTurnMessages(next, "next-input", "next-input", newBilling)
+			wantLedger := newBilling
+			if interrupt {
+				wantLedger = oldBilling
+			}
+			if ledger != wantLedger {
+				t.Fatal("successor got the wrong billing ledger")
+			}
+			all := fmt.Sprint(nextMessages)
+			if strings.Contains(all, "private-tool-result") != interrupt || strings.Count(all, "first-input") != 1 || strings.Contains(all, "transient") {
+				t.Fatalf("wrong successor context: %s", all)
+			}
+			if !interrupt && !strings.Contains(all, "delivered-answer") {
+				t.Fatal("ordinary successor lost the completed public reply")
+			}
+			if !next.SkillSession().HasActiveSkill("synthetic", "revision") {
+				t.Fatal("task cleanup lost same-sender session skills")
+			}
+			next.Done()
+			if lane.tail != nil || lane.active != nil || lane.transcript != nil || lane.billing != nil || len(lane.messageIDs) != 0 || lane.memoryWritten || len(lane.skillInputs) != 0 {
+				t.Fatal("terminal task retained temporary state")
+			}
+		})
+	}
+}
+
 func TestSequenceSkillsProactiveResetAndHistoryOwnership(t *testing.T) {
 	s := NewSessionManager().GetOrCreate("group:skills")
 	a := s.ReserveSequenceTurn("A", true, false)

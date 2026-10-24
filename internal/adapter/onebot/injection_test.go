@@ -26,6 +26,149 @@ func (f runtimeInjectionProvider) Chat(ctx context.Context, req core.ChatRequest
 	return f(ctx, req)
 }
 
+type injectionAdmissionObserver struct{ marker chan struct{} }
+
+func (*injectionAdmissionObserver) IsConfigured() bool { return true }
+func (o *injectionAdmissionObserver) DispatchIncoming(_ context.Context, msg core.IncomingMessage) error {
+	if msg.Content == "queue-marker" {
+		close(o.marker)
+	}
+	return nil
+}
+
+func TestOneBotQueuedPokeStartsIndependentTask(t *testing.T) {
+	for _, kind := range []string{"private", "group"} {
+		t.Run(kind, func(t *testing.T) {
+			billingServer, billingState := mockAlcyoneBillingServer(t)
+			defer billingServer.Close()
+			var taskIDs []string
+			billingState.reserveHandler = func(w http.ResponseWriter, r *http.Request) {
+				var req billing.LLMReserveRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					http.Error(w, "invalid reserve request", http.StatusBadRequest)
+					return
+				}
+				taskIDs = append(taskIDs, req.TaskID)
+				billingState.reserveCount++
+				json.NewEncoder(w).Encode(map[string]any{"data": billing.LLMReservationResult{ReservationID: fmt.Sprintf("synthetic-%d", billingState.reserveCount), Decision: billing.DecisionReserved, BalanceMinor: 10000}})
+			}
+			started, release := make(chan context.Context, 1), make(chan struct{})
+			var releaseOnce sync.Once
+			var calls atomic.Int32
+			engine := newTestEngine(runtimeInjectionProvider(func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				response := &core.ChatResponse{Usage: &core.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110}}
+				switch calls.Add(1) {
+				case 1:
+					response.Message = core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "synthetic-call", Type: "function", Function: core.ToolCallFunction{Name: "synthetic-tool", Arguments: "{}"}}}}
+				case 2:
+					started <- ctx
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "first-answer"}
+				case 3:
+					all := fmt.Sprint(req.Messages)
+					if strings.Contains(all, "private-tool-result") || !strings.Contains(all, "first-answer") {
+						t.Errorf("queued task has wrong history: %s", all)
+					}
+					for _, msg := range req.Messages {
+						if len(msg.ToolCalls) != 0 || msg.Role == core.RoleTool {
+							t.Errorf("queued task inherited completed private trajectory: %+v", msg)
+						}
+					}
+					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "poke-answer"}
+					response.Usage = &core.Usage{PromptTokens: 300, CompletionTokens: 30, TotalTokens: 330}
+				default:
+					t.Error("unexpected model call")
+					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "unexpected-answer"}
+				}
+				return response, nil
+			}))
+			engine.ToolRegistry["synthetic-tool"] = &mockTestTool{name: "synthetic-tool", result: "private-tool-result"}
+			engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_POKE": "true", "POKE_COOLDOWN_SECONDS": "0", "ENABLE_PROACTIVE_REPLY": "false", "PROACTIVE_REPLY_PROBABILITY": "0"})
+			engine.BillingClient = billing.NewClient(billingServer.URL, "synthetic-token", time.Second)
+			engine.BillingConfig = billing.Config{Enabled: true, Timeout: time.Second, MaxOutputTokens: 100, SafetyMultiplier: 1.2}
+			observer := &injectionAdmissionObserver{marker: make(chan struct{})}
+			adapter := NewAdapter(engine)
+			adapter.SetIncomingDispatcher(observer)
+			server := httptest.NewServer(adapter.Handler())
+			defer server.Close()
+			defer releaseOnce.Do(func() { close(release) })
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			var writes sync.Mutex
+			write := func(value any) error { writes.Lock(); defer writes.Unlock(); return conn.WriteJSON(value) }
+			replies := make(chan string, 4)
+			go func() {
+				for {
+					var action model.OneBotAction
+					if conn.ReadJSON(&action) != nil {
+						return
+					}
+					if write(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 22, "group_name": "synthetic-room"}}) != nil {
+						return
+					}
+					if action.Action != "get_group_info" {
+						raw, _ := json.Marshal(action.Params)
+						replies <- string(raw)
+					}
+				}
+			}()
+			first := model.OneBotEvent{PostType: "message", SelfID: 99, UserID: 11, MessageID: 1, MessageType: kind, Message: json.RawMessage(`[{"type":"at","data":{"qq":"99"}},{"type":"text","data":{"text":"first-input"}}]`)}
+			if kind == "group" {
+				first.GroupID = 20
+			}
+			if err := write(first); err != nil {
+				t.Fatal(err)
+			}
+			var oldCtx context.Context
+			select {
+			case oldCtx = <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("first task did not reach the model after its tool")
+			}
+			if err := write(model.OneBotEvent{PostType: "notice", NoticeType: "notify", SubType: "poke", SelfID: 99, TargetID: 99, UserID: 11, GroupID: first.GroupID}); err != nil {
+				t.Fatal(err)
+			}
+			// The same socket processes this unaddressed group marker only after
+			// reserving the poke turn, while the predecessor is still running.
+			if err := write(model.OneBotEvent{PostType: "message", MessageType: "group", SelfID: 99, GroupID: 21, UserID: 12, MessageID: 2, Message: json.RawMessage(`"queue-marker"`)}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-observer.marker:
+			case <-time.After(3 * time.Second):
+				t.Fatal("poke admission did not complete")
+			}
+			if oldCtx.Err() != nil || calls.Load() != 2 {
+				t.Fatalf("poke interrupted or overlapped its predecessor: err=%v calls=%d", oldCtx.Err(), calls.Load())
+			}
+			releaseOnce.Do(func() { close(release) })
+			for _, want := range []struct{ answer, usage string }{{"first-answer", "输入: 200, 输出: 20"}, {"poke-answer", "输入: 300, 输出: 30"}} {
+				select {
+				case got := <-replies:
+					if !strings.Contains(got, want.answer) || !strings.Contains(got, want.usage) {
+						t.Fatalf("want %s with separate usage %s, got %s", want.answer, want.usage, got)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatalf("missing %s", want.answer)
+				}
+			}
+			billingState.mu.Lock()
+			defer billingState.mu.Unlock()
+			if len(taskIDs) != 3 || taskIDs[0] != taskIDs[1] || taskIDs[1] == taskIDs[2] || billingState.commitCount != 3 || billingState.releaseCount != 0 {
+				t.Fatalf("tasks were not billed independently: tasks=%v commit=%d release=%d", taskIDs, billingState.commitCount, billingState.releaseCount)
+			}
+		})
+	}
+}
+
 func TestOneBotInjectionEarlyRejectionRetainsBillingReceipt(t *testing.T) {
 	for _, kind := range []string{"oversize", "vision-balance"} {
 		t.Run(kind, func(t *testing.T) {
