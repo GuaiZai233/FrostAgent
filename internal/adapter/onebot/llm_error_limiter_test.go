@@ -179,8 +179,13 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				}
 				first.Close()
 				second := dial()
-				// The success in the same session waits for the preceding dropped turn.
+				// Exercise suppression after the failed call has actually run; a
+				// burst from the same sender now interrupts/coalesces pending input.
+				provider.mu.Lock()
+				before := len(provider.requests)
+				provider.mu.Unlock()
 				send(second, 102, "fail")
+				waitOneBotRequests(t, provider, before+1)
 				send(second, 102, "sentinel")
 				read(second, "sentinel success")
 				if state != nil {
@@ -298,10 +303,25 @@ func TestWSLLMErrorLimitPreservesSettledReceipt(t *testing.T) {
 				} else if !strings.Contains(string(raw), "LLM 响应失败") {
 					t.Fatalf("unlimited error body should remain visible: %s", raw)
 				}
+				// ACK dispatch and turn completion are separate. Reserve a non-
+				// interrupting barrier so the sentinel starts a new task, rather
+				// than legitimately inheriting the old private tool transcript.
+				barrier := engine.SessionManager.GetOrCreate(historyKey(event)).ReserveSequenceTurn(fmt.Sprintf("sender:%d", event.UserID), false, false)
+				completed := make(chan struct{})
+				go func() {
+					barrier.Wait()
+					barrier.Done()
+					close(completed)
+				}()
 				if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"message_id": 301}, "echo": action.Echo}); err != nil {
 					t.Fatal(err)
 				}
-				// A following turn waits for receipt delivery and exposes committed history.
+				select {
+				case <-completed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("receipt turn did not finish")
+				}
+				// A new task sees public history, without the completed tool loop.
 				event.MessageID = 2
 				event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"103"}},{"type":"text","data":{"text":"sentinel"}}]`)
 				if err := conn.WriteJSON(event); err != nil {

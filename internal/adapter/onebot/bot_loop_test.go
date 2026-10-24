@@ -64,6 +64,7 @@ func TestOneBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 		if err := conn.WriteJSON(event); err != nil {
 			t.Fatal(err)
 		}
+		waitOneBotRequests(t, provider, int(id))
 	}
 	waitOneBotRequests(t, provider, 2)
 	provider.mu.Lock()
@@ -116,7 +117,9 @@ func TestOneBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 	send(3, 12, false, "interrupt")
 	send(4, 11, true, "still blocked after chatter")
 	send(5, 12, true, "explicit human wake")
+	waitOneBotRequests(t, provider, 2)
 	send(6, 11, true, "after explicit wake")
+	waitOneBotRequests(t, provider, 3)
 	send(7, 12, true, "barrier")
 	waitOneBotRequests(t, provider, 4)
 	provider.mu.Lock()
@@ -181,12 +184,16 @@ func TestOneBotBotLoopIndependentBudgetsAndExplicitWake(t *testing.T) {
 			}
 			send(11, "at", "first-a")
 			send(13, "at", "first-b")
+			waitOneBotRequests(t, provider, 2)
 			send(12, "", "proactive human chatter")
+			waitOneBotRequests(t, provider, 3)
 			send(11, "at", "blocked-a")
 			send(13, "at", "blocked-b")
 			send(12, wake, "human wake")
+			waitOneBotRequests(t, provider, 4)
 			send(11, "at", "resumed-a")
 			send(13, "at", "resumed-b")
+			waitOneBotRequests(t, provider, 6)
 			send(11, "at", "blocked-again")
 			send(12, "at", "budget-barrier")
 			select {

@@ -980,15 +980,14 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 		t.Fatalf("期望保留 user 与工具 assistant 历史，实际=%+v", history)
 	}
 	compact := engine.SessionManager.GetOrCreate("group:700000012").SnapshotGroupContext(20, 4000, "")
-	foundToolReply := false
+	foundToolReply := 0
 	for _, message := range compact.RecentMessages {
 		if strings.Contains(message, "工具已发送") {
-			foundToolReply = true
-			break
+			foundToolReply++
 		}
 	}
-	if !foundToolReply {
-		t.Fatalf("群聊 compact 未包含工具实际发送文本，实际=%+v", compact.RecentMessages)
+	if foundToolReply != 1 {
+		t.Fatalf("群聊 compact 应包含工具实际发送文本且仅一次，实际=%+v", compact.RecentMessages)
 	}
 	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
 	provider.mu.Lock()

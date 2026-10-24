@@ -18,6 +18,8 @@ Limits: 16 MiB uploaded ZIP, 32 MiB expanded import and total resources per inst
 
 ## Discovery and activation
 
+Adapter sessions isolate active instructions and arguments by sender execution sequence, while keeping the group sandbox shared. Runtime injection clones skill state for the successor attempt so late tools cannot mutate its activation state. Proactive replacements start with fresh skill state. See [runtime injection](runtime-injection.md).
+
 Only enabled skill names, abbreviated descriptions and environment requirements enter the model's catalog. The model calls `load_skill` to activate a relevant skill. Up to four active skills retain their instructions separately from normal conversation history. Their content is reconstructed on each iteration and survives history trimming. Disabling/deleting a skill stops injection and subsequent resource/execution access; resetting the session clears activated skills. Prompt Inspector includes the actual skill context.
 
 Users can invoke an enabled skill with `/skill-name arguments`. `disable-model-invocation: true` makes activation manual-only; `user-invocable: false` blocks manual invocation. `$ARGUMENTS` is replaced with manual invocation arguments. No script executes merely because a skill was imported or loaded.

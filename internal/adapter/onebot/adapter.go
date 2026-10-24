@@ -550,7 +550,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
+				if isWoken(event, a.engine, routing) {
+					lane := "sender:" + strconv.FormatInt(event.UserID, 10)
+					proactiveTurn := routing.WakeSignals.Proactive
+					if proactiveTurn {
+						lane = "proactive"
+					}
+					inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
+					turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
+				}
 			}
 
 			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
