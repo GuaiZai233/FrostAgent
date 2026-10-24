@@ -63,6 +63,13 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 	if ctx.Err() != nil {
 		return "消息发送取消：会话已取消", false
 	}
+	if run.Proactive {
+		var filtered bool
+		result.MessagePayload, filtered = filterStickerMessages(result.MessagePayload)
+		if filtered && result.MessagePayload == "" {
+			return "主动回复禁止发送表情包。", false
+		}
+	}
 	if run.SessionID != "" && run.Epoch > 0 && e.SessionManager != nil {
 		if current, ok := e.SessionManager.Get(run.SessionID); ok {
 			if session, ok := current.(*SessionContext); ok && session.Epoch() != run.Epoch {
