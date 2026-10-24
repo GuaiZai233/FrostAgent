@@ -29,6 +29,7 @@ func (f runtimeInjectionProvider) Chat(ctx context.Context, req core.ChatRequest
 type injectionAdmissionObserver struct{ marker chan struct{} }
 
 func (*injectionAdmissionObserver) IsConfigured() bool { return true }
+func (*injectionAdmissionObserver) IsEnabled() bool    { return true }
 func (o *injectionAdmissionObserver) DispatchIncoming(_ context.Context, msg core.IncomingMessage) error {
 	if msg.Content == "queue-marker" {
 		close(o.marker)

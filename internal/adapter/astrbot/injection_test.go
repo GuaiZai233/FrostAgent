@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"FrostAgent/internal/core"
+	"FrostAgent/internal/llm"
 	"FrostAgent/internal/security"
 	"FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
@@ -21,6 +22,24 @@ type runtimeInjectionProvider func(context.Context, core.ChatRequest) (*core.Cha
 
 func (f runtimeInjectionProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	return f(ctx, req)
+}
+
+// Receiving a terminal socket message does not imply that deferred history and
+// compaction cleanup has finished. Queue a barrier before asserting final state.
+func waitAstrBotTurnCompletion(t *testing.T, engine *llm.Engine, event Event) {
+	t.Helper()
+	barrier := engine.SessionManager.GetOrCreate(sessionKey(event)).ReserveSequenceTurn("sender:"+event.Platform+":"+event.UserID, false, false)
+	completed := make(chan struct{})
+	go func() {
+		barrier.Wait()
+		barrier.Done()
+		close(completed)
+	}()
+	select {
+	case <-completed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("terminal turn did not finish")
+	}
 }
 
 func TestAstrBotRuntimeInjectionTerminalAndIndependentSender(t *testing.T) {
