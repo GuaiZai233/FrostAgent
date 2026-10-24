@@ -236,6 +236,7 @@ func TestWSPokeSecurityRejectionDoesNotConsumeCooldown(t *testing.T) {
 type pokeTestDispatcher struct{ calls atomic.Int32 }
 
 func (*pokeTestDispatcher) IsConfigured() bool { return true }
+func (*pokeTestDispatcher) IsEnabled() bool    { return true }
 func (d *pokeTestDispatcher) DispatchIncoming(context.Context, core.IncomingMessage) error {
 	d.calls.Add(1)
 	return nil

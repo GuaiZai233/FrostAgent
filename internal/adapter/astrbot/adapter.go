@@ -230,6 +230,7 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 		SenderCard:  event.SenderCard,
 		Content:     event.Content,
 		Platform:    platform,
+		AdapterID:   "astrbot",
 		MessageType: event.MessageType,
 		GroupID:     event.GroupID,
 		GroupName:   event.GroupName,
@@ -394,7 +395,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
+			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 				(event.Type == "" || event.Type == "event") &&
 				(event.EventType == "" || event.EventType == "message") &&
 				(event.MessageType == "group" || event.MessageType == "private")
