@@ -151,9 +151,17 @@ func TestComputerUseRejectsCredentialsAndArbitraryContent(t *testing.T) {
 		"https://synthetic-token@repo.invalid/project.git",
 		"https://repo.invalid/project.git?token=synthetic-secret",
 		"ssh://git:synthetic-secret@repo.invalid/project.git",
+		"https://%zz@repo.invalid/project.git",
+		"ftp://repo.invalid/project.git",
+		"git:synthetic-secret@repo.invalid:project.git",
 	} {
 		if err := ValidateComputerUseProject(ComputerUseProject{ID: "synthetic-project", Remote: remote}); err == nil {
 			t.Fatal("remote inline credentials accepted")
+		}
+	}
+	for _, remote := range []string{"git@repo.invalid:project.git", "ssh://git@repo.invalid/project.git", "https://repo.invalid/project.git"} {
+		if err := ValidateComputerUseProject(ComputerUseProject{ID: "synthetic-project", Remote: remote}); err != nil {
+			t.Fatalf("valid remote %q rejected: %v", remote, err)
 		}
 	}
 	task := computerUseTestTask("synthetic-instance")
@@ -186,5 +194,92 @@ func TestSQLiteComputerUseRecoveryDoesNotMutateCompletedTasks(t *testing.T) {
 	tasks, err := db.ComputerUseTasks(ctx, "synthetic-instance")
 	if err != nil || len(tasks) != 1 || !reflect.DeepEqual(tasks[0], task) {
 		t.Fatalf("completed task changed: %+v %v", tasks, err)
+	}
+}
+
+func exerciseComputerUseMigrationRollback(t *testing.T, backend Backend) {
+	t.Helper()
+	ctx := context.Background()
+	root := t.TempDir()
+	config := Config{Backend: backend}
+	if backend == Postgres {
+		config = postgresMigrationConfig(t)
+	}
+	db, err := OpenWithConfig(ctx, root, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	prepareOldSchema(t, db, 14)
+	populateMigrationFixture(t, db)
+	var step migration
+	for _, candidate := range migrations {
+		if candidate.version == 15 {
+			step = migration{15, append([]string(nil), candidate.statements...)}
+		}
+	}
+	if len(step.statements) != 3 {
+		t.Fatal("computer-use v15 migration missing")
+	}
+	step.statements = append(step.statements, "THIS IS NOT SQL")
+	if err := db.applyMigration(ctx, step); err == nil {
+		t.Fatal("broken computer-use migration unexpectedly succeeded")
+	}
+	var version int
+	if err := db.SQL.QueryRow("SELECT version FROM schema_meta WHERE id = 1").Scan(&version); err != nil || version != 14 {
+		t.Fatalf("failed migration advanced schema: %d %v", version, err)
+	}
+	for _, table := range []string{"computer_use_config", "computer_use_projects", "computer_use_tasks"} {
+		var count int
+		if err := db.SQL.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err == nil {
+			t.Fatalf("failed migration retained table %s", table)
+		}
+	}
+	assertMigrationFixture(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = OpenWithConfig(ctx, root, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMigrationFixture(t, db)
+	if err := db.SQL.QueryRow("SELECT version FROM schema_meta WHERE id = 1").Scan(&version); err != nil || version != SchemaVersion {
+		t.Fatalf("retry migration failed: %d %v", version, err)
+	}
+}
+
+func TestSQLiteComputerUseMigrationRollbackAndRetry(t *testing.T) {
+	exerciseComputerUseMigrationRollback(t, SQLite)
+}
+
+func TestPostgresComputerUseMigrationRollbackAndRetry(t *testing.T) {
+	exerciseComputerUseMigrationRollback(t, Postgres)
+}
+
+func TestSQLiteComputerUseTaskWriteFailurePreservesPendingFact(t *testing.T) {
+	db, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	computerUseFixture(t, db, "synthetic-instance")
+	task := computerUseTestTask("synthetic-instance")
+	if err := db.SaveComputerUseTask(ctx, "synthetic-instance", task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`CREATE TRIGGER synthetic_write_failure BEFORE UPDATE ON computer_use_tasks
+		BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	changed := task
+	changed.Generation, changed.Pending, changed.State = 3, nil, "succeeded"
+	if err := db.SaveComputerUseTask(ctx, "synthetic-instance", changed); err == nil {
+		t.Fatal("injected write failure was ignored")
+	}
+	tasks, err := db.ComputerUseTasks(ctx, "synthetic-instance")
+	if err != nil || len(tasks) != 1 || !reflect.DeepEqual(tasks[0], task) {
+		t.Fatalf("failed write lost pending operation: %+v %v", tasks, err)
 	}
 }

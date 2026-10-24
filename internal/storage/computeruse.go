@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"strings"
@@ -124,7 +125,11 @@ func (d *DB) SaveComputerUseConfig(ctx context.Context, instanceID string, confi
 }
 
 func (d *DB) ComputerUseProjects(ctx context.Context, instanceID string) ([]ComputerUseProject, error) {
-	rows, err := d.SQL.QueryContext(ctx, d.Bind(`SELECT metadata_json FROM computer_use_projects WHERE instance_id = ? ORDER BY id`), instanceID)
+	return d.computerUseProjects(ctx, d.SQL, instanceID)
+}
+
+func (d *DB) computerUseProjects(ctx context.Context, q computerUseQuerier, instanceID string) ([]ComputerUseProject, error) {
+	rows, err := q.QueryContext(ctx, d.Bind(`SELECT metadata_json FROM computer_use_projects WHERE instance_id = ? ORDER BY id`), instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,10 +160,18 @@ func ValidateComputerUseProject(project ComputerUseProject) error {
 		!computerUseText(project.Shell, 4096) || len(project.Environment) > 48 {
 		return errors.New("invalid computer-use project metadata")
 	}
-	if u, err := url.Parse(project.Remote); err == nil {
+	if strings.Contains(project.Remote, "://") {
+		u, err := url.Parse(project.Remote)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "ssh") {
+			return errors.New("invalid project remote URL")
+		}
 		_, password := u.User.Password()
 		if password || u.User != nil && u.Scheme != "ssh" || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("project remote must not contain credentials or query parameters")
+		}
+	} else if userinfo, _, present := strings.Cut(project.Remote, "@"); present {
+		if strings.ContainsAny(userinfo, ":/?#\\") {
+			return errors.New("project remote contains invalid SCP user information")
 		}
 	}
 	seen := make(map[string]bool, len(project.Environment))
@@ -193,6 +206,9 @@ func (d *DB) SaveComputerUseProject(ctx context.Context, instanceID string, proj
 	if err != nil {
 		return err
 	}
+	if len(raw) > 512<<10 {
+		return errors.New("computer-use project metadata is too large")
+	}
 	_, err = d.SQL.ExecContext(ctx, d.Bind(`INSERT INTO computer_use_projects(instance_id, id, metadata_json)
 		VALUES (?, ?, ?) ON CONFLICT(instance_id, id) DO UPDATE SET metadata_json = excluded.metadata_json`), instanceID, project.ID, string(raw))
 	return err
@@ -211,6 +227,33 @@ func (d *DB) ComputerUseTasks(ctx context.Context, instanceID string) ([]Compute
 
 type computerUseQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+type ComputerUseMetadata struct {
+	Projects []ComputerUseProject
+	Tasks    []ComputerUseTask
+}
+
+// SnapshotComputerUse reads related registrations and task facts in one
+// transaction, while deliberately excluding the bridge configuration.
+func (d *DB) SnapshotComputerUse(ctx context.Context, instanceID string) (ComputerUseMetadata, error) {
+	tx, err := d.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ComputerUseMetadata{}, err
+	}
+	defer tx.Rollback()
+	projects, err := d.computerUseProjects(ctx, tx, instanceID)
+	if err != nil {
+		return ComputerUseMetadata{}, err
+	}
+	tasks, err := d.computerUseTasks(ctx, tx, instanceID)
+	if err != nil {
+		return ComputerUseMetadata{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ComputerUseMetadata{}, err
+	}
+	return ComputerUseMetadata{Projects: projects, Tasks: tasks}, nil
 }
 
 func (d *DB) computerUseTasks(ctx context.Context, q computerUseQuerier, instanceID string) ([]ComputerUseTask, error) {
@@ -343,6 +386,9 @@ func decodeComputerUse(raw string, value any) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		return fmt.Errorf("invalid computer-use metadata")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("invalid trailing computer-use metadata")
 	}
 	return nil
 }
