@@ -368,11 +368,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				scope = a.engine.Scope
 			}
 			pristineShouldReply := false
+			pristineInject := false
 			if event.MessageType == "group" || event.MessageType == "private" {
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
 				pristineShouldReply = shouldReply(&event, scope)
+				injectionEvent := event
+				injectionEvent.IsWake = false
+				pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 				if a.engine != nil && a.engine.SessionManager != nil &&
 					(event.Type == "" || event.Type == "event") &&
@@ -527,7 +531,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
+				if shouldReply(&event, a.engine.Scope) {
+					lane := "sender:" + event.Platform + ":" + event.UserID
+					proactiveTurn := isProactiveReply(&event)
+					if proactiveTurn {
+						lane = "proactive:" + event.Platform
+					}
+					turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
+				}
 			}
 
 			if event.MessageType == "group" && !c.mock {

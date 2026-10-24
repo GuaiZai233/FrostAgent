@@ -57,6 +57,9 @@ func SkillTools(store *skills.Store, backend sandbox.Backend, sessions *llm.Sess
 			if run.Epoch != 0 && sess.Epoch() != run.Epoch {
 				return "", errors.New("会话已重置，技能调用已失效")
 			}
+			if run.SkillState != nil {
+				sess = run.SkillState
+			}
 			if name == "load_skill" {
 				if pkg.Info.ManualOnly {
 					return "", errors.New("该技能仅允许用户通过 /" + pkg.Info.Name + " 手动调用")

@@ -164,11 +164,21 @@ type GroupCompactSnapshot struct {
 // separate from the history mutex because a full LLM turn calls methods that
 // briefly lock session state themselves.
 type SessionTurn struct {
-	wait        <-chan struct{}
-	done        chan struct{}
-	once        sync.Once
-	epoch       uint64
-	stagedGuard *StagedGroupCompactGuard
+	wait            <-chan struct{}
+	done            chan struct{}
+	once            sync.Once
+	epoch           uint64
+	stagedGuard     *StagedGroupCompactGuard
+	lane            *executionSequence
+	ctx             context.Context
+	cancel          context.CancelFunc
+	previous        *SessionTurn
+	inputIndex      int
+	transcriptStart int
+	durable         string
+	messageSeq      uint64
+	skillState      *SessionContext
+	authorityMu     sync.Mutex
 }
 
 func (t *SessionTurn) Wait() {
@@ -179,10 +189,13 @@ func (t *SessionTurn) Wait() {
 
 func (t *SessionTurn) Done() {
 	if t != nil {
-		if t.stagedGuard != nil {
-			t.stagedGuard.Done()
-		}
-		t.once.Do(func() { close(t.done) })
+		t.once.Do(func() {
+			if t.stagedGuard != nil {
+				t.stagedGuard.Done()
+			}
+			t.finishSequence()
+			close(t.done)
+		})
 	}
 }
 
@@ -262,6 +275,8 @@ type SessionContext struct {
 	resetMu        sync.Mutex // 串行化会话重置与在途屏障等待
 
 	activeCancel       context.CancelFunc
+	activeRunID        uint64
+	sequences          map[string]*executionSequence
 	epoch              uint64
 	nextExtractionID   uint64
 	extractionCancels  map[uint64]context.CancelFunc
@@ -490,6 +505,8 @@ func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, u
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	s.activeCancel = cancel
+	s.activeRunID++
+	runID := s.activeRunID
 	if s.epoch == 0 {
 		s.epoch = 1
 	}
@@ -501,7 +518,9 @@ func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, u
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			cancel()
-			s.activeCancel = nil
+			if s.activeRunID == runID {
+				s.activeCancel = nil
+			}
 		})
 	}
 
@@ -515,6 +534,7 @@ func (s *SessionContext) CancelActiveRun() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cancelSequencesLocked()
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil
@@ -980,6 +1000,8 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	defer s.resetMu.Unlock()
 
 	s.mu.Lock()
+	s.cancelSequencesLocked()
+	s.sequences = nil
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil
@@ -2447,9 +2469,25 @@ func (s *SessionContext) ID() string {
 
 // AddMessage 添加一条 core.ChatMessage 到会话历史
 func (s *SessionContext) AddMessage(msg core.ChatMessage) {
+	s.AddMessageTracked(msg)
+}
+
+// AddMessageTracked returns an exact history handle for transient public output.
+func (s *SessionContext) AddMessageTracked(msg core.ChatMessage) uint64 {
+	return s.AddMessageAtEpoch(msg, 0)
+}
+
+// AddMessageAtEpoch records confirmed delivery without reviving reset history.
+func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if epoch != 0 && s.epoch != epoch {
+		return 0
+	}
+	return s.addMessageLocked(msg)
+}
 
+func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
 		Role:    string(msg.Role),
@@ -2479,6 +2517,7 @@ func (s *SessionContext) AddMessage(msg core.ChatMessage) {
 	s.historySeq = append(s.historySeq, s.nextMsgSeq)
 	s.History = append(s.History, llmMsg)
 	s.UpdatedAt = time.Now()
+	return s.nextMsgSeq
 }
 
 // Messages 以 core.ChatMessage 切片形式返回会话历史

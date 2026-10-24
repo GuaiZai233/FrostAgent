@@ -940,15 +940,8 @@ func TestAstrBotSendHookEmptyFinalKeepsDeliveredReply(t *testing.T) {
 		t.Fatalf("空最终回复不应再次发送空消息，实际 action=%+v", terminalAction)
 	}
 
+	waitAstrBotTurnCompletion(t, engine, event)
 	session := engine.SessionManager.GetOrCreate("astrbot:group:grp_empty_final")
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		history := session.Snapshot()
-		if len(history) >= 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	history := session.Snapshot()
 	if len(history) != 2 {
 		t.Fatalf("期望历史包含 user 和实际工具回复，实际=%+v", history)
@@ -2708,6 +2701,12 @@ func TestAstrBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *test
 	if err := json.Unmarshal(respBytes, &act); err != nil {
 		t.Fatalf("unmarshal action failed: %v", err)
 	}
+	// Background lanes may now acknowledge their noop before the active reply.
+	if act.Action == "noop" {
+		if err := conn.ReadJSON(&act); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if act.Content != "这是对唤醒消息的最终回复。" {
 		t.Fatalf("unexpected reply content: %q", act.Content)
 	}
@@ -2843,6 +2842,7 @@ func TestAstrBot_IntermediateAssistantStaging_SendMessageThenBanUser_PurgesBoth(
 	if banAct.Action != "send_message" || !strings.Contains(banAct.Content, security.RejectGatewayMsg) {
 		t.Fatalf("expected rejection gateway message, got: %+v", banAct)
 	}
+	waitAstrBotTurnCompletion(t, engine, event)
 
 	// 3. 验证攻击者主体被 Security Controller 锁定
 	p, err := security.NewPrincipal("astrbot", attackerUserID)
