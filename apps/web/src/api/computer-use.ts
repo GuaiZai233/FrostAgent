@@ -64,6 +64,14 @@ export interface ComputerSnapshot {
   disclosure: string;
   model: string;
   desktop_paused: boolean;
+  desktop_generation: number;
+  desktop_confirmed: boolean;
+}
+
+export interface ComputerDesktopResult {
+  gui_stopped: boolean;
+  desktop_paused: boolean;
+  desktop_generation: number;
 }
 
 export interface ComputerContent {
@@ -148,13 +156,9 @@ export function createComputerUseAPI() {
     configure: (config: ComputerConfigUpdate) =>
       request<unknown>('/config', 'PUT', config),
     sync: () => request<unknown>('/sync', 'POST', {}),
-    takeover: () =>
-      request<{ gui_stopped: boolean; desktop_paused: boolean }>(
-        '/takeover',
-        'POST',
-        {},
-      ),
-    resumeDesktop: () => request<unknown>('/desktop/resume', 'POST', {}),
+    takeover: () => request<ComputerDesktopResult>('/takeover', 'POST', {}),
+    resumeDesktop: () =>
+      request<ComputerDesktopResult>('/desktop/resume', 'POST', {}),
     registerProject: (project: ComputerProject) =>
       request<unknown>('/projects', 'POST', project),
     archiveProject: (id: string, archived: boolean) =>

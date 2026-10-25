@@ -218,6 +218,8 @@ const snapshot: ComputerSnapshot = {
   model: '<model>',
   disclosure: '<script>disclosure</script>',
   desktop_paused: false,
+  desktop_confirmed: false,
+  desktop_generation: 0,
   projects: [
     {
       id: 'synthetic-project',
@@ -260,6 +262,14 @@ let snapshots = 0;
 let mutations = 0;
 let disposed = false;
 let takeoverConfirmed = false;
+let takeoverObservation:
+  | Partial<
+      Pick<
+        ComputerSnapshot,
+        'desktop_paused' | 'desktop_confirmed' | 'desktop_generation'
+      >
+    >
+  | undefined;
 let resumeArgs: unknown[] = [];
 let resolvePause:
   | ((value: ComputerSnapshot['tasks'][number]) => void)
@@ -268,20 +278,32 @@ const pageAPI = {
   ...createComputerUseAPI(),
   async snapshot() {
     snapshots++;
-    return structuredClone(snapshot);
+    return structuredClone({ ...snapshot, ...takeoverObservation });
   },
   async sync() {
     mutations++;
   },
   async takeover() {
     mutations++;
+    snapshot.desktop_generation++;
+    snapshot.desktop_paused = takeoverConfirmed;
+    snapshot.desktop_confirmed = takeoverConfirmed;
     return {
       gui_stopped: takeoverConfirmed,
       desktop_paused: takeoverConfirmed,
+      desktop_generation: snapshot.desktop_generation,
     };
   },
   async resumeDesktop() {
     mutations++;
+    snapshot.desktop_generation++;
+    snapshot.desktop_paused = false;
+    snapshot.desktop_confirmed = true;
+    return {
+      gui_stopped: false,
+      desktop_paused: false,
+      desktop_generation: snapshot.desktop_generation,
+    };
   },
   async start() {
     mutations++;
@@ -325,6 +347,10 @@ assert.ok(
 assert.ok(
   root.querySelector('#cu-tasks').innerHTML.includes('尚未确认 GUI 输入停止'),
 );
+assert.match(
+  root.querySelector('#cu-desktop-state').textContent,
+  /缓存记录不能作为接管依据/,
+);
 
 root.querySelector('#cu-takeover').emit('click');
 await settle();
@@ -339,6 +365,33 @@ assert.match(
   root.querySelector('#cu-feedback').textContent,
   /整机 GUI 输入停止并锁定，可以人工接管/,
 );
+for (const changed of [
+  { desktop_paused: false },
+  { desktop_confirmed: false },
+  { desktop_generation: 999 },
+]) {
+  takeoverObservation = changed;
+  root.querySelector('#cu-takeover').emit('click');
+  await settle();
+  assert.match(
+    root.querySelector('#cu-feedback').textContent,
+    /尚未确认整机 GUI 输入停止并锁定，请勿接管/,
+  );
+  assert.doesNotMatch(
+    root.querySelector('#cu-feedback').textContent,
+    /可以人工接管/,
+  );
+}
+takeoverObservation = undefined;
+root.querySelector('#cu-takeover').emit('click');
+await settle();
+assert.match(root.querySelector('#cu-feedback').textContent, /可以人工接管/);
+snapshot.desktop_generation++;
+snapshot.desktop_paused = false;
+root.querySelector('#cu-refresh').emit('click');
+await settle();
+assert.doesNotMatch(root.querySelector('#cu-feedback').textContent, /可以人工接管/);
+assert.match(root.querySelector('#cu-desktop-state').textContent, /整机桌面未锁定/);
 
 const taskButton = new ElementMock();
 taskButton.dataset = { id: 'synthetic-task', cuAction: 'resume' };

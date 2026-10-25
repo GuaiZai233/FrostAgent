@@ -21,6 +21,7 @@ export function mountComputerUsePage(
   let busy = false;
   let takeoverBusy = false;
   let desktopActionGeneration = 0;
+  let confirmedTakeoverGeneration: number | undefined;
   let editingProject: ComputerProject | undefined;
   let resumingTask = '';
   let snapshotSequence = 0;
@@ -194,9 +195,23 @@ export function mountComputerUsePage(
       : '未配置；仅管理工作台可发起 Computer Use';
     el('cu-disclosure').textContent = snapshot.disclosure || '';
     el('cu-model').textContent = '当前模型：' + (snapshot.model || '未配置');
-    el('cu-desktop-state').textContent = snapshot.desktop_paused
-      ? '整机桌面自动输入已锁定。恢复桌面权限不会自动继续任何任务。'
-      : '整机桌面未锁定。人工操作前须请求接管并等待停止确认。';
+    el('cu-desktop-state').textContent = !snapshot.desktop_confirmed
+      ? '桌面状态尚未得到当前桥确认；缓存记录不能作为接管依据。'
+      : snapshot.desktop_paused
+        ? '最近桥确认记录：整机桌面自动输入已锁定。人工操作前请重新请求接管确认；恢复桌面权限不会自动继续任务。'
+        : '最近桥确认记录：整机桌面未锁定。人工操作前须请求接管并等待停止确认。';
+    if (
+      confirmedTakeoverGeneration !== undefined &&
+      (!snapshot.desktop_confirmed ||
+        !snapshot.desktop_paused ||
+        snapshot.desktop_generation !== confirmedTakeoverGeneration)
+    ) {
+      confirmedTakeoverGeneration = undefined;
+      feedback(
+        '先前的整机接管确认已失效，请勿继续依据旧确认操作；请重新核对桌面状态。',
+        true,
+      );
+    }
     const projects = snapshot.projects.filter(
       (project) => !project.archived || input('cu-show-archived').checked,
     );
@@ -266,6 +281,7 @@ export function mountComputerUsePage(
     snapshot = result;
     if (fill) fillConfiguration();
     render();
+    return result;
   }
 
   async function perform(action: () => Promise<void>) {
@@ -334,6 +350,7 @@ export function mountComputerUsePage(
   on('cu-takeover', 'click', () => {
     if (takeoverBusy || lifecycle.signal.aborted) return;
     takeoverBusy = true;
+    confirmedTakeoverGeneration = undefined;
     const generation = ++desktopActionGeneration;
     snapshotSequence++;
     controls();
@@ -343,13 +360,20 @@ export function mountComputerUsePage(
         const result = await api.takeover();
         if (lifecycle.signal.aborted || generation !== desktopActionGeneration)
           return;
-        await reload();
+        const observed = await reload();
         if (generation !== desktopActionGeneration) return;
+        const confirmed =
+          result.gui_stopped &&
+          result.desktop_paused &&
+          observed?.desktop_confirmed &&
+          observed.desktop_paused &&
+          observed.desktop_generation === result.desktop_generation;
+        if (confirmed) confirmedTakeoverGeneration = result.desktop_generation;
         feedback(
-          result.gui_stopped && result.desktop_paused
+          confirmed
             ? '桥已确认整机 GUI 输入停止并锁定，可以人工接管。终端进程可能仍在运行；请另行核对。'
             : '尚未确认整机 GUI 输入停止并锁定，请勿接管桌面。请核对连接与状态。',
-          !(result.gui_stopped && result.desktop_paused),
+          !confirmed,
         );
       } catch {
         feedback(
@@ -368,10 +392,23 @@ export function mountComputerUsePage(
     () =>
       void perform(async () => {
         const generation = ++desktopActionGeneration;
-        await api.resumeDesktop();
+        confirmedTakeoverGeneration = undefined;
+        const result = await api.resumeDesktop();
         if (lifecycle.signal.aborted) return;
-        await reload();
+        const observed = await reload();
         if (generation !== desktopActionGeneration) return;
+        if (
+          !observed?.desktop_confirmed ||
+          observed.desktop_paused ||
+          result.desktop_paused ||
+          observed.desktop_generation !== result.desktop_generation
+        ) {
+          feedback(
+            '桌面恢复结果尚未确认，或已被更新的控制请求替代；请核对当前桌面状态。',
+            true,
+          );
+          return;
+        }
         feedback(
           '已解除人工桌面锁；未自动继续任何任务。继续任务仍需明确指令。',
         );
