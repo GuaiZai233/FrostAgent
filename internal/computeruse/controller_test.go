@@ -229,6 +229,31 @@ func TestPausedManualControlCannotBeCompletedByLateContent(t *testing.T) {
 	}
 }
 
+func TestRestoredMetadataCannotReplayOnConfiguredBridge(t *testing.T) {
+	c, transport, _ := fixture(t, modelFunc(completedModel))
+	task := &storage.ComputerUseTask{ID: "synthetic-restored", ProjectID: "synthetic-project",
+		State: "paused", Generation: 4, ReconcileRequired: true, ActorID: "synthetic-owner", ActorKind: "qq_private",
+		CreatedAt: now(), UpdatedAt: now()}
+	c.mu.Lock()
+	c.tasks[task.ID] = task
+	if err := c.save(task); err != nil {
+		c.mu.Unlock()
+		t.Fatal(err)
+	}
+	c.mu.Unlock()
+	if _, err := c.resume(c.managementActor(), task.ID, "synthetic instruction", true); err == nil {
+		t.Fatal("restored history resumed on a newly configured bridge")
+	}
+	if _, err := c.reconcile(context.Background(), task.ID); err == nil {
+		t.Fatal("restored history contacted a new bridge")
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.calls) != 0 {
+		t.Fatal("restored metadata replayed an operation")
+	}
+}
+
 func TestCloseCancelsAndWaitsForManualControl(t *testing.T) {
 	c, transport, _ := fixture(t, modelFunc(completedModel))
 	entered := make(chan struct{})
