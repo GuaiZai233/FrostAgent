@@ -221,6 +221,7 @@ def exercise(root, temporary, host_mode=False):
         before = api('/api/instances/global/backup/settings', headers=bearer)
         bootstrap_origin = 'https://bootstrap.example.com'
         updated = json.loads(json.dumps(before))
+        updated.pop('extra_env', None)
         origins_before = set(filter(None, updated['settings'].get('HTTP_ALLOWED_ORIGINS', '').split(',')))
         updated['settings']['HTTP_ALLOWED_ORIGINS'] = ','.join(sorted(origins_before | {bootstrap_origin}))
         for headers in ({}, {'Authorization': 'Bearer synthetic-incorrect-token'}):
