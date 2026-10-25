@@ -45,6 +45,7 @@ export interface ComputerWorkspace {
 export interface ComputerTask {
   id: string;
   project_id: string;
+  bridge_url: string;
   state: string;
   reason: string;
   generation: number;

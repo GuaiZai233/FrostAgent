@@ -246,11 +246,26 @@ const snapshot: ComputerSnapshot = {
     {
       id: 'synthetic-task',
       project_id: 'synthetic-project',
+      bridge_url: config.bridge_url,
       state: 'unknown',
       reason: '<script>reason</script>',
       generation: 1,
       model_rounds: 1,
       tool_calls: 2,
+      gui_stopped: false,
+      reconcile_required: true,
+      created_at: '',
+      updated_at: '',
+    },
+    {
+      id: 'synthetic-restored-task',
+      project_id: 'synthetic-project',
+      bridge_url: '',
+      state: 'paused',
+      reason: 'restored_requires_rebind',
+      generation: 3,
+      model_rounds: 4,
+      tool_calls: 5,
       gui_stopped: false,
       reconcile_required: true,
       created_at: '',
@@ -271,6 +286,8 @@ let takeoverObservation:
     >
   | undefined;
 let resumeArgs: unknown[] = [];
+let startArgs: unknown[] = [];
+const taskActions: string[] = [];
 let resolvePause:
   | ((value: ComputerSnapshot['tasks'][number]) => void)
   | undefined;
@@ -305,20 +322,28 @@ const pageAPI = {
       desktop_generation: snapshot.desktop_generation,
     };
   },
-  async start() {
+  async start(...args: [string, string]) {
     mutations++;
+    startArgs = args;
     return snapshot.tasks[0];
   },
   async resume(...args: [string, string, boolean?]) {
     mutations++;
+    taskActions.push('resume');
     resumeArgs = args;
     return snapshot.tasks[0];
   },
   pause: () =>
     new Promise<ComputerSnapshot['tasks'][number]>((resolve) => {
+      taskActions.push('pause');
       resolvePause = resolve;
     }),
+  async reconcile() {
+    taskActions.push('reconcile');
+    return snapshot.tasks[0];
+  },
   async content() {
+    taskActions.push('content');
     return {
       text: '<script>raw output</script>',
       expires_at: new Date(Date.now() + 50).toISOString(),
@@ -350,6 +375,50 @@ assert.ok(
 assert.match(
   root.querySelector('#cu-desktop-state').textContent,
   /缓存记录不能作为接管依据/,
+);
+
+const taskCards = root
+  .querySelector('#cu-tasks')
+  .innerHTML.split('<article class="cu-item">');
+const restoredCard = taskCards.find((card) =>
+  card.includes('synthetic-restored-task'),
+)!;
+assert.match(
+  restoredCard,
+  /仅供核对的恢复记录，配置桥\/项目后新建任务；不会重放旧操作/,
+);
+assert.match(restoredCard, /restored_requires_rebind/);
+assert.match(restoredCard, /Generation 3/);
+assert.match(restoredCard, /模型轮数 4/);
+assert.match(restoredCard, /工具调用 5/);
+assert.doesNotMatch(restoredCard, /data-cu-action=/);
+const boundCard = taskCards.find((card) => card.includes('synthetic-task'))!;
+for (const action of ['pause', 'resume', 'reconcile', 'content'])
+  assert.ok(boundCard.includes('data-cu-action="' + action + '"'));
+
+const restoredButton = new ElementMock();
+for (const action of ['pause', 'resume', 'reconcile', 'content']) {
+  restoredButton.dataset = {
+    id: 'synthetic-restored-task',
+    cuAction: action,
+  };
+  root.emit('click', restoredButton);
+  await settle();
+  assert.match(
+    root.querySelector('#cu-feedback').textContent,
+    /仅供核对的恢复记录/,
+  );
+}
+assert.deepEqual(taskActions, [], 'restored record sent an old bridge request');
+root.querySelector('#cu-task-project').value = 'synthetic-project';
+root.querySelector('#cu-instruction').value = 'new independent task';
+root.querySelector('#cu-task-form').emit('submit');
+await settle();
+assert.deepEqual(startArgs, ['synthetic-project', 'new independent task']);
+assert.deepEqual(
+  resumeArgs,
+  [],
+  'restored record silently resumed as a new task',
 );
 
 root.querySelector('#cu-takeover').emit('click');
@@ -390,11 +459,58 @@ snapshot.desktop_generation++;
 snapshot.desktop_paused = false;
 root.querySelector('#cu-refresh').emit('click');
 await settle();
-assert.doesNotMatch(root.querySelector('#cu-feedback').textContent, /可以人工接管/);
-assert.match(root.querySelector('#cu-desktop-state').textContent, /整机桌面未锁定/);
+assert.doesNotMatch(
+  root.querySelector('#cu-feedback').textContent,
+  /可以人工接管/,
+);
+assert.match(
+  root.querySelector('#cu-desktop-state').textContent,
+  /整机桌面未锁定/,
+);
 
 const taskButton = new ElementMock();
 taskButton.dataset = { id: 'synthetic-task', cuAction: 'resume' };
+snapshot.tasks[0].state = 'paused';
+snapshot.tasks[0].reconcile_required = false;
+root.querySelector('#cu-refresh').emit('click');
+await settle();
+root.emit('click', taskButton);
+assert.equal(root.querySelector('#cu-unknown-confirm').hidden, true);
+assert.equal(root.querySelector('#cu-start').disabled, false);
+root.querySelector('#cu-instruction').value = 'resume bound paused task';
+root.querySelector('#cu-task-form').emit('submit');
+await settle();
+assert.deepEqual(resumeArgs, [
+  'synthetic-task',
+  'resume bound paused task',
+  false,
+]);
+
+root.emit('click', taskButton);
+root.querySelector('#cu-instruction').value = 'stale resume instruction';
+snapshot.tasks[0].bridge_url = '';
+root.querySelector('#cu-refresh').emit('click');
+await settle();
+assert.equal(root.querySelector('#cu-start').disabled, true);
+const actionsBeforeDetachedSubmit = [...taskActions];
+root.querySelector('#cu-task-form').emit('submit');
+await settle();
+assert.deepEqual(
+  taskActions,
+  actionsBeforeDetachedSubmit,
+  'stale resume form sent a request for a detached task',
+);
+assert.match(
+  root.querySelector('#cu-feedback').textContent,
+  /仅供核对的恢复记录/,
+);
+snapshot.tasks[0].bridge_url = config.bridge_url;
+snapshot.tasks[0].state = 'unknown';
+snapshot.tasks[0].reconcile_required = true;
+root.querySelector('#cu-refresh').emit('click');
+await settle();
+root.querySelector('#cu-cancel-resume').emit('click');
+
 root.emit('click', taskButton);
 assert.equal(root.querySelector('#cu-unknown-confirm').hidden, false);
 assert.equal(root.querySelector('#cu-acknowledge-unknown').checked, false);

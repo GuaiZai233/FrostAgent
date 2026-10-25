@@ -12,6 +12,9 @@ import {
   withTokenUpdate,
 } from './computer-use-model';
 
+const restoredTaskNotice =
+  '仅供核对的恢复记录，配置桥/项目后新建任务；不会重放旧操作。';
+
 export function mountComputerUsePage(
   container: HTMLElement,
   api = createComputerUseAPI(),
@@ -154,7 +157,11 @@ export function mountComputerUsePage(
     input('cu-sync').disabled = busy || !snapshot?.config.enabled;
     input('cu-takeover').disabled = takeoverBusy || !snapshot;
     input('cu-desktop-resume').disabled = busy || !snapshot?.desktop_paused;
-    input('cu-start').disabled = busy || !snapshot?.config.enabled;
+    input('cu-start').disabled =
+      busy ||
+      !snapshot?.config.enabled ||
+      (!!resumingTask &&
+        !snapshot.tasks.find((task) => task.id === resumingTask)?.bridge_url);
     input('cu-token').disabled = input('cu-clear-token').checked;
     input('cu-adapter-token').disabled = input(
       'cu-clear-adapter-token',
@@ -261,13 +268,17 @@ export function mountComputerUsePage(
             </div>
             <p class="text-xs text-muted mt-2 break-words">项目 ${escapeHtml(task.project_id)} · Generation ${escapeHtml(String(task.generation))} · 模型轮数 ${escapeHtml(String(task.model_rounds))} · 工具调用 ${escapeHtml(String(task.tool_calls))}</p>
             <p class="text-sm break-words">${escapeHtml(task.reason || '')}</p>
-            <p class="text-xs mt-2">${task.gui_stopped ? '上次确认该任务 GUI 输入已停止；接管前请重新请求确认，终端进程状态须另行核对。' : '尚未确认 GUI 输入停止，请勿接管桌面。'}</p>
+            ${
+              !task.bridge_url
+                ? `<p class="text-sm mt-2">${restoredTaskNotice}</p>`
+                : `<p class="text-xs mt-2">${task.gui_stopped ? '上次确认该任务 GUI 输入已停止；接管前请重新请求确认，终端进程状态须另行核对。' : '尚未确认 GUI 输入停止，请勿接管桌面。'}</p>
             <div class="flex gap-2 flex-wrap mt-3">
               <button class="btn btn-outline btn-sm" data-cu-action="pause" data-id="${escapeHtml(task.id)}">暂停任务</button>
               <button class="btn btn-outline btn-sm" data-cu-action="reconcile" data-id="${escapeHtml(task.id)}">核对状态</button>
               ${['paused', 'failed', 'unknown'].includes(task.state) ? `<button class="btn btn-outline btn-sm" data-cu-action="resume" data-id="${escapeHtml(task.id)}">明确指令后继续</button>` : ''}
               <button class="btn btn-ghost btn-sm" data-cu-action="content" data-id="${escapeHtml(task.id)}">查看临时内容</button>
-            </div>
+            </div>`
+            }
           </article>`,
         )
         .join('') || '<p class="text-sm text-muted">暂无任务。</p>';
@@ -488,6 +499,13 @@ export function mountComputerUsePage(
   });
   on('cu-task-form', 'submit', (event) => {
     event.preventDefault();
+    if (
+      resumingTask &&
+      !snapshot?.tasks.find((task) => task.id === resumingTask)?.bridge_url
+    ) {
+      feedback(restoredTaskNotice, true);
+      return;
+    }
     if (!el<HTMLFormElement>('cu-task-form').reportValidity()) return;
     const instruction = el<HTMLTextAreaElement>('cu-instruction').value.trim();
     if (!instruction) {
@@ -523,6 +541,19 @@ export function mountComputerUsePage(
       if (!button || button.disabled || busy || !snapshot) return;
       const id = button.dataset.id!;
       const action = button.dataset.cuAction;
+      if (
+        action === 'pause' ||
+        action === 'resume' ||
+        action === 'reconcile' ||
+        action === 'content'
+      ) {
+        const task = snapshot.tasks.find((entry) => entry.id === id);
+        if (!task) return;
+        if (!task.bridge_url) {
+          feedback(restoredTaskNotice, true);
+          return;
+        }
+      }
       if (action === 'edit') {
         editingProject = snapshot.projects.find((project) => project.id === id);
         if (!editingProject) return;
