@@ -57,6 +57,7 @@ type Controller struct {
 	tasks             map[string]*storage.ComputerUseTask
 	runs              map[string]context.CancelFunc
 	controls          map[string]context.CancelFunc
+	operations        map[string]struct{}
 	wg                sync.WaitGroup
 	closing, blocked  bool
 	desktopPaused     bool
@@ -91,10 +92,10 @@ func New(opts Options) (*Controller, error) {
 		return nil, err
 	}
 	c := &Controller{opts: opts, config: cfg, tasks: map[string]*storage.ComputerUseTask{}, runs: map[string]context.CancelFunc{}, controls: map[string]context.CancelFunc{},
-		desktopPaused: true, content: bridge.NewContentCache(), contentIDs: map[string]string{}, newTransport: makeTransport}
+		operations: map[string]struct{}{}, desktopPaused: true, content: bridge.NewContentCache(), contentIDs: map[string]string{}, newTransport: makeTransport}
 	for _, t := range tasks {
 		c.tasks[t.ID] = &t
-		if t.ProjectID == "control" && t.BridgeURL == cfg.BridgeURL {
+		if isDesktopControlTask(&t) && t.BridgeURL == cfg.BridgeURL {
 			c.desktopGeneration = max(c.desktopGeneration, t.Generation)
 		}
 	}
@@ -106,14 +107,16 @@ func New(opts Options) (*Controller, error) {
 	return c, nil
 }
 
-func makeTransport(cfg storage.ComputerUseConfig) (transport, error) {
-	u, err := url.Parse(cfg.BridgeURL)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, bridge.ErrInvalid
-	}
-	ip := net.ParseIP(u.Hostname())
-	if ip == nil || (!ip.IsPrivate() && !ip.IsLoopback()) {
-		return nil, errors.New("桥地址必须为 HTTPS 私网或回环数字 IP")
+func bridgeRoots(cfg storage.ComputerUseConfig) (*x509.CertPool, error) {
+	if cfg.BridgeURL != "" {
+		u, err := url.Parse(cfg.BridgeURL)
+		if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return nil, bridge.ErrInvalid
+		}
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil || (!ip.IsPrivate() && !ip.IsLoopback()) {
+			return nil, errors.New("桥地址必须为 HTTPS 私网或回环数字 IP")
+		}
 	}
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
@@ -121,6 +124,14 @@ func makeTransport(cfg storage.ComputerUseConfig) (transport, error) {
 	}
 	if cfg.CAPEM != "" && !roots.AppendCertsFromPEM([]byte(cfg.CAPEM)) {
 		return nil, errors.New("CA PEM 无效")
+	}
+	return roots, nil
+}
+
+func makeTransport(cfg storage.ComputerUseConfig) (transport, error) {
+	roots, err := bridgeRoots(cfg)
+	if err != nil {
+		return nil, err
 	}
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
 	httpTransport.Proxy = nil
@@ -178,6 +189,29 @@ func operationIdentity(op *storage.ComputerUseOperation) bridge.Identity {
 }
 func pending(op *storage.ComputerUseOperation) bool {
 	return op != nil && (op.State == string(bridge.Accepted) || op.State == string(bridge.Running))
+}
+
+// Administrative operations are assigned by the controller, never by a model
+// or project name. Their first real request is persisted with the task itself.
+func isDesktopControlTask(t *storage.ComputerUseTask) bool {
+	for _, op := range []*storage.ComputerUseOperation{t.Pending, t.LastOperation} {
+		if op != nil && (op.Kind == "desktop.takeover" || op.Kind == "desktop.resume") {
+			return true
+		}
+	}
+	return false
+}
+
+func isControlTask(t *storage.ComputerUseTask) bool {
+	if isDesktopControlTask(t) {
+		return true
+	}
+	for _, op := range []*storage.ComputerUseOperation{t.Pending, t.LastOperation} {
+		if op != nil && (op.Kind == "project.register" || op.Kind == "project.archive" || op.Kind == "project.list") {
+			return true
+		}
+	}
+	return false
 }
 func (c *Controller) auditRecord(op bridge.Operation) error {
 	if c.audit == nil || c.audit.Record(op) != nil {
@@ -243,7 +277,7 @@ func (c *Controller) resume(a actor, id, instruction string, ack bool) (storage.
 		return storage.ComputerUseTask{}, err
 	}
 	t := c.tasks[id]
-	if t == nil || t.ProjectID == "control" {
+	if t == nil || isControlTask(t) {
 		return storage.ComputerUseTask{}, ErrState
 	}
 	if _, running := c.runs[id]; running || pending(t.Pending) || pending(t.PauseOperation) || len(c.runs) >= c.config.MaxConcurrent {
@@ -279,71 +313,91 @@ func (c *Controller) resume(a actor, id, instruction string, ack bool) (storage.
 // perform saves an immutable operation identity before allowing transport.
 // Late facts are retained but cannot advance a paused/newer task generation.
 func (c *Controller) perform(ctx context.Context, id string, gen uint64, kind string, parameters any) (bridge.Content, error) {
-	raw, err := json.Marshal(parameters)
-	if err != nil {
-		return bridge.Content{}, bridge.ErrInvalid
-	}
 	c.mu.Lock()
-	t := c.tasks[id]
-	if t == nil || t.Generation != gen || t.State != "running" {
-		c.mu.Unlock()
-		return bridge.Content{}, ErrState
-	}
-	if err := c.usable(actor{t.ActorKind, t.ActorID}); err != nil {
-		c.mu.Unlock()
+	client, req, err := c.prepareOperationLocked(ctx, c.tasks[id], gen, kind, parameters)
+	c.mu.Unlock()
+	if err != nil {
 		return bridge.Content{}, err
 	}
+	return c.executeOperation(ctx, client, req)
+}
+
+// The first administrative request and its task are saved together, so a
+// crash cannot leave an unclassified control task or a made-up operation ID.
+func (c *Controller) prepareOperationLocked(ctx context.Context, t *storage.ComputerUseTask, gen uint64, kind string, parameters any) (transport, bridge.Request, error) {
+	var empty bridge.Request
+	raw, err := json.Marshal(parameters)
+	if err != nil {
+		return nil, empty, bridge.ErrInvalid
+	}
+	if t == nil || t.Generation != gen || t.State != "running" {
+		return nil, empty, ErrState
+	}
+	if err := c.usable(actor{t.ActorKind, t.ActorID}); err != nil {
+		return nil, empty, err
+	}
 	if t.ToolCalls >= c.config.MaxToolCalls {
-		c.mu.Unlock()
-		return bridge.Content{}, ErrBudget
+		return nil, empty, ErrBudget
 	}
 	if t.BridgeURL != c.config.BridgeURL || pending(t.Pending) {
-		c.mu.Unlock()
-		return bridge.Content{}, ErrBusy
+		return nil, empty, ErrBusy
 	}
 	if ctx.Err() != nil {
-		c.mu.Unlock()
-		return bridge.Content{}, ctx.Err()
+		return nil, empty, ctx.Err()
 	}
 	client, err := c.newTransport(c.config)
 	if err != nil {
-		c.mu.Unlock()
-		return bridge.Content{}, err
+		return nil, empty, err
 	}
 	timeout := time.Duration(c.config.MaxSeconds) * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = min(timeout, time.Until(deadline))
 	}
 	timeout = min(timeout, 10*time.Minute)
-	req := bridge.Request{Identity: bridge.Identity{Version: 1, OperationID: newID(), InstanceID: c.opts.InstanceID, TaskID: id,
+	req := bridge.Request{Identity: bridge.Identity{Version: 1, OperationID: newID(), InstanceID: c.opts.InstanceID, TaskID: t.ID,
 		Generation: gen, ActorID: t.ActorID, Kind: kind}, TimeoutMS: max(int64(1), timeout.Milliseconds()), Parameters: raw}
 	hash, err := req.Fingerprint()
 	if err != nil {
-		c.mu.Unlock()
-		return bridge.Content{}, err
+		return nil, empty, err
 	}
 	op := bridge.Operation{Identity: req.Identity, RequestHash: hash, Outcome: bridge.Outcome{State: bridge.Accepted}}
 	t.Pending = operationMeta(op)
 	t.ToolCalls++
 	if err = c.save(t); err == nil {
+		c.tasks[t.ID] = t
+		delete(c.contentIDs, t.ID)
 		err = c.auditRecord(op)
 	}
-	c.mu.Unlock()
 	if err != nil {
-		return bridge.Content{}, err
+		return nil, empty, err
 	}
+	c.operations[req.OperationID] = struct{}{}
+	return client, req, nil
+}
+
+func (c *Controller) finishOperation(id string) {
+	c.mu.Lock()
+	delete(c.operations, id)
+	c.mu.Unlock()
+}
+
+func (c *Controller) executeOperation(ctx context.Context, client transport, req bridge.Request) (bridge.Content, error) {
+	defer c.finishOperation(req.OperationID)
+	id, gen := req.TaskID, req.Generation
+	hash, _ := req.Fingerprint()
 	result, runErr := client.Run(ctx, req)
 	if runErr != nil {
-		result = op
-		result.Outcome = bridge.Outcome{State: bridge.Unknown, Code: "outcome_unknown"}
+		result = bridge.Operation{Identity: req.Identity, RequestHash: hash,
+			Outcome: bridge.Outcome{State: bridge.Unknown, Code: "outcome_unknown"}}
 	}
 	c.mu.Lock()
-	t = c.tasks[id]
+	t := c.tasks[id]
 	if t == nil {
 		c.mu.Unlock()
 		return bridge.Content{}, ErrState
 	}
 	if t.Pending != nil && t.Pending.ID == req.OperationID {
+		result = preserveCompletion(t.Pending, result)
 		t.Pending = operationMeta(result)
 		t.LastOperation = operationMeta(result)
 	}
@@ -352,7 +406,7 @@ func (c *Controller) perform(ctx context.Context, id string, gen uint64, kind st
 	}
 	saveErr := c.save(t)
 	auditErr := c.auditRecord(result)
-	current := t.Generation == gen && t.State == "running"
+	current := t.Generation == gen && t.State == "running" && c.usable(actor{t.ActorKind, t.ActorID}) == nil
 	c.mu.Unlock()
 	if saveErr != nil {
 		return bridge.Content{}, saveErr
@@ -361,28 +415,35 @@ func (c *Controller) perform(ctx context.Context, id string, gen uint64, kind st
 		return bridge.Content{}, auditErr
 	}
 	if runErr != nil {
+		if result.State == bridge.Succeeded || result.State == bridge.Failed {
+			return bridge.Content{}, ErrState
+		}
 		return bridge.Content{}, bridge.ErrOutcomeUnknown
 	}
-	if result.State != bridge.Succeeded {
+	if result.State != bridge.Succeeded && result.State != bridge.Failed {
 		return bridge.Content{}, errors.New("桥操作未成功，已停止自动执行；请核对结果")
 	}
 	if !current {
 		return bridge.Content{}, ErrState
 	}
 	content, err := client.Content(ctx, req)
-	if err != nil {
-		return bridge.Content{}, err
-	}
 	c.mu.Lock()
 	t = c.tasks[id]
-	if t == nil || t.Generation != gen || t.State != "running" || c.closing {
+	if t == nil || t.Generation != gen || t.State != "running" || c.usable(actor{t.ActorKind, t.ActorID}) != nil || t.Pending == nil || t.Pending.ID != req.OperationID {
 		c.mu.Unlock()
 		return bridge.Content{}, ErrState
 	}
-	if err = c.content.Put(req, content.Text, content.PNG); err == nil {
-		c.contentIDs[id] = req.OperationID
+	if err == nil {
+		if err = c.content.Put(req, content.Text, content.PNG); err == nil {
+			c.contentIDs[id] = req.OperationID
+		}
 	}
 	c.mu.Unlock()
+	if result.State == bridge.Failed {
+		// Reading a failed command's diagnostic is not permission to continue or
+		// replay it. Expired diagnostics must not fall back to an older preview.
+		return content, errors.New("桥操作未成功，已停止自动执行；请核对结果")
+	}
 	return content, err
 }
 
@@ -418,10 +479,14 @@ func (c *Controller) pause(ctx context.Context, id, reason string) (storage.Comp
 	if err = c.save(t); err == nil {
 		err = c.auditRecord(op)
 	}
+	if err == nil {
+		c.operations[req.OperationID] = struct{}{}
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return storage.ComputerUseTask{}, err
 	}
+	defer c.finishOperation(req.OperationID)
 	result, runErr := client.Run(ctx, req)
 	if runErr != nil {
 		result = op
@@ -431,6 +496,7 @@ func (c *Controller) pause(ctx context.Context, id, reason string) (storage.Comp
 	defer c.mu.Unlock()
 	t = c.tasks[id]
 	if t.PauseOperation != nil && t.PauseOperation.ID == req.OperationID {
+		result = preserveCompletion(t.PauseOperation, result)
 		t.PauseOperation = operationMeta(result)
 		t.GUIStopped = result.State == bridge.Succeeded
 		t.ReconcileRequired = t.ReconcileRequired || result.State != bridge.Succeeded
@@ -443,7 +509,7 @@ func (c *Controller) pause(ctx context.Context, id, reason string) (storage.Comp
 	if auditErr != nil {
 		return cloneTask(t), auditErr
 	}
-	if runErr != nil || result.State != bridge.Succeeded {
+	if result.State != bridge.Succeeded {
 		return cloneTask(t), errors.New("暂停已请求，但未确认 GUI 停止；请勿据此接管桌面")
 	}
 	return cloneTask(t), nil
@@ -467,21 +533,43 @@ func (c *Controller) reconcile(ctx context.Context, id string) (storage.Computer
 	}
 	snapshot := cloneTask(t)
 	c.mu.Unlock()
+	var reconcileErr error
 	for index, p := range []*storage.ComputerUseOperation{snapshot.Pending, snapshot.PauseOperation} {
 		if p == nil {
 			continue
 		}
 		op, err := client.Lookup(ctx, operationIdentity(p), p.RequestHash)
-		if err != nil {
+		missing := errors.Is(err, bridge.ErrNotFound)
+		if err != nil && !missing {
 			return snapshot, errors.New("无法确认桥操作状态，保留未知结果；不会重放")
 		}
 		c.mu.Lock()
 		t = c.tasks[id]
+		if t == nil {
+			c.mu.Unlock()
+			return snapshot, ErrState
+		}
 		target := &t.Pending
 		if index == 1 {
 			target = &t.PauseOperation
 		}
-		if *target != nil && (*target).ID == p.ID {
+		// A lookup is only evidence for the metadata it observed. A concurrent
+		// completion or newer request must not be overwritten by a stale reply.
+		if sameOperation(*target, p) {
+			_, inFlight := c.operations[p.ID]
+			knownTerminal := p.State == string(bridge.Succeeded) || p.State == string(bridge.Failed)
+			if missing && (inFlight || knownTerminal) || knownTerminal && (string(op.State) != p.State || op.Code != p.Code) {
+				snapshot = cloneTask(t)
+				c.mu.Unlock()
+				reconcileErr = errors.New("无法确认桥操作状态，保留已有事实；不会重放")
+				continue
+			}
+			if missing {
+				// Absence cannot prove no effect occurred (e.g. a lost journal).
+				// Preserve the identity and require explicit human inspection.
+				op = bridge.Operation{Identity: operationIdentity(p), RequestHash: p.RequestHash,
+					Outcome: bridge.Outcome{State: bridge.Unknown, Code: "outcome_unknown"}}
+			}
 			*target = operationMeta(op)
 			if index == 0 {
 				t.LastOperation = operationMeta(op)
@@ -491,15 +579,39 @@ func (c *Controller) reconcile(ctx context.Context, id string) (storage.Computer
 			if op.State == bridge.Unknown {
 				t.ReconcileRequired = true
 			}
+			err = c.save(t)
+			if err == nil {
+				err = c.auditRecord(op)
+			}
+		} else {
+			err = nil
 		}
-		err = c.save(t)
 		snapshot = cloneTask(t)
 		c.mu.Unlock()
 		if err != nil {
 			return snapshot, err
 		}
 	}
-	return snapshot, nil
+	return snapshot, reconcileErr
+}
+
+// Reconciliation may finish before an older transport call times out. The
+// later transport failure cannot erase a completion already confirmed by ID.
+func preserveCompletion(previous *storage.ComputerUseOperation, result bridge.Operation) bridge.Operation {
+	if previous != nil && operationIdentity(previous) == result.Identity && previous.RequestHash == result.RequestHash &&
+		(previous.State == string(bridge.Succeeded) || previous.State == string(bridge.Failed)) {
+		result.Outcome = bridge.Outcome{State: bridge.State(previous.State), Code: previous.Code, ExitCode: previous.ExitCode}
+	}
+	return result
+}
+
+func sameOperation(a, b *storage.ComputerUseOperation) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	x, y := *a, *b
+	x.ExitCode, y.ExitCode = nil, nil
+	return x == y && (a.ExitCode == nil && b.ExitCode == nil || a.ExitCode != nil && b.ExitCode != nil && *a.ExitCode == *b.ExitCode)
 }
 
 func (c *Controller) Close() {

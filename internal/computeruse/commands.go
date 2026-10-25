@@ -108,7 +108,7 @@ func (c *Controller) HandleCommand(ctx context.Context, input core.ComputerUseIn
 		defer c.mu.Unlock()
 		var lines []string
 		for _, t := range c.tasks {
-			if t.ProjectID != "control" {
+			if !isControlTask(t) {
 				lines = append(lines, taskSummary(*t))
 				if len(lines) >= 20 {
 					break

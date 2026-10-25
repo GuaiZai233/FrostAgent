@@ -125,6 +125,11 @@ Windows 命令先挂起创建，再加入 Job Object 后恢复；Git hooks 使�
 查询中发现已接受操作丢失时停止，不再重新提交。显式失败/unknown 不盲目重放。
 回复的 operation/task/instance/actor/generation/参数签名必须全部匹配。
 
+FrostAgent 本地先保存操作身份再派发，崩溃可能留下桥端从未见过的 `accepted`。
+显式核对收到 not-found 时，保留原身份并标为 `unknown`，等待人工检查和明确确认，
+不能据此认定未执行或重放旧请求。仍在本机派发的请求不因 not-found 解除等待；
+已确认的成功/失败事实不会被迟到查询或传输错误降级。
+
 每台桥的 `StateDir/operations.db` 是独立 SQLite v1 账本，与 FrostAgent 主库分开。
 采用 WAL 与 FULL 同步；操作账本不按审计保留期清理。OS 文件租约在 Windows/Linux 上防止
 两个桥同时拥有同一账本；关闭超时不提前释放租约，必须等执行器全部返回。
@@ -134,6 +139,7 @@ FrostAgent 主库追加 v15 migration，保存 `computer_use_config`、`computer
 和 `computer_use_tasks`；既有 v12/v13 Embedding 与 v14 Skills migration 不改写。
 桥/适配器秘密只在主配置存储和授权连接中使用，API 不回显，实例 ZIP 不导出。
 任务派发前持久化操作身份/状态，恢复未完成任务时暂停，不自动续跑。
+内部管理任务按真实操作类型区分，首次持久化即包含实际请求身份；`control` 仍是合法项目名。
 
 此协议不承诺任意外部副作用的 exactly-once。断电、进程崩溃、损坏/回滚/丢失账本、
 仍在后台运行的子进程，都需要核对实际状态。不得删除或回滚账本后自动重放旧任务。

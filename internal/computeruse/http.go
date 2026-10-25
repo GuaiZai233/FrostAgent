@@ -215,7 +215,10 @@ func (c *Controller) setConfig(cfg storage.ComputerUseConfig) error {
 			return ErrBusy
 		}
 	}
-	if cfg.BridgeURL != "" || cfg.Enabled {
+	if _, err := bridgeRoots(cfg); err != nil {
+		return bridge.ErrInvalid
+	}
+	if cfg.Enabled {
 		if _, err := c.newTransport(cfg); err != nil {
 			return bridge.ErrInvalid
 		}
@@ -227,7 +230,7 @@ func (c *Controller) setConfig(cfg storage.ComputerUseConfig) error {
 		c.desktopConfirmed = false
 		c.desktopGeneration = 0
 		for _, t := range c.tasks {
-			if t.ProjectID == "control" && t.BridgeURL == cfg.BridgeURL {
+			if isDesktopControlTask(t) && t.BridgeURL == cfg.BridgeURL {
 				c.desktopGeneration = max(c.desktopGeneration, t.Generation)
 			}
 		}
@@ -301,11 +304,11 @@ func (c *Controller) manual(ctx context.Context, a actor, kind string, params ma
 			return bridge.Content{}, ErrState
 		}
 	}
-	if err := c.save(t); err != nil {
+	client, req, err := c.prepareOperationLocked(ctx, t, t.Generation, kind, params)
+	if err != nil {
 		c.mu.Unlock()
 		return bridge.Content{}, err
 	}
-	c.tasks[t.ID] = t
 	ctx, cancel := context.WithCancel(ctx)
 	stopCancel := context.AfterFunc(c.opts.Context, cancel)
 	c.controls[t.ID] = cancel
@@ -322,9 +325,9 @@ func (c *Controller) manual(ctx context.Context, a actor, kind string, params ma
 		c.desktopGeneration = t.Generation
 		c.desktopConfirmed = false
 	}
-	id, generation := t.ID, t.Generation
+	generation := t.Generation
 	c.mu.Unlock()
-	result, err := c.perform(ctx, id, generation, kind, params)
+	result, err := c.executeOperation(ctx, client, req)
 	c.mu.Lock()
 	if t.Generation != generation || t.State != "running" {
 		err = ErrState
