@@ -1,15 +1,16 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/adapter/quotetrace"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/quotetrace"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,10 @@ type oneBotAPIResponse struct {
 // SendActionAndWait sends a OneBot action and waits for the matching ACK response (via echo).
 // It distinguishes between websocket write failures, platform ACK timeout, and platform errors (retcode != 0).
 func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time.Duration) (oneBotAPIResponse, error) {
+	return c.sendActionAndWaitTurn(action, timeout, nil)
+}
+
+func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn) (oneBotAPIResponse, error) {
 	if c == nil || c.conn == nil {
 		return oneBotAPIResponse{}, fmt.Errorf("websocket connection is nil")
 	}
@@ -61,33 +66,54 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 		return oneBotAPIResponse{}, fmt.Errorf("marshal action failed: %w", err)
 	}
 
-	if err := c.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+	if err := c.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		c.clearMessageRequest(echo, responseChannel)
 		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", err)
 	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-
-	select {
-	case <-c.Context().Done():
-		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, c.Context().Err()
-	case response := <-responseChannel:
-		if response.RetCode != 0 || response.Status != "ok" {
-			detail := strings.TrimSpace(response.Wording)
-			if detail == "" {
-				detail = strings.TrimSpace(response.Message)
-			}
-			if detail == "" {
-				detail = fmt.Sprintf("retcode=%d", response.RetCode)
-			}
-			return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
+	defer c.clearMessageRequest(echo, responseChannel)
+	response, err := waitActionResponse(turn.Context(), c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
+	if err != nil {
+		if err == context.DeadlineExceeded {
+			err = fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
 		}
+		return response, err
+	}
+	if response.RetCode != 0 || response.Status != "ok" {
+		detail := strings.TrimSpace(response.Wording)
+		if detail == "" {
+			detail = strings.TrimSpace(response.Message)
+		}
+		if detail == "" {
+			detail = fmt.Sprintf("retcode=%d", response.RetCode)
+		}
+		return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
+	}
+	return response, nil
+}
+
+func waitActionResponse(turnCtx, connCtx context.Context, responses <-chan oneBotAPIResponse, timeout <-chan time.Time, detach func()) (oneBotAPIResponse, error) {
+	var err error
+	select {
+	case response := <-responses:
 		return response, nil
-	case <-timer.C:
-		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
+	case <-turnCtx.Done():
+		err = turnCtx.Err()
+	case <-connCtx.Done():
+		err = connCtx.Err()
+	case <-timeout:
+		err = context.DeadlineExceeded
+	}
+	// Detach under the response dispatcher lock, then prefer any ACK already
+	// confirmed at cancellation. Unacknowledged operations remain unknown.
+	detach()
+	select {
+	case response := <-responses:
+		return response, nil
+	default:
+		return oneBotAPIResponse{}, err
 	}
 }
 
@@ -244,12 +270,12 @@ func (c *wsConnection) deliverMessageResponse(echo string, response oneBotAPIRes
 	responseChannel, ok := c.pendingMessage[echo]
 	if ok {
 		delete(c.pendingMessage, echo)
+		responseChannel <- response
 	}
 	c.messageMu.Unlock()
 	if !ok {
 		return false
 	}
-	responseChannel <- response
 	return true
 }
 

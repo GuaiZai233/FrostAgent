@@ -1,14 +1,14 @@
 package backup
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/storage"
 	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"io"
 	"os"
 	"path/filepath"

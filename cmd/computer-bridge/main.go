@@ -13,8 +13,8 @@ import (
 	"os/signal"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/computeruse/machine"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/machine"
 )
 
 type config struct {

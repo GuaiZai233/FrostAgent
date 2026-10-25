@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
 )
 
 func testProjects(t *testing.T) (*Projects, Project) {

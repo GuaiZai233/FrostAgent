@@ -1,8 +1,8 @@
 package parity
 
 import (
-	"FrostAgent/internal/tools"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"strconv"
 	"strings"
 )

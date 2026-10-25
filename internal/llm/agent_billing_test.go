@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"net/http"
 	"net/http/httptest"
 	"strings"

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 const ComputerUseNotice = "仅包含项目和任务元数据；不包含桥凭据、项目环境、VM 磁盘、代码、工具链或工作会话内容。恢复/复制的历史任务不可直接继续；重新配置桥和项目、人工核对旧操作后，使用新的独立指令新建任务。不得重放结果未知的旧副作用；新任务不自动继承旧 worktree 的未提交内容。"

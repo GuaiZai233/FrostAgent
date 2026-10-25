@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/skills"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestSkillToolsLoadResourceAndRejectDisabledOrManualOnly(t *testing.T) {

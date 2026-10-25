@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"FrostAgent/internal/skills"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestSkillsZIPRestore(t *testing.T) {

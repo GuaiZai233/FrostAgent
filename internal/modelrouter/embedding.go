@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
 var ErrInputTooLong = errors.New("memory input exceeds model window")

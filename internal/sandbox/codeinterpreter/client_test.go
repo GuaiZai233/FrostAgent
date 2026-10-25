@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/sandbox/codeinterpreter"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox/codeinterpreter"
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/computeruse/machine"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/machine"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 const systemPrompt = `You are the coding/computer operator for a dedicated Windows VM, under whole-machine delegation by its owner.

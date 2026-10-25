@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 type fakeTransport struct {

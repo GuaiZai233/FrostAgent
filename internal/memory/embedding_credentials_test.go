@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
 func TestEmbeddingSQLiteCredentialRecovery(t *testing.T) {

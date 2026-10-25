@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	router "FrostAgent/internal/modelrouter"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	router "github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 
 	"connectrpc.com/connect"
 )

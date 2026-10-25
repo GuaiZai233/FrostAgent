@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 type zipEntry struct {

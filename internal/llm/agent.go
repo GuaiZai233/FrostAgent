@@ -1,22 +1,22 @@
 package llm
 
 import (
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/poke"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/skills"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/poke"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,7 +80,8 @@ type AgentRunResult struct {
 	OutputBlocked    bool
 	Usage            core.Usage
 	Error            error
-	LLMFailed        bool // Dialogue route resolution or provider call failed; excludes security, billing, and tool errors.
+	LLMFailed        bool          // Dialogue route resolution or provider call failed; excludes security, billing, and tool errors.
+	Transcript       []ChatMessage // Request-private checkpoint; never committed as public history.
 }
 
 // IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
@@ -287,6 +288,9 @@ func (e *Engine) RunMessagesWithContext(
 	messages []ChatMessage,
 	runContext RunContext,
 ) AgentRunResult {
+	if runContext.Turn != nil {
+		runContext.SkillState = runContext.Turn.SkillSession()
+	}
 	if !runContext.Mock {
 		e.RecordBotTurn()
 	}
@@ -307,6 +311,16 @@ func (e *Engine) RunMessagesWithContext(
 		defer cancel()
 		stop := context.AfterFunc(runContext.Context, cancel)
 		defer stop()
+	}
+	if runContext.Turn != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Turn.Context(), cancel)
+		defer stop()
+		if runContext.Turn.Interrupted() {
+			cancel()
+		}
 	}
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
@@ -460,8 +474,12 @@ func (e *Engine) RunMessagesWithContext(
 				}
 				var cancelRun func()
 				var currentEpoch uint64
-				ctx, currentEpoch, cancelRun = sess.BeginRun(ctx)
-				defer cancelRun()
+				if runContext.Turn == nil {
+					ctx, currentEpoch, cancelRun = sess.BeginRun(ctx)
+					defer cancelRun()
+				} else {
+					currentEpoch = sess.Epoch()
+				}
 				if runContext.Epoch == 0 {
 					runContext.Epoch = currentEpoch
 				}
@@ -734,12 +752,33 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 // runLoopWithResult executes the agent loop and reports terminal decisions and
 // memory side effects. A stay_silent call must be the only tool call in its
 // assistant response; conflicts are returned to the model for another choice.
-func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) AgentRunResult {
+func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) (result AgentRunResult) {
 	memoryWritten := false
 	var totalUsage core.Usage
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
 	billingActive := hasRunCtx && !runCtx.Mock && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	startedTools := make(map[string]bool)
+	defer func() {
+		result.MemoryWritten = runCtx.Turn.memoryState(result.MemoryWritten || memoryWritten)
+		if runCtx.Turn != nil {
+			result.Transcript = completeInterruptedTranscript(messages, startedTools)
+			runCtx.Turn.saveTranscript(result.Transcript)
+		}
+		if billingActive {
+			if e.waitBilling(ctx, runCtx.Billing) {
+				result.Usage = runCtx.Billing.Usage()
+			}
+		}
+		if runCanceled(ctx) {
+			result.Content = ""
+			result.Silent = true
+			result.SilenceReason = "canceled"
+			result.Error = context.Canceled
+			result.LLMFailed = false
+		}
+	}()
+	memoryWritten = runCtx.Turn.memoryState(false)
 	modelName := e.ModelName
 	if e.ModelRouter != nil {
 		var snapshot *modelrouter.Snapshot
@@ -782,11 +821,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 	}
 	for i := 0; i < maxIterations; i++ {
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, Error: context.Canceled}
+		}
 		if err := e.securityAccess(runCtx); err != nil {
 			return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
 		}
-		if err := ctx.Err(); err != nil {
-			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err}
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 		}
 		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
@@ -803,12 +845,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
 		if e.Skills != nil {
-			var skillErr error
-			messages, skillErr = e.skillMessages(ctx, messages)
+			skillMessages, skillErr := e.skillMessages(ctx, messages)
 			if skillErr != nil {
 				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
 			}
-			if sess := e.skillSession(ctx); sess != nil {
+			messages = skillMessages
+			if sess := e.promptTraceSession(ctx); sess != nil {
 				var system []string
 				for _, message := range messages {
 					if message.Role == "system" {
@@ -895,8 +937,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					taskID = fmt.Sprintf("%s_anon_%d", platform, time.Now().UnixNano())
 				}
 			}
-			callID := fmt.Sprintf("call_%s_%d", taskID, i)
-			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", platform, taskID, i)
+			callIndex := runCtx.Billing.NextCall()
+			callID := fmt.Sprintf("call_%s_%d", taskID, callIndex)
+			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", platform, taskID, callIndex)
 
 			reserveReq := billing.LLMReserveRequest{
 				Platform:       platform,
@@ -922,7 +965,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						}
 						cCancel()
 					}
-					runCtx.Billing.LastBalanceMinor = balMinor
+					runCtx.Billing.setBalance(balMinor, false)
 					var replyMsg string
 					if i == 0 {
 						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
@@ -965,10 +1008,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				reservationID = res.ReservationID
 			}
 			if res.Decision == billing.DecisionWelcome {
-				runCtx.Billing.WelcomeGranted = true
 				reservationID = ""
 			}
-			runCtx.Billing.LastBalanceMinor = res.BalanceMinor
+			runCtx.Billing.setBalance(res.BalanceMinor, res.Decision == billing.DecisionWelcome)
 		}
 
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
@@ -983,16 +1025,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			},
 			TraceID: runCtx.SessionID,
 		}
-		resp, err := e.Provider.Chat(ctx, chatReq)
+		var callBilling *BillingRunState
+		if billingActive {
+			callBilling = runCtx.Billing
+		}
+		resp, err, commitErr := e.chatAndSettle(ctx, chatReq, reservationID, callBilling)
 		if err != nil {
 			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
-			if billingActive && reservationID != "" {
-				rCtx, rCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
-				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
-					e.Log().Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败 (iter %d): %v", i+1, relErr))
-				}
-				rCancel()
-			}
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
 				LLMFailed:     true,
@@ -1000,6 +1039,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				Usage:         totalUsage,
 				Error:         err,
 			}
+		}
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 		}
 
 		if resp.Usage != nil {
@@ -1027,42 +1069,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 		}
 
-		// 结算本轮调用
-		if billingActive && reservationID != "" {
-			promptTok := 0
-			compTok := 0
-			if resp.Usage != nil {
-				promptTok = resp.Usage.PromptTokens
-				compTok = resp.Usage.CompletionTokens
-			}
-			price := e.BillingConfig.Price(modelName)
-			actualMinor := billing.CalculateMinorUnits(promptTok, compTok, price)
-
-			cCtx, cCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
-			commitRes, commitErr := e.BillingClient.CommitLLM(cCtx, reservationID, actualMinor)
-			cCancel()
-
-			if commitErr != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
-				// 如果是 Tool Call 且 commit 失败，禁止执行工具以防止免费副作用
-				if len(responseMsg.ToolCalls) > 0 {
-					e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行", "Tool Call 阶段 commit 失败，终止本轮工具执行")
-					return AgentRunResult{
-						Content:       "FrostAgent错误：计费结算失败，已终止后续工具执行。",
-						MemoryWritten: memoryWritten,
-						Usage:         totalUsage,
-						Error:         commitErr,
-					}
-				}
-				// 若是最终回答且 commit 失败，本轮按免费处理，不影响回复输出
-			} else if commitRes != nil {
-				runCtx.Billing.TotalBilledMinor += actualMinor
-				runCtx.Billing.LastBalanceMinor = commitRes.BalanceMinor
-				runCtx.Billing.IterationsBilled++
-			}
+		if commitErr != nil && len(responseMsg.ToolCalls) > 0 {
+			return AgentRunResult{Content: "FrostAgent错误：计费结算失败，已终止后续工具执行。", MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
 		}
 
 		messages = append(messages, *responseMsg)
+		startedTools = make(map[string]bool)
 		if stickerEnforcing {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval == 0 || grace > 0 || remaining == interval {
 				stickerEnforcing = false
@@ -1087,6 +1099,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
 					outputBlocked = true
 				}
+			}
+			messages[len(messages)-1].Content = contentStr
+			if runCanceled(ctx) {
+				messages = messages[:len(messages)-1]
+				return AgentRunResult{Silent: true, Error: context.Canceled}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
 				if stickerEnforcing {
@@ -1166,6 +1183,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		for tcIndex := 0; tcIndex < len(responseMsg.ToolCalls); tcIndex++ {
 			tc := responseMsg.ToolCalls[tcIndex]
+			if runCanceled(ctx) {
+				return AgentRunResult{Silent: true, Error: context.Canceled}
+			}
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
 			}
@@ -1189,7 +1209,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if hasRunCtx && !runCtx.Mock && !runCtx.Proactive && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
 				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
+					startedTools[tc.ID], startedTools[stickerCall.ID] = true, true
 					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					if runCanceled(ctx) {
+						return AgentRunResult{Silent: true, Error: context.Canceled}
+					}
 					messages = append(messages,
 						ChatMessage{Role: "tool", Content: textResult, ToolCallID: tc.ID},
 						ChatMessage{Role: "tool", Content: stickerResult, ToolCallID: stickerCall.ID},
@@ -1219,7 +1243,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			// 从 map 或 MCP Manager 中找到工具执行
 			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
 				var err error
-				execution, err = executeToolResult(ctx, tool, tc)
+				startedTools[tc.ID] = true
+				execution, err = executeInterruptibleTool(ctx, tool, tc)
+				if runCanceled(ctx) {
+					if isMemoryWriteRequest(tc) {
+						memoryWritten = true
+					}
+					return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: ctx.Err(), Usage: totalUsage}
+				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
 						if hasRunCtx && runCtx.Proactive {
@@ -1309,13 +1340,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						continue
 					}
 				}
-				var delivered bool
-				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
-				if hasRunCtx && !runCtx.Mock && execution.MessagePayload != "" && delivered {
-					e.RecordBotMessage(deliverySticker)
-				}
+				toolResult, _ = e.deliverToolResult(ctx, execution, toolResult)
 			}
 
+			if runCanceled(ctx) {
+				return AgentRunResult{Silent: true, Error: context.Canceled}
+			}
 			toolMsg := ChatMessage{
 				Role:       "tool",
 				Content:    toolResult,

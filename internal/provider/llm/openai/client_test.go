@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 func TestClient_Chat_ParsesUsage(t *testing.T) {

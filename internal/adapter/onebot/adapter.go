@@ -1,24 +1,24 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/adapter/heartbeat"
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -556,7 +556,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveTurn()
+				if isWoken(event, a.engine, routing) {
+					lane := "sender:" + strconv.FormatInt(event.UserID, 10)
+					proactiveTurn := routing.WakeSignals.Proactive
+					if proactiveTurn {
+						lane = "proactive"
+					}
+					inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
+					turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
+				}
 			}
 
 			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/adapter/astrbot"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 type ingressCountingClassifier struct {

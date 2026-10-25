@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 // SQL managers with an empty instance ID manage the shared catalog. Instance

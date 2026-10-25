@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 type mockTraceProvider struct {

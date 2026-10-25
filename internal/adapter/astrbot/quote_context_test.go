@@ -1,9 +1,9 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"testing"
 	"time"

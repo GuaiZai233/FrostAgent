@@ -1,10 +1,10 @@
 package content
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"io"
 	"net/http"
 	"strings"

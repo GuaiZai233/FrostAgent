@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/computeruse/machine"
-	mcpsvc "FrostAgent/internal/service/mcp"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/machine"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {

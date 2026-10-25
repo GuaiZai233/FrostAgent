@@ -1,8 +1,8 @@
 package instance
 
 import (
-	"FrostAgent/internal/actionscat"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"net/http"
 	"net/http/httptest"
 	"strings"

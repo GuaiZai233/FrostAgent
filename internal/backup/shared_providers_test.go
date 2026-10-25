@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestInstanceSettingsReuseSharedProvidersAndRemapConflicts(t *testing.T) {

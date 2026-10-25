@@ -15,7 +15,7 @@
 | 数据与部署 | `internal/storage/computeruse.go`、`internal/backup/computeruse.go`、`scripts/computer-use`：主库元数据、隔离恢复、VM 登录后启动脚本与静态检查 |
 
 启用仍须操作者配置专用 VM、桥凭据和可信入口；不会自动授予现有普通聊天或沙箱操作宿主机的
-权限。部署步骤见 [Computer Use 部署与操作](../../docs/computer-use.md)。
+权限。部署步骤见 [Computer Use 部署与操作](computer-use-deployment.md)。
 **真实 Windows VM 的端到端验收尚未执行，源码接入与替身测试不等于目标 VM 已可安全上线。**
 
 ## 架构与授权

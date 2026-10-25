@@ -1,10 +1,10 @@
 package security
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	securityctl "FrostAgent/internal/security"
-	mcpsvc "FrostAgent/internal/service/mcp"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	securityctl "github.com/GuaiZai233/FrostAgent/internal/security"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"net/http"
 	"strings"
 	"sync"

@@ -1,13 +1,13 @@
 package admincmd
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/security"
 	"context"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"path/filepath"
 	"strings"
 	"sync"

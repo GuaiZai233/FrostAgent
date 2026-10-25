@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestUnusedWindowsProviderDoesNotBlockOtherInstances(t *testing.T) {

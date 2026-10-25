@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	router "FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/storage"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	router "github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"google.golang.org/protobuf/proto"
 )
 

@@ -1,12 +1,12 @@
 package memory
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"slices"
 	"sort"

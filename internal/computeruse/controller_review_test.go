@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/computeruse/machine"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/machine"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestLateTransportFailureCannotEraseReconciledCompletion(t *testing.T) {

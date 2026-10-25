@@ -1,10 +1,10 @@
 package sticker
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/runtimescope"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"time"
 )
 

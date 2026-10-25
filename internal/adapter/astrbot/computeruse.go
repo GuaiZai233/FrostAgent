@@ -3,8 +3,8 @@ package astrbot
 import (
 	"strings"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 )
 
 func handleComputerUseCommand(conn *wsConn, event Event, engine *llm.Engine) bool {

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {

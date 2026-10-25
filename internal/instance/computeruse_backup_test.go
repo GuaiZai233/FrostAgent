@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func seedInstanceComputerUse(t *testing.T, m *Manager, id string) {

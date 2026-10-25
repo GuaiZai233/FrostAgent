@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 )
 
 var bearerTokenPattern = regexp.MustCompile(`(?i)bearer\s+[a-zA-Z0-9_\-\.\:\=\+\/]+`)

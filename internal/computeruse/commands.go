@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 // Candidate also drops privileged-looking commands from untrusted/group/mock

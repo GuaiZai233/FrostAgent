@@ -9,7 +9,7 @@
 
 技能系统与 ZIP 导入见 [skills.md](skills.md)。
 
-Computer use 的已确认规格、桥接底座与分阶段实现边界见 [computer-use.md](computer-use.md)；当前尚未开放桌面或持久项目工作台。
+Computer use 的专用 VM 桥、持久项目工作台和授权边界见 [computer-use.md](computer-use.md)；真实 VM 验收尚未完成。
 
 ### 当前服务端设置界面与生效边界
 
@@ -26,6 +26,10 @@ Computer use 的已确认规格、桥接底座与分阶段实现边界见 [compu
 模型路由器在凭据环境变量为空、凭据来源未知以及来源配置校验失败时，仅返回错误类别；不在错误文本中回显 `APIKeyRef` 或未知 `APIKeySource` 的原始值，避免经调用方日志或适配器错误提示泄露配置。环境变量引用的读取方式、凭据内容与配置拒绝规则保持不变。
 
 ## FrostAgent 的组成
+
+### Go 模块与包路径
+
+Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部 import 均使用该前缀，目录结构保持不变。`buf.gen.yaml` 的 `go_package_prefix` 使用 `github.com/GuaiZai233/FrostAgent/gen/proto`，确保重新生成的 Protobuf / ConnectRPC 代码引用同一模块。Dockerfile 的 `-X` 链接器参数同样使用完整模块包路径，向 `internal/instanceconfig` 注入容器监听与管理回环限制的默认值。
 
 ### Docker 部署
 

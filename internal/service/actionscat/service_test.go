@@ -1,17 +1,17 @@
 package actionscat
 
 import (
-	"strings"
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	actclient "FrostAgent/internal/actionscat"
+	actclient "github.com/GuaiZai233/FrostAgent/internal/actionscat"
 )
 
 func TestService_Status_Unconfigured(t *testing.T) {

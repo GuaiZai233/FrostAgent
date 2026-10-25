@@ -13,9 +13,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	"FrostAgent/internal/mcp"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
 )
 
 // MaskedSecret is the replacement placeholder returned for sensitive keys.

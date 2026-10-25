@@ -13,7 +13,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/joho/godotenv"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 )
 
 func mustNew(t *testing.T, envPath string) *Service {

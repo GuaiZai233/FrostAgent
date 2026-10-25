@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 func TestBuildContextSystemPromptStablePrefixAcrossMinutes(t *testing.T) {

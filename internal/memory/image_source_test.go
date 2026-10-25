@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestGroupExtractionSeparatesImageEvidenceFromUserText(t *testing.T) {

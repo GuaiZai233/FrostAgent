@@ -1,7 +1,7 @@
 package instance
 
 import (
-	"FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"net/http"
 	"net/http/httptest"
 	"strings"

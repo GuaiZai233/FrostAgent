@@ -1,12 +1,12 @@
 package main
 
 import (
-	"FrostAgent/internal/envinject"
-	"FrostAgent/internal/instance"
-	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/instance"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"net/http"
 	"net/http/httptest"
 	"os"

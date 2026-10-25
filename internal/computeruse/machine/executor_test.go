@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
 )
 
 type fakeDesktop struct {

@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	"FrostAgent/internal/modelrouter"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
 
 func TestProviderAPIExistsWithoutInstanceAndRejectsInstanceCredentialEdits(t *testing.T) {

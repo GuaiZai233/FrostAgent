@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestEmbeddingWireAndResponseValidation(t *testing.T) {

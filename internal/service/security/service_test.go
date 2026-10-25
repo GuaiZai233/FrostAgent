@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"FrostAgent/internal/instanceconfig"
-	securityctl "FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	securityctl "github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 func TestSecurityAuthHonorsScopedConfigWithoutProcessEnv(t *testing.T) {

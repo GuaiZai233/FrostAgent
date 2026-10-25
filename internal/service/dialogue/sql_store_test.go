@@ -1,9 +1,9 @@
 package dialogue
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/storage"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"path/filepath"
 	"reflect"
 	"testing"

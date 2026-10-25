@@ -1,9 +1,9 @@
 package dialogue
 
 import (
-	"FrostAgent/internal/storage"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,9 +11,9 @@ import (
 	"connectrpc.com/connect"
 	"gopkg.in/yaml.v3"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 // Option configures DialogueService.

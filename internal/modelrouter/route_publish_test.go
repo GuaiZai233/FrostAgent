@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestRoutePublicationGuardKeepsScopesIsolated(t *testing.T) {

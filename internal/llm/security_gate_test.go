@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 type mockGateClassifier struct {

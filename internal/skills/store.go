@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 type Store struct {

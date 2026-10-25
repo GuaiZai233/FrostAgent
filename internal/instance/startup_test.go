@@ -1,7 +1,7 @@
 package instance
 
 import (
-	"FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"net/http"
 	"os"
 	"path/filepath"

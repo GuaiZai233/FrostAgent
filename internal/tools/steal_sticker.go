@@ -1,13 +1,13 @@
 package tools
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"strings"
 	"unicode"
 )

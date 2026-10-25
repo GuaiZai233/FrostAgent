@@ -1,12 +1,12 @@
 package tools
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/subagent"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/subagent"
 )
 
 const SubAgentManagerPrompt = "你是子Agent的调度和管理工具。"

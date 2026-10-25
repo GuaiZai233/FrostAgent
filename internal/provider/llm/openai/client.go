@@ -11,8 +11,8 @@ import (
 	"net/url"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 // OpenAI-compatible structures for API communication.

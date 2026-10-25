@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func computerUseBackupDatabase(t *testing.T) *storage.DB {

@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"FrostAgent/internal/computeruse/bridge"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse/bridge"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 var ErrUnavailable = errors.New("computer use 未启用或实例未就绪")

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 )
 
 func TestSandboxBundlePreservesFilesAndAvoidsTransferNameCollision(t *testing.T) {

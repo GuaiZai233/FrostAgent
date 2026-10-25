@@ -1,10 +1,10 @@
 package tools
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/security"
 	"context"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"path/filepath"
 	"testing"
 )

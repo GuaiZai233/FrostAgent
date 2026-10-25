@@ -4,9 +4,9 @@ import (
 	"strconv"
 	"strings"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
 )
 
 func handleComputerUseCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {

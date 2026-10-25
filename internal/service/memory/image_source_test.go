@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/backup"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/storage"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/backup"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestImageSourceSurvivesListAndManualEdit(t *testing.T) {

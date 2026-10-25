@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 type contextualToolExecutor interface {
@@ -37,13 +37,17 @@ func executeToolResult(ctx context.Context, tool ToolExecutor, call ToolCall) (c
 // Legacy memory executors retain their existing contract while migrating to
 // StructuredToolExecutor. This is never used for the builtin memory tool.
 func isMemoryWriteAction(call ToolCall, content string) bool {
+	return isMemoryWriteRequest(call) && content == "记忆已写入"
+}
+
+func isMemoryWriteRequest(call ToolCall) bool {
 	if call.Function.Name != "memory" {
 		return false
 	}
 	var params struct {
 		Action string `json:"action"`
 	}
-	return json.Unmarshal([]byte(call.Function.Arguments), &params) == nil && params.Action == "write" && content == "记忆已写入"
+	return json.Unmarshal([]byte(call.Function.Arguments), &params) == nil && params.Action == "write"
 }
 
 func looksLikeMessagePayload(content string) bool {
@@ -60,7 +64,7 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 	if !ok || run.SendHook == nil || result.MessagePayload == "" || len(result.MessagePayload) > MaxToolOutputBytes {
 		return content, false
 	}
-	if ctx.Err() != nil {
+	if runCanceled(ctx) {
 		return "消息发送取消：会话已取消", false
 	}
 	if run.SessionID != "" && run.Epoch > 0 && e.SessionManager != nil {
@@ -70,7 +74,13 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 			}
 		}
 	}
-	if err := run.SendHook(result.MessagePayload); err != nil {
+	if err := awaitDelivery(ctx, func() error {
+		err := run.SendHook(result.MessagePayload)
+		if err == nil && !run.Mock {
+			e.RecordBotMessage(hasStickerImage(result.MessagePayload))
+		}
+		return err
+	}); err != nil {
 		return fmt.Sprintf("消息发送失败：%v", err), false
 	}
 	return "消息已发送", true

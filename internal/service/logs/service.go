@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	logspkg "FrostAgent/internal/logs"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	logspkg "github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 // Service implements frostagent.v1.LogServiceHandler.
