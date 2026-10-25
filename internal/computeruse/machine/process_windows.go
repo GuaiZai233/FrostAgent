@@ -21,6 +21,11 @@ func prepareProcess(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Hide
 // Start suspended so user code cannot spawn children before job assignment.
 // The job is private, non-inheritable, and killed if the bridge crashes.
 func runProcessTree(ctx context.Context, cmd *exec.Cmd) error {
+	// WaitDelay starts when the direct child exits, not when its job becomes
+	// empty. Keep draining inherited output pipes for the whole process tree.
+	// The independent job monitor below still terminates every descendant on
+	// cancellation or timeout, which closes their pipe handles and unblocks Wait.
+	cmd.WaitDelay = 0
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return err

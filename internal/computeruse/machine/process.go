@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 )
 
 type boundedOutput struct {
@@ -40,7 +39,6 @@ func runShell(ctx context.Context, w Workspace, command string) (string, int, er
 	cmd := exec.CommandContext(ctx, w.Shell, shellArgs(command)...)
 	cmd.Dir = w.Path
 	cmd.Env = append([]string(nil), w.Environment...)
-	cmd.WaitDelay = 2 * time.Second
 	prepareProcess(cmd)
 	out := &boundedOutput{limit: 256 << 10}
 	cmd.Stdout, cmd.Stderr = out, out

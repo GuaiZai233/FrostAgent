@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"FrostAgent/internal/computeruse/bridge"
 )
@@ -121,7 +120,6 @@ func (p *Projects) gitCommand(ctx context.Context, dir string, args ...string) (
 	prepareProcess(cmd)
 	output := &boundedOutput{limit: 256 << 10}
 	cmd.Stdout, cmd.Stderr = output, output
-	cmd.WaitDelay = 2 * time.Second
 	err := runProcessTree(ctx, cmd)
 	return output.String(), err
 }
