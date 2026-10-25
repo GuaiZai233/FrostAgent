@@ -12,9 +12,33 @@
 | :--- | :--- | :--- |
 | `ws_url` | FrostAgent 实例专属 WebSocket 地址（必填） | 无 |
 | `http_base_url` | FrostAgent HTTP API 根地址；分容器部署时填写 AstrBot 可访问的地址 | `http://127.0.0.1:8080` |
+| `computer_use_adapter_token` | 可选的、该 Bot 专属的 computer-use 适配器握手令牌 | 空 |
 | `forward_all_group_messages` | 是否将所有群消息发送给 FrostAgent (用于群聊总结) | `true` |
 | `heartbeat_interval` | 心跳保活间隔 (秒) | `30` |
 | `reconnect_interval` | 异常断开重连间隔 (秒) | `5` |
+
+## Computer use 可信适配器连接
+
+从插件 0.1.5 起，可填写 `computer_use_adapter_token`，或使用环境变量
+`FROSTAGENT_COMPUTER_USE_ADAPTER_TOKEN`。这是 FrostAgent 为该 Bot 配置的独立高熵令牌，
+不是 VM 桥令牌、管理令牌或 QQ 身份。非空插件配置优先于环境变量；令牌格式为 32～256 位
+base64url 字符。
+
+令牌只通过 WebSocket 握手的 `Authorization: Bearer ...` 请求头发送，不进入 URL、
+消息事件或插件配置对象的 repr。配置后只接受经过正常证书验证的 `wss://`，
+或数字回环 IP（例如 `127.0.0.1` / `[::1]`）上的 `ws://`；
+`localhost` 名称、局域网明文 `ws://`、URL 凭据和查询参数均不接受。
+跨机器部署请配置 TLS，不能关闭证书校验。反向代理须保留该请求头，并且不能记录凭据。
+
+认证连接不跟随重定向，不使用 websockets 新版的自动环境代理，也不会写出底层握手头、
+帧内容或原始连接异常。插件按已安装 websockets 的明确签名选择
+`additional_headers` / `extra_headers`，不在连接失败后尝试另一种认证方式。
+升级到不支持这些安全边界的库版本会拒绝认证连接。
+
+未配置此令牌时，普通聊天沿用原连接方式，但不能由此获得 computer-use 权限。
+配置令牌也不代表任意聊天用户有权限：FrostAgent 仍逐次校验该 Bot 的主人、可信 QQ 私聊
+和任务状态；群聊、模拟聊天、主动回复不具备此入口。轮换令牌后请同步修改插件配置并重新
+加载插件，使新连接生效；旧连接不能继续沿用已撤销的认证。
 
 ## 群聊唤醒
 
