@@ -23,6 +23,8 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
   <a href="LICENCE">
     <img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License">
   </a>
+  <a href="https://pkg.go.dev/github.com/GuaiZai233/FrostAgent"><img src="https://pkg.go.dev/badge/github.com/GuaiZai233/FrostAgent.svg" alt="Go Reference"></a>
+  </a>
 </p>
 
 ## 快速开始
