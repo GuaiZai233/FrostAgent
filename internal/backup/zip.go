@@ -43,6 +43,10 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	computerUse, err := ExportComputerUse(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
@@ -55,6 +59,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"manifest.json", manifest},
 		{"setting.json", settings},
 		{"skills.json", skillPackages},
+		{"computer_use.json", computerUse},
 		{"memory.json", memories},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},

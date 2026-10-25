@@ -119,9 +119,10 @@ type Engine struct {
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
 	Provider               core.LLMProvider // LLM 供应商接口
-	BaseURL                string           // API 地址
-	APIKey                 string           // API 密钥
-	ModelName              string           // 模型名称
+	ComputerUse            core.ComputerUseCommands
+	BaseURL                string // API 地址
+	APIKey                 string // API 密钥
+	ModelName              string // 模型名称
 	ModelRouter            *modelrouter.Manager
 	VisionProvider         core.LLMProvider
 	SessionManager         *SessionManager // 会话上下文管理器

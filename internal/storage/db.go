@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 14
+const SchemaVersion = 15
 
 type Backend string
 
@@ -105,7 +105,7 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 	}
 	db := &DB{SQL: conn, Backend: backend}
 	if backend == SQLite {
-		for _, pragma := range []string{"PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL", "PRAGMA busy_timeout = 10000"} {
+		for _, pragma := range []string{"PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL", "PRAGMA synchronous = FULL", "PRAGMA busy_timeout = 10000"} {
 			if _, err = conn.ExecContext(ctx, pragma); err != nil {
 				conn.Close()
 				return nil, fmt.Errorf("configure SQLite: %w", err)

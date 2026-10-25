@@ -93,6 +93,7 @@ type wsConnection struct {
 	generation          string
 	stealer             *sticker.Stealer
 	mock                bool
+	computerProof       string
 	mockSessions        sync.Map
 	inFlight            sync.WaitGroup
 	closed              atomic.Bool

@@ -6,6 +6,7 @@ import './styles/variables.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/layout.css';
+import './styles/computer-use.css';
 
 import { themeManager, type ThemeMode } from './theme';
 import { router } from './router';
@@ -40,6 +41,11 @@ const mountActionsCatPage = lazyMount(() =>
 const mountSkillsPage = lazyMount(() =>
   import('./pages/skills').then(({ mountSkillsPage }) => mountSkillsPage),
 );
+const mountComputerUsePage = lazyMount(() =>
+  import('./pages/computer-use').then(
+    ({ mountComputerUsePage }) => mountComputerUsePage,
+  ),
+);
 
 // Initialize Theme
 themeManager.init();
@@ -54,6 +60,7 @@ const navItems = [
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/skills', label: 'Skills', iconName: 'sparkles' },
   { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
+  { path: '/computer-use', label: 'Computer Use', iconName: 'terminal' },
   { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
   { path: '/settings', label: '系统设置', iconName: 'settings' },
@@ -305,6 +312,7 @@ function initAppShell(): void {
     '/stickers',
     '/mcp',
     '/actionscat',
+    '/computer-use',
     '/chat',
     '/settings/backend',
     '/settings/backup',
@@ -319,6 +327,7 @@ function initAppShell(): void {
     mountStickersPage,
     mountMCPPage,
     mountActionsCatPage,
+    mountComputerUsePage,
     mountChatPage,
     mountBackendSettingsPage,
     mountBackupRestorePage,

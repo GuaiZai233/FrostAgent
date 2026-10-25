@@ -83,6 +83,38 @@ func (m *Manager) InstancePart(id, part string) (data []byte, mediaType, fileNam
 }
 
 func (m *Manager) ImportSettings(id string, data backup.Settings) error {
+	return m.importSettingsWithComputerUse(id, data, nil)
+}
+
+func (m *Manager) copySQLInstanceSettings(target, source string) error {
+	if target == source {
+		return fmt.Errorf("不能复用自身")
+	}
+	src, err := m.lookup(source)
+	if err != nil {
+		return err
+	}
+	if !src.op.TryRLock() {
+		return ErrBusy
+	}
+	if m.shutdown.Err() != nil {
+		src.op.RUnlock()
+		return ErrClosing
+	}
+	settings, err := backup.ExportSettings(m.db, src.id)
+	if err != nil {
+		src.op.RUnlock()
+		return err
+	}
+	metadata, err := backup.ExportComputerUse(m.db, src.id)
+	src.op.RUnlock()
+	if err != nil {
+		return err
+	}
+	return m.importSettingsWithComputerUse(target, settings, &metadata)
+}
+
+func (m *Manager) importSettingsWithComputerUse(id string, data backup.Settings, metadata *backup.ComputerUse) error {
 	if m.db == nil {
 		return fmt.Errorf("setting import requires SQL storage")
 	}
@@ -115,7 +147,12 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	if oldMCP != nil {
 		_ = oldMCP.Close()
 	}
-	importErr := backup.ImportSettings(m.db, i.id, data)
+	var importErr error
+	if metadata == nil {
+		importErr = backup.ImportSettings(m.db, i.id, data)
+	} else {
+		importErr = backup.ImportSettingsWithComputerUse(m.db, i.id, data, *metadata)
+	}
 	r, c, buildErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
 	if buildErr == nil && enabled && i.mcp != nil {
 		buildErr = i.mcp.SetRuntimeActive(true)
@@ -277,6 +314,11 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	}
 	if err := skills.NewStore(m.db, info.ID).ImportPackages(decoded.Skills); err != nil {
 		return Info{}, err
+	}
+	if decoded.ComputerUse != nil {
+		if err := backup.ImportComputerUse(m.db, info.ID, *decoded.ComputerUse); err != nil {
+			return Info{}, err
+		}
 	}
 	if err := backup.ImportSummaries(m.db, info.ID, decoded.Summaries); err != nil {
 		return Info{}, err

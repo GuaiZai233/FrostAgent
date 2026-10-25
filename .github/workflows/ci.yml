@@ -40,6 +40,10 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v
+      - name: Test PostgreSQL computer-use metadata and migration rollback
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/storage -run '^(TestPostgresComputerUseMetadata|TestPostgresComputerUseMigrationRollbackAndRetry)$' -count=1 -v
       - name: Test shared providers on PostgreSQL
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
@@ -117,6 +121,9 @@ jobs:
       - name: Run WebSocket heartbeat race regression
         run: go test -race ./internal/adapter/heartbeat/... -timeout 60s
 
+      - name: Run computer-use controller, bridge and machine race regressions
+        run: go test -race ./internal/computeruse/... -count=3 -timeout 120s
+
   windows-smoke:
     name: Windows Smoke
     runs-on: windows-latest
@@ -158,5 +165,14 @@ jobs:
       - name: Build cmd/app
         run: go build ./cmd/app
 
+      - name: Build Windows computer-use bridge
+        run: go build ./cmd/computer-bridge
+
       - name: Run tests
         run: go test ./...
+
+      - name: Run Windows computer-use machine and bridge race regressions
+        run: go test -race ./internal/computeruse/machine ./internal/computeruse/bridge -count=3 -timeout 180s
+
+      - name: Check VM deployment script syntax and boundaries
+        run: .\scripts\computer-use\Test-DeploymentScripts.ps1

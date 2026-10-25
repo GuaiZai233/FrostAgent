@@ -6,7 +6,9 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/computeruse"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -47,11 +49,12 @@ import (
 const version = "0.1.0"
 
 type Runtime struct {
-	Scope   *runtimescope.Scope
-	Engine  *llm.Engine
-	Handler http.Handler
-	Onebot  *onebot.Adapter
-	Astrbot *astrbot.Adapter
+	Scope       *runtimescope.Scope
+	Engine      *llm.Engine
+	Handler     http.Handler
+	Onebot      *onebot.Adapter
+	Astrbot     *astrbot.Adapter
+	ComputerUse *computeruse.Controller
 }
 
 func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB) (*Runtime, error) {
@@ -378,6 +381,37 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	mux := http.NewServeMux()
+	var computer *computeruse.Controller
+	if db != nil {
+		var err error
+		computer, err = computeruse.New(computeruse.Options{
+			DB: db, InstanceID: instanceID, AuditDir: filepath.Join(dir, "computer-use-audit"), Context: scope.Context(),
+			Provider: subagentProvider, Getenv: mcpGetenv,
+			OwnerAllowed: func(id string) bool {
+				if !admincmd.IsAdmin(id, scope) {
+					return false
+				}
+				if securityController != nil {
+					p, err := security.NewPrincipal("qq", id)
+					return err == nil && securityController.CheckAccess(p) == nil
+				}
+				return true
+			},
+			ModelDescription: func() string {
+				target, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadSubagent, modelrouter.Scope{})
+				if err != nil {
+					return "未配置 Subagent 模型路由"
+				}
+				return target.EndpointDisplayName + " / " + target.UpstreamModel + " (" + target.BaseURL + ")"
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("computer-use metadata unavailable")
+		}
+		engine.ComputerUse = computer
+		mux.Handle("/api/computer-use", computer)
+		mux.Handle("/api/computer-use/", computer)
+	}
 	if skillStore != nil {
 		mux.Handle("/api/skills", skillservice.New(skillStore, mcpGetenv))
 		mux.Handle("/api/skills/", skillservice.New(skillStore, mcpGetenv))
@@ -464,7 +498,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		logger.Clear()
 	}
 	success = true
-	return &Runtime{scope, engine, mux, ob, ab}, nil
+	return &Runtime{Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab, ComputerUse: computer}, nil
 }
 func (r *Runtime) StartEmbeddings() {
 	if r != nil && r.Engine != nil && r.Engine.MemoryEmbeddings != nil && r.Scope.Context().Err() == nil {
@@ -474,6 +508,9 @@ func (r *Runtime) StartEmbeddings() {
 
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
+	if r.ComputerUse != nil {
+		r.ComputerUse.Close()
+	}
 	r.Onebot.CloseConnections()
 	r.Astrbot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()

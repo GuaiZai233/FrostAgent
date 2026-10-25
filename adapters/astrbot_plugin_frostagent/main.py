@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import ipaddress
 import json
+import logging
 import os
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import urljoin, urlparse
@@ -22,6 +24,9 @@ from astrbot.api.star import Context, Star, register
 __all__ = ["FrostAgentAdapter", "StickerImage"]
 
 PLUGIN_DIR = Path(__file__).resolve().parent
+# Go strings.Fields uses Unicode White_Space, excluding Python's four extra
+# ASCII information separators. Keep the local command boundary identical.
+COMPUTER_USE_COMMAND = re.compile(r"\A[^\S\x1c-\x1f]*/computer(?:[^\S\x1c-\x1f]|\Z)")
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,7 @@ class Settings:
     forward_all_group_messages: bool
     heartbeat_interval: int
     reconnect_interval: int
+    computer_use_adapter_token: str = field(default="", repr=False)
 
 
 class WSURLConfigurationError(ValueError):
@@ -47,7 +53,11 @@ def load_settings(config: dict = None) -> Settings:
             "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
             "WebSocket address from the instance overview"
         )
-    parsed_ws_url = urlparse(ws_url)
+    try:
+        parsed_ws_url = urlparse(ws_url)
+        parsed_ws_url.port
+    except ValueError:
+        raise WSURLConfigurationError("FrostAgent ws_url is invalid") from None
     if (
         parsed_ws_url.scheme not in ("ws", "wss")
         or not parsed_ws_url.netloc
@@ -59,6 +69,25 @@ def load_settings(config: dict = None) -> Settings:
             "FrostAgent ws_url must use "
             "ws(s)://host/instances/<instance-id>/ws/astrbot"
         )
+    adapter_token = _adapter_token(config)
+    if adapter_token:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", adapter_token):
+            raise WSURLConfigurationError(
+                "computer_use_adapter_token must be a 32-256 character base64url token"
+            )
+        if parsed_ws_url.username is not None or parsed_ws_url.query or parsed_ws_url.fragment:
+            raise WSURLConfigurationError(
+                "computer-use ws_url must not contain credentials, query parameters or a fragment"
+            )
+        if parsed_ws_url.scheme == "ws":
+            try:
+                loopback = ipaddress.ip_address(parsed_ws_url.hostname or "").is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise WSURLConfigurationError(
+                    "computer-use adapter authentication requires wss:// or a numeric loopback ws:// address"
+                )
     return Settings(
         ws_url=ws_url,
         http_base_url=config.get("http_base_url")
@@ -66,7 +95,15 @@ def load_settings(config: dict = None) -> Settings:
         forward_all_group_messages=config.get("forward_all_group_messages", True),
         heartbeat_interval=int(config.get("heartbeat_interval", 30)),
         reconnect_interval=int(config.get("reconnect_interval", 5)),
+        computer_use_adapter_token=adapter_token,
     )
+
+
+def _adapter_token(config: dict) -> str:
+    return str(
+        config.get("computer_use_adapter_token")
+        or os.getenv("FROSTAGENT_COMPUTER_USE_ADAPTER_TOKEN", "")
+    ).strip()
 
 
 def _load_settings_unvalidated(config: dict = None) -> Settings:
@@ -87,7 +124,66 @@ def _load_settings_unvalidated(config: dict = None) -> Settings:
         forward_all_group_messages=config.get("forward_all_group_messages", True),
         heartbeat_interval=int(config.get("heartbeat_interval", 30)),
         reconnect_interval=int(config.get("reconnect_interval", 5)),
+        computer_use_adapter_token=_adapter_token(config),
     )
+
+
+_AUTHENTICATED_WS_LOGGER = logging.Logger("frostagent.authenticated_websocket")
+_AUTHENTICATED_WS_LOGGER.disabled = True
+_AUTHENTICATED_WS_LOGGER.propagate = False
+
+
+def _reject_authenticated_redirect(_uri: str) -> None:
+    raise WSURLConfigurationError("authenticated WebSocket redirects are not allowed")
+
+
+def open_websocket(settings: Settings) -> Any:
+    """Bind credentials to one configured endpoint without logging headers."""
+    token = settings.computer_use_adapter_token
+    if not token:
+        return websockets.connect(settings.ws_url)
+    try:
+        parameters = inspect.signature(websockets.connect).parameters
+    except (TypeError, ValueError):
+        raise WSURLConfigurationError(
+            "cannot identify the installed websockets authentication API"
+        ) from None
+    if "additional_headers" in parameters:
+        header_parameter = "additional_headers"
+    elif "extra_headers" in parameters:
+        header_parameter = "extra_headers"
+    else:
+        raise WSURLConfigurationError(
+            "the installed websockets API does not support authenticated headers"
+        )
+    if "logger" not in parameters:
+        raise WSURLConfigurationError(
+            "the installed websockets API cannot disable sensitive transport logging"
+        )
+    options = {
+        header_parameter: {"Authorization": f"Bearer {token}"},
+        "logger": _AUTHENTICATED_WS_LOGGER,
+    }
+    if "proxy" in parameters:
+        options["proxy"] = None
+    connection = websockets.connect(settings.ws_url, **options)
+    # Older websockets releases retain headers on redirects. Fence the
+    # connection before awaiting it; unknown redirect APIs fail closed.
+    if callable(getattr(connection, "process_redirect", None)):
+        connection.process_redirect = lambda exc: exc
+    elif callable(getattr(connection, "handle_redirect", None)):
+        connection.handle_redirect = _reject_authenticated_redirect
+    else:
+        raise WSURLConfigurationError(
+            "the installed websockets API cannot disable authenticated redirects"
+        )
+    return connection
+
+
+def _connection_error(settings: Settings, error: Exception) -> str:
+    if settings.computer_use_adapter_token:
+        return "连接或认证失败（详细信息已隐藏）"
+    return str(error)
 
 
 def is_ws_open(ws: Any) -> bool:
@@ -254,8 +350,11 @@ class FrostAgentWSClient:
     async def _connection_loop(self) -> None:
         while self._running:
             try:
-                logger.info(f"[frostagent-adapter] 正在连接 FrostAgent: {self.settings.ws_url}")
-                async with websockets.connect(self.settings.ws_url) as ws:
+                if self.settings.computer_use_adapter_token:
+                    logger.info("[frostagent-adapter] 正在连接 FrostAgent（已配置适配器认证）")
+                else:
+                    logger.info(f"[frostagent-adapter] 正在连接 FrostAgent: {self.settings.ws_url}")
+                async with open_websocket(self.settings) as ws:
                     self.ws = ws
                     logger.info("[frostagent-adapter] 已成功建立与 FrostAgent 的 WebSocket 连接")
                     async for raw_msg in ws:
@@ -264,7 +363,7 @@ class FrostAgentWSClient:
                 break
             except Exception as e:
                 logger.warning(
-                    f"[frostagent-adapter] WebSocket 连接异常: {e}，将在 {self.settings.reconnect_interval}s 后重试"
+                    f"[frostagent-adapter] WebSocket 连接异常: {_connection_error(self.settings, e)}，将在 {self.settings.reconnect_interval}s 后重试"
                 )
             finally:
                 self.ws = None
@@ -282,7 +381,7 @@ class FrostAgentWSClient:
                     }
                     await self.ws.send(json.dumps(heartbeat_payload))
                 except Exception as e:
-                    logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
+                    logger.debug(f"[frostagent-adapter] 发送心跳失败: {_connection_error(self.settings, e)}")
 
     async def send_event(self, event_data: dict[str, Any]) -> bool:
         if is_ws_open(self.ws):
@@ -303,7 +402,10 @@ class FrostAgentWSClient:
         try:
             action = json.loads(raw_msg)
         except Exception as e:
-            logger.error(f"[frostagent-adapter] 解析出站动作失败: {e}, 原始数据: {raw_msg}")
+            if getattr(self.settings, "computer_use_adapter_token", ""):
+                logger.error("[frostagent-adapter] 解析出站动作失败，认证连接内容已隐藏")
+            else:
+                logger.error(f"[frostagent-adapter] 解析出站动作失败: {e}, 原始数据: {raw_msg}")
             return
 
         if action.get("type") == "quote_lookup":
@@ -377,7 +479,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.4",
+    "0.1.5",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -407,6 +509,12 @@ class FrostAgentAdapter(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        is_computer_command = COMPUTER_USE_COMMAND.match(extract_message_text(event)) is not None
+        if is_computer_command:
+            # Reserve sensitive commands before configuration checks or any
+            # attachment/transport I/O. Backend authorization is still required;
+            # failure must never hand these instructions to the default LLM.
+            event.should_call_llm(True)
         if self._configuration_error:
             return
 
@@ -465,7 +573,7 @@ class FrostAgentAdapter(Star):
                     self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
-            frostagent_replied = is_poke
+            frostagent_replied = is_poke or is_computer_command
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)

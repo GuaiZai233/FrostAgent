@@ -13,7 +13,7 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 
 .DEFAULT_GOAL := build
 
-.PHONY: build build-api build-web build-web-dev check-web
+.PHONY: build build-api build-computer-bridge build-web build-web-dev check-web
 .PHONY: dev serve-api serve-agent serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
 .PHONY: lint test test-api test-web vet clean ci
@@ -24,6 +24,10 @@ build-api: build-web proto-generate-go
 	mkdir -p ./bin
 	$(GO) build -o ./bin/app ./cmd/app
 	$(GO) build -o ./bin/agent ./cmd/agent
+
+build-computer-bridge:
+	mkdir -p ./bin
+	CGO_ENABLED=0 GOOS=windows $(GO) build -o ./bin/computer-bridge.exe ./cmd/computer-bridge
 
 check-web: proto-generate-web
 	$(PNPM) --filter @frostagent/web run check

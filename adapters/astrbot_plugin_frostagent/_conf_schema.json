@@ -9,6 +9,11 @@
         "type": "string",
         "default": "http://127.0.0.1:8080"
     },
+    "computer_use_adapter_token": {
+        "description": "可选：从 FrostAgent computer use 配置取得该 Bot 的独立适配器令牌。仅用于 WebSocket 握手；启用后要求 wss:// 或数字回环 ws://。不要填写桥令牌或管理令牌。",
+        "type": "string",
+        "default": ""
+    },
     "forward_all_group_messages": {
         "description": "是否将所有群消息发送给 FrostAgent (用于群聊无感总结与记忆反思)",
         "type": "bool",
