@@ -104,6 +104,9 @@ func (d *DB) ComputerUseConfig(ctx context.Context, instanceID string) (Computer
 
 func (d *DB) SaveComputerUseConfig(ctx context.Context, instanceID string, config ComputerUseConfig) error {
 	if config.AdapterToken != "" {
+		if config.AdapterToken == config.Token {
+			return errors.New("computer-use adapter and bridge tokens must differ")
+		}
 		if len(config.AdapterToken) < 32 || len(config.AdapterToken) > 256 {
 			return errors.New("invalid computer-use adapter token")
 		}

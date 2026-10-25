@@ -132,6 +132,11 @@ func TestComputerUseConfigRejectsOversizedAdapterToken(t *testing.T) {
 	if err := db.SaveComputerUseConfig(context.Background(), "synthetic-instance", config); err == nil {
 		t.Fatal("oversized adapter credential was accepted")
 	}
+	config.AdapterToken = "synthetic-independent-adapter-credential"
+	config.Token = config.AdapterToken
+	if err := db.SaveComputerUseConfig(context.Background(), "synthetic-instance", config); err == nil {
+		t.Fatal("shared adapter and whole-machine credential was accepted")
+	}
 }
 
 func TestSQLiteComputerUseMetadata(t *testing.T) {

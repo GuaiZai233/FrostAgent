@@ -156,10 +156,28 @@ func TestEnvironmentPinsDirectoryLinks(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	env := pinnedEnvironment(map[string]string{"PATH": link})
+	want, err := filepath.EvalSymlinks(version)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, v := range env {
-		if strings.HasPrefix(strings.ToUpper(v), "PATH=") && v != "PATH="+version && v != "Path="+version {
+		if strings.HasPrefix(strings.ToUpper(v), "PATH=") && strings.SplitN(v, "=", 2)[1] != want {
 			t.Fatalf("mutable path not resolved: %s", v)
 		}
+	}
+}
+
+func TestWorktreeParentAliasCannotCreateOutsideRoot(t *testing.T) {
+	p, project := testProjects(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(p.root, ".frost-worktrees")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := p.Prepare(context.Background(), project.ID, "synthetic-task", 1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("external parent alias accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, project.ID)); !os.IsNotExist(err) {
+		t.Fatal("directory created outside root before rejection")
 	}
 }
 
@@ -174,8 +192,12 @@ func TestEnvironmentOmitsMutableVersionManagerProxies(t *testing.T) {
 		}
 	}
 	env := pinnedEnvironment(map[string]string{"PATH": strings.Join([]string{shim, rust, fixed}, string(os.PathListSeparator))})
+	want, err := filepath.EvalSymlinks(fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, v := range env {
-		if strings.HasPrefix(strings.ToUpper(v), "PATH=") && strings.TrimPrefix(v, strings.SplitN(v, "=", 2)[0]+"=") != fixed {
+		if strings.HasPrefix(strings.ToUpper(v), "PATH=") && strings.SplitN(v, "=", 2)[1] != want {
 			t.Fatalf("mutable version proxy inherited: %s", v)
 		}
 	}

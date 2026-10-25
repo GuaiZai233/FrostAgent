@@ -281,8 +281,15 @@ func (p *Projects) Prepare(ctx context.Context, projectID, taskID string, genera
 		return Workspace{}, ErrInvalid
 	}
 	parent := filepath.Join(p.root, ".frost-worktrees", projectID)
-	if err := os.MkdirAll(parent, 0700); err != nil {
-		return Workspace{}, err
+	root, err := os.OpenRoot(p.root)
+	if err != nil {
+		return Workspace{}, ErrInvalid
+	}
+	defer root.Close()
+	// Create through the root handle: a pre-existing junction/symlink must
+	// not create directories outside the configured root before validation.
+	if err := root.MkdirAll(filepath.Join(".frost-worktrees", projectID), 0700); err != nil {
+		return Workspace{}, ErrInvalid
 	}
 	resolvedParent, err := filepath.EvalSymlinks(parent)
 	if err != nil || !inside(p.root, resolvedParent) {

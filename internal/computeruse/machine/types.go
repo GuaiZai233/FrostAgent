@@ -45,13 +45,14 @@ type Params struct {
 }
 
 type Input struct {
-	Type   string `json:"type"`
-	X      int    `json:"x,omitempty"`
-	Y      int    `json:"y,omitempty"`
-	Button string `json:"button,omitempty"`
-	Key    uint16 `json:"key,omitempty"`
-	Text   string `json:"text,omitempty"`
-	Delta  int    `json:"delta,omitempty"`
+	Type      string   `json:"type"`
+	X         int      `json:"x,omitempty"`
+	Y         int      `json:"y,omitempty"`
+	Button    string   `json:"button,omitempty"`
+	Key       uint16   `json:"key,omitempty"`
+	Modifiers []string `json:"modifiers,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Delta     int      `json:"delta,omitempty"`
 }
 
 type Desktop interface {

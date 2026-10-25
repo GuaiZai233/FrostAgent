@@ -32,6 +32,7 @@ var deleteDC = gdi32.NewProc("DeleteDC")
 var inputDesktop = user32.NewProc("OpenInputDesktop")
 var closeDesktop = user32.NewProc("CloseDesktop")
 var threadDPI = user32.NewProc("SetThreadDpiAwarenessContext")
+var mapVirtualKey = user32.NewProc("MapVirtualKeyW")
 
 type windowsDesktop struct{}
 
@@ -163,15 +164,46 @@ func (windowsDesktop) Input(ctx context.Context, actions []Input) error {
 		return err
 	}
 	_, _, width, height := desktopBounds()
+	events, err := encodeInput(actions, width, height)
+	if err != nil {
+		return err
+	}
+	mapInputScans(events, func(key uint16) uint32 {
+		scan, _, _ := mapVirtualKey.Call(uintptr(key), 4)
+		return uint32(scan)
+	})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	n, _, _ := sendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), 40)
+	runtime.KeepAlive(events)
+	if n != uintptr(len(events)) {
+		// Only send releases for this planned batch; never retry input.
+		// This is best effort if UIPI/desktop changes blocked delivery.
+		releases := inputReleases(events)
+		if len(releases) > 0 {
+			_, _, _ = sendInput.Call(uintptr(len(releases)), uintptr(unsafe.Pointer(&releases[0])), 40)
+			runtime.KeepAlive(releases)
+		}
+		return errors.New("input delivery incomplete; outcome unknown")
+	}
+	return nil
+}
+
+// Encoding is pure: regression tests never touch a real desktop.
+func encodeInput(actions []Input, width, height int) ([][40]byte, error) {
 	if width <= 1 || height <= 1 {
-		return ErrInvalid
+		return nil, ErrInvalid
 	}
 	events := make([][40]byte, 0, len(actions)*2)
 	for _, action := range actions {
+		if len(action.Modifiers) != 0 && action.Type != "key" {
+			return nil, ErrInvalid
+		}
 		switch action.Type {
 		case "move", "click":
 			if action.X < 0 || action.Y < 0 || action.X >= width || action.Y >= height {
-				return ErrInvalid
+				return nil, ErrInvalid
 			}
 			events = append(events, mouse(int32(action.X*65535/(width-1)), int32(action.Y*65535/(height-1)), 0, 0x8000|0x4000|0x0001))
 			if action.Type == "click" {
@@ -183,41 +215,85 @@ func (windowsDesktop) Input(ctx context.Context, actions []Input) error {
 				case "middle":
 					down, up = 32, 64
 				default:
-					return ErrInvalid
+					return nil, ErrInvalid
 				}
 				events = append(events, mouse(0, 0, 0, down), mouse(0, 0, 0, up))
 			}
 		case "key":
-			if action.Key == 0 || action.Key > 255 {
-				return ErrInvalid
+			if action.Key == 0 || action.Key > 254 || len(action.Modifiers) > 4 {
+				return nil, ErrInvalid
+			}
+			modifiers := make([]uint16, 0, len(action.Modifiers))
+			for _, name := range action.Modifiers {
+				key := map[string]uint16{"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5b}[name]
+				if key == 0 || key == action.Key {
+					return nil, ErrInvalid
+				}
+				for _, previous := range modifiers {
+					if previous == key {
+						return nil, ErrInvalid
+					}
+				}
+				modifiers = append(modifiers, key)
+				events = append(events, keyboard(key, 0, 0))
 			}
 			events = append(events, keyboard(action.Key, 0, 0), keyboard(action.Key, 0, 2))
+			for i := len(modifiers) - 1; i >= 0; i-- {
+				events = append(events, keyboard(modifiers[i], 0, 2))
+			}
 		case "text":
 			for _, unit := range utf16.Encode([]rune(action.Text)) {
 				events = append(events, keyboard(0, unit, 4), keyboard(0, unit, 6))
 			}
 		case "scroll":
 			if action.Delta < -12000 || action.Delta > 12000 {
-				return ErrInvalid
+				return nil, ErrInvalid
 			}
 			events = append(events, mouse(0, 0, uint32(int32(action.Delta)), 0x0800))
 		default:
-			return ErrInvalid
+			return nil, ErrInvalid
 		}
 		if len(events) > 8192 {
-			return ErrInvalid
+			return nil, ErrInvalid
 		}
 	}
 	if len(events) == 0 {
-		return ErrInvalid
+		return nil, ErrInvalid
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	return events, nil
+}
+
+func inputReleases(events [][40]byte) [][40]byte {
+	var releases [][40]byte
+	for _, event := range events {
+		if binary.LittleEndian.Uint32(event[:4]) == 1 {
+			if binary.LittleEndian.Uint32(event[12:16])&2 != 0 {
+				releases = append(releases, event)
+			}
+		} else if binary.LittleEndian.Uint32(event[20:24])&(4|16|64) != 0 {
+			releases = append(releases, event)
+		}
 	}
-	n, _, _ := sendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), 40)
-	runtime.KeepAlive(events)
-	if n != uintptr(len(events)) {
-		return errors.New("input delivery incomplete; outcome unknown")
+	return releases
+}
+
+// Keep virtual-key semantics while supplying scan codes for applications
+// which inspect them. E0-prefixed keys require EXTENDEDKEY on down and up.
+func mapInputScans(events [][40]byte, lookup func(uint16) uint32) {
+	for i := range events {
+		event := &events[i]
+		if binary.LittleEndian.Uint32(event[:4]) != 1 {
+			continue
+		}
+		flags := binary.LittleEndian.Uint32(event[12:16])
+		if flags&4 != 0 {
+			continue
+		} // Unicode scan contains the UTF-16 unit.
+		scan := lookup(binary.LittleEndian.Uint16(event[8:10]))
+		binary.LittleEndian.PutUint16(event[10:12], uint16(scan&0xff))
+		if scan&0xff00 == 0xe000 {
+			flags |= 1
+		}
+		binary.LittleEndian.PutUint32(event[12:16], flags)
 	}
-	return nil
 }

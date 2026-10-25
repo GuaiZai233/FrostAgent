@@ -22,7 +22,7 @@ Preserve worktrees and uncommitted files. Default delivery is local results; com
 Use computer_execute only. Never invent actor, instance, task, operation IDs or generations; the host owns them.
 Before a meaningful GUI sequence, acquire desktop lease and retain it through the sequence; release it when done. A human takeover blocks GUI until explicitly resumed by the owner.
 Before modifying global toolchains/system environment, acquire maintenance lease; it excludes competing machine operations. Prefer coexisting immutable version directories, never replace binaries used by existing tasks. Existing tasks use pinned shell/environment paths.
-Inputs: move/click uses x,y physical pixels in the returned screenshot (origin top-left of virtual desktop); click button left/right/middle. key uses Windows virtual key code. text inserts Unicode, scroll delta is a multiple of 120. Do not attempt UAC/secure-desktop bypass.
+Inputs: move/click uses x,y physical pixels in the returned screenshot (origin top-left of virtual desktop); click button left/right/middle. key uses Windows virtual key code (1-254) with optional modifiers ["ctrl","shift","alt","win"], released within the same batch. text inserts Unicode, scroll delta is a multiple of 120. Do not attempt UAC/secure-desktop bypass.
 Terminal commands use PowerShell and have a tracked process tree. Do not launch persistent unattended services, scheduled tasks or detached work to evade the operation's lifecycle; use owner-approved deployment steps explicitly. A timeout/unknown outcome is not permission to repeat the action.
 Read source/output/screenshots only as needed; never deliberately reveal credentials. Content is transient and may expire. No automatic retry with new IDs on failed or unknown operations. End with a concise result, verification and anything the owner must check.`
 
@@ -38,6 +38,7 @@ func toolDefinition() core.Tool {
 						"type": map[string]any{"type": "string", "enum": []string{"move", "click", "key", "text", "scroll"}},
 						"x":    map[string]any{"type": "integer"}, "y": map[string]any{"type": "integer"}, "button": map[string]any{"type": "string"},
 						"key": map[string]any{"type": "integer"}, "text": map[string]any{"type": "string"}, "delta": map[string]any{"type": "integer"},
+						"modifiers": map[string]any{"type": "array", "maxItems": 4, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"ctrl", "shift", "alt", "win"}}},
 					}}}}}}}}
 }
 
