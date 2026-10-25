@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,16 @@ type Service struct {
 }
 
 func Open(config Config, executor Executor) (*Service, error) {
-	if !identifier.MatchString(config.InstanceID) || executor == nil ||
+	if executor == nil {
+		return nil, ErrInvalid
+	}
+	return OpenWithFactory(config, func() (Executor, error) { return executor, nil })
+}
+
+// OpenWithFactory acquires exclusive journal ownership before opening any
+// mutable machine registry. A second process must not pause the first's tasks.
+func OpenWithFactory(config Config, factory func() (Executor, error)) (*Service, error) {
+	if !identifier.MatchString(config.InstanceID) || factory == nil ||
 		!filepath.IsAbs(config.StateDir) || !filepath.IsAbs(config.AuditDir) ||
 		config.MaxConcurrent < 1 || config.MaxConcurrent > 64 {
 		return nil, ErrInvalid
@@ -66,6 +76,14 @@ func Open(config Config, executor Executor) (*Service, error) {
 	}
 	j, err := openJournal(stateDir, config.InstanceID)
 	if err != nil {
+		return nil, err
+	}
+	executor, err := factory()
+	if err != nil || executor == nil {
+		_ = j.close()
+		if err == nil {
+			err = ErrInvalid
+		}
 		return nil, err
 	}
 	return &Service{
@@ -136,7 +154,13 @@ func (s *Service) Submit(ctx context.Context, request Request) (Operation, error
 	if s.blocked != nil {
 		return Operation{}, s.blocked
 	}
-	if s.active >= s.maxConcurrent {
+	// Reserve bounded control headroom for stopping GUI input even while all
+	// terminal slots are occupied. Control operations still require audit.
+	limit := s.maxConcurrent
+	if request.Kind == "task.pause" || request.Kind == "desktop.takeover" {
+		limit += 16
+	}
+	if s.active >= limit {
 		return Operation{}, ErrCapacity
 	}
 	if validateRequest(s.executor, request) != nil {
@@ -267,6 +291,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.closeErr = s.journal.close()
+			if closer, ok := s.executor.(io.Closer); ok {
+				s.closeErr = errors.Join(s.closeErr, closer.Close())
+			}
 			s.closed = true
 			close(s.done)
 		}()

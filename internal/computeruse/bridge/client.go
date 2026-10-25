@@ -176,6 +176,22 @@ func (c *Client) exchange(ctx context.Context, method, id string, body []byte) (
 	}
 }
 
+// Lookup reconciles an operation without ever resubmitting it. The caller
+// supplies the durable identity/hash, not parameters reconstructed by a model.
+func (c *Client) Lookup(ctx context.Context, identity Identity, hash string) (Operation, error) {
+	if !identity.valid() || len(hash) != 64 {
+		return Operation{}, ErrInvalid
+	}
+	op, err, _ := c.exchange(ctx, http.MethodGet, identity.OperationID, nil)
+	if err != nil {
+		return Operation{}, err
+	}
+	if !op.valid() || op.Identity != identity || op.RequestHash != hash {
+		return Operation{}, ErrProtocol
+	}
+	return op, nil
+}
+
 func waitBackoff(ctx context.Context, duration time.Duration) error {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()

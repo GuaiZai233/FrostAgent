@@ -274,6 +274,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
 			c.mock = true
 		}
+		if a.engine != nil && a.engine.ComputerUse != nil && core.ComputerUseSecureTransport(r) {
+			c.computerProof = a.engine.ComputerUse.AuthenticateTransport(r.Header.Get("Authorization"))
+		}
 		a.registerConn(c)
 		if a.engine != nil && a.engine.Context().Err() != nil {
 			c.Close()
@@ -342,6 +345,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				if json.Unmarshal(message, &response) == nil {
 					c.acceptQuoteLookup(response)
 				}
+				continue
+			}
+			if handleComputerUseCommand(c, event, a.engine) {
 				continue
 			}
 

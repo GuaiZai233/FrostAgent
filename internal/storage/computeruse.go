@@ -21,6 +21,7 @@ type ComputerUseConfig struct {
 	Enabled            bool   `json:"enabled"`
 	BridgeURL          string `json:"bridge_url"`
 	Token              string `json:"token"`
+	AdapterToken       string `json:"adapter_token"`
 	CAPEM              string `json:"ca_pem"`
 	MaxConcurrent      int    `json:"max_concurrent"`
 	MaxSeconds         int    `json:"max_seconds"`
@@ -102,6 +103,16 @@ func (d *DB) ComputerUseConfig(ctx context.Context, instanceID string) (Computer
 }
 
 func (d *DB) SaveComputerUseConfig(ctx context.Context, instanceID string, config ComputerUseConfig) error {
+	if config.AdapterToken != "" {
+		if len(config.AdapterToken) < 32 || len(config.AdapterToken) > 256 {
+			return errors.New("invalid computer-use adapter token")
+		}
+		for _, r := range config.AdapterToken {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+				return errors.New("invalid computer-use adapter token")
+			}
+		}
+	}
 	if config.MaxConcurrent < 1 || config.MaxConcurrent > 64 || config.MaxSeconds < 1 ||
 		config.MaxSeconds > 86400 || config.MaxModelRounds < 1 || config.MaxModelRounds > 10000 ||
 		config.MaxToolCalls < 1 || config.MaxToolCalls > 100000 || config.AuditRetentionDays < 1 ||

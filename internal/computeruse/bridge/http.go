@@ -23,6 +23,15 @@ func NewHandler(service *Service, token string) (http.Handler, error) {
 	}
 	expected := sha256.Sum256([]byte("Bearer " + token))
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/operations/{id}/content", func(w http.ResponseWriter, r *http.Request) {
+		value, err := service.content(r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(value)
+	})
 	mux.HandleFunc("PUT /v1/operations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
@@ -84,6 +93,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status, code = http.StatusConflict, "operation_conflict"
 	case errors.Is(err, ErrNotFound):
 		status, code = http.StatusNotFound, "not_found"
+	case errors.Is(err, ErrContentExpired):
+		status, code = http.StatusGone, "content_expired"
 	case errors.Is(err, ErrCapacity):
 		status, code = http.StatusTooManyRequests, "capacity"
 	case errors.Is(err, ErrClosed):

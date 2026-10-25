@@ -6,10 +6,41 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
 const DefaultAuditRetentionDays = 7
+
+// Audit exposes metadata-only auditing to the FrostAgent control plane.
+type Audit struct {
+	mu     sync.Mutex
+	writer *fileAudit
+}
+
+func NewAudit(dir string, retentionDays int) (*Audit, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, ErrInvalid
+	}
+	if retentionDays == 0 {
+		retentionDays = DefaultAuditRetentionDays
+	}
+	if retentionDays < 1 || retentionDays > 3650 {
+		return nil, ErrInvalid
+	}
+	if err := ensureDataDirectory(dir); err != nil {
+		return nil, ErrAudit
+	}
+	return &Audit{writer: &fileAudit{dir: dir, retentionDays: retentionDays, now: time.Now}}, nil
+}
+func (a *Audit) Record(op Operation) error {
+	if !op.Identity.valid() || !validOutcome(op.Outcome) {
+		return ErrInvalid
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.writer.append(op)
+}
 
 type auditWriter interface {
 	append(Operation) error

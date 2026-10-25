@@ -1298,6 +1298,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	stream := strings.HasSuffix(path, "/StreamLogs")
 	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
 	isActionsCat := strings.HasPrefix(path, "/api/actionscat") || strings.HasPrefix(path, "/api/v1/actionscat")
+	isComputerUse := path == "/api/computer-use" || strings.HasPrefix(path, "/api/computer-use/")
 	if isActionsCat {
 		if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -1308,7 +1309,9 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			return
 		}
 	}
-	readOnly := r.Method == "GET" || isSendMessage || isActionsCat
+	// Computer-use owns its internal mutation locks. Keep the runtime alive
+	// with a shared lifecycle lock so a slow bridge call cannot block takeover.
+	readOnly := r.Method == "GET" || isSendMessage || isActionsCat || isComputerUse
 	method := path[strings.LastIndex(path, "/")+1:]
 	for _, prefix := range []string{"Get", "List", "Search", "Export", "Test"} {
 		if strings.HasPrefix(method, prefix) {
@@ -1358,12 +1361,12 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if (ws || stream || isSendMessage || isActionsCat) && rt.Scope.Context().Err() != nil {
+	if (ws || stream || isSendMessage || isActionsCat || isComputerUse) && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}
 	requestContext := r.Context()
-	if stream {
+	if stream || isComputerUse {
 		streamContext, streamCancel := context.WithCancel(requestContext)
 		stopRuntimeCancel := context.AfterFunc(rt.Scope.Context(), streamCancel)
 		defer func() {

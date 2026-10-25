@@ -102,6 +102,10 @@ func (r Request) fingerprint() (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
+// Fingerprint allows the control plane to persist a metadata-only pending
+// operation before dispatch, without retaining its source/output parameters.
+func (r Request) Fingerprint() (string, error) { return r.fingerprint() }
+
 func validOutcome(o Outcome) bool {
 	switch o.State {
 	case Accepted, Running:
