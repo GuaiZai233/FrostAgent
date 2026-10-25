@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	mcpcore "FrostAgent/internal/mcp"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	mcpcore "github.com/GuaiZai233/FrostAgent/internal/mcp"
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

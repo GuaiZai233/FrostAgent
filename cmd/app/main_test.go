@@ -1,10 +1,10 @@
 package main
 
 import (
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"connectrpc.com/connect"
 	"context"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"io"
 	"net"
 	"net/http"

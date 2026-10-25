@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 )
 
 func TestMatcherToolPreservesPatternWhitespace(t *testing.T) {

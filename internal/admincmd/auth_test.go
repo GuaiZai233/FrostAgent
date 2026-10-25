@@ -1,8 +1,8 @@
 package admincmd
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"path/filepath"
 	"testing"
 )

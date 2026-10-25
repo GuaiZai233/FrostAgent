@@ -1,11 +1,11 @@
 package onebot
 
 import (
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/runtimescope"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"strings"
 	"time"
 	"unicode"

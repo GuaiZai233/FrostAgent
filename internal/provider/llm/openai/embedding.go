@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func (c *Client) Embed(ctx context.Context, req core.EmbeddingRequest) (*core.EmbeddingResponse, error) {

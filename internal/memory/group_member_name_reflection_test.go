@@ -1,8 +1,8 @@
 package memory
 
 import (
-	"FrostAgent/internal/core"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"testing"
 	"time"

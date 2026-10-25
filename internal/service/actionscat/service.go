@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	client "FrostAgent/internal/actionscat"
-	mcpsvc "FrostAgent/internal/service/mcp"
+	client "github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 )
 
 // Service exposes an HTTP API for the FrostAgent frontend and internal caller to manage ActionsCat.

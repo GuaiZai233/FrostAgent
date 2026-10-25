@@ -1,9 +1,9 @@
 package instance
 
 import (
-	"FrostAgent/internal/envinject"
-	settingssvc "FrostAgent/internal/service/settings"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	settingssvc "github.com/GuaiZai233/FrostAgent/internal/service/settings"
 	"net/http"
 	"strings"
 )

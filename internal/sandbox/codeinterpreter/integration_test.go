@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/sandbox/codeinterpreter"
-	"FrostAgent/internal/tools"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox/codeinterpreter"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
 
 func TestRealGatewayIntegration(t *testing.T) {

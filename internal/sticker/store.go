@@ -1,11 +1,11 @@
 package sticker
 
 import (
-	"FrostAgent/internal/storage"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"sync"

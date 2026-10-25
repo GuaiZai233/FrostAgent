@@ -1,14 +1,14 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/onebot"
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/adapter/quotetrace"
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/quotetrace"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"sync/atomic"
 	"time"

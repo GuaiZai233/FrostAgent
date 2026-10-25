@@ -1,12 +1,12 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 // deliverStickerPair prepares both tools before any platform send. A single

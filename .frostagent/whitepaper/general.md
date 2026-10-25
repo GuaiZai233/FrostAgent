@@ -25,6 +25,10 @@
 
 ## FrostAgent 的组成
 
+### Go 模块与包路径
+
+Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部 import 均使用该前缀，目录结构保持不变。`buf.gen.yaml` 的 `go_package_prefix` 使用 `github.com/GuaiZai233/FrostAgent/gen/proto`，确保重新生成的 Protobuf / ConnectRPC 代码引用同一模块。Dockerfile 的 `-X` 链接器参数同样使用完整模块包路径，向 `internal/instanceconfig` 注入容器监听与管理回环限制的默认值。
+
 ### Docker 部署
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。

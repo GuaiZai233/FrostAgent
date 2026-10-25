@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
 )
 
 type activeSkill struct {

@@ -1,15 +1,15 @@
 package security
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/storage"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"regexp"

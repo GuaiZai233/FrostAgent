@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 const syntheticStartupError = "SQL logic error: no such column: max_input_tokens (1)"

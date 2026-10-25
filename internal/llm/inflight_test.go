@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 func TestRunCanceledOptionalTurn(t *testing.T) {

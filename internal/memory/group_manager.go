@@ -1,12 +1,12 @@
 package memory
 
 import (
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/storage"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"sync"

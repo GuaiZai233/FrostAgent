@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestClientDisabledBlocksRequestsAndResumes(t *testing.T) {

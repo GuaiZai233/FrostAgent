@@ -1,7 +1,7 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/tools"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"testing"
 )
 

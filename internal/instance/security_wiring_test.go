@@ -1,13 +1,13 @@
 ﻿package instance
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/security"
 	"context"
 	"errors"
-	"os"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"os"
 	"strings"
 	"sync"
 	"testing"

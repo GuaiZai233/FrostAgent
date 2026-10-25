@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 )
 
 // llmErrorReplyLimiter is shared by all connections of one adapter instance.

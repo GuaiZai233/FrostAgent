@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
 func TestGroupCompactor_RequestSeparatesInstructionsFromConversation(t *testing.T) {

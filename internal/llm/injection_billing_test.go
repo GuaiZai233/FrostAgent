@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestInjectionBillingSettlesLateSuccessAndAggregatesReceipt(t *testing.T) {

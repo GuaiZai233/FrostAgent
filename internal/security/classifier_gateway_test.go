@@ -1,9 +1,9 @@
 package security
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"sync"
 	"testing"

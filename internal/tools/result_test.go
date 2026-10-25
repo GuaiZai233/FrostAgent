@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/memory"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"path/filepath"
 	"testing"
 )

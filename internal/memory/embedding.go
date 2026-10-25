@@ -16,12 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/provider/llm/openai"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 var ErrEmbeddingNotReady = errors.New("向量索引尚未就绪")

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 )
 
 func TestManager_ActionsCatControlPlaneAuth(t *testing.T) {

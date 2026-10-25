@@ -1,6 +1,6 @@
 ﻿package eval
 
-import "FrostAgent/internal/security"
+import "github.com/GuaiZai233/FrostAgent/internal/security"
 
 type CorpusCategory string
 

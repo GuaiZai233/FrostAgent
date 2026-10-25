@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 type contextualToolExecutor interface {

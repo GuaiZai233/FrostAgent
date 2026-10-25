@@ -1,9 +1,9 @@
 package llm
 
 import (
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"sync"
 	"time"
 )

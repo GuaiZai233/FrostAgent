@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/security"
 	"context"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
 	"testing"
 )

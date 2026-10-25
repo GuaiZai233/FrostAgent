@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"FrostAgent/internal/sticker"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
 	"strings"
 	"testing"

@@ -9,9 +9,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 func TestDialogueService_CRUD(t *testing.T) {

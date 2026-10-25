@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"sync"
 )

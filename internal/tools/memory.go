@@ -1,16 +1,16 @@
 package tools
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"time"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 )
 
 // NewMemoryTool creates a tool that manages the current request's memory owner.

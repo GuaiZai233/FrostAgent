@@ -1,9 +1,9 @@
 package backup
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	settingsservice "FrostAgent/internal/service/settings"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	settingsservice "github.com/GuaiZai233/FrostAgent/internal/service/settings"
 )
 
 // GlobalSettings is separate from the per-instance setting.json contract.

@@ -1,11 +1,11 @@
 ﻿package security
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"time"
 )

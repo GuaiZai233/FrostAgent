@@ -1,15 +1,15 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net"
 	"strings"
 	"testing"

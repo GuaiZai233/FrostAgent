@@ -1,16 +1,16 @@
 package logs
 
 import (
-	"FrostAgent/internal/logs"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 )
 
 func TestLogSourceSelectionAndClearAreExclusive(t *testing.T) {

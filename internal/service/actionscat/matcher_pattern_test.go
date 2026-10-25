@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	actclient "FrostAgent/internal/actionscat"
+	actclient "github.com/GuaiZai233/FrostAgent/internal/actionscat"
 )
 
 func TestMatcherProxyPreservesPatternWhitespace(t *testing.T) {

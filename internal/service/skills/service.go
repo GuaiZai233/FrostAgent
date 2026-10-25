@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	mcpsvc "FrostAgent/internal/service/mcp"
-	skillstore "FrostAgent/internal/skills"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	skillstore "github.com/GuaiZai233/FrostAgent/internal/skills"
 )
 
 type Service struct {

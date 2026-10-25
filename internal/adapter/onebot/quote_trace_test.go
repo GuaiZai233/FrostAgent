@@ -1,11 +1,11 @@
 package onebot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/security"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
 	"testing"
 	"time"

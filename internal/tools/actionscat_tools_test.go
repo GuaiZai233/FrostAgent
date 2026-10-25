@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 func newTestScope(t *testing.T, env map[string]string) *runtimescope.Scope {

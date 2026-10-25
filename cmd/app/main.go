@@ -1,13 +1,13 @@
 package main
 
 import (
-	"FrostAgent/internal/frontend"
-	"FrostAgent/internal/instance"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/logs"
-	mcpsvc "FrostAgent/internal/service/mcp"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/frontend"
+	"github.com/GuaiZai233/FrostAgent/internal/instance"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"maps"
 	"net/http"
 	"os"

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/runtimescope"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 
 	"connectrpc.com/connect"
 )

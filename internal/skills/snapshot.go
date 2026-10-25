@@ -1,6 +1,6 @@
 package skills
 
-import "FrostAgent/internal/storage"
+import "github.com/GuaiZai233/FrostAgent/internal/storage"
 
 // Snapshot contains metadata and only the requested instruction bodies, never
 // resource bytes. Its token is valid only for the originating instance state.

@@ -9,9 +9,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
 )
 
 func SkillTools(store *skills.Store, backend sandbox.Backend, sessions *llm.SessionManager) []Tool {

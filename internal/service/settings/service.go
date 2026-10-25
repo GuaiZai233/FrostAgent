@@ -1,11 +1,11 @@
 package settings
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/sandbox"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"maps"
 	"math"
 	"os"
@@ -18,7 +18,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/joho/godotenv"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 )
 
 // envEntry defines metadata for a known environment variable.

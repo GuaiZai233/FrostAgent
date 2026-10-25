@@ -1,8 +1,8 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/gorilla/websocket"
 	"strings"
 	"testing"

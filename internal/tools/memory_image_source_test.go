@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
 
 func TestMemoryToolImageWriteUsesTrustedAdapterSource(t *testing.T) {

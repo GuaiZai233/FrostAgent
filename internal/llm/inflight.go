@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 func (b *BillingRunState) NextCall() uint64 {

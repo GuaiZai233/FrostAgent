@@ -1,18 +1,18 @@
 package botstatus
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"sort"
 	"strings"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 
 	"connectrpc.com/connect"
 )

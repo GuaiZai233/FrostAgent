@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 var ErrBanUserSuccess = security.ErrBanUserSuccess

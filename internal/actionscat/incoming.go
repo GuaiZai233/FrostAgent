@@ -1,8 +1,8 @@
 package actionscat
 
 import (
-	"FrostAgent/internal/core"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"time"
 )

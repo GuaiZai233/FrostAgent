@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 )
 
 type injectionProvider func(context.Context, core.ChatRequest) (*core.ChatResponse, error)

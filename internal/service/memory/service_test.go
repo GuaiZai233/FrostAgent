@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/storage"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 
 	"connectrpc.com/connect"
 )

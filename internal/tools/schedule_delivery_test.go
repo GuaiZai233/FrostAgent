@@ -1,12 +1,12 @@
 package tools
 
 import (
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/modelrouter"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"net/http"
 	"net/http/httptest"
 	"reflect"

@@ -1,11 +1,11 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
 	"testing"
 	"time"

@@ -1,10 +1,10 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/service/messages"
 	"bytes"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/service/messages"
 	"net/http"
 	"net/http/httptest"
 	"testing"

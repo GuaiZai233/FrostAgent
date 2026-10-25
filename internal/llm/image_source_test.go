@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
 
 func TestStagedImageDescriptionBindsToExactUserSlot(t *testing.T) {

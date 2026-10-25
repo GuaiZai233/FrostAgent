@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"sync"
 )
 

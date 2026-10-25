@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 // ReferencedConfiguration includes only catalog records needed by this instance.

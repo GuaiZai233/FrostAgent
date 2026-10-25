@@ -1,11 +1,11 @@
 package dialogue
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/storage"
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func LoadExamplesSQL(db *storage.DB, instanceID string) ([]llm.DialogueExample, error) {

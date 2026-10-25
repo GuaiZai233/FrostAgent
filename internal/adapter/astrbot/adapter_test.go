@@ -1,12 +1,12 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/sticker"
 	"context"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
 	"testing"
 	"time"
