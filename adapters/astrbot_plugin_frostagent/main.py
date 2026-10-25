@@ -24,6 +24,9 @@ from astrbot.api.star import Context, Star, register
 __all__ = ["FrostAgentAdapter", "StickerImage"]
 
 PLUGIN_DIR = Path(__file__).resolve().parent
+# Go strings.Fields uses Unicode White_Space, excluding Python's four extra
+# ASCII information separators. Keep the local command boundary identical.
+COMPUTER_USE_COMMAND = re.compile(r"\A[^\S\x1c-\x1f]*/computer(?:[^\S\x1c-\x1f]|\Z)")
 
 
 @dataclass(frozen=True)
@@ -506,6 +509,12 @@ class FrostAgentAdapter(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        is_computer_command = COMPUTER_USE_COMMAND.match(extract_message_text(event)) is not None
+        if is_computer_command:
+            # Reserve sensitive commands before configuration checks or any
+            # attachment/transport I/O. Backend authorization is still required;
+            # failure must never hand these instructions to the default LLM.
+            event.should_call_llm(True)
         if self._configuration_error:
             return
 
@@ -564,7 +573,7 @@ class FrostAgentAdapter(Star):
                     self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
-            frostagent_replied = is_poke
+            frostagent_replied = is_poke or is_computer_command
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)
