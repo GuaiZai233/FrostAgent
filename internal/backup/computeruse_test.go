@@ -37,6 +37,7 @@ func seedComputerUseBackup(t *testing.T, db *storage.DB, id string) storage.Comp
 	ctx := context.Background()
 	config := storage.DefaultComputerUseConfig()
 	config.Enabled, config.Token, config.CAPEM = true, "synthetic-bridge-secret", "synthetic-private-ca"
+	config.AdapterToken = "synthetic-adapter-secret-for-testing-only"
 	config.BridgeURL = "https://synthetic-bridge.invalid"
 	if err := db.SaveComputerUseConfig(ctx, id, config); err != nil {
 		t.Fatal(err)
@@ -114,7 +115,7 @@ func TestComputerUseInstanceZIPExportsMetadataOnlyAndRestoresPaused(t *testing.T
 	}
 	files := readComputerUseZIP(t, archive)
 	for _, member := range files {
-		for _, secret := range []string{"synthetic-bridge-secret", "synthetic-private-ca", "synthetic-private-path"} {
+		for _, secret := range []string{"synthetic-bridge-secret", "synthetic-adapter-secret-for-testing-only", "synthetic-private-ca", "synthetic-private-path"} {
 			if bytes.Contains(member, []byte(secret)) {
 				t.Fatalf("archive member contains private config: %s", secret)
 			}
@@ -132,7 +133,7 @@ func TestComputerUseInstanceZIPExportsMetadataOnlyAndRestoresPaused(t *testing.T
 		t.Fatal(err)
 	}
 	config, err := db.ComputerUseConfig(context.Background(), "synthetic-target")
-	if err != nil || config.Enabled || config.Token != "" || config.BridgeURL != "" || config.CAPEM != "" {
+	if err != nil || config.Enabled || config.Token != "" || config.AdapterToken != "" || config.BridgeURL != "" || config.CAPEM != "" {
 		t.Fatalf("restored credentials or live binding: %+v %v", config, err)
 	}
 	tasks, err := db.ComputerUseTasks(context.Background(), "synthetic-target")

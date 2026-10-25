@@ -44,6 +44,7 @@ func exerciseComputerUseMetadata(t *testing.T, db *DB) {
 		t.Fatalf("unexpected default config: %+v, %v", config, err)
 	}
 	config.BridgeURL, config.Token, config.Enabled = "https://bridge.invalid:9443", "synthetic-secret", true
+	config.AdapterToken = "synthetic-adapter-secret-for-testing-only"
 	if err := db.SaveComputerUseConfig(ctx, "synthetic-instance", config); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func exerciseComputerUseMetadata(t *testing.T, db *DB) {
 		t.Fatalf("cross-instance task leak: %v", err)
 	}
 	otherConfig, err := db.ComputerUseConfig(ctx, "synthetic-other")
-	if err != nil || otherConfig.Token != "" || otherConfig.Enabled {
+	if err != nil || otherConfig.Token != "" || otherConfig.AdapterToken != "" || otherConfig.Enabled {
 		t.Fatalf("cross-instance credentials leak: %v", err)
 	}
 	if err := db.DeleteComputerUseProject(ctx, "synthetic-other", project.ID); err != nil {
@@ -116,6 +117,20 @@ func exerciseComputerUseMetadata(t *testing.T, db *DB) {
 		if err := db.SQL.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("instance metadata not cascaded: %s count=%d err=%v", table, count, err)
 		}
+	}
+}
+
+func TestComputerUseConfigRejectsOversizedAdapterToken(t *testing.T) {
+	db, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	computerUseFixture(t, db, "synthetic-instance")
+	config := DefaultComputerUseConfig()
+	config.AdapterToken = strings.Repeat("a", 257)
+	if err := db.SaveComputerUseConfig(context.Background(), "synthetic-instance", config); err == nil {
+		t.Fatal("oversized adapter credential was accepted")
 	}
 }
 
