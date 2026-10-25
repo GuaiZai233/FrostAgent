@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -105,5 +106,84 @@ func TestOrdinaryChatKeepsContentLogging(t *testing.T) {
 		if !strings.Contains(string(raw), source) || !strings.Contains(string(raw), response) {
 			t.Fatalf("ordinary logging changed: %s", raw)
 		}
+	}
+}
+
+type trackedSensitiveBody struct {
+	io.Reader
+	readBytes int
+	closed    bool
+}
+
+func (b *trackedSensitiveBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	b.readBytes += n
+	return n, err
+}
+
+func (b *trackedSensitiveBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestSensitiveChatBoundsSuccessAndHTTPErrorResponses(t *testing.T) {
+	const secret = "synthetic-sensitive-response-content"
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			body := &trackedSensitiveBody{Reader: strings.NewReader(secret + strings.Repeat("x", maxSensitiveResponseBytes*2))}
+			client := NewClient("https://synthetic.invalid/v1", "")
+			client.Logger = logs.New("synthetic-instance", "Synthetic", 100)
+			client.HTTPClient.Transport = sensitiveRoundTripper(func(*http.Request) (*http.Response, error) {
+				// The streaming limit must not trust an upstream Content-Length.
+				return &http.Response{StatusCode: status, ContentLength: 1, Body: body}, nil
+			})
+			response, err := client.Chat(context.Background(), core.ChatRequest{Sensitive: true})
+			if response != nil || !errors.Is(err, errSensitiveResponseTooLarge) {
+				t.Fatalf("oversized response not rejected: response=%+v error=%v", response, err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatal("oversized response content leaked through the error")
+			}
+			if body.readBytes != maxSensitiveResponseBytes+1 || !body.closed {
+				t.Fatalf("response wasn't bounded and closed: read=%d closed=%v", body.readBytes, body.closed)
+			}
+			if entries := client.Logger.Snapshot(); len(entries) != 0 {
+				t.Fatalf("oversized sensitive response was logged: %+v", entries)
+			}
+		})
+	}
+}
+
+func TestSensitiveChatAcceptsResponseExactlyAtLimit(t *testing.T) {
+	const payload = `{"choices":[{"message":{"role":"assistant","content":"synthetic-result"}}]}`
+	body := &trackedSensitiveBody{Reader: strings.NewReader(payload + strings.Repeat(" ", maxSensitiveResponseBytes-len(payload)))}
+	client := NewClient("https://synthetic.invalid/v1", "")
+	client.Logger = logs.New("synthetic-instance", "Synthetic", 100)
+	client.HTTPClient.Transport = sensitiveRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+	})
+	response, err := client.Chat(context.Background(), core.ChatRequest{Sensitive: true})
+	if err != nil || response == nil || response.Message.Content != "synthetic-result" {
+		t.Fatalf("response at limit failed: %+v %v", response, err)
+	}
+	if body.readBytes != maxSensitiveResponseBytes || !body.closed || len(client.Logger.Snapshot()) != 0 {
+		t.Fatal("response at limit did not preserve body lifecycle/privacy")
+	}
+}
+
+func TestOrdinaryChatResponseRemainsUnboundedBySensitiveLimit(t *testing.T) {
+	const payload = `{"choices":[{"message":{"role":"assistant","content":"synthetic-result"}}]}`
+	body := &trackedSensitiveBody{Reader: strings.NewReader(payload + strings.Repeat(" ", maxSensitiveResponseBytes+1))}
+	client := NewClient("https://synthetic.invalid/v1", "")
+	client.Logger = logs.New("synthetic-instance", "Synthetic", 100)
+	client.HTTPClient.Transport = sensitiveRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+	})
+	response, err := client.Chat(context.Background(), core.ChatRequest{})
+	if err != nil || response == nil || response.Message.Content != "synthetic-result" {
+		t.Fatalf("ordinary large response behavior changed: %+v %v", response, err)
+	}
+	if body.readBytes <= maxSensitiveResponseBytes || !body.closed || len(client.Logger.Snapshot()) == 0 {
+		t.Fatal("ordinary response lifecycle or logging changed")
 	}
 }

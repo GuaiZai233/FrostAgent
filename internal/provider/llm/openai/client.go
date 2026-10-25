@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +79,10 @@ func (e *HTTPError) Error() string {
 }
 
 const defaultHTTPTimeout = 120 * time.Second
+
+const maxSensitiveResponseBytes = 8 << 20
+
+var errSensitiveResponseTooLarge = errors.New("sensitive LLM response exceeds size limit")
 
 const (
 	staySilentFallbackToolName   = "stay_silent"
@@ -183,14 +188,17 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := readChatResponseBody(resp.Body, req.Sensitive)
+		if req.Sensitive && readErr != nil {
+			return nil, readErr
+		}
 		if !req.Sensitive {
 			c.log().Error(logs.HTTP, fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(body)), req.TraceID)
 		}
 		return nil, &HTTPError{Status: resp.Status, StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readChatResponseBody(resp.Body, req.Sensitive)
 	if err != nil {
 		if !req.Sensitive {
 			c.log().Error(logs.HTTP, fmt.Sprintf("failed to read response body: %v", err), req.TraceID)
@@ -275,6 +283,22 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		Message: coreMsg,
 		Usage:   usage,
 	}, nil
+}
+
+// Privileged work sessions have a bounded transient-content budget, including
+// upstream error responses. Ordinary chat retains its existing read behavior.
+func readChatResponseBody(body io.Reader, sensitive bool) ([]byte, error) {
+	if !sensitive {
+		return io.ReadAll(body)
+	}
+	content, err := io.ReadAll(io.LimitReader(body, maxSensitiveResponseBytes+1))
+	if len(content) > maxSensitiveResponseBytes {
+		return nil, errSensitiveResponseTooLarge
+	}
+	if err != nil {
+		return nil, errors.New("failed to read sensitive LLM response")
+	}
+	return content, nil
 }
 
 func (c *Client) log() *logs.Store {
