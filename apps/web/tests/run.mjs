@@ -9,6 +9,7 @@ const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
   'overview-enhancements.test.ts',
+  'overview-page.test.ts',
   'actionscat-disabled.test.ts',
   'actionscat-page.test.ts',
   'model-router-editor.test.ts',

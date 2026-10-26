@@ -16,9 +16,13 @@
   overflow-wrap: anywhere;
 }
 
+.overview-tool-card > p {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
 .overview-tool-preview > p {
   max-height: 6rem;
-  overflow-y: auto;
 }
 
 .overview-tools-more {
@@ -44,6 +48,7 @@
 
 .overview-resource {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 0.75rem;
   text-decoration: none;
