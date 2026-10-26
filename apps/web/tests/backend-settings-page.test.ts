@@ -11,6 +11,8 @@ class Element {
   private html = '';
   private children = new Map<string, Element>();
   private rows: Element[] = [];
+  private groupButtons: Element[] = [];
+  private closeButtons: Element[] = [];
   private listeners = new Map<string, (event: unknown) => void>();
   private inputValue = '';
   get value() { return this.inputValue; }
@@ -31,10 +33,18 @@ class Element {
   max = '';
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
+  closed = false;
   set innerHTML(html: string) {
     this.html = html;
     this.children.clear();
     this.rows = [];
+    this.groupButtons = [...html.matchAll(/<button\b[^>]*data-group-(probability|id)="([^"]+)"[^>]*>/g)].map((match) => {
+      const button = new Element();
+      button.tag = 'button';
+      button.dataset[match[1] === 'id' ? 'groupId' : 'groupProbability'] = match[2];
+      return button;
+    });
+    this.closeButtons = [...html.matchAll(/<button\b[^>]*class="[^"]*dialog-close-btn[^"]*"[^>]*>/g)].map(() => new Element());
     for (const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
       const child = new Element();
       child.tag = match[1];
@@ -76,16 +86,24 @@ class Element {
     const key = selector.match(/data-setting-input="([^"]+)"/)?.[1];
     return key ? this.all().find((input) => input.type === 'number' && input.dataset.settingInput === key) ?? null : null;
   }
-  private all(): Element[] { return [...this.children.values()].flatMap((child) => [child, ...child.all()]); }
+  private all(): Element[] { return [...this.children.values()].flatMap((child) => [child, ...child.all()]).concat(this.groupButtons); }
   querySelectorAll(selector: string): Element[] {
+    if (selector === '[data-group-probability]') return this.groupButtons.filter((button) => button.dataset.groupProbability);
+    if (selector === '[data-group-id]') return this.groupButtons.filter((button) => button.dataset.groupId);
+    if (selector === '.dialog-close-btn') return this.closeButtons;
     if (selector === '[data-setting-row]') return this.rows;
     if (selector === 'input, select, button') return this.all().filter((child) => ['input', 'select', 'button'].includes(child.tag));
     if (selector === 'input[type="number"]') return this.all().filter((child) => child.type === 'number');
     return [];
   }
   addEventListener(name: string, listener: (event: unknown) => void) { this.listeners.set(name, listener); }
-  emit(name: string) { if (!this.disabled) this.listeners.get(name)?.({ currentTarget: this, preventDefault() {} }); }
+  emit(name: string, extra = {}) { if (!this.disabled) this.listeners.get(name)?.({ currentTarget: this, preventDefault() {}, ...extra }); }
   click() { this.emit('click'); }
+  focus() {}
+  select() {}
+  showModal() {}
+  close() { this.closed = true; }
+  remove() {}
   reportValidity() {
     if (this.disabled) return true;
     if (this.validity.badInput) return false;
@@ -99,7 +117,11 @@ class Element {
 const errors: string[] = [];
 toast.error = (message) => { errors.push(message); };
 toast.success = () => {};
-Object.assign(globalThis, { window: new EventTarget(), document: { querySelectorAll: () => [] } });
+const dialogs: Element[] = [];
+Object.assign(globalThis, { window: new EventTarget(), document: {
+  querySelectorAll: () => [], body: { appendChild() {} },
+  createElement: () => { const dialog = new Element(); dialogs.push(dialog); return dialog; },
+} });
 Object.assign(globalThis, { HTMLInputElement: Element, HTMLSelectElement: class {} });
 instanceState.select({ id: 'a1b2c3d4', name: 'test', enabled: false, created_at: '' });
 let values = [
@@ -458,6 +480,96 @@ el('poke-cooldown').emit('input');
 el('settings-draft-save').click();
 await settle();
 assert.equal(writes.length, beforeInvalidPoke, 'invalid cooldown blocks save');
+cleanup();
+
+const probabilitiesKey = 'PROACTIVE_REPLY_GROUP_PROBABILITIES';
+values = [
+  { key: 'ENABLE_PROACTIVE_REPLY', value: 'true', isSecret: false },
+  { key: 'PROACTIVE_REPLY_PROBABILITY', value: '0.05', isSecret: false },
+  { key: 'ENABLE_PROACTIVE_REPLY_WHITELIST', value: 'true', isSecret: false },
+  { key: 'PROACTIVE_REPLY_GROUP_WHITELIST', value: 'synthetic,telegram:synthetic,qq:other', isSecret: false },
+  { key: probabilitiesKey, value: '{"telegram:synthetic":0.38}', isSecret: false },
+];
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+const groupTags = () => el('proactive-whitelist-tags');
+const groupButton = (id: string) => groupTags().querySelectorAll('[data-group-probability]').find((button) => button.dataset.groupProbability === id)!;
+const openProbability = (id: string) => { groupButton(id).click(); return dialogs.at(-1)!; };
+const dialogEl = (dialog: Element, id: string) => dialog.querySelector('#group-probability-' + id)!;
+const storedProbabilities = () => JSON.parse(values.find(({ key }) => key === probabilitiesKey)!.value || '{}');
+assert.match(groupTags().innerHTML, />0.38<\/span>/);
+assert.equal(groupTags().querySelectorAll('[data-group-probability]').length, 3);
+let dialog = openProbability('synthetic');
+assert.equal(dialogEl(dialog, 'input').value, '0.05');
+dialogEl(dialog, 'input').value = '0.25';
+const beforeGroupEdit = writes.length;
+dialogEl(dialog, 'confirm').click();
+assert.equal(dialog.closed, true);
+assert.equal(writes.length, beforeGroupEdit, 'confirm only stages a draft');
+assert.match(groupTags().innerHTML, />0.25<\/span>/);
+assert.match(groupTags().innerHTML, />0.38<\/span>/);
+assert.equal(el('settings-draft-banner').hidden, false);
+el('settings-draft-restore').click();
+assert.doesNotMatch(groupTags().innerHTML, />0.25<\/span>/);
+assert.equal(el('settings-draft-banner').hidden, true);
+
+dialog = openProbability('synthetic');
+dialogEl(dialog, 'input').value = '0.8';
+dialog.emit('cancel');
+assert.equal(dialog.closed, true);
+assert.equal(el('settings-draft-banner').hidden, true, 'cancel must not edit the draft');
+
+for (const [raw, expected] of [['0.25', 0.25], ['-0.5', 0.01], ['2', 1], ['bad', 0.01], ['', 0.01], ['NaN', 0.01], ['0.3tail', 0.01], ['0', 0], ['0.001', 0.001]] as const) {
+  dialog = openProbability('synthetic');
+  dialogEl(dialog, 'input').value = raw;
+  dialogEl(dialog, 'input').emit('keydown', { key: 'Enter', isComposing: false });
+  assert.match(groupTags().innerHTML, new RegExp(`>${String(expected).replace('.', '\\.')}<\\/span>`));
+  fail = raw === '0.25';
+  el('settings-draft-save').click();
+  await settle();
+  if (fail) {
+    assert.equal(storedProbabilities()['qq:synthetic'], undefined);
+    assert.equal(el('settings-draft-banner').hidden, false, 'failed save must retain the override draft');
+    fail = false;
+    el('settings-draft-save').click();
+    await settle();
+  }
+  assert.equal(storedProbabilities()['qq:synthetic'], expected);
+  assert.equal(storedProbabilities()['telegram:synthetic'], 0.38, 'same-ID platform config must be preserved');
+  assert.equal(el('settings-draft-banner').hidden, true);
+}
+dialog = openProbability('synthetic');
+dialogEl(dialog, 'reset').click();
+assert.doesNotMatch(groupTags().innerHTML, />0.001<\/span>/);
+el('settings-draft-save').click();
+await settle();
+assert.deepEqual(storedProbabilities(), { 'telegram:synthetic': 0.38 });
+
+groupTags().querySelectorAll('[data-group-id]').find((button) => button.dataset.groupId === 'telegram:synthetic')!.click();
+assert.doesNotMatch(groupTags().innerHTML, />0.38<\/span>/);
+el('settings-draft-restore').click();
+assert.match(groupTags().innerHTML, />0.38<\/span>/);
+groupTags().querySelectorAll('[data-group-id]').find((button) => button.dataset.groupId === 'telegram:synthetic')!.click();
+el('settings-draft-save').click();
+await settle();
+assert.deepEqual(writes.at(-1)?.map(({ key, value }) => ({ key, value })), [
+  { key: probabilitiesKey, value: null },
+  { key: 'PROACTIVE_REPLY_GROUP_WHITELIST', value: 'synthetic,qq:other' },
+], 'removal must save the group and override together');
+dialog = openProbability('synthetic');
+cleanup();
+assert.equal(dialog.closed, true, 'leaving the page must close its dialog');
+dialogEl(dialog, 'input').value = '0.99';
+dialogEl(dialog, 'confirm').click();
+assert.deepEqual(storedProbabilities(), {}, 'closed instance cannot be edited through a stale dialog');
+
+values = values.map((item) => item.key === probabilitiesKey ? { ...item, value: 'broken' } : item);
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+const dialogsBeforeMalformed = dialogs.length;
+groupButton('synthetic').click();
+assert.equal(dialogs.length, dialogsBeforeMalformed, 'malformed stored config must not silently lose other group values');
+assert.match(errors.at(-1)!, /无法编辑群聊概率/);
 cleanup();
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);

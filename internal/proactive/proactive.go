@@ -77,7 +77,10 @@ func Roll(getenv func(string) string) bool {
 
 // RollWithRand evaluates whether an inbound message hits using a custom RNG function.
 func RollWithRand(getenv func(string) string, rng func() float64) bool {
-	prob := GetProbability(getenv)
+	return rollProbability(GetProbability(getenv), rng)
+}
+
+func rollProbability(prob float64, rng func() float64) bool {
 	if prob <= 0 {
 		return false
 	}
@@ -216,5 +219,5 @@ func RollGroupWithRand(getenv func(string) string, groupID string, rng func() fl
 	if !IsGroupAllowed(getenv, groupID, platforms...) {
 		return false
 	}
-	return RollWithRand(getenv, rng)
+	return rollProbability(GetGroupProbability(getenv, groupID, platforms...), rng)
 }
