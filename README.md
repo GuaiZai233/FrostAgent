@@ -34,7 +34,7 @@ go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
 
-CI Actions are pinned to immutable references. Dependabot
+CI Actions and Docker base images are pinned to immutable references. Dependabot
 opens weekly update PRs; review and merge them regularly so pinned versions do not
 become stale. See [dependency maintenance](.github/dependency-maintenance.md) for
 the Go tool versions and update checks.

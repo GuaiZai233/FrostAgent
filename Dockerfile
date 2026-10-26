@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
-ARG GO_VERSION=1.27.3
-ARG NODE_VERSION=22
-ARG BUF_VERSION=1.46.0
+# Keep tags and multi-platform index digests together for Dependabot updates.
+# See .github/dependency-maintenance.md before changing these references.
 
-FROM bufbuild/buf:${BUF_VERSION} AS buf
+FROM bufbuild/buf:1.46.0@sha256:c260d8fbd458bf23252a0fe5e6e391145b523591f509469f8f15bf3d36cf1474 AS buf
 
-FROM node:${NODE_VERSION}-bookworm-slim AS web
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS web
 WORKDIR /src
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -22,7 +21,7 @@ COPY libs/frostagent-proto ./libs/frostagent-proto
 RUN pnpm exec buf generate --template buf.gen.web.yaml \
     && pnpm --filter @frostagent/web run build
 
-FROM golang:${GO_VERSION}-bookworm AS build
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -43,7 +42,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8080 -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
     -o /out/frostagent ./cmd/app
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \

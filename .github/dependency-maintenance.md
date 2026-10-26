@@ -9,13 +9,16 @@ reproducible (for example, Debian packages are still installed from apt).
 - Every external GitHub Action in `.github/workflows/` uses a full 40-character
   commit SHA. The adjacent release comment is for humans and Dependabot; it is
   not the reference executed by GitHub.
-- The Dockerfile frontend uses a SHA-256 digest. The four base images are still
-  pending a maintainer decision: the existing `GO_VERSION`, `NODE_VERSION`, and
-  `BUF_VERSION` build arguments allow version overrides, but Dependabot's Docker
-  parser does not support those variable references. Do not silently remove the
-  override interface or append a fixed digest that makes the arguments ineffective.
+- All four Dockerfile base images and the Dockerfile frontend use SHA-256
+  digests. Keep each readable tag and multi-platform index digest together.
+- The maintainer selected explicit `FROM image:tag@sha256:digest` references
+  (Option A) so Dependabot can maintain the base images. The old `GO_VERSION`,
+  `NODE_VERSION`, and `BUF_VERSION` build arguments have been removed: custom
+  builds must now update the tag and digest in `FROM` instead. This is an
+  intentional build-time compatibility change; default image versions and
+  distributions are unchanged. `DOCKER_WS_LISTEN_ADDR` remains configurable.
 - The PostgreSQL CI service is also pinned to its current `pg17` index digest.
-- `.github/dependabot.yml` schedules weekly PRs for Actions.
+- `.github/dependabot.yml` schedules weekly PRs for Actions and Docker base images.
   Review and merge these regularly: a frozen but unmaintained
   dependency is still a security risk. Updates are not automatically merged.
   The configuration takes effect after it reaches the default branch.
@@ -55,13 +58,14 @@ builds, and the corresponding tests.
 python3 -m unittest discover -s scripts -p 'test_dependency_pins.py' -v
 ```
 
-The CI regression checks cover external Action references, the Dockerfile
-frontend, workflow service images, and explicit remote Go tool versions in
+The CI regression checks cover external Action references, Dockerfile base images
+and the frontend, workflow service images, and explicit remote Go tool versions in
 workflows, the Dockerfile, Makefile, and quick-start instructions. These are
 checks for the repository's line-oriented declarations, not a general-purpose
 YAML, Dockerfile, or shell security parser. They do not verify upstream provenance
-or transitive downloads inside Actions. Dockerfile base-image enforcement is
-pending the build-argument compatibility decision above.
+or transitive downloads inside Actions. The Docker checks also verify that
+removing the digest from any current base image fails validation, while local
+stage references and `scratch` are not mistaken for external dependencies.
 
 After updates, run the regular CI and Docker build/smoke workflows. Scorecard runs
 on the default branch and its normal schedule; a PR alone does not update the

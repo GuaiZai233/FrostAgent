@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 IMAGE = re.compile(r"^\s*image:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
+FROM = re.compile(r"^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)"
+                  r"(?:[ \t]+AS[ \t]+([^\s#]+))?", re.MULTILINE | re.IGNORECASE)
 SYNTAX = re.compile(r"^#\s*syntax=(\S+)", re.MULTILINE)
 GO_TOOL = re.compile(r"(?:\bgo|\$\(GO\))\s+(?:install|run)\s+([^\s;\\]+)")
 COMMIT = re.compile(r"[^@\s]+@[0-9a-f]{40}\Z")
@@ -18,6 +20,22 @@ MODULE_VERSION = re.compile(r"[^@\s]+@v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+inc
 def workflows():
     return sorted(path for path in (ROOT / '.github' / 'workflows').iterdir()
                   if path.suffix in {'.yml', '.yaml'})
+
+
+def external_base_images(source):
+    stages = {'scratch'}
+    images = []
+    for reference, alias in FROM.findall(source):
+        if reference.lower() not in stages:
+            images.append(reference)
+        if alias:
+            stages.add(alias.lower())
+    return images
+
+
+def unpinned_base_images(source):
+    return [reference for reference in external_base_images(source)
+            if '$' in reference or not DIGEST.fullmatch(reference)]
 
 
 class DependencyPinTests(unittest.TestCase):
@@ -32,6 +50,38 @@ class DependencyPinTests(unittest.TestCase):
                     pattern = DIGEST if reference.startswith('docker://') else COMMIT
                     self.assertRegex(reference, pattern)
         self.assertGreater(count, 0, 'no external Actions found')
+
+    def test_dockerfile_base_images_use_literal_digests(self):
+        source = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+        self.assertTrue(external_base_images(source), 'no external base images found')
+        self.assertEqual(unpinned_base_images(source), [])
+
+    def test_removing_any_base_image_digest_is_rejected(self):
+        source = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+        images = external_base_images(source)
+        self.assertTrue(images, 'no external base images found')
+        for reference in images:
+            with self.subTest(reference=reference):
+                floating = reference.split('@', 1)[0]
+                changed = source.replace(reference, floating, 1)
+                self.assertIn(floating, unpinned_base_images(changed))
+
+    def test_base_image_check_handles_local_stages_and_platforms(self):
+        reference = 'node:22@sha256:' + 'a' * 64
+        source = (f'FROM --platform=$BUILDPLATFORM {reference} AS build\n'
+                  'from BUILD as reused\n'
+                  'FROM scratch AS runtime\n'
+                  'FROM runtime AS final\n')
+        self.assertEqual(external_base_images(source), [reference])
+        self.assertEqual(unpinned_base_images(source), [])
+
+    def test_base_image_check_rejects_variables_and_short_digests(self):
+        for reference in ('${BASE_IMAGE}', 'node:${NODE_VERSION}',
+                          'node:${NODE_VERSION}@sha256:' + 'a' * 64,
+                          'node:22@sha256:' + 'a' * 63):
+            with self.subTest(reference=reference):
+                self.assertEqual(unpinned_base_images(f'FROM {reference} AS web\n'),
+                                 [reference])
 
     def test_dockerfile_frontend_uses_digest(self):
         source = (ROOT / 'Dockerfile').read_text(encoding='utf-8')

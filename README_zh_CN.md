@@ -41,7 +41,7 @@ go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
 
-CI Actions 已固定到不可变引用，并由 Dependabot 每周提交更新 PR。
+CI Actions 与 Docker 基础镜像已固定到不可变引用，并由 Dependabot 每周提交更新 PR。
 请定期审查并合并更新，避免固定版本长期失修；Go 工具版本及更新验证方式见
 [依赖维护说明](.github/dependency-maintenance.md)。
 
