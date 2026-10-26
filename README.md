@@ -14,17 +14,12 @@ FrostAgent is an AI role-playing and agent orchestration framework written in Go
 </p>
 
 <p align="center">
-  <a href="https://go.dev">
-    <img src="https://img.shields.io/badge/Go-1.27.0+-blue.svg" alt="Go Version">
-  </a>
-  <a href="https://github.com/GuaiZai233/FrostAgent/actions">
-    <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status">
-  </a>
-  <a href="LICENCE">
-    <img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License">
-  </a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.27.0+-blue.svg" alt="Go Version"></a>
+  <a href="https://github.com/GuaiZai233/FrostAgent/actions"><img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status"></a>
+  <a href="LICENCE"><img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License"></a>
   <a href="https://pkg.go.dev/github.com/GuaiZai233/FrostAgent"><img src="https://pkg.go.dev/badge/github.com/GuaiZai233/FrostAgent.svg" alt="Go Reference"></a>
-  </a>
+  <a href="https://codecov.io/gh/GuaiZai233/FrostAgent"><img src="https://codecov.io/gh/GuaiZai233/FrostAgent/branch/main/graph/badge.svg" alt="Codecov Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/GuaiZai233/FrostAgent"><img src="https://api.scorecard.dev/projects/github.com/GuaiZai233/FrostAgent/badge" alt="OpenSSF Scorecard"></a>
 </p>
 
 ## Quick Start

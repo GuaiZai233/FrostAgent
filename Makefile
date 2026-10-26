@@ -77,7 +77,7 @@ lint:
 test: test-api test-web
 
 test-api: build-web proto-generate-go
-	$(GO) test ./...
+	$(GO) test -coverprofile=coverage.out ./...
 
 test-web: check-web build-web
 

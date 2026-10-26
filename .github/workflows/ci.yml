@@ -117,6 +117,13 @@ jobs:
       - name: Run WebSocket heartbeat race regression
         run: go test -race ./internal/adapter/heartbeat/... -timeout 60s
 
+      - name: Upload Go coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
+
   windows-smoke:
     name: Windows Smoke
     runs-on: windows-latest
