@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { renderOverviewTools } from '../src/pages/overview-tools';
 import { renderInstanceLabel, renderInstanceStatus } from '../src/components/instance-label';
 import { instanceState } from '../src/instance-state';
@@ -20,9 +22,24 @@ const all = renderOverviewTools(tools, false);
 assert.equal((all.match(/<article /g) || []).length, 12);
 assert.match(all, /tool_11/);
 assert.doesNotMatch(all, /id="overview-all-tools"/);
-const escaped = renderOverviewTools([{ name: '<script>', description: '<img src=x onerror=alert(1)>' }]);
-assert.doesNotMatch(escaped, /<script>|<img /);
-assert.match(escaped, /&lt;script&gt;/);
+const { JSDOM } = createRequire(resolve('package.json'))('jsdom');
+const maliciousTools = [
+  { name: '<script>alert(1)</script>', description: '<img src=x onerror=alert(1)>' },
+  { name: '<SCRIPT>alert(1)</SCRIPT>', description: '<IMG SRC=x ONERROR=alert(1)>' },
+  { name: '<ScRiPt src="https://example.invalid/script"></ScRiPt>', description: '<ImG\nSrC=x\nOnErRoR=alert(1)>' },
+];
+const parsedTools = new JSDOM(renderOverviewTools(maliciousTools));
+try {
+  const rendered = parsedTools.window.document;
+  assert.equal(rendered.querySelector('script, img'), null, 'tool content must remain text, not executable HTML');
+  const cards = rendered.querySelectorAll('article');
+  for (const [index, tool] of maliciousTools.entries()) {
+    assert.equal(cards[index].querySelector('h3')?.textContent, tool.name);
+    assert.equal(cards[index].querySelector('p')?.textContent, tool.description);
+  }
+} finally {
+  parsedTools.window.close();
+}
 
 assert.match(renderInstanceStatus(true), /instance-dot on/);
 assert.match(renderInstanceStatus(false), /instance-dot off/);
@@ -50,7 +67,17 @@ const main = readFileSync('src/main.ts', 'utf8');
 const overview = readFileSync('src/pages/overview.ts', 'utf8');
 const settings = readFileSync('src/pages/settings.ts', 'utf8');
 const styles = readFileSync('src/styles/overview.css', 'utf8');
+const dockerfile = readFileSync('../../Dockerfile', 'utf8');
+const dockerignore = readFileSync('../../.dockerignore', 'utf8');
 assert.match(main, /import logoURL from '\.\.\/\.\.\/\.\.\/assets\/logo.png'/);
+const webStage = dockerfile.split(' AS web')[1]?.split(/\nFROM /)[0] ?? '';
+const logoCopy = 'COPY assets/logo.png ./assets/logo.png';
+assert.ok(webStage.includes(logoCopy), 'Docker web stage must copy the imported logo');
+assert.ok(webStage.indexOf(logoCopy) < webStage.indexOf('pnpm --filter @frostagent/web run build'));
+assert.match(dockerignore, /^\*\s*$/m, 'Docker context must retain its default-deny rule');
+assert.match(dockerignore, /^!assets\/\r?\nassets\/\*\*\r?\n!assets\/logo\.png\s*$/m,
+  'Docker context must reopen assets, exclude all descendants, then allow only the logo');
+assert.ok(!dockerignore.split(/\r?\n/).includes('!assets/**'), 'only the logo should be added to the Docker context');
 assert.equal((main.match(/<img src="\$\{logoURL\}"/g) || []).length, 3);
 assert.ok(main.indexOf("path: '/security'") < main.indexOf("path: '/settings'"));
 assert.doesNotMatch(overview, /openQuickConfig|id="quick-config"/);
