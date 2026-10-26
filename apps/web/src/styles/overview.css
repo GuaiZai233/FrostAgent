@@ -1,0 +1,54 @@
+.overview-tools-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.75rem;
+  scroll-snap-type: x proximity;
+}
+
+.overview-tools-strip > .overview-tool-card {
+  flex: 0 0 min(17rem, 85%);
+  scroll-snap-align: start;
+}
+
+.overview-tool-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview-tool-preview > p {
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+.overview-tools-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  cursor: pointer;
+}
+
+.overview-all-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 0.75rem;
+}
+
+.overview-resources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.75rem;
+}
+
+.overview-resource {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-decoration: none;
+}
+
+.overview-resource > svg:last-child {
+  margin-left: auto;
+}

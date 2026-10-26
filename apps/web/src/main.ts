@@ -1,5 +1,7 @@
 import { instanceState } from './instance-state';
 import { openInstanceManagement } from './components/instances';
+import { renderInstanceLabel } from './components/instance-label';
+import logoURL from '../../../assets/logo.png';
 import { mountAuthenticatedResources } from './components/authenticated-resources';
 import './styles/app.css';
 import './styles/variables.css';
@@ -56,8 +58,8 @@ const navItems = [
   { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
   { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
-  { path: '/settings', label: '系统设置', iconName: 'settings' },
   { path: '/security', label: '安全控制', iconName: 'lock' },
+  { path: '/settings', label: '系统设置', iconName: 'settings' },
 ];
 
 function buildNavigationLinks(isMobile = false): string {
@@ -103,7 +105,7 @@ function initAppShell(): void {
         <div class="sidebar-header">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('sparkles')}
+              <img src="${logoURL}" alt="FrostAgent Logo" />
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -119,7 +121,7 @@ function initAppShell(): void {
         <div class="sidebar-footer">
           <button class="theme-toggle-btn instance-manager-btn">
             <span>实例管理</span>
-            <span class="instance-selected-label text-xs text-muted">未选择</span>
+            <span class="instance-selected-label text-xs text-muted">${renderInstanceLabel(instanceState.selected)}</span>
           </button>
         </div>
       </aside>
@@ -131,7 +133,7 @@ function initAppShell(): void {
         </button>
         <div class="flex items-center gap-2">
           <div class="brand-icon" style="width: 1.5rem; height: 1.5rem; border-radius: var(--radius-sm);">
-            ${icon('sparkles', '', 14)}
+            <img src="${logoURL}" alt="FrostAgent Logo" />
           </div>
           <span class="font-bold text-sm">FrostAgent</span>
         </div>
@@ -148,7 +150,7 @@ function initAppShell(): void {
         <div class="drawer-header flex items-center justify-between p-4 border-b">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('sparkles')}
+              <img src="${logoURL}" alt="FrostAgent Logo" />
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -165,7 +167,7 @@ function initAppShell(): void {
         <div class="sidebar-footer">
           <button class="theme-toggle-btn instance-manager-btn">
             <span>实例管理</span>
-            <span class="instance-selected-label text-xs text-muted">未选择</span>
+            <span class="instance-selected-label text-xs text-muted">${renderInstanceLabel(instanceState.selected)}</span>
           </button>
         </div>
       </aside>
@@ -250,13 +252,17 @@ function initAppShell(): void {
       void openInstanceManagement();
     }),
   );
-  window.addEventListener('instance-selected', () => {
+  const updateInstanceLabel = () => {
     document
       .querySelectorAll('.instance-selected-label')
       .forEach(
         (label) =>
-          (label.textContent = instanceState.selected?.name || '未选择'),
+          (label.innerHTML = renderInstanceLabel(instanceState.selected)),
       );
+  };
+  window.addEventListener('instance-updated', updateInstanceLabel);
+  window.addEventListener('instance-selected', () => {
+    updateInstanceLabel();
     router.refresh();
   });
 
