@@ -52,6 +52,14 @@ two versions is a separate tool upgrade, not a prerequisite for pinning. When
 updating a tool, review all its install sites and run Go and web proto generation,
 builds, and the corresponding tests.
 
+## Corepack
+
+The Node 26 web build image does not bundle Corepack. Install the explicit
+Corepack version in the Dockerfile before enabling it; pnpm remains selected by
+the root `package.json` `packageManager` field. Review this Corepack pin manually
+alongside Node image updates, since Dependabot does not maintain embedded npm
+install commands. Verify with the dependency pin tests and Docker build/smoke.
+
 ## Verification
 
 ```sh

@@ -7,7 +7,9 @@ FROM bufbuild/buf:1.75.0@sha256:adf82c7170be6629ec81dc907921ac1699407cd11c4f7fd7
 
 FROM node:26-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS web
 WORKDIR /src
-RUN corepack enable
+# Node 26 does not bundle Corepack; keep pnpm selected by package.json.
+RUN npm install --global corepack@0.36.0 \
+    && corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY libs/frostagent-proto/package.json ./libs/frostagent-proto/package.json

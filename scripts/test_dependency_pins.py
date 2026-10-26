@@ -90,6 +90,18 @@ class DependencyPinTests(unittest.TestCase):
         for reference in frontends:
             self.assertRegex(reference, DIGEST)
 
+    def test_dockerfile_installs_pinned_corepack_before_enabling_it(self):
+        source = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+        web = re.search(r'^FROM [^\n]+ AS web\n(.*?)(?=^FROM )',
+                        source, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(web, 'web build stage must exist')
+        bootstrap = re.search(
+            r'RUN npm install --global corepack@\d+\.\d+\.\d+\s*'
+            r'(?:\\\n\s*)?&& corepack enable\b', web.group(1))
+        self.assertIsNotNone(bootstrap,
+                             'install a pinned Corepack before enabling pnpm')
+        self.assertLess(bootstrap.end(), web.group(1).index('pnpm install'))
+
     def test_workflow_container_images_use_digests(self):
         count = 0
         for path in workflows():
