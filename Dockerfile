@@ -3,7 +3,7 @@
 # Keep tags and multi-platform index digests together for Dependabot updates.
 # See .github/dependency-maintenance.md before changing these references.
 
-FROM bufbuild/buf:1.46.0@sha256:c260d8fbd458bf23252a0fe5e6e391145b523591f509469f8f15bf3d36cf1474 AS buf
+FROM bufbuild/buf:1.75.0@sha256:adf82c7170be6629ec81dc907921ac1699407cd11c4f7fd7521b13c74152f849 AS buf
 
 FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS web
 WORKDIR /src
