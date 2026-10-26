@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"strings"
 	"sync"
 	"testing"

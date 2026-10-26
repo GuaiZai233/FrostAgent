@@ -1,14 +1,14 @@
 package onebot
 
 import (
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/http/httptest"
@@ -236,6 +236,7 @@ func TestWSPokeSecurityRejectionDoesNotConsumeCooldown(t *testing.T) {
 type pokeTestDispatcher struct{ calls atomic.Int32 }
 
 func (*pokeTestDispatcher) IsConfigured() bool { return true }
+func (*pokeTestDispatcher) IsEnabled() bool    { return true }
 func (d *pokeTestDispatcher) DispatchIncoming(context.Context, core.IncomingMessage) error {
 	d.calls.Add(1)
 	return nil

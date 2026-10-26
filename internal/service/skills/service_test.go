@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	skillstore "FrostAgent/internal/skills"
-	"FrostAgent/internal/storage"
+	skillstore "github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestManagementAuthImportToggleAndDelete(t *testing.T) {

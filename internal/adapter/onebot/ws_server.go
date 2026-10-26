@@ -1,21 +1,21 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,10 +25,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/proactive"
-	"FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 
 	"github.com/gorilla/websocket"
 )
@@ -152,12 +152,22 @@ func (c *wsConnection) Context() context.Context {
 }
 
 func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
+	return c.writeTurnMessage(messageType, data, nil)
+}
+
+func (c *wsConnection) writeTurnMessage(messageType int, data []byte, turn *llm.SessionTurn) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.conn == nil || c.isClosed() {
 		return fmt.Errorf("websocket connection is closed")
 	}
-	return c.conn.WriteMessage(messageType, data)
+	return turn.WithAuthority(func() error {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		defer c.conn.SetWriteDeadline(time.Time{})
+		return c.conn.WriteMessage(messageType, data)
+	})
 }
 
 func (c *wsConnection) Close() error {
@@ -300,6 +310,15 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 
 // reply records terminal silence without sending or batching memory.
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, warningNotice ...string) {
+	billingReported := false
+	defer func() {
+		if engine == nil || conn == nil || billingReported {
+			return
+		}
+		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
+			_, _ = conn.sendActionAndWaitTurn(model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": receipt}, Echo: echo}, actionACKTimeout(conn.Scope), turn)
+		}
+	}()
 	if conn != nil && conn.mock && conn.isClosed() {
 		return
 	}
@@ -369,16 +388,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err != nil {
 			if errors.Is(err, billing.ErrInsufficientFunds) {
 				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0))
+				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0), turn)
 				return
 			}
 			engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage())
+			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage(), turn)
 			return
 		}
 		if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor))
+			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), turn)
 			return
 		}
 	}
@@ -463,7 +482,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if wakeSignals.Proactive {
 			return
 		}
-		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。")
+		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。", turn)
 		return
 	}
 
@@ -707,13 +726,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	// 4. Call the agent engine with history
 	var (
-		replyText      string
-		receiptText    string
-		runResult      llm.AgentRunResult
-		finalDelivered bool
-		finalSticker   bool
+		replyText    string
+		receiptText  string
+		runResult    llm.AgentRunResult
+		finalSticker bool
 	)
-	commitAssistantHistory := func(string) {}
+	commitAssistantHistory := func(string, bool) {}
 
 	owner, ownerType := memory.OwnerForPrivate(strconv.FormatInt(event.UserID, 10))
 	if event.MessageType == "group" {
@@ -736,18 +754,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
-		// 将用户的 durable prompt 加入会话历史（使用 core.Session 接口方法，内部加锁）
-		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: durablePrompt})
+		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
 
-		// 获取带历史的消息快照（已深拷贝，线程安全）
-		messages := session.Snapshot()
-		// 动态生成的群聊摘要与最近原始消息仅作为本轮瞬时上下文附加在 messages 快照中，
-		// 不写入持久化的 session history，防止多轮对话中历史不断重复膨胀。
-		if len(messages) > 0 {
-			messages[len(messages)-1].Content = requestPrompt
-		}
-
-		var deliveredToolReplies []string
+		deliveries := llm.NewPublicReplyLog(session, startEpoch)
+		defer func() { deliveries.Finish(turn.Interrupted()) }()
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages []tools.Msg `json:"messages"`
@@ -778,11 +788,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				},
 				Echo: echo,
 			}
-			if session != nil && session.Epoch() != startEpoch {
+			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
 			}
-			ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
-			if session != nil && session.Epoch() != startEpoch {
+			ackResp, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+			if (err != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
 			}
 			if err != nil {
@@ -801,116 +811,132 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
-				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
+				deliveries.Record(deliveredReply, func(live bool) {
+					if event.MessageType == "group" {
+						botName := engine.Getenv("BOT_NAME")
+						if botName == "" {
+							botName = defaultBotName
+						}
+						var maxBufferSize int
+						if engine.GroupCompactor != nil {
+							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+						}
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
+						if live && turn != nil && turn.StagedGuard() != nil {
+							turn.StagedGuard().AddSequence(seq)
+						} else {
+							session.PromoteGroupCompactSlot(seq, "")
+						}
+					}
+				})
 			}
 			return nil
 		}
 
-		commitAssistantHistory = func(replyText string) {
+		commitAssistantHistory = func(replyText string, alreadyStaged bool) {
 			if session == nil {
 				return
 			}
-			if session.Epoch() != startEpoch {
-				return
-			}
-			if strings.TrimSpace(replyText) == "" {
+			session.WithEpochCommit(startEpoch, func() {
+				if strings.TrimSpace(replyText) == "" {
+					engine.TrimSession(session)
+					return
+				}
+
+				deliveries.CommitFinal(replyText, turn.Interrupted())
 				engine.TrimSession(session)
-				return
-			}
 
-			session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: replyText})
-			engine.TrimSession(session)
-
-			if event.MessageType == "group" {
-				var msgID string
-				if event.MessageID != 0 {
-					msgID = strconv.FormatInt(int64(event.MessageID), 10)
-				}
-				if turn != nil && turn.StagedGuard() != nil {
-					turn.StagedGuard().Promote()
-				} else if msgID != "" {
-					session.PromoteGroupCompactMessage(msgID)
-				}
-				botReply := extractBotReplyText(replyText)
-				if strings.TrimSpace(botReply) != "" {
-					botName := engine.Getenv("BOT_NAME")
-					if botName == "" {
-						botName = defaultBotName
-					}
-					var maxBufferSize int
-					if engine.GroupCompactor != nil {
-						maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-					}
-					session.AppendGroupCompactMessage(
-						llm.GroupCompactMessage{
-							Role:    "assistant",
-							Sender:  botName,
-							Content: strings.TrimSpace(botReply),
-							Time:    time.Now().Format("15:04:05"),
-						},
-						maxBufferSize,
-					)
-					if engine.GroupCompactor != nil && !conn.mock {
-						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
-					}
-				}
-			}
-
-			if runResult.MemoryWritten {
-				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-			} else if strings.TrimSpace(userText) != "" && !conn.mock {
 				if event.MessageType == "group" {
-					groupIDStr := strconv.FormatInt(event.GroupID, 10)
-					userIDStr := strconv.FormatInt(event.UserID, 10)
-					speakerName := senderDisplayName(event)
-					msgID := ""
+					var msgID string
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-						{
-							Owner:            owner,
-							OwnerType:        memory.OwnerGroup,
-							ScopeType:        memory.ScopeGroup,
-							GroupID:          groupIDStr,
-							SpeakerID:        userIDStr,
-							SpeakerName:      speakerName,
-							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
-							ImageDescription: memoryImageDescription,
-							MessageID:        msgID,
-						},
-						{
-							Owner:       owner,
-							OwnerType:   memory.OwnerGroup,
-							ScopeType:   memory.ScopeGroup,
-							GroupID:     groupIDStr,
-							SpeakerID:   userIDStr,
-							SpeakerName: speakerName,
-							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-							MessageID:   msgID,
-						},
-					})
-				} else {
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-						{
-							Owner:     owner,
-							OwnerType: ownerType,
-							ScopeType: memory.ScopePrivate,
-							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
-						},
-						{
-							Owner:     owner,
-							OwnerType: ownerType,
-							ScopeType: memory.ScopePrivate,
-							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
-						},
-					})
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else if msgID != "" {
+						session.PromoteGroupCompactMessage(msgID)
+					}
+					botReply := extractBotReplyText(replyText)
+					if !alreadyStaged && strings.TrimSpace(botReply) != "" {
+						botName := engine.Getenv("BOT_NAME")
+						if botName == "" {
+							botName = defaultBotName
+						}
+						var maxBufferSize int
+						if engine.GroupCompactor != nil {
+							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+						}
+						session.AppendGroupCompactMessage(
+							llm.GroupCompactMessage{
+								Role:    "assistant",
+								Sender:  botName,
+								Content: strings.TrimSpace(botReply),
+								Time:    time.Now().Format("15:04:05"),
+							},
+							maxBufferSize,
+						)
+						if engine.GroupCompactor != nil && !conn.mock {
+							engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+						}
+					}
 				}
-			}
+
+				if runResult.MemoryWritten {
+					engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "本轮已通过 memory.write 处理记忆，跳过自动提取累计", "本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+				} else if strings.TrimSpace(userText) != "" && !conn.mock {
+					if event.MessageType == "group" {
+						groupIDStr := strconv.FormatInt(event.GroupID, 10)
+						userIDStr := strconv.FormatInt(event.UserID, 10)
+						speakerName := senderDisplayName(event)
+						msgID := ""
+						if event.MessageID != 0 {
+							msgID = strconv.FormatInt(int64(event.MessageID), 10)
+						}
+						engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+							{
+								Owner:            owner,
+								OwnerType:        memory.OwnerGroup,
+								ScopeType:        memory.ScopeGroup,
+								GroupID:          groupIDStr,
+								SpeakerID:        userIDStr,
+								SpeakerName:      speakerName,
+								Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+								Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+								ImageDescription: memoryImageDescription,
+								MessageID:        msgID,
+							},
+							{
+								Owner:       owner,
+								OwnerType:   memory.OwnerGroup,
+								ScopeType:   memory.ScopeGroup,
+								GroupID:     groupIDStr,
+								SpeakerID:   userIDStr,
+								SpeakerName: speakerName,
+								Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+								Message:     core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+								MessageID:   msgID,
+							},
+						})
+					} else {
+						engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+							{
+								Owner:     owner,
+								OwnerType: ownerType,
+								ScopeType: memory.ScopePrivate,
+								Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+								Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+							},
+							{
+								Owner:     owner,
+								OwnerType: ownerType,
+								ScopeType: memory.ScopePrivate,
+								Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+								Message:   core.ChatMessage{Role: core.RoleAssistant, Content: replyText},
+							},
+						})
+					}
+				}
+			})
 		}
 
 		var runCtx context.Context
@@ -918,6 +944,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			runCtx = conn.Context()
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
+			Turn:        turn,
 			Context:     runCtx,
 			Epoch:       startEpoch,
 			SessionID:   conn.historyKey(event),
@@ -941,22 +968,20 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Mock:           conn.mock,
 			Proactive:      wakeSignals.Proactive,
 		})
-		defer func() {
-			if !conn.mock && finalDelivered {
-				engine.RecordBotMessage(finalSticker)
-			}
-		}()
 		replyText = runResult.Content
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
 		}
-		if session != nil && session.Epoch() != startEpoch {
+		if turn.Interrupted() {
+			return
+		}
+		if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 
 		if runResult.Banned {
 			if session != nil {
-				session.DropLastMessage()
+				session.DropMessage(inputID)
 				if event.MessageType == "group" {
 					var msgID string
 					if event.MessageID != 0 {
@@ -973,27 +998,28 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 			}
 			if !wakeSignals.Proactive {
-				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+				sendDirectReply(action, type1, id, echo, event, conn, runResult.Content, turn)
 			}
 			return
 		}
 
 		// 计费回执处理与历史保护
 		if billingState != nil && billingState.BillingActive {
-			if runResult.Error != nil && billingState.IterationsBilled == 0 {
+			receipt := billingState.Receipt()
+			if runResult.Error != nil && receipt.IterationsBilled == 0 {
 				// 首次迭代即失败且无任何消费记录，不污染历史并直接回复
-				session.TrimHistory(len(session.Snapshot()) - 1)
+				session.DropMessage(inputID)
 				if conn.allowLLMErrorReply(runResult) {
-					sendDirectReply(action, type1, id, echo, event, conn, runResult.Content)
+					sendDirectReply(action, type1, id, echo, event, conn, runResult.Content, turn)
 				}
 				return
 			}
 			receiptText = billing.FormatReceipt(
-				billingState.TotalBilledMinor,
+				receipt.TotalBilledMinor,
 				runResult.Usage.PromptTokens,
 				runResult.Usage.CompletionTokens,
-				billingState.LastBalanceMinor,
-				billingState.WelcomeGranted,
+				receipt.LastBalanceMinor,
+				receipt.WelcomeGranted,
 			)
 		}
 
@@ -1092,8 +1118,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// they finish without text or tool calls. Do not turn that malformed
 		// terminal response into an empty group message with an @ mention.
 		if strings.TrimSpace(replyText) == "" {
-			if len(deliveredToolReplies) > 0 {
-				commitAssistantHistory(strings.Join(deliveredToolReplies, "\n"))
+			if deliveredText := deliveries.Text(); deliveredText != "" {
+				commitAssistantHistory(deliveredText, true)
 			} else {
 				engine.TrimSession(session)
 				if event.MessageType == "group" && !runResult.Banned {
@@ -1150,7 +1176,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error())
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
@@ -1160,7 +1186,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error())
+			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error(), turn)
 			return
 		}
 		if len(oneBotSegments) > 0 {
@@ -1227,58 +1253,67 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		Echo: echo,
 	}
 
-	if session != nil && session.Epoch() != startEpoch {
+	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	ackResp, err := conn.SendActionAndWait(botAction, actionACKTimeout(conn.Scope))
-	if session != nil && session.Epoch() != startEpoch {
-		return
-	}
-	if err == nil {
-		conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
-		finalDelivered = strings.TrimSpace(replyText) != "" || receiptText != ""
-		// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
-		commitAssistantHistory(replyText)
-	} else {
-		// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
-		if event.MessageType == "group" && session != nil {
-			var msgID string
-			if event.MessageID != 0 {
-				msgID = strconv.FormatInt(int64(event.MessageID), 10)
+	billingReported = receiptText != ""
+	turn.AwaitDelivery(func() {
+		ackResp, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+		if (err != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
+			return
+		}
+		if err == nil {
+			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
+				engine.RecordBotMessage(finalSticker)
 			}
-			var guard *llm.StagedGroupCompactGuard
-			if turn != nil {
-				guard = turn.StagedGuard()
+			// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
+			commitAssistantHistory(replyText, false)
+		} else {
+			// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
+			if event.MessageType == "group" && session != nil {
+				var msgID string
+				if event.MessageID != 0 {
+					msgID = strconv.FormatInt(int64(event.MessageID), 10)
+				}
+				var guard *llm.StagedGroupCompactGuard
+				if turn != nil {
+					guard = turn.StagedGuard()
+				}
+				engine.DropRejectedGroupMessage(session, guard, msgID, strconv.FormatInt(event.UserID, 10))
 			}
-			engine.DropRejectedGroupMessage(session, guard, msgID, strconv.FormatInt(event.UserID, 10))
-		}
-		reason := strings.TrimSpace(ackResp.Wording)
-		if reason == "" {
-			reason = strings.TrimSpace(ackResp.Message)
-		}
-		if reason == "" && ackResp.RetCode != 0 {
-			reason = fmt.Sprintf("retcode %d", ackResp.RetCode)
-		}
-		if reason == "" {
-			reason = err.Error()
-		}
-		if session != nil {
-			session.SetDeliveryFailure(llm.DeliveryFailure{
-				Platform: "onebot",
-				Action:   action,
-				RetCode:  ackResp.RetCode,
-				Message:  ackResp.Message,
-				Wording:  reason,
-			})
-			if engine != nil {
-				engine.TrimSession(session)
+			reason := strings.TrimSpace(ackResp.Wording)
+			if reason == "" {
+				reason = strings.TrimSpace(ackResp.Message)
 			}
+			if reason == "" && ackResp.RetCode != 0 {
+				reason = fmt.Sprintf("retcode %d", ackResp.RetCode)
+			}
+			if reason == "" {
+				reason = err.Error()
+			}
+			if session != nil {
+				session.SetDeliveryFailure(llm.DeliveryFailure{
+					Platform: "onebot",
+					Action:   action,
+					RetCode:  ackResp.RetCode,
+					Message:  ackResp.Message,
+					Wording:  reason,
+				})
+				if engine != nil {
+					engine.TrimSession(session)
+				}
+			}
+			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 		}
-		engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
-	}
+	})
 }
 
-func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string) {
+func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {
+	var turn *llm.SessionTurn
+	if len(turns) > 0 {
+		turn = turns[0]
+	}
 	var finalMessage interface{}
 	if event.MessageType == "group" {
 		enableAt := conn.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
@@ -1306,7 +1341,7 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 	}
 
 	actionBytes, _ := json.Marshal(botAction)
-	if err := conn.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
 	}
 }

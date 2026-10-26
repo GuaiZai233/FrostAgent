@@ -1,10 +1,10 @@
 package settings
 
 import (
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/storage"
 	"context"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"strings"
 	"testing"
 

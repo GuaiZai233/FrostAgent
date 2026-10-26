@@ -1,8 +1,8 @@
 package onebot
 
 import (
-	"FrostAgent/internal/model"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
 )
 
 // buildResponseContext creates per-turn, user-segment guidance for the model's

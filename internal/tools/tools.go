@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"FrostAgent/internal/core"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 type Tool struct {

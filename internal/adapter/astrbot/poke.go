@@ -1,9 +1,9 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/poke"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/poke"
 	"strconv"
 	"strings"
 	"time"

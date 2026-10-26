@@ -1,9 +1,9 @@
 package parity
 
 import (
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"strconv"
 	"strings"
 )

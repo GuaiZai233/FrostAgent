@@ -1,12 +1,12 @@
 ﻿package eval
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/provider/llm/openai"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"os"
 	"path/filepath"
 	"strings"

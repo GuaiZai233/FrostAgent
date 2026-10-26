@@ -1,10 +1,10 @@
 package runtimescope
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/storage"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"testing"

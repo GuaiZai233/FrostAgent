@@ -1,24 +1,24 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -980,15 +980,14 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 		t.Fatalf("期望保留 user 与工具 assistant 历史，实际=%+v", history)
 	}
 	compact := engine.SessionManager.GetOrCreate("group:700000012").SnapshotGroupContext(20, 4000, "")
-	foundToolReply := false
+	foundToolReply := 0
 	for _, message := range compact.RecentMessages {
 		if strings.Contains(message, "工具已发送") {
-			foundToolReply = true
-			break
+			foundToolReply++
 		}
 	}
-	if !foundToolReply {
-		t.Fatalf("群聊 compact 未包含工具实际发送文本，实际=%+v", compact.RecentMessages)
+	if foundToolReply != 1 {
+		t.Fatalf("群聊 compact 应包含工具实际发送文本且仅一次，实际=%+v", compact.RecentMessages)
 	}
 	engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "check quota"}}, llm.RunContext{})
 	provider.mu.Lock()

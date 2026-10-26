@@ -1,9 +1,9 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/tools"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"reflect"
 	"strconv"
 	"strings"

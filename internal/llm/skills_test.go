@@ -2,11 +2,12 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/skills"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestSkillsProgressiveLoadingManualInvocationAndReset(t *testing.T) {
@@ -149,6 +150,51 @@ func TestManualSkillUsesCurrentRawMessageInsteadOfTransportContext(t *testing.T)
 	if strings.Contains(prompt, "RAW-MANUAL-INSTRUCTIONS") {
 		t.Fatal("transport context invoked manual skill")
 	}
+
+	// A superseded pending input still carries its explicit manual-only skill
+	// activation into the surviving input, without publishing arguments to B.
+	session.Clear()
+	first := session.ReserveSequenceTurn("A", true, false)
+	next := session.ReserveSequenceTurn("A", true, false)
+	first.Wait()
+	firstMessages, _, _ := session.PrepareTurnMessages(first, "/manual queued-argument", "wrapped input", nil)
+	run.Turn, run.Epoch = first, first.Epoch()
+	run.MemorySource.Content = "/manual queued-argument"
+	if old := engine.RunMessagesWithContext(firstMessages, run); !old.Silent {
+		t.Fatalf("pending input ran: %+v", old)
+	}
+	first.Done()
+	next.Wait()
+	nextMessages, _, _ := session.PrepareTurnMessages(next, "next", "next", nil)
+	run.Turn, run.Epoch = next, next.Epoch()
+	run.MemorySource.Content = "ordinary follow-up"
+	if result := engine.RunMessagesWithContext(nextMessages, run); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	prompt, _ = session.LastPromptTrace()
+	if !strings.Contains(prompt, "RAW-MANUAL-INSTRUCTIONS queued-argument") {
+		t.Fatalf("missing resumed skill in parent prompt inspector: %s", prompt)
+	}
+	if session.HasActiveSkill("manual", pkg.Info.Revision) {
+		t.Fatal("private skill activation leaked to shared session")
+	}
+	next.Done()
+
+	// Storage failures during per-iteration Skills refresh must retain the
+	// prepared checkpoint even when there is a nonempty public prefix.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	failing := session.ReserveSequenceTurn("B", true, false)
+	failing.Wait()
+	failingMessages, _, _ := session.PrepareTurnMessages(failing, "error-input", "error-input", nil)
+	run.Turn, run.Epoch = failing, failing.Epoch()
+	result = engine.RunMessagesWithContext(failingMessages, run)
+	if result.Error == nil || !strings.Contains(fmt.Sprint(result.Transcript), "error-input") {
+		t.Fatalf("failed refresh lost checkpoint: %+v", result)
+	}
+	failing.saveTranscript(nil) // Defensively retain checkpoint for malformed callers.
+	failing.Done()
 }
 
 func TestManualSkillActivationReclaimsInvalidSlotsBeforeCapacityCheck(t *testing.T) {

@@ -1,11 +1,11 @@
 package subagent
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 const CoderPrompt = "你是编程助手。"

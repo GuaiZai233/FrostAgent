@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	actclient "FrostAgent/internal/actionscat"
+	actclient "github.com/GuaiZai233/FrostAgent/internal/actionscat"
 )
 
 func TestDisabledServiceReportsStatusAndRejectsProxy(t *testing.T) {

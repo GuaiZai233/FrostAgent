@@ -1,13 +1,13 @@
 package backup
 
 import (
-	"FrostAgent/internal/skills"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/storage"
 	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"io"
 	"os"
 	"path/filepath"

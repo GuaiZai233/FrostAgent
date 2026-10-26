@@ -1,14 +1,14 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/security"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
 )
 

@@ -1,8 +1,8 @@
 package settings
 
 import (
-	"FrostAgent/internal/instanceconfig"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"strconv"
 	"strings"
 	"time"

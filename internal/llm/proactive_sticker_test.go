@@ -1,10 +1,11 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestProactiveStickerToolDeniedEvenWithOptIn(t *testing.T) {
 		e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": tool}}
 		result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 			Proactive: true, Mock: mock,
-			SendHook: func(string) error { t.Fatal("proactive sticker reached delivery"); return nil },
+			SendHook: func(string) error { t.Error("proactive sticker reached delivery"); return nil },
 		})
 		if tool.calls != 0 || !result.Silent || result.Error != nil || len(p.requests) != 1 {
 			t.Fatalf("mock=%t calls=%d result=%+v requests=%d", mock, tool.calls, result, len(p.requests))
@@ -100,7 +101,7 @@ func TestProactiveRepliesSkipStickerEnforcement(t *testing.T) {
 
 func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
-	for _, tc := range []struct{ name, payload, want string }{
+	for _, tc := range append([]struct{ name, payload, want string }{
 		{"sticker only", `{"messages":[{"type":"image","url":"https://example.invalid/sticker.png","is_sticker":true}]}`, ""},
 		{"mface type", `{"messages":[{"type":"mface","url":"https://example.invalid/sticker.png"}]}`, ""},
 		{"sticker type", `{"messages":[{"type":"sticker","url":"https://example.invalid/sticker.png"}]}`, ""},
@@ -123,7 +124,7 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 		{"mixed", `{"messages":[{"type":"plain","text":"before"},{"type":"image","path":"/test/sticker.png","is_sticker":true},{"type":"image","url":"https://example.invalid/image.gif"},{"type":"plain","text":"after"}]}`, `{"messages":[{"type":"plain","text":"before"},{"type":"image","url":"https://example.invalid/image.gif"},{"type":"plain","text":"after"}]}`},
 		{"mixed representations", `{"messages":[{"type":"plain","text":"before"},{"type":"mface"},{"type":"image","sub_type":1},{"type":"image","data":{"subType":"1"}},{"type":"image","url":"https://example.invalid/image.gif","subType":0},{"type":"sticker"},{"type":"plain","text":"after"}]}`, `{"messages":[{"type":"plain","text":"before"},{"type":"image","url":"https://example.invalid/image.gif","subType":0},{"type":"plain","text":"after"}]}`},
 		{"text", "ordinary reply", "ordinary reply"},
-	} {
+	}, proactiveStickerEnvelopeCases()...) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, adapter := range []string{"onebot", "astrbot"} {
 				for _, proactive := range []bool{false, true} {
@@ -134,12 +135,22 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 							e.RecordBotTurn()
 						}
 					}
-					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{Proactive: proactive, AdapterID: adapter})
+					turn := (&SessionContext{}).ReserveSequenceTurn("synthetic-sender", false, proactive)
+					turn.Wait()
+					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{Proactive: proactive, AdapterID: adapter, Turn: turn})
+					turn.Done()
 					want := tc.payload
 					if proactive {
 						want = tc.want
 					}
 					assertStickerFilteredContent(t, result.Content, want)
+					if len(result.Transcript) == 0 {
+						t.Fatal("missing final transcript")
+					}
+					last := result.Transcript[len(result.Transcript)-1]
+					if last.Role != "assistant" || last.Content != result.Content {
+						t.Fatalf("final transcript = %+v, returned content = %q", last, result.Content)
+					}
 					if result.Error != nil || len(p.requests) != 1 {
 						t.Fatalf("adapter=%s proactive=%t result=%+v requests=%d", adapter, proactive, result, len(p.requests))
 					}
@@ -159,12 +170,12 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 			for range 4 {
 				e.RecordBotTurn()
 			}
-			deliveries := 0
+			e.grantStickerGrace()
+			var deliveredPayloads []string
 			result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 				Proactive: true,
 				SendHook: func(got string) error {
-					deliveries++
-					assertStickerFilteredContent(t, got, tc.want)
+					deliveredPayloads = append(deliveredPayloads, got)
 					return nil
 				},
 			})
@@ -172,13 +183,87 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 			if tc.want == "" {
 				wantDeliveries = 0
 			}
-			if tool.calls != 1 || deliveries != wantDeliveries || result.Content != "done" || result.Error != nil || len(p.requests) != 2 {
-				t.Fatalf("calls=%d deliveries=%d result=%+v requests=%d", tool.calls, deliveries, result, len(p.requests))
+			if tool.calls != 1 || len(deliveredPayloads) != wantDeliveries || result.Content != "done" || result.Error != nil || len(p.requests) != 2 {
+				t.Fatalf("calls=%d deliveries=%d result=%+v requests=%d", tool.calls, len(deliveredPayloads), result, len(p.requests))
 			}
-			if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 0 || grace != 0 {
-				t.Fatalf("filtered sticker reset quota: remaining=%d grace=%d", remaining, grace)
+			for _, got := range deliveredPayloads {
+				assertStickerFilteredContent(t, got, tc.want)
+			}
+			if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 0 || grace != 2-wantDeliveries {
+				t.Fatalf("filtered delivery changed quota or counted incorrectly: remaining=%d grace=%d", remaining, grace)
 			}
 		})
+	}
+}
+
+func proactiveStickerEnvelopeCases() []struct{ name, payload, want string } {
+	return []struct{ name, payload, want string }{
+		{
+			name:    "session and unknown fields",
+			payload: `{"session":"onebot:group:synthetic-target","messages":[{"type":"plain","text":"before"},{"type":"mface"},{"type":"image","url":"https://example.invalid/image.gif","extra":9007199254740993},{"type":"plain","text":"after"}],"metadata":{"sequence":9007199254740993,"decimal":1.234567890123456789,"nested":[true,null,{"keep":"value"}]},"trace_id":"synthetic","enabled":false,"extension":null}`,
+			want:    `{"session":"onebot:group:synthetic-target","messages":[{"type":"plain","text":"before"},{"type":"image","url":"https://example.invalid/image.gif","extra":9007199254740993},{"type":"plain","text":"after"}],"metadata":{"sequence":9007199254740993,"decimal":1.234567890123456789,"nested":[true,null,{"keep":"value"}]},"trace_id":"synthetic","enabled":false,"extension":null}`,
+		},
+		{
+			name:    "capitalized messages key",
+			payload: `{"session":"synthetic-target","Messages":[{"type":"sticker"},{"type":"image","path":"/test/image.gif"}],"version":9007199254740993}`,
+			want:    `{"session":"synthetic-target","Messages":[{"type":"image","path":"/test/image.gif"}],"version":9007199254740993}`,
+		},
+		{
+			name:    "uppercase messages key",
+			payload: `{"session":"synthetic-target","MESSAGES":[{"type":"plain","text":"keep"},{"type":"image","sub_type":1}]}`,
+			want:    `{"session":"synthetic-target","MESSAGES":[{"type":"plain","text":"keep"}]}`,
+		},
+		{
+			name:    "message key aliases",
+			payload: `{"session":"synthetic-target","messages":[{"type":"sticker"}],"Messages":[{"type":"plain","text":"keep"},{"type":"mface"}]}`,
+			want:    `{"session":"synthetic-target","messages":[{"type":"plain","text":"keep"}],"Messages":[{"type":"plain","text":"keep"}]}`,
+		},
+		{
+			name:    "message key aliases reverse order",
+			payload: `{"Messages":[{"type":"sticker"}],"messages":[{"type":"plain","text":"keep"},{"type":"mface"}],"session":"synthetic-target"}`,
+			want:    `{"Messages":[{"type":"plain","text":"keep"}],"messages":[{"type":"plain","text":"keep"}],"session":"synthetic-target"}`,
+		},
+		{
+			name:    "sticker only with envelope",
+			payload: `{"session":"synthetic-target","metadata":{"keep":true},"messages":[{"type":"sticker"}]}`,
+			want:    "",
+		},
+	}
+}
+
+func TestFilterStickerMessagesPreservesEnvelope(t *testing.T) {
+	for _, tc := range proactiveStickerEnvelopeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			got, filtered := filterStickerMessages(tc.payload)
+			if !filtered {
+				t.Fatal("sticker was not filtered")
+			}
+			assertStickerFilteredContent(t, got, tc.want)
+		})
+	}
+}
+
+func TestProactiveFailedDeliveryDoesNotConsumeStickerGrace(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	e := &Engine{}
+	e.RecordBotTurn()
+	e.grantStickerGrace()
+	tc := proactiveStickerEnvelopeCases()[0]
+	var delivered string
+	ctx := WithRunContext(context.Background(), RunContext{
+		Proactive: true,
+		SendHook: func(payload string) error {
+			delivered = payload
+			return errors.New("synthetic delivery failure")
+		},
+	})
+	_, sent := e.deliverToolResult(ctx, core.ToolExecutionResult{MessagePayload: tc.payload}, "prepared")
+	if sent {
+		t.Fatal("failed hook counted as delivered")
+	}
+	assertStickerFilteredContent(t, delivered, tc.want)
+	if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 4 || grace != 2 {
+		t.Fatalf("failed delivery changed quota: remaining=%d grace=%d", remaining, grace)
 	}
 }
 
@@ -188,6 +273,10 @@ func TestFilterStickerMessagesPreservesUnrelatedContent(t *testing.T) {
 			t.Fatalf("unrelated input changed: %q -> %q filtered=%t", input, got, filtered)
 		}
 	}
+	input := "{\n  \"session\":\"synthetic-target\", \"metadata\":{\"sequence\":9007199254740993}, \"messages\":[{\"type\":\"image\",\"url\":\"https://example.invalid/image.gif\"}]\n}"
+	if got, filtered := filterStickerMessages(input); filtered || got != input {
+		t.Fatalf("ordinary image envelope changed: %q -> %q filtered=%t", input, got, filtered)
+	}
 }
 
 func assertStickerFilteredContent(t *testing.T, got, want string) {
@@ -196,7 +285,11 @@ func assertStickerFilteredContent(t *testing.T, got, want string) {
 		return
 	}
 	var gotJSON, wantJSON any
-	if json.Unmarshal([]byte(got), &gotJSON) != nil || json.Unmarshal([]byte(want), &wantJSON) != nil || !reflect.DeepEqual(gotJSON, wantJSON) {
+	gotDecoder := json.NewDecoder(strings.NewReader(got))
+	gotDecoder.UseNumber()
+	wantDecoder := json.NewDecoder(strings.NewReader(want))
+	wantDecoder.UseNumber()
+	if gotDecoder.Decode(&gotJSON) != nil || wantDecoder.Decode(&wantJSON) != nil || !reflect.DeepEqual(gotJSON, wantJSON) {
 		t.Fatalf("content = %q, want %q", got, want)
 	}
 }

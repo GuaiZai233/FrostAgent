@@ -3,7 +3,7 @@ package billing
 import (
 	"testing"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestEstimateTextTokens(t *testing.T) {

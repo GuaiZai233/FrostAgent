@@ -1,11 +1,11 @@
 package modelrouter
 
 import (
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/storage"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"net/url"
 	"os"
 	"path/filepath"

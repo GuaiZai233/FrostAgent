@@ -1,10 +1,10 @@
 package runtimescope
 
 import (
-	"FrostAgent/internal/envinject"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/storage"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"testing"
 )

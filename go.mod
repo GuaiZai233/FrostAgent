@@ -1,4 +1,4 @@
-module FrostAgent
+module github.com/GuaiZai233/FrostAgent
 
 go 1.27.3
 

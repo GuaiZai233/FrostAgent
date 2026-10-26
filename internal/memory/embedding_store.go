@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
 
 func (m *Embeddings) withEntriesLocked(s SearchScope, fn func([]MemoryEntry) error) error {

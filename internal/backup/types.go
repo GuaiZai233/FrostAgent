@@ -1,12 +1,12 @@
 package backup
 
 import (
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"time"
 )
 

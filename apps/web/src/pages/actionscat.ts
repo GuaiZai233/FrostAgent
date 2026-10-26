@@ -1302,7 +1302,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
                                 ? `
                               <div class="text-[10px] text-muted-foreground mt-0.5 font-mono">
                                 捕获: ${Object.entries(m.capture_env_map)
-                                  .map(([k, v]) => `${k}→${v}`)
+                                  .map(([k, v]) => `${escapeHtml(k)}→${escapeHtml(v)}`)
                                   .join(', ')}
                               </div>
                             `
@@ -1367,8 +1367,8 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
             matcherNameInput.focus();
             return;
           }
-          const pattern = matcherPatternInput.value.trim();
-          if (!pattern) {
+          const pattern = matcherPatternInput.value;
+          if (!pattern.trim()) {
             toast.warning('请输入匹配表达式 (Pattern)');
             matcherPatternInput.focus();
             return;
@@ -1659,8 +1659,12 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
 
   // Load All Data
   async function loadAll(): Promise<void> {
+    if (isDisposed) return;
     await loadStatus();
-    await Promise.all([loadActions(), loadRuns()]);
+    if (isDisposed) return;
+    await loadActions();
+    if (isDisposed) return;
+    await loadRuns();
   }
 
   // Attach Top Bar Events

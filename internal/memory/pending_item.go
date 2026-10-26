@@ -1,6 +1,6 @@
 package memory
 
-import "FrostAgent/internal/core"
+import "github.com/GuaiZai233/FrostAgent/internal/core"
 
 // PendingExtractionItem 是一条带 owner 标签的待提取消息。
 // Engine 在 buffer 阈值触发时按 owner 与路由分组，对每组调一次 Writer.Extract。

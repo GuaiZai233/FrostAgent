@@ -1,9 +1,9 @@
 package memory
 
 import (
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"strings"
 	"sync"
 	"time"

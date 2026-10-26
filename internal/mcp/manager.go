@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/admincmd"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 const (
@@ -1506,8 +1506,8 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			default:
 				return fmt.Sprintf("无效的 match_type %q，仅支持 'exact', 'contains', 'regex'", input.MatchType), nil
 			}
-			pattern := strings.TrimSpace(input.Pattern)
-			if pattern == "" {
+			pattern := input.Pattern
+			if strings.TrimSpace(pattern) == "" {
 				return "缺少必填参数 'pattern'", nil
 			}
 			if matchType == "regex" {
@@ -1538,7 +1538,7 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			matcher, err := client.CreateMatcher(ctx, input.ActionID, actionscat.CreateMatcherReq{
 				Name:             strings.TrimSpace(input.Name),
 				MatchType:        matchType,
-				Pattern:          strings.TrimSpace(input.Pattern),
+				Pattern:          pattern,
 				TargetField:      targetField,
 				CaptureEnvMap:    input.CaptureEnvMap,
 				Priority:         input.Priority,

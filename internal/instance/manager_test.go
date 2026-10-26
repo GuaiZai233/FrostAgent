@@ -1,16 +1,16 @@
 package instance
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/gorilla/websocket"
 	"io"
 	"net/http"

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 func TestMemoryInputWindow(t *testing.T) {

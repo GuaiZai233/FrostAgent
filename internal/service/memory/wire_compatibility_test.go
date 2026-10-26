@@ -1,7 +1,7 @@
 package memsvc
 
 import (
-	v1 "FrostAgent/gen/proto/frostagent/v1"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"testing"
 
 	"google.golang.org/protobuf/proto"

@@ -1,12 +1,12 @@
 package messages_test
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/service/messages"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/service/messages"
 	"net/http"
 	"net/http/httptest"
 	"strings"

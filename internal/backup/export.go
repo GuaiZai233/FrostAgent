@@ -1,16 +1,16 @@
 package backup
 
 import (
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/service/dialogue"
-	settingsservice "FrostAgent/internal/service/settings"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/storage"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
+	settingsservice "github.com/GuaiZai233/FrostAgent/internal/service/settings"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"net/url"
 )
 

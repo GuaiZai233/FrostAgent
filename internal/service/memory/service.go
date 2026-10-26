@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	"FrostAgent/internal/memory"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	pbconnect "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 
 	"connectrpc.com/connect"
 )

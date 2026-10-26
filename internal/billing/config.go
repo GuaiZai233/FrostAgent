@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 // Config holds runtime configuration for the Alcyone billing integration.

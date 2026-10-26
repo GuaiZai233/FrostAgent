@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {

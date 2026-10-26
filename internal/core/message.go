@@ -8,6 +8,7 @@ import (
 // IncomingDispatcher forwards eligible transport messages outside the agent loop.
 type IncomingDispatcher interface {
 	IsConfigured() bool
+	IsEnabled() bool
 	DispatchIncoming(context.Context, IncomingMessage) error
 }
 
@@ -58,6 +59,7 @@ type IncomingMessage struct {
 	SenderCard  string         `json:"sender_card,omitempty"`
 	Content     string         `json:"content"`
 	Platform    string         `json:"platform"`     // "qq", "telegram", "discord", "astrbot", etc.
+	AdapterID   string         `json:"-"`            // Trusted transport identity; never decoded from a message payload.
 	MessageType string         `json:"message_type"` // "group" | "private"
 	GroupID     string         `json:"group_id,omitempty"`
 	GroupName   string         `json:"group_name,omitempty"`

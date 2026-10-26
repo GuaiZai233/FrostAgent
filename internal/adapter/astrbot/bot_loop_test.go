@@ -1,11 +1,11 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +104,9 @@ func TestAstrBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 		if action := readBotLoopAction(t, conn); action.Action != "send_message" {
 			t.Fatalf("turn %s: %+v", id, action)
 		}
+		// These are separate soft-budget turns, not an injection while the
+		// previous terminal write is still being finalized.
+		waitAstrBotTurnCompletion(t, engine, event)
 	}
 	provider.mu.Lock()
 	requests := append([]core.ChatRequest(nil), provider.requests...)
@@ -197,6 +200,9 @@ func TestAstrBotBotLoopIndependentBudgetsAndExplicitWake(t *testing.T) {
 				action := readBotLoopAction(t, conn)
 				if action.Action != want || (want == "noop" && !action.SuppressLLM) {
 					t.Fatalf("%s: got %+v, want %s", id, action, want)
+				}
+				if want == "send_message" && trigger != "" {
+					waitAstrBotTurnCompletion(t, engine, event)
 				}
 			}
 			send("first-a", "11", "at", "send_message")
@@ -327,10 +333,15 @@ func TestAstrBotBotLoopCrossConnectionSecurityDelayPreservesOrder(t *testing.T) 
 	if action := readBotLoopAction(t, first); action.Action != "send_message" {
 		t.Fatalf("first security rejection: %+v", action)
 	}
-	if action := readBotLoopAction(t, second); action.Action != "send_message" || action.Echo != "reply_human" {
-		t.Fatalf("human interruption: %+v", action)
-	}
-	if action := readBotLoopAction(t, second); action.Action != "send_message" || action.Echo != "reply_resumed" {
-		t.Fatalf("new bot turn after human interruption: %+v", action)
+	// Budget admission remains ordered, but different senders execute
+	// independently. Both replies must arrive exactly once in either order.
+	replies := map[string]bool{"reply_human": false, "reply_resumed": false}
+	for range 2 {
+		action := readBotLoopAction(t, second)
+		seen, expected := replies[action.Echo]
+		if action.Action != "send_message" || !expected || seen {
+			t.Fatalf("unexpected or duplicate reply after human budget reset: %+v", action)
+		}
+		replies[action.Echo] = true
 	}
 }

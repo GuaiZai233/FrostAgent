@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/storage"
 	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func TestSQLDialogueYAMLImportExport(t *testing.T) {

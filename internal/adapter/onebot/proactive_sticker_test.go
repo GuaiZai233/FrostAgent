@@ -1,12 +1,12 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 	"testing"
 	"time"

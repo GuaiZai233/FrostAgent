@@ -1,9 +1,9 @@
 package instance
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/proactive"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"net/http"
 	"net/http/httptest"
 	"strings"

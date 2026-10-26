@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/skills"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func skillConcurrencyFixture(t *testing.T) (*Engine, *SessionContext, *skills.Store, context.Context) {

@@ -1,9 +1,9 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/mcp"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
 	"strings"
 	"sync"
 	"testing"

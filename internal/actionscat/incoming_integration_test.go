@@ -1,16 +1,16 @@
 package actionscat_test
 
 import (
-	"FrostAgent/internal/actionscat"
-	"FrostAgent/internal/adapter/astrbot"
-	"FrostAgent/internal/adapter/onebot"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/security"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -425,7 +425,7 @@ func TestIngressCreatesRunThroughRealActionsCatMatcher(t *testing.T) {
 		found := false
 		for _, run := range runs {
 			if run.PlannedEnv["ACTIONSCAT_EVENT_PLATFORM"] == map[string]string{"onebot": "onebot", "astrbot": "test-platform"}[name] {
-				found = run.PlannedEnv["ACTIONSCAT_EVENT_TEXT"] == "https://www.bilibili.com/video/test" && run.PlannedEnv["ACTIONSCAT_EVENT_GROUP_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_USER_ID"] != ""
+				found = run.PlannedEnv["ACTIONSCAT_EVENT_TEXT"] == "https://www.bilibili.com/video/test" && run.PlannedEnv["ACTIONSCAT_EVENT_GROUP_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_USER_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_ADAPTER_ID"] == name
 			}
 		}
 		if !found {

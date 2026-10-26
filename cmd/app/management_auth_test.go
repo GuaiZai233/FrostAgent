@@ -1,10 +1,10 @@
 package main
 
 import (
-	"FrostAgent/internal/instance"
-	"FrostAgent/internal/instanceconfig"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/instance"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"io"
 	"net/http"
 	"net/http/httptest"

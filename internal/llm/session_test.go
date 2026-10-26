@@ -1,11 +1,11 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/runtimescope"
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"path/filepath"
 	"sync"
 	"sync/atomic"

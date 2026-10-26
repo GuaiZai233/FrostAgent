@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
 func TestFormatToolCallLog_ExecCommandNotRedacted(t *testing.T) {

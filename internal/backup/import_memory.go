@@ -1,8 +1,8 @@
 package backup
 
 import (
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
 func ImportMemories(db *storage.DB, instanceID string, data Memories, merge bool) (memory.ImportResult, error) {

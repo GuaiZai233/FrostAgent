@@ -1,21 +1,21 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/botloop"
-	"FrostAgent/internal/adapter/heartbeat"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"net/http"
 	"net/url"
 	"strings"
@@ -230,6 +230,7 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 		SenderCard:  event.SenderCard,
 		Content:     event.Content,
 		Platform:    platform,
+		AdapterID:   "astrbot",
 		MessageType: event.MessageType,
 		GroupID:     event.GroupID,
 		GroupName:   event.GroupName,
@@ -367,11 +368,15 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				scope = a.engine.Scope
 			}
 			pristineShouldReply := false
+			pristineInject := false
 			if event.MessageType == "group" || event.MessageType == "private" {
 				if event.Metadata == nil {
 					event.Metadata = make(map[string]any)
 				}
 				pristineShouldReply = shouldReply(&event, scope)
+				injectionEvent := event
+				injectionEvent.IsWake = false
+				pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
 				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 				if a.engine != nil && a.engine.SessionManager != nil &&
 					(event.Type == "" || event.Type == "event") &&
@@ -394,7 +399,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
-			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsConfigured() &&
+			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 				(event.Type == "" || event.Type == "event") &&
 				(event.EventType == "" || event.EventType == "message") &&
 				(event.MessageType == "group" || event.MessageType == "private")
@@ -526,7 +531,14 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveTurn()
+				if shouldReply(&event, a.engine.Scope) {
+					lane := "sender:" + event.Platform + ":" + event.UserID
+					proactiveTurn := isProactiveReply(&event)
+					if proactiveTurn {
+						lane = "proactive:" + event.Platform
+					}
+					turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
+				}
 			}
 
 			if event.MessageType == "group" && !c.mock {

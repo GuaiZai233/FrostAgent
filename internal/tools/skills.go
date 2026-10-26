@@ -9,9 +9,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
 )
 
 func SkillTools(store *skills.Store, backend sandbox.Backend, sessions *llm.SessionManager) []Tool {
@@ -56,6 +56,9 @@ func SkillTools(store *skills.Store, backend sandbox.Backend, sessions *llm.Sess
 			}
 			if run.Epoch != 0 && sess.Epoch() != run.Epoch {
 				return "", errors.New("会话已重置，技能调用已失效")
+			}
+			if run.SkillState != nil {
+				sess = run.SkillState
 			}
 			if name == "load_skill" {
 				if pkg.Info.ManualOnly {

@@ -1,12 +1,13 @@
 package llm
 
 import (
-	"FrostAgent/internal/sticker"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"strings"
 )
 
 // filterStickerMessages removes sticker components from the shared outbound
-// message format. Ordinary text and images retain their fields and order.
+// message format. Envelope fields, ordinary text and images are retained.
 // An empty result means the entire message chain consisted of stickers.
 func filterStickerMessages(content string) (string, bool) {
 	var payload struct {
@@ -47,9 +48,20 @@ func filterStickerMessages(content string) (string, bool) {
 	if len(kept) == 0 {
 		return "", true
 	}
-	// Delivery consumes only the messages envelope; raw components preserve
-	// media sources and any platform-specific fields on retained messages.
-	payload.Messages = kept
-	filtered, _ := json.Marshal(payload)
+	// Preserve session and unknown envelope values as raw JSON, including numbers
+	// that cannot be represented exactly as float64.
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal([]byte(content), &envelope) != nil {
+		return content, false
+	}
+	filteredMessages, _ := json.Marshal(kept)
+	for key := range envelope {
+		// Match the struct decoder used above and by the adapters. Replace every
+		// alias so re-encoding cannot change which message chain is delivered.
+		if strings.EqualFold(key, "messages") {
+			envelope[key] = filteredMessages
+		}
+	}
+	filtered, _ := json.Marshal(envelope)
 	return string(filtered), true
 }

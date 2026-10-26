@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 )
 
 var sandboxDirectory = regexp.MustCompile("^/sandbox/frostagent-skill-[a-zA-Z0-9]+$")

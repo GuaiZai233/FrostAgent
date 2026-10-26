@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 )
 
 const (
