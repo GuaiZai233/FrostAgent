@@ -30,9 +30,14 @@ This project uses the `Makefile` in the repository root to orchestrate the build
 
 ```bash
 pnpm install
-go install github.com/bufbuild/buf/cmd/buf@latest
+go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
+
+CI Actions are pinned to immutable references. Dependabot
+opens weekly update PRs; review and merge them regularly so pinned versions do not
+become stale. See [dependency maintenance](.github/dependency-maintenance.md) for
+the Go tool versions and update checks.
 
 ### 2. Choose a Database
 
