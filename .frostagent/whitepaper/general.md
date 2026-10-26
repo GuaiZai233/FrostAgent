@@ -248,7 +248,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。`
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。`
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
@@ -269,7 +269,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **主动回复工具门禁与副作用限制 (Proactive Reply Tool Confinement)**：
   - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
-    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，向模型仅暴露 `stay_silent`、`memory` 与受积极度开关限制的 `send_sticker`；ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，仅放行 `stay_silent`、`memory` 及显式实现主动回复许可接口的扩展工具；`send_sticker` 始终禁止，即使工具显式声明主动回复许可也不能绕过。ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **主动回复表情包发送硬限制**：引擎在最终输出和工具发送边界过滤 `mface`、`sticker`、`is_sticker` 及图片 `sub_type` / `subType` 标记（含嵌套 `data`）；OneBot 同时过滤旧式 CQ 字符串中的表情包。混合消息只移除表情包组件，保留普通图片、文本及顺序，并保留 `session` 与未知外层字段；全表情包消息不发送。未标记为表情包的普通图片（包括 GIF）不受影响，显式唤醒轮次保持原有行为；
     - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
     - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
     - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；
@@ -461,7 +462,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 - **工具检索与轮盘赌加权随机选择 (`send_sticker` Tool & Weighted Roulette Selection)**：
   - 注册 `send_sticker` 工具供大模型在合适语境下调用；
   - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 个选定轮次至少发送一次表情包。`STICKER_ACTIVITY_MODE` 可选 `bot_turns`（默认，强制 Bot 对话轮次：每次唤醒或触发主动回复进入对话计一次，最终静默也计数）与 `all_messages`（全部轮次：OneBot/AstrBot 每条传入聊天消息计一次，无需唤醒；心跳、通知、API 回执和 Mock 不计数）。多次模型思考或同轮多条出站消息不重复计数；全部轮次到期只在下一次正常触发对话时执行约束，不会自行触发主动回复。只有成功确认发送的表情包才重置计数。计数在实例内存中，重启、切换模式或调整积极度后重置。
-  - 在当轮请求的用户消息快照中注入所选模式的剩余轮次数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。
+  - 在非主动回复轮次的用户消息快照中注入所选模式的剩余轮次数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。主动回复仍计入所选轮次计数，但跳过上述强制约束，不因过滤表情包重置额度或授予宽容。
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；

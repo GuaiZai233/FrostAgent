@@ -969,6 +969,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Proactive:      wakeSignals.Proactive,
 		})
 		replyText = runResult.Content
+		if wakeSignals.Proactive {
+			replyText = filterProactiveStickerCQ(replyText)
+		}
 		if turn.Interrupted() {
 			return
 		}
