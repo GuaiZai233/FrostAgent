@@ -353,6 +353,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 				event = normalized
 			}
+			if handleRuntimeStatusCommand(c, event, a.engine) {
+				continue
+			}
 			if !c.mock && (event.Type == "" || event.Type == "event") &&
 				(event.EventType == "" || event.EventType == "message") &&
 				(event.MessageType == "group" || event.MessageType == "private") {
