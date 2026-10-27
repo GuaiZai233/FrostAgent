@@ -81,6 +81,24 @@ def protected_tag(tag):
     return tag in {'main', 'latest'} or RELEASE_TAG.fullmatch(tag) is not None
 
 
+def reconcile_registry_tags(client, api_tags):
+    """Fail closed unless GHCR and Packages API report the same complete tag set."""
+    registry_tags = client.registry_tags()
+    if (not isinstance(registry_tags, (tuple, list))
+            or any(not isinstance(tag, str) or not tag for tag in registry_tags)
+            or len(registry_tags) != len(set(registry_tags))):
+        raise CleanupError('Invalid registry tag set; refusing cleanup')
+    registry_set = set(registry_tags)
+    api_set = set(api_tags)
+    if registry_set != api_set:
+        registry_only = len(registry_set - api_set)
+        metadata_only = len(api_set - registry_set)
+        raise CleanupError(
+            'Registry tag list and Packages API metadata disagree '
+            f'(registry-only={registry_only}, metadata-only={metadata_only}); refusing cleanup'
+        )
+
+
 def manifest_references(manifest):
     """Walk indexes (including BuildKit attestations) and manifest subjects."""
     if not isinstance(manifest, dict) or manifest.get('schemaVersion') != 2:
@@ -157,6 +175,42 @@ class GHCR:
                 return versions
             page += 1
 
+    def registry_tags(self):
+        """Read every GHCR tag page without trusting links to other hosts."""
+        path = f'/v2/{REPOSITORY.lower()}/tags/list'
+        url = f'https://ghcr.io{path}?n=100'
+        visited = set()
+        tags = []
+        while True:
+            if url in visited:
+                raise CleanupError('Repeated registry pagination; refusing cleanup')
+            visited.add(url)
+            payload, headers = request_json(url, headers=self.registry_headers)
+            if (not isinstance(payload, dict)
+                    or payload.get('name') != REPOSITORY.lower()
+                    or not isinstance(payload.get('tags'), list)):
+                raise CleanupError('Invalid registry tag listing; refusing cleanup')
+            batch = payload['tags']
+            if any(not isinstance(tag, str) or not tag for tag in batch):
+                raise CleanupError('Invalid registry tag; refusing cleanup')
+            tags.extend(batch)
+
+            next_link = re.search(r'<([^>]+)>;\s*rel="next"', headers.get('Link', ''))
+            if not next_link:
+                if len(tags) != len(set(tags)):
+                    raise CleanupError('Duplicate registry tags; refusing cleanup')
+                return tuple(sorted(tags))
+
+            target = urlsplit(next_link.group(1))
+            if (target.scheme != 'https' or target.netloc != 'ghcr.io'
+                    or target.path != path or not target.query
+                    or target.username is not None or target.password is not None
+                    or target.fragment):
+                raise CleanupError('Unexpected registry pagination URL; refusing cleanup')
+            # Rebuild the URL with the validated fixed host/path so the registry
+            # bearer token can never be sent to a URL supplied by a response.
+            url = f'https://ghcr.io{path}?{target.query}'
+
     def version(self, version_id):
         version, _ = self.api(f'{self.path}/{version_id}')
         return version
@@ -182,6 +236,12 @@ def cleanup(client, *, apply=False, log=print):
             if tag in tags:
                 raise CleanupError('Duplicate image tags; refusing cleanup')
             tags[tag] = digest
+
+    # The Packages API and registry can briefly disagree after a push/retag.
+    # Package-version deletion removes every alias on that version, so never
+    # delete anything unless both APIs agree on the complete tag-name set.
+    reconcile_registry_tags(client, tags)
+
     if 'main' not in tags or tags.get('latest') != tags['main']:
         raise CleanupError('main and latest must point to the same image; refusing cleanup')
 
@@ -237,6 +297,8 @@ def cleanup(client, *, apply=False, log=print):
 
     if snapshot(client.versions()) != original:
         raise CleanupError('Package changed during planning; refusing cleanup')
+    # Reconcile again at the last safe point before the first destructive call.
+    reconcile_registry_tags(client, tags)
     for version in candidates:
         version_id, _, _, _ = version_key(version)
         if version_key(client.version(version_id)) != version_key(version):

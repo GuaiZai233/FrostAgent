@@ -59,6 +59,16 @@ class Registry:
         self.deleted = []
         self.reads = []
         self.list_calls = 0
+        self.registry_only_tags = {}
+
+    def registry_tags(self):
+        names = {
+            tag
+            for item in self.items
+            for tag in item['metadata']['container']['tags']
+        }
+        names.update(self.registry_only_tags)
+        return tuple(sorted(names))
 
     def versions(self):
         self.list_calls += 1
@@ -162,6 +172,14 @@ class RetentionTests(unittest.TestCase):
         self.client.items[0]['metadata']['container']['tags'] = ['main']
         self.client.items[-1]['metadata']['container']['tags'] = ['latest']
         with self.assertRaisesRegex(gc.CleanupError, 'main and latest'):
+            self.run_cleanup(apply=True)
+        self.assertEqual(self.client.deleted, [])
+
+    def test_registry_only_release_tag_stops_cleanup_before_deletion(self):
+        # GHCR already exposes a release alias on an older SHA digest, but the
+        # Packages API snapshot has not propagated that alias yet.
+        self.client.registry_only_tags = {'v2.0.0': digest(6)}
+        with self.assertRaisesRegex(gc.CleanupError, 'Registry tag list and Packages API metadata disagree'):
             self.run_cleanup(apply=True)
         self.assertEqual(self.client.deleted, [])
 
@@ -321,6 +339,31 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(gc.CleanupError):
                 client.versions()
 
+    def test_registry_tag_listing_follows_pagination(self):
+        client = self.client()
+        path = '/v2/guaizai233/frostagent/tags/list'
+        first = (
+            {'name': 'guaizai233/frostagent', 'tags': ['main']},
+            {'Link': f'<https://ghcr.io{path}?n=100&last=main>; rel="next"'},
+        )
+        second = ({'name': 'guaizai233/frostagent', 'tags': ['latest']}, {})
+        with patch.object(gc, 'request_json', side_effect=[first, second]) as request:
+            self.assertEqual(client.registry_tags(), ('latest', 'main'))
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[1].args[0],
+            f'https://ghcr.io{path}?n=100&last=main',
+        )
+
+    def test_registry_tag_listing_rejects_untrusted_next_link(self):
+        client = self.client()
+        path = '/v2/guaizai233/frostagent/tags/list'
+        payload = {'name': 'guaizai233/frostagent', 'tags': ['main']}
+        headers = {'Link': f'<https://evil.example{path}?n=100&last=main>; rel="next"'}
+        with patch.object(gc, 'request_json', return_value=(payload, headers)):
+            with self.assertRaisesRegex(gc.CleanupError, 'Unexpected registry pagination URL'):
+                client.registry_tags()
+
     def test_registry_digest_validation(self):
         client = self.client()
         for returned in ('', 'not-a-digest', digest(2)):
@@ -377,6 +420,11 @@ class ClientTests(unittest.TestCase):
                 return {'token': 'synthetic-pull'}, {}
             if url.startswith(version_url + '?'):
                 return registry.versions(), {}
+            if url.startswith('https://ghcr.io/v2/guaizai233/frostagent/tags/list?'):
+                return {
+                    'name': 'guaizai233/frostagent',
+                    'tags': list(registry.registry_tags()),
+                }, {}
             if url.startswith(version_url + '/'):
                 version_id = int(url.rsplit('/', 1)[1])
                 if method == 'DELETE':

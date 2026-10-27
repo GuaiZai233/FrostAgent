@@ -40,11 +40,13 @@ Both jobs use `queue: max` so cleanup cannot replace a pending release publish.
 GitHub allows up to 100 pending jobs in this queue; overflowing jobs are rejected.
 See [GitHub's concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
-The script first reads every API page, resolves protected tags through GHCR, and
-walks all of their manifest references. Missing or divergent main aliases,
-unknown manifests, incomplete responses and permission errors fail closed.
-Before applying, it checks that the package snapshot has not changed and
-revalidates each candidate immediately before deletion. HTTP failures stop the
+The script reads every Packages API page and every paginated GHCR `tags/list`
+page, then requires both sources to report exactly the same tag-name set before
+planning deletion. It resolves protected tags through GHCR and walks all of
+their manifest references. Tag-list mismatches, divergent main aliases, unknown
+manifests, incomplete responses and permission errors fail closed. Before
+applying, it rechecks the package snapshot and registry tag set, then revalidates
+each candidate immediately before deletion. HTTP failures stop the
 job visibly; a partial deletion is safe to retry. GitHub APIs do not provide a
 transaction spanning registry pushes and package deletion, so the shared lock
 is required, not just these consistency checks.
