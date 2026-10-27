@@ -13,6 +13,9 @@ func (d *DB) PrepareDeletion(ctx context.Context, instanceID string, backupVersi
 		return err
 	}
 	defer tx.Rollback()
+	if err := requireNativeSchema(ctx, tx, "prepare instance deletion"); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, d.Bind(`UPDATE instances SET enabled = 0, deleting = 1 WHERE id = ? AND deleting = 0`), instanceID)
 	if err != nil {
 		return err
@@ -55,6 +58,9 @@ func (d *DB) CancelDeletion(ctx context.Context, instanceID string) error {
 // ConfirmDeletion removes SQL-owned instance data after the caller has staged
 // its filesystem directory for rollback. A missing pending marker is fatal.
 func (d *DB) ConfirmDeletion(ctx context.Context, instanceID string) error {
+	if err := d.RequireNativeSchema(ctx, "confirm instance deletion"); err != nil {
+		return err
+	}
 	state := d.SkillState(instanceID)
 	state.Mu.Lock()
 	defer state.Mu.Unlock()
@@ -65,6 +71,9 @@ func (d *DB) ConfirmDeletion(ctx context.Context, instanceID string) error {
 	}
 	defer tx.Rollback()
 	var version int
+	if err := requireNativeSchema(ctx, tx, "confirm instance deletion"); err != nil {
+		return err
+	}
 	if err := tx.QueryRowContext(ctx, d.Bind(`SELECT backup_version FROM pending_deletions WHERE instance_id = ?`), instanceID).Scan(&version); err != nil {
 		return err
 	}

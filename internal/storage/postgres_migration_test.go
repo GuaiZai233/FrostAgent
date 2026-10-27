@@ -105,7 +105,7 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 	}
 	prepareOldSchema(t, db, 7)
 	populateMigrationFixture(t, db)
-	if err := db.applyMigration(ctx, migration{8, []string{
+	if err := db.applyMigration(ctx, migration{version: 8, statements: []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, source_message_id)`,
 		`THIS IS NOT SQL`,
 	}}); err == nil {
@@ -124,7 +124,7 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 		t.Fatalf("retry PostgreSQL migration: %v", err)
 	}
 	assertMigrationFixture(t, db)
-	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), SchemaVersion+1); err != nil {
+	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), SchemaVersion+1, SchemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
