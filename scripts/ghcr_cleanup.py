@@ -82,7 +82,7 @@ def protected_tag(tag):
 
 
 def reconcile_registry_tags(client, api_tags):
-    """Fail closed unless GHCR and Packages API report the same complete tag set."""
+    """Fail closed unless GHCR and Packages API agree on every tag's digest."""
     registry_tags = client.registry_tags()
     if (not isinstance(registry_tags, (tuple, list))
             or any(not isinstance(tag, str) or not tag for tag in registry_tags)
@@ -97,6 +97,13 @@ def reconcile_registry_tags(client, api_tags):
             'Registry tag list and Packages API metadata disagree '
             f'(registry-only={registry_only}, metadata-only={metadata_only}); refusing cleanup'
         )
+    # Matching names alone do not prove the Packages API has caught up with a
+    # retag. Check every alias, including SHA tags outside the retention window
+    # and other tags on deletion candidates. Never reuse a previous resolution.
+    for tag, expected in sorted(api_tags.items()):
+        digest, _ = client.manifest(tag)
+        if digest != expected:
+            raise CleanupError(f'Tag {tag} changed or is not yet consistent; refusing cleanup')
 
 
 def manifest_references(manifest):
@@ -237,13 +244,13 @@ def cleanup(client, *, apply=False, log=print):
                 raise CleanupError('Duplicate image tags; refusing cleanup')
             tags[tag] = digest
 
-    # The Packages API and registry can briefly disagree after a push/retag.
-    # Package-version deletion removes every alias on that version, so never
-    # delete anything unless both APIs agree on the complete tag-name set.
-    reconcile_registry_tags(client, tags)
-
     if 'main' not in tags or tags.get('latest') != tags['main']:
         raise CleanupError('main and latest must point to the same image; refusing cleanup')
+
+    # The Packages API and registry can briefly disagree after a push/retag.
+    # Package-version deletion removes every alias on that version, so never
+    # delete anything unless both APIs agree on the complete tag-to-digest map.
+    reconcile_registry_tags(client, tags)
 
     # Keep the ten most recent SHA-tagged intermediate images. The current
     # main/latest image and release-tagged images are protected separately and

@@ -131,6 +131,80 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(set(self.client.deleted), {6, 7, 100, 101, 999})
         self.assertTrue(set(range(102, 112)).isdisjoint(self.client.deleted))
 
+    def test_same_tag_set_with_expired_sha_mapping_mismatch_stops_all_deletion(self):
+        for apply in (False, True):
+            with self.subTest(apply=apply):
+                self.client = Registry()
+                for number in range(100, 111):
+                    self.client.items.append(version(
+                        number, f'sha-{number:07x}', created_at=f'2026-02-01T00:00:{number - 100:02d}Z'))
+                    self.client.manifests[digest(number)] = leaf()
+                # The old API mapping places this tag outside the ten-image
+                # window. GHCR actually points it at a newer, API-untagged image.
+                stale_tag = 'sha-0000064'
+                self.client.items.append(version(200, created_at='2026-03-01T00:00:00Z'))
+                original = self.client.manifest
+
+                def changed(reference):
+                    if reference == stale_tag:
+                        return digest(200), leaf()
+                    return original(reference)
+
+                api_names = {tag for item in self.client.items
+                             for tag in item['metadata']['container']['tags']}
+                self.assertEqual(set(self.client.registry_tags()), api_names)
+                with patch.object(self.client, 'manifest', side_effect=changed):
+                    with self.assertRaisesRegex(gc.CleanupError, f'Tag {stale_tag} .*not yet consistent'):
+                        self.run_cleanup(apply=apply)
+                self.assertEqual(self.client.deleted, [])
+
+    def test_candidate_mapping_change_after_planning_stops_first_delete(self):
+        self.client.items.append(version(20, 'old-build'))
+        self.client.manifests[digest(20)] = leaf()
+        original_tags = self.client.registry_tags
+        original_manifest = self.client.manifest
+        tag_list_calls = 0
+
+        def registry_tags():
+            nonlocal tag_list_calls
+            tag_list_calls += 1
+            return original_tags()
+
+        def changed(reference):
+            if tag_list_calls > 1 and reference == 'old-build':
+                return digest(200), leaf()
+            return original_manifest(reference)
+
+        with patch.object(self.client, 'registry_tags', side_effect=registry_tags), \
+                patch.object(self.client, 'manifest', side_effect=changed):
+            with self.assertRaisesRegex(gc.CleanupError, 'Tag old-build .*not yet consistent'):
+                self.run_cleanup(apply=True)
+        self.assertEqual(tag_list_calls, 2)
+        self.assertEqual(self.client.deleted, [])
+
+    def test_failure_resolving_candidate_tag_stops_all_deletion(self):
+        self.client.items.append(version(20, 'old-build'))
+        original = self.client.manifest
+
+        def unavailable(reference):
+            if reference == 'old-build':
+                raise gc.CleanupError('HTTP 404')
+            return original(reference)
+
+        with patch.object(self.client, 'manifest', side_effect=unavailable):
+            with self.assertRaisesRegex(gc.CleanupError, 'HTTP 404'):
+                self.run_cleanup(apply=True)
+        self.assertEqual(self.client.deleted, [])
+
+    def test_all_tag_mappings_are_read_again_before_deletion(self):
+        self.client.items.append(version(20, 'old-build'))
+        self.client.manifests[digest(20)] = leaf()
+        self.run_cleanup(apply=True)
+        self.assertEqual(self.client.deleted, [20, 7])
+        for tag in self.client.registry_tags():
+            with self.subTest(tag=tag):
+                self.assertGreaterEqual(self.client.reads.count(tag), 2)
+
     def test_main_update_keeps_previous_main_within_intermediate_retention(self):
         self.client.items[0]['metadata']['container']['tags'] = ['sha-eeeeeee']
         self.client.items.append(version(8, 'main', 'latest', 'sha-ffffffff', created_at='2026-01-08T00:00:00Z'))
