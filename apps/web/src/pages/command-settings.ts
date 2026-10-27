@@ -16,11 +16,12 @@ function getPrefixParts(prefix: string): { prefix: string; sep: string } {
   return { prefix: trimmed, sep };
 }
 
-export function mountCommandSettingsPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountCommandSettingsPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
+  let loaded = false;
+  let loading = false;
   let saving = false;
-  let currentPrefix = '/';
+  const controller = new AbortController();
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -34,11 +35,11 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button class="btn btn-outline btn-sm" id="cmd-reset-default-btn">
+          <button class="btn btn-outline btn-sm" id="cmd-reset-default-btn" disabled>
             ${icon('refresh', 'w-3.5 h-3.5')}
-            <span>重置为默认 (/)</span>
+            <span>重置指令前缀 (/)</span>
           </button>
-          <button class="btn btn-primary btn-sm" id="cmd-save-btn">
+          <button class="btn btn-primary btn-sm" id="cmd-save-btn" disabled>
             ${icon('save', 'w-3.5 h-3.5')}
             <span>保存设置</span>
           </button>
@@ -46,6 +47,25 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
       </header>
 
       <div class="flex flex-col gap-4" style="max-width: 48rem;">
+        <div class="flex items-center gap-3" id="cmd-load-status" role="status">
+          <span id="cmd-load-message" class="text-xs text-muted">正在加载指令设置…</span>
+          <button class="btn btn-outline btn-sm" id="cmd-retry-btn" hidden disabled>重新加载</button>
+        </div>
+        <article class="card p-5 flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-3">
+            <label for="cmd-runtime-status" class="text-sm font-semibold text-foreground">输出FrostAgent默认运行信息</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="cmd-runtime-status" role="switch" aria-label="输出FrostAgent默认运行信息" aria-describedby="cmd-runtime-status-description" disabled />
+              <span aria-hidden="true"></span>
+            </label>
+          </div>
+          <p id="cmd-runtime-status-description" class="text-xs text-muted leading-relaxed">一旦输入 FrostAgent 预留的调试语句“#fa”，将会促使 Bot 输出基本运行信息。</p>
+          <div class="flex items-center gap-2">
+            <span class="badge badge-outline">当前实例</span>
+            <span class="badge badge-outline">默认开启</span>
+            <span class="badge badge-outline">保存后立即生效</span>
+          </div>
+        </article>
         <!-- Prefix Config Card -->
         <article class="card p-5 flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
@@ -59,6 +79,7 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
                 class="input font-mono text-sm"
                 placeholder="/"
                 style="max-width: 16rem;"
+                disabled
               />
               <span class="badge badge-outline">当前实例</span>
               <span class="badge badge-outline">立即生效</span>
@@ -89,9 +110,22 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
   `;
 
   const prefixInput = container.querySelector<HTMLInputElement>('#cmd-prefix-input')!;
+  const runtimeStatusInput = container.querySelector<HTMLInputElement>('#cmd-runtime-status')!;
   const saveBtn = container.querySelector<HTMLButtonElement>('#cmd-save-btn')!;
   const resetDefaultBtn = container.querySelector<HTMLButtonElement>('#cmd-reset-default-btn')!;
   const examplesList = container.querySelector<HTMLElement>('#cmd-examples-list')!;
+  const loadStatus = container.querySelector<HTMLElement>('#cmd-load-status')!;
+  const loadMessage = container.querySelector<HTMLElement>('#cmd-load-message')!;
+  const retryBtn = container.querySelector<HTMLButtonElement>('#cmd-retry-btn')!;
+
+  function syncControls() {
+    const disabled = !loaded || loading || saving || isUnmounted;
+    prefixInput.disabled = disabled;
+    runtimeStatusInput.disabled = disabled;
+    saveBtn.disabled = disabled;
+    resetDefaultBtn.disabled = disabled;
+    retryBtn.disabled = loading || saving || isUnmounted;
+  }
 
   function renderExamples(prefix: string) {
     const { prefix: p, sep } = getPrefixParts(prefix);
@@ -159,60 +193,73 @@ export function mountCommandSettingsPage(container: HTMLElement): () => void {
   });
 
   async function loadData() {
-    if (isUnmounted) return;
+    if (isUnmounted || loading || saving) return;
+    loading = true;
+    loaded = false;
+    loadStatus.hidden = false;
+    loadMessage.textContent = '正在加载指令设置…';
+    retryBtn.hidden = true;
+    syncControls();
     try {
       const vars = await api.listEnvVars();
       if (isUnmounted) return;
       const found = vars.find((v) => v.key === 'ADMIN_COMMAND_PREFIX');
-      currentPrefix = found?.value?.trim() || '/';
-      prefixInput.value = currentPrefix;
-      renderExamples(currentPrefix);
+      prefixInput.value = found?.value?.trim() || '/';
+      runtimeStatusInput.checked = vars.find((v) => v.key === 'ENABLE_RUNTIME_STATUS_COMMAND')?.value !== 'false';
+      renderExamples(prefixInput.value);
+      loaded = true;
+      loadStatus.hidden = true;
     } catch (err) {
       if (isUnmounted) return;
       toast.error('加载指令设置失败: ' + (err instanceof Error ? err.message : String(err)));
-      prefixInput.value = '/';
-      renderExamples('/');
+      loadMessage.textContent = '加载失败，请重新加载后再修改设置。';
+      retryBtn.hidden = false;
+    } finally {
+      loading = false;
+      if (!isUnmounted) syncControls();
     }
   }
 
   async function saveData() {
-    if (saving || isUnmounted) return;
+    if (!loaded || loading || saving || isUnmounted) return;
     const newPrefix = prefixInput.value.trim() || '/';
+    const runtimeStatusEnabled = runtimeStatusInput.checked;
     saving = true;
-    saveBtn.disabled = true;
+    syncControls();
 
     try {
-      const res = await api.updateEnvVar({
-        key: 'ADMIN_COMMAND_PREFIX',
-        value: newPrefix,
-        isSecret: false,
-      });
+      const res = await api.updateEnvVars([
+        { key: 'ADMIN_COMMAND_PREFIX', value: newPrefix, isSecret: false },
+        { key: 'ENABLE_RUNTIME_STATUS_COMMAND', value: String(runtimeStatusEnabled), isSecret: false },
+      ], controller.signal);
 
       if (isUnmounted) return;
       if (res.success) {
-        currentPrefix = newPrefix;
-        prefixInput.value = currentPrefix;
-        renderExamples(currentPrefix);
-        toast.success('指令前缀已保存并立即生效');
+        prefixInput.value = newPrefix;
+        runtimeStatusInput.checked = runtimeStatusEnabled;
+        renderExamples(newPrefix);
+        toast.success('指令设置已保存并立即生效');
       } else {
-        toast.error('保存指令前缀失败: ' + (res.error || '未知错误'));
+        toast.error('保存指令设置失败: ' + (res.error || '未知错误'));
       }
     } catch (err) {
       if (isUnmounted) return;
-      toast.error('保存指令前缀失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('保存指令设置失败: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       if (!isUnmounted) {
         saving = false;
-        saveBtn.disabled = false;
+        syncControls();
       }
     }
   }
 
   saveBtn.addEventListener('click', () => void saveData());
+  retryBtn.addEventListener('click', () => void loadData());
 
   void loadData();
 
   return () => {
     isUnmounted = true;
+    controller.abort();
   };
 }

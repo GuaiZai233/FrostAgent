@@ -21,6 +21,7 @@ var resetHints = map[string]string{
 	"MAX_CONTEXT_MESSAGES":                 "50",
 	"ADMIN_QQ_IDS":                         "未配置管理员",
 	"ADMIN_COMMAND_PREFIX":                 "/",
+	"ENABLE_RUNTIME_STATUS_COMMAND":        "开启",
 	"GROUP_COMPACT_BUFFER_SIZE":            "20",
 	"GROUP_COMPACT_MIN_INTERVAL":           "30s",
 	"GROUP_RAW_CONTEXT_MAX_CHARS":          "12000",
