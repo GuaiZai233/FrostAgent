@@ -268,6 +268,21 @@ class ClientTests(unittest.TestCase):
         with patch.object(client, 'api', side_effect=[([version(n) for n in range(1, 101)], {}), ([], {})]):
             self.assertEqual(len(client.versions()), 100)
 
+    def test_short_page_with_next_link_is_not_treated_as_complete(self):
+        client = self.client()
+        headers = {'Link': '<https://api.github.com' + client.path + '?page=2&per_page=100>; rel="next"'}
+        with patch.object(client, 'api', side_effect=[([version(1)], headers), ([version(2)], {})]) as api:
+            self.assertEqual(len(client.versions()), 2)
+            self.assertIn('page=2', api.call_args.args[0])
+
+    def test_nonadvancing_pagination_fails_without_looping(self):
+        client = self.client()
+        for target in ('?page=1', '?page=3', '?page=invalid'):
+            headers = {'Link': '<https://api.github.com' + client.path + target + '>; rel="next"'}
+            with self.subTest(target=target), patch.object(client, 'api', return_value=([version(1)], headers)):
+                with self.assertRaisesRegex(gc.CleanupError, 'pagination'):
+                    client.versions()
+
     def test_pagination_error_does_not_return_partial_list(self):
         client = self.client()
         with patch.object(client, 'api', side_effect=[([version(n) for n in range(1, 101)], {}), gc.CleanupError('403')]):

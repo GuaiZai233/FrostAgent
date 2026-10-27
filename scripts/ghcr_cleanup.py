@@ -11,7 +11,7 @@ import os
 import re
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -133,12 +133,19 @@ class GHCR:
         versions = []
         page = 1
         while True:
-            batch, _ = self.api(f'{self.path}?per_page=100&page={page}&state=active')
+            batch, headers = self.api(f'{self.path}?per_page=100&page={page}&state=active')
             if not isinstance(batch, list):
                 raise CleanupError('Invalid package version list')
             versions.extend(batch)
-            if len(batch) < 100:
-                snapshot(versions)
+            snapshot(versions)
+            next_link = re.search(r'<([^>]+)>;\s*rel="next"', headers.get('Link', ''))
+            if next_link:
+                # Follow pagination even on a short page, but never forward the
+                # bearer token to a URL from a response. Rebuild our own URL.
+                next_page = parse_qs(urlsplit(next_link.group(1)).query).get('page')
+                if next_page != [str(page + 1)]:
+                    raise CleanupError('Unexpected package pagination; refusing cleanup')
+            elif len(batch) < 100:
                 return versions
             page += 1
 
