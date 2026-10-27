@@ -5,7 +5,8 @@ package instance
 var hotInstanceSettings = map[string]bool{
 	"SYSTEM_PROMPT": true, "BOT_NAME": true, "BOT_ALIASES": true,
 	"ADMIN_QQ_IDS": true, "ADMIN_COMMAND_PREFIX": true,
-	"ENABLE_AT_IN_GROUP_MSG": true, "GROUP_REPLY_ON_MENTION": true,
+	"ENABLE_RUNTIME_STATUS_COMMAND": true,
+	"ENABLE_AT_IN_GROUP_MSG":        true, "GROUP_REPLY_ON_MENTION": true,
 	"ENABLE_REPLY_IN_GROUP_MSG": true, "MAX_CONTEXT_MESSAGES": true,
 	"ENABLE_QUOTE_TRACE": true, "QUOTE_TRACE_DEPTH": true,
 	"BOT_LOOP_USER_IDS": true, "BOT_LOOP_MAX_TURNS": true, "BOT_LOOP_MODE": true,

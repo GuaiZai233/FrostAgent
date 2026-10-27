@@ -11,7 +11,11 @@ IMAGE = re.compile(r"^\s*image:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 FROM = re.compile(r"^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)"
                   r"(?:[ \t]+AS[ \t]+([^\s#]+))?", re.MULTILINE | re.IGNORECASE)
 SYNTAX = re.compile(r"^#\s*syntax=(\S+)", re.MULTILINE)
-GO_TOOL = re.compile(r"(?:\bgo|\$\(GO\))\s+(?:install|run)\s+([^\s;\\]+)")
+GO_TOOL = re.compile(
+    r"(?:\bgo|\$\(GO\))\s+(?:install|run)\s+"
+    r"(?:-[^\s=\"';\\]+(?:=(?:\"[^\"]*\"|'[^']*'|[^\s;\\]+))?\s+)*"
+    r"([^\s;\\]+)"
+)
 COMMIT = re.compile(r"[^@\s]+@[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 MODULE_VERSION = re.compile(r"[^@\s]+@v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+incompatible)?\Z")
@@ -39,6 +43,13 @@ def unpinned_base_images(source):
 
 
 class DependencyPinTests(unittest.TestCase):
+    def test_go_tool_check_skips_equals_form_build_flags(self):
+        for command in ('$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/app',
+                        'go run -trimpath -ldflags="-X example.test.Version=fixture" ./cmd/app'):
+            self.assertEqual(GO_TOOL.findall(command), ['./cmd/app'])
+        for reference in ('example.invalid/tool@latest', 'example.invalid/tool@v1.2.3'):
+            self.assertEqual(GO_TOOL.findall('go run -ldflags="-s -w" ' + reference), [reference])
+
     def test_external_actions_use_full_commit_shas(self):
         count = 0
         for path in workflows():

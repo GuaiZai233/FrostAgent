@@ -7,6 +7,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -43,8 +44,6 @@ import (
 
 	pbconnect "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 )
-
-const version = "0.1.0"
 
 type Runtime struct {
 	Scope   *runtimescope.Scope
@@ -326,6 +325,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 
 	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", llm.DefaultMaxIterations)
+	version := buildinfo.DisplayVersion()
 	engine := &llm.Engine{Scope: scope,
 		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,
