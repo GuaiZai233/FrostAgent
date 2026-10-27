@@ -53,6 +53,47 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		_, _, db := compatibilityDatabase(t, backend)
 		assertCompatibilityVersions(t, db, 14, 14)
 	})
+	for _, preserves := range []bool{false, true} {
+		t.Run(fmt.Sprintf("migration-preserves-compatibility-%v", preserves), func(t *testing.T) {
+			root, config, db := compatibilityDatabase(t, backend)
+			populateMigrationFixture(t, db)
+			before := compatibilitySnapshot(t, db.SQL, backend)
+			step := migration{
+				version: 15,
+				statements: []string{
+					`CREATE TABLE compatibility_migration_data (id TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+					`INSERT INTO compatibility_migration_data VALUES ('synthetic-row', 'preserve-me')`,
+					`THIS IS NOT SQL`,
+				},
+				preservesCompatibility: preserves,
+			}
+			if err := db.applyMigration(ctx, step); err == nil {
+				t.Fatal("broken migration unexpectedly succeeded")
+			}
+			if after := compatibilitySnapshot(t, db.SQL, backend); !reflect.DeepEqual(before, after) {
+				t.Fatal("failed migration changed data, version or compatibility floor")
+			}
+			step.statements = step.statements[:len(step.statements)-1]
+			if err := db.applyMigration(ctx, step); err != nil {
+				t.Fatalf("retry migration: %v", err)
+			}
+			floor := 15
+			if preserves {
+				floor = 14
+			}
+			assertCompatibilityVersions(t, db, 15, floor)
+			assertMigrationFixture(t, db)
+			compatibilityClose(t, db)
+			if preserves {
+				db = compatibilityReopen(t, root, config)
+				assertCompatibilityVersions(t, db, 15, 14)
+				assertMigrationFixture(t, db)
+			} else if opened, err := OpenWithConfig(ctx, root, config); err == nil {
+				opened.Close()
+				t.Fatal("migration without explicit compatibility opt-in remained loadable by older code")
+			}
+		})
+	}
 	for previous := 7; previous <= 14; previous++ {
 		t.Run(fmt.Sprintf("legacy-v%d", previous), func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
@@ -171,12 +212,38 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			compatibilityExec(t, db, `ALTER TABLE instances DROP COLUMN error`)
 			compatibilityExec(t, db, `ALTER TABLE instances ADD COLUMN error INTEGER NOT NULL DEFAULT 0`)
 		}},
+		{"extra-core-unique-constraint", 16, true, 14, func(t *testing.T, db *DB) {
+			compatibilityExec(t, db, `CREATE UNIQUE INDEX compatibility_extra_unique ON settings(value)`)
+		}},
 		{"extension-fk-to-replaced-core-row", 16, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `CREATE TABLE future_settings (
 				scope TEXT NOT NULL, instance_id TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL,
 				FOREIGN KEY (scope, instance_id, key) REFERENCES settings(scope, instance_id, key) ON DELETE CASCADE
 			)`)
 			compatibilityExec(t, db, `INSERT INTO future_settings VALUES ('instance', 'synthetic-instance', 'UPSTREAM_API_KEY', 'must-not-cascade')`)
+		}},
+		{"core-cascade-fk-to-replaced-core-row", 16, true, 14, func(t *testing.T, db *DB) {
+			compatibilityExec(t, db, `INSERT INTO provider_endpoints(id, display_name, base_url, api_key_source, enabled, position)
+				VALUES ('synthetic-provider', 'Synthetic', 'https://model.invalid/v1', 'manual', 1, 0)`)
+			compatibilityExec(t, db, `INSERT INTO provider_models(id, display_name, endpoint_id, upstream_model, enabled, capabilities, position)
+				VALUES ('synthetic-model', 'Synthetic', 'synthetic-provider', 'synthetic-model', 1, '[]', 0)`)
+			compatibilityExec(t, db, `INSERT INTO model_bindings(instance_id, platform, group_id, workload, mode, model_id)
+				VALUES ('synthetic-instance', 'qq', 'synthetic-group', 'chat', 'model', 'synthetic-model')`)
+			if db.Backend == SQLite {
+				compatibilityExec(t, db, `ALTER TABLE model_bindings RENAME TO compatibility_old_bindings`)
+				compatibilityExec(t, db, `CREATE TABLE model_bindings (
+					instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+					platform TEXT NOT NULL, group_id TEXT NOT NULL, workload TEXT NOT NULL,
+					mode TEXT NOT NULL, model_id TEXT NOT NULL DEFAULT '',
+					PRIMARY KEY (instance_id, platform, group_id, workload),
+					FOREIGN KEY (model_id) REFERENCES provider_models(id) ON DELETE CASCADE
+				)`)
+				compatibilityExec(t, db, `INSERT INTO model_bindings SELECT * FROM compatibility_old_bindings`)
+				compatibilityExec(t, db, `DROP TABLE compatibility_old_bindings`)
+			} else {
+				compatibilityExec(t, db, `ALTER TABLE model_bindings ADD CONSTRAINT compatibility_added_model_fk
+					FOREIGN KEY (model_id) REFERENCES provider_models(id) ON DELETE CASCADE`)
+			}
 		}},
 		{"core-trigger", 16, true, 14, func(t *testing.T, db *DB) {
 			if db.Backend == SQLite {
