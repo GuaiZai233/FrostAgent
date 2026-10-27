@@ -39,9 +39,11 @@ COPY internal ./internal
 COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
 ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:1234
+ARG FROSTAGENT_VERSION
+ARG FROSTAGENT_COMMIT
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8080 -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
+    -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Version=${FROSTAGENT_VERSION} -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=${FROSTAGENT_COMMIT} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8080 -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
     -o /out/frostagent ./cmd/app
 
 FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS runtime
