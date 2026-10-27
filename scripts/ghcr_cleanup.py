@@ -1,0 +1,229 @@
+"""Keep release images and current main, including their manifest dependencies.
+
+Dry-run by default. All publishers and cleanup jobs must share the workflow's
+ghcr-frostagent-maintenance concurrency group. No third-party packages required.
+"""
+
+import argparse
+import base64
+import json
+import os
+import re
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+
+
+REPOSITORY = 'GuaiZai233/FrostAgent'
+RELEASE_TAG = re.compile(r'v?\d+\.\d+\.\d+(?:[-_][0-9A-Za-z_.-]+)?\Z')
+DIGEST = re.compile(r'sha256:[0-9a-f]{64}\Z')
+INDEX_TYPES = {
+    'application/vnd.oci.image.index.v1+json',
+    'application/vnd.docker.distribution.manifest.list.v2+json',
+}
+IMAGE_TYPES = {
+    'application/vnd.oci.image.manifest.v1+json',
+    'application/vnd.docker.distribution.manifest.v2+json',
+}
+
+
+class CleanupError(RuntimeError):
+    """An unsafe or incomplete cleanup plan must not be executed."""
+
+
+def request_json(url, *, headers, method='GET'):
+    request = Request(url, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=30) as response:
+            body = response.read()
+            return (json.loads(body) if body else None), response.headers
+    except HTTPError as error:
+        # Do not print request headers, credentials, or untrusted response bodies.
+        raise CleanupError(f'{method} {url}: HTTP {error.code}') from None
+    except (URLError, TimeoutError, ValueError) as error:
+        raise CleanupError(f'{method} {url}: {type(error).__name__}') from None
+
+
+def version_key(version):
+    """Validate API fields before making any retention decision."""
+    try:
+        version_id = version['id']
+        digest = version['name']
+        tags = version['metadata']['container']['tags']
+        if (type(version_id) is not int or version_id <= 0
+                or not isinstance(digest, str) or not DIGEST.fullmatch(digest)
+                or not isinstance(tags, list)
+                or any(not isinstance(tag, str) or not tag for tag in tags)):
+            raise ValueError
+        return version_id, digest, tuple(sorted(tags))
+    except (KeyError, TypeError, ValueError):
+        raise CleanupError('Invalid container version metadata; refusing cleanup') from None
+
+
+def snapshot(versions):
+    keys = tuple(sorted(version_key(version) for version in versions))
+    if (len({key[0] for key in keys}) != len(keys)
+            or len({key[1] for key in keys}) != len(keys)):
+        raise CleanupError('Duplicate container versions; refusing cleanup')
+    return keys
+
+
+def protected_tag(tag):
+    return tag in {'main', 'latest'} or RELEASE_TAG.fullmatch(tag) is not None
+
+
+def manifest_references(manifest):
+    """Walk indexes (including BuildKit attestations) and manifest subjects."""
+    if not isinstance(manifest, dict) or manifest.get('schemaVersion') != 2:
+        raise CleanupError('Invalid manifest schema; refusing cleanup')
+    media_type = manifest.get('mediaType')
+    if media_type in INDEX_TYPES:
+        descriptors = manifest.get('manifests')
+        if not isinstance(descriptors, list) or not descriptors:
+            raise CleanupError('Invalid or empty image index; refusing cleanup')
+    elif media_type in IMAGE_TYPES:
+        if not isinstance(manifest.get('config'), dict) or not isinstance(manifest.get('layers'), list):
+            raise CleanupError('Invalid image manifest; refusing cleanup')
+        descriptors = []
+    else:
+        raise CleanupError('Unsupported manifest media type; refusing cleanup')
+    if 'subject' in manifest:
+        descriptors = [*descriptors, manifest['subject']]
+    references = []
+    for descriptor in descriptors:
+        digest = descriptor.get('digest') if isinstance(descriptor, dict) else None
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            raise CleanupError('Invalid manifest descriptor; refusing cleanup')
+        references.append(digest)
+    return references
+
+
+class GHCR:
+    def __init__(self, token, actor):
+        if not token or not actor:
+            raise CleanupError('GH_TOKEN and GITHUB_ACTOR are required')
+        self.api_headers = {
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+        }
+        repository, _ = self.api(f'/repos/{REPOSITORY}')
+        owner_type = repository['owner']['type']
+        if owner_type not in {'User', 'Organization'}:
+            raise CleanupError('Unsupported package owner type')
+        owner, package = REPOSITORY.split('/')
+        scope = 'users' if owner_type == 'User' else 'orgs'
+        self.path = f'/{scope}/{owner}/packages/container/{quote(package.lower(), safe="")}/versions'
+        credentials = base64.b64encode(f'{actor}:{token}'.encode()).decode()
+        query = urlencode({'service': 'ghcr.io', 'scope': f'repository:{REPOSITORY.lower()}:pull'})
+        auth, _ = request_json(f'https://ghcr.io/token?{query}',
+                               headers={'Authorization': f'Basic {credentials}'})
+        if not isinstance(auth, dict) or not auth.get('token'):
+            raise CleanupError('GHCR did not return a pull token')
+        self.registry_headers = {
+            'Authorization': f'Bearer {auth["token"]}',
+            'Accept': ', '.join(sorted(INDEX_TYPES | IMAGE_TYPES)),
+        }
+
+    def api(self, path, method='GET'):
+        return request_json(f'https://api.github.com{path}', headers=self.api_headers, method=method)
+
+    def versions(self):
+        versions = []
+        page = 1
+        while True:
+            batch, _ = self.api(f'{self.path}?per_page=100&page={page}&state=active')
+            if not isinstance(batch, list):
+                raise CleanupError('Invalid package version list')
+            versions.extend(batch)
+            if len(batch) < 100:
+                snapshot(versions)
+                return versions
+            page += 1
+
+    def version(self, version_id):
+        version, _ = self.api(f'{self.path}/{version_id}')
+        return version
+
+    def manifest(self, reference):
+        url = f'https://ghcr.io/v2/{REPOSITORY.lower()}/manifests/{quote(reference, safe=":")}'
+        manifest, headers = request_json(url, headers=self.registry_headers)
+        digest = headers.get('Docker-Content-Digest', '')
+        if not DIGEST.fullmatch(digest) or (DIGEST.fullmatch(reference) and reference != digest):
+            raise CleanupError('Missing or mismatched registry digest; refusing cleanup')
+        return digest, manifest
+
+    def delete(self, version_id):
+        self.api(f'{self.path}/{version_id}', method='DELETE')
+
+
+def cleanup(client, *, apply=False, log=print):
+    versions = client.versions()
+    original = snapshot(versions)
+    tags = {}
+    for _, digest, names in original:
+        for tag in names:
+            if tag in tags:
+                raise CleanupError('Duplicate image tags; refusing cleanup')
+            tags[tag] = digest
+    if 'main' not in tags or tags.get('latest') != tags['main']:
+        raise CleanupError('main and latest must point to the same image; refusing cleanup')
+
+    # Resolve every protected tag and all dependencies before the first DELETE.
+    pending = []
+    for tag, expected in sorted(tags.items()):
+        if protected_tag(tag):
+            digest, manifest = client.manifest(tag)
+            if digest != expected:
+                raise CleanupError(f'Tag {tag} changed or is not yet consistent; refusing cleanup')
+            pending.append((digest, manifest))
+    keep = set()
+    while pending:
+        digest, manifest = pending.pop()
+        if digest in keep:
+            continue
+        keep.add(digest)
+        for child in manifest_references(manifest):
+            if child not in keep:
+                child_digest, child_manifest = client.manifest(child)
+                if child_digest != child:
+                    raise CleanupError('Dependency digest mismatch; refusing cleanup')
+                pending.append((child, child_manifest))
+
+    candidates = [version for version in versions if version['name'] not in keep]
+    # Remove tagged roots before orphaned manifests. Retained shared children
+    # are never candidates, even when they carry an old sha-* tag themselves.
+    candidates.sort(key=lambda version: not bool(version['metadata']['container']['tags']))
+    log(f'{"APPLY" if apply else "DRY RUN"}: keep {len(versions) - len(candidates)}, delete {len(candidates)} versions')
+    for version in candidates:
+        version_id, digest, names = version_key(version)
+        log(f'Candidate {version_id}: {digest} tags={json.dumps(names)}')
+    if not apply:
+        return candidates
+
+    if snapshot(client.versions()) != original:
+        raise CleanupError('Package changed during planning; refusing cleanup')
+    for version in candidates:
+        version_id, _, _ = version_key(version)
+        if version_key(client.version(version_id)) != version_key(version):
+            raise CleanupError(f'Version {version_id} changed before deletion; stopping cleanup')
+        client.delete(version_id)
+        log(f'Deleted version {version_id}')
+    return candidates
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--apply', action='store_true', help='delete planned versions (default: dry-run)')
+    args = parser.parse_args(argv)
+    try:
+        cleanup(GHCR(os.environ.get('GH_TOKEN'), os.environ.get('GITHUB_ACTOR')), apply=args.apply)
+    except (CleanupError, KeyError, TypeError) as error:
+        print(f'GHCR cleanup failed: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

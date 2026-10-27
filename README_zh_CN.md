@@ -65,6 +65,9 @@ Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再�
 docker compose up -d --build
 ```
 
+GHCR 仅保留版本号镜像与当前 `main` / `latest` 镜像，自动清理其余历史 commit 镜像。
+清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。
+
 
 ## 适配器
 
