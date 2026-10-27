@@ -55,7 +55,7 @@ class Registry:
             version(7, created_at='2026-01-04T00:00:00Z'),
         ]
         self.manifests = {digest(1): index(4, 5), digest(2): index(4), digest(3): leaf(),
-                          digest(4): leaf(), digest(5): leaf()}
+                          digest(4): leaf(), digest(5): leaf(), digest(6): leaf()}
         self.deleted = []
         self.reads = []
         self.list_calls = 0
