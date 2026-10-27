@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
@@ -19,8 +20,17 @@ def digest(number):
     return f'sha256:{number:064x}'
 
 
-def version(number, *tags):
-    return {'id': number, 'name': digest(number), 'metadata': {'container': {'tags': list(tags)}}}
+def version(number, *tags, created_at=None):
+    if created_at is None:
+        created_at = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=number)
+        ).isoformat().replace('+00:00', 'Z')
+    return {
+        'id': number,
+        'name': digest(number),
+        'created_at': created_at,
+        'metadata': {'container': {'tags': list(tags)}},
+    }
 
 
 def leaf():
@@ -35,9 +45,15 @@ def index(*children):
 
 class Registry:
     def __init__(self):
-        self.items = [version(1, 'main', 'latest', 'sha-current'),
-                      version(2, 'v1.0.1', 'sha-release'), version(3, 'v1.1.0-rc.1'),
-                      version(4), version(5), version(6, 'sha-old'), version(7)]
+        self.items = [
+            version(1, 'main', 'latest', 'sha-aaaaaaa', created_at='2026-01-07T00:00:00Z'),
+            version(2, 'v1.0.1', 'sha-bbbbbbb', created_at='2026-01-05T00:00:00Z'),
+            version(3, 'v1.1.0-rc.1', created_at='2026-01-06T00:00:00Z'),
+            version(4, created_at='2026-01-01T00:00:00Z'),
+            version(5, created_at='2026-01-02T00:00:00Z'),
+            version(6, 'sha-ccccccc', created_at='2026-01-03T00:00:00Z'),
+            version(7, created_at='2026-01-04T00:00:00Z'),
+        ]
         self.manifests = {digest(1): index(4, 5), digest(2): index(4), digest(3): leaf(),
                           digest(4): leaf(), digest(5): leaf()}
         self.deleted = []
@@ -80,44 +96,59 @@ class RetentionTests(unittest.TestCase):
 
     def test_dry_run_is_default_and_retains_all_releases_and_shared_children(self):
         planned = self.run_cleanup()
-        self.assertEqual([item['id'] for item in planned], [6, 7])
+        self.assertEqual([item['id'] for item in planned], [7])
         self.assertEqual(self.client.deleted, [])
         self.assertEqual(self.client.list_calls, 1)
-        self.assertNotIn(digest(6), self.client.reads)
+        self.assertIn('sha-ccccccc', self.client.reads)
 
-    def test_apply_deletes_only_old_commits_and_orphans(self):
+    def test_apply_deletes_only_expired_commits_and_orphans(self):
         self.run_cleanup(apply=True)
-        self.assertEqual(self.client.deleted, [6, 7])
+        self.assertEqual(self.client.deleted, [7])
         self.assertEqual(self.client.list_calls, 2)
 
-    def test_main_update_retires_previous_main(self):
-        self.client.items[0]['metadata']['container']['tags'] = ['sha-previous']
-        self.client.items.append(version(8, 'main', 'latest'))
+    def test_retains_latest_ten_intermediate_sha_images(self):
+        for number in range(100, 112):
+            created_at = (
+                datetime(2026, 1, 8, tzinfo=timezone.utc) + timedelta(seconds=number)
+            ).isoformat().replace('+00:00', 'Z')
+            self.client.items.append(version(number, f'sha-{number:07x}', created_at=created_at))
+            self.client.manifests[digest(number)] = leaf()
+        self.client.items.append(version(999, 'sha-9999999', created_at='2026-01-02T00:00:00Z'))
+        self.client.manifests[digest(999)] = leaf()
+
+        self.run_cleanup(apply=True)
+
+        self.assertEqual(set(self.client.deleted), {6, 7, 100, 101, 999})
+        self.assertTrue(set(range(102, 112)).isdisjoint(self.client.deleted))
+
+    def test_main_update_keeps_previous_main_within_intermediate_retention(self):
+        self.client.items[0]['metadata']['container']['tags'] = ['sha-eeeeeee']
+        self.client.items.append(version(8, 'main', 'latest', 'sha-ffffffff', created_at='2026-01-08T00:00:00Z'))
         self.client.manifests[digest(8)] = leaf()
         self.run_cleanup(apply=True)
-        self.assertEqual(set(self.client.deleted), {1, 5, 6, 7})
-        self.assertNotIn(4, self.client.deleted, 'release still references this shared child')
+        self.assertEqual(self.client.deleted, [7])
+        self.assertNotIn(1, self.client.deleted, 'previous main remains within the ten-image window')
 
     def test_release_remains_after_main_moves_even_when_it_has_sha_tag(self):
-        self.client.items[0]['metadata']['container']['tags'] = ['v1.2.0', 'sha-previous']
-        self.client.items.append(version(8, 'main', 'latest'))
+        self.client.items[0]['metadata']['container']['tags'] = ['v1.2.0', 'sha-eeeeeee']
+        self.client.items.append(version(8, 'main', 'latest', 'sha-ffffffff', created_at='2026-01-08T00:00:00Z'))
         self.client.manifests[digest(8)] = leaf()
         self.run_cleanup(apply=True)
-        self.assertEqual(self.client.deleted, [6, 7])
+        self.assertEqual(self.client.deleted, [7])
 
     def test_nested_indexes_and_attestation_subjects_remain(self):
         self.client.manifests[digest(5)] = index(8)
         self.client.manifests[digest(8)] = leaf()
         self.client.manifests[digest(8)]['subject'] = {'digest': digest(9)}
         self.client.manifests[digest(9)] = leaf()
-        self.client.items.extend([version(8), version(9, 'sha-shared')])
+        self.client.items.extend([version(8), version(9, 'sha-9999999')])
         self.run_cleanup(apply=True)
-        self.assertEqual(self.client.deleted, [6, 7])
+        self.assertEqual(self.client.deleted, [7])
 
     def test_untagged_old_index_is_deleted_not_kept_by_age(self):
         self.client.items.append(version(10))
         self.run_cleanup(apply=True)
-        self.assertEqual(self.client.deleted, [6, 7, 10])
+        self.assertEqual(self.client.deleted, [7, 10])
 
     def test_missing_or_divergent_main_aliases_stop_all_deletion(self):
         for names in ([], ['main'], ['latest']):
@@ -172,7 +203,7 @@ class RetentionTests(unittest.TestCase):
         self.client.manifests[digest(1)]['mediaType'] = 'application/vnd.docker.distribution.manifest.list.v2+json'
         self.client.manifests[digest(4)]['mediaType'] = 'application/vnd.docker.distribution.manifest.v2+json'
         self.run_cleanup(apply=True)
-        self.assertEqual(self.client.deleted, [6, 7])
+        self.assertEqual(self.client.deleted, [7])
 
     def test_changed_snapshot_stops_all_deletion(self):
         original = self.client.versions
@@ -212,6 +243,7 @@ class RetentionTests(unittest.TestCase):
     def test_bad_metadata_or_duplicates_stop_all_deletion(self):
         for item in ({}, version(1), version(10, 'main'),
                      {**version(10), 'name': 'invalid'},
+                     {**version(10), 'created_at': None},
                      {**version(10), 'metadata': {'container': {'tags': None}}}):
             with self.subTest(item=item):
                 self.client = Registry()
@@ -358,9 +390,9 @@ class ClientTests(unittest.TestCase):
 
         with patch.object(gc, 'request_json', side_effect=respond):
             gc.cleanup(gc.GHCR('synthetic-github', 'synthetic-actor'), apply=True, log=lambda _: None)
-        self.assertEqual(registry.deleted, [6, 7])
+        self.assertEqual(registry.deleted, [7])
         self.assertEqual([url for method, url in calls if method == 'DELETE'],
-                         [version_url + '/6', version_url + '/7'])
+                         [version_url + '/7'])
 
 
 class WorkflowTests(unittest.TestCase):
@@ -369,7 +401,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.count('group: ghcr-frostagent-maintenance'), 2)
         self.assertEqual(workflow.count('queue: max'), 2)
         self.assertEqual(workflow.count('cancel-in-progress: false'), 2)
-        self.assertNotIn('type=sha', workflow)
+        self.assertIn('type=sha,prefix=sha-', workflow)
         self.assertIn('flavor: latest=false', workflow)
         self.assertIn('type=raw,value=latest,enable={{is_default_branch}}', workflow)
         self.assertIn('git ls-remote origin refs/heads/main', workflow)

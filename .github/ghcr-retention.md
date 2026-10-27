@@ -6,10 +6,13 @@ The Docker workflow maintains only `ghcr.io/guaizai233/frostagent`:
   prerelease/build suffixes such as `v1.1.0-rc.1` are also protected.
 - Keep the current `main` image. `main` and `latest` must resolve to the same
   digest; releases never move `latest`.
-- Delete all other package versions, including historical `sha-*` images and
-  unreferenced, untagged manifests. New builds no longer publish `sha-*` tags.
-- Keep the complete manifest graph of protected images, including nested
-  multi-platform indexes, shared platform manifests and embedded BuildKit
+- Keep the 10 most recent SHA-tagged intermediate commit images in addition to
+  the current `main` / `latest` image and all version-number releases. The
+  current main image and release-tagged images do not consume this allowance.
+- Delete older SHA-only commit images and unreferenced, untagged manifests.
+  New builds publish `sha-*` tags so recent commits remain directly pullable.
+- Keep the complete manifest graph of protected and retained images, including
+  nested multi-platform indexes, shared platform manifests and embedded BuildKit
   provenance attestations. These dependencies may appear untagged in GitHub;
   deleting them would break the retained images. This workflow does not publish
   separate referrer-based signatures or attestations.
@@ -17,7 +20,9 @@ The Docker workflow maintains only `ghcr.io/guaizai233/frostagent`:
 GitHub deletes **package versions**, not individual tag aliases. A historical
 `sha-*` tag sharing a digest with a protected release, main image or dependency
 remains on that retained version. It is not an additional historical image.
-Other historical commit digests will no longer be pullable after cleanup.
+The ten-image limit applies to commit-image roots, not the manifests they depend
+on; older manifests required by a retained image are kept. Older, unreferenced
+commit digests outside the ten-image window are deleted.
 
 ## When cleanup runs
 

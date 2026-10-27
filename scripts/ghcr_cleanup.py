@@ -1,4 +1,4 @@
-"""Keep release images and current main, including their manifest dependencies.
+"""Keep releases, current main, and the ten most recent intermediate commit images.
 
 Dry-run by default. All publishers and cleanup jobs must share the workflow's
 ghcr-frostagent-maintenance concurrency group. No third-party packages required.
@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
@@ -17,6 +18,8 @@ from urllib.request import Request, urlopen
 
 REPOSITORY = 'GuaiZai233/FrostAgent'
 RELEASE_TAG = re.compile(r'v?\d+\.\d+\.\d+(?:[-_][0-9A-Za-z_.-]+)?\Z')
+SHA_TAG = re.compile(r'sha-[0-9a-f]{7,40}\Z')
+INTERMEDIATE_RETENTION = 10
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}\Z')
 INDEX_TYPES = {
     'application/vnd.oci.image.index.v1+json',
@@ -51,12 +54,17 @@ def version_key(version):
         version_id = version['id']
         digest = version['name']
         tags = version['metadata']['container']['tags']
+        created_at_text = version['created_at']
         if (type(version_id) is not int or version_id <= 0
                 or not isinstance(digest, str) or not DIGEST.fullmatch(digest)
                 or not isinstance(tags, list)
-                or any(not isinstance(tag, str) or not tag for tag in tags)):
+                or any(not isinstance(tag, str) or not tag for tag in tags)
+                or not isinstance(created_at_text, str)):
             raise ValueError
-        return version_id, digest, tuple(sorted(tags))
+        created_at = datetime.fromisoformat(created_at_text.replace('Z', '+00:00'))
+        if created_at.tzinfo is None:
+            raise ValueError
+        return version_id, digest, tuple(sorted(tags)), created_at
     except (KeyError, TypeError, ValueError):
         raise CleanupError('Invalid container version metadata; refusing cleanup') from None
 
@@ -169,7 +177,7 @@ def cleanup(client, *, apply=False, log=print):
     versions = client.versions()
     original = snapshot(versions)
     tags = {}
-    for _, digest, names in original:
+    for _, digest, names, _ in original:
         for tag in names:
             if tag in tags:
                 raise CleanupError('Duplicate image tags; refusing cleanup')
@@ -177,14 +185,32 @@ def cleanup(client, *, apply=False, log=print):
     if 'main' not in tags or tags.get('latest') != tags['main']:
         raise CleanupError('main and latest must point to the same image; refusing cleanup')
 
-    # Resolve every protected tag and all dependencies before the first DELETE.
+    # Keep the ten most recent SHA-tagged intermediate images. The current
+    # main/latest image and release-tagged images are protected separately and
+    # do not consume the ten-image allowance.
+    intermediate = []
+    for version in versions:
+        version_id, digest, names, created_at = version_key(version)
+        sha_tags = tuple(tag for tag in names if SHA_TAG.fullmatch(tag))
+        if sha_tags and not any(protected_tag(tag) for tag in names):
+            intermediate.append((created_at, version_id, digest, sha_tags))
+    intermediate.sort(reverse=True)
+    retained_sha_tags = {
+        tag
+        for _, _, _, sha_tags in intermediate[:INTERMEDIATE_RETENTION]
+        for tag in sha_tags
+    }
+
+    # Resolve all protected tags and selected historical commit tags before the
+    # first DELETE. Validate their registry digests and preserve dependencies.
     pending = []
-    for tag, expected in sorted(tags.items()):
-        if protected_tag(tag):
-            digest, manifest = client.manifest(tag)
-            if digest != expected:
-                raise CleanupError(f'Tag {tag} changed or is not yet consistent; refusing cleanup')
-            pending.append((digest, manifest))
+    root_tags = {tag for tag in tags if protected_tag(tag)} | retained_sha_tags
+    for tag in sorted(root_tags):
+        expected = tags[tag]
+        digest, manifest = client.manifest(tag)
+        if digest != expected:
+            raise CleanupError(f'Tag {tag} changed or is not yet consistent; refusing cleanup')
+        pending.append((digest, manifest))
     keep = set()
     while pending:
         digest, manifest = pending.pop()
@@ -204,7 +230,7 @@ def cleanup(client, *, apply=False, log=print):
     candidates.sort(key=lambda version: not bool(version['metadata']['container']['tags']))
     log(f'{"APPLY" if apply else "DRY RUN"}: keep {len(versions) - len(candidates)}, delete {len(candidates)} versions')
     for version in candidates:
-        version_id, digest, names = version_key(version)
+        version_id, digest, names, _ = version_key(version)
         log(f'Candidate {version_id}: {digest} tags={json.dumps(names)}')
     if not apply:
         return candidates
@@ -212,7 +238,7 @@ def cleanup(client, *, apply=False, log=print):
     if snapshot(client.versions()) != original:
         raise CleanupError('Package changed during planning; refusing cleanup')
     for version in candidates:
-        version_id, _, _ = version_key(version)
+        version_id, _, _, _ = version_key(version)
         if version_key(client.version(version_id)) != version_key(version):
             raise CleanupError(f'Version {version_id} changed before deletion; stopping cleanup')
         client.delete(version_id)
