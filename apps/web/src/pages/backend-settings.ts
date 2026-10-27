@@ -20,6 +20,7 @@ import { instanceState } from '../instance-state';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
+import { openDialog } from '../components/dialog';
 import { renderBackendSettingsForm } from './backend-settings-form';
 import { SettingsDraft } from './settings-draft';
 import { dedicatedSettingKeys, settingFields } from './backend-setting-fields';
@@ -29,6 +30,13 @@ import {
   formatGroupOption,
   isWhitelistEnabled,
 } from './proactive-whitelist';
+import {
+  groupProbabilitiesKey,
+  groupProbabilityIdentity,
+  normalizeGroupProbability,
+  parseGroupProbabilities,
+  serializeGroupProbabilities,
+} from './proactive-group-probabilities';
 
 export function mountBackendSettingsPage(container: HTMLElement, api = createInstanceAPI(), extraAPI = extraEnvAPI): () => void {
   let isUnmounted = false;
@@ -39,6 +47,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   let draft: SettingsDraft | null = null;
   const controller = new AbortController();
   const sessionGroupMap = new Map<string, string>();
+  let closeGroupProbabilityDialog: (() => void) | null = null;
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -209,6 +218,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
                     <div id="proactive-whitelist-tags" class="flex flex-wrap gap-1.5 min-h-[1.75rem] items-center p-2 rounded bg-background border border-border">
                       <span class="text-[11px] text-muted">暂无白名单群聊</span>
                     </div>
+                    <p class="text-[11px] text-muted">点击群聊名称可单独配置主动回复概率；未单独配置时使用上方统一概率。</p>
                   </div>
                 </div>
               </div>
@@ -405,12 +415,21 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
   function renderGroups(): void {
     const groups = parseWhitelistGroups(draft?.get('PROACTIVE_REPLY_GROUP_WHITELIST') ?? '');
+    let probabilities = new Map<string, number>();
+    let probabilityError = false;
+    try { probabilities = parseGroupProbabilities(draft?.get(groupProbabilitiesKey) ?? ''); }
+    catch { probabilityError = true; }
     whitelist.checked = isWhitelistEnabled(draft?.get('ENABLE_PROACTIVE_REPLY_WHITELIST'), groups.length);
     groupTags.innerHTML = groups.length === 0 ? '<span class="text-[11px] text-muted">白名单为空。</span>' : groups.map((id) => `
-      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs">
-        ${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))}
+      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs max-w-full">
+        <button type="button" data-group-probability="${escapeHtml(id)}" class="cursor-pointer text-left break-all" title="单独配置主动回复概率" aria-label="配置 ${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))} 的主动回复概率">${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))}</button>
+        ${probabilities.has(groupProbabilityIdentity(id)) ? `<span class="border border-border rounded px-1.5 py-0.5 bg-background font-mono shrink-0" aria-label="单独配置概率" title="单独配置概率">${probabilities.get(groupProbabilityIdentity(id))}</span>` : ''}
         <button type="button" data-group-id="${escapeHtml(id)}" aria-label="移除群聊" class="proactive-remove-group-btn">×</button>
       </span>`).join('');
+    if (probabilityError) groupTags.innerHTML += '<span class="text-xs text-destructive">单群概率配置格式异常，请先修复配置后再编辑。</span>';
+    groupTags.querySelectorAll<HTMLButtonElement>('[data-group-probability]').forEach((button) => {
+      button.addEventListener('click', () => openGroupProbability(button.dataset.groupProbability!));
+    });
     groupTags.querySelectorAll<HTMLButtonElement>('[data-group-id]').forEach((button) => {
       button.addEventListener('click', () => {
         changeGroups(groups.filter((id) => id !== button.dataset.groupId));
@@ -419,12 +438,75 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   function changeGroups(groups: string[]): void {
-    if (!draft) return;
+    if (!draft || saving || loading) return;
+    const retained = new Set(groups.map(groupProbabilityIdentity));
+    const removed = parseWhitelistGroups(draft.get('PROACTIVE_REPLY_GROUP_WHITELIST'))
+      .map(groupProbabilityIdentity).filter((id) => !retained.has(id));
+    if (removed.length) {
+      try {
+        const probabilities = parseGroupProbabilities(draft.get(groupProbabilitiesKey));
+        let changed = false;
+        for (const id of removed) changed = probabilities.delete(id) || changed;
+        if (changed) change(groupProbabilitiesKey, serializeGroupProbabilities(probabilities));
+      } catch (error) {
+        toast.error('无法移除群聊：' + String(error));
+        return;
+      }
+    }
     if (!draft.get('ENABLE_PROACTIVE_REPLY_WHITELIST')) {
       change('ENABLE_PROACTIVE_REPLY_WHITELIST', whitelist.checked ? 'true' : 'false');
     }
     change('PROACTIVE_REPLY_GROUP_WHITELIST', groups.join(','));
     renderGroups();
+  }
+
+  function openGroupProbability(id: string): void {
+    if (!draft || saving || loading || isUnmounted) return;
+    let probabilities: Map<string, number>;
+    try { probabilities = parseGroupProbabilities(draft.get(groupProbabilitiesKey)); }
+    catch (error) { toast.error('无法编辑群聊概率：' + String(error)); return; }
+    closeGroupProbabilityDialog?.();
+    const identity = groupProbabilityIdentity(id);
+    const current = probabilities.get(identity) ?? normalizeGroupProbability(draft.get('PROACTIVE_REPLY_PROBABILITY'));
+    void openDialog({
+      title: '单独配置主动回复概率',
+      description: formatGroupOption(id, sessionGroupMap.get(id)),
+      maxWidth: '26rem',
+      bodyHtml: `<label class="text-xs font-semibold" for="group-probability-input">触发概率</label>
+        <input id="group-probability-input" class="input font-mono mt-2 w-full" type="text" inputmode="decimal" value="${current}" aria-describedby="group-probability-hint" autocomplete="off" />
+        <p id="group-probability-hint" class="text-xs text-muted mt-2">小于 0 或输入不合法时设为 0.01，大于 1 时设为 1。0 表示该群不触发主动回复。</p>
+        <p class="text-xs text-muted mt-2">确认后加入草稿，点击页面上方「保存」后生效。总开关和白名单限制仍然适用。</p>`,
+      footerHtml: `<button type="button" id="group-probability-reset" class="btn btn-outline btn-sm" ${probabilities.has(identity) ? '' : 'disabled'}>恢复统一概率</button>
+        <button type="button" class="btn btn-outline btn-sm dialog-close-btn">取消</button>
+        <button type="button" id="group-probability-confirm" class="btn btn-primary btn-sm">确认</button>`,
+      onMount(dialog, close) {
+        closeGroupProbabilityDialog = close;
+        const input = dialog.querySelector<HTMLInputElement>('#group-probability-input')!;
+        const apply = (probability: number | null) => {
+          if (!draft || saving || loading || isUnmounted) return;
+          const values = parseGroupProbabilities(draft.get(groupProbabilitiesKey));
+          if (probability === null) values.delete(identity);
+          else values.set(identity, probability);
+          change(groupProbabilitiesKey, serializeGroupProbabilities(values));
+          renderGroups();
+          close();
+        };
+        dialog.querySelector('#group-probability-confirm')!.addEventListener('click', () => apply(normalizeGroupProbability(input.value)));
+        dialog.querySelector('#group-probability-reset')!.addEventListener('click', () => apply(null));
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); apply(normalizeGroupProbability(input.value)); }
+        });
+        input.focus();
+        input.select();
+      },
+      onClose() {
+        closeGroupProbabilityDialog = null;
+        if (!isUnmounted) {
+          [...groupTags.querySelectorAll<HTMLButtonElement>('[data-group-probability]')]
+            .find((button) => button.dataset.groupProbability === id)?.focus();
+        }
+      },
+    });
   }
 
   function normalizeBotUserID(userID: string): string {
@@ -594,6 +676,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   async function loadData(): Promise<void> {
+    closeGroupProbabilityDialog?.();
     const sequence = ++loadSeq;
     loading = true;
     renderAll();
@@ -776,6 +859,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   extraAdd.addEventListener('click', addExtra);
   restoreBtn.addEventListener('click', () => {
     if (saving) return;
+    closeGroupProbabilityDialog?.();
     draft?.restore();
     extraKey.value = extraValue.value = '';
     groupInput.value = groupSelect.value = '';
@@ -785,5 +869,5 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   saveBtn.addEventListener('click', () => void saveDraft());
   refreshBtn.addEventListener('click', () => { if (!dirty()) void loadData(); });
   void loadData();
-  return () => { isUnmounted = true; controller.abort(); draft = null; banner.hidden = true; };
+  return () => { isUnmounted = true; closeGroupProbabilityDialog?.(); controller.abort(); draft = null; banner.hidden = true; };
 }

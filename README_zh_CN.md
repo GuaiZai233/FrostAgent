@@ -79,6 +79,12 @@ docker compose up -d --build
 可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 附加功能
+### 按群配置主动回复概率
+
+在「Bot 服务端设置 → 主动回复」中，点击已添加的群聊名称即可单独输入触发概率，群名后的小方框会显示已配置的概率。弹框确认后，点击页面上方「保存」生效；可在弹框内「恢复统一概率」。
+
+负数或非法输入自动设为 `0.01`，大于 `1` 自动设为 `1`，`0` 表示该群不触发主动回复。未单独配置的群沿用统一概率，总开关和白名单限制仍然适用；正常被唤醒的回复不受单群概率影响。移除群聊时会一并移除其概率覆盖。
+
 ### 与 ActionsCat 协同
 
 [ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。

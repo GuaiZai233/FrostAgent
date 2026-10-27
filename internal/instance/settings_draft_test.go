@@ -19,6 +19,62 @@ func applySettingsDraft(m *Manager, id, body string) *httptest.ResponseRecorder 
 	return response
 }
 
+func TestSQLGroupProbabilityDraftPersistenceIsolationAndHotApply(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Group Probability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := m.Create("Other Instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	runtime := m.instances[info.ID].runtime
+	body := `{"updates":[{"key":"ENABLE_PROACTIVE_REPLY","value":"true"},{"key":"PROACTIVE_REPLY_PROBABILITY","value":"0.5"},{"key":"PROACTIVE_REPLY_GROUP_PROBABILITIES","value":"{\"qq:synthetic-group\":0.25,\"telegram:synthetic-group\":0.38}"}]}`
+	response := applySettingsDraft(m, info.ID, body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+		t.Fatalf("save failed: %d %s", response.Code, response.Body.String())
+	}
+	if m.instances[info.ID].runtime != runtime || runtime.Scope.Context().Err() != nil {
+		t.Fatal("group probability draft rebuilt or stopped the runtime")
+	}
+	for platform, want := range map[string]float64{"onebot": 0.25, "telegram": 0.38, "discord": 0.5} {
+		if got := proactive.GetGroupProbability(runtime.Scope.Getenv, "synthetic-group", platform); got != want {
+			t.Fatalf("%s probability=%v, want %v", platform, got, want)
+		}
+	}
+	reopened, err := instanceconfig.OpenDatabase(m.db, info.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := proactive.GetGroupProbability(reopened.Get, "synthetic-group", "qq"); got != 0.25 {
+		t.Fatalf("override did not persist: %v", got)
+	}
+	if m.instances[other.ID].config.Get(proactive.EnvGroupProbabilities) != "" || m.global.Get(proactive.EnvGroupProbabilities) != "" {
+		t.Fatal("override leaked to another instance or global settings")
+	}
+	for _, malformed := range []string{"broken", "[]", "null"} {
+		response = applySettingsDraft(m, info.ID, `{"updates":[{"key":"PROACTIVE_REPLY_GROUP_PROBABILITIES","value":"`+malformed+`"}]}`)
+		if strings.Contains(response.Body.String(), `"success":true`) || proactive.GetGroupProbability(runtime.Scope.Getenv, "synthetic-group", "qq") != 0.25 {
+			t.Fatalf("malformed draft replaced the valid override: %s", response.Body.String())
+		}
+	}
+	response = applySettingsDraft(m, info.ID, `{"clearKeys":["PROACTIVE_REPLY_GROUP_PROBABILITIES"]}`)
+	if !strings.Contains(response.Body.String(), `"success":true`) || proactive.GetGroupProbability(runtime.Scope.Getenv, "synthetic-group", "qq") != 0.5 {
+		t.Fatalf("clear did not restore global probability: %s", response.Body.String())
+	}
+	if m.instances[info.ID].runtime != runtime {
+		t.Fatal("clearing group probability rebuilt the runtime")
+	}
+}
+
 func TestSQLSettingsDraftReenableProactiveUsesDefaultAfterClearingLegacyProbability(t *testing.T) {
 	for _, probability := range []string{"0", "-0.1", "invalid", "NaN"} {
 		t.Run(probability, func(t *testing.T) {

@@ -93,6 +93,12 @@ Configure communication between AstrBot and the upstream service. Once configure
 
 ## Additional Features
 
+### Per-group Proactive Reply Probability
+
+In **Bot Server Settings → Proactive Replies**, click an added group's name to set its own trigger probability. A small box beside the name shows the override. Confirm the dialog, then save the page to apply it; use the dialog's reset action to inherit the shared probability again.
+
+Negative or invalid input becomes `0.01`, values above `1` become `1`, and `0` disables proactive replies for that group. Unconfigured groups use the shared probability. The master switch and whitelist still apply, while explicit wake-ups are unaffected. Removing a group also removes its probability override.
+
 ### Integration with ActionsCat
 
 [ActionsCat](https://github.com/actionscat/actionscat) supports statically orchestrated automated workflows.
