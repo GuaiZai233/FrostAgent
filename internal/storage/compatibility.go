@@ -36,7 +36,7 @@ func addCompatibilityColumn(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	// Zero is deliberately invalid. The real value is written in this same
-	// transaction; older writers must not silently fabricate compatibility.
+	// transaction; an insert that omits the marker must not declare compatibility.
 	_, err = tx.ExecContext(ctx, `ALTER TABLE schema_meta ADD COLUMN min_compatible_version INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
@@ -238,25 +238,28 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 		if err != nil {
 			return err
 		}
-		if len(keys) != 1 || keys[0] != (schemaForeignKey{"instance_id", "instances", "id", "CASCADE"}) {
+		if len(keys) != 1 || keys[0] != (schemaForeignKey{"instance_id", "instances", "id", "CASCADE", "NO ACTION"}) {
 			return fmt.Errorf("table %s has unrecognized foreign keys", table)
 		}
 	}
 	return nil
 }
 
-type schemaForeignKey struct{ column, parent, parentColumn, onDelete string }
+type schemaForeignKey struct{ column, parent, parentColumn, onDelete, onUpdate string }
 
 func (d *DB) tableForeignKeys(ctx context.Context, q schemaReader, table string) ([]schemaForeignKey, error) {
-	query := `SELECT "from", "table", "to", on_delete FROM pragma_foreign_key_list(?)`
+	query := `SELECT id, "from", "table", "to", on_delete, on_update FROM pragma_foreign_key_list(?) ORDER BY id, seq`
 	if d.Backend == Postgres {
-		query = `SELECT a.attname, parent.relname, pa.attname,
-			CASE c.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END
+		query = `SELECT c.oid, a.attname,
+			CASE WHEN pn.nspname = current_schema() THEN parent.relname ELSE pn.nspname || '.' || parent.relname END, pa.attname,
+			CASE c.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END,
+			CASE c.confupdtype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END
 			FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class parent ON parent.oid = c.confrelid
-			CROSS JOIN LATERAL unnest(c.conkey, c.confkey) AS k(localkey, parentkey)
+			JOIN pg_catalog.pg_namespace pn ON pn.oid = parent.relnamespace
+			CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(localkey, parentkey, position)
 			JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.localkey
 			JOIN pg_catalog.pg_attribute pa ON pa.attrelid = c.confrelid AND pa.attnum = k.parentkey
-			WHERE c.contype = 'f' AND c.conrelid = pg_catalog.to_regclass($1)`
+			WHERE c.contype = 'f' AND c.conrelid = pg_catalog.to_regclass($1) ORDER BY c.oid, k.position`
 	}
 	rows, err := q.QueryContext(ctx, query, table)
 	if err != nil {
@@ -264,19 +267,31 @@ func (d *DB) tableForeignKeys(ctx context.Context, q schemaReader, table string)
 	}
 	defer rows.Close()
 	var keys []schemaForeignKey
+	var previous int64 = -1
 	for rows.Next() {
+		var id int64
 		var key schemaForeignKey
-		if err := rows.Scan(&key.column, &key.parent, &key.parentColumn, &key.onDelete); err != nil {
+		if err := rows.Scan(&id, &key.column, &key.parent, &key.parentColumn, &key.onDelete, &key.onUpdate); err != nil {
 			return nil, err
 		}
-		keys = append(keys, key)
+		if id == previous {
+			keys[len(keys)-1].column += "," + key.column
+			keys[len(keys)-1].parentColumn += "," + key.parentColumn
+		} else {
+			keys = append(keys, key)
+		}
+		previous = id
 	}
 	return keys, rows.Err()
 }
 
 func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 	for table, expected := range compatibleCoreColumns {
-		if _, err := d.matchColumns(ctx, q, table, expected); err != nil {
+		columns, err := d.matchColumns(ctx, q, table, expected)
+		if err != nil {
+			return err
+		}
+		if err := d.validateCoreConstraints(ctx, q, table, columns); err != nil {
 			return err
 		}
 	}
