@@ -166,6 +166,8 @@ class FakeEvent:
         sender_id: str = "user_test",
     ):
         components = [At("bot_self")] if mention_bot else []
+        if content:
+            components.append(Plain(content))
         if image_url:
             components.append(Image(image_url))
         self.platform = "test"
@@ -651,6 +653,201 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, [])
         self.assertTrue(event.call_llm)
         self.assertEqual(event.should_call_llm_calls, [True])
+
+
+class RuntimeInfoCommandTest(unittest.IsolatedAsyncioTestCase):
+    def make_adapter(self, actions=None):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=False,
+            http_base_url="http://127.0.0.1:8080",
+        )
+        adapter.client = FakeClient(actions)
+        return adapter
+
+    async def forward(self, adapter, event):
+        return [result async for result in adapter.forward_to_frostagent(event)]
+
+    async def test_current_group_command_bypasses_filter_without_wake(self):
+        adapter = self.make_adapter([{"action": "reply", "content": "FrostAgent 运行状态"}])
+        event = FakeEvent(group_id="group_test", content=" \n#fa\t ")
+        original_send = adapter.client.send_event
+
+        async def send(payload):
+            self.assertEqual(event.should_call_llm_calls, [True])
+            return await original_send(payload)
+
+        adapter.client.send_event = send
+        results = await self.forward(adapter, event)
+        self.assertEqual(results, [{"content": "FrostAgent 运行状态"}])
+        self.assertEqual(event.should_call_llm_calls, [True])
+        self.assertIsNone(adapter.client.queue)
+        payload = adapter.client.sent_events[0]
+        self.assertEqual(payload["content"], "#fa")
+        self.assertTrue(payload["metadata"]["runtime_info_command"])
+        self.assertFalse(payload["is_at"])
+        self.assertFalse(payload["is_wake"])
+        self.assertEqual(payload["attachments"], [])
+
+    async def test_real_bot_mention_and_split_current_text_are_accepted(self):
+        event = FakeEvent(group_id="group_test", content="@Bot #fa")
+        event.message_obj.message = [At("bot_self"), Plain(" #"), Plain("fa ")]
+        event.message_obj.raw_message = {"message": [
+            {"type": "at", "data": {"qq": "bot_self"}},
+            {"type": "text", "data": {"text": " #fa "}},
+        ]}
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertTrue(payload["metadata"]["runtime_info_command"])
+        self.assertEqual(payload["content"], "#fa")
+        self.assertTrue(payload["is_at"])
+
+    async def test_current_text_can_use_raw_onebot_segments_without_components(self):
+        event = FakeEvent(group_id="group_test", content="unreliable fallback")
+        event.message_obj.message = []
+        event.message_obj.raw_message = {"message": json.dumps([
+            {"type": "text", "data": {"text": " #fa "}},
+        ])}
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertTrue(payload["metadata"]["runtime_info_command"])
+        self.assertEqual(payload["content"], "#fa")
+
+    async def test_quote_only_and_string_fallback_do_not_trigger_or_escape_filter(self):
+        for components in ([], [Reply("quote_test")]):
+            with self.subTest(components=components):
+                adapter = self.make_adapter()
+                event = FakeEvent(group_id="group_test", content="#fa")
+                event.message_obj.message = components
+                if components:
+                    components[0].chain = [Plain("#fa")]
+                    components[0].message_str = "#fa"
+                self.assertFalse(adapter_module.is_runtime_info_command(event))
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(adapter.client.sent_events, [])
+                self.assertEqual(event.should_call_llm_calls, [])
+
+    async def test_current_command_ignores_quoted_text_and_images(self):
+        event = FakeEvent(group_id="group_test", content="quoted history and #fa")
+        reply = Reply("quote_test")
+        reply.sender_id = "other_test"
+        reply.chain = [Plain("private quoted history"), Image("https://example.com/private.png")]
+        event.message_obj.message = [reply, Plain("#fa")]
+        event.platform = "aiocqhttp"
+        event.bot = SimpleNamespace(call_action=lambda **_kwargs: self.fail("must not look up history"))
+        with patch.object(adapter_module, "extract_attachments", side_effect=AssertionError("must not load quoted media")):
+            payload = await adapter_module.build_frostagent_payload(event)
+        self.assertTrue(payload["metadata"]["runtime_info_command"])
+        self.assertEqual(payload["content"], "#fa")
+        self.assertEqual(payload["attachments"], [])
+        self.assertNotIn("reply_message_id", payload["metadata"])
+        self.assertNotIn("quote_lookup_supported", payload["metadata"])
+        self.assertNotIn("private quoted history", json.dumps(payload))
+
+    async def test_diagnostic_never_answers_quote_lookup_with_history(self):
+        adapter = self.make_adapter([
+            {"type": "quote_lookup", "echo": "lookup_test", "event_message_id": "msg_test", "message_id": "quote_test"},
+            {"action": "noop", "suppress_llm": True},
+        ])
+        event = FakeEvent(group_id="group_test", content="#fa")
+        event.platform = "aiocqhttp"
+        with patch.object(adapter_module, "lookup_reply_onebot_message", side_effect=AssertionError("must not look up history")):
+            self.assertEqual(await self.forward(adapter, event), [])
+        self.assertEqual(adapter.client.sent_events[1]["type"], "quote_lookup_result")
+        self.assertEqual(adapter.client.sent_events[1]["data"], {})
+
+    async def test_non_commands_do_not_escape_group_filter(self):
+        cases = [
+            [Plain("#FA")], [Plain("say #fa")], [Plain("#fa extra")],
+            [Plain("#fa\n#fa")], [Plain("#fa"), At("other_test")],
+            [Plain("#fa"), Image("https://example.com/image.png")],
+            [Plain("#fa"), SimpleNamespace(text="unknown component")],
+            [Reply("quote_test"), Plain("ordinary text")],
+        ]
+        for components in cases:
+            with self.subTest(components=components):
+                adapter = self.make_adapter()
+                event = FakeEvent(group_id="group_test", content="#fa")
+                event.message_obj.message = components
+                self.assertFalse(adapter_module.is_runtime_info_command(event))
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(adapter.client.sent_events, [])
+                self.assertEqual(event.should_call_llm_calls, [])
+
+    async def test_raw_segments_must_agree_and_reject_nontext_content(self):
+        cases = [
+            [{"type": "text", "data": {"text": "not the command"}}],
+            [{"type": "reply", "data": {"id": "quote_test", "text": "#fa"}}],
+            [{"type": "text", "data": {"text": "#fa"}}, {"type": "image", "data": {"url": "unavailable"}}],
+            [{"type": "text", "data": {"text": "#fa"}}, {"type": "at", "data": {"qq": "other_test"}}],
+            [{"type": "text", "data": {"text": "#fa"}}, {"type": "face", "data": {"id": "face_test"}}],
+            [{"type": "text", "data": {"text": "#fa"}}, "malformed segment"],
+        ]
+        for segments in cases:
+            with self.subTest(segments=segments):
+                event = FakeEvent(group_id="group_test", content="#fa")
+                event.message_obj.raw_message = {"message": segments}
+                self.assertFalse(adapter_module.is_runtime_info_command(event))
+                payload = await adapter_module.build_frostagent_payload(event)
+                self.assertFalse(payload["metadata"]["runtime_info_command"])
+
+    async def test_private_message_is_not_diagnostic(self):
+        event = FakeEvent(content="#fa")
+        self.assertFalse(adapter_module.is_runtime_info_command(event))
+        payload = await adapter_module.build_frostagent_payload(event)
+        self.assertFalse(payload["metadata"]["runtime_info_command"])
+
+    async def test_non_message_notice_cannot_be_diagnostic(self):
+        event = FakeEvent(group_id="group_test", content="#fa")
+        event.message_obj.raw_message = {"post_type": "notice"}
+        self.assertFalse(adapter_module.is_runtime_info_command(event))
+
+    async def test_disabled_or_blocked_terminal_noop_keeps_local_llm_suppressed(self):
+        for action in (
+            {"action": "noop", "subtype": "runtime_info_disabled", "suppress_llm": True},
+            {"action": "noop", "subtype": "security_blocked", "suppress_llm": True},
+            {"action": "noop"},
+        ):
+            with self.subTest(action=action):
+                adapter = self.make_adapter([action])
+                event = FakeEvent(group_id="group_test", content="#fa")
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(event.should_call_llm_calls, [True])
+                self.assertIsNone(adapter.client.queue)
+
+    async def test_disconnection_or_send_failure_keeps_local_llm_suppressed(self):
+        for raises in (False, True):
+            with self.subTest(raises=raises):
+                adapter = self.make_adapter()
+                adapter.client.connected = False
+                event = FakeEvent(group_id="group_test", content="#fa")
+                if raises:
+                    async def fail_send(_payload):
+                        raise RuntimeError("connection closed")
+                    adapter.client.send_event = fail_send
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(event.should_call_llm_calls, [True])
+                self.assertIsNone(adapter.client.queue)
+
+    async def test_wait_timeout_keeps_local_llm_suppressed(self):
+        adapter = self.make_adapter()
+        event = FakeEvent(group_id="group_test", content="#fa")
+
+        async def timeout_wait(awaitable, timeout):
+            awaitable.close()
+            raise asyncio.TimeoutError()
+
+        with patch.object(asyncio, "wait_for", side_effect=timeout_wait):
+            self.assertEqual(await self.forward(adapter, event), [])
+        self.assertEqual(event.should_call_llm_calls, [True])
+        self.assertIsNone(adapter.client.queue)
+
+    async def test_invalid_configuration_keeps_local_llm_suppressed(self):
+        adapter = self.make_adapter()
+        adapter._configuration_error = "invalid ws_url"
+        event = FakeEvent(group_id="group_test", content="#fa")
+        self.assertEqual(await self.forward(adapter, event), [])
+        self.assertEqual(event.should_call_llm_calls, [True])
+        self.assertEqual(adapter.client.sent_events, [])
 
 
 class FakeContext:

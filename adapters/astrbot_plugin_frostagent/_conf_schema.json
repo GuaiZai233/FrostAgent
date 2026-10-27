@@ -10,7 +10,7 @@
         "default": "http://127.0.0.1:8080"
     },
     "forward_all_group_messages": {
-        "description": "是否将所有群消息发送给 FrostAgent (用于群聊无感总结与记忆反思)",
+        "description": "是否将所有群消息发送给 FrostAgent (用于群聊无感总结与记忆反思；关闭后仍转发真实 @/引用机器人、有效戳一戳和群内 #fa 诊断指令)",
         "type": "bool",
         "default": true
     },
