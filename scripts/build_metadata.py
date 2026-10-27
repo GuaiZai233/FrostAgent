@@ -8,12 +8,15 @@ import sys
 
 NUMBER = r'(?:0|[1-9][0-9]*)'
 PRERELEASE_PART = r'(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
-SEMVER = re.compile(
+# Release tags must survive docker/metadata-action sanitization unchanged.
+# SemVer build metadata uses '+', which that action replaces with '-'; accepting
+# it would let a release overwrite the image tag of a different prerelease.
+RELEASE_TAG = re.compile(
     rf'v({NUMBER}\.{NUMBER}\.{NUMBER}'
-    rf'(?:-{PRERELEASE_PART}(?:\.{PRERELEASE_PART})*)?'
-    r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)\Z'
+    rf'(?:-{PRERELEASE_PART}(?:\.{PRERELEASE_PART})*)?)\Z'
 )
 COMMIT = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})\Z')
+MAX_DOCKER_TAG_LENGTH = 128
 
 
 def resolve_metadata(ref, commit):
@@ -22,9 +25,14 @@ def resolve_metadata(ref, commit):
         raise ValueError('build commit must be a full lowercase Git revision')
     version = ''
     if ref.startswith('refs/tags/'):
-        match = SEMVER.fullmatch(ref.removeprefix('refs/tags/'))
+        tag = ref.removeprefix('refs/tags/')
+        if len(tag) > MAX_DOCKER_TAG_LENGTH:
+            raise ValueError('version tag must fit within Docker\'s 128-character limit, including v')
+        match = RELEASE_TAG.fullmatch(tag)
         if match is None:
-            raise ValueError('version tag must be vMAJOR.MINOR.PATCH with optional SemVer prerelease/build metadata')
+            raise ValueError(
+                'version tag must be vMAJOR.MINOR.PATCH with optional SemVer prerelease; '
+                'build metadata (+...) is not supported')
         version = match.group(1)
     return {'version': version, 'commit': commit,
             'display_version': version or commit[:7]}

@@ -37,7 +37,11 @@ docker build --build-arg FROSTAGENT_COMMIT="$(git rev-parse HEAD)" -t frostagent
 `docker compose up --build` 没有传入构建身份时显示 `unknown`，不能凭包版本猜测。
 
 GitHub Docker 工作流从已检出的提交和 `GITHUB_REF` 解析元数据；版本 tag 必须
-符合 SemVer（支持预发布和 build metadata），不合法的 tag 会停止构建。
+使用 `vMAJOR.MINOR.PATCH`，可带 SemVer 预发布后缀（如 `-rc.1`），不支持 `+build` 元数据。
+完整 tag（含开头的 `v`）最长 128 个字符，与 Docker 镜像标签限制一致。
+例如 `v1.2.3+build.1` 会被拒绝，而 `v1.2.3-build.1` 是允许的预发布版本。
+这是为了避免 Docker 标签规范化把 `+` 替换为 `-`，导致不同版本覆盖同一个镜像标签。
+不支持的 tag 会在构建元数据解析阶段失败，不输出版本参数，也不会启动依赖该阶段的镜像发布。
 测试镜像和发布镜像使用同一组元数据，容器 smoke test 会验证实际状态接口返回的版本。
 `main`／`latest` 保持源码预构建语义；`sha-*` 只由非 tag 构建发布，避免同一提交的
 版本构建覆盖预构建镜像。版本 tag 本身由维护者创建，本工作流不创建 Release 或二进制附件。
