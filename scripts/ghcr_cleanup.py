@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import datetime
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -208,7 +208,9 @@ class GHCR:
                     raise CleanupError('Duplicate registry tags; refusing cleanup')
                 return tuple(sorted(tags))
 
-            target = urlsplit(next_link.group(1))
+            # GHCR can return a relative Link URI. Resolve it first, then apply
+            # the same origin/path restrictions before sending credentials.
+            target = urlsplit(urljoin(url, next_link.group(1)))
             if (target.scheme != 'https' or target.netloc != 'ghcr.io'
                     or target.path != path or not target.query
                     or target.username is not None or target.password is not None

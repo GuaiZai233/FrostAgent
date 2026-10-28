@@ -45,6 +45,9 @@ page, then requires both sources to report exactly the same tag-name set and
 tag-to-digest mappings before planning deletion. Every tag is resolved through
 GHCR, including SHA tags outside the ten-image window and other aliases on
 deletion candidates. It walks the manifest references of retained images.
+Relative registry pagination links are resolved against the current page URL,
+then checked against the same HTTPS host and package-path allowlist as absolute
+links. Cross-origin links, credentials in URLs and pagination cycles are rejected.
 Tag-name or digest mismatches, divergent main aliases, unknown manifests,
 incomplete responses and permission errors fail closed. Before applying, it
 rechecks the package snapshot and freshly resolves the entire registry tag map

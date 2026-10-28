@@ -438,6 +438,59 @@ class ClientTests(unittest.TestCase):
             with self.assertRaisesRegex(gc.CleanupError, 'Unexpected registry pagination URL'):
                 client.registry_tags()
 
+    def test_registry_tag_listing_resolves_relative_next_links_over_one_hundred_tags(self):
+        client = self.client()
+        path = '/v2/guaizai233/frostagent/tags/list'
+        query = '?last=tag099&n=100'
+        for target in (path + query, 'list' + query, query, '//ghcr.io' + path + query):
+            with self.subTest(target=target):
+                first = (
+                    {'name': 'guaizai233/frostagent', 'tags': [f'tag{n:03d}' for n in range(100)]},
+                    {'Link': f'<{target}>; rel="next"'},
+                )
+                second = ({'name': 'guaizai233/frostagent', 'tags': ['tag100']}, {})
+                with patch.object(gc, 'request_json', side_effect=[first, second]) as request:
+                    self.assertEqual(client.registry_tags(), tuple(f'tag{n:03d}' for n in range(101)))
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(request.call_args_list[1].args[0], f'https://ghcr.io{path}{query}')
+                self.assertEqual(request.call_args_list[1].kwargs['headers'], client.registry_headers)
+
+    def test_registry_tag_listing_validates_resolved_next_link_before_request(self):
+        client = self.client()
+        path = '/v2/guaizai233/frostagent/tags/list'
+        query = '?last=main&n=100'
+        targets = (
+            '//evil.example' + path + query,
+            'http://ghcr.io' + path + query,
+            '//synthetic-user:synthetic-password@ghcr.io' + path + query,
+            '//ghcr.io:443' + path + query,
+            '/v2/another/image/tags/list' + query,
+            '../manifests/main' + query,
+            query + '#fragment',
+            path,
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                payload = {'name': 'guaizai233/frostagent', 'tags': ['main']}
+                headers = {'Link': f'<{target}>; rel="next"'}
+                with patch.object(gc, 'request_json', return_value=(payload, headers)) as request:
+                    with self.assertRaisesRegex(gc.CleanupError, 'Unexpected registry pagination URL'):
+                        client.registry_tags()
+                self.assertEqual(request.call_count, 1, 'must not send credentials to a rejected URL')
+
+    def test_registry_tag_listing_rejects_relative_pagination_cycle(self):
+        client = self.client()
+        path = '/v2/guaizai233/frostagent/tags/list'
+        query = '?last=tag000&n=100'
+        first = ({'name': 'guaizai233/frostagent', 'tags': ['tag000']},
+                 {'Link': f'<{path}{query}>; rel="next"'})
+        second = ({'name': 'guaizai233/frostagent', 'tags': ['tag001']},
+                  {'Link': f'<{query}>; rel="next"'})
+        with patch.object(gc, 'request_json', side_effect=[first, second]) as request:
+            with self.assertRaisesRegex(gc.CleanupError, 'Repeated registry pagination'):
+                client.registry_tags()
+        self.assertEqual(request.call_count, 2)
+
     def test_registry_digest_validation(self):
         client = self.client()
         for returned in ('', 'not-a-digest', digest(2)):
