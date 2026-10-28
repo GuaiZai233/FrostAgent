@@ -23,6 +23,7 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 
 - 当前模型目录、MCP、表情包及部分记忆存储仍有删除再插入的写入路径。因此兼容模式保守地拒绝已知核心表的额外列、列类型/主键/非空/唯一约束变化、外键变化、未知 `CHECK` 约束，以及未知触发器。必须先让旧写入器保留新增数据，才能放宽这类变化。v14 核心表没有 `CHECK`；即使只是增加 `CHECK (enabled = 1)`，也会阻止旧程序正常创建或停用实例。PostgreSQL 从约束目录检查，SQLite 从建表语句识别约束关键字并跳过注释和引用内容；不会将字符串里的 `CHECK` 当成约束。数据库选择表 `storage_selection` 的已有检查不属于核心表检查范围，不受影响。
 - 独立扩展表不能通过外键依赖会被旧代码重建的核心行；否则一次普通保存就可能级联删除新版数据。只依赖 `instances` 的扩展表可保留，但完整实例生命周期受下节保护。
+- PostgreSQL 的外键检查包含其他 schema 对当前写入器可变表的入站依赖，不限于当前 schema 的表清单。被引用表按写入器实际解析到的关系 OID 匹配，其他 schema 中的同名独立表不会被误拒；外部同名 `memory_embeddings` 也不能冒用原生缓存关联豁免。检查包含当前 schema 引用 `search_path` 后续 schema 中可变缓存的反向情形，不能假设写入目标总在第一个 schema。无论外键使用级联、置空还是限制删除，均可能改变未知数据或阻断旧写入器，必须拒绝。该检查不枚举或重写外部业务数据，不扩大历史 v15 的表白名单；未标记 v15 也必须先通过检查才能回填兼容字段。
 - 已有列的含义、合法枚举和 JSON 结构也属于契约。例如新增全局设置键或模型路由 workload 可能被旧校验拒绝；给记忆目录或合并归档的固定结构 JSON 增加字段，可能在旧程序反序列化后重写时丢失。此类变更必须提高下限，或先发布能保留未知字段的旧写入器。
 - 可重建的 Embedding 派生缓存仍遵循其原有失效与重建规则，不能将新的不可丢失数据放进旧程序会清理的缓存或写入域。`memory_embedding_scopes` 与 `memory_embeddings` 同样属于可变外键目标，兼容检查拒绝扩展表对它们的依赖；仅保留向量表到 scope 表原有的五列 `ON DELETE CASCADE`、`ON UPDATE NO ACTION` 关联，避免记忆导入或保存时连带删除新版模块数据。
 - 数据库布局检查用于拦截可识别的矛盾，不是对任意新语义的自动证明。每个保持下限的迁移都必须测试旧程序的正常读取、保存、重启，以及新数据保持不变。
@@ -44,5 +45,7 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 `internal/storage/compatibility_test.go` 使用一次性 SQLite 和隔离 PostgreSQL schema，覆盖历史升级、兼容/不兼容未来版本、重复打开、原始 JSON 保留、迁移下限推进/保持/回滚，以及结构拒绝后数据不变。PostgreSQL 测试通过现有 `FROSTAGENT_TEST_POSTGRES_DSN` 开关运行；未配置时是跳过，不算通过。
 
 `internal/storage/compatibility_embedding_test.go` 独立构造缓存表的真实复合主键和外键，使用文本向量载荷以便在未启用 pgvector 的迁移测试阶段运行。它先在回滚事务内证明缓存删除会级联删除扩展数据，再验证拒绝启动且全库元数据和行值不变；正常 v15/v16 缓存布局仍可打开，大小写外键名称也不能绕过检查。
+
+`internal/storage/compatibility_cross_schema_test.go` 使用独立 PostgreSQL schema 覆盖跨 schema 的核心表与缓存外键、外部同名缓存表、`search_path` 后续 schema 中的缓存目标、原始 v15 回填保护，以及无关同名表和仅引用实例的合法布局；快照同时检查当前 schema 与外部 schema 的行值和约束，确认拒绝打开不修改任何一侧。
 
 `internal/backup/schema_compatibility_test.go` 与 `internal/instance/schema_compatibility_test.go` 覆盖完整操作拒绝时无副作用、删除暂存文件保留，以及仍可用的部分导出。所有用例使用临时数据库，不访问部署中的真实数据。

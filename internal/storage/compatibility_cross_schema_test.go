@@ -126,6 +126,73 @@ func TestPostgresMigrationSchemaCompatibilityCrossSchemaReferences(t *testing.T)
 	}
 }
 
+func TestPostgresMigrationSchemaCompatibilitySearchPathReference(t *testing.T) {
+	root, config, db := compatibilityDatabase(t, Postgres)
+	compatibilitySeedComputerUse(t, db)
+	seedCompatibilityEmbeddingCaches(t, db, false)
+	compatibilityMetadata(t, db, 16, true, 14)
+	var activeSchema string
+	if err := db.SQL.QueryRow(`SELECT current_schema()`).Scan(&activeSchema); err != nil {
+		t.Fatal(err)
+	}
+	moduleSchema, moduleDB := compatibilityModuleSchema(t, config, activeSchema+`.module"Data`)
+	parent := compatibilityQualifiedTable(moduleSchema, "memory_embedding_scopes")
+	child := compatibilityQualifiedTable(activeSchema, "future_extension")
+	compatibilityExec(t, db, `ALTER TABLE `+compatibilityQualifiedTable(activeSchema, "memory_embedding_scopes")+
+		` SET SCHEMA "`+strings.ReplaceAll(moduleSchema, `"`, `""`)+`"`)
+	compatibilityExec(t, db, `CREATE TABLE `+child+` (
+		instance_id TEXT NOT NULL, scope_type TEXT NOT NULL, platform TEXT NOT NULL,
+		group_id TEXT NOT NULL, owner TEXT NOT NULL, payload TEXT NOT NULL,
+		FOREIGN KEY (instance_id,scope_type,platform,group_id,owner)
+			REFERENCES `+parent+` (instance_id,scope_type,platform,group_id,owner) ON DELETE CASCADE)`)
+	compatibilityExec(t, db, `INSERT INTO `+child+`
+		SELECT instance_id,scope_type,platform,group_id,owner, 'synthetic-search-path-data' FROM `+parent)
+	before := compatibilityPostgresSchemaSnapshot(t, db.SQL)
+	moduleBefore := compatibilityPostgresSchemaSnapshot(t, moduleDB)
+	proveCompatibilityCrossSchemaEffect(t, db, parent, child, "CASCADE")
+	if after := compatibilityPostgresSchemaSnapshot(t, db.SQL); !reflect.DeepEqual(before, after) {
+		t.Fatal("rolled-back search-path fixture changed active-schema data or constraints")
+	}
+	if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+		t.Fatal("rolled-back search-path fixture changed external-schema data or constraints")
+	}
+	compatibilityClose(t, db)
+
+	// The v14 writer resolves scopes through its fallback search path, while
+	// both dependent tables remain in current_schema(). Check relation identity
+	// rather than assuming every dangerous dependency has an external child.
+	parsed, err := url.Parse(config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", `"`+strings.ReplaceAll(activeSchema, `"`, `""`)+`","`+strings.ReplaceAll(moduleSchema, `"`, `""`)+`"`)
+	parsed.RawQuery = query.Encode()
+	reopenedConfig := Config{Backend: Postgres, DSN: parsed.String()}
+	opened, err := OpenWithConfig(context.Background(), root, reopenedConfig)
+	if err == nil {
+		opened.Close()
+		t.Fatal("active-schema dependency on a mutable search-path target was accepted")
+	}
+	if !strings.Contains(err.Error(), "memory_embedding_scopes") ||
+		(!strings.Contains(err.Error(), "future_extension") && !strings.Contains(err.Error(), "memory_embeddings")) {
+		t.Fatalf("startup did not identify the unsafe search-path dependency: %v", err)
+	}
+	// Keep the original search path for snapshots so PostgreSQL renders
+	// constraint definitions identically before and after the rejected startup.
+	probe, err := sql.Open("pgx", config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	if after := compatibilityPostgresSchemaSnapshot(t, probe); !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected startup changed active-schema data, constraints or compatibility metadata")
+	}
+	if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+		t.Fatal("rejected startup changed external-schema data or constraints")
+	}
+}
+
 func compatibilityQualifiedTable(schema, table string) string {
 	return `"` + strings.ReplaceAll(schema, `"`, `""`) + `"."` + strings.ReplaceAll(table, `"`, `""`) + `"`
 }

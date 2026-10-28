@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -310,6 +311,11 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 	if triggers != 0 {
 		return fmt.Errorf("unrecognized database triggers require a newer program")
 	}
+	if d.Backend == Postgres {
+		if err := validatePostgresCrossSchemaReferences(ctx, q); err != nil {
+			return err
+		}
+	}
 	tables, err := d.schemaTables(ctx, q)
 	if err != nil {
 		return err
@@ -338,6 +344,48 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		}
 	}
 	return nil
+}
+
+func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) error {
+	// Keep schemaTables scoped to the active schema for legacy recognition, but
+	// foreign keys can reach writer-owned rows from any schema. Resolve targets
+	// by OID so unrelated schemas with identically named tables are not rejected.
+	targets := []string{"memory_embedding_scopes", "memory_embeddings"}
+	for table := range compatibleCoreColumns {
+		if table != "instances" {
+			targets = append(targets, table)
+		}
+	}
+	sort.Strings(targets)
+	references := make([]string, len(targets))
+	args := make([]any, len(targets))
+	for i, table := range targets {
+		references[i] = fmt.Sprintf("pg_catalog.to_regclass($%d)", i+1)
+		args[i] = table
+	}
+	// Do not filter by FK action: cascades can mutate unknown data, while
+	// restrictive actions can prevent normal writes. The native cache exemption
+	// never applies to a table in another schema, even if it has the same name.
+	query := `SELECT pg_catalog.format('%I.%I', child_ns.nspname, child.relname),
+		pg_catalog.format('%I.%I', parent_ns.nspname, parent.relname)
+		FROM pg_catalog.pg_constraint c
+		JOIN pg_catalog.pg_class child ON child.oid = c.conrelid
+		JOIN pg_catalog.pg_namespace child_ns ON child_ns.oid = child.relnamespace
+		JOIN pg_catalog.pg_class parent ON parent.oid = c.confrelid
+		JOIN pg_catalog.pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
+		WHERE c.contype = 'f'
+		AND (child_ns.nspname <> current_schema() OR parent_ns.nspname <> current_schema())
+		AND c.confrelid IN (` + strings.Join(references, ", ") + `)
+		ORDER BY child_ns.nspname, child.relname, c.conname LIMIT 1`
+	var child, parent string
+	err := q.QueryRowContext(ctx, query, args...).Scan(&child, &parent)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("extension table %s references mutable table %s; a newer program is required", child, parent)
 }
 
 func (d *DB) schemaTables(ctx context.Context, q schemaReader) ([]string, error) {
