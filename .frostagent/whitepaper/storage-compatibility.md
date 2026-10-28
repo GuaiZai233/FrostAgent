@@ -48,4 +48,6 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 
 `internal/storage/compatibility_cross_schema_test.go` 使用独立 PostgreSQL schema 覆盖跨 schema 的核心表与缓存外键、外部同名缓存表、`search_path` 后续 schema 中的缓存目标、原始 v15 回填保护，以及无关同名表和仅引用实例的合法布局；快照同时检查当前 schema 与外部 schema 的行值和约束，确认拒绝打开不修改任何一侧。
 
+PostgreSQL 迁移 CI 为真实数据库测试生成并上传独立覆盖率报告，与普通 Go 测试报告合并；否则只在 PostgreSQL 执行的兼容检查会被错误计为未覆盖。该报告不替代普通测试，也不降低覆盖率门槛。
+
 `internal/backup/schema_compatibility_test.go` 与 `internal/instance/schema_compatibility_test.go` 覆盖完整操作拒绝时无副作用、删除暂存文件保留，以及仍可用的部分导出。所有用例使用临时数据库，不访问部署中的真实数据。
