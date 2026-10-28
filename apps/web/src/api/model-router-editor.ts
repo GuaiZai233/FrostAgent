@@ -85,7 +85,7 @@ export function createModelRouterEditorAPI(
       secretDirty = catalogState.hasDraftSecretChanges;
       const staleCatalogDraft = catalogState.draft && catalogState.draft.revision !== catalogActive.revision;
       const loadError = [catalogState.loadError, routeState?.loadError,
-        staleCatalogDraft ? '共享供应商目录已更新，当前草稿基于旧版本。请点击“重置共享草稿”后重新编辑' : '',
+        staleCatalogDraft ? '共享供应商目录已更新，当前草稿基于旧版本。请点击“放弃改动”后重新编辑' : '',
       ].filter(Boolean).join('；');
       ready = !loadError;
       return { active: merge(), draft: structuredClone(pending), hasDraftSecretChanges: secretDirty, loadError };
@@ -156,17 +156,16 @@ export function createModelRouterEditorAPI(
         throw snapshotError(error, completed);
       }
     },
-    async discardModelRouterDraft(configuration: ModelRouterConfiguration) {
-      assertReady();
+    async discardChanges(configuration: ModelRouterConfiguration) {
       pending = structuredClone(configuration);
       const completed: string[] = [];
       try {
-        if (catalogChanged() || secretDirty) {
-          const discardedCatalog = await catalog.discardModelRouterDraft();
-          if (!discardedCatalog) throw new Error('放弃共享供应商草稿失败');
-          catalogActive = structuredClone(discardedCatalog);
-          completed.push('共享供应商草稿已放弃');
-        }
+        // The UI explicitly confirms the shared scope. This recovery path must
+        // also work when the editor's catalog revision is stale.
+        const discardedCatalog = await catalog.resetSharedCatalogDraft();
+        if (!discardedCatalog) throw new Error('放弃共享供应商改动失败');
+        catalogActive = structuredClone(discardedCatalog);
+        completed.push('共享供应商改动已放弃');
         pending.endpoints = structuredClone(catalogActive.endpoints);
         pending.models = structuredClone(catalogActive.models);
         secretDirty = false;
@@ -176,19 +175,11 @@ export function createModelRouterEditorAPI(
           routesActive = structuredClone(discardedRoutes);
         }
         pending = merge();
+        ready = true;
         return merge();
       } catch (error) {
         throw snapshotError(error, completed);
       }
-    },
-    async resetSharedCatalogDraft() {
-      const discarded = await catalog.resetSharedCatalogDraft();
-      if (!discarded) throw new Error('重置共享供应商草稿失败');
-      catalogActive = structuredClone(discarded);
-      pending.endpoints = structuredClone(discarded.endpoints);
-      pending.models = structuredClone(discarded.models);
-      secretDirty = false;
-      return structuredClone(pending);
     },
     async setDraftEndpointSecret(endpointId: string, apiKey: string) {
       assertReady();

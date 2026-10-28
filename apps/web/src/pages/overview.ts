@@ -1,5 +1,5 @@
 import { instanceState, instanceRequest } from '../instance-state';
-import { openQuickConfig } from '../components/instances';
+import { openDialog } from '../components/dialog';
 import { toast } from '../components/toast';
 import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
@@ -7,11 +7,15 @@ import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/fo
 import { icon } from '../components/icons';
 import { instanceWebSocketURL } from '../utils/websocket-url';
 import { copyToClipboard } from '../utils/clipboard';
+import { renderOverviewTools } from './overview-tools';
+import '../styles/overview.css';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+  const api = createInstanceAPI();
   let timerId: number | null = null;
   let isUnmounted = false;
+  let loading = false;
+  let closeToolsDialog: (() => void) | undefined;
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -29,7 +33,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   const contentEl = container.querySelector<HTMLElement>('#overview-content')!;
 
   async function loadData(showLoading = false) {
-    if (isUnmounted) return;
+    if (isUnmounted || loading) return;
+    loading = true;
     if (showLoading && contentEl.children.length === 0) {
       loadingEl.style.display = 'flex';
     }
@@ -67,28 +72,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         window.location.origin,
       );
 
-      const toolsHtml =
-        data.tools.length > 0
-          ? data.tools
-              .map(
-                (tool) => `
-            <article class="card p-3.5 flex flex-col gap-2 hover-bg transition-colors">
-              <div class="flex items-center gap-2">
-                <span class="text-primary flex items-center">${icon('wrench', 'w-4 h-4')}</span>
-                <h3 class="text-xs font-semibold text-foreground">${escapeHtml(tool.name)}</h3>
-              </div>
-              <p class="text-xs text-muted leading-relaxed">
-                ${escapeHtml(tool.description || '无描述')}
-              </p>
-            </article>
-          `,
-              )
-              .join('')
-          : `
-          <div class="card p-6 text-center text-muted col-span-3 text-xs">
-            暂无已注册工具。
-          </div>
-        `;
+      const toolsScroll = contentEl.querySelector<HTMLElement>('#overview-tools-strip')?.scrollLeft || 0;
+      const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
+      const focusedToolID = toolsHadFocus ? (document.activeElement as HTMLElement)?.id : '';
 
       contentEl.innerHTML = `
         <header class="flex flex-col gap-2 pb-1">
@@ -97,7 +83,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               你好👋！我是 ${escapeHtml(botName)}
             </h1>
             <div class="flex flex-wrap gap-1.5 items-center">
- <button class="btn btn-outline btn-sm" id="quick-config">快速配置</button>
               <span class="badge ${statusBadgeClass}">
                 ${icon('activity', 'w-3 h-3')}
                 ${escapeHtml(formatStatus(data.status))}
@@ -161,12 +146,36 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               <span class="badge badge-outline text-xs">${data.tools.length}</span>
             </h2>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            ${toolsHtml}
+          <div id="overview-tools-strip" class="overview-tools-strip" tabindex="0" role="region" aria-label="已注册工具能力，横向滚动查看">
+            ${renderOverviewTools(data.tools)}
+          </div>
+        </section>
+
+        <section class="flex flex-col gap-3" aria-labelledby="overview-resources-title">
+          <h2 id="overview-resources-title" class="text-sm font-semibold text-foreground">资源</h2>
+          <div class="overview-resources">
+            <a class="card p-4 overview-resource hover-bg text-foreground" href="https://github.com/GuaiZai233/FrostAgent" target="_blank" rel="noopener noreferrer">
+              ${icon('github', 'w-5 h-5')}<span class="text-sm font-semibold">GitHub</span>${icon('chevron_right')}
+            </a>
+            <a class="card p-4 overview-resource hover-bg text-foreground" href="https://frostagent.guaitech.org/docs" target="_blank" rel="noopener noreferrer">
+              ${icon('book_open', 'w-5 h-5')}<span class="text-sm font-semibold">文档</span>${icon('chevron_right')}
+            </a>
           </div>
         </section>
       `;
-      contentEl.querySelector("#quick-config")!.addEventListener("click",()=>void openQuickConfig());
+      contentEl.querySelector<HTMLElement>('#overview-tools-strip')!.scrollLeft = toolsScroll;
+      if (focusedToolID) contentEl.querySelector<HTMLElement>(`#${focusedToolID}`)?.focus({ preventScroll: true });
+      contentEl.querySelector('#overview-all-tools')?.addEventListener('click', () => {
+        if (closeToolsDialog) return;
+        void openDialog({
+          title: '已注册工具能力',
+          description: `共 ${data.tools.length} 个工具`,
+          maxWidth: '64rem',
+          bodyHtml: `<div class="overview-all-tools">${renderOverviewTools(data.tools, false)}</div>`,
+          onMount: (_dialog, close) => { closeToolsDialog = close; },
+          onClose: () => { closeToolsDialog = undefined; },
+        });
+      });
       contentEl.querySelectorAll<HTMLAnchorElement>('[data-copy-url]').forEach((el) => {
         el.addEventListener('click', async (e) => {
           e.preventDefault();
@@ -195,6 +204,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <span>${escapeHtml(err instanceof Error ? err.message : String(err))}</span>
         </div>
       `;
+    } finally {
+      loading = false;
     }
   }
 
@@ -205,6 +216,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    closeToolsDialog?.();
     if (timerId !== null) {
       clearInterval(timerId);
     }

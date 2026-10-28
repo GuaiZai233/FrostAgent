@@ -1,35 +1,39 @@
 import { instanceURL, instanceState } from '../instance-state';
 import { createInstanceAPI } from '../api/client';
 import type { StickerItem, GetStickerStatsResponse } from '@frostagent/proto';
-import { escapeHtml, PageTokenStack } from '../utils/formatters';
+import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
-import { renderPagination, attachPaginationEvents } from '../components/pagination';
+import { StickerFeed, type StickerFeedChange } from './sticker-feed';
 
-function formatTimestamp(ts: bigint | number | string | undefined | null): string {
+function formatTimestamp(
+  ts: bigint | number | string | undefined | null,
+): string {
   if (!ts) return '-';
   const ms = typeof ts === 'string' ? Number(ts) : Number(ts);
   if (ms <= 0 || Number.isNaN(ms)) return '-';
   const d = new Date(ms * 1000);
-  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(d);
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(d);
 }
 
-export function mountStickersPage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+export function mountStickersPage(
+  container: HTMLElement,
+  api = createInstanceAPI(),
+): () => void {
   let isUnmounted = false;
-  let loading = false;
-  let stickers: StickerItem[] = [];
   let stats: GetStickerStatsResponse | null = null;
-  let total = 0;
-  let pageSize = 24;
+  const batchSize = 24;
   let statusFilter = '';
   let searchQuery = '';
   let sortBy = 'created_at';
   let descending = false;
-  let latestListRequest = 0;
-  const tokenStack = new PageTokenStack();
+  let latestStatsRequest = 0;
+  const lifecycle = new AbortController();
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -110,7 +114,7 @@ export function mountStickersPage(container: HTMLElement): () => void {
         </div>
       </div>
 
-      <div id="sticker-pagination-container"></div>
+      <div id="sticker-load-more" class="flex items-center justify-center gap-3 flex-wrap text-sm text-muted p-3" role="status" aria-live="polite"></div>
     </div>
 
     <style>
@@ -193,26 +197,77 @@ export function mountStickersPage(container: HTMLElement): () => void {
     </style>
   `;
 
-  const searchInput = container.querySelector<HTMLInputElement>('#sticker-search-input')!;
-  const searchBtn = container.querySelector<HTMLButtonElement>('#sticker-search-btn')!;
-  const statusSelect = container.querySelector<HTMLSelectElement>('#sticker-status-select')!;
-  const sortSelect = container.querySelector<HTMLSelectElement>('#sticker-sort-select')!;
-  const sortOrderSelect = container.querySelector<HTMLSelectElement>('#sticker-sort-order-select')!;
-  const retryBtn = container.querySelector<HTMLButtonElement>('#sticker-retry-btn')!;
-  const retryIcon = container.querySelector<HTMLElement>('#sticker-retry-icon')!;
-  const refreshBtn = container.querySelector<HTMLButtonElement>('#sticker-refresh-btn')!;
-  const uploadInput = container.querySelector<HTMLInputElement>('#sticker-upload-input')!;
+  const searchInput = container.querySelector<HTMLInputElement>(
+    '#sticker-search-input',
+  )!;
+  const searchBtn = container.querySelector<HTMLButtonElement>(
+    '#sticker-search-btn',
+  )!;
+  const statusSelect = container.querySelector<HTMLSelectElement>(
+    '#sticker-status-select',
+  )!;
+  const sortSelect = container.querySelector<HTMLSelectElement>(
+    '#sticker-sort-select',
+  )!;
+  const sortOrderSelect = container.querySelector<HTMLSelectElement>(
+    '#sticker-sort-order-select',
+  )!;
+  const retryBtn =
+    container.querySelector<HTMLButtonElement>('#sticker-retry-btn')!;
+  const retryIcon = container.querySelector<HTMLElement>(
+    '#sticker-retry-icon',
+  )!;
+  const refreshBtn = container.querySelector<HTMLButtonElement>(
+    '#sticker-refresh-btn',
+  )!;
+  const uploadInput = container.querySelector<HTMLInputElement>(
+    '#sticker-upload-input',
+  )!;
 
-  const statTotal = container.querySelector<HTMLElement>('#stat-sticker-total')!;
-  const statReady = container.querySelector<HTMLElement>('#stat-sticker-ready')!;
-  const statUnsummarized = container.querySelector<HTMLElement>('#stat-sticker-unsummarized')!;
+  const statTotal = container.querySelector<HTMLElement>(
+    '#stat-sticker-total',
+  )!;
+  const statReady = container.querySelector<HTMLElement>(
+    '#stat-sticker-ready',
+  )!;
+  const statUnsummarized = container.querySelector<HTMLElement>(
+    '#stat-sticker-unsummarized',
+  )!;
 
   const grid = container.querySelector<HTMLElement>('#sticker-grid')!;
-  const paginationContainer = container.querySelector<HTMLElement>('#sticker-pagination-container')!;
+  const loadMoreContainer =
+    container.querySelector<HTMLElement>('#sticker-load-more')!;
+  const feed = new StickerFeed(
+    (token) =>
+      api.listStickers(
+        batchSize,
+        token,
+        statusFilter,
+        searchQuery,
+        sortBy,
+        descending,
+      ),
+    renderFeed,
+  );
+  const observer =
+    typeof IntersectionObserver === 'undefined'
+      ? null
+      : new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting) && !feed.error) {
+              void feed.loadMore();
+            }
+          },
+          { rootMargin: '120px' },
+        );
 
   async function loadStats() {
+    if (isUnmounted) return;
+    const requestId = ++latestStatsRequest;
     try {
-      stats = await api.getStickerStats();
+      const response = await api.getStickerStats();
+      if (isUnmounted || requestId !== latestStatsRequest) return;
+      stats = response;
       renderStats();
     } catch {
       // non-critical
@@ -226,82 +281,84 @@ export function mountStickersPage(container: HTMLElement): () => void {
     statUnsummarized.textContent = String(stats.unsummarized);
   }
 
-  async function loadStickers() {
-    if (isUnmounted) return;
-    const requestId = ++latestListRequest;
-    loading = true;
-    renderGrid();
-
-    try {
-      const res = await api.listStickers(
-        pageSize, tokenStack.currentToken, statusFilter, searchQuery, sortBy, descending,
-      );
-      if (isUnmounted || requestId !== latestListRequest) return;
-      stickers = res.stickers;
-      tokenStack.setNextToken(res.nextPageToken ?? '');
-      total = res.totalCount;
-    } catch (err) {
-      if (isUnmounted || requestId !== latestListRequest) return;
-      toast.error('加载表情包失败: ' + (err instanceof Error ? err.message : String(err)));
-      stickers = [];
-    } finally {
-      if (!isUnmounted && requestId === latestListRequest) {
-        loading = false;
-        renderGrid();
-      }
-    }
+  function loadStickers() {
+    return feed.reset();
   }
 
   function stickerImageUrl(id: string): string {
     return `${window.location.origin}${instanceURL(`/api/sticker/${encodeURIComponent(id)}/image`)}`;
   }
 
-  function renderGrid() {
-    if (loading && stickers.length === 0) {
+  function renderFeed(change: StickerFeedChange) {
+    if (change.kind === 'reset') grid.innerHTML = '';
+    if (change.kind === 'append' && change.stickers.length > 0) {
+      if (feed.stickers.length === change.stickers.length) grid.innerHTML = '';
+      grid.insertAdjacentHTML(
+        'beforeend',
+        change.stickers.map(renderSticker).join(''),
+      );
+    }
+    if (feed.loading && feed.stickers.length === 0) {
       grid.innerHTML = `
         <div class="text-center text-muted" style="grid-column: 1 / -1; padding: 2.5rem;">
           <span class="spinner"></span>
           <span style="margin-left: 0.5rem;">加载中...</span>
         </div>
       `;
-      paginationContainer.innerHTML = '';
-      return;
-    }
-
-    if (stickers.length === 0) {
+    } else if (feed.stickers.length === 0) {
       grid.innerHTML = `
         <div class="text-center text-muted" style="grid-column: 1 / -1; padding: 3rem;">
-          暂无表情包记录。
+          ${feed.error ? '未能加载表情包，请在下方重试。' : '暂无表情包记录。'}
         </div>
       `;
-      paginationContainer.innerHTML = '';
-      return;
     }
 
-    grid.innerHTML = stickers
-      .map((s) => {
-        const isReady = s.status === 'ready';
-        const statusBadge = isReady
-          ? `<span class="badge badge-success text-[10px] px-1 py-0">已摘要</span>`
-          : `<span class="badge badge-warning text-[10px] px-1 py-0">未摘要</span>`;
-        const inappropriateBadge = s.suspectedInappropriate
-          ? `<span class="badge badge-destructive sticker-flag-badge text-[10px] px-1 py-0">疑似不合适</span>`
-          : '';
+    loadMoreContainer.setAttribute('aria-busy', String(feed.loading));
+    if (feed.loading) {
+      loadMoreContainer.innerHTML =
+        '<span class="spinner"></span><span>正在加载表情包，请稍候...</span>';
+    } else if (feed.error) {
+      loadMoreContainer.innerHTML = `
+        <span class="text-destructive">加载失败：${escapeHtml(feed.error)}</span>
+        <button class="btn btn-outline btn-sm" data-action="load-stickers">重试加载</button>
+      `;
+    } else if (feed.hasMore) {
+      loadMoreContainer.innerHTML = `
+        <span>已加载 ${feed.stickers.length} / ${feed.total} 张，向下滚动加载更多</span>
+        <button class="btn btn-outline btn-sm" data-action="load-stickers">加载更多</button>
+      `;
+      // A short batch may leave the sentinel visible. Observe it again so the
+      // viewport continues filling without requiring an impossible scroll.
+      observer?.unobserve(loadMoreContainer);
+      observer?.observe(loadMoreContainer);
+    } else {
+      loadMoreContainer.innerHTML = `<span>已加载全部 ${feed.stickers.length} 张表情包</span>`;
+    }
+  }
 
-        const keywordsHtml = (s.keywords || [])
-          .slice(0, 4)
-          .map(
-            (k) =>
-              `<span class="badge badge-secondary text-[10px] px-1 py-0">${escapeHtml(k)}</span>`,
-          )
-          .join('');
-        const moreCount = (s.keywords || []).length - 4;
-        const moreHtml =
-          moreCount > 0
-            ? `<span class="badge badge-outline text-[10px] px-1 py-0 text-muted">+${moreCount}</span>`
-            : '';
+  function renderSticker(s: StickerItem): string {
+    const isReady = s.status === 'ready';
+    const statusBadge = isReady
+      ? `<span class="badge badge-success text-[10px] px-1 py-0">已摘要</span>`
+      : `<span class="badge badge-warning text-[10px] px-1 py-0">未摘要</span>`;
+    const inappropriateBadge = s.suspectedInappropriate
+      ? `<span class="badge badge-destructive sticker-flag-badge text-[10px] px-1 py-0">疑似不合适</span>`
+      : '';
 
-        return `
+    const keywordsHtml = (s.keywords || [])
+      .slice(0, 4)
+      .map(
+        (k) =>
+          `<span class="badge badge-secondary text-[10px] px-1 py-0">${escapeHtml(k)}</span>`,
+      )
+      .join('');
+    const moreCount = (s.keywords || []).length - 4;
+    const moreHtml =
+      moreCount > 0
+        ? `<span class="badge badge-outline text-[10px] px-1 py-0 text-muted">+${moreCount}</span>`
+        : '';
+
+    return `
           <div class="sticker-card" data-id="${escapeHtml(s.id)}">
             <div class="sticker-thumb-wrap">
               <img
@@ -330,75 +387,65 @@ export function mountStickersPage(container: HTMLElement): () => void {
             </div>
           </div>
         `;
-      })
-      .join('');
-
-    paginationContainer.innerHTML = renderPagination({
-      total,
-      pageIndex: tokenStack.pageIndex,
-      pageSize,
-      canGoBack: tokenStack.canGoBack,
-      canGoNext: tokenStack.canGoNext,
-      loading,
-    });
-
-    attachPaginationEvents(paginationContainer, {
-      onPageSizeChange: (newSize) => {
-        pageSize = newSize;
-        tokenStack.reset();
-        void loadStickers();
-      },
-      onPrevPage: () => {
-        tokenStack.prev();
-        void loadStickers();
-      },
-      onNextPage: () => {
-        tokenStack.next();
-        void loadStickers();
-      },
-    });
-
-    // Edit button events
-    grid.querySelectorAll<HTMLButtonElement>('[data-action="edit-sticker"]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        const s = stickers.find((st) => st.id === id);
-        if (s) openEditDialog(s);
-      });
-    });
-
-    // Delete button events
-    grid.querySelectorAll<HTMLButtonElement>('[data-action="delete-sticker"]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        if (!id) return;
-        const confirmed = await confirmDialog({
-          title: '删除表情包',
-          message: '确定要删除这个表情包吗？此操作不可逆。',
-          confirmLabel: '删除',
-          destructive: true,
-        });
-        if (confirmed) {
-          try {
-            const res = await api.deleteSticker(id);
-            if (res.success) {
-              toast.success('表情包已删除');
-              void loadStats();
-              void loadStickers();
-            } else {
-              toast.error('删除失败: ' + res.error);
-            }
-          } catch (err) {
-            toast.error('删除失败: ' + (err instanceof Error ? err.message : String(err)));
-          }
-        }
-      });
-    });
   }
 
+  loadMoreContainer.addEventListener(
+    'click',
+    (event) => {
+      if ((event.target as Element).closest('[data-action="load-stickers"]')) {
+        void feed.loadMore();
+      }
+    },
+    { signal: lifecycle.signal },
+  );
+
+  // Delegate clicks so appending a batch does not replace existing image nodes.
+  grid.addEventListener(
+    'click',
+    async (event) => {
+      const button = (event.target as Element).closest<HTMLButtonElement>(
+        'button[data-action]',
+      );
+      if (!button || isUnmounted) return;
+      const sticker = feed.stickers.find(
+        (item) => item.id === button.dataset.id,
+      );
+      if (!sticker) return;
+      if (button.dataset.action === 'edit-sticker') {
+        openEditDialog(sticker);
+        return;
+      }
+      if (button.dataset.action !== 'delete-sticker') return;
+      const confirmed = await confirmDialog({
+        title: '删除表情包',
+        message: '确定要删除这个表情包吗？此操作不可逆。',
+        confirmLabel: '删除',
+        destructive: true,
+        signal: lifecycle.signal,
+      });
+      if (!confirmed || isUnmounted) return;
+      try {
+        const res = await api.deleteSticker(sticker.id);
+        if (isUnmounted) return;
+        if (res.success) {
+          toast.success('表情包已删除');
+          void loadStats();
+          void loadStickers();
+        } else {
+          toast.error('删除失败: ' + res.error);
+        }
+      } catch (err) {
+        if (!isUnmounted)
+          toast.error(
+            '删除失败: ' + (err instanceof Error ? err.message : String(err)),
+          );
+      }
+    },
+    { signal: lifecycle.signal },
+  );
+
   function openEditDialog(s: StickerItem) {
+    let closeOnUnmount: (() => void) | undefined;
     openDialog({
       title: '编辑表情包',
       maxWidth: '32rem',
@@ -448,42 +495,62 @@ export function mountStickersPage(container: HTMLElement): () => void {
         <button class="btn btn-outline btn-sm" id="edit-sticker-cancel">取消</button>
         <button class="btn btn-primary btn-sm" id="edit-sticker-save">保存</button>
       `,
+      onClose: () => {
+        if (closeOnUnmount)
+          lifecycle.signal.removeEventListener('abort', closeOnUnmount);
+      },
       onMount: (dialogEl, close) => {
+        closeOnUnmount = () => close();
+        lifecycle.signal.addEventListener('abort', closeOnUnmount, {
+          once: true,
+        });
         const cancelBtn = dialogEl.querySelector('#edit-sticker-cancel')!;
-        const saveBtn = dialogEl.querySelector<HTMLButtonElement>('#edit-sticker-save')!;
+        const saveBtn =
+          dialogEl.querySelector<HTMLButtonElement>('#edit-sticker-save')!;
         const toggleFlagBtn = dialogEl.querySelector<HTMLButtonElement>(
           '#edit-sticker-toggle-flag',
         );
-        const descInput = dialogEl.querySelector<HTMLTextAreaElement>('#edit-sticker-desc')!;
-        const keywordsInput = dialogEl.querySelector<HTMLInputElement>('#edit-sticker-keywords')!;
+        const descInput =
+          dialogEl.querySelector<HTMLTextAreaElement>('#edit-sticker-desc')!;
+        const keywordsInput = dialogEl.querySelector<HTMLInputElement>(
+          '#edit-sticker-keywords',
+        )!;
 
         cancelBtn.addEventListener('click', () => close());
         toggleFlagBtn?.addEventListener('click', async () => {
+          if (isUnmounted) return;
           try {
             toggleFlagBtn.disabled = true;
             const res = s.suspectedInappropriate
               ? await api.clearStickerInappropriateFlag(s.id)
               : await api.markStickerInappropriateFlag(s.id);
+            if (isUnmounted) return;
             if (res.success) {
               toast.success(
-                s.suspectedInappropriate ? '已移除疑似不合适标记' : '已添加疑似不合适标记',
+                s.suspectedInappropriate
+                  ? '已移除疑似不合适标记'
+                  : '已添加疑似不合适标记',
               );
               close();
               void loadStickers();
             } else {
-              toast.error(`${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${res.error}`);
+              toast.error(
+                `${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${res.error}`,
+              );
             }
           } catch (err) {
-            toast.error(
-              `${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
+            if (!isUnmounted)
+              toast.error(
+                `${s.suspectedInappropriate ? '移除' : '添加'}标记失败: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
           } finally {
-            toggleFlagBtn.disabled = false;
+            if (!isUnmounted) toggleFlagBtn.disabled = false;
           }
         });
         saveBtn.addEventListener('click', async () => {
+          if (isUnmounted) return;
           const description = descInput.value.trim();
           const keywords = keywordsInput.value
             .split(',')
@@ -492,7 +559,12 @@ export function mountStickersPage(container: HTMLElement): () => void {
 
           try {
             saveBtn.disabled = true;
-            const res = await api.updateStickerKeywords(s.id, description, keywords);
+            const res = await api.updateStickerKeywords(
+              s.id,
+              description,
+              keywords,
+            );
+            if (isUnmounted) return;
             if (res.success) {
               toast.success('表情包已更新');
               close();
@@ -501,9 +573,13 @@ export function mountStickersPage(container: HTMLElement): () => void {
               toast.error('更新失败: ' + res.error);
             }
           } catch (err) {
-            toast.error('更新失败: ' + (err instanceof Error ? err.message : String(err)));
+            if (!isUnmounted)
+              toast.error(
+                '更新失败: ' +
+                  (err instanceof Error ? err.message : String(err)),
+              );
           } finally {
-            saveBtn.disabled = false;
+            if (!isUnmounted) saveBtn.disabled = false;
           }
         });
       },
@@ -519,11 +595,12 @@ export function mountStickersPage(container: HTMLElement): () => void {
     let fail = 0;
 
     for (const file of Array.from(files)) {
- if(isUnmounted)break;
+      if (isUnmounted) break;
       try {
         const buf = await file.arrayBuffer();
- if(isUnmounted)break;
+        if (isUnmounted) break;
         const res = await api.uploadSticker(new Uint8Array(buf), file.name);
+        if (isUnmounted) return;
         if (res.success) {
           success++;
         } else {
@@ -531,68 +608,76 @@ export function mountStickersPage(container: HTMLElement): () => void {
           toast.error(`上传 ${file.name} 失败: ${res.error}`);
         }
       } catch (err) {
+        if (isUnmounted) return;
         fail++;
-        toast.error(`上传 ${file.name} 失败: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error(
+          `上传 ${file.name} 失败: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
+    if (isUnmounted) return;
     input.value = '';
     if (success > 0) {
-      toast.success(`已上传 ${success} 张表情包${fail ? `，${fail} 张失败` : ''}`);
+      toast.success(
+        `已上传 ${success} 张表情包${fail ? `，${fail} 张失败` : ''}`,
+      );
       void loadStats();
       void loadStickers();
     }
   }
 
   async function retryUnsummarized() {
+    if (isUnmounted) return;
     retryBtn.disabled = true;
     retryIcon.innerHTML = `<span class="spinner inline-block" style="width: 0.875rem; height: 0.875rem;"></span>`;
 
     try {
       const res = await api.retryAllUnsummarized();
+      if (isUnmounted) return;
       if (res.enqueuedCount > 0) {
         toast.success(`已加入摘要队列 ${res.enqueuedCount} 张`);
       } else {
         toast.warning('没有需要重试的表情包');
       }
     } catch (err) {
-      toast.error('重试失败: ' + (err instanceof Error ? err.message : String(err)));
+      if (!isUnmounted)
+        toast.error(
+          '重试失败: ' + (err instanceof Error ? err.message : String(err)),
+        );
     } finally {
-      retryBtn.disabled = false;
-      retryIcon.innerHTML = icon('refresh');
+      if (!isUnmounted) {
+        retryBtn.disabled = false;
+        retryIcon.innerHTML = icon('refresh');
+      }
     }
   }
 
   // Event listeners
   searchBtn.addEventListener('click', () => {
     searchQuery = searchInput.value.trim();
-    tokenStack.reset();
     void loadStickers();
   });
 
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       searchQuery = searchInput.value.trim();
-      tokenStack.reset();
       void loadStickers();
     }
   });
 
   statusSelect.addEventListener('change', () => {
     statusFilter = statusSelect.value;
-    tokenStack.reset();
     void loadStickers();
   });
 
   sortSelect.addEventListener('change', () => {
     sortBy = sortSelect.value;
-    tokenStack.reset();
     void loadStickers();
   });
 
   sortOrderSelect.addEventListener('change', () => {
     descending = sortOrderSelect.value === 'desc';
-    tokenStack.reset();
     void loadStickers();
   });
 
@@ -600,7 +685,6 @@ export function mountStickersPage(container: HTMLElement): () => void {
   uploadInput.addEventListener('change', handleUpload);
 
   refreshBtn.addEventListener('click', () => {
-    tokenStack.reset();
     statusFilter = '';
     statusSelect.value = '';
     searchQuery = '';
@@ -619,5 +703,8 @@ export function mountStickersPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    lifecycle.abort();
+    observer?.disconnect();
+    feed.dispose();
   };
 }

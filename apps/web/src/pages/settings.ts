@@ -1,4 +1,6 @@
 import { icon } from '../components/icons';
+import { openQuickConfig } from '../components/instances';
+import { instanceState } from '../instance-state';
 
 export function mountSettingsPage(container: HTMLElement): () => void {
   container.innerHTML = `
@@ -26,6 +28,24 @@ export function mountSettingsPage(container: HTMLElement): () => void {
             ${icon('chevron_right', 'w-4 h-4')}
           </div>
         </a>
+        <button
+          type="button"
+          id="settings-quick-config"
+          class="card p-4 hover-bg transition-colors text-foreground"
+          style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; width: 100%; cursor: pointer;"
+          ${instanceState.selected ? '' : 'disabled'}
+        >
+          <div class="flex items-center gap-3.5">
+            <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary" style="flex-shrink: 0;">
+              ${icon('copy', 'w-4 h-4')}
+            </div>
+            <div>
+              <h2 class="text-sm font-semibold text-foreground">快速配置</h2>
+              <p class="text-xs text-muted mt-0.5">${instanceState.selected ? '从其他实例复用配置，密钥及凭据来源不会复制' : '请先创建或选择实例'}</p>
+            </div>
+          </div>
+          ${icon('chevron_right', 'w-4 h-4')}
+        </button>
         <a
           href="#/settings/backup"
           class="card p-4 hover-bg transition-colors text-foreground"
@@ -103,6 +123,10 @@ export function mountSettingsPage(container: HTMLElement): () => void {
       </div>
     </div>
   `;
+
+  container.querySelector('#settings-quick-config')?.addEventListener('click', () => {
+    void openQuickConfig();
+  });
 
   return () => {};
 }

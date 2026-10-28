@@ -19,6 +19,7 @@ COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
 COPY buf.yaml buf.gen.web.yaml ./
 COPY api/proto ./api/proto
 COPY apps/web ./apps/web
+COPY assets/logo.png ./assets/logo.png
 COPY libs/frostagent-proto ./libs/frostagent-proto
 RUN pnpm exec buf generate --template buf.gen.web.yaml \
     && pnpm --filter @frostagent/web run build

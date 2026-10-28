@@ -8,6 +8,10 @@ const esbuildPath = require.resolve('esbuild', {
 const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
+  'overview-enhancements.test.ts',
+  'overview-page.test.ts',
+  'stickers-page.test.ts',
+  'frontend-editors.test.ts',
   'actionscat-disabled.test.ts',
   'actionscat-page.test.ts',
   'model-router-editor.test.ts',
@@ -29,6 +33,7 @@ for (const testFile of [
     platform: 'node',
     format: 'esm',
     write: false,
+    loader: { '.css': 'empty' },
     alias: {
       '@frostagent/proto': resolve('../../libs/frostagent-proto/src/index.ts'),
     },
