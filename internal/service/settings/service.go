@@ -48,6 +48,7 @@ var knownEnvVars = map[string]envEntry{
 	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
+	"ENABLE_RUNTIME_STATUS_COMMAND":        {"输出 FrostAgent 默认运行信息（#fa，默认开启）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
 	"ENABLE_QUOTE_TRACE":                   {"是否追溯收到消息的引用链（默认开启）", false, false, false},
 	"QUOTE_TRACE_DEPTH":                    {"引用追溯深度（1~10，默认 5）", false, false, false},
@@ -682,6 +683,9 @@ func validateUpdate(key, value string) error {
 
 	if key == "ENABLE_POKE" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许发送戳一戳行为必须为 true 或 false")
+	}
+	if key == "ENABLE_RUNTIME_STATUS_COMMAND" && value != "" && value != "true" && value != "false" {
+		return errors.New("输出 FrostAgent 默认运行信息必须为 true 或 false")
 	}
 	if key == "POKE_COOLDOWN_SECONDS" && value != "" {
 		seconds, err := strconv.Atoi(value)

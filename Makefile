@@ -5,6 +5,8 @@ VITE ?= $(PNPM) --filter @frostagent/web exec vite
 ESLINT ?= $(PNPM) exec eslint
 BUF ?= buf
 GO ?= go
+BUILD_COMMIT := $(shell git rev-parse --verify HEAD 2>/dev/null)
+BUILD_LDFLAGS := -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=$(BUILD_COMMIT)
 TOOLS_BIN := $(CURDIR)/.tools/bin
 PROTOC_GEN_GO := $(TOOLS_BIN)/protoc-gen-go
 PROTOC_GEN_CONNECT_GO := $(TOOLS_BIN)/protoc-gen-connect-go
@@ -22,8 +24,8 @@ build: build-api
 
 build-api: build-web proto-generate-go
 	mkdir -p ./bin
-	$(GO) build -o ./bin/app ./cmd/app
-	$(GO) build -o ./bin/agent ./cmd/agent
+	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/app ./cmd/app
+	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/agent ./cmd/agent
 
 check-web: proto-generate-web
 	$(PNPM) --filter @frostagent/web run check
@@ -36,7 +38,7 @@ build-web-dev: proto-generate-web
 
 dev: proto-generate-go build-web-dev
 	@set -euo pipefail; \
-	$(GO) run ./cmd/app & api_pid=$$!; \
+	$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/app & api_pid=$$!; \
 	$(VITE) & web_pid=$$!; \
 	trap 'kill $$api_pid $$web_pid 2>/dev/null || true' INT TERM EXIT; \
 	wait -n $$api_pid $$web_pid; \
@@ -45,10 +47,10 @@ dev: proto-generate-go build-web-dev
 	exit $$status
 
 serve-api: build-web proto-generate-go
-	$(GO) run ./cmd/app
+	$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/app
 
 serve-agent: proto-generate-go
-	$(GO) run ./cmd/agent
+	$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/agent
 
 serve-web: proto-generate-web
 	$(VITE)
