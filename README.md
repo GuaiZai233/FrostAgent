@@ -67,6 +67,11 @@ Start the service using `./bin/app` instead of `go run ./cmd/app`. This capabili
 docker compose up -d --build
 ```
 
+GHCR retains all versioned releases, the current `main` / `latest` image, and
+the 10 most recent SHA-tagged commit images. Older historical commit images are
+automatically removed. See the [image retention policy](.github/ghcr-retention.md)
+for cleanup previews and recovery.
+
 ## Adapters
 
 ### WebSocket
