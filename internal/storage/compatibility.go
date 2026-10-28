@@ -274,6 +274,10 @@ func (d *DB) tableForeignKeys(ctx context.Context, q schemaReader, table string)
 		if err := rows.Scan(&id, &key.column, &key.parent, &key.parentColumn, &key.onDelete, &key.onUpdate); err != nil {
 			return nil, err
 		}
+		if d.Backend == SQLite {
+			// SQLite preserves REFERENCES spelling but resolves names without case.
+			key.parent = strings.ToLower(key.parent)
+		}
 		if id == previous {
 			keys[len(keys)-1].column += "," + key.column
 			keys[len(keys)-1].parentColumn += "," + key.parentColumn
@@ -319,8 +323,17 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 			return err
 		}
 		for _, key := range keys {
-			if _, core := compatibleCoreColumns[key.parent]; core && key.parent != "instances" {
-				return fmt.Errorf("extension table %s references mutable core table %s; a newer program is required", table, key.parent)
+			// Native vector rows are already disposable along with their scope.
+			// Exempt only this existing edge, not other dependencies from a cache.
+			if table == "memory_embeddings" && key == (schemaForeignKey{
+				"instance_id,scope_type,platform,group_id,owner", "memory_embedding_scopes",
+				"instance_id,scope_type,platform,group_id,owner", "CASCADE", "NO ACTION",
+			}) {
+				continue
+			}
+			_, core := compatibleCoreColumns[key.parent]
+			if (core && key.parent != "instances") || key.parent == "memory_embedding_scopes" || key.parent == "memory_embeddings" {
+				return fmt.Errorf("extension table %s references mutable table %s; a newer program is required", table, key.parent)
 			}
 		}
 	}
