@@ -92,7 +92,91 @@ func (d *DB) validateCoreConstraints(ctx context.Context, q schemaReader, table 
 	if !slices.Equal(unique, expected) {
 		return fmt.Errorf("table %s has unrecognized unique constraints", table)
 	}
+	hasCheck, err := d.tableHasCheckConstraints(ctx, q, table)
+	if err != nil {
+		return err
+	}
+	// No v14 core table has CHECK constraints. Even an additive constraint can
+	// reject values the old writer emits, so it cannot be assumed compatible.
+	if hasCheck {
+		return fmt.Errorf("table %s has unrecognized CHECK constraints", table)
+	}
 	return nil
+}
+
+func (d *DB) tableHasCheckConstraints(ctx context.Context, q schemaReader, table string) (bool, error) {
+	if d.Backend == Postgres {
+		var hasCheck bool
+		err := q.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_constraint
+			WHERE conrelid = pg_catalog.to_regclass($1) AND contype = 'c'
+		)`, table).Scan(&hasCheck)
+		return hasCheck, err
+	}
+	// SQLite exposes CHECK clauses in the stored CREATE TABLE statement, not
+	// table_info/index_list. Inspect tokens, not text inside quotes/comments.
+	var statement string
+	if err := q.QueryRowContext(ctx, `SELECT sql FROM sqlite_master
+		WHERE type = 'table' AND name = ? COLLATE NOCASE`, table).Scan(&statement); err != nil {
+		return false, err
+	}
+	return containsSQLiteCheckConstraint(statement), nil
+}
+
+func containsSQLiteCheckConstraint(statement string) bool {
+	for i := 0; i < len(statement); {
+		switch {
+		case strings.HasPrefix(statement[i:], "--"):
+			if end := strings.IndexByte(statement[i+2:], '\n'); end >= 0 {
+				i += end + 3
+			} else {
+				return false
+			}
+		case strings.HasPrefix(statement[i:], "/*"):
+			if end := strings.Index(statement[i+2:], "*/"); end >= 0 {
+				i += end + 4
+			} else {
+				return false
+			}
+		case statement[i] == '\'' || statement[i] == '"' || statement[i] == '`':
+			quote := statement[i]
+			i++
+			for i < len(statement) {
+				if statement[i] != quote {
+					i++
+					continue
+				}
+				i++
+				if i < len(statement) && statement[i] == quote {
+					i++ // Escaped quote inside a string or identifier.
+					continue
+				}
+				break
+			}
+		case statement[i] == '[':
+			if end := strings.IndexByte(statement[i+1:], ']'); end >= 0 {
+				i += end + 2
+			} else {
+				return false
+			}
+		case sqliteIdentifierByte(statement[i]):
+			start := i
+			for i < len(statement) && sqliteIdentifierByte(statement[i]) {
+				i++
+			}
+			if strings.EqualFold(statement[start:i], "CHECK") {
+				return true
+			}
+		default:
+			i++
+		}
+	}
+	return false
+}
+
+func sqliteIdentifierByte(char byte) bool {
+	return char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+		char >= '0' && char <= '9' || char == '_' || char == '$' || char >= 0x80
 }
 
 func (d *DB) tableUniqueKeys(ctx context.Context, q schemaReader, table string) ([]string, error) {
