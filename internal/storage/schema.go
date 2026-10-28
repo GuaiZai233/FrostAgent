@@ -167,25 +167,28 @@ var schemaStatements = []string{
 type migration struct {
 	version    int
 	statements []string
+	// Opt in only after proving older writers preserve the new data. The
+	// default raises the compatibility floor to this migration's version.
+	preservesCompatibility bool
 }
 
 var migrations = []migration{
-	{8, []string{
+	{version: 8, statements: []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, scope_type, platform, group_id, source_message_id)`,
 	}},
-	{9, []string{
+	{version: 9, statements: []string{
 		`CREATE INDEX security_audit_occurred_idx ON security_audit(occurred_at DESC, id DESC)`,
 	}},
-	{10, []string{
+	{version: 10, statements: []string{
 		`ALTER TABLE memory_entries ADD COLUMN source_media TEXT NOT NULL DEFAULT ''`,
 	}},
-	{11, providerSchema},
-	{12, []string{`ALTER TABLE provider_models ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0`,
+	{version: 11, statements: providerSchema},
+	{version: 12, statements: []string{`ALTER TABLE provider_models ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE memory_entries ADD COLUMN summary_dirty INTEGER NOT NULL DEFAULT 0`}},
 	// Development branches previously shared v12 with different schemas.
-	{13, nil},
+	{version: 13},
 	// Preserve Skills data already created by the development v12 branch.
-	{14, []string{`CREATE TABLE IF NOT EXISTS skills (
+	{version: 14, statements: []string{`CREATE TABLE IF NOT EXISTS skills (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
 		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
@@ -202,11 +205,15 @@ func (d *DB) initSchema(ctx context.Context) error {
 	if errors.Is(err, sql.ErrNoRows) || isMissingSchemaTable(err) {
 		return d.createSchema(ctx)
 	}
-	if version > SchemaVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d", version, SchemaVersion)
-	}
 	if version < 7 {
 		return fmt.Errorf("database schema version %d predates the v7 SQL baseline", version)
+	}
+	if err := d.prepareCompatibility(ctx, version); err != nil {
+		return err
+	}
+	if version > SchemaVersion {
+		// A newer compatible database is used in place, never migrated back.
+		return nil
 	}
 	for _, step := range migrations {
 		if step.version <= version {
@@ -235,6 +242,9 @@ func (d *DB) createSchema(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_meta (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("create schema metadata: %w", err)
 	}
+	if err := addCompatibilityColumn(ctx, tx); err != nil {
+		return err
+	}
 	for _, statement := range schemaStatements {
 		retired := false
 		for _, table := range []string{"endpoint_ids", "model_endpoints", "model_secrets", "models"} {
@@ -250,7 +260,11 @@ func (d *DB) createSchema(ctx context.Context) error {
 			return fmt.Errorf("create v7 schema: %w", err)
 		}
 	}
+	minimumCompatible := 7
 	for _, step := range migrations {
+		if !step.preservesCompatibility {
+			minimumCompatible = max(minimumCompatible, step.version)
+		}
 		for _, statement := range step.statements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("create schema v%d: %w", step.version, err)
@@ -262,7 +276,7 @@ func (d *DB) createSchema(ctx context.Context) error {
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version) VALUES (1, ?)`), SchemaVersion); err != nil {
+	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version, min_compatible_version) VALUES (1, ?, ?)`), SchemaVersion, minimumCompatible); err != nil {
 		return fmt.Errorf("write schema version: %w", err)
 	}
 	return tx.Commit()
@@ -274,12 +288,15 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 		return err
 	}
 	defer tx.Rollback()
-	var version int
-	if err := tx.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil {
+	var version, minimumCompatible int
+	if err := tx.QueryRowContext(ctx, `SELECT version, min_compatible_version FROM schema_meta WHERE id = 1`).Scan(&version, &minimumCompatible); err != nil {
 		return fmt.Errorf("read schema version for migration: %w", err)
 	}
 	if version != step.version-1 {
 		return fmt.Errorf("expected schema version %d before migration v%d, got %d", step.version-1, step.version, version)
+	}
+	if err := validateCompatibility(version, minimumCompatible); err != nil {
+		return err
 	}
 	for _, statement := range step.statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -296,7 +313,10 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, d.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), step.version); err != nil {
+	if !step.preservesCompatibility {
+		minimumCompatible = max(minimumCompatible, step.version)
+	}
+	if _, err := tx.ExecContext(ctx, d.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), step.version, minimumCompatible); err != nil {
 		return fmt.Errorf("advance schema version to %d: %w", step.version, err)
 	}
 	return tx.Commit()

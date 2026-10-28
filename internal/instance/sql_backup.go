@@ -208,6 +208,9 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if m.db == nil {
 		return Info{}, fmt.Errorf("instance restore requires SQL storage")
 	}
+	if err := m.db.RequireNativeSchema(context.Background(), "restore a complete instance backup"); err != nil {
+		return Info{}, err
+	}
 	decoded, err := backup.DecodeInstanceZIP(archive)
 	if err != nil {
 		return Info{}, err
@@ -326,6 +329,9 @@ func (m *Manager) PrepareDeletion(id string) error {
 	if m.db == nil {
 		return fmt.Errorf("pending deletion requires SQL storage")
 	}
+	if err := m.db.RequireNativeSchema(context.Background(), "prepare instance deletion"); err != nil {
+		return err
+	}
 	i, err := m.lookup(id)
 	if err != nil {
 		return err
@@ -399,6 +405,9 @@ func (m *Manager) CancelDeletion(id string) error {
 func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 	if m.db == nil {
 		return fmt.Errorf("pending deletion requires SQL storage")
+	}
+	if err := m.db.RequireNativeSchema(context.Background(), "confirm instance deletion"); err != nil {
+		return err
 	}
 	i, err := m.lookup(id)
 	if err != nil {

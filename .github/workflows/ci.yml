@@ -39,7 +39,7 @@ jobs:
       - name: Test PostgreSQL migrations
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v
+        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v -coverprofile=coverage-postgres.out
       - name: Test shared providers on PostgreSQL
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
@@ -71,6 +71,13 @@ jobs:
         run: |
           psql "$FROSTAGENT_TEST_POSTGRES_DSN" -c "CREATE EXTENSION IF NOT EXISTS vector"
           go test ./internal/memory -run '^TestPostgresEmbedding' -count=1 -v
+
+      - name: Upload PostgreSQL coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ./coverage-postgres.out
+          fail_ci_if_error: false
 
   ci:
     runs-on: ubuntu-latest
