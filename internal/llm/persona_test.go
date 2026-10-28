@@ -125,27 +125,24 @@ func TestFormatDialoguePrompt(t *testing.T) {
 }
 
 func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
-	// Locate eval/dialogue/dialogue.yml relative to test directory
-	path := filepath.Join("..", "..", "eval", "dialogue", "dialogue.yml")
+	path := filepath.Join(t.TempDir(), "dialogue.yml")
+	if err := os.WriteFile(path, []byte(`- id: synthetic-first
+  user: synthetic question
+  preferred: synthetic answer
+- id: synthetic-second
+  user: second question
+  preferred: second answer
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	prompt, err := LoadDialoguePrompt(path)
 	if err != nil {
 		t.Fatalf("LoadDialoguePrompt failed: %v", err)
 	}
 
-	if !strings.Contains(prompt, DefaultDialogueInstruction) {
-		t.Errorf("prompt missing default instruction")
-	}
-	if !strings.Contains(prompt, "你不觉得草迪拉熊很神圣吗") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "老公") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "宝宝 你身上好香") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "越来越没耐心怎么办") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
+	want := DefaultDialogueInstruction + "\n\nUser: synthetic question\nAssistant: synthetic answer\n\nUser: second question\nAssistant: second answer"
+	if prompt != want {
+		t.Errorf("loaded dialogue prompt = %q, want %q", prompt, want)
 	}
 }
 
