@@ -8,6 +8,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
@@ -37,6 +38,10 @@ type Adapter struct {
 	conns              map[*wsConnection]struct{}
 	incomingDispatcher core.IncomingDispatcher
 	llmErrorReplies    llmErrorReplyLimiter
+	connectionConfig   wsclient.Config
+	clientCancel       context.CancelFunc
+	clientRunning      bool
+	stopped            bool
 }
 
 // NewAdapter 创建一个新的 OneBot 适配器实例。
@@ -107,6 +112,10 @@ func (a *Adapter) ID() string {
 func (a *Adapter) registerConn(c *wsConnection) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.stopped {
+		_ = c.Close()
+		return
+	}
 	a.conns[c] = struct{}{}
 }
 
@@ -245,6 +254,11 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		mock := r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true"
+		if a.connectionConfig.Mode == wsclient.Forward && !mock {
+			http.Error(w, "当前适配器使用正向 WebSocket（FA 作为客户端）", http.StatusConflict)
+			return
+		}
 		if a.engine != nil {
 			done, ok := a.engine.Enter()
 			if !ok {
@@ -265,354 +279,362 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			return
 		}
-		var wsConn *wsConnection
-		if a.engine != nil {
-			wsConn = newWSConnection(conn, a.engine.Scope)
-			wsConn.engine = a.engine
-			wsConn.Scope = a.engine.Scope
-		} else {
-			wsConn = newWSConnection(conn)
-		}
-		wsConn.stealer = a.stealer
-		wsConn.llmErrorReplies = &a.llmErrorReplies
-		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
-			wsConn.mock = true
-		}
-		a.registerConn(wsConn)
-		if a.engine != nil && a.engine.Context().Err() != nil {
-			wsConn.Close()
-		}
-		defer func() {
-			a.unregisterConn(wsConn)
-			wsConn.Close()
-			wsConn.inFlight.Wait()
-			if wsConn.stealer != nil {
-				wsConn.stealer.ClearObservedScope(wsConn.generation)
-			}
-			if wsConn.mock && a.engine != nil {
-				if a.engine.SessionManager != nil {
-					wsConn.mockSessions.Range(func(key, _ any) bool {
-						if sessionID, ok := key.(string); ok {
-							a.engine.SessionManager.Delete(sessionID)
-						}
-						return true
-					})
-				}
-				if a.engine.SandboxBackend != nil {
-					wsConn.mockSessions.Range(func(key, _ any) bool {
-						if sessionID, ok := key.(string); ok {
-							if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
-								a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
-							}
-						}
-						return true
-					})
-				}
-			}
-		}()
+		a.serveConnection(r.Context(), conn, mock, r.RemoteAddr)
+	}
+}
 
-		if a.engine != nil {
-			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", r.RemoteAddr))
+func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, mock bool, peer string) {
+	var wsConn *wsConnection
+	if a.engine != nil {
+		wsConn = newWSConnection(conn, a.engine.Scope)
+		wsConn.engine = a.engine
+		wsConn.Scope = a.engine.Scope
+	} else {
+		wsConn = newWSConnection(conn)
+	}
+	wsConn.stealer = a.stealer
+	wsConn.llmErrorReplies = &a.llmErrorReplies
+	wsConn.mock = mock
+	stopCancellation := context.AfterFunc(ctx, func() { _ = wsConn.Close() })
+	defer stopCancellation()
+	a.registerConn(wsConn)
+	if a.engine != nil && a.engine.Context().Err() != nil {
+		wsConn.Close()
+	}
+	defer func() {
+		a.unregisterConn(wsConn)
+		wsConn.Close()
+		wsConn.inFlight.Wait()
+		if wsConn.stealer != nil {
+			wsConn.stealer.ClearObservedScope(wsConn.generation)
 		}
+		if wsConn.mock && a.engine != nil {
+			if a.engine.SessionManager != nil {
+				wsConn.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						a.engine.SessionManager.Delete(sessionID)
+					}
+					return true
+				})
+			}
+			if a.engine.SandboxBackend != nil {
+				wsConn.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+							a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+						}
+					}
+					return true
+				})
+			}
+		}
+	}()
 
-		reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
-		defer reader.Close()
-		for {
-			_, message, err := reader.ReadMessage()
-			if err != nil {
-				if a.engine != nil {
+	if a.engine != nil {
+		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("WebSocket 连接已建立: %s", peer))
+	}
+
+	reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
+	defer reader.Close()
+	for {
+		_, message, err := reader.ReadMessage()
+		if err != nil {
+			if a.engine != nil {
+				if a.connectionConfig.Mode == wsclient.Forward && !mock {
+					a.engine.Log().Warn(logs.WEBSOCKET, "正向 WebSocket 连接已断开")
+				} else {
 					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("读取消息失败: %v", err))
 				}
-				break
 			}
+			break
+		}
 
-			if wsConn.handleAPIResponse(message) {
-				continue
+		if wsConn.handleAPIResponse(message) {
+			continue
+		}
+
+		var event model.OneBotEvent
+		if err := json.Unmarshal(message, &event); err != nil {
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
 			}
+			continue
+		}
 
-			var event model.OneBotEvent
-			if err := json.Unmarshal(message, &event); err != nil {
-				if a.engine != nil {
-					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("消息解析失败: %v", err))
+		if event.MetaEventType == "heartbeat" {
+			continue
+		}
+
+		if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
+			groupIDStr := strconv.FormatInt(event.GroupID, 10)
+			userIDStr := strconv.FormatInt(event.UserID, 10)
+			if groupIDStr != "" && userIDStr != "" {
+				gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
+				if err != nil {
+					a.engine.PauseOnStorageError(err)
+					continue
 				}
-				continue
-			}
-
-			if event.MetaEventType == "heartbeat" {
-				continue
-			}
-
-			if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
-				groupIDStr := strconv.FormatInt(event.GroupID, 10)
-				userIDStr := strconv.FormatInt(event.UserID, 10)
-				if groupIDStr != "" && userIDStr != "" {
-					gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
+				if gStore != nil {
+					switch event.NoticeType {
+					case "group_admin":
+						if event.SubType == "set" {
+							err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleAdmin)
+						} else if event.SubType == "unset" {
+							err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleMember)
+						}
+					}
 					if err != nil {
 						a.engine.PauseOnStorageError(err)
 						continue
 					}
-					if gStore != nil {
-						switch event.NoticeType {
-						case "group_admin":
-							if event.SubType == "set" {
-								err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleAdmin)
-							} else if event.SubType == "unset" {
-								err = gStore.UpdateMemberRole(userIDStr, memory.GroupRoleMember)
-							}
-						}
-						if err != nil {
-							a.engine.PauseOnStorageError(err)
-							continue
-						}
-					}
 				}
 			}
+		}
 
-			if event.PostType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
-				var accepted bool
-				event, accepted = a.normalizePoke(event, wsConn.mock)
-				if !accepted {
-					continue
-				}
+		if event.PostType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+			var accepted bool
+			event, accepted = a.normalizePoke(event, wsConn.mock)
+			if !accepted {
+				continue
 			}
+		}
 
-			var warningNotice string
-			var botLoopSoft bool
-			var botLoopObservation *llm.BotLoopObservation
-			var botLoopConfig botloop.Config
-			var botLoopUserID string
-			var botLoopMarked bool
-			var routing EventRouting
-			if event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				if !wsConn.mock {
-					a.engine.RecordIncomingMessage()
-				}
-				if event.PokeID == "" {
-					wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
-				}
-				var scope *runtimescope.Scope
-				if a.engine != nil {
-					scope = a.engine.Scope
-				}
-				routing = EventRouting{
-					Derived:     true,
-					WakeSignals: DetectGroupWakeSignals(event, scope),
-				}
-				if a.engine != nil && a.engine.SessionManager != nil {
-					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
-					if botLoopConfig.Enabled() {
-						botLoopUserID = strconv.FormatInt(event.UserID, 10)
-						botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
-						botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
-							botLoopUserID, botLoopMarked, botLoopConfig.Revision(), isExplicitlyWoken(event, a.engine, routing),
-						)
-					}
-				}
-				if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
-					botLoopObservation.Finish(false, botLoopConfig.Limit())
-					continue
+		var warningNotice string
+		var botLoopSoft bool
+		var botLoopObservation *llm.BotLoopObservation
+		var botLoopConfig botloop.Config
+		var botLoopUserID string
+		var botLoopMarked bool
+		var routing EventRouting
+		if event.PostType == "message" &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			if !wsConn.mock {
+				a.engine.RecordIncomingMessage()
+			}
+			if event.PokeID == "" {
+				wsConn.rememberMessageSession(int64(event.MessageID), wsConn.historyKey(event))
+			}
+			var scope *runtimescope.Scope
+			if a.engine != nil {
+				scope = a.engine.Scope
+			}
+			routing = EventRouting{
+				Derived:     true,
+				WakeSignals: DetectGroupWakeSignals(event, scope),
+			}
+			if a.engine != nil && a.engine.SessionManager != nil {
+				botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+				if botLoopConfig.Enabled() {
+					botLoopUserID = strconv.FormatInt(event.UserID, 10)
+					botLoopMarked = botLoopConfig.IsMarked("onebot", botLoopUserID)
+					botLoopObservation = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).BeginBotLoop(
+						botLoopUserID, botLoopMarked, botLoopConfig.Revision(), isExplicitlyWoken(event, a.engine, routing),
+					)
 				}
 			}
-			canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
-				event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
-			if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-				(isWoken(event, a.engine, routing) || canDispatch) {
-				secPlatform := "onebot"
-				if wsConn.mock {
-					secPlatform = "mock"
-				}
-				principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
-				if principalErr != nil {
-					botLoopObservation.Finish(false, botLoopConfig.Limit())
-					continue
-				}
-				var decision security.WatchdogDecision
-				if wsConn.mock {
-					decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
+				continue
+			}
+		}
+		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
+			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
+		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
+			(isWoken(event, a.engine, routing) || canDispatch) {
+			secPlatform := "onebot"
+			if wsConn.mock {
+				secPlatform = "mock"
+			}
+			principal, principalErr := security.NewPrincipal(secPlatform, strconv.FormatInt(event.UserID, 10))
+			if principalErr != nil {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
+				continue
+			}
+			var decision security.WatchdogDecision
+			if wsConn.mock {
+				decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+			} else {
+				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+			}
+			if security.Blocks(decision.Action) {
+				directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
+				if directReply {
+					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+						continue
+					}
 				} else {
-					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
 				}
-				if security.Blocks(decision.Action) {
-					directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
-					if directReply {
-						if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
-							continue
-						}
-					} else {
-						botLoopObservation.Finish(false, botLoopConfig.Limit())
+				if decision.IsFailure {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
+				} else {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+					if event.MessageType == "group" && decision.SanitizedContent != "" {
+						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 					}
-					if decision.IsFailure {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
-					} else {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
-						if event.MessageType == "group" && decision.SanitizedContent != "" {
-							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
-						}
-					}
-					if directReply {
-						msg := a.engine.Security.RejectMessage(principal, decision)
-						action := "send_private_msg"
-						type1 := "user_id"
-						id := strconv.FormatInt(event.UserID, 10)
-						if event.MessageType == "group" {
-							action = "send_group_msg"
-							type1 = "group_id"
-							id = strconv.FormatInt(event.GroupID, 10)
-						}
-						sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
-					}
-					continue
-				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制脱敏: user=%d category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
-					event.Message = SanitizeOneBotMessage(event.Message, decision.SanitizedContent)
-					if len(event.Messages) > 0 && string(event.Messages) != "null" {
-						var raws []json.RawMessage
-						if err := json.Unmarshal(event.Messages, &raws); err == nil && len(raws) > 0 {
-							var sanitizedRaws []json.RawMessage
-							for _, raw := range raws {
-								sanitizedRaws = append(sanitizedRaws, SanitizeOneBotMessage(raw, decision.SanitizedContent))
-							}
-							b, _ := json.Marshal(sanitizedRaws)
-							event.Messages = b
-						} else {
-							event.Messages = nil
-						}
-					}
-				} else if decision.Action == security.WatchdogWarn {
-					warningNotice = decision.WarningNotice
 				}
+				if directReply {
+					msg := a.engine.Security.RejectMessage(principal, decision)
+					action := "send_private_msg"
+					type1 := "user_id"
+					id := strconv.FormatInt(event.UserID, 10)
+					if event.MessageType == "group" {
+						action = "send_group_msg"
+						type1 = "group_id"
+						id = strconv.FormatInt(event.GroupID, 10)
+					}
+					sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
+				}
+				continue
+			} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制脱敏: user=%d category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+				event.Message = SanitizeOneBotMessage(event.Message, decision.SanitizedContent)
+				if len(event.Messages) > 0 && string(event.Messages) != "null" {
+					var raws []json.RawMessage
+					if err := json.Unmarshal(event.Messages, &raws); err == nil && len(raws) > 0 {
+						var sanitizedRaws []json.RawMessage
+						for _, raw := range raws {
+							sanitizedRaws = append(sanitizedRaws, SanitizeOneBotMessage(raw, decision.SanitizedContent))
+						}
+						b, _ := json.Marshal(sanitizedRaws)
+						event.Messages = b
+					} else {
+						event.Messages = nil
+					}
+				}
+			} else if decision.Action == security.WatchdogWarn {
+				warningNotice = decision.WarningNotice
 			}
+		}
 
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
+		var routeSnapshot *modelrouter.Snapshot
+		if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			routeSnapshot = a.engine.ModelRouter.Snapshot()
+		}
+		botLoopEligible := isWoken(event, a.engine, routing) && (routeSnapshot == nil ||
+			(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event))))
+		var botLoopExceeded bool
+		if event.PokeID != "" {
+			var admitted bool
+			botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
+				botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
+					return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
+				},
+			)
+			if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
+				if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
+					a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+				}
+				continue
 			}
-			botLoopEligible := isWoken(event, a.engine, routing) && (routeSnapshot == nil ||
-				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event))))
-			var botLoopExceeded bool
-			if event.PokeID != "" {
-				var admitted bool
-				botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
-					botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
-						return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
-					},
-				)
-				if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
-					if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
-						a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+		} else {
+			botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+		}
+		if botLoopExceeded && !botLoopConfig.Hard() {
+			botLoopSoft = true
+		}
+
+		if canDispatch && !wsConn.isClosed() {
+			incoming := ToIncomingMessage(event)
+			var text strings.Builder
+			for _, segment := range ParseMessageSegments(event.Message) {
+				if segment.Type == "text" {
+					if part, ok := segment.Data["text"].(string); ok {
+						text.WriteString(part)
 					}
-					continue
+				}
+			}
+			incoming.Content = text.String()
+			if err := a.incomingDispatcher.DispatchIncoming(wsConn.Context(), incoming); err != nil {
+				if a.engine != nil {
+					a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+				}
+			}
+		}
+
+		if botLoopExceeded && botLoopConfig.Hard() {
+			continue
+		}
+
+		if routeSnapshot != nil {
+			if err := routeSnapshot.LoadError(); err != nil {
+				a.engine.PauseOnStorageError(err)
+				continue
+			}
+			if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event)) {
+				continue
+			}
+		}
+
+		if wsConn.isClosed() {
+			continue
+		}
+		var turn *llm.SessionTurn
+		if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			if isWoken(event, a.engine, routing) {
+				lane := "sender:" + strconv.FormatInt(event.UserID, 10)
+				proactiveTurn := routing.WakeSignals.Proactive
+				if proactiveTurn {
+					lane = "proactive"
+				}
+				inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
+				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
+			}
+		}
+
+		if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
+			if a.engine != nil && a.engine.GroupManager != nil {
+				groupIDStr := strconv.FormatInt(event.GroupID, 10)
+				userIDStr := strconv.FormatInt(event.UserID, 10)
+				if groupIDStr != "" && userIDStr != "" {
+					gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
+					if err == nil && gStore != nil {
+						nickname := ""
+						card := ""
+						role := memory.GroupRoleUnknown
+						if event.Sender != nil {
+							nickname = event.Sender.Nickname
+							card = event.Sender.Card
+							role = memory.NormalizeGroupRole(event.Sender.Role)
+						}
+						_, err = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
+						if err == nil {
+							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
+						}
+					}
+					if err != nil {
+						a.engine.PauseOnStorageError(err)
+						if turn != nil {
+							turn.Done()
+						}
+						continue
+					}
+				}
+			}
+			if isExplicitlyWoken(event, a.engine, routing) {
+				guard := stageGroupCompactMessage(event, a.engine)
+				if turn != nil {
+					turn.AttachStagedGuard(guard)
 				}
 			} else {
-				botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+				captureGroupCompactMessage(event, a.engine)
 			}
-			if botLoopExceeded && !botLoopConfig.Hard() {
-				botLoopSoft = true
-			}
+		}
 
-			if canDispatch && !wsConn.isClosed() {
-				incoming := ToIncomingMessage(event)
-				var text strings.Builder
-				for _, segment := range ParseMessageSegments(event.Message) {
-					if segment.Type == "text" {
-						if part, ok := segment.Data["text"].(string); ok {
-							text.WriteString(part)
-						}
-					}
-				}
-				incoming.Content = text.String()
-				if err := a.incomingDispatcher.DispatchIncoming(wsConn.Context(), incoming); err != nil {
-					if a.engine != nil {
-						a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
-					}
-				}
-			}
-
-			if botLoopExceeded && botLoopConfig.Hard() {
-				continue
-			}
-
-			if routeSnapshot != nil {
-				if err := routeSnapshot.LoadError(); err != nil {
-					a.engine.PauseOnStorageError(err)
-					continue
-				}
-				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, oneBotRouteScope(event)) {
-					continue
-				}
-			}
-
-			if wsConn.isClosed() {
-				continue
-			}
-			var turn *llm.SessionTurn
-			if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				if isWoken(event, a.engine, routing) {
-					lane := "sender:" + strconv.FormatInt(event.UserID, 10)
-					proactiveTurn := routing.WakeSignals.Proactive
-					if proactiveTurn {
-						lane = "proactive"
-					}
-					inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
-					turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
-				}
-			}
-
-			if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
-				if a.engine != nil && a.engine.GroupManager != nil {
-					groupIDStr := strconv.FormatInt(event.GroupID, 10)
-					userIDStr := strconv.FormatInt(event.UserID, 10)
-					if groupIDStr != "" && userIDStr != "" {
-						gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
-						if err == nil && gStore != nil {
-							nickname := ""
-							card := ""
-							role := memory.GroupRoleUnknown
-							if event.Sender != nil {
-								nickname = event.Sender.Nickname
-								card = event.Sender.Card
-								role = memory.NormalizeGroupRole(event.Sender.Role)
-							}
-							_, err = gStore.ObserveMember(userIDStr, nickname, card, string(role), "onebot")
-							if err == nil {
-								gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
-								gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
-							}
-						}
-						if err != nil {
-							a.engine.PauseOnStorageError(err)
-							if turn != nil {
-								turn.Done()
-							}
-							continue
-						}
-					}
-				}
-				if isExplicitlyWoken(event, a.engine, routing) {
-					guard := stageGroupCompactMessage(event, a.engine)
-					if turn != nil {
-						turn.AttachStagedGuard(guard)
-					}
-				} else {
-					captureGroupCompactMessage(event, a.engine)
-				}
-			}
-
-			if !wsConn.mock {
-				wsConn.observeStickers(event)
-			}
-			wsConn.inFlight.Add(1)
-			if !a.engine.Go(func() {
-				defer wsConn.inFlight.Done()
-				processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft)
-			}) {
-				wsConn.inFlight.Done()
-				if turn != nil {
-					turn.Done()
-				}
+		if !wsConn.mock {
+			wsConn.observeStickers(event)
+		}
+		wsConn.inFlight.Add(1)
+		if !a.engine.Go(func() {
+			defer wsConn.inFlight.Done()
+			processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft)
+		}) {
+			wsConn.inFlight.Done()
+			if turn != nil {
+				turn.Done()
 			}
 		}
 	}
@@ -677,8 +699,12 @@ func isStickerSubType(value any) bool {
 }
 
 func (a *Adapter) CloseConnections() {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+	if a.clientCancel != nil {
+		a.clientCancel()
+	}
 	for c := range a.conns {
 		c.Close()
 	}
