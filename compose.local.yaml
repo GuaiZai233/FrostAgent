@@ -1,0 +1,78 @@
+# Opt-in local panel for Docker Desktop (Linux containers) and Linux Engine.
+# Keep compose.yaml first and preserve the existing Compose project name.
+# Do not attach adapters to local-panel or publish the origin's management port.
+services:
+  local-panel-origin:
+    image: alpine/socat:1.8.1.3@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    network_mode: service:frostagent
+    depends_on:
+      frostagent:
+        condition: service_started
+        restart: true
+    environment:
+      FROSTAGENT_PANEL_TARGET_PORT: ${FROSTAGENT_PANEL_TARGET_PORT:-8080}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        port=$$FROSTAGENT_PANEL_TARGET_PORT
+        case "$$port" in
+          ''|*[!0-9]*) echo 'Panel target must be a numeric TCP port' >&2; exit 1 ;;
+        esac
+        if [ "$${#port}" -gt 5 ] || [ "$$port" -lt 1 ] || [ "$$port" -gt 65535 ]; then
+          echo 'Panel target port must be between 1 and 65535' >&2
+          exit 1
+        fi
+        exec socat UNIX-LISTEN:/run/frostagent-panel/management.sock,unlink-early,mode=0600,fork "TCP4:127.0.0.1:$$port"
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: local-panel-socket
+        target: /run/frostagent-panel
+        volume:
+          nocopy: true
+
+  local-panel:
+    image: alpine/socat:1.8.1.3@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    depends_on:
+      local-panel-origin:
+        condition: service_started
+        restart: true
+    command:
+      - TCP4-LISTEN:8080,bind=0.0.0.0,reuseaddr,fork
+      - UNIX-CONNECT:/run/frostagent-panel/management.sock
+    ports:
+      - "127.0.0.1:${FROSTAGENT_PANEL_PORT:-8088}:8080"
+    networks: [local-panel]
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: local-panel-socket
+        target: /run/frostagent-panel
+        read_only: true
+        volume:
+          nocopy: true
+
+networks:
+  local-panel:
+    internal: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+
+volumes:
+  local-panel-socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1m,uid=10001,gid=10001,mode=0700,nosuid,nodev,noexec

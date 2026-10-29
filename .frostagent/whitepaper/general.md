@@ -37,6 +37,8 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
 
+可信单机的 Windows Docker Desktop（Linux 容器）与 Linux Engine 可显式叠加 `compose.local.yaml`，不需要 host 网络或公网 Tunnel。两个固定摘要的独立 socat 容器通过权限受限的 Unix socket 卷连接：origin 与 FA 共享网络命名空间且仅监听 socket；入口容器位于禁止容器互通的专用内部 bridge，仅发布宿主机 `127.0.0.1:8088`。FA 镜像、默认桥接网络、适配器监听、SQL 配置和现有令牌策略不变，同适配器网络不新增管理 TCP 入口。该模式不增加管理员账号，也不提供公网认证；本地进程、Docker 管理员仍属于可信边界。重建 FA 时需同时重建两个转发容器；停止入口不能只省略覆盖文件。部署与验证限制见 [本地 Docker 面板](../../docs/docker-local-panel.md)。
+
 生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
 
 SQL 保持优先；Docker 镜像在启动、热更新和换库前强制管理数值回环与独立端口，拒绝不安全配置且不迁移数据。旧 `127.0.0.1:8081` 设置仍有效，Tunnel 使用其实际端口；新库默认 8080。host 镜像的回环适配器默认值不覆盖已有 SQL 通配监听，切换模式前须检查。UID/GID `10001:10001` 与 `/app/data` 持久卷保留；不自动删除旧代理证书卷或应用数据。
