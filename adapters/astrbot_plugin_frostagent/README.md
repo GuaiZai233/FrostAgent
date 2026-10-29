@@ -4,17 +4,35 @@
 
 ## 配置说明
 
-先在 FrostAgent 控制台创建并启用实例，再从该实例的概览复制 AstrBot WebSocket 地址（例如 `ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；插件不再提供不带实例 ID 的默认地址，缺失或填写旧版 `/ws/astrbot` 地址时会直接报错。
+先在 FrostAgent 控制台创建并启用实例，再到该实例的“连接”页选择 AstrBot 的连接模式。正向/反向均以 FA 为准，两种模式都是双向收发消息；一次只选一种，不能同时接入同一个上游。
+
+### 反向 WebSocket（FA 作为服务端，默认）
+
+保持插件 `ws_mode=reverse`，从 FA 的“连接”页复制 AstrBot WebSocket 地址到 `ws_url`（例如 `ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；缺失或填写旧版 `/ws/astrbot` 地址时插件保持加载，但暂停连接并提示修正。插件负责断线重连，已有配置无需迁移。
+
+### 正向 WebSocket（FA 作为客户端）
+
+1. 插件设置 `ws_mode=forward`，配置监听 IP、端口和可选的 `ws_access_token`，保存后重新加载插件。此模式不需要 `ws_url`。
+2. FA 的“连接”页选择 AstrBot“正向 WebSocket（FA 作为客户端）”，填写 `ws://插件可达地址:1244/`，访问令牌与插件保持一致。
+3. FA 主动连接插件，并负责断线重连。插件只允许一个 FA 连接；第二个连接会被拒绝，避免消息被多个实例接管。
+
+默认插件只监听 `127.0.0.1:1244`。跨容器时，`127.0.0.1` 指各自容器，不是另一端；可在可信 Docker 网络内让插件监听 `0.0.0.0`，由 FA 使用插件服务名连接。**非回环监听必须设置访问令牌；访问令牌仅接受无空白的可打印 ASCII。** 不要把监听端口无鉴权暴露到公网；跨非可信网络应前置 TLS 代理并让 FA 使用 `wss://`。插件拒绝浏览器 Origin 请求，不将 Origin 当成身份认证。该连接模式不会改变 FA 的 HTTP 管理面访问方式。
+
+插件重载或停止会关闭监听、连接及待处理的响应等待；不会把断线前的等待队列交给新连接。
 
 在 AstrBot Web 控制台中配置插件参数：
 
 | 参数项 | 说明 | 默认值 |
 | :--- | :--- | :--- |
-| `ws_url` | FrostAgent 实例专属 WebSocket 地址（必填） | 无 |
+| `ws_mode` | `reverse`：反向（FA 服务端）；`forward`：正向（FA 客户端） | `reverse` |
+| `ws_url` | 仅反向模式必填：FrostAgent 实例专属 WebSocket 地址 | 无 |
+| `ws_listen_host` | 仅正向模式：插件监听 IP，非回环必须配置令牌 | `127.0.0.1` |
+| `ws_listen_port` | 仅正向模式：插件监听端口 | `1244` |
+| `ws_access_token` | 仅正向模式：与 FA AstrBot 连接配置一致的 Bearer 令牌 | 无 |
 | `http_base_url` | FrostAgent HTTP API 根地址；分容器部署时填写 AstrBot 可访问的地址 | `http://127.0.0.1:8080` |
 | `forward_all_group_messages` | 是否将所有群消息发送给 FrostAgent (用于群聊总结) | `true` |
 | `heartbeat_interval` | 心跳保活间隔 (秒) | `30` |
-| `reconnect_interval` | 异常断开重连间隔 (秒) | `5` |
+| `reconnect_interval` | 仅反向模式：异常断开重连间隔 (秒) | `5` |
 
 ## 群聊唤醒
 
