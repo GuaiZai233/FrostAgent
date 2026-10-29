@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import inspect
+import ipaddress
 import json
 import os
 import re
 import time
 import uuid
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import urljoin, urlparse
@@ -31,41 +34,82 @@ class Settings:
     forward_all_group_messages: bool
     heartbeat_interval: int
     reconnect_interval: int
+    ws_mode: str = "reverse"
+    ws_listen_host: str = "127.0.0.1"
+    ws_listen_port: int = 1244
+    ws_access_token: str = ""
 
 
 class WSURLConfigurationError(ValueError):
-    """Raised when the persisted FrostAgent WebSocket URL needs repair."""
+    """Raised when persisted WebSocket connection settings need repair."""
 
 
 def load_settings(config: dict = None) -> Settings:
     config = config or {}
+    mode = str(config.get("ws_mode") or "reverse").strip()
+    if mode not in ("reverse", "forward"):
+        raise WSURLConfigurationError("ws_mode must be reverse or forward")
     ws_url = str(
         config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
     ).strip()
-    if not ws_url:
+    if mode == "reverse" and not ws_url:
         raise WSURLConfigurationError(
             "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
-            "WebSocket address from the instance overview"
+            "WebSocket address from the instance connection page"
         )
-    parsed_ws_url = urlparse(ws_url)
-    if (
-        parsed_ws_url.scheme not in ("ws", "wss")
-        or not parsed_ws_url.netloc
-        or not re.fullmatch(
-            r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path
-        )
-    ):
-        raise WSURLConfigurationError(
-            "FrostAgent ws_url must use "
-            "ws(s)://host/instances/<instance-id>/ws/astrbot"
-        )
+    if mode == "reverse":
+        try:
+            parsed_ws_url = urlparse(ws_url)
+            valid_url = (
+                parsed_ws_url.scheme in ("ws", "wss")
+                and parsed_ws_url.hostname
+                and parsed_ws_url.port != 0
+                and not parsed_ws_url.username
+                and not parsed_ws_url.password
+                and not parsed_ws_url.fragment
+                and not any(ord(char) < 32 or ord(char) == 127 for char in ws_url)
+                and re.fullmatch(r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path)
+            )
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise WSURLConfigurationError(
+                "FrostAgent ws_url must use "
+                "ws(s)://host/instances/<instance-id>/ws/astrbot without URL credentials"
+            )
+    host = str(config.get("ws_listen_host") or "127.0.0.1").strip()
+    port = 1244
+    token = str(config.get("ws_access_token") or "")
+    if mode == "forward":
+        try:
+            address = ipaddress.ip_address(host)
+            port = int(config.get("ws_listen_port", 1244))
+        except (ValueError, TypeError):
+            raise WSURLConfigurationError("forward mode requires a numeric listen IP and port") from None
+        if not 1 <= port <= 65535:
+            raise WSURLConfigurationError("ws_listen_port must be between 1 and 65535")
+        if any(ord(char) < 33 or ord(char) > 126 for char in token):
+            raise WSURLConfigurationError("ws_access_token must contain printable ASCII without spaces")
+        if not address.is_loopback and not token:
+            raise WSURLConfigurationError("non-loopback WebSocket listeners require ws_access_token")
+    try:
+        heartbeat_interval = int(config.get("heartbeat_interval", 30))
+        reconnect_interval = int(config.get("reconnect_interval", 5))
+    except (ValueError, TypeError):
+        raise WSURLConfigurationError("heartbeat and reconnect intervals must be positive integers") from None
+    if heartbeat_interval <= 0 or reconnect_interval <= 0:
+        raise WSURLConfigurationError("heartbeat and reconnect intervals must be positive integers")
     return Settings(
         ws_url=ws_url,
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
-        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
-        reconnect_interval=int(config.get("reconnect_interval", 5)),
+        heartbeat_interval=heartbeat_interval,
+        reconnect_interval=reconnect_interval,
+        ws_mode=mode,
+        ws_listen_host=host,
+        ws_listen_port=port,
+        ws_access_token=token,
     )
 
 
@@ -85,8 +129,9 @@ def _load_settings_unvalidated(config: dict = None) -> Settings:
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
-        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
-        reconnect_interval=int(config.get("reconnect_interval", 5)),
+        heartbeat_interval=30,
+        reconnect_interval=5,
+        ws_mode=str(config.get("ws_mode") or "reverse"),
     )
 
 
@@ -224,7 +269,7 @@ async def resolve_sticker_sources(action: dict[str, Any], http_base_url: str) ->
 
 
 class FrostAgentWSClient:
-    """FrostAgent WebSocket 双向通信客户端，支持自动重连、心跳维持及消息分发。"""
+    """Bidirectional transport: reverse dials FA; forward accepts one FA client."""
 
     def __init__(self, settings: Settings, context: Context):
         self.settings = settings
@@ -233,38 +278,155 @@ class FrostAgentWSClient:
         self._running = False
         self._worker_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._server: Optional[Any] = None
+        self._connection_tasks: set[asyncio.Task] = set()
         # 针对每个消息事件的响应队列：message_id -> asyncio.Queue[dict]
         self._pending_queues: Dict[str, asyncio.Queue] = {}
         self._lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        self._running = True
-        self._worker_task = asyncio.create_task(self._connection_loop())
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        async with self._lifecycle_lock:
+            if self._running:
+                return
+            self._running = True
+            try:
+                if self.settings.ws_mode == "forward":
+                    try:
+                        from websockets.asyncio.server import serve
+
+                        authorize = self._authorize_forward_request
+                    except ImportError:
+                        # websockets 12 predates the asyncio implementation.
+                        from websockets.legacy.server import serve
+
+                        authorize = self._authorize_forward
+
+                    self._server = await serve(
+                        self._accept_forward,
+                        self.settings.ws_listen_host,
+                        self.settings.ws_listen_port,
+                        process_request=authorize,
+                        open_timeout=10,
+                        close_timeout=3,
+                        ping_interval=30,
+                        ping_timeout=90,
+                    )
+                    logger.info("[frostagent-adapter] 正向 WebSocket 已监听，等待 FA 客户端连接")
+                else:
+                    self._worker_task = asyncio.create_task(self._connection_loop())
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            except BaseException:
+                self._running = False
+                if self._server is not None:
+                    self._server.close()
+                    await self._server.wait_closed()
+                    self._server = None
+                raise
 
     async def stop(self) -> None:
-        self._running = False
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._worker_task:
-            self._worker_task.cancel()
-        if self.ws:
-            await self.ws.close()
+        async with self._lifecycle_lock:
+            self._running = False
+            tasks = [task for task in (self._heartbeat_task, self._worker_task) if task]
+            tasks.extend(self._connection_tasks)
+            for task in tasks:
+                task.cancel()
+            if self._server is not None:
+                self._server.close()
+            ws = self.ws
+            if ws is not None:
+                await ws.close()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if self._server is not None:
+                await self._server.wait_closed()
+            self.ws = None
+            self._server = None
+            self._worker_task = None
+            self._heartbeat_task = None
+            self._release_waiters()
+
+    async def _authorize_forward(self, path: str, headers: Any) -> Optional[tuple]:
+        def reject(status: HTTPStatus, text: str) -> tuple:
+            return status, [("Content-Type", "text/plain; charset=utf-8")], text.encode("utf-8")
+
+        if path != "/":
+            return reject(HTTPStatus.NOT_FOUND, "WebSocket endpoint is /\n")
+        if not self._running:
+            return reject(HTTPStatus.SERVICE_UNAVAILABLE, "WebSocket listener is stopping\n")
+        # The FA client isn't a browser. Reject browser-originated local requests,
+        # including when a loopback listener has no configured bearer token.
+        if headers.get_all("Origin"):
+            return reject(HTTPStatus.FORBIDDEN, "Browser WebSocket clients aren't accepted\n")
+        if self.settings.ws_access_token:
+            tokens = headers.get_all("Authorization")
+            expected = "Bearer " + self.settings.ws_access_token
+            if len(tokens) != 1 or not hmac.compare_digest(tokens[0].encode(), expected.encode()):
+                return reject(HTTPStatus.UNAUTHORIZED, "Invalid WebSocket access token\n")
+        if self.ws is not None:
+            return reject(HTTPStatus.CONFLICT, "A FrostAgent client is already connected\n")
+        return None
+
+    async def _authorize_forward_request(self, connection: Any, request: Any) -> Any:
+        rejected = await self._authorize_forward(request.path, request.headers)
+        if rejected is None:
+            return None
+        status, _headers, body = rejected
+        return connection.respond(status, body.decode("utf-8"))
+
+    async def _accept_forward(self, ws: Any) -> None:
+        task = asyncio.current_task()
+        self._connection_tasks.add(task)
+        try:
+            async with self._lock:
+                accepted = self._running and self.ws is None
+                if accepted:
+                    self.ws = ws
+            if not accepted:
+                await ws.close(code=1008, reason="Only one FrostAgent client is allowed")
+                return
+            logger.info("[frostagent-adapter] FA 正向 WebSocket 客户端已连接")
+            try:
+                async for raw_msg in ws:
+                    await self._handle_incoming_action(raw_msg)
+            finally:
+                await self._release_connection(ws)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[frostagent-adapter] 正向 WebSocket 连接已结束 ({type(exc).__name__})")
+        finally:
+            self._connection_tasks.discard(task)
+
+    def _release_waiters(self) -> None:
+        queues = list(self._pending_queues.values())
+        self._pending_queues.clear()
+        for queue in queues:
+            queue.put_nowait({"type": "connection_closed"})
+
+    async def _release_connection(self, ws: Any) -> None:
+        async with self._lock:
+            if self.ws is ws:
+                self.ws = None
+                self._release_waiters()
 
     async def _connection_loop(self) -> None:
         while self._running:
             try:
-                logger.info(f"[frostagent-adapter] 正在连接 FrostAgent: {self.settings.ws_url}")
-                async with websockets.connect(self.settings.ws_url) as ws:
+                logger.info("[frostagent-adapter] 正在建立反向 WebSocket 连接（FA 作为服务端）")
+                async with websockets.connect(self.settings.ws_url, open_timeout=10, close_timeout=3) as ws:
                     self.ws = ws
                     logger.info("[frostagent-adapter] 已成功建立与 FrostAgent 的 WebSocket 连接")
-                    async for raw_msg in ws:
-                        await self._handle_incoming_action(raw_msg)
+                    try:
+                        async for raw_msg in ws:
+                            await self._handle_incoming_action(raw_msg)
+                    finally:
+                        await self._release_connection(ws)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(
-                    f"[frostagent-adapter] WebSocket 连接异常: {e}，将在 {self.settings.reconnect_interval}s 后重试"
+                    f"[frostagent-adapter] WebSocket 连接异常 ({type(e).__name__})，将在 {self.settings.reconnect_interval}s 后重试"
                 )
             finally:
                 self.ws = None
@@ -274,20 +436,26 @@ class FrostAgentWSClient:
     async def _heartbeat_loop(self) -> None:
         while self._running:
             await asyncio.sleep(self.settings.heartbeat_interval)
-            if is_ws_open(self.ws):
+            ws = self.ws
+            if is_ws_open(ws):
                 try:
                     heartbeat_payload = {
                         "type": "heartbeat",
                         "timestamp": int(time.time()),
                     }
-                    await self.ws.send(json.dumps(heartbeat_payload))
+                    await ws.send(json.dumps(heartbeat_payload))
                 except Exception as e:
-                    logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
+                    logger.debug(f"[frostagent-adapter] 发送心跳失败 ({type(e).__name__})")
 
     async def send_event(self, event_data: dict[str, Any]) -> bool:
-        if is_ws_open(self.ws):
-            await self.ws.send(json.dumps(event_data))
-            return True
+        ws = self.ws
+        if is_ws_open(ws):
+            try:
+                await ws.send(json.dumps(event_data))
+                return True
+            except Exception as exc:
+                logger.warning(f"[frostagent-adapter] 事件发送失败 ({type(exc).__name__})")
+                return False
         logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
         return False
 
@@ -377,7 +545,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.4",
+    "0.2.0",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -398,12 +566,18 @@ class FrostAgentAdapter(Star):
             self._init_task = None
             logger.error(
                 f"[frostagent-adapter] {self._configuration_error}. "
-                "插件已保持加载但暂停连接；请在插件配置中复制目标实例概览里的 "
+                "插件已保持加载但暂停连接；请修正插件的连接模式、监听设置或从目标实例连接页复制 "
                 "AstrBot WebSocket 地址，然后重新加载插件。"
             )
             return
         self.client = FrostAgentWSClient(self.settings, context)
-        self._init_task = asyncio.create_task(self.client.start())
+        self._init_task = asyncio.create_task(self._start_transport())
+
+    async def _start_transport(self) -> None:
+        try:
+            await self.client.start()
+        except Exception as exc:
+            logger.error(f"[frostagent-adapter] WebSocket 启动失败 ({type(exc).__name__})；请检查监听端口后重新加载插件")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
@@ -473,6 +647,9 @@ class FrostAgentAdapter(Star):
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
 
+                if action.get("type") == "connection_closed":
+                    break
+
                 if action.get("type") == "quote_lookup":
                     quote_data = {}
                     if (
@@ -536,6 +713,9 @@ class FrostAgentAdapter(Star):
                 self.client.unregister_waiter(msg_id)
 
     async def terminate(self):
+        if self._init_task is not None:
+            self._init_task.cancel()
+            await asyncio.gather(self._init_task, return_exceptions=True)
         await self.client.stop()
 
 

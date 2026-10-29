@@ -1,6 +1,27 @@
 {
+    "ws_mode": {
+        "description": "连接方向（以 FA 为准）：reverse = 反向 WebSocket（FA 作为服务端，插件主动连接）；forward = 正向 WebSocket（FA 作为客户端，插件监听）",
+        "type": "string",
+        "options": ["reverse", "forward"],
+        "default": "reverse"
+    },
     "ws_url": {
-        "description": "从 FrostAgent 实例概览复制 WebSocket 地址 (例如 ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot)",
+        "description": "仅反向模式：从 FrostAgent 实例的连接页复制 AstrBot WebSocket 地址 (例如 ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot)",
+        "type": "string",
+        "default": ""
+    },
+    "ws_listen_host": {
+        "description": "仅正向模式：插件监听 IP（默认仅本机；跨容器可填 0.0.0.0，但必须配置 ws_access_token 并限制网络访问）",
+        "type": "string",
+        "default": "127.0.0.1"
+    },
+    "ws_listen_port": {
+        "description": "仅正向模式：插件 WebSocket 监听端口，FA 正向连接地址填写 ws://插件可达地址:端口/",
+        "type": "int",
+        "default": 1244
+    },
+    "ws_access_token": {
+        "description": "仅正向模式：FA 连接插件时的 Bearer 访问令牌，与 FA 连接页 AstrBot 访问令牌保持一致；非回环监听必填",
         "type": "string",
         "default": ""
     },
@@ -20,7 +41,7 @@
         "default": 30
     },
     "reconnect_interval": {
-        "description": "连接断开后重试重连间隔 (秒)",
+        "description": "仅反向模式：连接断开后重试重连间隔 (秒)；正向模式由 FA 重连",
         "type": "int",
         "default": 5
     }

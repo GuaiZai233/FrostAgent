@@ -92,7 +92,10 @@ sys.modules["astrbot.api"] = api_module
 sys.modules["astrbot.api.event"] = event_module
 sys.modules["astrbot.api.star"] = star_module
 sys.modules["astrbot.api.message_components"] = components_module
-sys.modules["websockets"] = types.ModuleType("websockets")
+try:
+    import websockets
+except ImportError:
+    sys.modules["websockets"] = types.ModuleType("websockets")
 
 adapter_module = importlib.import_module(
     "adapters.astrbot_plugin_frostagent.main"
@@ -104,6 +107,48 @@ load_settings = adapter_module.load_settings
 
 
 class SettingsTest(unittest.TestCase):
+    def test_reverse_is_default_and_ignores_forward_listen_settings(self):
+        settings = load_settings({
+            "ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+            "ws_listen_port": "not-a-port",
+            "ws_listen_host": "not-an-IP",
+        })
+        self.assertEqual(settings.ws_mode, "reverse")
+
+    def test_forward_does_not_require_reverse_url(self):
+        settings = load_settings({"ws_mode": "forward"})
+        self.assertEqual(settings.ws_listen_host, "127.0.0.1")
+        self.assertEqual(settings.ws_listen_port, 1244)
+        self.assertEqual(settings.ws_url, "")
+
+    def test_forward_requires_token_on_non_loopback_listener(self):
+        with self.assertRaisesRegex(ValueError, "require ws_access_token"):
+            load_settings({"ws_mode": "forward", "ws_listen_host": "0.0.0.0"})
+        settings = load_settings({
+            "ws_mode": "forward", "ws_listen_host": "0.0.0.0",
+            "ws_access_token": "synthetic-access-token",
+        })
+        self.assertEqual(settings.ws_access_token, "synthetic-access-token")
+
+    def test_bad_forward_settings_keep_plugin_loaded_but_inactive(self):
+        for config in [
+            {"ws_mode": "invalid"},
+            {"ws_mode": "forward", "ws_listen_host": "localhost.invalid"},
+            {"ws_mode": "forward", "ws_listen_port": 0},
+            {"ws_mode": "forward", "ws_listen_port": 65536},
+            {"ws_mode": "forward", "ws_listen_port": "invalid"},
+            {"ws_mode": "forward", "ws_access_token": "synthetic\r\nsecret"},
+            {"ws_mode": "forward", "ws_access_token": "synthetic secret"},
+            {"ws_mode": "forward", "heartbeat_interval": 0},
+            {"ws_mode": "forward", "heartbeat_interval": "invalid"},
+        ]:
+            with self.subTest(config=config), patch.object(asyncio, "create_task") as create_task:
+                adapter = FrostAgentAdapter(object(), config)
+                self.assertTrue(adapter._configuration_error)
+                self.assertIsNone(adapter._init_task)
+                self.assertNotIn("synthetic", adapter._configuration_error)
+                create_task.assert_not_called()
+
     def test_ws_url_is_required_without_legacy_default(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(ValueError, "ws_url is required"):
@@ -247,6 +292,20 @@ class QuoteLookupRoutingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_disconnection_releases_the_waiting_event(self):
+        adapter = object.__new__(FrostAgentAdapter)
+        adapter._configuration_error = None
+        adapter.settings = SimpleNamespace(
+            forward_all_group_messages=True,
+            http_base_url="http://frostagent:8080",
+        )
+        adapter.client = FakeClient([{"type": "connection_closed"}])
+        event = FakeEvent(content="synthetic message")
+        results = [result async for result in adapter.forward_to_frostagent(event)]
+        self.assertEqual(results, [])
+        self.assertIsNone(adapter.client.queue)
+        self.assertFalse(event.call_llm)
+
     async def test_quote_lookup_capability_requires_qq_bot_action(self):
         event = FakeEvent(content="你觉得呢？")
         event.message_obj.message = [Reply("44")]
