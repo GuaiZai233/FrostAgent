@@ -13,6 +13,7 @@ import { icon } from './components/icons';
 import { lazyMount } from './lazy-page';
 
 import { mountOverviewPage } from './pages/overview';
+import { mountConnectionsPage } from './pages/connections';
 import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
@@ -46,6 +47,7 @@ themeManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
+  { path: '/connections', label: '连接', iconName: 'radio' },
   { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人格设定', iconName: 'chat' },
@@ -262,6 +264,7 @@ function initAppShell(): void {
 
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
+  router.register('/connections', '连接', mountConnectionsPage);
   router.register('/sessions', '会话与 Prompt', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
   router.register('/dialogue', '人格设定', mountDialoguePage);
@@ -298,6 +301,7 @@ function initAppShell(): void {
   const register = router.register.bind(router);
   const guardedPaths = [
     '/overview',
+    '/connections',
     '/sessions',
     '/memory',
     '/dialogue',
@@ -312,6 +316,7 @@ function initAppShell(): void {
   ];
   const mounts = [
     mountOverviewPage,
+    mountConnectionsPage,
     mountPromptPage,
     mountMemoryPage,
     mountDialoguePage,
