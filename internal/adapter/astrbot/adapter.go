@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
@@ -32,6 +33,10 @@ type Adapter struct {
 	mu                 sync.RWMutex
 	conns              map[*wsConn]struct{}
 	incomingDispatcher core.IncomingDispatcher
+	connectionConfig   wsclient.Config
+	clientCancel       context.CancelFunc
+	clientRunning      bool
+	stopped            bool
 }
 
 const astrBotQQPlatform = "aiocqhttp"
@@ -121,6 +126,10 @@ func (a *Adapter) ID() string {
 func (a *Adapter) registerConn(c *wsConn) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.stopped {
+		_ = c.Close()
+		return
+	}
 	a.conns[c] = struct{}{}
 }
 
@@ -244,6 +253,11 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler。
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		mock := r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true"
+		if a.connectionConfig.Mode == wsclient.Forward && !mock {
+			http.Error(w, "当前适配器使用正向 WebSocket（FA 作为客户端）", http.StatusConflict)
+			return
+		}
 		if a.engine != nil {
 			done, ok := a.engine.Enter()
 			if !ok {
@@ -264,342 +278,354 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 			return
 		}
-		var c *wsConn
-		if a.engine != nil {
-			c = newWSConn(conn, a.engine.Scope)
-			c.Scope = a.engine.Scope
-		} else {
-			c = newWSConn(conn)
-		}
-		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
-			c.mock = true
-		}
-		a.registerConn(c)
-		if a.engine != nil && a.engine.Context().Err() != nil {
-			c.Close()
-		}
-		defer func() {
-			a.unregisterConn(c)
-			c.Close()
-			c.inFlight.Wait()
-			if c.mock && a.engine != nil {
-				if a.engine.SessionManager != nil {
-					c.mockSessions.Range(func(key, _ any) bool {
-						if sessionID, ok := key.(string); ok {
-							a.engine.SessionManager.Delete(sessionID)
-						}
-						return true
-					})
-				}
-				if a.engine.SandboxBackend != nil {
-					c.mockSessions.Range(func(key, _ any) bool {
-						if sessionID, ok := key.(string); ok {
-							if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
-								a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
-							}
-						}
-						return true
-					})
-				}
+		a.serveConnection(r.Context(), conn, mock, r.RemoteAddr)
+	}
+}
+
+func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, mock bool, peer string) {
+	var c *wsConn
+	if a.engine != nil {
+		c = newWSConn(conn, a.engine.Scope)
+		c.Scope = a.engine.Scope
+	} else {
+		c = newWSConn(conn)
+	}
+	c.mock = mock
+	stopCancellation := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stopCancellation()
+	a.registerConn(c)
+	if a.engine != nil && a.engine.Context().Err() != nil {
+		c.Close()
+	}
+	defer func() {
+		a.unregisterConn(c)
+		c.Close()
+		c.inFlight.Wait()
+		if c.mock && a.engine != nil {
+			if a.engine.SessionManager != nil {
+				c.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						a.engine.SessionManager.Delete(sessionID)
+					}
+					return true
+				})
 			}
-		}()
-
-		if a.engine != nil {
-			a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+			if a.engine.SandboxBackend != nil {
+				c.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+							a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+						}
+					}
+					return true
+				})
+			}
 		}
+	}()
 
-		reader := heartbeat.Start(c.Context(), conn, c.Close)
-		defer reader.Close()
-		for {
-			_, message, err := reader.ReadMessage()
-			if err != nil {
-				if a.engine != nil {
+	if a.engine != nil {
+		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", peer))
+	}
+
+	reader := heartbeat.Start(c.Context(), conn, c.Close)
+	defer reader.Close()
+	for {
+		_, message, err := reader.ReadMessage()
+		if err != nil {
+			if a.engine != nil {
+				if a.connectionConfig.Mode == wsclient.Forward && !mock {
+					a.engine.Log().Warn(logs.WEBSOCKET, "AstrBot 正向 WebSocket 连接已断开")
+				} else {
 					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
 				}
-				break
 			}
+			break
+		}
 
-			var event Event
-			if err := json.Unmarshal(message, &event); err != nil {
-				if a.engine != nil {
-					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
-				}
-				continue
-			}
-
-			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
-				continue
-			}
-			if event.Type == "delivery_result" {
-				var receipt deliveryReceipt
-				if json.Unmarshal(message, &receipt) == nil {
-					c.acceptDeliveryReceipt(receipt)
-				}
-				continue
-			}
-			if event.Type == "quote_lookup_result" {
-				var response quoteLookupResponse
-				if json.Unmarshal(message, &response) == nil {
-					c.acceptQuoteLookup(response)
-				}
-				continue
-			}
-
-			if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
-				normalized, accepted := a.normalizePoke(event, c.mock)
-				if !accepted {
-					_ = sendTerminalNoopWithSuppress(event, c)
-					continue
-				}
-				event = normalized
-			}
-			if !c.mock && (event.Type == "" || event.Type == "event") &&
-				(event.EventType == "" || event.EventType == "message") &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				a.engine.RecordIncomingMessage()
-			}
-			sanitizeIngressMetadata(&event)
-			var warningNotice string
-			var botLoopObservation *llm.BotLoopObservation
-			var botLoopConfig botloop.Config
-			var botLoopMarked bool
-			var scope *runtimescope.Scope
+		var event Event
+		if err := json.Unmarshal(message, &event); err != nil {
 			if a.engine != nil {
-				scope = a.engine.Scope
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
 			}
-			pristineShouldReply := false
-			pristineInject := false
-			if event.MessageType == "group" || event.MessageType == "private" {
-				if event.Metadata == nil {
-					event.Metadata = make(map[string]any)
-				}
-				pristineShouldReply = shouldReply(&event, scope)
-				injectionEvent := event
-				injectionEvent.IsWake = false
-				pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
-				event.Metadata["_frostagent_should_reply"] = pristineShouldReply
-				if a.engine != nil && a.engine.SessionManager != nil &&
-					(event.Type == "" || event.Type == "event") &&
-					(event.EventType == "" || event.EventType == "message") {
-					botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
-					if botLoopConfig.Enabled() {
-						platform := event.Platform
-						if platform == "" {
-							platform = "astrbot"
-						}
-						botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
-						botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
-							event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
-						)
-					}
-				}
-				if !c.mock && handleAdminCommand(c, event, a.engine) {
-					botLoopObservation.Finish(false, botLoopConfig.Limit())
-					continue
-				}
-			}
+			continue
+		}
 
-			canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
-				(event.Type == "" || event.Type == "event") &&
-				(event.EventType == "" || event.EventType == "message") &&
-				(event.MessageType == "group" || event.MessageType == "private")
-			if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
-				platform := event.Platform
-				if platform == "" {
-					platform = "astrbot"
-				}
-				if c.mock {
-					platform = "mock"
-				}
-				principal, principalErr := security.NewPrincipal(platform, event.UserID)
-				if principalErr != nil {
-					botLoopObservation.Finish(false, botLoopConfig.Limit())
-					if isProactiveReply(&event) || event.pokeID != "" {
-						_ = sendTerminalNoopWithSuppress(event, c)
-					}
-					continue
-				}
-				var decision security.WatchdogDecision
-				if c.mock {
-					decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
-				} else {
-					decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
-				}
-				if security.Blocks(decision.Action) {
-					directReply := isExplicitWake(&event, scope)
-					if directReply {
-						if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
-							_ = sendTerminalNoopWithSuppress(event, c)
-							continue
-						}
-					} else {
-						botLoopObservation.Finish(false, botLoopConfig.Limit())
-					}
-					if decision.IsFailure {
-						if a.engine != nil && a.engine.Scope != nil {
-							a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
-						} else {
-							logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
-						}
-					} else {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
-						if event.MessageType == "group" && decision.SanitizedContent != "" {
-							captureGroupCompactText(event, decision.SanitizedContent, a.engine)
-						}
-					}
-					if directReply {
-						msg := a.engine.Security.RejectMessage(principal, decision)
-						_ = sendDirectReply(event, c, msg)
-					} else if isProactiveReply(&event) || event.pokeID != "" {
-						_ = sendTerminalNoopWithSuppress(event, c)
-					}
-					continue
-				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
-					event.Content = decision.SanitizedContent
-					if len(event.Messages) > 0 {
-						event.Messages = []string{decision.SanitizedContent}
-					}
-				} else if decision.Action == security.WatchdogWarn {
-					warningNotice = decision.WarningNotice
-				}
+		if event.Type == "heartbeat" || event.EventType == "heartbeat" {
+			continue
+		}
+		if event.Type == "delivery_result" {
+			var receipt deliveryReceipt
+			if json.Unmarshal(message, &receipt) == nil {
+				c.acceptDeliveryReceipt(receipt)
 			}
+			continue
+		}
+		if event.Type == "quote_lookup_result" {
+			var response quoteLookupResponse
+			if json.Unmarshal(message, &response) == nil {
+				c.acceptQuoteLookup(response)
+			}
+			continue
+		}
 
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
-			}
-			botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
-				(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
-			var botLoopExceeded bool
-			if event.pokeID != "" {
-				var admitted bool
-				botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
-					botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
-						return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
-					},
-				)
-				if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
-					if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
-						a.engine.PauseOnStorageError(routeSnapshot.LoadError())
-					}
-					_ = sendTerminalNoopWithSuppress(event, c)
-					continue
-				}
-			} else {
-				botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
-			}
-			if botLoopExceeded && !botLoopConfig.Hard() {
-				event.botLoopSoft = true
-			}
-
-			if canDispatch && !c.isClosed() {
-				incoming := ToIncomingMessage(event)
-				incoming.SessionID = sessionKey(event)
-				if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
-					if a.engine != nil {
-						a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
-					}
-				}
-			}
-
-			if botLoopExceeded && botLoopConfig.Hard() {
+		if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+			normalized, accepted := a.normalizePoke(event, c.mock)
+			if !accepted {
 				_ = sendTerminalNoopWithSuppress(event, c)
 				continue
 			}
-
-			if routeSnapshot != nil {
-				if err := routeSnapshot.LoadError(); err != nil {
-					a.engine.PauseOnStorageError(err)
-					if event.pokeID != "" {
-						_ = sendTerminalNoopWithSuppress(event, c)
+			event = normalized
+		}
+		if !c.mock && (event.Type == "" || event.Type == "event") &&
+			(event.EventType == "" || event.EventType == "message") &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			a.engine.RecordIncomingMessage()
+		}
+		sanitizeIngressMetadata(&event)
+		var warningNotice string
+		var botLoopObservation *llm.BotLoopObservation
+		var botLoopConfig botloop.Config
+		var botLoopMarked bool
+		var scope *runtimescope.Scope
+		if a.engine != nil {
+			scope = a.engine.Scope
+		}
+		pristineShouldReply := false
+		pristineInject := false
+		if event.MessageType == "group" || event.MessageType == "private" {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any)
+			}
+			pristineShouldReply = shouldReply(&event, scope)
+			injectionEvent := event
+			injectionEvent.IsWake = false
+			pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
+			event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+			if a.engine != nil && a.engine.SessionManager != nil &&
+				(event.Type == "" || event.Type == "event") &&
+				(event.EventType == "" || event.EventType == "message") {
+				botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+				if botLoopConfig.Enabled() {
+					platform := event.Platform
+					if platform == "" {
+						platform = "astrbot"
 					}
-					continue
-				}
-				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
-					if isProactiveReply(&event) || event.pokeID != "" {
-						_ = sendTerminalNoopWithSuppress(event, c)
-					}
-					continue
+					botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
+					botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
+						event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
+					)
 				}
 			}
-
-			if c.isClosed() {
+			if !c.mock && handleAdminCommand(c, event, a.engine) {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
 				continue
 			}
-			var turn *llm.SessionTurn
-			if a.engine != nil && a.engine.SessionManager != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				if shouldReply(&event, a.engine.Scope) {
-					lane := "sender:" + event.Platform + ":" + event.UserID
-					proactiveTurn := isProactiveReply(&event)
-					if proactiveTurn {
-						lane = "proactive:" + event.Platform
-					}
-					turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
-				}
-			}
+		}
 
-			if event.MessageType == "group" && !c.mock {
-				if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
-					gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
-					if err == nil && gStore != nil {
-						role := memory.GroupRoleUnknown
-						if r, ok := event.Metadata["role"].(string); ok {
-							role = memory.NormalizeGroupRole(r)
-						}
-						_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
-						if err == nil && event.GroupName != "" {
-							err = gStore.UpdateGroupName(event.GroupName)
-						}
-						if err == nil {
-							routeScope := astrBotRouteScope(event)
-							gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
-							gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
-						}
-					}
-					if err != nil {
-						a.engine.PauseOnStorageError(err)
-						if turn != nil {
-							turn.Done()
-						}
-						continue
-					}
-				}
-				if isExplicitlyWoken(event, scope) {
-					guard := stageGroupCompactMessage(event, a.engine)
-					if turn != nil {
-						turn.AttachStagedGuard(guard)
-					}
-				} else {
-					captureGroupCompactMessage(event, a.engine)
-				}
+		canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
+			(event.Type == "" || event.Type == "event") &&
+			(event.EventType == "" || event.EventType == "message") &&
+			(event.MessageType == "group" || event.MessageType == "private")
+		if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
 			}
-
-			if !c.mock {
-				a.observeStickers(event)
+			if c.mock {
+				platform = "mock"
 			}
-			c.inFlight.Add(1)
-			if !a.engine.Go(func() {
-				defer c.inFlight.Done()
-				processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
-			}) {
-				c.inFlight.Done()
-				if turn != nil {
-					turn.Done()
-				}
+			principal, principalErr := security.NewPrincipal(platform, event.UserID)
+			if principalErr != nil {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
 				if isProactiveReply(&event) || event.pokeID != "" {
 					_ = sendTerminalNoopWithSuppress(event, c)
 				}
+				continue
+			}
+			var decision security.WatchdogDecision
+			if c.mock {
+				decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+			} else {
+				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+			}
+			if security.Blocks(decision.Action) {
+				directReply := isExplicitWake(&event, scope)
+				if directReply {
+					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+						_ = sendTerminalNoopWithSuppress(event, c)
+						continue
+					}
+				} else {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
+				}
+				if decision.IsFailure {
+					if a.engine != nil && a.engine.Scope != nil {
+						a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+					}
+				} else {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+					if event.MessageType == "group" && decision.SanitizedContent != "" {
+						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+					}
+				}
+				if directReply {
+					msg := a.engine.Security.RejectMessage(principal, decision)
+					_ = sendDirectReply(event, c, msg)
+				} else if isProactiveReply(&event) || event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+				event.Content = decision.SanitizedContent
+				if len(event.Messages) > 0 {
+					event.Messages = []string{decision.SanitizedContent}
+				}
+			} else if decision.Action == security.WatchdogWarn {
+				warningNotice = decision.WarningNotice
+			}
+		}
+
+		var routeSnapshot *modelrouter.Snapshot
+		if a.engine != nil && a.engine.ModelRouter != nil &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			routeSnapshot = a.engine.ModelRouter.Snapshot()
+		}
+		botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
+			(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
+		var botLoopExceeded bool
+		if event.pokeID != "" {
+			var admitted bool
+			botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
+				botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
+					return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
+				},
+			)
+			if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
+				if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
+					a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+				}
+				_ = sendTerminalNoopWithSuppress(event, c)
+				continue
+			}
+		} else {
+			botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+		}
+		if botLoopExceeded && !botLoopConfig.Hard() {
+			event.botLoopSoft = true
+		}
+
+		if canDispatch && !c.isClosed() {
+			incoming := ToIncomingMessage(event)
+			incoming.SessionID = sessionKey(event)
+			if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
+				if a.engine != nil {
+					a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+				}
+			}
+		}
+
+		if botLoopExceeded && botLoopConfig.Hard() {
+			_ = sendTerminalNoopWithSuppress(event, c)
+			continue
+		}
+
+		if routeSnapshot != nil {
+			if err := routeSnapshot.LoadError(); err != nil {
+				a.engine.PauseOnStorageError(err)
+				if event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			}
+			if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
+				if isProactiveReply(&event) || event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			}
+		}
+
+		if c.isClosed() {
+			continue
+		}
+		var turn *llm.SessionTurn
+		if a.engine != nil && a.engine.SessionManager != nil &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			if shouldReply(&event, a.engine.Scope) {
+				lane := "sender:" + event.Platform + ":" + event.UserID
+				proactiveTurn := isProactiveReply(&event)
+				if proactiveTurn {
+					lane = "proactive:" + event.Platform
+				}
+				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
+			}
+		}
+
+		if event.MessageType == "group" && !c.mock {
+			if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
+				gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
+				if err == nil && gStore != nil {
+					role := memory.GroupRoleUnknown
+					if r, ok := event.Metadata["role"].(string); ok {
+						role = memory.NormalizeGroupRole(r)
+					}
+					_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+					if err == nil && event.GroupName != "" {
+						err = gStore.UpdateGroupName(event.GroupName)
+					}
+					if err == nil {
+						routeScope := astrBotRouteScope(event)
+						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+					}
+				}
+				if err != nil {
+					a.engine.PauseOnStorageError(err)
+					if turn != nil {
+						turn.Done()
+					}
+					continue
+				}
+			}
+			if isExplicitlyWoken(event, scope) {
+				guard := stageGroupCompactMessage(event, a.engine)
+				if turn != nil {
+					turn.AttachStagedGuard(guard)
+				}
+			} else {
+				captureGroupCompactMessage(event, a.engine)
+			}
+		}
+
+		if !c.mock {
+			a.observeStickers(event)
+		}
+		c.inFlight.Add(1)
+		if !a.engine.Go(func() {
+			defer c.inFlight.Done()
+			processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
+		}) {
+			c.inFlight.Done()
+			if turn != nil {
+				turn.Done()
+			}
+			if isProactiveReply(&event) || event.pokeID != "" {
+				_ = sendTerminalNoopWithSuppress(event, c)
 			}
 		}
 	}
 }
 
 func (a *Adapter) CloseConnections() {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+	if a.clientCancel != nil {
+		a.clientCancel()
+	}
 	for c := range a.conns {
 		c.Close()
 	}

@@ -17,6 +17,7 @@ for (const testFile of [
   'dialogue-page.test.ts',
   'skills.test.ts',
   'backend-settings-page.test.ts',
+  'connections-page.test.ts',
   'bot-user-id-list.test.ts',
   'control-auth.test.ts',
   'backup-download.test.ts',

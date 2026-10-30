@@ -57,6 +57,8 @@ export const settingFields: Record<string, SettingField> = {
 };
 
 export const dedicatedSettingKeys = new Set([
+  'ONEBOT_WS_MODE', 'ONEBOT_WS_URL', 'ONEBOT_WS_TOKEN',
+  'ASTRBOT_WS_MODE', 'ASTRBOT_WS_URL', 'ASTRBOT_WS_TOKEN',
   'ENABLE_EMBEDDING',
   'ENABLE_POKE', 'POKE_CUSTOM_TEXT', 'POKE_COOLDOWN_SECONDS',
   'SYSTEM_PROMPT',

@@ -16,6 +16,10 @@ const overview = await readFile(
   new URL('../src/pages/overview.ts', import.meta.url),
   'utf8',
 );
+const connections = await readFile(
+  new URL('../src/pages/connections.ts', import.meta.url),
+  'utf8',
+);
 const chat = await readFile(
   new URL('../src/pages/chat.ts', import.meta.url),
   'utf8',
@@ -98,21 +102,13 @@ assert.match(
   /\.instance-selected-label\s*{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/,
 );
 
-assert.match(
-  overview,
-  /OneBot:\s*\$\{escapeHtml\(oneBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(oneBotURL\)\}"[^>]*>复制<\/a>/,
-  'OneBot WebSocket URL is missing the copy link',
-);
-assert.match(
-  overview,
-  /AstrBot:\s*\$\{escapeHtml\(astrBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(astrBotURL\)\}"[^>]*>复制<\/a>/,
-  'AstrBot WebSocket URL is missing the copy link',
-);
-assert.match(
-  overview,
-  /copyToClipboard\(target\)/,
-  'overview copy action does not call copyToClipboard',
-);
+assert.doesNotMatch(overview, /instanceWebSocketURL|copyToClipboard|data-copy-url/, 'connection addresses belong on the connection page');
+assert.match(main, /path: '\/overview'[^\n]+\n\s*\{ path: '\/connections', label: '连接'/, 'connection navigation must immediately follow overview');
+assert.match(main, /const guardedPaths = \[\s*'\/overview',\s*'\/connections'/, 'connections must require a selected instance');
+assert.match(main, /const mounts = \[\s*mountOverviewPage,\s*mountConnectionsPage/);
+assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
+assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
+assert.match(connections, /copyToClipboard\(address\)/, 'connection addresses must be copyable');
 
 assert.match(
   chat,

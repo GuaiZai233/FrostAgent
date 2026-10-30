@@ -71,15 +71,22 @@ GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最�
 
 ## 适配器
 
-### Websocket
+### WebSocket 连接模式
 
-在本地上游 OneBot 实现（如 NapCat）启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1023/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
+创建实例后，在侧边栏「概览」下方的「连接」页配置 OneBot 和 AstrBot；原概览页的两个地址复制入口已移至此页。两种适配器分别选择模式，默认保持已有的反向连接：
+
+- **反向 WebSocket（FA 作为服务端）**：上游主动连接 FA。在 NapCat 等 OneBot 实现中启用反向 WebSocket 客户端，将「连接」页复制的 OneBot 地址填入，例如 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot`。地址使用实际适配器监听端口，容器部署时需根据端口映射调整可达主机和端口。
+- **正向 WebSocket（FA 作为客户端）**：上游提供 WebSocket 服务端。在 FA「连接」页填写上游的 `ws://` 或 `wss://` 地址及可选访问令牌；FA 通过 `Authorization: Bearer <令牌>` 发起连接，并在断线后自动重试。不要在 URL 中填写用户名、密码或令牌。
+
+保存仅影响当前实例，自动应用并断开旧连接；停用实例会停止拨号和重连。正向模式不会同时接受该适配器的普通反向连接，网页「直接对话」仍可使用。两种模式建立连接后均为双向收发；不要将同一上游重复接入多个实例，否则可能重复回复。
+
+Docker 内的 `127.0.0.1` 指容器自身，不是 Windows 宿主机。正向连接宿主机服务时，Docker Desktop 可使用 `host.docker.internal`，但上游监听与防火墙仍必须允许容器访问；同一 Compose 网络中的服务可使用服务名。远程连接应使用 `wss://` 和访问令牌；正向／反向只改变适配器的连接方向，**不会改变 HTTP 管理面板的监听与认证设置**。
 
 ### 接入 AstrBot 等框架
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
 
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) 进行连接。反向模式下，把 FA「连接」页复制的 AstrBot 地址填入插件的 `ws_url`。正向模式需要插件 0.2.0 或更新版本：将插件 `ws_mode` 设为 `forward`，配置监听地址／端口及令牌，再将插件的可达地址（例如 `ws://插件主机:1244/`）和相同令牌填入 FA。插件默认只监听本机；非回环监听必须配置令牌，且同一插件只接受一个活跃 FA 连接。配置好 AstrBot 和上游的通信即可。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 附加功能
 ### 按群配置主动回复概率

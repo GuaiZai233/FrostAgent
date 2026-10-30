@@ -34,6 +34,12 @@ type envEntry struct {
 var knownEnvVars = map[string]envEntry{
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
+	"ONEBOT_WS_MODE":                       {"OneBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
+	"ONEBOT_WS_URL":                        {"OneBot 正向 WebSocket 上游地址", false, true, false},
+	"ONEBOT_WS_TOKEN":                      {"OneBot 正向 WebSocket 访问令牌", true, true, false},
+	"ASTRBOT_WS_MODE":                      {"AstrBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
+	"ASTRBOT_WS_URL":                       {"AstrBot 正向 WebSocket 插件服务端地址", false, true, false},
+	"ASTRBOT_WS_TOKEN":                     {"AstrBot 正向 WebSocket 访问令牌", true, true, false},
 	"HTTP_ALLOWED_ORIGINS":                 {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true, false},
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
@@ -290,6 +296,9 @@ func (s *Service) UpdateEnvVar(
 	if err := s.validateEmbeddingUpdate(ctx, key, value); err != nil {
 		return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
 	}
+	if err := s.validateConnectionChanges(map[string]*string{key: &value}); err != nil {
+		return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: err.Error()}), nil
+	}
 
 	if s.config != nil || s.global != nil {
 		targetStore := s.store(key)
@@ -349,6 +358,9 @@ func (s *Service) DeleteEnvVar(
 			Success: false,
 			Error:   fmt.Sprintf("key %q is not in the allowed environment variables list", key),
 		}), nil
+	}
+	if err := s.validateConnectionChanges(map[string]*string{key: nil}); err != nil {
+		return connect.NewResponse(&v1.DeleteEnvVarResponse{Error: err.Error()}), nil
 	}
 
 	if s.config != nil || s.global != nil {
@@ -631,6 +643,18 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 		if err := add(key, "", true); err != nil {
 			return failure(err)
 		}
+	}
+	connectionChanges := make(map[string]*string, len(changes))
+	for _, change := range changes {
+		if change.clear {
+			connectionChanges[change.key] = nil
+		} else {
+			value := change.value
+			connectionChanges[change.key] = &value
+		}
+	}
+	if err := s.validateConnectionChanges(connectionChanges); err != nil {
+		return failure(err)
 	}
 	databaseChanges := make([]instanceconfig.DatabaseChange, 0, len(changes))
 	hasDatabase := false

@@ -97,6 +97,9 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	if err := m.rejectDeleting(i.id); err != nil {
 		return err
 	}
+	if err := backup.ValidateConnectionSettingsImport(m.db, i.id, data); err != nil {
+		return err
+	}
 	list, _ := m.List()
 	enabled := false
 	for _, info := range list {
@@ -131,7 +134,7 @@ func (m *Manager) ImportSettings(id string, data backup.Settings) error {
 	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
-	r.StartEmbeddings()
+	r.StartBackground()
 	i.mu.Unlock()
 	if buildErr != nil {
 		_ = m.update(i.id, func(info *Info) { info.Enabled = false; info.Error = buildErr.Error() })
@@ -388,7 +391,7 @@ func (m *Manager) CancelDeletion(id string) error {
 	r, c, err := m.buildFresh(i.id, i, false, m.dir(i.id))
 	i.mu.Lock()
 	i.runtime, i.config = r, c
-	r.StartEmbeddings()
+	r.StartBackground()
 	i.mu.Unlock()
 	if err != nil {
 		_ = m.update(i.id, func(info *Info) { info.Error = err.Error() })

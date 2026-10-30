@@ -109,7 +109,12 @@ jobs:
         run: go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 
       - name: Run AstrBot plugin unit tests
-        run: python3 -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
+        run: |
+          python3 -m venv "$RUNNER_TEMP/astrbot-ws-tests"
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==12.0
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==15.0.1
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest adapters.astrbot_plugin_frostagent.tests.test_websocket_transport -v
 
       - name: Run frontend instance isolation regression
         run: pnpm --filter @frostagent/web test
@@ -121,7 +126,7 @@ jobs:
         run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/memory/... ./internal/groupsummary/... ./internal/modelrouter/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
 
       - name: Run WebSocket heartbeat race regression
-        run: go test -race ./internal/adapter/heartbeat/... -timeout 60s
+        run: go test -race ./internal/adapter/heartbeat/... ./internal/adapter/wsclient/... -timeout 60s
 
       - name: Upload Go coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

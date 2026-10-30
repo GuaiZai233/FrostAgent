@@ -62,7 +62,11 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 	}
 	for key, value := range map[string]string{
 		"BOT_NAME": "Test Bot", "UPSTREAM_API_KEY": "synthetic-private-key",
-		"CUSTOM_TOKEN": "synthetic-custom-token",
+		"CUSTOM_TOKEN":   "synthetic-custom-token",
+		"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws?access_token=synthetic-onebot-query-key",
+		"ONEBOT_WS_TOKEN": "synthetic-onebot-token",
+		"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/?token=synthetic-astrbot-query-key",
+		"ASTRBOT_WS_TOKEN": "synthetic-astrbot-token",
 	} {
 		if err := settings.Update(key, value, false); err != nil {
 			t.Fatal(err)
@@ -86,6 +90,37 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 	image := []byte{0x89, 'P', 'N', 'G', 0, 1, 2}
 	if err := stickers.Add("sticker-a", "image.png", image); err != nil {
 		t.Fatal(err)
+	}
+	assertConnectionSettings := func(exported Settings) {
+		t.Helper()
+		for key, want := range map[string]string{
+			"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws", "ONEBOT_WS_TOKEN": "",
+			"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/", "ASTRBOT_WS_TOKEN": "",
+		} {
+			if got := exported.Values[key]; got != want {
+				t.Errorf("exported %s = %q, want %q", key, got, want)
+			}
+		}
+	}
+	exportedSettings, err := ExportSettings(db, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertConnectionSettings(exportedSettings)
+	for _, mode := range []string{"ONEBOT_WS_MODE", "ASTRBOT_WS_MODE"} {
+		if err := ImportSettings(db, id, Settings{FormatVersion: FormatVersion, Values: map[string]string{
+			mode: "forward", "BOT_NAME": "must-not-import",
+		}}); err == nil {
+			t.Fatalf("import accepted %s=forward without a destination", mode)
+		}
+		unchanged, err := ExportSettings(db, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unchanged.Values["BOT_NAME"] != "Test Bot" {
+			t.Fatal("invalid connection import partially wrote settings")
+		}
+		assertConnectionSettings(unchanged)
 	}
 
 	archive, err := BuildInstanceZIP(db, id, imageDir)
@@ -112,6 +147,11 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, secret := range []string{"synthetic-onebot-query-key", "synthetic-onebot-token", "synthetic-astrbot-query-key", "synthetic-astrbot-token"} {
+			if bytes.Contains(data, []byte(secret)) {
+				t.Errorf("ZIP member %s contains secret %q", member.Name, secret)
+			}
+		}
 		files[member.Name] = data
 	}
 	if !bytes.Equal(files["sticker/files/image.png"], image) {
@@ -128,6 +168,7 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 	if err := json.Unmarshal(files["setting.json"], &exported); err != nil {
 		t.Fatal(err)
 	}
+	assertConnectionSettings(exported)
 	if exported.Values["BOT_NAME"] != "Test Bot" || exported.Values["UPSTREAM_API_KEY"] != "" || exported.Values["CUSTOM_TOKEN"] != "" {
 		t.Fatalf("settings export did not preserve safe fields and blank secrets: %#v", exported.Values)
 	}
