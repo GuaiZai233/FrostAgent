@@ -107,11 +107,20 @@ joins the new network namespace:
 docker compose -f compose.yaml -f compose.local.yaml up -d --build --force-recreate frostagent local-panel-origin local-panel
 ```
 
-Stopping/restarting the same container does not require a namespace change. The
-origin removes any stale socket pathname on startup. If the origin or FA is
+Even if FA's container ID stays the same, Docker can replace its network
+namespace when FA stops and starts. [`depends_on.restart`](https://docs.docker.com/reference/compose-file/services/#depends_on) assists explicit
+Compose-managed restarts; it does not propagate Docker's automatic restarts or
+an out-of-band `docker restart` to the relays. After those events, the panel may
+remain unavailable until both relays are restarted against the running FA:
+
+```powershell
+docker compose -f compose.yaml -f compose.local.yaml restart local-panel-origin local-panel
+```
+
+This recovery command does not restart FA or remove its data. If FA was replaced
+with a different container instead, use the full recreation command above.
+The origin removes any stale socket pathname on startup. If the origin or FA is
 unavailable, panel connections fail closed; no alternate upstream is used.
-`depends_on.restart` assists Compose-managed restarts, but does not watch arbitrary
-out-of-band container replacements.
 
 To close the local entry point without stopping FA or its adapters:
 

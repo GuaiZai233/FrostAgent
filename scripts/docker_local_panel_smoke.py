@@ -165,6 +165,17 @@ def wait_ready(read):
     raise AssertionError(f'local panel did not become ready (last HTTP status: {last_status})')
 
 
+def wait_websocket(read):
+    deadline = time.monotonic() + 60
+    last_status = None
+    while time.monotonic() < deadline:
+        last_status = read()['status']
+        if last_status == 101:
+            return
+        time.sleep(0.25)
+    raise AssertionError(f'adapter did not become ready (last HTTP status: {last_status})')
+
+
 def published_ports(compose):
     # Docker may allocate a different ephemeral host port when a container restarts.
     ports = []
@@ -262,6 +273,9 @@ def exercise(root):
                 assert not actual['HostConfig']['PortBindings'].get('18080/tcp')
                 origin = inspect(container('local-panel-origin'))
                 assert origin['HostConfig']['NetworkMode'] == 'container:' + app
+                app_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
+                origin_namespace = command('docker', 'exec', origin['Id'], 'readlink', '/proc/self/ns/net')
+                assert origin_namespace == app_namespace, 'origin is attached to a stale network namespace'
                 ingress = inspect(container('local-panel'))
                 ingress_ip = ingress['NetworkSettings']['Networks'][panel_network]['IPAddress']
                 assert ingress_ip
@@ -326,6 +340,37 @@ def exercise(root):
             assert len(instances) == 1 and instances[0]['id'] == instance_id and instances[0]['enabled']
             assert api('/api/instances/global/backup/settings', headers=BEARER) == before
             print('PASS: restart/recreation rebinds the namespace and preserves instance/settings data')
+
+            # The app's container ID may survive an out-of-band restart even when
+            # its network namespace changes. Explicitly restart both relays to rejoin.
+            app = container('frostagent')
+            previous_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
+            command('docker', 'restart', app)
+            assert container('frostagent') == app, 'docker restart unexpectedly replaced the app container'
+            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on app restart'
+            endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
+            wait_websocket(lambda: http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE))
+            for adapter in ('onebot', 'astrbot'):
+                endpoint = f'/instances/{instance_id}/ws/{adapter}?mock=true'
+                assert peer_request(peer, 'frostagent', 1234, endpoint, UPGRADE) == 101
+            current_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
+            pending_status = read('/api/instances')['status']
+            print(f'Out-of-band app restart: namespace {previous_namespace} -> {current_namespace}; '
+                  f'panel unauthenticated HTTP status before relay recovery={pending_status}', flush=True)
+            assert pending_status in (0, 401), 'app restart bypassed local token enforcement'
+            command(*compose, 'restart', 'local-panel-origin', 'local-panel')
+            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on relay recovery'
+            wait_ready(read)
+            assert container('frostagent') == app
+            check_isolation()
+            assert read('/api/instances')['status'] == 401
+            assert read(rpc, {})['status'] == 401
+            assert read('/api/instances', headers={'Authorization': 'Bearer incorrect-synthetic-token'})['status'] == 401
+            assert read(rpc, {}, BEARER)['status'] == 200
+            assert api('/api/instances', headers=BEARER)['instances'] == instances
+            assert api('/api/instances/global/backup/settings', headers=BEARER) == before
+            print('PASS: out-of-band same-container app restart recovers after relay restart; '
+                  'namespace, adapters, isolation, token enforcement and data verified')
 
             updated = copy.deepcopy(before)
             updated['settings']['LISTEN_ADDR'] = '127.0.0.1:8081'

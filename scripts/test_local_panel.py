@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 from docker_local_panel_smoke import (TOKEN, enable_local_token, http_request, prepare_test_config,
-                                     published_ports, validate_config, wait_ready)
+                                     published_ports, validate_config, wait_ready, wait_websocket)
 
 
 PROJECT = 'frostagent-local-smoke-' + 'a' * 12
@@ -156,6 +156,18 @@ class LocalPanelGuardTests(unittest.TestCase):
                 patch('docker_local_panel_smoke.time.sleep'):
             with self.assertRaisesRegex(AssertionError, 'last HTTP status: 503'):
                 wait_ready(lambda _: {'status': 503, 'body': ''})
+
+    def test_adapter_wait_requires_successful_upgrade(self):
+        read = Mock(side_effect=[{'status': 0}, {'status': 101}])
+        with patch('docker_local_panel_smoke.time.sleep'):
+            wait_websocket(read)
+        self.assertEqual(read.call_count, 2)
+
+    def test_adapter_wait_timeout_reports_last_status(self):
+        with patch('docker_local_panel_smoke.time.monotonic', side_effect=[0, 0, 61]), \
+                patch('docker_local_panel_smoke.time.sleep'):
+            with self.assertRaisesRegex(AssertionError, 'last HTTP status: 404'):
+                wait_websocket(lambda: {'status': 404})
 
 
 if __name__ == '__main__':
