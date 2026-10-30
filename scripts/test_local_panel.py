@@ -4,7 +4,8 @@ import copy
 import unittest
 from unittest.mock import Mock, call, patch
 
-from docker_local_panel_smoke import TOKEN, enable_local_token, http_request, prepare_test_config, validate_config
+from docker_local_panel_smoke import (TOKEN, enable_local_token, http_request, prepare_test_config,
+                                     published_ports, validate_config, wait_ready)
 
 
 PROJECT = 'frostagent-local-smoke-' + 'a' * 12
@@ -142,6 +143,19 @@ class LocalPanelGuardTests(unittest.TestCase):
                 'format_version': 1, 'settings': {
                     'MCP_CONTROL_TOKEN': '', 'MCP_ENFORCE_LOCAL_TOKEN': 'true'}}),
         ])
+
+    def test_published_ports_are_rediscovered_after_restart(self):
+        with patch('docker_local_panel_smoke.command', side_effect=[
+            '127.0.0.1:31001', '127.0.0.1:31002', '127.0.0.1:32001', '127.0.0.1:31002',
+        ]), patch('builtins.print'):
+            self.assertEqual(published_ports(('docker', 'compose')), (31001, 31002))
+            self.assertEqual(published_ports(('docker', 'compose')), (32001, 31002))
+
+    def test_ready_timeout_reports_last_http_status(self):
+        with patch('docker_local_panel_smoke.time.monotonic', side_effect=[0, 0, 61]), \
+                patch('docker_local_panel_smoke.time.sleep'):
+            with self.assertRaisesRegex(AssertionError, 'last HTTP status: 503'):
+                wait_ready(lambda _: {'status': 503, 'body': ''})
 
 
 if __name__ == '__main__':

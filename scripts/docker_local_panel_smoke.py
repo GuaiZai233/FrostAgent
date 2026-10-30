@@ -154,13 +154,26 @@ def inspect(container):
 
 def wait_ready(read):
     deadline = time.monotonic() + 60
+    last_status = None
     while time.monotonic() < deadline:
         result = read('/')
+        last_status = result['status']
         if result['status'] == 200:
             assert '<html' in result['body'].lower(), 'embedded frontend missing'
             return result['body']
         time.sleep(0.25)
-    raise AssertionError('local panel did not become ready')
+    raise AssertionError(f'local panel did not become ready (last HTTP status: {last_status})')
+
+
+def published_ports(compose):
+    # Docker may allocate a different ephemeral host port when a container restarts.
+    ports = []
+    for service, target in (('local-panel', 8080), ('frostagent', 1234)):
+        address = command(*compose, 'port', service, str(target))
+        assert address.startswith('127.0.0.1:'), address
+        ports.append(int(address.rsplit(':', 1)[1]))
+    print(f'Published test ports: panel={ports[0]}, adapter={ports[1]}', flush=True)
+    return tuple(ports)
 
 
 def prepare_test_config(config, project, ports=None):
@@ -203,11 +216,6 @@ def exercise(root):
         def container(service):
             return command(*compose, 'ps', '--quiet', service)
 
-        def published(service, port):
-            address = command(*compose, 'port', service, str(port))
-            assert address.startswith('127.0.0.1:'), address
-            return int(address.rsplit(':', 1)[1])
-
         def helper(suffix, network):
             args = ('docker', 'run', '--detach', '--name', project + '-' + suffix,
                     '--network', network)
@@ -219,8 +227,7 @@ def exercise(root):
 
         try:
             command(*compose, 'up', '--detach', '--no-build')
-            panel_port = published('local-panel', 8080)
-            ws_port = published('frostagent', 1234)
+            panel_port, ws_port = published_ports(compose)
 
             def read(endpoint='/', payload=None, headers=None):
                 return http_request('127.0.0.1', panel_port, endpoint, payload, headers)
@@ -297,11 +304,13 @@ def exercise(root):
             assert container('local-panel'), 'ingress should remain running for the failure-path check'
             assert read('/api/instances', headers=BEARER)['status'] == 0
             command(*compose, 'start', 'local-panel-origin')
+            panel_port, ws_port = published_ports(compose)
             wait_ready(read)
             assert api('/api/instances/global/backup/settings', headers=BEARER) == before
             print('PASS: origin-only stop fails closed and restarts without changing settings')
 
             command(*compose, 'restart', 'local-panel-origin', 'local-panel')
+            panel_port, ws_port = published_ports(compose)
             wait_ready(read)
             old_app = container('frostagent')
             # Preserve actual allocated host ports across full recreation.
@@ -309,6 +318,7 @@ def exercise(root):
                 config['services'][service]['ports'][0]['published'] = str(port)
             path.write_text(json.dumps(config), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)
+            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert container('frostagent') != old_app
             check_isolation()
@@ -326,6 +336,7 @@ def exercise(root):
                                          {'local-panel': panel_port, 'frostagent': ws_port})
             path.write_text(json.dumps(custom), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)
+            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert api('/api/instances/global/backup/settings', headers=BEARER) == updated
             check_isolation(target_port=8081)
@@ -336,10 +347,12 @@ def exercise(root):
             endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
             assert peer_request(peer, 'frostagent', 1234, endpoint, UPGRADE) == 101
             command(*compose, 'up', '--detach', '--no-build', 'local-panel-origin', 'local-panel')
+            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on start'
             wait_ready(read)
             assert api('/api/instances', headers=BEARER)['instances'][0]['id'] == instance_id
             print('PASS: disabling/re-enabling the panel leaves the application and data intact')
         except BaseException:
+            subprocess.run((*compose, 'ps', '--all'), check=False)
             subprocess.run((*compose, 'logs', '--no-color'), check=False)
             raise
         finally:
