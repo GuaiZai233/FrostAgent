@@ -41,8 +41,29 @@ def render(root, project, local=True, panel_port=8088, target_port=8080):
     return json.loads(command(*args, 'config', '--format', 'json', env=env))
 
 
+def validate_test_data_mount(config):
+    """A generated volume name is not sufficient if it aliases real host data."""
+    app = config['services']['frostagent']
+    mounts = app.get('volumes', [])
+    expected = {'type': 'volume', 'source': 'frostagent-data', 'target': '/app/data'}
+    if len(mounts) != 1:
+        raise ValueError('smoke app must mount only its generated frostagent-data volume')
+    mount = mounts[0]
+    if ({key: mount.get(key) for key in expected} != expected or
+            set(mount) - {*expected, 'volume'} or mount.get('volume')):
+        raise ValueError('smoke app data mount must be an unmodified named volume, never a host bind')
+    if app.get('volumes_from'):
+        raise ValueError('smoke app must not inherit mounts from another container')
+    volume = config['volumes']['frostagent-data']
+    if (volume.get('external') or 'driver_opts' in volume or
+            volume.get('driver', 'local') != 'local'):
+        raise ValueError('smoke data volume must use the local driver without options or external storage')
+
+
 def validate_config(base, local, panel_port=8088, target_port=8080):
     """Reject topology changes that would silently widen the trust boundary."""
+    validate_test_data_mount(base)
+    validate_test_data_mount(local)
     assert set(base['services']) == {'frostagent'}
     assert set(local['services']) == set(SERVICES)
     assert local['services']['frostagent'] == base['services']['frostagent'], \
@@ -189,6 +210,8 @@ def published_ports(compose):
 
 def prepare_test_config(config, project, ports=None):
     """Only generated smoke resources may be created or removed by this script."""
+    # Recheck here even when exercise() is called without the CLI config checks.
+    validate_test_data_mount(config)
     assert re.fullmatch(r'frostagent-local-smoke-[0-9a-f]{12}', project)
     for kind in ('volumes', 'networks'):
         for resource in config[kind].values():
@@ -213,6 +236,8 @@ def enable_local_token(api, instance_id):
 
 
 def exercise(root):
+    if not __debug__:
+        raise RuntimeError('Live smoke requires Python assertions; run without -O or PYTHONOPTIMIZE')
     project = 'frostagent-local-smoke-' + uuid.uuid4().hex[:12]
     config = prepare_test_config(render(root, project), project)
     operating_system = command('docker', 'info', '--format', '{{.OperatingSystem}}')

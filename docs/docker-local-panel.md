@@ -154,7 +154,11 @@ existing token requirement, not a reason to disable authentication. `403` is a
 Host/Origin rejection; first use the exact local URL above.
 
 Repository verification uses a separate random Compose project and synthetic
-data, never a live deployment volume:
+data, never a live deployment volume. The smoke requires the repository's standard
+local named data-volume layout: it rejects application bind/extra mounts,
+external volumes, and custom data-volume drivers/options before starting
+containers. Run it from an unmodified repository checkout if your deployment
+uses custom storage; that restriction applies to the smoke, not the local panel:
 
 ```powershell
 python scripts/docker_local_panel_smoke.py --config-only

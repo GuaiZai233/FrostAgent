@@ -1,10 +1,13 @@
 """Unit checks for the local-panel smoke's isolation and cleanup guardrails."""
 
 import copy
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from docker_local_panel_smoke import (TOKEN, enable_local_token, http_request, prepare_test_config,
+from docker_local_panel_smoke import (TOKEN, enable_local_token, exercise, http_request, prepare_test_config,
                                      published_ports, validate_config, wait_ready, wait_websocket)
 
 
@@ -15,7 +18,7 @@ def topology():
     base = {
         'services': {'frostagent': {'image': 'frostagent:local', 'ports': [
             {'host_ip': '127.0.0.1', 'published': '1234', 'target': 1234}],
-            'volumes': [{'source': 'frostagent-data', 'target': '/app/data'}]}},
+            'volumes': [{'type': 'volume', 'source': 'frostagent-data', 'target': '/app/data'}]}},
         'volumes': {'frostagent-data': {'name': PROJECT + '_frostagent-data'}},
         'networks': {'default': {'name': PROJECT + '_default'}},
     }
@@ -52,6 +55,15 @@ def topology():
 
 
 class LocalPanelGuardTests(unittest.TestCase):
+    def test_live_smoke_refuses_optimized_python_before_accessing_docker(self):
+        result = subprocess.run(
+            [sys.executable, '-B', '-O', '-c',
+             'from docker_local_panel_smoke import exercise; exercise(None)'],
+            cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Live smoke requires Python assertions', result.stderr)
+
     def test_expected_topology_is_accepted(self):
         validate_config(*topology())
 
@@ -89,7 +101,7 @@ class LocalPanelGuardTests(unittest.TestCase):
         for attribute in ('ports', 'volumes'):
             base, local = topology()
             local['services']['frostagent'][attribute] = []
-            with self.subTest(attribute=attribute), self.assertRaises(AssertionError):
+            with self.subTest(attribute=attribute), self.assertRaises((AssertionError, ValueError)):
                 validate_config(base, local)
 
     def test_inter_container_connectivity_cannot_be_enabled(self):
@@ -117,8 +129,55 @@ class LocalPanelGuardTests(unittest.TestCase):
             for change in ({'name': 'existing-user-resource'}, {'external': True}):
                 _, local = topology()
                 next(iter(local[kind].values())).update(change)
-                with self.subTest(kind=kind, change=change), self.assertRaises(AssertionError):
+                with self.subTest(kind=kind, change=change), self.assertRaises((AssertionError, ValueError)):
                     prepare_test_config(local, PROJECT)
+
+    def assert_unsafe_storage_rejected_before_docker(self, local):
+        with self.assertRaises(ValueError):
+            prepare_test_config(copy.deepcopy(local), PROJECT)
+        base = copy.deepcopy(local)
+        base['services'] = {'frostagent': base['services']['frostagent']}
+        with self.assertRaises(ValueError):
+            validate_config(base, local)
+        with patch('docker_local_panel_smoke.render', return_value=local), \
+                patch('docker_local_panel_smoke.command') as docker:
+            with self.assertRaises(ValueError):
+                exercise(None)
+            docker.assert_not_called()
+
+    def test_app_host_bind_is_rejected_before_docker(self):
+        _, local = topology()
+        local['services']['frostagent']['volumes'] = [
+            {'type': 'bind', 'source': '/synthetic-existing-data', 'target': '/app/data'}]
+        self.assert_unsafe_storage_rejected_before_docker(local)
+
+    def test_extra_app_mount_is_rejected_before_docker(self):
+        _, local = topology()
+        local['services']['frostagent']['volumes'].append(
+            {'type': 'bind', 'source': '/synthetic-existing-config', 'target': '/app/config'})
+        self.assert_unsafe_storage_rejected_before_docker(local)
+
+    def test_replaced_data_source_is_rejected_before_docker(self):
+        _, local = topology()
+        local['services']['frostagent']['volumes'][0]['source'] = 'existing-user-volume'
+        self.assert_unsafe_storage_rejected_before_docker(local)
+
+    def test_local_driver_bind_options_are_rejected_before_docker(self):
+        _, local = topology()
+        local['volumes']['frostagent-data'].update({
+            'driver': 'local', 'driver_opts': {
+                'type': 'none', 'device': '/synthetic-existing-data', 'o': 'bind'}})
+        self.assert_unsafe_storage_rejected_before_docker(local)
+
+    def test_nonlocal_storage_driver_is_rejected_before_docker(self):
+        _, local = topology()
+        local['volumes']['frostagent-data']['driver'] = 'synthetic-network-volume-plugin'
+        self.assert_unsafe_storage_rejected_before_docker(local)
+
+    def test_explicit_local_driver_without_options_is_accepted(self):
+        _, local = topology()
+        local['volumes']['frostagent-data']['driver'] = 'local'
+        prepare_test_config(local, PROJECT)
 
     def test_cleanup_project_must_be_generated(self):
         for project in ('frostagent', 'frostagent-local-smoke-', 'production'):
