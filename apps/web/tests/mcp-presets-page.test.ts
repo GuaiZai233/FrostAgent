@@ -179,7 +179,7 @@ await el(dialog, '[data-mcp-preset="anysearch"]').click();
 assert.equal(el(dialog, '[data-mcp-preset="anysearch"]').getAttribute('aria-pressed'), 'true');
 assert.ok(!fields.hidden && !fields.classList.contains('hidden'));
 assert.deepEqual(json(dialog), manualDraft);
-assert.ok(el(dialog, '#mcp-preset-description').textContent.includes('https://api.anysearch.com/mcp'));
+assert.equal(el(dialog, '#mcp-preset-description').textContent, '联网搜索与网页内容提取，填写自己的 AnySearch API Key。 https://api.anysearch.com/mcp');
 
 for (const invalid of ['', '   ', 'Bearer', 'synthetic-invalid\r\nX-Injected: yes', 'synthetic invalid']) {
   await type(token, invalid);
