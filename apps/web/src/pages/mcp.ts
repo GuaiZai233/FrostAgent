@@ -16,6 +16,7 @@ import {
   parseHeadersText,
   formatHeadersMap,
 } from './mcp-config';
+import { MCP_PRESETS, createMCPPresetDraft, type MCPPresetId } from './mcp-presets';
 
 export function mountMCPPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
@@ -846,6 +847,29 @@ export function mountMCPPage(container: HTMLElement): () => void {
       maxWidth: '42rem',
       bodyHtml: `
         <div class="flex flex-col gap-3 text-xs">
+          ${!isEdit ? `
+            <section class="flex flex-col gap-2.5 rounded-md border border-border p-3" aria-label="常用 MCP 预设">
+              <div class="font-semibold text-foreground">常用 MCP 预设</div>
+              <div class="flex gap-2 flex-wrap">
+                ${MCP_PRESETS.map((preset) => `
+                  <button type="button" class="btn btn-outline btn-sm" data-mcp-preset="${preset.id}" aria-pressed="false">
+                    ${preset.name}
+                  </button>
+                `).join('')}
+              </div>
+              <div id="mcp-preset-fields" hidden>
+                <div class="flex flex-col gap-2">
+                  <p id="mcp-preset-description" class="text-muted break-all"></p>
+                  <label for="mcp-preset-token" class="font-semibold text-foreground">Bearer Token *</label>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <input type="password" id="mcp-preset-token" class="input flex-1 min-w-0 font-mono" autocomplete="off" spellcheck="false" placeholder="粘贴自己的 Token，可带 Bearer 前缀" aria-describedby="mcp-preset-description mcp-preset-hint" />
+                    <button type="button" id="mcp-preset-apply" class="btn btn-outline btn-sm">填入模板</button>
+                  </div>
+                  <p id="mcp-preset-hint" class="text-muted">填入模板会替换当前表单和 JSON，可继续编辑。点击「保存并应用」后才会保存并连接。</p>
+                </div>
+              </div>
+            </section>
+          ` : ''}
           <!-- Top Tabs -->
           <div class="pb-2 border-b border-border">
             <div class="tabs" id="mcp-dialog-tabs">
@@ -1200,6 +1224,48 @@ export function mountMCPPage(container: HTMLElement): () => void {
           } finally {
             isSyncing = false;
           }
+        }
+
+        if (!isEdit) {
+          const presetFields = dialogEl.querySelector('#mcp-preset-fields') as HTMLElement;
+          const presetDescription = dialogEl.querySelector('#mcp-preset-description') as HTMLElement;
+          const presetToken = dialogEl.querySelector('#mcp-preset-token') as HTMLInputElement;
+          const presetButtons = dialogEl.querySelectorAll<HTMLButtonElement>('[data-mcp-preset]');
+          let selectedPreset: MCPPresetId | undefined;
+
+          presetButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+              const preset = MCP_PRESETS.find((entry) => entry.id === button.dataset.mcpPreset);
+              if (!preset) return;
+              selectedPreset = preset.id;
+              presetToken.value = '';
+              presetFields.hidden = false;
+              presetDescription.textContent = `${preset.description} ${preset.url}`;
+              presetButtons.forEach((entry) => {
+                const selected = entry === button;
+                entry.setAttribute('aria-pressed', String(selected));
+                entry.classList.toggle('btn-primary', selected);
+                entry.classList.toggle('btn-outline', !selected);
+              });
+              presetToken.focus();
+            });
+          });
+
+          dialogEl.querySelector('#mcp-preset-apply')?.addEventListener('click', () => {
+            if (!selectedPreset) return;
+            try {
+              currentDraft = createMCPPresetDraft(selectedPreset, presetToken.value, servers.map((server) => server.id));
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '无法填入 MCP 预设');
+              presetToken.focus();
+              return;
+            }
+            renderFormFromDraft();
+            jsonTextarea.value = draftToJSON(currentDraft);
+            jsonAlert.className = 'hidden';
+            presetToken.value = '';
+            toast.success(`${currentDraft.name} 模板已填入，请检查后保存`);
+          });
         }
 
         // Initialize UI from currentDraft
