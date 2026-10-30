@@ -2,9 +2,9 @@
 
 import copy
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
-from docker_local_panel_smoke import http_request, prepare_test_config, validate_config
+from docker_local_panel_smoke import TOKEN, enable_local_token, http_request, prepare_test_config, validate_config
 
 
 PROJECT = 'frostagent-local-smoke-' + 'a' * 12
@@ -129,6 +129,19 @@ class LocalPanelGuardTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__):
                 with patch('docker_local_panel_smoke.socket.create_connection', side_effect=error):
                     self.assertEqual(http_request('127.0.0.1', 8088), {'status': 0, 'body': ''})
+
+    def test_token_setup_uses_credential_rpc_not_settings_import(self):
+        exported = {'format_version': 1, 'settings': {'MCP_CONTROL_TOKEN': ''}}
+        api = Mock(side_effect=[{'success': True}, exported, {'success': True}])
+        enable_local_token(api, 'a1b2c3d4')
+        self.assertEqual(api.call_args_list, [
+            call('/instances/a1b2c3d4/frostagent.v1.SettingsService/UpdateEnvVar',
+                 {'key': 'MCP_CONTROL_TOKEN', 'value': TOKEN}),
+            call('/api/instances/global/backup/settings'),
+            call('/api/instances/global/import/settings', {
+                'format_version': 1, 'settings': {
+                    'MCP_CONTROL_TOKEN': '', 'MCP_ENFORCE_LOCAL_TOKEN': 'true'}}),
+        ])
 
 
 if __name__ == '__main__':

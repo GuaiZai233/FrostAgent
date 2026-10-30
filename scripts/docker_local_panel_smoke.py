@@ -178,6 +178,16 @@ def prepare_test_config(config, project, ports=None):
     return config
 
 
+def enable_local_token(api, instance_id):
+    # Credentials use SettingsService; global backup/import deliberately excludes them.
+    assert api(f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVar',
+               {'key': 'MCP_CONTROL_TOKEN', 'value': TOKEN}).get('success')
+    settings = api('/api/instances/global/backup/settings')
+    assert not settings['settings'].get('MCP_CONTROL_TOKEN'), 'backup exposed the control token'
+    settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'true'
+    assert api('/api/instances/global/import/settings', settings).get('success')
+
+
 def exercise(root):
     project = 'frostagent-local-smoke-' + uuid.uuid4().hex[:12]
     config = prepare_test_config(render(root, project), project)
@@ -274,9 +284,7 @@ def exercise(root):
             assert peer_request(peer, 'frostagent', 1234, '/api/storage') == 404
             print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and network isolation')
 
-            settings = api('/api/instances/global/backup/settings')
-            settings['settings'].update({'MCP_CONTROL_TOKEN': TOKEN, 'MCP_ENFORCE_LOCAL_TOKEN': 'true'})
-            assert api('/api/instances/global/import/settings', settings).get('success')
+            enable_local_token(api, instance_id)
             assert read('/api/instances')['status'] == 401
             assert read(rpc, {})['status'] == 401
             assert read('/api/instances', headers={'Authorization': 'Bearer incorrect-synthetic-token'})['status'] == 401
