@@ -64,7 +64,8 @@ services:
 
 networks:
   local-panel:
-    internal: true
+    # Internal networks suppress host port publishing on Docker Engine.
+    # Keep a dedicated bridge with peer forwarding disabled instead.
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_icc: "false"

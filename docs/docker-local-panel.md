@@ -1,7 +1,7 @@
 # Local Docker panel
 
 Use `compose.local.yaml` explicitly to open the management panel on a trusted
-single-user Docker host. It works with the normal bridge-network FA image; socat
+single-user Docker host. It uses the normal bridge-network FA image; socat
 is **not** installed in that image. Windows Docker Desktop must use **Linux
 containers**. No Desktop host-networking option, Windows bind mount, Cloudflare
 Tunnel, administrator account, or application authentication change is required.
@@ -72,8 +72,10 @@ host 127.0.0.1:8088 -> local-panel (dedicated bridge, TCP 8080)
 ```
 
 The origin relay opens **only a Unix socket**, not a TCP management listener on
-FA's default adapter network. The ingress relay has its own internal bridge with
-inter-container connectivity disabled. Do not attach adapters or other services
+FA's default adapter network. The ingress relay has its own dedicated bridge with
+inter-container connectivity disabled. It is not an `internal: true` network,
+because Docker Engine skips host port publishing on internal networks.
+Do not attach adapters or other services
 to that bridge. The socket directory belongs to UID/GID 10001 with mode 0700;
 the socket is mode 0600. Only the two non-root, capability-dropped relays mount
 this tmpfs-backed named volume; the ingress mount is read-only. Neither relay
