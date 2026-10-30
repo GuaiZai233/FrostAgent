@@ -74,13 +74,16 @@ for cleanup previews and recovery.
 
 ## Adapters
 
-### WebSocket
+### WebSocket Connection Modes
 
-Enable a reverse WebSocket client in your local OneBot implementation (such as NapCat) and set its URL to:
+After creating an instance, open **Connections**, immediately below **Overview** in the sidebar. The OneBot and AstrBot address-copy actions now live here. Each adapter independently selects one of these modes; existing instances default to reverse mode:
 
-`ws://127.0.0.1:1023/instances/<instance-id>/ws/onebot`
+- **Reverse WebSocket (FA as server)**: the upstream connects to FA. Enable a reverse WebSocket client in NapCat or another OneBot implementation and paste the OneBot URL copied from Connections, for example `ws://127.0.0.1:1234/instances/<instance-id>/ws/onebot`. Adjust the reachable host and published port for your deployment.
+- **Forward WebSocket (FA as client)**: the upstream runs a WebSocket server. Enter its `ws://` or `wss://` URL and optional access token in Connections. FA sends `Authorization: Bearer <token>` and reconnects automatically. Keep credentials out of the URL.
 
-The port depends on the listening address configured on the Settings page.
+Saving applies only to the selected instance and replaces its old connections. Disabling an instance stops dialing and reconnecting. In forward mode, ordinary reverse connections to that adapter are rejected, while browser Direct Chat remains available. Both modes provide bidirectional messaging after connection; connecting the same upstream to multiple instances can produce duplicate replies.
+
+Inside Docker, `127.0.0.1` refers to the container, not the Windows host. Docker Desktop's `host.docker.internal` can address a host service, provided its listener and firewall permit container access; containers on the same Compose network can use service names. Use `wss://` and an access token across untrusted networks. **Adapter connection modes do not change the HTTP management panel's listener or authentication.**
 
 ### Integration with Frameworks Such as AstrBot
 
@@ -88,11 +91,7 @@ With the appropriate adapter, FrostAgent can replace the LLM response module in 
 
 You can connect to FrostAgent using the [astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) plugin.
 
-The default FrostAgent WebSocket endpoint is:
-
-`ws://127.0.0.1:1234/instances/<instance-id>/ws/astrbot`
-
-Configure communication between AstrBot and the upstream service. Once configured, FrostAgent can take over message handling.
+In reverse mode, paste the AstrBot URL from FA's Connections page into the plugin's `ws_url`. Forward mode requires plugin 0.2.0 or newer: set the plugin's `ws_mode` to `forward`, configure its listener and access token, then enter its reachable URL (for example `ws://plugin-host:1244/`) and the same token in FA. The plugin defaults to loopback; non-loopback listeners require a token, and only one FA connection may be active. Configure communication between AstrBot and the upstream service to let FrostAgent take over message handling.
 
 **Note:** Disable AstrBot's built-in LLM functionality.
 

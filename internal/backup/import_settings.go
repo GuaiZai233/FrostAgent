@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/mcp"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
@@ -12,6 +13,29 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"strings"
 )
+
+// ValidateConnectionSettingsImport checks the configuration produced by the
+// import before a caller stops its runtime. Non-secret values are replaced,
+// including omitted keys; credentials in an upload are ignored and retained
+// from the destination instance, just as in the import transaction.
+func ValidateConnectionSettingsImport(db *storage.DB, instanceID string, data Settings) error {
+	current, err := instanceconfig.OpenDatabase(db, instanceID, false)
+	if err != nil {
+		return err
+	}
+	get := func(key string) string {
+		if strings.HasSuffix(key, "_WS_TOKEN") {
+			return current.Get(key)
+		}
+		return data.Values[key]
+	}
+	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+		if _, err := wsclient.Load(get, adapter); err != nil {
+			return fmt.Errorf("invalid imported connection settings: %w", err)
+		}
+	}
+	return nil
+}
 
 // ImportSettings replaces all classified non-secret settings and the exported
 // router, MCP, and dialogue configuration in one SQL transaction. Secrets in
@@ -28,6 +52,9 @@ func ImportSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data
 	db.ModelRouterMu.Lock()
 	defer db.ModelRouterMu.Unlock()
 	if err := ValidateFormat(data.FormatVersion); err != nil {
+		return err
+	}
+	if err := ValidateConnectionSettingsImport(db, instanceID, data); err != nil {
 		return err
 	}
 	ctx := context.Background()
