@@ -65,6 +65,19 @@ Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再�
 docker compose up -d --build
 ```
 
+默认部署不会发布管理面板。Windows Docker Desktop（Linux 容器）或 Linux
+宿主机需要本地访问时，显式加入可选配置：
+
+```powershell
+docker compose -f compose.yaml -f compose.local.yaml up -d --build
+```
+
+打开 **http://127.0.0.1:8088**。FA 镜像不内置 socat；两个独立转发容器通过专用
+Unix socket 连接管理回环，适配器网络不新增管理端口。已有部署须保留原目录、
+项目名、环境文件和数据卷；关闭入口需停止两个转发容器，不能只省略覆盖文件。
+端口配置、信任边界、升级与回退见[本地 Docker 面板说明](docs/docker-local-panel.md)。
+此模式仅用于可信本机，公网访问仍使用 Cloudflare Access。
+
 GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
 更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。
 

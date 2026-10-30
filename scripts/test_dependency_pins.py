@@ -90,6 +90,15 @@ class DependencyPinTests(unittest.TestCase):
         for reference in frontends:
             self.assertRegex(reference, DIGEST)
 
+    def test_local_panel_relays_use_the_same_immutable_image(self):
+        source = (ROOT / 'compose.local.yaml').read_text(encoding='utf-8')
+        images = IMAGE.findall(source)
+        self.assertEqual(len(images), 2)
+        self.assertEqual(images[0], images[1])
+        for reference in images:
+            self.assertTrue(reference.startswith('alpine/socat:'))
+            self.assertRegex(reference, DIGEST)
+
     def test_dockerfile_installs_pinned_corepack_before_enabling_it(self):
         source = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
         web = re.search(r'^FROM [^\n]+ AS web\n(.*?)(?=^FROM )',
