@@ -470,8 +470,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **表情包确认模式（Sticker Confirmation Mode）两阶段精确决策机制**：
     - 当 `ENABLE_STICKER_CONFIRM=false`（默认）时，保持经典单阶段行为：传入 `query` 进行模糊匹配并通过加权轮盘赌算法随机选中一张，立即生成图片消息出站发送；
     - 当 `ENABLE_STICKER_CONFIRM=true` 时，开启两阶段（Query -> Compact Candidates -> Select）确认机制：
-      1. **候选检索阶段 (Query Stage)**：模型调用 `send_sticker(query: "...")` 时，后端在表情包库中匹配关键词与描述，若有匹配条目，返回 compact 候选列表（包含 `id`、`keywords` 与多模态提炼的详细画面 `description`），此时不生成出站消息载荷（`MessagePayload` 为空），不触发平台发图，并提示模型根据语境进行精确选择；
-      2. **精确选择阶段 (Select Stage)**：模型在理解候选表情包的具体视觉与语境含义后，选择最切合上下文的一张，调用 `send_sticker(id: "...")`；后端验证 ID 合法性后构建原生贴纸消息载荷并出站发送，重置表情包积极度配额；
+      1. **候选检索阶段 (Query Stage)**：模型在独立工具调用批次中单独调用 `send_sticker(query: "...")`，不与 `send_message` 配对。后端匹配关键词与描述，返回最多 20 条 compact 候选（包含完整 `id`、最多 8 个各不超过 128 UTF-8 字节的 `keywords`、不超过 2048 UTF-8 字节的 `description`）。长字段在字符边界精简，完整序列化 JSON（包含选择提示与截断标志）不超过 32 KiB，计入 JSON 转义开销，避免引擎的 64 KiB 上限破坏结果；候选或字段被精简时返回 `truncated: true`，可缩小查询范围后重查。此阶段 `MessagePayload` 为空，不发送文字或贴纸，也不重置配额；
+      2. **精确选择阶段 (Select Stage)**：模型根据候选描述选择 ID。需要同时发送文字时，在后续同一批工具调用中先调用 `send_message` 发送 plain，紧接着调用 `send_sticker(id: "...")`；无需文字时仅调用 `send_sticker(id: "...")`。后端验证 ID 后构建原生贴纸消息载荷，成功发送才重置表情包积极度配额；配额到期时文字与选定贴纸仍作为一个有序消息链发送，不改变既有配对失败处理；
     - 两种模式下均支持直接传入 `id` 快速发送指定表情包。该机制在轻微增加一轮模型推理开销的前提下，解决了随机挑选可能带来的语境错配问题，实现了表情包发送精度的显著提升；
   - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` / `subType: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，同时双写 `sub_type: 1` 与 `subType: 1` 确保 NapCat 与 LuckyLillia 均可正确处理，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
   - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
