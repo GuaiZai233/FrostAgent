@@ -124,28 +124,30 @@ func TestFormatDialoguePrompt(t *testing.T) {
 	})
 }
 
-func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
-	// Locate eval/dialogue/dialogue.yml relative to test directory
-	path := filepath.Join("..", "..", "eval", "dialogue", "dialogue.yml")
+func TestLoadDialoguePrompt_FixtureFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dialogue.yml")
+	const fixture = `- id: test_greeting
+  user: |
+    你好，测试助手。
+  preferred: |
+    你好，请问需要什么帮助？
+- id: test_follow_up
+  user: "  请给出下一步。  "
+  preferred: "  先验证输入，再检查输出。  "
+`
+	if err := os.WriteFile(path, []byte(fixture), 0600); err != nil {
+		t.Fatalf("write dialogue fixture: %v", err)
+	}
 	prompt, err := LoadDialoguePrompt(path)
 	if err != nil {
 		t.Fatalf("LoadDialoguePrompt failed: %v", err)
 	}
 
-	if !strings.Contains(prompt, DefaultDialogueInstruction) {
-		t.Errorf("prompt missing default instruction")
-	}
-	if !strings.Contains(prompt, "你不觉得草迪拉熊很神圣吗") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "老公") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "宝宝 你身上好香") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "越来越没耐心怎么办") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
+	want := DefaultDialogueInstruction +
+		"\n\nUser: 你好，测试助手。\nAssistant: 你好，请问需要什么帮助？" +
+		"\n\nUser: 请给出下一步。\nAssistant: 先验证输入，再检查输出。"
+	if prompt != want {
+		t.Errorf("unexpected loaded prompt:\ngot:  %q\nwant: %q", prompt, want)
 	}
 }
 

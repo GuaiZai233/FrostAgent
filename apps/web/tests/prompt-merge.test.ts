@@ -90,7 +90,26 @@ assert.match(container.innerHTML, /私聊总结/);
 assert.match(container.innerHTML, /当前私聊 compact 内容/);
 assert.match(container.innerHTML, /当前私聊消息 \(history\)/);
 assert.match(container.innerHTML, /compact &lt;script&gt;payload&lt;\/script&gt;/);
-assert.doesNotMatch(container.innerHTML, /群聊|<script>|先前对话总结/);
+assert.doesNotMatch(container.innerHTML, /群聊|先前对话总结/);
+
+for (const [payload, escapedPayload] of [
+  ['<script>payload</script>', '&lt;script&gt;payload&lt;/script&gt;'],
+  ['<SCRIPT>payload</SCRIPT>', '&lt;SCRIPT&gt;payload&lt;/SCRIPT&gt;'],
+  ['<ScRiPt >payload</ScRiPt >', '&lt;ScRiPt &gt;payload&lt;/ScRiPt &gt;'],
+  ['<img src="x" onerror=alert(1)>', '&lt;img src=&quot;x&quot; onerror=alert(1)&gt;'],
+] as const) {
+  for (const withBatch of [true, false]) {
+    const data = buildInspectorDataFromSessionContext({
+      ...privateContext,
+      runningSummary: payload,
+      summaryGroups: withBatch ? [{ summary: payload, messages: [] }] : [],
+      recentStructuredMessages: [{ ...privateContext.recentStructuredMessages[0], content: payload }],
+    });
+    renderPromptInspector(container, data);
+    assert.equal(container.innerHTML.includes(payload), false, 'raw HTML must not be rendered');
+    assert.equal(container.innerHTML.split(escapedPayload).length - 1, 2, 'both summary and message must be escaped');
+  }
+}
 
 const summaryOnly = buildInspectorDataFromSessionContext({ ...privateContext, recentStructuredMessages: [] });
 assert.equal(summaryOnly.recentMessages.length, 0, 'compact injection must not reappear through history fallback');
