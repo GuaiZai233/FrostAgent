@@ -23,6 +23,26 @@ func awaitClientStop(t *testing.T, done <-chan struct{}) {
 	}
 }
 
+func TestDisabledClientNeverDials(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "disabled client must not dial", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Run(ctx, Config{Disabled: true, Mode: Forward, URL: "ws" + strings.TrimPrefix(server.URL, "http")}, nil, nil)
+	}()
+	awaitClientStop(t, done)
+	if attempts.Load() != 0 {
+		t.Fatal("disabled client attempted a handshake")
+	}
+}
+
 func TestClientReconnectsAndAuthenticatesWithoutDisclosingSecrets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

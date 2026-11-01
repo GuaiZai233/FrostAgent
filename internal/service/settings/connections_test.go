@@ -24,7 +24,7 @@ func TestConnectionSettingsValidateFinalDraftBeforeWriting(t *testing.T) {
 				t.Fatal(err)
 			}
 			svc := NewScoped(config, nil, nil)
-			mode, url, token := adapter+"_WS_MODE", adapter+"_WS_URL", adapter+"_WS_TOKEN"
+			mode, url, token, enabled := adapter+"_WS_MODE", adapter+"_WS_URL", adapter+"_WS_TOKEN", adapter+"_WS_ENABLED"
 			for _, value := range []string{"invalid", "forward"} {
 				response, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{
 					Updates: []*v1.EnvVar{{Key: "BOT_NAME", Value: "must-not-save"}, {Key: mode, Value: value}},
@@ -69,6 +69,28 @@ func TestConnectionSettingsValidateFinalDraftBeforeWriting(t *testing.T) {
 			if err != nil || !deleted.Msg.Success || config.Get(mode) != "" {
 				t.Fatalf("reset to default reverse failed: %v %v", deleted, err)
 			}
+			response, err = svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{
+				Updates: []*v1.EnvVar{{Key: enabled, Value: "false"}, {Key: mode, Value: "forward"}},
+			}))
+			if err != nil || !response.Msg.Success {
+				t.Fatalf("disabled forward configuration rejected: %v %v", response, err)
+			}
+			for _, value := range []string{"true", "invalid"} {
+				update, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: enabled, Value: value}))
+				if err != nil || update.Msg.Success || config.Get(enabled) != "false" {
+					t.Fatalf("invalid enable replaced the disabled flag: %v %v", update, err)
+				}
+			}
+			deleted, err = svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: enabled}))
+			if err != nil || deleted.Msg.Success || config.Get(enabled) != "false" {
+				t.Fatal("clearing the flag enabled an incomplete forward configuration")
+			}
+			response, err = svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{
+				Updates: []*v1.EnvVar{{Key: enabled, Value: "true"}, {Key: url, Value: "ws://127.0.0.1:1244/"}},
+			}))
+			if err != nil || !response.Msg.Success || config.Get(enabled) != "true" {
+				t.Fatalf("valid atomic re-enable failed: %v %v", response, err)
+			}
 		})
 	}
 }
@@ -93,7 +115,7 @@ func TestConnectionSettingMetadataAndIsolation(t *testing.T) {
 		entries[entry.Key] = entry
 	}
 	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
-		for _, suffix := range []string{"_WS_MODE", "_WS_URL", "_WS_TOKEN"} {
+		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN"} {
 			key := adapter + suffix
 			entry := entries[key]
 			if entry == nil || entry.IsSecret != (suffix == "_WS_TOKEN") || instanceconfig.GlobalKeys[key] {
@@ -101,6 +123,9 @@ func TestConnectionSettingMetadataAndIsolation(t *testing.T) {
 			}
 			if suffix == "_WS_MODE" && entry.ResetHint != "reverse" {
 				t.Fatal("default must preserve reverse mode")
+			}
+			if suffix == "_WS_ENABLED" && entry.ResetHint != "true" {
+				t.Fatal("existing connections must remain enabled by default")
 			}
 			if !instanceconfig.InstanceRestartKeys[key] {
 				t.Fatalf("legacy lifecycle missing connection key %s", key)

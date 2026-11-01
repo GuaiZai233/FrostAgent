@@ -108,6 +108,7 @@ assert.match(main, /const guardedPaths = \[\s*'\/overview',\s*'\/connections'/, 
 assert.match(main, /const mounts = \[\s*mountOverviewPage,\s*mountConnectionsPage/);
 assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
 assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
+assert.match(connections, /id="\$\{adapter.id\}-enabled" type="checkbox"/, 'each adapter needs its own enable checkbox');
 assert.match(connections, /copyToClipboard\(address\)/, 'connection addresses must be copyable');
 
 assert.match(

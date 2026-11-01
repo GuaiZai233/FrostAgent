@@ -393,7 +393,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`；侧边栏概览下方的「连接」页使用 Control Plane 下发的本次启动实际采用的 `WS_LISTEN_ADDR` 生成实例专属适配器地址并提供复制入口。设置页修改后的待重启值不会提前污染地址。
-  - OneBot 与 AstrBot 各自使用实例设置 `ONEBOT_WS_MODE` / `ASTRBOT_WS_MODE`：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接，浏览器 mock 直接对话保留。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
+  - OneBot 与 AstrBot 分别使用 `ONEBOT_WS_ENABLED` / `ASTRBOT_WS_ENABLED` 控制真实上游连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后各自使用实例设置 `ONEBOT_WS_MODE` / `ASTRBOT_WS_MODE` 二选一：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
   - 设置批量保存前校验最终的模式／URL／Token 组合，保存后重建该实例连接，停用及换库会取消拨号、重连等待和已建立连接。客户端在 runtime 发布后才启动，带有界握手超时、退避重试和原有 Ping/Pong 心跳；不关闭 TLS 证书校验，不在连接日志中输出凭证。
   - AstrBot 插件默认仍作为客户端连接实例专属地址；0.2.0 起可设置 `ws_mode=forward` 作为配套服务端（默认回环 `127.0.0.1:1244`，非回环必须设置访问令牌，仅一个活跃 FA 连接）。此模式不改变 HTTP 管理面板的回环及认证边界。
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。

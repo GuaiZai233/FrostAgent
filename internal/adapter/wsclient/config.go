@@ -17,9 +17,11 @@ const (
 // Config is a snapshot for one adapter activation. URLs and tokens are never
 // included in errors or connection logs.
 type Config struct {
-	Mode  string
-	URL   string
-	Token string
+	// Disabled keeps the zero value backward-compatible with enabled reverse WS.
+	Disabled bool
+	Mode     string
+	URL      string
+	Token    string
 }
 
 // Load preserves the existing inbound listener when no mode was configured.
@@ -29,6 +31,13 @@ func Load(getenv func(string) string, adapter string) (Config, error) {
 	}
 	config := Config{Mode: Reverse}
 	if getenv != nil {
+		switch getenv(adapter + "_WS_ENABLED") {
+		case "", "true":
+		case "false":
+			config.Disabled = true
+		default:
+			return Config{}, fmt.Errorf("%s: WS_ENABLED must be true or false", adapter)
+		}
 		rawMode, rawURL := getenv(adapter+"_WS_MODE"), getenv(adapter+"_WS_URL")
 		if strings.IndexFunc(rawMode, unicode.IsControl) >= 0 || strings.IndexFunc(rawURL, unicode.IsControl) >= 0 {
 			return Config{}, fmt.Errorf("%s: WS_MODE and WS_URL must not contain control characters", adapter)
@@ -55,7 +64,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("WS_TOKEN must not contain control characters")
 	}
 	if c.URL == "" {
-		if c.Mode == Forward {
+		if !c.Disabled && c.Mode == Forward {
 			return fmt.Errorf("WS_URL is required for forward WebSocket")
 		}
 		return nil

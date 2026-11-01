@@ -482,8 +482,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	success = true
 	return &Runtime{
 		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab,
-		onebotClient:  onebotConnection.Mode == wsclient.Forward,
-		astrbotClient: astrbotConnection.Mode == wsclient.Forward,
+		onebotClient:  !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
+		astrbotClient: !astrbotConnection.Disabled && astrbotConnection.Mode == wsclient.Forward,
 	}, nil
 }
 

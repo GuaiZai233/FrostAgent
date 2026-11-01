@@ -107,15 +107,20 @@ func TestOneBotConnectionModeAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode, query string
 		allowed           bool
+		disabled          bool
 	}{
-		{"default reverse", "", "", true},
-		{"explicit reverse", wsclient.Reverse, "", true},
-		{"forward blocks upstream", wsclient.Forward, "", false},
-		{"forward retains direct chat", wsclient.Forward, "?mock=true", true},
+		{"default reverse", "", "", true, false},
+		{"explicit reverse", wsclient.Reverse, "", true, false},
+		{"forward blocks upstream", wsclient.Forward, "", false, false},
+		{"forward retains direct chat", wsclient.Forward, "?mock=true", true, false},
+		{"disabled reverse blocks upstream", wsclient.Reverse, "", false, true},
+		{"disabled forward blocks upstream", wsclient.Forward, "", false, true},
+		{"disabled reverse retains direct chat", wsclient.Reverse, "?mock=true", true, true},
+		{"disabled forward retains direct chat", wsclient.Forward, "?mock=true", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adapter := NewAdapter(nil)
-			adapter.ConfigureConnection(wsclient.Config{Mode: tc.mode, URL: "ws://synthetic.invalid/"})
+			adapter.ConfigureConnection(wsclient.Config{Disabled: tc.disabled, Mode: tc.mode, URL: "ws://synthetic.invalid/"})
 			server := httptest.NewServer(adapter.Handler())
 			defer server.Close()
 			defer adapter.CloseConnections()
@@ -130,8 +135,12 @@ func TestOneBotConnectionModeAdmission(t *testing.T) {
 					_ = connection.Close()
 					t.Fatal("forward mode admitted a reverse upstream")
 				}
-				if response == nil || response.StatusCode != http.StatusConflict {
-					t.Fatalf("expected conflict, got %v", response)
+				want := http.StatusConflict
+				if tc.disabled {
+					want = http.StatusServiceUnavailable
+				}
+				if response == nil || response.StatusCode != want {
+					t.Fatalf("expected %d, got %v", want, response)
 				}
 				_ = response.Body.Close()
 			}

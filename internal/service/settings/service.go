@@ -34,6 +34,8 @@ type envEntry struct {
 var knownEnvVars = map[string]envEntry{
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
+	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
+	"ASTRBOT_WS_ENABLED":                   {"启用 AstrBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
 	"ONEBOT_WS_MODE":                       {"OneBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
 	"ONEBOT_WS_URL":                        {"OneBot 正向 WebSocket 上游地址", false, true, false},
 	"ONEBOT_WS_TOKEN":                      {"OneBot 正向 WebSocket 访问令牌", true, true, false},

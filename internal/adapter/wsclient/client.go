@@ -25,7 +25,7 @@ func Run(ctx context.Context, config Config, serve func(*websocket.Conn), report
 }
 
 func run(ctx context.Context, config Config, serve func(*websocket.Conn), report func(string), initial, maximum time.Duration) {
-	if config.Mode != Forward || ctx.Err() != nil {
+	if config.Disabled || config.Mode != Forward || ctx.Err() != nil {
 		return
 	}
 	if err := config.Validate(); err != nil {

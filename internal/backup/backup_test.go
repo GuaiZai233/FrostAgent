@@ -66,7 +66,8 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws?access_token=synthetic-onebot-query-key",
 		"ONEBOT_WS_TOKEN": "synthetic-onebot-token",
 		"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/?token=synthetic-astrbot-query-key",
-		"ASTRBOT_WS_TOKEN": "synthetic-astrbot-token",
+		"ASTRBOT_WS_TOKEN":  "synthetic-astrbot-token",
+		"ONEBOT_WS_ENABLED": "true", "ASTRBOT_WS_ENABLED": "false",
 	} {
 		if err := settings.Update(key, value, false); err != nil {
 			t.Fatal(err)
@@ -96,6 +97,7 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		for key, want := range map[string]string{
 			"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws", "ONEBOT_WS_TOKEN": "",
 			"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/", "ASTRBOT_WS_TOKEN": "",
+			"ONEBOT_WS_ENABLED": "true", "ASTRBOT_WS_ENABLED": "false",
 		} {
 			if got := exported.Values[key]; got != want {
 				t.Errorf("exported %s = %q, want %q", key, got, want)

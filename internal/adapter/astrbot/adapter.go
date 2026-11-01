@@ -254,6 +254,10 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mock := r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true"
+		if a.connectionConfig.Disabled && !mock {
+			http.Error(w, "当前适配器连接未启用", http.StatusServiceUnavailable)
+			return
+		}
 		if a.connectionConfig.Mode == wsclient.Forward && !mock {
 			http.Error(w, "当前适配器使用正向 WebSocket（FA 作为客户端）", http.StatusConflict)
 			return

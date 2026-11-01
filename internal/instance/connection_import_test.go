@@ -34,6 +34,7 @@ func TestConnectionSettingsImportRejectsInvalidBeforeRuntimeStop(t *testing.T) {
 				for _, values := range []map[string]string{
 					{adapter + "_WS_MODE": "forward", adapter + "_WS_URL": "http://invalid.example/?token=synthetic-import-secret", "BOT_NAME": "must-not-save"},
 					{adapter + "_WS_MODE": "forward", "BOT_NAME": "must-not-save"},
+					{adapter + "_WS_ENABLED": "invalid", "BOT_NAME": "must-not-save"},
 				} {
 					err := m.ImportSettings(info.ID, backup.Settings{FormatVersion: backup.FormatVersion, Values: values})
 					if err == nil || strings.Contains(err.Error(), "synthetic-import-secret") {
@@ -90,6 +91,22 @@ func TestConnectionSettingsImportSwitchesModeAndRepairsDisabledInstance(t *testi
 			if err := config.Update(adapter+"_WS_TOKEN", "synthetic-existing-token", false); err != nil {
 				t.Fatal(err)
 			}
+			if err := m.ImportSettings(info.ID, backup.Settings{FormatVersion: backup.FormatVersion, Values: map[string]string{
+				adapter + "_WS_ENABLED": "false", adapter + "_WS_MODE": "forward",
+			}}); err != nil {
+				t.Fatalf("disabled connection import rejected: %v", err)
+			}
+			archive, err := m.InstanceZIP(info.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored, err := m.RestoreInstanceZIP("Disabled Adapter Copy", archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.instances[restored.ID].config.Get(adapter+"_WS_ENABLED") != "false" {
+				t.Fatal("ZIP restore lost the disabled flag")
+			}
 			if err := m.Enable(info.ID, true); err != nil {
 				t.Fatal(err)
 			}
@@ -99,6 +116,9 @@ func TestConnectionSettingsImportSwitchesModeAndRepairsDisabledInstance(t *testi
 			}}
 			if err := m.ImportSettings(info.ID, data); err != nil {
 				t.Fatal(err)
+			}
+			if m.instances[info.ID].config.Get(adapter+"_WS_ENABLED") != "" {
+				t.Fatal("older backups without an enable flag must restore the enabled default")
 			}
 			select {
 			case token := <-connected:

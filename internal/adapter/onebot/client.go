@@ -19,7 +19,7 @@ func (a *Adapter) ConfigureConnection(config wsclient.Config) {
 // activation, including an in-progress handshake or reconnect delay.
 func (a *Adapter) RunClient(parent context.Context) {
 	a.mu.Lock()
-	if a.stopped || a.clientRunning || a.connectionConfig.Mode != wsclient.Forward {
+	if a.stopped || a.clientRunning || a.connectionConfig.Disabled || a.connectionConfig.Mode != wsclient.Forward {
 		a.mu.Unlock()
 		return
 	}

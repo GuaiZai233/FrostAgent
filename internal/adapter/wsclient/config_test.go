@@ -12,16 +12,42 @@ func TestLoadConnectionConfigDefaultsAndIsolation(t *testing.T) {
 	}
 	getenv := func(key string) string { return values[key] }
 	onebot, err := Load(getenv, "ONEBOT")
-	if err != nil || onebot.Mode != Forward || onebot.URL != values["ONEBOT_WS_URL"] || onebot.Token != values["ONEBOT_WS_TOKEN"] {
+	if err != nil || onebot.Disabled || onebot.Mode != Forward || onebot.URL != values["ONEBOT_WS_URL"] || onebot.Token != values["ONEBOT_WS_TOKEN"] {
 		t.Fatalf("forward config did not round trip: %v", err)
 	}
 	astrbot, err := Load(getenv, "ASTRBOT")
-	if err != nil || astrbot.Mode != Reverse || astrbot.URL != "" || astrbot.Token != "" {
+	if err != nil || astrbot.Disabled || astrbot.Mode != Reverse || astrbot.URL != "" || astrbot.Token != "" {
 		t.Fatalf("adapter config leaked: %#v %v", astrbot, err)
 	}
 	defaults, err := Load(nil, "ONEBOT")
-	if err != nil || defaults.Mode != Reverse {
+	if err != nil || defaults.Disabled || defaults.Mode != Reverse {
 		t.Fatalf("nil getter defaults: %#v %v", defaults, err)
+	}
+}
+
+func TestLoadConnectionEnabledFlag(t *testing.T) {
+	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+		values := map[string]string{adapter + "_WS_ENABLED": "false", adapter + "_WS_MODE": Forward}
+		get := func(key string) string { return values[key] }
+		config, err := Load(get, adapter)
+		if err != nil || !config.Disabled || config.Mode != Forward || config.URL != "" {
+			t.Fatalf("disabled forward configuration should not require a URL: %#v %v", config, err)
+		}
+		values[adapter+"_WS_ENABLED"] = "true"
+		if _, err := Load(get, adapter); err == nil {
+			t.Fatal("enabling forward without a destination was accepted")
+		}
+		values[adapter+"_WS_URL"] = "ws://synthetic.invalid/"
+		config, err = Load(get, adapter)
+		if err != nil || config.Disabled {
+			t.Fatalf("explicitly enabled configuration rejected: %v", err)
+		}
+		for _, invalid := range []string{"synthetic-secret", "false\n", "0", "TRUE"} {
+			values[adapter+"_WS_ENABLED"] = invalid
+			if _, err := Load(get, adapter); err == nil || strings.Contains(err.Error(), invalid) {
+				t.Fatalf("invalid flag accepted or echoed: %v", err)
+			}
+		}
 	}
 }
 

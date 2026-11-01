@@ -12,7 +12,7 @@ const adapters = [
   { id: 'astrbot', name: 'AstrBot', prefix: 'ASTRBOT', upstream: '需要更新配套 FrostAgent 插件，并在 AstrBot 插件中启用 WebSocket 服务端。' },
 ] as const;
 
-const fields = ['MODE', 'URL', 'TOKEN'] as const;
+const fields = ['ENABLED', 'MODE', 'URL', 'TOKEN'] as const;
 
 export function mountConnectionsPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   const instanceID = instanceState.selected?.id;
@@ -51,6 +51,11 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
         ${adapters.map((adapter) => `
           <article class="card p-4 flex flex-col gap-3">
             <h2 class="text-sm font-semibold">${adapter.name}</h2>
+            <label class="flex items-center gap-2 text-xs font-medium" for="${adapter.id}-enabled">
+              <input id="${adapter.id}-enabled" type="checkbox" class="checkbox" disabled>
+              启用 ${adapter.name}
+            </label>
+            <p id="${adapter.id}-disabled-hint" class="text-xs text-muted" hidden>连接已停用；保存后关闭真实上游连接并停止重连，保留方向、地址和令牌。网页直接对话不受影响。</p>
             <label class="text-xs font-medium" for="${adapter.id}-mode">连接方式</label>
             <select id="${adapter.id}-mode" class="input w-full" disabled>
               <option value="reverse">反向 WebSocket（FA 作为服务端）</option>
@@ -75,7 +80,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
           </article>
         `).join('')}
         <aside class="card p-4 text-xs text-muted leading-relaxed">
-          两种模式都能双向收发消息；同一适配器只启用一种真实上游连接方式，避免重复接收消息。切回反向模式会保留正向地址和令牌。<br>
+          OneBot、AstrBot 可分别勾选启用，默认启用。启用后同一适配器的正向／反向二选一，两种模式都能双向收发消息。停用或切回反向模式会保留正向地址和令牌。<br>
           Docker 内的 127.0.0.1 指容器自己，请填写 FA 容器实际能访问的上游地址。这里仅配置适配器 WebSocket，不改变 HTTP 管理面板的端口或访问限制。
         </aside>
       </div>
@@ -99,18 +104,22 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
     retryButton.disabled = !active() || loading || saving;
     el<HTMLElement>('connections-draft').hidden = !draft?.dirty;
     for (const adapter of adapters) {
+      const enabled = draft?.get(`${adapter.prefix}_WS_ENABLED`) !== 'false';
       const forward = draft?.get(`${adapter.prefix}_WS_MODE`) === 'forward';
-      el<HTMLSelectElement>(`${adapter.id}-mode`).disabled = locked;
+      el<HTMLInputElement>(`${adapter.id}-enabled`).disabled = locked;
+      el<HTMLElement>(`${adapter.id}-disabled-hint`).hidden = enabled;
+      el<HTMLSelectElement>(`${adapter.id}-mode`).disabled = locked || !enabled;
       el<HTMLElement>(`${adapter.id}-reverse`).hidden = forward;
       el<HTMLElement>(`${adapter.id}-forward`).hidden = !forward;
-      el<HTMLInputElement>(`${adapter.id}-url`).disabled = locked || !forward;
-      el<HTMLInputElement>(`${adapter.id}-token`).disabled = locked || !forward;
-      el<HTMLButtonElement>(`${adapter.id}-copy`).disabled = locked || forward || !addresses.get(adapter.id);
+      el<HTMLInputElement>(`${adapter.id}-url`).disabled = locked || !enabled || !forward;
+      el<HTMLInputElement>(`${adapter.id}-token`).disabled = locked || !enabled || !forward;
+      el<HTMLButtonElement>(`${adapter.id}-copy`).disabled = locked || !enabled || forward || !addresses.get(adapter.id);
     }
   }
 
   function populate() {
     for (const adapter of adapters) {
+      el<HTMLInputElement>(`${adapter.id}-enabled`).checked = draft?.get(`${adapter.prefix}_WS_ENABLED`) !== 'false';
       el<HTMLSelectElement>(`${adapter.id}-mode`).value = draft?.get(`${adapter.prefix}_WS_MODE`) || 'reverse';
       el<HTMLInputElement>(`${adapter.id}-url`).value = draft?.get(`${adapter.prefix}_WS_URL`) || '';
       el<HTMLInputElement>(`${adapter.id}-token`).value = draft?.get(`${adapter.prefix}_WS_TOKEN`) || '';
@@ -132,7 +141,8 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
       const settings = adapters.flatMap((adapter) => fields.map((field) => {
         const key = `${adapter.prefix}_WS_${field}`;
         const value = values.find((entry) => entry.key === key)?.value || '';
-        return { key, value: field === 'MODE' ? value || 'reverse' : value, isSecret: field === 'TOKEN' };
+        const fallback = field === 'MODE' ? 'reverse' : field === 'ENABLED' ? 'true' : '';
+        return { key, value: value || fallback, isSecret: field === 'TOKEN' };
       }));
       for (const adapter of adapters) {
         addresses.set(adapter.id, instanceWebSocketURL(overview.wsListenAddr, instanceID!, adapter.id, window.location.origin));
@@ -155,6 +165,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
 
   function validate(): boolean {
     for (const adapter of adapters) {
+      const enabled = draft!.get(`${adapter.prefix}_WS_ENABLED`) !== 'false';
       const mode = draft!.get(`${adapter.prefix}_WS_MODE`);
       const address = draft!.get(`${adapter.prefix}_WS_URL`);
       const token = draft!.get(`${adapter.prefix}_WS_TOKEN`);
@@ -162,7 +173,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
         toast.error(`${adapter.name} 请选择正向或反向 WebSocket`);
         return false;
       }
-      if (mode === 'forward' || address) {
+      if ((enabled && mode === 'forward') || address) {
         try {
           const url = new URL(address);
           const hasControlOrSpace = [...address].some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127);
@@ -194,7 +205,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
       }
       draft.acknowledgeSettings(changes);
       populate();
-      toast.success('连接配置已保存并应用；停用的实例将在启用后连接');
+      toast.success('连接配置已保存并应用；仅已启用的实例和适配器会建立真实连接');
     } catch {
       if (active()) toast.error('连接配置保存失败，请重试；更改已保留。');
     } finally {
@@ -208,14 +219,14 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
   for (const adapter of adapters) {
     for (const field of fields) {
       const input = el<HTMLInputElement | HTMLSelectElement>(`${adapter.id}-${field.toLowerCase()}`);
-      input.addEventListener(field === 'MODE' ? 'change' : 'input', () => {
+      input.addEventListener(field === 'MODE' || field === 'ENABLED' ? 'change' : 'input', () => {
         if (!active() || loading || saving || !draft) return;
-        draft.set(`${adapter.prefix}_WS_${field}`, input.value);
+        draft.set(`${adapter.prefix}_WS_${field}`, field === 'ENABLED' ? String((input as HTMLInputElement).checked) : input.value);
         updateState();
       });
     }
     el<HTMLButtonElement>(`${adapter.id}-copy`).addEventListener('click', async () => {
-      if (!active() || loading || saving || !draft || draft.get(`${adapter.prefix}_WS_MODE`) === 'forward') return;
+      if (!active() || loading || saving || !draft || draft.get(`${adapter.prefix}_WS_ENABLED`) === 'false' || draft.get(`${adapter.prefix}_WS_MODE`) === 'forward') return;
       const address = addresses.get(adapter.id);
       if (!address) return;
       const copied = await copyToClipboard(address);
