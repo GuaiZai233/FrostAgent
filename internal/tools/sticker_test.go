@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
@@ -145,5 +146,126 @@ func TestWeightedRandomSticker(t *testing.T) {
 	// High weight (100 vs 1) should be chosen the vast majority of times
 	if highCount < 80 {
 		t.Errorf("expected high weight candidate to be chosen >= 80 times, got %d", highCount)
+	}
+}
+
+func TestSendStickerConfirmationMode(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "1")
+	t.Setenv(sticker.ConfirmEnvKey, "true")
+	tempDir := t.TempDir()
+	store, err := sticker.NewStore(filepath.Join(tempDir, "stickers"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// 1. Add sticker A
+	dataA := []byte("fake_image_happy_dog")
+	hashA := sticker.HashBytes(dataA)
+	if err := store.Add(hashA, hashA+".jpg", dataA); err != nil {
+		t.Fatalf("Add A failed: %v", err)
+	}
+	_ = store.Update(hashA, "开心的柴犬在大笑", []string{"开心", "哈哈", "柴犬"})
+
+	// 2. Add sticker B
+	dataB := []byte("fake_image_happy_cat")
+	hashB := sticker.HashBytes(dataB)
+	if err := store.Add(hashB, hashB+".jpg", dataB); err != nil {
+		t.Fatalf("Add B failed: %v", err)
+	}
+	_ = store.Update(hashB, "开心的猫咪在微笑", []string{"开心", "微笑"})
+
+	tool := SendStickerTool(store)
+	ctx := context.Background()
+
+	// Step 1: Query "开心" returns compact candidates without image payload
+	execResult, err := tool.ExecuteResult(ctx, `{"query": "开心"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if execResult.MessagePayload != "" {
+		t.Errorf("expected MessagePayload to be empty in query mode, got: %s", execResult.MessagePayload)
+	}
+
+	var queryResp struct {
+		Candidates []struct {
+			ID          string   `json:"id"`
+			Keywords    []string `json:"keywords"`
+			Description string   `json:"description"`
+		} `json:"candidates"`
+		Hint string `json:"hint"`
+	}
+	if err := json.Unmarshal([]byte(execResult.Content), &queryResp); err != nil {
+		t.Fatalf("failed to parse query response: %v\ncontent: %s", err, execResult.Content)
+	}
+	if len(queryResp.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(queryResp.Candidates))
+	}
+	if !strings.Contains(queryResp.Hint, "send_sticker") {
+		t.Errorf("expected hint to mention send_sticker, got: %s", queryResp.Hint)
+	}
+
+	foundA, foundB := false, false
+	for _, c := range queryResp.Candidates {
+		if c.ID == hashA && c.Description == "开心的柴犬在大笑" {
+			foundA = true
+		}
+		if c.ID == hashB && c.Description == "开心的猫咪在微笑" {
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Errorf("expected candidates to contain both A and B, got: %+v", queryResp.Candidates)
+	}
+
+	// Step 2: Select sticker A by ID returns image message payload
+	selectResult, err := tool.ExecuteResult(ctx, `{"id": "`+hashA+`"}`)
+	if err != nil {
+		t.Fatalf("unexpected error during select: %v", err)
+	}
+	if selectResult.MessagePayload == "" {
+		t.Fatal("expected non-empty MessagePayload on select")
+	}
+
+	var res struct {
+		Messages []Msg `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(selectResult.MessagePayload), &res); err != nil {
+		t.Fatalf("failed to parse select payload: %v", err)
+	}
+	if len(res.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(res.Messages))
+	}
+	if res.Messages[0].Type != "image" || !res.Messages[0].IsSticker {
+		t.Errorf("unexpected message: %+v", res.Messages[0])
+	}
+	if !strings.Contains(res.Messages[0].Path, hashA) {
+		t.Errorf("expected image path to contain hashA %s, got %s", hashA, res.Messages[0].Path)
+	}
+
+	// Step 3: Select invalid ID
+	invalidResult, err := tool.ExecuteResult(ctx, `{"id": "non_existent_id"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(invalidResult.Content, "指定表情包不存在或不可用") {
+		t.Errorf("expected error for non-existent id, got: %s", invalidResult.Content)
+	}
+	if invalidResult.MessagePayload != "" {
+		t.Errorf("expected empty MessagePayload for failed select, got: %s", invalidResult.MessagePayload)
+	}
+
+	// Step 4: Query with no matching items
+	noMatchResult, err := tool.ExecuteResult(ctx, `{"query": "不存在的情绪词"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(noMatchResult.Content, "查无此词条") {
+		t.Errorf("expected 查无此词条, got: %s", noMatchResult.Content)
+	}
+
+	// Step 5: Empty query and id
+	_, err = tool.ExecuteResult(ctx, `{"query": ""}`)
+	if err == nil {
+		t.Error("expected error for empty query and id")
 	}
 }

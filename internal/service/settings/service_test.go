@@ -667,6 +667,39 @@ func TestSettingsUpdateEnvVarEndToEndMatrix(t *testing.T) {
 	}
 }
 
+func TestSettingsUpdateStickerConfirmValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	svc := mustNew(t, envPath)
+
+	for _, val := range []string{"true", "false", ""} {
+		resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+			Key:   "ENABLE_STICKER_CONFIRM",
+			Value: val,
+		}))
+		if err != nil {
+			t.Fatalf("UpdateEnvVar error: %v", err)
+		}
+		if !resp.Msg.GetSuccess() {
+			t.Fatalf("expected ENABLE_STICKER_CONFIRM=%q to succeed, got error: %s", val, resp.Msg.GetError())
+		}
+	}
+
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "ENABLE_STICKER_CONFIRM",
+		Value: "invalid",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if resp.Msg.GetSuccess() {
+		t.Fatalf("expected ENABLE_STICKER_CONFIRM='invalid' to fail")
+	}
+	if !strings.Contains(resp.Msg.GetError(), "表情包确认必须为 true 或 false") {
+		t.Fatalf("unexpected error message: %s", resp.Msg.GetError())
+	}
+}
+
 func TestSettingsHardenPermissionsFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Directory path instead of file path: os.Stat is Dir, should fail hardenPermissions

@@ -5,9 +5,15 @@ import "strconv"
 const (
 	ActivityEnvKey      = "STICKER_ACTIVITY"
 	ActivityModeEnvKey  = "STICKER_ACTIVITY_MODE"
+	ConfirmEnvKey       = "ENABLE_STICKER_CONFIRM"
 	ActivityBotTurns    = "bot_turns"
 	ActivityAllMessages = "all_messages"
 )
+
+// ConfirmEnabled returns whether sticker confirmation two-stage mode is enabled.
+func ConfirmEnabled(raw string) bool {
+	return raw == "true"
+}
 
 // ActivityMode defaults legacy and invalid configuration to bot dialogue turns.
 func ActivityMode(raw string) string {
