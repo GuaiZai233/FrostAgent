@@ -126,23 +126,32 @@ func TestFormatDialoguePrompt(t *testing.T) {
 
 func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dialogue.yml")
-	if err := os.WriteFile(path, []byte(`- id: synthetic-first
-  user: synthetic question
-  preferred: synthetic answer
-- id: synthetic-second
-  user: second question
-  preferred: second answer
-`), 0600); err != nil {
-		t.Fatal(err)
+	const fixture = `- id: 1
+  user: |
+    示例问题一
+  preferred: |
+    示例回答一
+
+- id: 2
+  user: |
+    示例问题二
+  preferred: |
+    示例回答二
+`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatalf("write dialogue fixture: %v", err)
 	}
+
 	prompt, err := LoadDialoguePrompt(path)
 	if err != nil {
 		t.Fatalf("LoadDialoguePrompt failed: %v", err)
 	}
 
-	want := DefaultDialogueInstruction + "\n\nUser: synthetic question\nAssistant: synthetic answer\n\nUser: second question\nAssistant: second answer"
+	want := DefaultDialogueInstruction +
+		"\n\nUser: 示例问题一\nAssistant: 示例回答一" +
+		"\n\nUser: 示例问题二\nAssistant: 示例回答二"
 	if prompt != want {
-		t.Errorf("loaded dialogue prompt = %q, want %q", prompt, want)
+		t.Errorf("unexpected prompt:\ngot:  %q\nwant: %q", prompt, want)
 	}
 }
 
