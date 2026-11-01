@@ -1,6 +1,6 @@
 import { instanceURL } from '../instance-state';
 import { icon } from './icons';
-import { escapeHtml } from '../utils/formatters';
+import { escapeHtml, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
@@ -45,6 +45,7 @@ export interface PromptImage {
 }
 
 export interface ParsedPrompt {
+  sessionKind?: 'group' | 'private';
   model?: string;
   systemPrompt?: string;
   userMessage?: string;
@@ -223,7 +224,9 @@ export function buildInspectorDataFromSessionContext(context: {
   systemPrompt?: string;
   model?: string;
   recentStructuredMessages?: StructuredGroupMessage[];
+  history?: Array<{ role: string; content: string }>;
 }): ParsedPrompt {
+  const privateSession = isPrivateSession(context.sessionId);
   const summaryGroups: SummaryGroupInfo[] = (context.summaryGroups || []).map((g) => {
     const rawMsgs = g.messages || [];
     return {
@@ -242,12 +245,24 @@ export function buildInspectorDataFromSessionContext(context: {
     };
   });
 
-  const recentMessages: GroupMessageItem[] = (context.recentStructuredMessages?.length
+  let recentMessages: GroupMessageItem[] = (context.recentStructuredMessages?.length
     ? context.recentStructuredMessages.map(groupMessageFromStructured)
     : (context.recentMessages || []).map(parseMessageLine)
   ).map((item) => ({ ...item, isSummarized: false }));
 
+  // Older servers expose private conversations only through history. Never
+  // interpret user-authored summary markers as trusted compact metadata.
+  if (privateSession && recentMessages.length === 0 && !context.runningSummary && summaryGroups.length === 0) {
+    recentMessages = (context.history || []).map((message) => ({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: message.content,
+      rawText: message.content,
+      isSummarized: false,
+    }));
+  }
+
   return {
+    sessionKind: privateSession ? 'private' : 'group',
     raw: context.promptText || '',
     model: context.model,
     systemPrompt: context.systemPrompt,
@@ -454,6 +469,8 @@ export function renderPromptInspector(
   } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw) : dataOrRaw;
+  const privateSession = parsed.sessionKind === 'private';
+  const chatLabel = privateSession ? '私聊' : '群聊';
   let viewMode: 'visual' | 'raw' = 'visual';
 
   function render() {
@@ -503,9 +520,9 @@ export function renderPromptInspector(
           <div class="flex items-center gap-2 flex-wrap text-xs">
             ${
               options.onViewSummary
-                ? `<button class="btn btn-outline btn-sm" id="pi-view-summary-btn" title="查看群聊总结">
+                ? `<button class="btn btn-outline btn-sm" id="pi-view-summary-btn" title="查看${chatLabel}总结">
                     ${icon('sparkles', 'w-3.5 h-3.5 text-info')}
-                    <span>群聊总结</span>
+                    <span>${chatLabel}总结</span>
                   </button>`
                 : `<span class="badge badge-outline flex items-center gap-1">
                     ${icon('sparkles', 'w-3 h-3 text-info')}
@@ -603,13 +620,13 @@ export function renderPromptInspector(
             <div class="prompt-section-header">
               <div class="prompt-section-title">
                 <span class="text-info flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
-                <span>最新压缩批次 (最近一次滚动总结)</span>
+                <span>最新压缩批次 (${privateSession ? '最近一次私聊 compact' : '最近一次滚动总结'})</span>
               </div>
-              <span class="text-xs text-muted">在右侧卡片展开查看当前群聊 compact 内容</span>
+              <span class="text-xs text-muted">在右侧卡片展开查看当前${chatLabel} compact 内容</span>
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${renderSummaryGroups(parsed.summaryGroups, parsed.model)}
+                ${renderSummaryGroups(parsed.summaryGroups, parsed.model, chatLabel)}
               </div>
             </div>
           </div>
@@ -625,7 +642,7 @@ export function renderPromptInspector(
             <div class="prompt-section-header">
               <div class="prompt-section-title">
                 <span class="text-info flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
-                <span>群聊滚动摘要 (group_running_summary)</span>
+                <span>${privateSession ? '私聊 compact 摘要' : '群聊滚动摘要 (group_running_summary)'}</span>
               </div>
             </div>
             <div class="card p-3 text-xs leading-relaxed select-text bg-info-bg/30 border-info-border/40 text-foreground whitespace-pre-wrap">${escapeHtml(
@@ -644,9 +661,9 @@ export function renderPromptInspector(
             <div class="prompt-section-header">
               <div class="prompt-section-title">
                 <span class="text-primary flex items-center">${icon('users', 'w-3.5 h-3.5')}</span>
-                <span>当前未压缩消息 (recent_group_messages)</span>
+                <span>${privateSession ? '当前私聊消息 (history)' : '当前未压缩消息 (recent_group_messages)'}</span>
               </div>
-              <span class="text-xs text-muted">待进入下一次滚动压缩的最新群消息</span>
+              <span class="text-xs text-muted">${privateSession ? '当前保留的私聊对话记录，不包含 compact 注入的摘要与确认消息' : '待进入下一次滚动压缩的最新群消息'}</span>
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
@@ -804,11 +821,11 @@ export function renderPromptInspector(
 /**
  * Renders all summary groups with their current compact content.
  */
-function renderSummaryGroups(summaryGroups: SummaryGroupInfo[], model?: string): string {
+function renderSummaryGroups(summaryGroups: SummaryGroupInfo[], model?: string, chatLabel = '群聊'): string {
   return summaryGroups
     .map((group, idx) => {
       const messages = group.parsedMessages || (group.messages || []).map(parseMessageLine);
-      return renderSummaryGroupBlock(messages, group, idx, model);
+      return renderSummaryGroupBlock(messages, group, idx, model, chatLabel);
     })
     .join('');
 }
@@ -821,6 +838,7 @@ function renderSummaryGroupBlock(
   group: SummaryGroupInfo,
   groupIdx: number,
   model?: string,
+  chatLabel = '群聊',
 ): string {
   const rowsHtml = messages.map((m) => renderSingleMessageRow(m, true, model)).join('');
 
@@ -836,7 +854,7 @@ function renderSummaryGroupBlock(
         <summary class="summary-compact-card-header">
           <span class="summary-compact-card-title-wrap">
             <span class="summary-compact-card-icon">${icon('sparkles', 'w-3.5 h-3.5')}</span>
-            <span class="summary-compact-card-title">当前群聊 compact 内容</span>
+            <span class="summary-compact-card-title">当前${chatLabel} compact 内容</span>
           </span>
           <span class="summary-compact-card-meta">
             <span>${messages.length} 条消息</span>
