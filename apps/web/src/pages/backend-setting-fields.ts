@@ -57,6 +57,7 @@ export const settingFields: Record<string, SettingField> = {
 };
 
 export const dedicatedSettingKeys = new Set([
+  'ENABLE_RUNTIME_STATUS_COMMAND',
   'ENABLE_EMBEDDING',
   'ENABLE_POKE', 'POKE_CUSTOM_TEXT', 'POKE_COOLDOWN_SECONDS',
   'SYSTEM_PROMPT',

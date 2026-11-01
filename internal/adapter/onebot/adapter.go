@@ -376,6 +376,10 @@ func (a *Adapter) Handler() http.HandlerFunc {
 				}
 			}
 
+			if handleRuntimeStatusCommand(wsConn, event, a.engine) {
+				continue
+			}
+
 			var warningNotice string
 			var botLoopSoft bool
 			var botLoopObservation *llm.BotLoopObservation
