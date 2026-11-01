@@ -21,7 +21,7 @@ const (
 	EnvWhitelistEnabled = "ENABLE_PROACTIVE_REPLY_WHITELIST"
 
 	// PromptPrefix is prepended to the prompt when proactive reply is triggered.
-	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。"
+	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。"
 
 	// MinProbability defines the minimum probability when proactive reply is turned on (0.01).
 	MinProbability = 0.01
@@ -77,7 +77,10 @@ func Roll(getenv func(string) string) bool {
 
 // RollWithRand evaluates whether an inbound message hits using a custom RNG function.
 func RollWithRand(getenv func(string) string, rng func() float64) bool {
-	prob := GetProbability(getenv)
+	return rollProbability(GetProbability(getenv), rng)
+}
+
+func rollProbability(prob float64, rng func() float64) bool {
 	if prob <= 0 {
 		return false
 	}
@@ -216,5 +219,5 @@ func RollGroupWithRand(getenv func(string) string, groupID string, rng func() fl
 	if !IsGroupAllowed(getenv, groupID, platforms...) {
 		return false
 	}
-	return RollWithRand(getenv, rng)
+	return rollProbability(GetGroupProbability(getenv, groupID, platforms...), rng)
 }

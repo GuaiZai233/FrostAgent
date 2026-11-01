@@ -26,8 +26,8 @@ func (p *stickerActivityProvider) Chat(_ context.Context, req core.ChatRequest) 
 }
 
 func TestStickerActivityIntervalsAndGrace(t *testing.T) {
-	if !IsProactiveAllowedTool("send_sticker") || IsProactiveAllowedTool("send_message") {
-		t.Fatal("proactive sticker exception changed the surrounding tool boundary")
+	if IsProactiveAllowedTool("send_sticker") || IsProactiveAllowedTool("send_message") {
+		t.Fatal("proactive turns must not allow sticker or general message tools")
 	}
 	for _, tc := range []struct{ level, interval int }{{0, 0}, {1, 50}, {9, 10}, {10, 5}} {
 		if got := sticker.ActivityInterval(tc.level); got != tc.interval {
@@ -151,7 +151,7 @@ func TestStickerEnforcementConflictStillReachesForgiveness(t *testing.T) {
 	}
 }
 
-func TestProactiveStickerDeliverySatisfiesQuota(t *testing.T) {
+func TestAddressedStickerDeliverySatisfiesQuota(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	const payload = `{"messages":[{"type":"image","path":"/test/sticker.png","is_sticker":true}]}`
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
@@ -167,7 +167,6 @@ func TestProactiveStickerDeliverySatisfiesQuota(t *testing.T) {
 		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
-		Proactive: true,
 		SendHook: func(got string) error {
 			if got != payload {
 				t.Fatalf("payload = %q", got)
@@ -179,7 +178,7 @@ func TestProactiveStickerDeliverySatisfiesQuota(t *testing.T) {
 		t.Fatalf("result=%q calls=%d", result.Content, len(p.requests))
 	}
 	if len(p.requests[0].Tools) != 1 || p.requests[0].Tools[0].Name != "send_sticker" {
-		t.Fatalf("proactive sticker tool unavailable: %+v", p.requests[0].Tools)
+		t.Fatalf("addressed sticker tool unavailable: %+v", p.requests[0].Tools)
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
 		t.Fatalf("remaining=%d after confirmed sticker", remaining)

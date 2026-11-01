@@ -14,15 +14,12 @@ FrostAgent is an AI role-playing and agent orchestration framework written in Go
 </p>
 
 <p align="center">
-  <a href="https://go.dev">
-    <img src="https://img.shields.io/badge/Go-1.27.0+-blue.svg" alt="Go Version">
-  </a>
-  <a href="https://github.com/GuaiZai233/FrostAgent/actions">
-    <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status">
-  </a>
-  <a href="LICENCE">
-    <img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License">
-  </a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.27.0+-blue.svg" alt="Go Version"></a>
+  <a href="https://github.com/GuaiZai233/FrostAgent/actions"><img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status"></a>
+  <a href="LICENCE"><img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License"></a>
+  <a href="https://pkg.go.dev/github.com/GuaiZai233/FrostAgent"><img src="https://pkg.go.dev/badge/github.com/GuaiZai233/FrostAgent.svg" alt="Go Reference"></a>
+  <a href="https://codecov.io/gh/GuaiZai233/FrostAgent"><img src="https://codecov.io/gh/GuaiZai233/FrostAgent/branch/main/graph/badge.svg" alt="Codecov Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/GuaiZai233/FrostAgent"><img src="https://api.scorecard.dev/projects/github.com/GuaiZai233/FrostAgent/badge" alt="OpenSSF Scorecard"></a>
 </p>
 
 ## Quick Start
@@ -33,9 +30,14 @@ This project uses the `Makefile` in the repository root to orchestrate the build
 
 ```bash
 pnpm install
-go install github.com/bufbuild/buf/cmd/buf@latest
+go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
+
+CI Actions and Docker base images are pinned to immutable references. Dependabot
+opens weekly update PRs; review and merge them regularly so pinned versions do not
+become stale. See [dependency maintenance](.github/dependency-maintenance.md) for
+the Go tool versions and update checks.
 
 ### 2. Choose a Database
 
@@ -65,6 +67,11 @@ Start the service using `./bin/app` instead of `go run ./cmd/app`. This capabili
 docker compose up -d --build
 ```
 
+GHCR retains all versioned releases, the current `main` / `latest` image, and
+the 10 most recent SHA-tagged commit images. Older historical commit images are
+automatically removed. See the [image retention policy](.github/ghcr-retention.md)
+for cleanup previews and recovery.
+
 ## Adapters
 
 ### WebSocket
@@ -90,6 +97,12 @@ Configure communication between AstrBot and the upstream service. Once configure
 **Note:** Disable AstrBot's built-in LLM functionality.
 
 ## Additional Features
+
+### Per-group Proactive Reply Probability
+
+In **Bot Server Settings → Proactive Replies**, click an added group's name to set its own trigger probability. A small box beside the name shows the override. Confirm the dialog, then save the page to apply it; use the dialog's reset action to inherit the shared probability again.
+
+Negative or invalid input becomes `0.01`, values above `1` become `1`, and `0` disables proactive replies for that group. Unconfigured groups use the shared probability. The master switch and whitelist still apply, while explicit wake-ups are unaffected. Removing a group also removes its probability override.
 
 ### Integration with ActionsCat
 

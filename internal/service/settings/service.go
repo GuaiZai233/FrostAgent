@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"maps"
 	"math"
@@ -56,6 +57,7 @@ var knownEnvVars = map[string]envEntry{
 	"PROACTIVE_REPLY_PROBABILITY":          {"主动回复触发概率（0.01~1.00，0 为关闭）", false, false, false},
 	"ENABLE_PROACTIVE_REPLY":               {"是否启用主动回复", false, false, false},
 	"PROACTIVE_REPLY_GROUP_WHITELIST":      {"主动回复允许的群号白名单，多个群号以英文逗号分隔", false, false, false},
+	proactive.EnvGroupProbabilities:        {"各群主动回复概率覆盖（JSON 对象，未配置的群使用统一概率）", false, false, false},
 	"ENABLE_PROACTIVE_REPLY_WHITELIST":     {"是否启用主动回复群聊白名单模式", false, false, false},
 	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
 	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
@@ -671,6 +673,11 @@ func validateUpdate(key, value string) error {
 	}
 	if key == "ENABLE_EMBEDDING" && value != "true" && value != "false" {
 		return errors.New("启用 Embedding 必须为 true 或 false")
+	}
+	if key == proactive.EnvGroupProbabilities {
+		if _, err := proactive.ParseGroupProbabilities(value); err != nil {
+			return err
+		}
 	}
 
 	if key == "ENABLE_POKE" && value != "" && value != "true" && value != "false" {

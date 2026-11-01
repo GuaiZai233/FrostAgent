@@ -125,27 +125,33 @@ func TestFormatDialoguePrompt(t *testing.T) {
 }
 
 func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
-	// Locate eval/dialogue/dialogue.yml relative to test directory
-	path := filepath.Join("..", "..", "eval", "dialogue", "dialogue.yml")
+	path := filepath.Join(t.TempDir(), "dialogue.yml")
+	const fixture = `- id: 1
+  user: |
+    示例问题一
+  preferred: |
+    示例回答一
+
+- id: 2
+  user: |
+    示例问题二
+  preferred: |
+    示例回答二
+`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatalf("write dialogue fixture: %v", err)
+	}
+
 	prompt, err := LoadDialoguePrompt(path)
 	if err != nil {
 		t.Fatalf("LoadDialoguePrompt failed: %v", err)
 	}
 
-	if !strings.Contains(prompt, DefaultDialogueInstruction) {
-		t.Errorf("prompt missing default instruction")
-	}
-	if !strings.Contains(prompt, "你不觉得草迪拉熊很神圣吗") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "老公") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "宝宝 你身上好香") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
-	}
-	if !strings.Contains(prompt, "越来越没耐心怎么办") {
-		t.Errorf("prompt missing dialogue content: %q", prompt)
+	want := DefaultDialogueInstruction +
+		"\n\nUser: 示例问题一\nAssistant: 示例回答一" +
+		"\n\nUser: 示例问题二\nAssistant: 示例回答二"
+	if prompt != want {
+		t.Errorf("unexpected prompt:\ngot:  %q\nwant: %q", prompt, want)
 	}
 }
 

@@ -23,6 +23,10 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
   <a href="LICENCE">
     <img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License">
   </a>
+  <a href="https://pkg.go.dev/github.com/GuaiZai233/FrostAgent"><img src="https://pkg.go.dev/badge/github.com/GuaiZai233/FrostAgent.svg" alt="Go Reference"></a>
+  <a href="https://codecov.io/gh/GuaiZai233/FrostAgent"><img src="https://codecov.io/gh/GuaiZai233/FrostAgent/branch/main/graph/badge.svg" alt="测试覆盖率"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/GuaiZai233/FrostAgent"><img src="https://api.scorecard.dev/projects/github.com/GuaiZai233/FrostAgent/badge" alt="OpenSSF Scorecard 安全评分"></a>
+  </a>
 </p>
 
 ## 快速开始
@@ -33,9 +37,13 @@ FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框
 
 ```bash
 pnpm install
-go install github.com/bufbuild/buf/cmd/buf@latest
+go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
+
+CI Actions 与 Docker 基础镜像已固定到不可变引用，并由 Dependabot 每周提交更新 PR。
+请定期审查并合并更新，避免固定版本长期失修；Go 工具版本及更新验证方式见
+[依赖维护说明](.github/dependency-maintenance.md)。
 
 ### 2. 选择数据库
 
@@ -57,6 +65,9 @@ Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再�
 docker compose up -d --build
 ```
 
+GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
+更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。
+
 
 ## 适配器
 
@@ -71,6 +82,12 @@ docker compose up -d --build
 可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 附加功能
+### 按群配置主动回复概率
+
+在「Bot 服务端设置 → 主动回复」中，点击已添加的群聊名称即可单独输入触发概率，群名后的小方框会显示已配置的概率。弹框确认后，点击页面上方「保存」生效；可在弹框内「恢复统一概率」。
+
+负数或非法输入自动设为 `0.01`，大于 `1` 自动设为 `1`，`0` 表示该群不触发主动回复。未单独配置的群沿用统一概率，总开关和白名单限制仍然适用；正常被唤醒的回复不受单群概率影响。移除群聊时会一并移除其概率覆盖。
+
 ### 与 ActionsCat 协同
 
 [ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
