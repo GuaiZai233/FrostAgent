@@ -74,6 +74,22 @@ func (d *DB) validateCoreConstraints(ctx context.Context, q schemaReader, table 
 			return fmt.Errorf("table %s has unrecognized primary key or nullability", table)
 		}
 	}
+	if d.Backend == Postgres {
+		// Matching key columns are insufficient: PostgreSQL cannot use a
+		// deferrable PRIMARY KEY or UNIQUE as an ON CONFLICT arbiter, even
+		// when the constraint is INITIALLY IMMEDIATE. All v14 keys are immediate.
+		var deferrable bool
+		if err := q.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_constraint
+			WHERE conrelid = pg_catalog.to_regclass($1)
+			AND contype IN ('p', 'u') AND condeferrable
+		)`, table).Scan(&deferrable); err != nil {
+			return err
+		}
+		if deferrable {
+			return fmt.Errorf("table %s has unrecognized deferrable primary or unique constraints", table)
+		}
+	}
 	keys, err := d.tableForeignKeys(ctx, q, table)
 	if err != nil {
 		return err

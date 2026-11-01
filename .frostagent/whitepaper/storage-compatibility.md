@@ -22,6 +22,7 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 下限是迁移作者需要维护并通过测试证明的契约，不是数据库能自动推导的结论。新增表、列或 JSON 键，不天然意味着兼容：
 
 - 当前模型目录、MCP、表情包及部分记忆存储仍有删除再插入的写入路径。因此兼容模式保守地拒绝已知核心表的额外列、列类型/主键/非空/唯一约束变化、外键变化、未知 `CHECK` 约束，以及未知触发器。必须先让旧写入器保留新增数据，才能放宽这类变化。v14 核心表没有 `CHECK`；即使只是增加 `CHECK (enabled = 1)`，也会阻止旧程序正常创建或停用实例。PostgreSQL 从约束目录检查，SQLite 从建表语句识别约束关键字并跳过注释和引用内容；不会将字符串里的 `CHECK` 当成约束。数据库选择表 `storage_selection` 的已有检查不属于核心表检查范围，不受影响。
+- PostgreSQL 核心主键和唯一约束还必须保持 `NOT DEFERRABLE`。即使键列没有变化，`DEFERRABLE` 也不能作为 `ON CONFLICT` 的冲突判定约束，`INITIALLY IMMEDIATE` 并不能消除这个限制。例如把 `counters(key)` 的主键改为可延迟约束，会使现有实例创建事务中的计数器 UPSERT 失败。启动检查读取 `pg_constraint.condeferrable`，拒绝核心表的这类变更；不重建约束、不改数据，也不把此限制施加到不受旧写入器管理的独立扩展表。
 - 独立扩展表不能通过外键依赖会被旧代码重建的核心行；否则一次普通保存就可能级联删除新版数据。只依赖 `instances` 的扩展表可保留，但完整实例生命周期受下节保护。
 - PostgreSQL 的外键检查包含其他 schema 对当前写入器可变表的入站依赖，不限于当前 schema 的表清单。被引用表按写入器实际解析到的关系 OID 匹配，其他 schema 中的同名独立表不会被误拒；外部同名 `memory_embeddings` 也不能冒用原生缓存关联豁免。检查包含当前 schema 引用 `search_path` 后续 schema 中可变缓存的反向情形，不能假设写入目标总在第一个 schema。无论外键使用级联、置空还是限制删除，均可能改变未知数据或阻断旧写入器，必须拒绝。该检查不枚举或重写外部业务数据，不扩大历史 v15 的表白名单；未标记 v15 也必须先通过检查才能回填兼容字段。
 - 已有列的含义、合法枚举和 JSON 结构也属于契约。例如新增全局设置键或模型路由 workload 可能被旧校验拒绝；给记忆目录或合并归档的固定结构 JSON 增加字段，可能在旧程序反序列化后重写时丢失。此类变更必须提高下限，或先发布能保留未知字段的旧写入器。
@@ -47,6 +48,8 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 `internal/storage/compatibility_embedding_test.go` 独立构造缓存表的真实复合主键和外键，使用文本向量载荷以便在未启用 pgvector 的迁移测试阶段运行。它先在回滚事务内证明缓存删除会级联删除扩展数据，再验证拒绝启动且全库元数据和行值不变；正常 v15/v16 缓存布局仍可打开，大小写外键名称也不能绕过检查。
 
 `internal/storage/compatibility_cross_schema_test.go` 使用独立 PostgreSQL schema 覆盖跨 schema 的核心表与缓存外键、外部同名缓存表、`search_path` 后续 schema 中的缓存目标、原始 v15 回填保护，以及无关同名表和仅引用实例的合法布局；快照同时检查当前 schema 与外部 schema 的行值和约束，确认拒绝打开不修改任何一侧。
+
+`internal/storage/compatibility_deferrable_test.go` 覆盖主键、非主键唯一约束的 `INITIALLY DEFERRED` / `INITIALLY IMMEDIATE` 变化，以及原始 v15 拒绝后不回填。主键场景通过真实 `CreateInstance` 复现失败并验证整个事务回滚；非主键场景通过直接 UPSERT 探针验证约束限制。拒绝启动前后比较行、列类型和约束定义；普通不可延迟约束与独立扩展表保持可用。
 
 PostgreSQL 迁移 CI 为真实数据库测试生成并上传独立覆盖率报告，与普通 Go 测试报告合并；否则只在 PostgreSQL 执行的兼容检查会被错误计为未覆盖。该报告不替代普通测试，也不降低覆盖率门槛。
 
