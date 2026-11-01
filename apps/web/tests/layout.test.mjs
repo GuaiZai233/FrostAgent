@@ -140,7 +140,7 @@ for (const removedSampleToken of [
 }
 assert.match(
   promptPage,
-  /<h3 class="text-sm font-semibold text-foreground mb-1">请选择群聊会话<\/h3>\s*<p class="text-xs max-w-sm mb-4">从左侧选择/,
+  /<h3 class="text-sm font-semibold text-foreground mb-1">请选择会话<\/h3>\s*<p class="text-xs max-w-sm mb-4">从左侧选择/,
   'prompt page empty state must retain its session-selection guidance',
 );
 
