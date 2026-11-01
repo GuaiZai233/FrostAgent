@@ -151,6 +151,37 @@ func TestLoadDialoguePrompt_FixtureFile(t *testing.T) {
 	}
 }
 
+func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dialogue.yml")
+	const fixture = `- id: 1
+  user: |
+    示例问题一
+  preferred: |
+    示例回答一
+
+- id: 2
+  user: |
+    示例问题二
+  preferred: |
+    示例回答二
+`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatalf("write dialogue fixture: %v", err)
+	}
+
+	prompt, err := LoadDialoguePrompt(path)
+	if err != nil {
+		t.Fatalf("LoadDialoguePrompt failed: %v", err)
+	}
+
+	want := DefaultDialogueInstruction +
+		"\n\nUser: 示例问题一\nAssistant: 示例回答一" +
+		"\n\nUser: 示例问题二\nAssistant: 示例回答二"
+	if prompt != want {
+		t.Errorf("unexpected prompt:\ngot:  %q\nwant: %q", prompt, want)
+	}
+}
+
 func TestLoadDialoguePrompt_NonExistentFile(t *testing.T) {
 	_, err := LoadDialoguePrompt("non_existent_file.yml")
 	if err == nil {
