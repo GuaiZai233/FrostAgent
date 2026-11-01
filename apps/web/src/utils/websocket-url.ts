@@ -15,7 +15,7 @@ export function instanceWebSocketURL(
   pageOrigin: string,
   query?: string,
 ): string {
-  const configured = listenAddress.trim() || '127.0.0.1:1234';
+  const configured = listenAddress.trim() || '127.0.0.1:1023';
   const explicitScheme = /^wss?:\/\//i.test(configured);
   const parsed = new URL(
     explicitScheme

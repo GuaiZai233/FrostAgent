@@ -90,7 +90,7 @@ You can connect to FrostAgent using the [astrbot_plugin_frostagent](adapters/ast
 
 The default FrostAgent WebSocket endpoint is:
 
-`ws://127.0.0.1:1234/instances/<instance-id>/ws/astrbot`
+`ws://127.0.0.1:1023/instances/<instance-id>/ws/astrbot`
 
 Configure communication between AstrBot and the upstream service. Once configured, FrostAgent can take over message handling.
 

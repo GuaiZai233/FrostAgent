@@ -38,7 +38,7 @@ COPY cmd/app ./cmd/app
 COPY internal ./internal
 COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
-ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:1234
+ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:1023
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8080 -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
@@ -54,6 +54,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
 USER 10001:10001
-EXPOSE 1234
+EXPOSE 1023
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/frostagent"]

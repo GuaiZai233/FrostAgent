@@ -69,7 +69,7 @@ func TestGetOverviewUsesEffectiveInstanceAndControlPlaneSettings(t *testing.T) {
 			}
 			wantWSAddress := tt.effectiveWSAddress
 			if wantWSAddress == "" {
-				wantWSAddress = "127.0.0.1:1234"
+				wantWSAddress = "127.0.0.1:1023"
 			}
 			if response.Msg.GetWsListenAddr() != wantWSAddress {
 				t.Fatalf("WS address = %q, want %q", response.Msg.GetWsListenAddr(), wantWSAddress)

@@ -42,7 +42,7 @@ jobs:
           context: .
           load: true
           tags: frostagent:host
-          build-args: DOCKER_WS_LISTEN_ADDR=127.0.0.1:1234
+          build-args: DOCKER_WS_LISTEN_ADDR=127.0.0.1:1023
           cache-from: type=gha
       - name: Test Compose deployment
         run: python3 scripts/docker-smoke.py --host-network

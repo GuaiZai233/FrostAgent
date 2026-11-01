@@ -4,7 +4,7 @@
 
 ## 配置说明
 
-先在 FrostAgent 控制台创建并启用实例，再从该实例的概览复制 AstrBot WebSocket 地址（例如 `ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；插件不再提供不带实例 ID 的默认地址，缺失或填写旧版 `/ws/astrbot` 地址时会直接报错。
+先在 FrostAgent 控制台创建并启用实例，再从该实例的概览复制 AstrBot WebSocket 地址（例如 `ws://127.0.0.1:1023/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；插件不再提供不带实例 ID 的默认地址，缺失或填写旧版 `/ws/astrbot` 地址时会直接报错。
 
 在 AstrBot Web 控制台中配置插件参数：
 
