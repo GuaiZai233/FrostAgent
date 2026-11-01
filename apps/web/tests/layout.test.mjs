@@ -16,6 +16,8 @@ const overview = await readFile(
   new URL('../src/pages/overview.ts', import.meta.url),
   'utf8',
 );
+assert.doesNotMatch(overview, /v\$\{escapeHtml\(version\)\}/, 'source revisions must not get a version prefix');
+assert.match(overview, /\$\{escapeHtml\(version\)\}/, 'overview must render the backend build identity');
 const chat = await readFile(
   new URL('../src/pages/chat.ts', import.meta.url),
   'utf8',
