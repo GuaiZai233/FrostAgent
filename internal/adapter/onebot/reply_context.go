@@ -532,15 +532,16 @@ func (c *wsConnection) loadObservedImage(
 	return imageDataFromSegments(ctx, resolved.Segments, imageIndex)
 }
 
+// imageSourcesFromSegments returns one slot per image/mface segment, including
+// segments whose source is unreadable. Keeping unreadable slots preserves the
+// model-visible ordinal so image_index always refers to the same placeholder.
 func imageSourcesFromSegments(segments []content.MessageSegment) []string {
 	var sources []string
 	for _, seg := range segments {
 		if seg.Type != "image" && seg.Type != "mface" {
 			continue
 		}
-		if source := content.SegmentImageSource(seg); source != "" {
-			sources = append(sources, source)
-		}
+		sources = append(sources, content.SegmentImageSource(seg))
 	}
 	return sources
 }
@@ -550,7 +551,11 @@ func imageDataFromSegments(ctx context.Context, segments []content.MessageSegmen
 	if imageIndex < 0 || imageIndex >= len(sources) {
 		return nil, fmt.Errorf("image index %d is unavailable", imageIndex)
 	}
-	return sticker.LoadImageSource(ctx, sources[imageIndex])
+	source := strings.TrimSpace(sources[imageIndex])
+	if source == "" {
+		return nil, fmt.Errorf("image index %d has no readable source", imageIndex)
+	}
+	return sticker.LoadImageSource(ctx, source)
 }
 
 func (r *resolvedReplyContext) addImageDescription(description string, scopes ...*runtimescope.Scope) {

@@ -2,10 +2,12 @@ package llm
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
+
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
-	"sync"
 )
 
 // BillingRunState tracks request-level billing context and accumulates consumption across tool loop iterations.
@@ -45,21 +47,25 @@ type RunContext struct {
 	// LoadObservedImage resolves a trusted image attachment from a message that
 	// the adapter observed in the current session. The adapter enforces message
 	// ownership; the model only supplies an opaque message ID and image index.
-	LoadObservedImage func(context.Context, string, int) ([]byte, error)
-	ObservationScope  string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
-	Billing           *BillingRunState
-	RouteScope        modelrouter.Scope
-	RouteSnapshot     *modelrouter.Snapshot
-	SecurityNotice    string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
-	Mock              bool   // Mock / ephemeral session: do not write to persistent memory or group summary
-	Proactive         bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
-	Epoch             uint64
+	LoadObservedImage    func(context.Context, string, int) ([]byte, error)
+	ImageInspectionQuota *atomic.Int32 // Per-request image inspection budget shared by tool calls.
+	ObservationScope     string        // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
+	Billing              *BillingRunState
+	RouteScope           modelrouter.Scope
+	RouteSnapshot        *modelrouter.Snapshot
+	SecurityNotice       string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
+	Mock                 bool   // Mock / ephemeral session: do not write to persistent memory or group summary
+	Proactive            bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
+	Epoch                uint64
 }
 
 type runContextKey struct{}
 
 func withRunContext(ctx context.Context, runContext RunContext) context.Context {
 	runContext.OwnerType = memory.NormalizeOwnerType(runContext.OwnerType)
+	if runContext.ImageInspectionQuota == nil {
+		runContext.ImageInspectionQuota = new(atomic.Int32)
+	}
 	return context.WithValue(ctx, runContextKey{}, runContext)
 }
 

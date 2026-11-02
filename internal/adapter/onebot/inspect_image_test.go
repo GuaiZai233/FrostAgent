@@ -96,6 +96,31 @@ func TestLoadObservedImageSelectsImageIndexAndRejectsUnusableIDs(t *testing.T) {
 	}
 }
 
+func TestLoadObservedImageCountsUnreadableImageSlots(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	conn := newWSConnection(nil)
+	event := model.OneBotEvent{MessageType: "group", GroupID: 42, UserID: 10001, MessageID: 500}
+	segments := []content.MessageSegment{
+		// The first model-visible [图片] has no readable source; it must still
+		// occupy index 0 instead of shifting the second image into its place.
+		{Type: "image", Data: map[string]any{}},
+		{Type: "image", Data: map[string]any{"base64": base64.StdEncoding.EncodeToString(readable)}},
+	}
+
+	if _, err := conn.loadObservedImage(context.Background(), event, resolvedReplyContext{}, segments, "500", 0); err == nil ||
+		!strings.Contains(err.Error(), "no readable source") {
+		t.Fatalf("unexpected unreadable image index error: %v", err)
+	}
+
+	data, err := conn.loadObservedImage(context.Background(), event, resolvedReplyContext{}, segments, "500", 1)
+	if err != nil {
+		t.Fatalf("load second image: %v", err)
+	}
+	if string(data) != string(readable) {
+		t.Fatalf("image index 1 loaded %q, want %q", data, readable)
+	}
+}
+
 func TestWSInspectMessageImageUsesGetMsgAndVision(t *testing.T) {
 	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x03}
 	visionProvider := &mockLLMProvider{responses: []*core.ChatResponse{{

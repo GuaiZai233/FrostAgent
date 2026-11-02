@@ -88,8 +88,9 @@ func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
 			{Type: core.AttachmentTypeImage, Content: quotedImage, MessageID: "msg_quoted"},
 		},
 	}
+	trusted := map[string]struct{}{"msg_current": {}, "msg_quoted": {}}
 
-	data, err := loadObservedImageFromEvent(context.Background(), event, "msg_current", 1)
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
 	if err != nil {
 		t.Fatalf("load second image: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
 		t.Fatalf("image index 1 loaded %q, want %q", data, secondImage)
 	}
 
-	data, err = loadObservedImageFromEvent(context.Background(), event, "msg_quoted", 0)
+	data, err = loadObservedImageFromEvent(context.Background(), event, trusted, "msg_quoted", 0)
 	if err != nil {
 		t.Fatalf("load quoted image: %v", err)
 	}
@@ -105,14 +106,40 @@ func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
 		t.Fatalf("quoted image loaded %q, want %q", data, quotedImage)
 	}
 
-	if _, err := loadObservedImageFromEvent(context.Background(), event, "msg_current", 2); err == nil {
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2); err == nil {
 		t.Fatal("expected out-of-range image index error")
 	}
-	if _, err := loadObservedImageFromEvent(context.Background(), event, "msg_unknown", 0); err == nil {
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_unknown", 0); err == nil {
 		t.Fatal("expected unknown message error")
 	}
-	if _, err := loadObservedImageFromEvent(context.Background(), event, "", 0); err == nil {
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "", 0); err == nil {
 		t.Fatal("expected empty message_id error")
+	}
+}
+
+func TestLoadObservedImageFromEventRejectsUnvalidatedQuotedAttachment(t *testing.T) {
+	// The plugin may forward a Reply.chain image under a quoted message ID even
+	// when the quote belongs to another group. Only IDs produced by the
+	// adapter's same-session quote validation are authorized.
+	foreignImage := []byte("GIF89a foreign")
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: foreignImage, MessageID: "msg_foreign"},
+		},
+	}
+	onlyCurrent := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, onlyCurrent, "msg_foreign", 0); err == nil {
+		t.Fatal("unvalidated quoted attachment must not be exposed to the image tool")
+	}
+
+	validated := trustedQuotedMessageIDs([]astrBotQuoteNode{{
+		Context: map[string]any{"message_id": "msg_foreign"},
+	}}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, validated, "msg_foreign", 0); err != nil {
+		t.Fatalf("validated quoted attachment should be readable: %v", err)
 	}
 }
 

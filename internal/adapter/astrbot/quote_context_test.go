@@ -121,6 +121,22 @@ func TestParseAstrBotQuoteRejectsOtherGroup(t *testing.T) {
 	}
 }
 
+func TestTrustedQuotedMessageIDsExcludesRejectedCrossGroupQuote(t *testing.T) {
+	event := Event{MessageID: "msg_current", MessageType: "group", GroupID: "101"}
+	data := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"202","user_id":1,"message":[{"type":"image","data":{}}]}`)
+	if _, ok := parseAstrBotQuote(event, "44", data); ok {
+		t.Fatal("cross-group quote was accepted")
+	}
+
+	trusted := trustedQuotedMessageIDs(nil, event)
+	if _, ok := trusted["44"]; ok {
+		t.Fatal("rejected cross-group quote ID was authorized for image inspection")
+	}
+	if _, ok := trusted["msg_current"]; !ok {
+		t.Fatal("current event message ID must always be authorized")
+	}
+}
+
 func TestParseAstrBotQuoteRejectsGroupMessageInPrivate(t *testing.T) {
 	event := Event{MessageType: "private", UserID: "77"}
 	data, _ := json.Marshal(map[string]any{

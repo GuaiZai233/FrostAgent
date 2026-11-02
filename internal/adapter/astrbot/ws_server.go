@@ -847,6 +847,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	// Quote lookups occur only after ingress security and reply routing.
 	quoteChain, allowDirectFallback := conn.lookupQuoteChain(event)
+	// Only IDs validated by parseAstrBotQuote may be inspected by tools. The
+	// direct fallback is deliberately excluded: it lacks group/peer validation.
+	trustedQuoteIDs := trustedQuotedMessageIDs(quoteChain, event)
 	directQuote := directQuotedImageChain(event)
 	if len(quoteChain) == 0 && allowDirectFallback {
 		quoteChain = directQuote
@@ -1333,7 +1336,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
-				return loadObservedImageFromEvent(ctx, event, messageID, imageIndex)
+				return loadObservedImageFromEvent(ctx, event, trustedQuoteIDs, messageID, imageIndex)
 			},
 			Billing:       billingState,
 			RouteScope:    routeScope,

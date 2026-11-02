@@ -114,12 +114,16 @@ func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, er
 }
 
 // loadObservedImageFromEvent resolves any image attachment that the adapter
-// received for the selected message. Attachments are adapter-trusted; the model
-// only chooses an opaque message ID and image index.
-func loadObservedImageFromEvent(ctx context.Context, event Event, messageID string, imageIndex int) ([]byte, error) {
+// received for the selected message. Only the current event message and quoted
+// IDs that passed the adapter's same-session quote validation are authorized;
+// the model only chooses an opaque message ID and image index.
+func loadObservedImageFromEvent(ctx context.Context, event Event, trustedMessageIDs map[string]struct{}, messageID string, imageIndex int) ([]byte, error) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" || imageIndex < 0 {
 		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+	if _, authorized := trustedMessageIDs[messageID]; !authorized {
+		return nil, fmt.Errorf("message %s is not authorized for image inspection", messageID)
 	}
 	matchedIndex := 0
 	for _, att := range event.Attachments {
