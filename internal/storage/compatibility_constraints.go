@@ -89,6 +89,19 @@ func (d *DB) validateCoreConstraints(ctx context.Context, q schemaReader, table 
 		if deferrable {
 			return fmt.Errorf("table %s has unrecognized deferrable primary or unique constraints", table)
 		}
+		// Exclusion indexes need not be unique, so tableUniqueKeys cannot
+		// detect them. No v14 core table has an exclusion constraint; adding
+		// one can reject an otherwise valid INSERT, UPDATE or transaction.
+		var exclusion bool
+		if err := q.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_constraint
+			WHERE conrelid = pg_catalog.to_regclass($1) AND contype = 'x'
+		)`, table).Scan(&exclusion); err != nil {
+			return err
+		}
+		if exclusion {
+			return fmt.Errorf("table %s has unrecognized exclusion constraints", table)
+		}
 	}
 	keys, err := d.tableForeignKeys(ctx, q, table)
 	if err != nil {

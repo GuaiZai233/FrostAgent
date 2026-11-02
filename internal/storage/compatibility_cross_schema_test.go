@@ -276,5 +276,25 @@ func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+	rows.Close()
+	triggers, err := db.Query(`SELECT r.relname, t.tgname, t.tgenabled,
+		pg_catalog.pg_get_triggerdef(t.oid), pg_catalog.pg_get_functiondef(t.tgfoid)
+		FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class r ON r.oid = t.tgrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+		WHERE n.nspname = current_schema() AND NOT t.tgisinternal ORDER BY r.relname, t.tgname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer triggers.Close()
+	for triggers.Next() {
+		var table, name, enabled, definition, function string
+		if err := triggers.Scan(&table, &name, &enabled, &definition, &function); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":triggers"] = append(snapshot[table+":triggers"], name+":"+enabled+":"+definition+":"+function)
+	}
+	if err := triggers.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return snapshot
 }

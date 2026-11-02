@@ -301,11 +301,25 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		}
 	}
 	triggerQuery := `SELECT count(*) FROM sqlite_master WHERE type = 'trigger'`
+	var triggerArgs []any
 	if d.Backend == Postgres {
-		triggerQuery = `SELECT count(*) FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal AND n.nspname = current_schema()`
+		// Preserve the active-schema guard, and also inspect actual writer
+		// targets resolved in later schemas. Relation OIDs avoid confusing an
+		// unrelated same-name table with the one an unqualified write uses.
+		targets := []string{"schema_meta", "memory_embedding_scopes", "memory_embeddings"}
+		for table := range compatibleCoreColumns {
+			targets = append(targets, table)
+		}
+		references, args := postgresRelationReferences(targets)
+		triggerArgs = args
+		triggerQuery = `SELECT count(*) FROM pg_catalog.pg_trigger t
+			JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE NOT t.tgisinternal AND (n.nspname = current_schema()
+			OR t.tgrelid IN (` + references + `))`
 	}
 	var triggers int
-	if err := q.QueryRowContext(ctx, triggerQuery).Scan(&triggers); err != nil {
+	if err := q.QueryRowContext(ctx, triggerQuery, triggerArgs...).Scan(&triggers); err != nil {
 		return err
 	}
 	if triggers != 0 {
@@ -356,13 +370,7 @@ func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) 
 			targets = append(targets, table)
 		}
 	}
-	sort.Strings(targets)
-	references := make([]string, len(targets))
-	args := make([]any, len(targets))
-	for i, table := range targets {
-		references[i] = fmt.Sprintf("pg_catalog.to_regclass($%d)", i+1)
-		args[i] = table
-	}
+	references, args := postgresRelationReferences(targets)
 	// Do not filter by FK action: cascades can mutate unknown data, while
 	// restrictive actions can prevent normal writes. The native cache exemption
 	// never applies to a table in another schema, even if it has the same name.
@@ -375,7 +383,7 @@ func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) 
 		JOIN pg_catalog.pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
 		WHERE c.contype = 'f'
 		AND (child_ns.nspname <> current_schema() OR parent_ns.nspname <> current_schema())
-		AND c.confrelid IN (` + strings.Join(references, ", ") + `)
+		AND c.confrelid IN (` + references + `)
 		ORDER BY child_ns.nspname, child.relname, c.conname LIMIT 1`
 	var child, parent string
 	err := q.QueryRowContext(ctx, query, args...).Scan(&child, &parent)
@@ -386,6 +394,17 @@ func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) 
 		return err
 	}
 	return fmt.Errorf("extension table %s references mutable table %s; a newer program is required", child, parent)
+}
+
+func postgresRelationReferences(tables []string) (string, []any) {
+	sort.Strings(tables)
+	references := make([]string, len(tables))
+	args := make([]any, len(tables))
+	for i, table := range tables {
+		references[i] = fmt.Sprintf("pg_catalog.to_regclass($%d)", i+1)
+		args[i] = table
+	}
+	return strings.Join(references, ", "), args
 }
 
 func (d *DB) schemaTables(ctx context.Context, q schemaReader) ([]string, error) {
