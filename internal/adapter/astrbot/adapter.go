@@ -380,6 +380,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 			event = normalized
 		}
+		if handleRuntimeStatusCommand(c, event, a.engine) {
+			continue
+		}
 		if !c.mock && (event.Type == "" || event.Type == "event") &&
 			(event.EventType == "" || event.EventType == "message") &&
 			(event.MessageType == "group" || event.MessageType == "private") {

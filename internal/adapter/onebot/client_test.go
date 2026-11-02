@@ -42,6 +42,7 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "synthetic-answer"}}}}
 	engine := newTestEngine(provider)
 	engine.Scope = runtimescope.New(nil, nil, nil)
+	engine.Version = "synthetic-forward-version"
 	adapter := NewAdapter(engine)
 	adapter.ConfigureConnection(wsclient.Config{Mode: wsclient.Forward, URL: "ws" + strings.TrimPrefix(server.URL, "http"), Token: "synthetic-onebot-token"})
 	done := make(chan struct{})
@@ -60,6 +61,20 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 	}
 	defer peer.Close()
 	_ = peer.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := peer.WriteJSON(runtimeStatusEvent()); err != nil {
+		t.Fatal(err)
+	}
+	var status model.OneBotAction
+	if err := peer.ReadJSON(&status); err != nil {
+		t.Fatal(err)
+	}
+	statusParams, _ := json.Marshal(status.Params)
+	if status.Action != "send_group_msg" || !strings.Contains(string(statusParams), engine.Version) {
+		t.Fatalf("forward connection lost runtime status command: %+v", status)
+	}
+	if engine.SessionManager.Count() != 0 {
+		t.Fatal("forward runtime status command created a conversation session")
+	}
 	// Small identifiers below are synthetic protocol fixtures, not user accounts.
 	event := model.OneBotEvent{PostType: "message", MessageType: "private", SelfID: 11, UserID: 22, MessageID: 33,
 		Message: json.RawMessage(`[{"type":"text","data":{"text":"synthetic-question"}}]`)}

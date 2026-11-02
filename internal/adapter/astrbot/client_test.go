@@ -40,6 +40,7 @@ func TestAstrBotForwardConnectionRoundTripAndClose(t *testing.T) {
 	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "synthetic-answer"}}}}
 	engine := newTestEngine(provider)
 	engine.Scope = runtimescope.New(nil, nil, nil)
+	engine.Version = "synthetic-forward-version"
 	adapter := NewAdapter(engine)
 	adapter.ConfigureConnection(wsclient.Config{Mode: wsclient.Forward, URL: "ws" + strings.TrimPrefix(server.URL, "http"), Token: "synthetic-astrbot-token"})
 	done := make(chan struct{})
@@ -58,6 +59,21 @@ func TestAstrBotForwardConnectionRoundTripAndClose(t *testing.T) {
 	}
 	defer peer.Close()
 	_ = peer.SetReadDeadline(time.Now().Add(3 * time.Second))
+	statusEvent := runtimeStatusEvent()
+	if err := peer.WriteJSON(statusEvent); err != nil {
+		t.Fatal(err)
+	}
+	var status Action
+	if err := peer.ReadJSON(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Action != "send_message" || !status.SuppressLLM || status.GroupID != statusEvent.GroupID ||
+		!strings.Contains(status.Content, engine.Version) {
+		t.Fatalf("forward connection lost runtime status command: %+v", status)
+	}
+	if engine.SessionManager.Count() != 0 {
+		t.Fatal("forward runtime status command created a conversation session")
+	}
 	event := Event{Type: "event", EventType: "message", MessageType: "private", UserID: "synthetic-user", MessageID: "synthetic-message",
 		Platform: "astrbot", Content: "synthetic-question"}
 	if err := peer.WriteJSON(event); err != nil {

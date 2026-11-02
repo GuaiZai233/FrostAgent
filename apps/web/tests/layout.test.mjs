@@ -20,6 +20,8 @@ const connections = await readFile(
   new URL('../src/pages/connections.ts', import.meta.url),
   'utf8',
 );
+assert.doesNotMatch(overview, /v\$\{escapeHtml\(version\)\}/, 'source revisions must not get a version prefix');
+assert.match(overview, /\$\{escapeHtml\(version\)\}/, 'overview must render the backend build identity');
 const chat = await readFile(
   new URL('../src/pages/chat.ts', import.meta.url),
   'utf8',
@@ -137,7 +139,7 @@ for (const removedSampleToken of [
 }
 assert.match(
   promptPage,
-  /<h3 class="text-sm font-semibold text-foreground mb-1">请选择群聊会话<\/h3>\s*<p class="text-xs max-w-sm mb-4">从左侧选择/,
+  /<h3 class="text-sm font-semibold text-foreground mb-1">请选择会话<\/h3>\s*<p class="text-xs max-w-sm mb-4">从左侧选择/,
   'prompt page empty state must retain its session-selection guidance',
 );
 
