@@ -158,13 +158,16 @@ type schemaColumn struct {
 	notNull    bool
 	primary    int
 	defaultSQL sql.NullString
+	generated  string
+	identity   string
 }
 
 func (d *DB) tableColumns(ctx context.Context, q schemaReader, table string) ([]schemaColumn, error) {
-	query := `SELECT name, lower(type), "notnull", pk, dflt_value FROM pragma_table_info(?) ORDER BY cid`
+	query := `SELECT name, lower(type), "notnull", pk, dflt_value, '', '' FROM pragma_table_info(?) ORDER BY cid`
 	if d.Backend == Postgres {
 		query = `SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
-			COALESCE(array_position(c.conkey, a.attnum), 0), pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+			COALESCE(array_position(c.conkey, a.attnum), 0), pg_catalog.pg_get_expr(d.adbin, d.adrelid),
+			a.attgenerated, a.attidentity
 			FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_constraint c
 			ON c.conrelid = a.attrelid AND c.contype = 'p'
 			LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -178,7 +181,8 @@ func (d *DB) tableColumns(ctx context.Context, q schemaReader, table string) ([]
 	var columns []schemaColumn
 	for rows.Next() {
 		var column schemaColumn
-		if err := rows.Scan(&column.name, &column.kind, &column.notNull, &column.primary, &column.defaultSQL); err != nil {
+		if err := rows.Scan(&column.name, &column.kind, &column.notNull, &column.primary, &column.defaultSQL,
+			&column.generated, &column.identity); err != nil {
 			return nil, err
 		}
 		columns = append(columns, column)
@@ -191,16 +195,23 @@ func (d *DB) matchColumns(ctx context.Context, q schemaReader, table, expected s
 	if err != nil {
 		return nil, err
 	}
+	if err := matchColumnLayout(table, columns, expected); err != nil {
+		return nil, err
+	}
+	return columns, nil
+}
+
+func matchColumnLayout(table string, columns []schemaColumn, expected string) error {
 	want := strings.Fields(expected)
 	if len(columns) != len(want) {
-		return nil, fmt.Errorf("table %s has missing or unrecognized columns", table)
+		return fmt.Errorf("table %s has missing or unrecognized columns", table)
 	}
 	for index, column := range columns {
 		if column.name+"="+column.kind != want[index] {
-			return nil, fmt.Errorf("table %s column %s does not match the supported layout", table, column.name)
+			return fmt.Errorf("table %s column %s does not match the supported layout", table, column.name)
 		}
 	}
-	return columns, nil
+	return nil
 }
 
 func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) error {
@@ -298,7 +309,7 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		if err != nil {
 			return err
 		}
-		if err := d.validateCoreConstraints(ctx, q, table, columns); err != nil {
+		if err := d.validateWriterConstraints(ctx, q, table, columns); err != nil {
 			return err
 		}
 	}
@@ -357,6 +368,9 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 			return fmt.Errorf("unrecognized database rewrite rules require a newer program")
 		}
 		if err := validatePostgresCrossSchemaReferences(ctx, q); err != nil {
+			return err
+		}
+		if err := d.validateEmbeddingCacheLayout(ctx, q); err != nil {
 			return err
 		}
 	}

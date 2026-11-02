@@ -336,6 +336,27 @@ func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]
 		t.Fatal(err)
 	}
 	defaults.Close()
+	attributes, err := db.Query(`SELECT c.relname, a.attname, a.attgenerated, a.attidentity,
+		pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull
+		FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND a.attnum > 0 AND NOT a.attisdropped
+		ORDER BY c.relname, a.attnum`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attributes.Close()
+	for attributes.Next() {
+		var table, column, generated, identity, kind, notNull string
+		if err := attributes.Scan(&table, &column, &generated, &identity, &kind, &notNull); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":attributes"] = append(snapshot[table+":attributes"], column+":"+generated+":"+identity+":"+kind+":"+notNull)
+	}
+	if err := attributes.Err(); err != nil {
+		t.Fatal(err)
+	}
+	attributes.Close()
 	security, err := db.Query(`SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
 		FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = current_schema() ORDER BY c.relname`)

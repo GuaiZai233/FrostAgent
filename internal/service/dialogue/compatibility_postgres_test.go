@@ -18,11 +18,23 @@ import (
 )
 
 func TestPostgresDialogueCompatibilityDefaults(t *testing.T) {
+	testPostgresDialogueCompatibilityColumn(t, false)
+}
+
+func TestPostgresDialogueCompatibilityIdentity(t *testing.T) {
+	testPostgresDialogueCompatibilityColumn(t, true)
+}
+
+func testPostgresDialogueCompatibilityColumn(t *testing.T, identity bool) {
 	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
 	if base == "" {
 		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset; CI supplies a disposable database")
 	}
-	for _, column := range []string{"scene", "relation"} {
+	columns := []string{"scene", "relation"}
+	if identity {
+		columns = []string{"position"}
+	}
+	for _, column := range columns {
 		t.Run(column, func(t *testing.T) {
 			parsed, err := url.Parse(base)
 			if err != nil {
@@ -59,9 +71,13 @@ func TestPostgresDialogueCompatibilityDefaults(t *testing.T) {
 			}
 			original := []llm.DialogueExample{{ID: "synthetic-original", User: "original question", Preferred: "original answer"}}
 			if err := SaveExamplesSQL(db, "synthetic-dialogue-instance", original); err != nil {
-				t.Fatalf("native defaults broke the real dialogue writer: %v", err)
+				t.Fatalf("native layout broke the real dialogue writer: %v", err)
 			}
-			if _, err := db.SQL.Exec(`ALTER TABLE dialogues ALTER COLUMN ` + column + ` SET DEFAULT NULL`); err != nil {
+			change, code, diagnostic := " SET DEFAULT NULL", "23502", "default"
+			if identity {
+				change, code, diagnostic = " ADD GENERATED ALWAYS AS IDENTITY", "428C9", "identity"
+			}
+			if _, err := db.SQL.Exec(`ALTER TABLE dialogues ALTER COLUMN ` + column + change); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.SQL.Exec(`UPDATE schema_meta SET version = 16, min_compatible_version = 14 WHERE id = 1`); err != nil {
@@ -70,11 +86,11 @@ func TestPostgresDialogueCompatibilityDefaults(t *testing.T) {
 			before := dialogueCompatibilitySnapshot(t, db.SQL)
 			err = SaveExamplesSQL(db, "synthetic-dialogue-instance", []llm.DialogueExample{{ID: "synthetic-replacement", User: "replacement", Preferred: "replacement"}})
 			var pgError *pgconn.PgError
-			if !errors.As(err, &pgError) || pgError.Code != "23502" || pgError.ColumnName != column {
-				t.Fatalf("changed default did not break the real dialogue writer: %v", err)
+			if !errors.As(err, &pgError) || pgError.Code != code || (!identity && pgError.ColumnName != column) {
+				t.Fatalf("changed column did not break the real dialogue writer: %v", err)
 			}
 			if after := dialogueCompatibilitySnapshot(t, db.SQL); !reflect.DeepEqual(before, after) {
-				t.Fatal("failed dialogue save did not roll back rows, defaults or metadata")
+				t.Fatal("failed dialogue save did not roll back rows, column attributes or metadata")
 			}
 			loaded, err := LoadExamplesSQL(db, "synthetic-dialogue-instance")
 			if err != nil || !reflect.DeepEqual(loaded, original) {
@@ -86,10 +102,10 @@ func TestPostgresDialogueCompatibilityDefaults(t *testing.T) {
 			opened, err := storage.OpenWithConfig(context.Background(), root, config)
 			if err == nil {
 				opened.Close()
-				t.Fatal("startup accepted a default that breaks the real dialogue writer")
+				t.Fatal("startup accepted a column that breaks the real dialogue writer")
 			}
-			if !strings.Contains(err.Error(), "dialogues") || !strings.Contains(err.Error(), column) || !strings.Contains(err.Error(), "default") {
-				t.Fatalf("startup did not identify the incompatible default: %v", err)
+			if !strings.Contains(err.Error(), "dialogues") || !strings.Contains(err.Error(), column) || !strings.Contains(err.Error(), diagnostic) {
+				t.Fatalf("startup did not identify the incompatible column: %v", err)
 			}
 			probe, err := sql.Open("pgx", config.DSN)
 			if err != nil {
@@ -97,7 +113,7 @@ func TestPostgresDialogueCompatibilityDefaults(t *testing.T) {
 			}
 			defer probe.Close()
 			if after := dialogueCompatibilitySnapshot(t, probe); !reflect.DeepEqual(before, after) {
-				t.Fatal("rejected startup changed original examples, defaults or metadata")
+				t.Fatal("rejected startup changed original examples, column attributes or metadata")
 			}
 		})
 	}
@@ -110,6 +126,8 @@ func dialogueCompatibilitySnapshot(t *testing.T, db *sql.DB) []string {
 		`SELECT jsonb_agg(to_jsonb(d) ORDER BY instance_id, position)::text FROM dialogues d`,
 		`SELECT jsonb_agg(to_jsonb(i) ORDER BY id)::text FROM instances i`,
 		`SELECT jsonb_agg(to_jsonb(m) ORDER BY id)::text FROM schema_meta m`,
+		`SELECT jsonb_agg(jsonb_build_array(attname, attgenerated, attidentity) ORDER BY attnum)::text
+			FROM pg_catalog.pg_attribute WHERE attrelid = 'dialogues'::regclass AND attnum > 0 AND NOT attisdropped`,
 		`SELECT jsonb_agg(jsonb_build_array(a.attname, pg_catalog.pg_get_expr(d.adbin, d.adrelid)) ORDER BY a.attnum)::text
 			FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
 			WHERE d.adrelid = 'dialogues'::regclass`,

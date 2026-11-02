@@ -11,31 +11,33 @@ import (
 // These keys are part of the writer contract: UPSERT conflict targets and
 // cascading deletes must keep their v14 meaning, not merely their column names.
 var compatiblePrimaryKeys = map[string]string{
-	"access_records":        "principal_key",
-	"counters":              "key",
-	"dialogues":             "instance_id,position",
-	"group_members":         "instance_id,platform,group_id,user_id",
-	"group_profiles":        "instance_id,platform,group_id",
-	"group_summaries":       "instance_id,platform,group_id",
-	"instances":             "id",
-	"mcp_servers":           "instance_id,id",
-	"mcp_tool_policies":     "instance_id,server_id,tool_name",
-	"memory_catalogs":       "instance_id,scope_type,platform,group_id,owner",
-	"memory_entries":        "instance_id,scope_type,platform,group_id,id",
-	"memory_merge_archives": "instance_id,scope_type,platform,group_id,merged_id",
-	"memory_tags":           "instance_id,scope_type,platform,group_id,memory_id,tag",
-	"model_bindings":        "instance_id,platform,group_id,workload",
-	"model_revisions":       "instance_id",
-	"pending_deletions":     "instance_id",
-	"provider_endpoints":    "id",
-	"provider_models":       "id",
-	"provider_revision":     "id",
-	"provider_secrets":      "ref",
-	"security_audit":        "id",
-	"settings":              "scope,instance_id,key",
-	"skills":                "instance_id,name",
-	"sticker_entries":       "instance_id,id",
-	"sticker_keywords":      "instance_id,sticker_id,position",
+	"access_records":          "principal_key",
+	"counters":                "key",
+	"dialogues":               "instance_id,position",
+	"group_members":           "instance_id,platform,group_id,user_id",
+	"group_profiles":          "instance_id,platform,group_id",
+	"group_summaries":         "instance_id,platform,group_id",
+	"instances":               "id",
+	"mcp_servers":             "instance_id,id",
+	"mcp_tool_policies":       "instance_id,server_id,tool_name",
+	"memory_catalogs":         "instance_id,scope_type,platform,group_id,owner",
+	"memory_entries":          "instance_id,scope_type,platform,group_id,id",
+	"memory_embedding_scopes": "instance_id,scope_type,platform,group_id,owner",
+	"memory_embeddings":       "instance_id,scope_type,platform,group_id,owner,memory_id",
+	"memory_merge_archives":   "instance_id,scope_type,platform,group_id,merged_id",
+	"memory_tags":             "instance_id,scope_type,platform,group_id,memory_id,tag",
+	"model_bindings":          "instance_id,platform,group_id,workload",
+	"model_revisions":         "instance_id",
+	"pending_deletions":       "instance_id",
+	"provider_endpoints":      "id",
+	"provider_models":         "id",
+	"provider_revision":       "id",
+	"provider_secrets":        "ref",
+	"security_audit":          "id",
+	"settings":                "scope,instance_id,key",
+	"skills":                  "instance_id,name",
+	"sticker_entries":         "instance_id,id",
+	"sticker_keywords":        "instance_id,sticker_id,position",
 }
 
 func compatibleForeignKeys(table string) []schemaForeignKey {
@@ -43,8 +45,11 @@ func compatibleForeignKeys(table string) []schemaForeignKey {
 	switch table {
 	case "dialogues", "group_profiles", "group_summaries", "mcp_servers", "memory_catalogs",
 		"memory_entries", "memory_merge_archives", "model_bindings", "model_revisions",
-		"pending_deletions", "skills", "sticker_entries":
+		"pending_deletions", "skills", "sticker_entries", "memory_embedding_scopes":
 		key = schemaForeignKey{"instance_id", "instances", "id", "CASCADE", "NO ACTION"}
+	case "memory_embeddings":
+		key = schemaForeignKey{"instance_id,scope_type,platform,group_id,owner", "memory_embedding_scopes",
+			"instance_id,scope_type,platform,group_id,owner", "CASCADE", "NO ACTION"}
 	case "group_members":
 		key = schemaForeignKey{"instance_id,platform,group_id", "group_profiles", "instance_id,platform,group_id", "CASCADE", "NO ACTION"}
 	case "mcp_tool_policies":
@@ -61,9 +66,14 @@ func compatibleForeignKeys(table string) []schemaForeignKey {
 	return []schemaForeignKey{key}
 }
 
-func (d *DB) validateCoreConstraints(ctx context.Context, q schemaReader, table string, columns []schemaColumn) error {
+func (d *DB) validateWriterConstraints(ctx context.Context, q schemaReader, table string, columns []schemaColumn) error {
 	primary := strings.Split(compatiblePrimaryKeys[table], ",")
 	for _, column := range columns {
+		// The v14 writer supplies values explicitly. Generated and ALWAYS
+		// identity columns reject them; no identity mode is in this contract.
+		if column.generated != "" || column.identity != "" {
+			return fmt.Errorf("table %s column %s has unrecognized generated or identity attributes", table, column.name)
+		}
 		position := slices.Index(primary, column.name) + 1
 		notNull := true
 		if d.Backend == SQLite && len(primary) == 1 && position == 1 {

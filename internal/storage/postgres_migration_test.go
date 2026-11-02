@@ -52,6 +52,14 @@ func TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage(t *testing.T) {
 		err = db.SQL.QueryRow(`SELECT pg_catalog.to_regclass('memory_embeddings') IS NOT NULL
 			OR pg_catalog.to_regclass('memory_embedding_scopes') IS NOT NULL`).Scan(&exists)
 		ready := db.EmbeddingStorageReady.Load()
+		if startup == 0 {
+			// The second open also checks a declared future layout without
+			// caches. CI runs this before enabling the vector extension.
+			if _, updateErr := db.SQL.Exec(`UPDATE schema_meta SET version = 16, min_compatible_version = 14 WHERE id = 1`); updateErr != nil {
+				db.Close()
+				t.Fatal(updateErr)
+			}
+		}
 		closeErr := db.Close()
 		if err != nil || closeErr != nil || exists || ready {
 			t.Fatalf("ordinary startup created embedding storage: exists=%v ready=%v query=%v close=%v", exists, ready, err, closeErr)

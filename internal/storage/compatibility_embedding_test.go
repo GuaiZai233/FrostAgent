@@ -121,9 +121,17 @@ func exerciseEmbeddingCacheCompatibility(t *testing.T, backend Backend) {
 
 func seedCompatibilityEmbeddingCaches(t *testing.T, db *DB, alterCacheKey bool) {
 	t.Helper()
-	// Match the native composite keys and foreign keys independently of the
-	// guard. TEXT payloads let this relational regression also run on SQLite
-	// and in the PostgreSQL migrations job before pgvector is enabled.
+	// Keep this fixture independent of the validator and production creator.
+	// PostgreSQL must exercise the real extension type; SQLite only exercises
+	// extension relationships because its writer does not use vector tables.
+	vectorType := "TEXT"
+	if db.Backend == Postgres {
+		if err := db.SQL.QueryRow(`SELECT pg_catalog.format('%I.vector', n.nspname)
+			FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+			WHERE e.extname = 'vector'`).Scan(&vectorType); err != nil {
+			t.Fatalf("compatibility cache tests require pre-enabled pgvector: %v", err)
+		}
+	}
 	for _, statement := range []string{
 		`CREATE TABLE memory_embedding_scopes (
 			instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -134,7 +142,7 @@ func seedCompatibilityEmbeddingCaches(t *testing.T, db *DB, alterCacheKey bool) 
 		`CREATE TABLE memory_embeddings (
 			instance_id TEXT NOT NULL, scope_type TEXT NOT NULL, platform TEXT NOT NULL,
 			group_id TEXT NOT NULL, owner TEXT NOT NULL, memory_id TEXT NOT NULL,
-			content_hash TEXT NOT NULL, dimensions INTEGER NOT NULL, embedding TEXT NOT NULL,
+			content_hash TEXT NOT NULL, dimensions INTEGER NOT NULL, embedding ` + vectorType + ` NOT NULL,
 			PRIMARY KEY(instance_id,scope_type,platform,group_id,owner,memory_id),
 			FOREIGN KEY(instance_id,scope_type,platform,group_id,owner)
 				REFERENCES memory_embedding_scopes(instance_id,scope_type,platform,group_id,owner) ON DELETE CASCADE
