@@ -30,7 +30,7 @@ func New(engine *llm.Engine, version, wsListenAddr string) *Service {
 	return &Service{
 		engine:       engine,
 		version:      version,
-		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:1023"),
+		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:11023"),
 	}
 }
 

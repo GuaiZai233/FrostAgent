@@ -73,13 +73,13 @@ GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最�
 
 ### Websocket
 
-在本地上游 OneBot 实现（如 NapCat）启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1023/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
+在本地上游 OneBot 实现（如 NapCat）启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`（端口取决于设置页面中的监听地址）。
 
 ### 接入 AstrBot 等框架
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
 
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1023/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:11023/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
 
 ## 附加功能
 ### 按群配置主动回复概率

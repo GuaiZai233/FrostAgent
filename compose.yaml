@@ -7,7 +7,7 @@ services:
     stop_grace_period: 30s
     # Management listens on container loopback; do not publish it in bridge mode.
     ports:
-      - "127.0.0.1:1023:1023"
+      - "127.0.0.1:11023:11023"
     volumes:
       - frostagent-data:/app/data
 

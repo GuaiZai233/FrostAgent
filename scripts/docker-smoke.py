@@ -101,12 +101,12 @@ def exercise(root, temporary, host_mode=False):
     if host_mode:
         assert not service.get('ports'), 'host mode must not pretend to publish ports'
         assert service['network_mode'] == 'host'
-        assert service['build']['args']['DOCKER_WS_LISTEN_ADDR'] == '127.0.0.1:1023'
+        assert service['build']['args']['DOCKER_WS_LISTEN_ADDR'] == '127.0.0.1:11023'
     else:
-        assert {int(p['target']) for p in service['ports']} == {1023}
+        assert {int(p['target']) for p in service['ports']} == {11023}
         assert all(p['host_ip'] == '127.0.0.1' for p in service['ports'])
         service['ports'] = [{'target': p, 'published': '0', 'host_ip': '127.0.0.1',
-                             'protocol': 'tcp'} for p in (1023, 1235)]
+                             'protocol': 'tcp'} for p in (11023, 1235)]
         connector = config['services']['cloudflared']
         assert connector['network_mode'] == 'service:frostagent'
         assert connector['depends_on']['frostagent']['restart']
@@ -181,18 +181,18 @@ def exercise(root, temporary, host_mode=False):
             assert client(peer, remote_host, 8080, path, payload, method=method)['status'] == 0, path
             assert client(peer, remote_host, 8080, path, payload, FORWARDED, method)['status'] == 0, path
             if not host_mode:
-                assert client(peer, remote_host, 1023, path, payload, method=method)['status'] == 404, path
+                assert client(peer, remote_host, 11023, path, payload, method=method)['status'] == 404, path
         assert len(api('/api/instances')['instances']) == 1
         for adapter in ('onebot', 'astrbot'):
             ws = f'/instances/{instance_id}/ws/{adapter}?mock=true'
             assert read(ws, headers={**FORWARDED, **UPGRADE})['status'] == 101
-            assert client(origin, '127.0.0.1', 1023, ws, headers=UPGRADE)['status'] == 101
+            assert client(origin, '127.0.0.1', 11023, ws, headers=UPGRADE)['status'] == 101
             if host_mode:
-                assert client(peer, remote_host, 1023, ws, headers=UPGRADE)['status'] == 0
+                assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 0
             else:
-                assert client(peer, remote_host, 1023, ws, headers=UPGRADE)['status'] == 101
-                published = int(command(*compose, 'port', 'frostagent', '1023').rsplit(':', 1)[1])
-                assert client(origin, '127.0.0.1', 1023, rpc, {}, UPGRADE)['status'] == 404
+                assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 101
+                published = int(command(*compose, 'port', 'frostagent', '11023').rsplit(':', 1)[1])
+                assert client(origin, '127.0.0.1', 11023, rpc, {}, UPGRADE)['status'] == 404
                 # Verify the host's published adapter port as well as direct bridge traffic.
                 import socket
                 with socket.create_connection(('127.0.0.1', published), timeout=5) as connection:
