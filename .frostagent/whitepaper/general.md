@@ -33,7 +33,7 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:1234`，宿主机仅发布到 `127.0.0.1:1234`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
+默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:11023`，宿主机仅发布到 `127.0.0.1:11023`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
 
 Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
 
@@ -411,7 +411,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
-  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:11023`；
   - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；

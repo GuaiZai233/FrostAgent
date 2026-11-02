@@ -38,7 +38,7 @@ COPY cmd/app ./cmd/app
 COPY internal ./internal
 COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
-ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:1234
+ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:11023
 ARG FROSTAGENT_VERSION
 ARG FROSTAGENT_COMMIT
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
@@ -56,6 +56,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
 USER 10001:10001
-EXPOSE 1234
+EXPOSE 11023
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/frostagent"]

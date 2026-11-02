@@ -69,25 +69,36 @@ test('dashboardWebSocketURL handles calls without query string', () => {
 
 test('instanceWebSocketURL preserves external listen address formatting for overview copy', () => {
   const onebotURL = instanceWebSocketURL(
-    '127.0.0.1:1234',
+    '127.0.0.1:11023',
     'inst_test_1',
     'onebot',
     'http://localhost:8080',
   );
   assert.equal(
     onebotURL,
-    'ws://127.0.0.1:1234/instances/inst_test_1/ws/onebot',
+    'ws://127.0.0.1:11023/instances/inst_test_1/ws/onebot',
   );
 
   const astrbotURL = instanceWebSocketURL(
-    '0.0.0.0:1234',
+    '0.0.0.0:11023',
     'inst_test_1',
     'astrbot',
     'http://dashboard.local:8080',
   );
   assert.equal(
     astrbotURL,
-    'ws://dashboard.local:1234/instances/inst_test_1/ws/astrbot',
+    'ws://dashboard.local:11023/instances/inst_test_1/ws/astrbot',
+  );
+
+  const defaultURL = instanceWebSocketURL(
+    '',
+    'inst_test_1',
+    'onebot',
+    'http://localhost:8080',
+  );
+  assert.equal(
+    defaultURL,
+    'ws://127.0.0.1:11023/instances/inst_test_1/ws/onebot',
   );
 });
 

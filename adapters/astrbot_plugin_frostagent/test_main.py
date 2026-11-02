@@ -111,29 +111,29 @@ class SettingsTest(unittest.TestCase):
 
     def test_legacy_unscoped_ws_url_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "/instances/<instance-id>"):
-            load_settings({"ws_url": "ws://127.0.0.1:1234/ws/astrbot"})
+            load_settings({"ws_url": "ws://127.0.0.1:11023/ws/astrbot"})
 
     def test_instance_scoped_ws_url_is_accepted(self):
         settings = load_settings(
             {
                 "ws_url": (
-                    "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot"
+                    "ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot"
                 )
             }
         )
         self.assertEqual(
             settings.ws_url,
-            "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+            "ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot",
         )
 
     def test_plugin_keeps_loading_with_legacy_ws_url(self):
         with patch.object(asyncio, "create_task") as create_task:
             adapter = FrostAgentAdapter(
                 object(),
-                {"ws_url": "ws://127.0.0.1:1234/ws/astrbot"},
+                {"ws_url": "ws://127.0.0.1:11023/ws/astrbot"},
             )
         self.assertIn("/instances/<instance-id>", adapter._configuration_error)
-        self.assertEqual(adapter.settings.ws_url, "ws://127.0.0.1:1234/ws/astrbot")
+        self.assertEqual(adapter.settings.ws_url, "ws://127.0.0.1:11023/ws/astrbot")
         self.assertIsNone(adapter._init_task)
         create_task.assert_not_called()
 
@@ -147,7 +147,7 @@ class SettingsTest(unittest.TestCase):
         with patch.object(asyncio, "create_task", side_effect=capture_task) as create_task:
             adapter = FrostAgentAdapter(
                 object(),
-                {"ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot"},
+                {"ws_url": "ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot"},
             )
         self.assertIsNone(adapter._configuration_error)
         self.assertIs(adapter._init_task, created_task)
@@ -862,7 +862,7 @@ class ProactiveActionDispatchTest(unittest.IsolatedAsyncioTestCase):
     async def test_proactive_dispatch_platform_and_umo(self) -> None:
         fake_context = FakeContext()
         settings = Settings(
-            ws_url="ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+            ws_url="ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot",
             http_base_url="http://127.0.0.1:8080",
             forward_all_group_messages=True,
             heartbeat_interval=30,

@@ -2426,7 +2426,7 @@ func TestAstrBot_CheckWebSocketOrigin_DevProxyAndProduction(t *testing.T) {
 		{
 			name:    "Non-browser client without Origin",
 			origin:  "",
-			host:    "127.0.0.1:1234",
+			host:    "127.0.0.1:11023",
 			allowed: true,
 		},
 		{
