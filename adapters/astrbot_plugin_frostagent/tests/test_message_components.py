@@ -281,6 +281,43 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
             self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
 
+    def test_repeated_identical_images_keep_all_image_indices(self) -> None:
+        first = b"same-image"
+        second = b"different-image"
+        event = InboundEvent([
+            InboundImage(first, sub_type=0),
+            InboundImage(first, sub_type=0),
+            InboundImage(second, sub_type=0),
+        ])
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current"))
+
+            self.assertEqual(len(attachments), 2)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), first)
+            self.assertEqual(attachments[0]["image_indices"], [0, 1])
+            self.assertEqual(base64.b64decode(attachments[1]["content"]), second)
+            self.assertEqual(attachments[1]["image_indices"], [2])
+
+    def test_image_indices_are_counted_per_message_id(self) -> None:
+        current = b"current-image"
+        quoted = b"quoted-image"
+        event = InboundEvent([
+            InboundImage(current, sub_type=0),
+            Reply("msg_quoted", [
+                InboundImage(quoted, sub_type=0),
+                InboundImage(quoted, sub_type=0),
+            ]),
+        ])
+
+        with load_plugin_module() as module:
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current"))
+            current_attachments = [a for a in attachments if a["message_id"] == "msg_current"]
+            quoted_attachments = [a for a in attachments if a["message_id"] == "msg_quoted"]
+
+            self.assertEqual(current_attachments[0]["image_indices"], [0])
+            self.assertEqual(quoted_attachments[0]["image_indices"], [0, 1])
+
     def test_raw_image_sticker_sub_type_is_preserved_without_downloadable_source(self) -> None:
         image_data = b"custom-sticker"
         event = InboundEvent(

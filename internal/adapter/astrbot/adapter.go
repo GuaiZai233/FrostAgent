@@ -125,13 +125,35 @@ func loadObservedImageFromEvent(ctx context.Context, event Event, trustedMessage
 	if _, authorized := trustedMessageIDs[messageID]; !authorized {
 		return nil, fmt.Errorf("message %s is not authorized for image inspection", messageID)
 	}
+
+	// The plugin deduplicates identical attachment bytes and carries the
+	// original image-segment ordinals in image_indices. Prefer those explicit
+	// ordinals so repeated identical images keep their model-visible positions.
+	indexed := false
+	for _, att := range event.Attachments {
+		if attachmentMessageID(event, att) == messageID && att.Type == core.AttachmentTypeImage && len(att.ImageIndices) > 0 {
+			indexed = true
+			break
+		}
+	}
+	if indexed {
+		for _, att := range event.Attachments {
+			if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
+				continue
+			}
+			for _, index := range att.ImageIndices {
+				if index == imageIndex {
+					return loadStickerAttachment(ctx, att)
+				}
+			}
+		}
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+
+	// Compatibility path for plugin versions that do not send image_indices.
 	matchedIndex := 0
 	for _, att := range event.Attachments {
-		attachmentMessageID := att.MessageID
-		if attachmentMessageID == "" {
-			attachmentMessageID = event.MessageID
-		}
-		if attachmentMessageID != messageID || att.Type != core.AttachmentTypeImage {
+		if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
 			continue
 		}
 		if matchedIndex == imageIndex {
@@ -140,6 +162,13 @@ func loadObservedImageFromEvent(ctx context.Context, event Event, trustedMessage
 		matchedIndex++
 	}
 	return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+}
+
+func attachmentMessageID(event Event, att core.Attachment) string {
+	if id := strings.TrimSpace(att.MessageID); id != "" {
+		return id
+	}
+	return event.MessageID
 }
 
 // ID 返回平台唯一标识 "astrbot"

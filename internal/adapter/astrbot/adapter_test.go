@@ -143,6 +143,45 @@ func TestLoadObservedImageFromEventRejectsUnvalidatedQuotedAttachment(t *testing
 	}
 }
 
+func TestLoadObservedImageFromEventUsesExplicitImageIndices(t *testing.T) {
+	// The plugin deduplicates identical image bytes. For [A, A, B] it keeps
+	// A with image_indices [0, 1] and B with [2]; both A slots must resolve to A.
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+	trusted := map[string]struct{}{"msg_current": {}}
+
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil {
+			t.Fatalf("load deduplicated image index %d: %v", imageIndex, err)
+		}
+		if string(data) != string(sameImage) {
+			t.Fatalf("image index %d loaded %q, want %q", imageIndex, data, sameImage)
+		}
+	}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil {
+		t.Fatalf("load third image: %v", err)
+	}
+	if string(data) != string(otherImage) {
+		t.Fatalf("image index 2 loaded %q, want %q", data, otherImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 3); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+}
+
 func TestSendDirectReplyRejectsInvalidInput(t *testing.T) {
 	event := Event{UserID: "usr_123", MessageType: "private"}
 

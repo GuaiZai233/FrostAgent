@@ -1164,14 +1164,22 @@ async def sticker_attachments_from_segments(
 def append_unique_attachment(
     attachments: list[dict[str, Any]],
     attachment: dict[str, Any] | None,
+    image_indexes: dict[str, int],
 ) -> None:
     if attachment is None:
         return
+    message_id = str(attachment.get("message_id") or "")
+    image_index = image_indexes.get(message_id, 0)
+    image_indexes[message_id] = image_index + 1
+    attachment["image_indices"] = [image_index]
     for existing in attachments:
         if (
             existing.get("message_id") == attachment.get("message_id")
             and existing.get("content") == attachment.get("content")
         ):
+            indices = existing.setdefault("image_indices", [])
+            if image_index not in indices:
+                indices.append(image_index)
             if attachment.get("sub_type") == 1:
                 existing["sub_type"] = 1
             return
@@ -1180,6 +1188,7 @@ def append_unique_attachment(
 
 async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
     attachments = []
+    image_indexes: dict[str, int] = {}
     handled_sticker_sources: set[str] = set()
     reply_image_components: dict[str, list[Any]] = {}
     unmatched_raw_segments = list(raw_onebot_segments(event))
@@ -1194,7 +1203,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                     comp_type,
                 )
                 attachment = await image_attachment(comp, message_id, raw_segment)
-                append_unique_attachment(attachments, attachment)
+                append_unique_attachment(attachments, attachment, image_indexes)
                 if attachment and attachment.get("sub_type") == 1:
                     source = image_source_from_data(component_image_data(comp))
                     if source:
@@ -1217,7 +1226,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
         message_id,
         handled_sticker_sources,
     ):
-        append_unique_attachment(attachments, attachment)
+        append_unique_attachment(attachments, attachment, image_indexes)
     for reply_id, quoted_images in reply_image_components.items():
         unmatched_reply_segments = await lookup_reply_onebot_segments(event, reply_id)
         handled_sources: set[str] = set()
@@ -1228,7 +1237,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                 quoted_type,
             )
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
-            append_unique_attachment(attachments, attachment)
+            append_unique_attachment(attachments, attachment, image_indexes)
             if attachment and attachment.get("sub_type") == 1:
                 source = image_source_from_data(component_image_data(quoted_comp))
                 if source:
@@ -1238,7 +1247,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
             reply_id,
             handled_sources,
         ):
-            append_unique_attachment(attachments, attachment)
+            append_unique_attachment(attachments, attachment, image_indexes)
     return attachments
 
 
