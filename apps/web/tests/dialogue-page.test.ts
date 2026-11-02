@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { mountDialoguePage } from '../src/pages/dialogue';
 import { toast } from '../src/components/toast';
 import type { createInstanceAPI } from '../src/api/client';
+import { renderMarkdown } from '../src/utils/markdown';
+
+const { JSDOM } = createRequire(resolve('package.json'))('jsdom');
+const promptDOM = new JSDOM('');
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+Object.defineProperty(globalThis, 'window', { configurable: true, value: promptDOM.window });
 
 class MockElement {
   innerHTML = '';
@@ -119,7 +127,7 @@ assert.equal(
   'editing is disabled until the current instance loads',
 );
 await settle();
-assert.equal(display.textContent, storedPrompt);
+assert.equal(display.innerHTML, renderMarkdown(storedPrompt));
 assert.equal(display.style.display, 'block');
 assert.equal(edit.disabled, false);
 const name = root.querySelector('#persona-bot-name');
@@ -181,7 +189,7 @@ assert.deepEqual(updates[0], {
   value: '新的人格\n第二行',
   isSecret: false,
 });
-assert.equal(display.textContent, '新的人格\n第二行');
+assert.equal(display.innerHTML, renderMarkdown('新的人格\n第二行'));
 assert.equal(editor.style.display, 'none');
 assert.equal(input.disabled, false);
 assert.equal(successes.at(-1), '系统提示词已保存并生效');
@@ -200,8 +208,8 @@ assert.equal(input.value, '未保存的人格');
 assert.match(errors.at(-1) || '', /write failed/);
 cancel.click();
 assert.equal(
-  display.textContent,
-  '新的人格\n第二行',
+  display.innerHTML,
+  renderMarkdown('新的人格\n第二行'),
   'cancel restores the last saved value',
 );
 
@@ -209,8 +217,8 @@ storedPrompt = '外部更新';
 refresh.click();
 await settle();
 assert.equal(
-  display.textContent,
-  '外部更新',
+  display.innerHTML,
+  renderMarkdown('外部更新'),
   'refresh loads the latest instance value',
 );
 const cards = root.querySelector('#dialogue-cards-container');
@@ -255,6 +263,9 @@ try {
   else Reflect.deleteProperty(globalThis, 'document');
 }
 cleanup();
+if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+else Reflect.deleteProperty(globalThis, 'window');
+promptDOM.window.close();
 
 process.stdout.write(
   'PASS: persona system prompt and dialogue editing, search, and save\n',

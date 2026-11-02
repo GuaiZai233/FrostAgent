@@ -54,7 +54,7 @@ jobs:
           load: true
           tags: frostagent:host
           build-args: |
-            DOCKER_WS_LISTEN_ADDR=127.0.0.1:1234
+            DOCKER_WS_LISTEN_ADDR=127.0.0.1:11023
             FROSTAGENT_VERSION=${{ steps.build.outputs.version }}
             FROSTAGENT_COMMIT=${{ steps.build.outputs.commit }}
           cache-from: type=gha
@@ -99,7 +99,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GitHub Container Registry
         if: steps.current.outputs.publish == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -107,7 +107,7 @@ jobs:
       - name: Extract Docker metadata
         if: steps.current.outputs.publish == 'true'
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/guaizai233/frostagent
           flavor: latest=false

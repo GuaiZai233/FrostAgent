@@ -276,6 +276,18 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             <div class="flex justify-between text-[11px] text-muted mt-1">
               <span>0 · 禁用</span><span>10 · 每 5 轮</span>
             </div>
+            <div class="mt-4 pt-3 border-t border-border/60">
+              <label class="card p-3 flex items-center justify-between cursor-pointer hover-bg transition-colors">
+                <div>
+                  <span class="text-xs font-semibold text-foreground">表情包确认</span>
+                  <p class="text-[11px] text-muted mt-0.5">返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。</p>
+                </div>
+                <span class="toggle-switch shrink-0 ml-3">
+                  <input type="checkbox" id="sticker-confirm-cb" role="switch" aria-label="启用表情包确认" />
+                  <span aria-hidden="true"></span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <!-- Group Response Rules -->
@@ -591,6 +603,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     const toggles: Record<string, string> = {
       'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
       'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
+      'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
     };
     for (const [id, key] of Object.entries(toggles)) {
       element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
@@ -769,6 +782,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
     'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
     'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
+    'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
   };
   for (const [id, key] of Object.entries(binds)) {
     const input = element<HTMLInputElement>(id);

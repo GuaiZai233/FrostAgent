@@ -14,7 +14,7 @@ var resetHints = map[string]string{
 	"POKE_CUSTOM_TEXT":                     "的...",
 	"POKE_COOLDOWN_SECONDS":                "30",
 	"LISTEN_ADDR":                          "127.0.0.1:8080",
-	"WS_LISTEN_ADDR":                       "127.0.0.1:1234",
+	"WS_LISTEN_ADDR":                       "127.0.0.1:11023",
 	"ONEBOT_WS_ENABLED":                    "true",
 	"ASTRBOT_WS_ENABLED":                   "true",
 	"ONEBOT_WS_MODE":                       "reverse",

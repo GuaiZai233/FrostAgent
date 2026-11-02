@@ -7,6 +7,7 @@ import {
 import { openDialog } from './dialog';
 import { escapeHtml } from '../utils/formatters';
 import { toast } from './toast';
+import { renderInstanceStatus } from './instance-label';
 export async function openInstanceManagement(): Promise<void> {
   try {
     const initial = await instanceState.refresh();
@@ -30,8 +31,7 @@ export async function openInstanceManagement(): Promise<void> {
                 (item) => `
       <article class="card p-3 instance-item">
        <button class="btn btn-ghost instance-select" data-id="${item.id}" ${item.deleting ? 'disabled' : ''}>
-        <span class="instance-dot ${item.enabled ? 'on' : 'off'}" aria-label="${item.enabled ? '已启用' : '已停用'}"></span>
-        <span class="text-left"><strong>${escapeHtml(item.name)}</strong><br><small class="font-mono text-muted">${item.id}${item.deleting ? ' · 待确认删除' : ''}</small></span>
+        <span class="text-left"><strong class="instance-name">${renderInstanceStatus(item.enabled)}${escapeHtml(item.name)}</strong><small class="font-mono text-muted">${item.id}${item.deleting ? ' · 待确认删除' : ''}</small></span>
        </button>
        <button class="btn btn-ghost btn-icon-sm" data-rename="${item.id}" aria-label="重命名 ${escapeHtml(item.name)}">✎</button>
        <button class="btn btn-ghost btn-icon-sm instance-delete" data-delete="${item.id}" aria-label="删除 ${escapeHtml(item.name)}">×</button>

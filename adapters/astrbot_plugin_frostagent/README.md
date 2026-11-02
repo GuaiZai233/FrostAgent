@@ -8,7 +8,7 @@
 
 ### 反向 WebSocket（FA 作为服务端，默认）
 
-保持插件 `ws_mode=reverse`，从 FA 的“连接”页复制 AstrBot WebSocket 地址到 `ws_url`（例如 `ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；缺失或填写旧版 `/ws/astrbot` 地址时插件保持加载，但暂停连接并提示修正。插件负责断线重连，已有配置无需迁移。
+保持插件 `ws_mode=reverse`，从 FA 的“连接”页复制 AstrBot WebSocket 地址到 `ws_url`（例如 `ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；缺失或填写旧版 `/ws/astrbot` 地址时插件保持加载，但暂停连接并提示修正。插件负责断线重连，已有配置无需迁移。
 
 ### 正向 WebSocket（FA 作为客户端）
 

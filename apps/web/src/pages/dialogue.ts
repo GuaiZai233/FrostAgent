@@ -5,6 +5,8 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
+import { renderMarkdown } from '../utils/markdown';
+import '../styles/prompt-preview.css';
 
 export function mountDialoguePage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
@@ -83,9 +85,9 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
             ${icon('pencil', 'w-3.5 h-3.5')}
           </button>
         </div>
-        <div id="system-prompt-display" class="rounded-md bg-muted p-3 text-sm text-muted whitespace-pre-wrap break-words select-text" style="min-height: 5rem;">加载中...</div>
+        <div id="system-prompt-display" class="system-prompt-viewport markdown-preview rounded-md bg-muted p-3 text-sm text-muted select-text" tabindex="0" role="region" aria-label="系统提示词 Markdown 预览">加载中...</div>
         <div id="system-prompt-editor" class="flex flex-col gap-3" style="display: none;">
-          <textarea id="system-prompt-input" class="textarea text-sm leading-relaxed" rows="8" aria-label="系统提示词"></textarea>
+          <textarea id="system-prompt-input" class="textarea system-prompt-viewport text-sm" rows="15" aria-label="系统提示词 Markdown 编辑"></textarea>
           <div class="flex items-center justify-end gap-2">
             <button type="button" class="btn btn-outline btn-sm" id="system-prompt-cancel-btn">取消</button>
             <button type="button" class="btn btn-primary btn-sm" id="system-prompt-save-btn">保存并生效</button>
@@ -245,7 +247,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
     systemPromptCancelBtn.disabled = systemPromptSaving || identitySaving;
     systemPromptSaveBtn.disabled = systemPromptSaving || identitySaving;
     if (!systemPromptEditing) {
-      systemPromptDisplay.textContent = systemPromptLoaded ? systemPrompt || '（未设置）' : '加载中...';
+      systemPromptDisplay.innerHTML = renderMarkdown(systemPromptLoaded ? systemPrompt || '（未设置）' : '加载中...');
     }
   }
 

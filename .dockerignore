@@ -22,6 +22,9 @@
 !apps/
 !apps/web/
 !apps/web/**
+!assets/
+assets/**
+!assets/logo.png
 !libs/
 !libs/frostagent-proto/
 !libs/frostagent-proto/**
