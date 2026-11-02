@@ -140,6 +140,7 @@ let values = [
   { key: 'SECURITY_CONTROL_MODE', value: 'aggressive', resetHint: '基础模式', isSecret: false },
   { key: 'BOT_LOOP_MODE', value: 'hard', isSecret: false },
   { key: 'STICKER_ACTIVITY_MODE', value: 'all_messages', isSecret: false },
+  { key: 'ENABLE_STICKER_CONFIRM', value: 'true', isSecret: false },
 ];
 let fail = false;
 let failLoad = true;
@@ -302,6 +303,14 @@ for (const [id, key] of [
   assert.equal(el(id).value, '');
   assert.equal(el(id).dataset.default, 'true');
 }
+
+assert.equal(el('sticker-confirm-cb').checked, true, 'ENABLE_STICKER_CONFIRM loads into toggle');
+el('sticker-confirm-cb').checked = false;
+el('sticker-confirm-cb').emit('change');
+assert.equal(el('settings-draft-banner').hidden, false, 'toggling sticker confirm marks settings dirty');
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.at(-1)?.find((change) => change.key === 'ENABLE_STICKER_CONFIRM')?.value, 'false');
 
 const malformed = el('setting-MAX_CONTEXT_MESSAGES');
 malformed.value = '';

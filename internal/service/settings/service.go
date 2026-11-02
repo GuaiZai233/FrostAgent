@@ -62,6 +62,7 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_PROACTIVE_REPLY_WHITELIST":     {"是否启用主动回复群聊白名单模式", false, false, false},
 	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
 	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
+	"ENABLE_STICKER_CONFIRM":               {"返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
 	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
@@ -686,6 +687,9 @@ func validateUpdate(key, value string) error {
 	}
 	if key == "ENABLE_RUNTIME_STATUS_COMMAND" && value != "" && value != "true" && value != "false" {
 		return errors.New("输出 FrostAgent 默认运行信息必须为 true 或 false")
+	}
+	if key == "ENABLE_STICKER_CONFIRM" && value != "" && value != "true" && value != "false" {
+		return errors.New("表情包确认必须为 true 或 false")
 	}
 	if key == "POKE_COOLDOWN_SECONDS" && value != "" {
 		seconds, err := strconv.Atoi(value)
