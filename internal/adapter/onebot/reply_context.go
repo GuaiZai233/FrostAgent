@@ -489,6 +489,70 @@ func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegm
 	return sticker.LoadImageSource(ctx, sources[stickerIndex])
 }
 
+// loadObservedImage resolves one trusted image attachment selected by message
+// ID and image index. Current-message and already-resolved quote segments are
+// used directly; anything else is fetched from the platform get_msg API, which
+// revalidates that the message belongs to the current session.
+func (c *wsConnection) loadObservedImage(
+	ctx context.Context,
+	event model.OneBotEvent,
+	reply resolvedReplyContext,
+	currentSegments []content.MessageSegment,
+	messageID string,
+	imageIndex int,
+) ([]byte, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return nil, fmt.Errorf("OneBot message_id 不能为空")
+	}
+	if imageIndex < 0 {
+		return nil, fmt.Errorf("image_index %d 不能小于 0", imageIndex)
+	}
+
+	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
+	if messageID == currentMessageID {
+		return imageDataFromSegments(ctx, currentSegments, imageIndex)
+	}
+	quoteNodes := []resolvedReplyContext{reply}
+	quoteNodes = append(quoteNodes, reply.Ancestors...)
+	for _, quote := range quoteNodes {
+		if quote.MessageID == messageID && quote.SessionID == historyKey(event) && len(quote.Segments) > 0 {
+			return imageDataFromSegments(ctx, quote.Segments, imageIndex)
+		}
+	}
+
+	numericID, ok := numericMessageID(messageID)
+	if !ok {
+		return nil, fmt.Errorf("OneBot message_id %q 不是数字", messageID)
+	}
+	resolved := c.lookupMessageContext(ctx, event, numericID)
+	if len(resolved.Segments) == 0 {
+		return nil, fmt.Errorf("OneBot get_msg 未能获取消息 %s 的可读内容", messageID)
+	}
+	return imageDataFromSegments(ctx, resolved.Segments, imageIndex)
+}
+
+func imageSourcesFromSegments(segments []content.MessageSegment) []string {
+	var sources []string
+	for _, seg := range segments {
+		if seg.Type != "image" && seg.Type != "mface" {
+			continue
+		}
+		if source := content.SegmentImageSource(seg); source != "" {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+func imageDataFromSegments(ctx context.Context, segments []content.MessageSegment, imageIndex int) ([]byte, error) {
+	sources := imageSourcesFromSegments(segments)
+	if imageIndex < 0 || imageIndex >= len(sources) {
+		return nil, fmt.Errorf("image index %d is unavailable", imageIndex)
+	}
+	return sticker.LoadImageSource(ctx, sources[imageIndex])
+}
+
 func (r *resolvedReplyContext) addImageDescription(description string, scopes ...*runtimescope.Scope) {
 	scope := runtimescope.First(scopes)
 	description = strings.TrimSpace(description)

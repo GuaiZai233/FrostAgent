@@ -1332,6 +1332,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},
+			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
+				return loadObservedImageFromEvent(ctx, event, messageID, imageIndex)
+			},
 			Billing:       billingState,
 			RouteScope:    routeScope,
 			RouteSnapshot: routeSnapshot,

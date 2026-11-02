@@ -42,14 +42,18 @@ type RunContext struct {
 	InstanceID          string              // Runtime instance used for audit/evaluation attribution.
 	SendHook            func(toolResultJSON string) error
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
-	ObservationScope    string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
-	Billing             *BillingRunState
-	RouteScope          modelrouter.Scope
-	RouteSnapshot       *modelrouter.Snapshot
-	SecurityNotice      string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
-	Mock                bool   // Mock / ephemeral session: do not write to persistent memory or group summary
-	Proactive           bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
-	Epoch               uint64
+	// LoadObservedImage resolves a trusted image attachment from a message that
+	// the adapter observed in the current session. The adapter enforces message
+	// ownership; the model only supplies an opaque message ID and image index.
+	LoadObservedImage func(context.Context, string, int) ([]byte, error)
+	ObservationScope  string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
+	Billing           *BillingRunState
+	RouteScope        modelrouter.Scope
+	RouteSnapshot     *modelrouter.Snapshot
+	SecurityNotice    string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
+	Mock              bool   // Mock / ephemeral session: do not write to persistent memory or group summary
+	Proactive         bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
+	Epoch             uint64
 }
 
 type runContextKey struct{}

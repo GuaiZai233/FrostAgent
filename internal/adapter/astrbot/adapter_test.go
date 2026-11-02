@@ -75,6 +75,47 @@ func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
 	}
 }
 
+func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
+	firstImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	secondImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	quotedImage := []byte("GIF89a quoted")
+	event := Event{
+		MessageID: "msg_current",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: firstImage},
+			{Type: core.AttachmentTypeFile, Content: []byte("not an image")},
+			{Type: core.AttachmentTypeImage, Content: secondImage},
+			{Type: core.AttachmentTypeImage, Content: quotedImage, MessageID: "msg_quoted"},
+		},
+	}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, "msg_current", 1)
+	if err != nil {
+		t.Fatalf("load second image: %v", err)
+	}
+	if string(data) != string(secondImage) {
+		t.Fatalf("image index 1 loaded %q, want %q", data, secondImage)
+	}
+
+	data, err = loadObservedImageFromEvent(context.Background(), event, "msg_quoted", 0)
+	if err != nil {
+		t.Fatalf("load quoted image: %v", err)
+	}
+	if string(data) != string(quotedImage) {
+		t.Fatalf("quoted image loaded %q, want %q", data, quotedImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, "msg_current", 2); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, "msg_unknown", 0); err == nil {
+		t.Fatal("expected unknown message error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, "", 0); err == nil {
+		t.Fatal("expected empty message_id error")
+	}
+}
+
 func TestSendDirectReplyRejectsInvalidInput(t *testing.T) {
 	event := Event{UserID: "usr_123", MessageType: "private"}
 

@@ -113,6 +113,31 @@ func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, er
 	return sticker.LoadImageSource(ctx, att.URL)
 }
 
+// loadObservedImageFromEvent resolves any image attachment that the adapter
+// received for the selected message. Attachments are adapter-trusted; the model
+// only chooses an opaque message ID and image index.
+func loadObservedImageFromEvent(ctx context.Context, event Event, messageID string, imageIndex int) ([]byte, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" || imageIndex < 0 {
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+	matchedIndex := 0
+	for _, att := range event.Attachments {
+		attachmentMessageID := att.MessageID
+		if attachmentMessageID == "" {
+			attachmentMessageID = event.MessageID
+		}
+		if attachmentMessageID != messageID || att.Type != core.AttachmentTypeImage {
+			continue
+		}
+		if matchedIndex == imageIndex {
+			return loadStickerAttachment(ctx, att)
+		}
+		matchedIndex++
+	}
+	return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+}
+
 // ID 返回平台唯一标识 "astrbot"
 func (a *Adapter) ID() string {
 	return "astrbot"

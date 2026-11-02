@@ -15,11 +15,20 @@ type Tool struct {
 	executeResult  func(ctx context.Context, args string) (core.ToolExecutionResult, error)
 	enabled        func() bool
 	disabledError  error
+	// proactiveAllowed marks side-effect-free tools that may run during an
+	// unaddressed proactive turn.
+	proactiveAllowed bool
 }
 
 // IsEnabled reports whether this tool is currently available to the model.
 func (t Tool) IsEnabled() bool {
 	return t.enabled == nil || t.enabled()
+}
+
+// IsProactiveAllowed reports whether the tool is safe to call during an
+// unaddressed proactive turn. It defaults to false.
+func (t Tool) IsProactiveAllowed() bool {
+	return t.proactiveAllowed
 }
 
 func (t Tool) Name() string {
