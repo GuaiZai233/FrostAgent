@@ -124,6 +124,33 @@ func TestFormatDialoguePrompt(t *testing.T) {
 	})
 }
 
+func TestLoadDialoguePrompt_FixtureFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dialogue.yml")
+	const fixture = `- id: test_greeting
+  user: |
+    你好，测试助手。
+  preferred: |
+    你好，请问需要什么帮助？
+- id: test_follow_up
+  user: "  请给出下一步。  "
+  preferred: "  先验证输入，再检查输出。  "
+`
+	if err := os.WriteFile(path, []byte(fixture), 0600); err != nil {
+		t.Fatalf("write dialogue fixture: %v", err)
+	}
+	prompt, err := LoadDialoguePrompt(path)
+	if err != nil {
+		t.Fatalf("LoadDialoguePrompt failed: %v", err)
+	}
+
+	want := DefaultDialogueInstruction +
+		"\n\nUser: 你好，测试助手。\nAssistant: 你好，请问需要什么帮助？" +
+		"\n\nUser: 请给出下一步。\nAssistant: 先验证输入，再检查输出。"
+	if prompt != want {
+		t.Errorf("unexpected loaded prompt:\ngot:  %q\nwant: %q", prompt, want)
+	}
+}
+
 func TestLoadDialoguePrompt_ActualFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dialogue.yml")
 	const fixture = `- id: 1

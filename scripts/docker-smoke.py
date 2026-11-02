@@ -163,6 +163,10 @@ def exercise(root, temporary, host_mode=False):
                    {'key': 'MCP_CONTROL_TOKEN', 'value': 'synthetic-control-token'}, FORWARDED).get('success')
         assert read('/api/instances', headers=FORWARDED)['status'] == 200
         assert api(f'/api/instances/{instance_id}/enable', {'enabled': True}, FORWARDED).get('success')
+        expected_version = os.environ.get('FROSTAGENT_EXPECTED_VERSION')
+        if expected_version:
+            overview = api(f'/instances/{instance_id}/frostagent.v1.BotStatusService/GetOverview', {}, FORWARDED)
+            assert overview.get('version') == expected_version, overview
         rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars'
         assert read(rpc, {}, FORWARDED)['status'] == 200
 

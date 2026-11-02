@@ -284,6 +284,7 @@ type SessionContext struct {
 	historySeq         []uint64
 	nextMsgSeq         uint64
 	privateCompacting  bool
+	privateCompact     *privateCompactInspection
 
 	groupCompactSummary     string
 	groupCompactBuffer      []groupCompactItem
@@ -1030,6 +1031,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.History = nil
 	s.activeSkills = nil
 	s.historySeq = nil
+	s.privateCompact = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -1175,8 +1177,76 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 
 	s.History = newHistory
 	s.historySeq = newSeq
+	batch := SummaryGroup{Summary: summary, EndIndex: len(snapshot.Messages) - 1}
+	for _, msg := range snapshot.Messages {
+		item := historyInspectionMessage(msg)
+		batch.StructuredMsgs = append(batch.StructuredMsgs, item)
+		batch.Messages = append(batch.Messages, item.FormatDisplay())
+	}
+	s.privateCompact = &privateCompactInspection{
+		summarySeq: newSeq[0],
+		ackSeq:     newSeq[1],
+		batch:      batch,
+	}
 	s.UpdatedAt = time.Now()
 	return true
+}
+
+// privateCompactInspection retains only the latest successful batch in memory.
+// Sequence handles distinguish injected context from user-authored lookalikes.
+type privateCompactInspection struct {
+	summarySeq uint64
+	ackSeq     uint64
+	batch      SummaryGroup
+}
+
+func (s *SessionContext) hasPrivateCompactLocked() bool {
+	return s.privateCompact != nil && len(s.historySeq) == len(s.History) &&
+		slices.Contains(s.historySeq, s.privateCompact.summarySeq)
+}
+
+// PrivateRunningSummary returns a committed summary still present in history.
+func (s *SessionContext) PrivateRunningSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hasPrivateCompactLocked() {
+		return s.privateCompact.batch.Summary
+	}
+	return ""
+}
+
+// SnapshotPrivateContext returns an atomic inspection view and the actual LLM
+// history. It does not change compaction, persistence, or prompt assembly.
+func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot, []ChatMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result GroupContextSnapshot
+	compacted := s.hasPrivateCompactLocked()
+	if compacted {
+		batch := s.privateCompact.batch
+		batch.Messages = slices.Clone(batch.Messages)
+		batch.StructuredMsgs = slices.Clone(batch.StructuredMsgs)
+		result.RunningSummary = batch.Summary
+		result.SummaryGroups = []SummaryGroup{batch}
+	}
+	for i, msg := range s.History {
+		if compacted && (s.historySeq[i] == s.privateCompact.summarySeq || s.historySeq[i] == s.privateCompact.ackSeq) {
+			continue
+		}
+		result.RecentStructuredMessages = append(result.RecentStructuredMessages, historyInspectionMessage(msg))
+	}
+	if limit > 0 && len(result.RecentStructuredMessages) > limit {
+		result.RecentStructuredMessages = result.RecentStructuredMessages[len(result.RecentStructuredMessages)-limit:]
+	}
+	for _, msg := range result.RecentStructuredMessages {
+		result.RecentMessages = append(result.RecentMessages, msg.FormatDisplay())
+	}
+	return result, slices.Clone(s.History)
+}
+
+func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
+	return GroupCompactMessage{Role: msg.Role, Content: fmt.Sprint(msg.Content)}
 }
 
 // CancelPrivateCompact releases the private compaction lock if compaction fails.
@@ -2536,6 +2606,7 @@ func (s *SessionContext) Clear() {
 	s.History = nil
 	s.activeSkills = nil
 	s.historySeq = nil
+	s.privateCompact = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil

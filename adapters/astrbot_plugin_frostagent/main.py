@@ -510,10 +510,11 @@ class FrostAgentAdapter(Star):
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         is_computer_command = COMPUTER_USE_COMMAND.match(extract_message_text(event)) is not None
-        if is_computer_command:
-            # Reserve sensitive commands before configuration checks or any
+        is_runtime_info = is_runtime_info_command(event)
+        if is_computer_command or is_runtime_info:
+            # Reserve FrostAgent commands before configuration checks or any
             # attachment/transport I/O. Backend authorization is still required;
-            # failure must never hand these instructions to the default LLM.
+            # failure must never hand these commands to the default LLM.
             event.should_call_llm(True)
         if self._configuration_error:
             return
@@ -557,7 +558,7 @@ class FrostAgentAdapter(Star):
                     if not is_group_interaction:
                         return
 
-                if session_key and not is_poke and not self.settings.forward_all_group_messages:
+                if session_key and not is_poke and not is_runtime_info and not self.settings.forward_all_group_messages:
                     if not payload.get("is_wake") and not payload.get("is_at"):
                         return
 
@@ -566,14 +567,23 @@ class FrostAgentAdapter(Star):
                         previous is None or session_key in self._bot_loop_interrupted
                     )
                 queue = self.client.register_waiter(msg_id)
-                if not await self.client.send_event(payload):
+                try:
+                    sent = await self.client.send_event(payload)
+                except Exception as exc:
+                    if not is_runtime_info:
+                        raise
+                    logger.warning(
+                        f"[frostagent-adapter] 运行信息指令发送失败: {_connection_error(self.settings, exc)}"
+                    )
+                    return
+                if not sent:
                     return
                 if session_key:
                     self._bot_loop_last_forwarded_sender[session_key] = payload["user_id"]
                     self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
-            frostagent_replied = is_poke or is_computer_command
+            frostagent_replied = is_poke or is_computer_command or is_runtime_info
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)
@@ -584,7 +594,8 @@ class FrostAgentAdapter(Star):
                 if action.get("type") == "quote_lookup":
                     quote_data = {}
                     if (
-                        _extract_platform_name(event) == "aiocqhttp"
+                        not is_runtime_info
+                        and _extract_platform_name(event) == "aiocqhttp"
                         and action.get("event_message_id") == msg_id
                     ):
                         quote_data = await lookup_reply_onebot_message(
@@ -670,7 +681,8 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     user_id = extract_sender_id(event)
     group_id = extract_group_id(event)
     message_type = "group" if group_id else "private"
-    content = extract_message_text(event)
+    is_runtime_info = is_runtime_info_command(event)
+    content = "#fa" if is_runtime_info else extract_message_text(event)
     is_wake, is_at = check_is_at_or_wake(event)
 
     msg_id = str(
@@ -678,8 +690,10 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         or getattr(event, "message_id", "")
         or f"ast_{int(time.time() * 1000)}"
     )
-    attachments = await extract_attachments(event, msg_id)
-    reply_message_id = extract_reply_message_id(event)
+    # A diagnostic command does not need quoted history or media. In particular,
+    # do not download/forward images from a Reply component's nested chain.
+    attachments = [] if is_runtime_info else await extract_attachments(event, msg_id)
+    reply_message_id = "" if is_runtime_info else extract_reply_message_id(event)
     platform = _extract_platform_name(event)
 
     sender_name = ""
@@ -720,6 +734,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "timestamp": int(time.time()),
     }
     metadata: dict[str, Any] = {
+        "runtime_info_command": is_runtime_info,
         "has_other_mention": has_other_mention,
         "has_other_content": has_other_content,
         "has_media_content": has_media_content,
@@ -902,6 +917,72 @@ def extract_message_text(event: AstrMessageEvent) -> str:
     if value is not None:
         return str(value)
     return ""
+
+
+def is_runtime_info_command(event: AstrMessageEvent) -> bool:
+    """Recognize #fa only from current group message text, never string fallbacks.
+
+    Normalized components and raw OneBot segments, when both are available,
+    must agree. Reply markers are allowed, but their quoted text is not read.
+    """
+    if not extract_group_id(event):
+        return False
+    raw_event = first_attr(getattr_chain(event, "message_obj"), "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    if isinstance(raw_event, dict) and raw_event.get("post_type", "message") != "message":
+        return False
+
+    self_id = extract_self_id(event)
+    texts: list[str] = []
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if isinstance(components, list) and components:
+        text_parts: list[str] = []
+        for comp in components:
+            comp_type = type(comp).__name__.lower()
+            if comp_type == "plain":
+                value = first_attr(comp, "text")
+                if not isinstance(value, str):
+                    return False
+                text_parts.append(value)
+            elif comp_type == "at":
+                target = str(first_attr(comp, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target != self_id:
+                    return False
+            elif comp_type != "reply":
+                return False
+        texts.append("".join(text_parts))
+
+    raw_segments = first_attr(raw_event, "message")
+    if raw_segments is None:
+        raw_segments = first_attr(first_attr(raw_event, "data"), "message")
+    if isinstance(raw_segments, str):
+        try:
+            raw_segments = json.loads(raw_segments)
+        except json.JSONDecodeError:
+            raw_segments = None
+    if isinstance(raw_segments, list) and raw_segments:
+        text_parts = []
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                return False
+            segment_type = str(segment.get("type") or "").lower()
+            data = segment.get("data")
+            if not isinstance(data, dict):
+                return False
+            if segment_type == "text":
+                value = data.get("text")
+                if not isinstance(value, str):
+                    return False
+                text_parts.append(value)
+            elif segment_type == "at":
+                target = str(first_attr(data, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target != self_id:
+                    return False
+            elif segment_type != "reply":
+                return False
+        texts.append("".join(text_parts))
+    return bool(texts) and all(text.strip() == "#fa" for text in texts)
 
 
 def extract_reply_message_id(event: AstrMessageEvent) -> str:

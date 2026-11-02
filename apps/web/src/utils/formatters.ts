@@ -86,6 +86,13 @@ export function formatPlatform(platform: string | undefined | null): string {
   }
 }
 
+export function isPrivateSession(sessionId: string): boolean {
+  const id = ':' + sessionId.toLowerCase();
+  const privateIndex = id.indexOf(':private:');
+  const groupIndex = id.indexOf(':group:');
+  return privateIndex >= 0 && (groupIndex < 0 || privateIndex < groupIndex);
+}
+
 export function isGroupSession(
   session:
     | { id?: string; sessionId?: string; platform?: string }
@@ -98,13 +105,13 @@ export function isGroupSession(
   }
   if (typeof session === 'string') {
     const s = session.toLowerCase();
-    return s.startsWith('group:') || s.includes(':group:');
+    return !isPrivateSession(s) && (s.startsWith('group:') || s.includes(':group:'));
   }
   if (session.platform?.toLowerCase() === 'group') {
     return true;
   }
   const id = (session.id ?? session.sessionId ?? '').toLowerCase();
-  return id.startsWith('group:') || id.includes(':group:');
+  return !isPrivateSession(id) && (id.startsWith('group:') || id.includes(':group:'));
 }
 
 export function formatLogLevel(level: LogLevel): string {

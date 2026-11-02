@@ -18,6 +18,7 @@ for (const testFile of [
   'skills.test.ts',
   'computer-use.test.ts',
   'backend-settings-page.test.ts',
+  'command-settings-page.test.ts',
   'bot-user-id-list.test.ts',
   'control-auth.test.ts',
   'backup-download.test.ts',
