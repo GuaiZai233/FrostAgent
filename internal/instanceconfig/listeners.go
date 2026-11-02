@@ -9,7 +9,7 @@ import (
 // SQL settings take precedence, subject to container listener isolation.
 var (
 	DefaultListenAddr   = "127.0.0.1:8080"
-	DefaultWSListenAddr = "127.0.0.1:1234"
+	DefaultWSListenAddr = "127.0.0.1:11023"
 	// Container builds require a loopback management listener in the connector's network namespace.
 	ManagementLoopbackOnly = "false"
 )

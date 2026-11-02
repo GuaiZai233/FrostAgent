@@ -2,6 +2,7 @@ package botstatus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -29,7 +30,7 @@ func New(engine *llm.Engine, version, wsListenAddr string) *Service {
 	return &Service{
 		engine:       engine,
 		version:      version,
-		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:1234"),
+		wsListenAddr: defaultString(wsListenAddr, "127.0.0.1:11023"),
 	}
 }
 
@@ -163,6 +164,10 @@ func (s *Service) GetSessions(
 		updatedAt := sess.UpdatedAt
 		sess.Unlock()
 		groupName := sess.GroupName()
+		summary := sess.GroupRunningSummary()
+		if isPrivateSession(sess.ConversationID) {
+			summary = sess.PrivateRunningSummary()
+		}
 		if groupName == "" && s.engine.SessionManager != nil {
 			groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
 		}
@@ -173,7 +178,7 @@ func (s *Service) GetSessions(
 				MessageCount: int32(msgCount),
 				CreatedAt:    createdAt.Format(time.RFC3339),
 				LastActive:   updatedAt.Format(time.RFC3339),
-				GroupSummary: sess.GroupRunningSummary(),
+				GroupSummary: summary,
 				GroupName:    groupName,
 			},
 			createdAt: createdAt,
@@ -278,8 +283,8 @@ func (s *Service) GetSessions(
 	return connect.NewResponse(resp), nil
 }
 
-// GetSessionContext returns the group session's active running summary, recent
-// group chat messages, latest compact-batch mapping, and formatted prompt text.
+// GetSessionContext returns active messages, the latest compact batch, and a
+// context preview for group and private sessions.
 func (s *Service) GetSessionContext(
 	ctx context.Context,
 	req *connect.Request[v1.GetSessionContextRequest],
@@ -310,6 +315,12 @@ func (s *Service) GetSessionContext(
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
+				var history []llm.ChatMessage
+				if isPrivateSession(sessionID) {
+					snap, history = sess.SnapshotPrivateContext(limit)
+				} else {
+					history = sess.Snapshot()
+				}
 				runningSummary = snap.RunningSummary
 				summaryGroups = snap.SummaryGroups
 				recentMessages = snap.RecentMessages
@@ -319,21 +330,19 @@ func (s *Service) GetSessionContext(
 				resp.SystemPrompt = lastSysPrompt
 				resp.Model = lastModel
 
-				sess.Lock()
-				for _, h := range sess.History {
+				for _, h := range history {
 					contentStr := fmt.Sprintf("%v", h.Content)
 					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
 						Role:    h.Role,
 						Content: contentStr,
 					})
 				}
-				sess.Unlock()
 			}
 		}
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && runningSummary == "" && s.engine.GroupSummaryStore != nil {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}
@@ -360,6 +369,22 @@ func (s *Service) GetSessionContext(
 	}
 	for _, message := range recentStructuredMessages {
 		resp.RecentStructuredMessages = append(resp.RecentStructuredMessages, groupMessageToProto(message))
+	}
+
+	if isPrivateSession(sessionID) {
+		// Private compaction is injected into ordinary history, not group XML.
+		// This is a context preview, not a reconstruction of the last LLM request.
+		messages := make([]*v1.SessionHistoryMessageProto, 0, len(historyMsgs)+1)
+		if resp.SystemPrompt != "" {
+			messages = append(messages, &v1.SessionHistoryMessageProto{Role: "system", Content: resp.SystemPrompt})
+		}
+		messages = append(messages, historyMsgs...)
+		preview, _ := json.MarshalIndent(struct {
+			Model    string                           `json:"model,omitempty"`
+			Messages []*v1.SessionHistoryMessageProto `json:"messages"`
+		}{Model: resp.Model, Messages: messages}, "", "  ")
+		resp.PromptText = string(preview)
+		return connect.NewResponse(resp), nil
 	}
 
 	// Construct session context preview with XML tags (reflecting actual prompt structure)
@@ -421,7 +446,15 @@ func (s *Service) DeleteGroupSummary(
 
 func isGroupSession(sessionID string) bool {
 	s := strings.ToLower(sessionID)
-	return strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:")
+	return !isPrivateSession(s) && (strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:"))
+}
+
+func isPrivateSession(sessionID string) bool {
+	s := ":" + strings.ToLower(sessionID)
+	privateIndex := strings.Index(s, ":private:")
+	groupIndex := strings.Index(s, ":group:")
+	// Only the first kind marker identifies the session; the rest is an opaque ID.
+	return privateIndex >= 0 && (groupIndex < 0 || privateIndex < groupIndex)
 }
 
 // derivePlatform infers the platform from the session ID prefix.

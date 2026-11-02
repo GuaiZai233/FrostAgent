@@ -33,7 +33,7 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:1234`，宿主机仅发布到 `127.0.0.1:1234`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
+默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:11023`，宿主机仅发布到 `127.0.0.1:11023`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
 
 Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
 
@@ -110,6 +110,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
   - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
   - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
+  - 私聊检查：会话列表支持单独筛选私聊，并展示当前私聊历史及最近一次成功 `compact` 的摘要和输入批次；摘要注入的 user/assistant 消息通过内部序列标识与真实对话区分，不通过用户文本猜测。仅保留最新批次的内存检查信息；会话重置、清空或摘要从历史中裁剪后不再展示，不新增私聊持久化或自动压缩。私聊摘要弹窗只读，群聊的总结删除和分群模型配置入口保持原有范围。
   - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
   - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
   - 群级模型页内配置：「会话与 Prompt」中的群聊模型配置入口直接打开当前页弹窗，六个工作负载使用与实例默认配置相同的模型下拉选项，并支持继承实例默认；保存并发布仅更新当前群的覆盖，保留其他群和默认路由，以已发布配置为基线避免带入其他草稿；QQ 平台别名按后端规则匹配，发布成功后刷新当前会话上下文。
@@ -410,7 +411,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 为了防止管理接口与控制台在未经配置的情况下意外暴露至非受信网络环境，并防范恶意网页通过浏览器发起的跨域驱动攻击与 DNS 重绑定攻击，FrostAgent 构建了清晰纵深的管理面网络信任边界：
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
-  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:1234`；
+  - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:11023`；
   - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
@@ -466,6 +467,13 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
   - 仅在 `ready` 状态的匹配候选集中，依据表情包的累计 `weight` 权重进行轮盘赌比例随机采样（Weighted Roulette Sampling），使高频出现的热门表情包具有更高的召回概率；
+  - 实例级 `ENABLE_STICKER_CONFIRM` 取值 `true` / `false`，默认 `false`，支持实例热重载。在 Web 控制台设置页面「Bot 行为与回复策略」的表情包积极度卡片中提供「表情包确认」开关，描述为“返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度”；
+  - **表情包确认模式（Sticker Confirmation Mode）两阶段精确决策机制**：
+    - 当 `ENABLE_STICKER_CONFIRM=false`（默认）时，保持经典单阶段行为：传入 `query` 进行模糊匹配并通过加权轮盘赌算法随机选中一张，立即生成图片消息出站发送；
+    - 当 `ENABLE_STICKER_CONFIRM=true` 时，开启两阶段（Query -> Compact Candidates -> Select）确认机制：
+      1. **候选检索阶段 (Query Stage)**：模型在独立工具调用批次中单独调用 `send_sticker(query: "...")`，不与 `send_message` 配对。后端匹配关键词与描述，返回最多 20 条 compact 候选（包含完整 `id`、最多 8 个各不超过 128 UTF-8 字节的 `keywords`、不超过 2048 UTF-8 字节的 `description`）。长字段在字符边界精简，完整序列化 JSON（包含选择提示与截断标志）不超过 32 KiB，计入 JSON 转义开销，避免引擎的 64 KiB 上限破坏结果；候选或字段被精简时返回 `truncated: true`，可缩小查询范围后重查。此阶段 `MessagePayload` 为空，不发送文字或贴纸，也不重置配额；
+      2. **精确选择阶段 (Select Stage)**：模型根据候选描述选择 ID。需要同时发送文字时，在后续同一批工具调用中先调用 `send_message` 发送 plain，紧接着调用 `send_sticker(id: "...")`；无需文字时仅调用 `send_sticker(id: "...")`。后端验证 ID 后构建原生贴纸消息载荷，成功发送才重置表情包积极度配额；配额到期时文字与选定贴纸仍作为一个有序消息链发送，不改变既有配对失败处理；
+    - 两种模式下均支持直接传入 `id` 快速发送指定表情包。该机制在轻微增加一轮模型推理开销的前提下，解决了随机挑选可能带来的语境错配问题，实现了表情包发送精度的显著提升；
   - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` / `subType: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，同时双写 `sub_type: 1` 与 `subType: 1` 确保 NapCat 与 LuckyLillia 均可正确处理，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
   - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
 - **Web 控制台表情包管理 (Web Dashboard Management)**：

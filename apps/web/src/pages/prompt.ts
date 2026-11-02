@@ -1,7 +1,7 @@
 import { createInstanceAPI } from '../api/client';
 import { instanceState } from '../instance-state';
 import { SessionInfo } from '@frostagent/proto';
-import { escapeHtml, formatCount, formatDateTime, formatPlatform, isGroupSession, PageTokenStack } from '../utils/formatters';
+import { escapeHtml, formatCount, formatDateTime, formatPlatform, isGroupSession, isPrivateSession, PageTokenStack } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
@@ -32,7 +32,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   let selectedSessionId = '';
   let selectedSession: SessionInfo | null = null;
   let currentPromptText = '';
-  let activePlatformFilter = 'all'; // 'all-groups' | 'aiohttp' | 'onebot' | 'all'
+  let activePlatformFilter = 'all'; // 'all-groups' | 'all-private' | 'aiohttp' | 'onebot' | 'all'
   let searchQuery = '';
   let inspectorCleanup: (() => void) | null = null;
   let isEditorExpanded = false;
@@ -100,12 +100,13 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
                 type="search"
                 id="prompt-session-search-input"
                 class="input text-xs w-full"
-                placeholder="搜索最近 100 条会话的群号 / 会话 ID..."
+                placeholder="搜索最近 100 条会话的群号 / 用户 ID / 会话 ID..."
               />
             </div>
             <div class="flex items-center gap-1 flex-wrap text-xs" id="prompt-platform-filter-tabs">
               <button class="btn btn-xs ${activePlatformFilter === 'all' ? 'btn-primary' : 'btn-outline'}" data-filter="all">全部</button>
               <button class="btn btn-xs ${activePlatformFilter === 'all-groups' ? 'btn-primary' : 'btn-outline'}" data-filter="all-groups">全部群聊</button>
+              <button class="btn btn-xs ${activePlatformFilter === 'all-private' ? 'btn-primary' : 'btn-outline'}" data-filter="all-private">全部私聊</button>
               <button class="btn btn-xs ${activePlatformFilter === 'aiohttp' ? 'btn-primary' : 'btn-outline'}" data-filter="aiohttp">aiohttp</button>
               <button class="btn btn-xs ${activePlatformFilter === 'onebot' ? 'btn-primary' : 'btn-outline'}" data-filter="onebot">OneBot</button>
             </div>
@@ -225,6 +226,9 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       if (activePlatformFilter === 'all-groups' && !isGroup) {
         return false;
       }
+      if (activePlatformFilter === 'all-private' && !isPrivateSession(s.sessionId)) {
+        return false;
+      }
       if (activePlatformFilter === 'aiohttp' && !id.includes('aiohttp') && platform !== 'aiohttp') {
         return false;
       }
@@ -309,6 +313,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
                 <span class="badge ${isGroup ? 'badge-info' : 'badge-outline'} text-[10px] px-1 py-0 font-medium">
                   ${escapeHtml(platformName)}
                 </span>
+                <span class="text-[10px] text-muted">${isGroup ? '群聊' : isPrivateSession(s.sessionId) ? '私聊' : '会话'}</span>
                 <span class="text-xs font-semibold font-mono truncate text-foreground" title="${escapeHtml(s.sessionId)}">
                   ${escapeHtml(s.sessionId)}
                 </span>
@@ -357,7 +362,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     mountEl.innerHTML = `
       <div class="text-center text-muted p-12">
         <span class="spinner"></span>
-        <div class="mt-2 text-xs">正在加载群聊 ${escapeHtml(sessionId)} 的聊天记录与上下文预览...</div>
+        <div class="mt-2 text-xs">正在加载会话 ${escapeHtml(sessionId)} 的聊天记录与上下文预览...</div>
       </div>
     `;
 
@@ -366,11 +371,14 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
 
       currentPromptText = resp.promptText || '';
+      if (selectedSession?.sessionId === sessionId && typeof resp.runningSummary === 'string') {
+        selectedSession.groupSummary = resp.runningSummary;
+      }
       const parsed = buildInspectorDataFromSessionContext(resp);
       renderInspector(parsed, `会话上下文预览 (${sessionId})`, selectedSession?.sessionId === sessionId ? selectedSession : undefined);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
-      toast.error('加载群聊上下文失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('加载会话上下文失败: ' + (err instanceof Error ? err.message : String(err)));
       renderEmptyState();
     }
   }
@@ -398,22 +406,24 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
           });
         }
         : undefined,
-      onViewSummary: session && isGroupSession(session)
+      onViewSummary: session && (isGroupSession(session) || isPrivateSession(session.sessionId))
         ? () => showSummaryDialog(session)
         : undefined,
     });
   }
 
   function showSummaryDialog(session: SessionInfo) {
+    const groupSession = isGroupSession(session);
+    const chatLabel = groupSession ? '群聊' : '私聊';
     void openDialog({
-      title: `群聊总结 - ${session.sessionId}`,
+      title: `${chatLabel}总结 - ${session.sessionId}`,
       description: `平台: ${formatPlatform(session.platform)} · 消息数: ${formatCount(session.messageCount)}`,
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(session.groupSummary || '暂无群聊总结内容。')}</div>
+        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 20rem; overflow-y: auto;">${escapeHtml(session.groupSummary || `暂无${chatLabel}总结内容。`)}</div>
       `,
       footerHtml: `
-        ${session.groupSummary ? '<button class="btn btn-destructive btn-sm" id="prompt-delete-summary-btn">删除总结</button>' : ''}
+        ${groupSession && session.groupSummary ? '<button class="btn btn-destructive btn-sm" id="prompt-delete-summary-btn">删除总结</button>' : ''}
         <button class="btn btn-outline btn-sm dialog-close-btn">关闭</button>
       `,
       onMount: (dialogEl, close) => {
@@ -459,8 +469,8 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     }
     mountEl.innerHTML = `
       <div class="flex flex-col items-center justify-center p-12 text-center text-muted" style="min-height: 20rem;">
-        <h3 class="text-sm font-semibold text-foreground mb-1">请选择群聊会话</h3>
-        <p class="text-xs max-w-sm mb-4">从左侧选择一个群聊会话以查看该群内群友的聊天记录、实时滚动摘要以及发送给 LLM 的结构化提示词。</p>
+        <h3 class="text-sm font-semibold text-foreground mb-1">请选择会话</h3>
+        <p class="text-xs max-w-sm mb-4">从左侧选择群聊或私聊会话，查看聊天记录、compact 摘要及上下文预览。</p>
       </div>
     `;
   }

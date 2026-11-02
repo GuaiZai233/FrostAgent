@@ -48,6 +48,7 @@ var knownEnvVars = map[string]envEntry{
 	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
+	"ENABLE_RUNTIME_STATUS_COMMAND":        {"输出 FrostAgent 默认运行信息（#fa，默认开启）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
 	"ENABLE_QUOTE_TRACE":                   {"是否追溯收到消息的引用链（默认开启）", false, false, false},
 	"QUOTE_TRACE_DEPTH":                    {"引用追溯深度（1~10，默认 5）", false, false, false},
@@ -61,6 +62,7 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_PROACTIVE_REPLY_WHITELIST":     {"是否启用主动回复群聊白名单模式", false, false, false},
 	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
 	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
+	"ENABLE_STICKER_CONFIRM":               {"返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。", false, false, false},
 	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
 	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
@@ -682,6 +684,12 @@ func validateUpdate(key, value string) error {
 
 	if key == "ENABLE_POKE" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许发送戳一戳行为必须为 true 或 false")
+	}
+	if key == "ENABLE_RUNTIME_STATUS_COMMAND" && value != "" && value != "true" && value != "false" {
+		return errors.New("输出 FrostAgent 默认运行信息必须为 true 或 false")
+	}
+	if key == "ENABLE_STICKER_CONFIRM" && value != "" && value != "true" && value != "false" {
+		return errors.New("表情包确认必须为 true 或 false")
 	}
 	if key == "POKE_COOLDOWN_SECONDS" && value != "" {
 		seconds, err := strconv.Atoi(value)

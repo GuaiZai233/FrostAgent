@@ -45,6 +45,10 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 	if got := before.Scope.Getenv("BOT_NAME"); got != "HotBot" {
 		t.Fatalf("runtime still sees old name %q", got)
 	}
+	update("ENABLE_RUNTIME_STATUS_COMMAND", "false")
+	if got := before.Scope.Getenv("ENABLE_RUNTIME_STATUS_COMMAND"); got != "false" {
+		t.Fatalf("runtime status switch was not applied: %q", got)
+	}
 	update("ENABLE_QUOTE_TRACE", "false")
 	update("QUOTE_TRACE_DEPTH", "3")
 	update("BOT_LOOP_USER_IDS", "onebot:synthetic-bot")
@@ -59,6 +63,48 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 	update("MCP_CONTROL_TOKEN", "synthetic-control-token")
 	if got := m.ControlPlaneGetenv()("MCP_CONTROL_TOKEN"); got != "synthetic-control-token" {
 		t.Fatalf("control plane still sees old token %q", got)
+	}
+}
+
+func TestSQLRuntimeStatusDraftKeepsRunningRuntime(t *testing.T) {
+	m, err := NewDatabase(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	info, err := m.Create("Runtime Status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	runtime := m.instances[info.ID].runtime
+	if runtime.Scope.Getenv("ENABLE_RUNTIME_STATUS_COMMAND") != "" {
+		t.Fatal("new instances must use the enabled code default")
+	}
+	for _, step := range []struct {
+		body  string
+		value string
+	}{
+		{`{"updates":[{"key":"ADMIN_COMMAND_PREFIX","value":"!"},{"key":"ENABLE_RUNTIME_STATUS_COMMAND","value":"false"}]}`, "false"},
+		{`{"updates":[{"key":"ENABLE_RUNTIME_STATUS_COMMAND","value":"true"}]}`, "true"},
+		{`{"updates":[{"key":"ENABLE_RUNTIME_STATUS_COMMAND","value":"false"}]}`, "false"},
+		{`{"clearKeys":["ENABLE_RUNTIME_STATUS_COMMAND"]}`, ""},
+	} {
+		response := applySettingsDraft(m, info.ID, step.body)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
+			t.Fatalf("save failed: %d %s", response.Code, response.Body.String())
+		}
+		if m.instances[info.ID].runtime != runtime || runtime.Scope.Context().Err() != nil {
+			t.Fatal("runtime status draft rebuilt or stopped the runtime")
+		}
+		if got := runtime.Scope.Getenv("ENABLE_RUNTIME_STATUS_COMMAND"); got != step.value {
+			t.Fatalf("runtime has stale setting %q, want %q", got, step.value)
+		}
+		if got := runtime.Scope.Getenv("ADMIN_COMMAND_PREFIX"); got != "!" {
+			t.Fatalf("runtime status draft changed the prefix: %q", got)
+		}
 	}
 }
 
