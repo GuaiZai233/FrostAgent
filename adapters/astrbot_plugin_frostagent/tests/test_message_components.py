@@ -54,6 +54,15 @@ class InboundImage:
         return base64.b64encode(self.data_bytes).decode("ascii")
 
 
+class FailingInboundImage:
+    """An image component whose conversion fails, leaving an unreadable slot."""
+
+    subType = 0
+
+    async def convert_to_base64(self) -> str:
+        raise RuntimeError("synthetic image conversion failure")
+
+
 class Reply:
     def __init__(
         self,
@@ -280,6 +289,114 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(attachments[0]["content"]), current_data)
             self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
             self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
+
+    def test_repeated_identical_images_keep_all_image_indices(self) -> None:
+        first = b"same-image"
+        second = b"different-image"
+        event = InboundEvent([
+            InboundImage(first, sub_type=0),
+            InboundImage(first, sub_type=0),
+            InboundImage(second, sub_type=0),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_current": 3})
+            self.assertEqual(len(attachments), 2)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), first)
+            self.assertEqual(attachments[0]["image_indices"], [0, 1])
+            self.assertEqual(base64.b64decode(attachments[1]["content"]), second)
+            self.assertEqual(attachments[1]["image_indices"], [2])
+
+    def test_image_indices_are_counted_per_message_id(self) -> None:
+        current = b"current-image"
+        quoted = b"quoted-image"
+        event = InboundEvent([
+            InboundImage(current, sub_type=0),
+            Reply("msg_quoted", [
+                InboundImage(quoted, sub_type=0),
+                InboundImage(quoted, sub_type=0),
+            ]),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+            current_attachments = [a for a in attachments if a["message_id"] == "msg_current"]
+            quoted_attachments = [a for a in attachments if a["message_id"] == "msg_quoted"]
+
+            self.assertEqual(slot_counts, {"msg_current": 1, "msg_quoted": 2})
+            self.assertEqual(current_attachments[0]["image_indices"], [0])
+            self.assertEqual(quoted_attachments[0]["image_indices"], [0, 1])
+
+    def test_failed_current_image_still_consumes_a_slot(self) -> None:
+        readable = b"readable-image"
+        event = InboundEvent([
+            FailingInboundImage(),
+            InboundImage(readable, sub_type=0),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_current": 2})
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["image_indices"], [1])
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), readable)
+
+    def test_failed_quoted_image_still_consumes_a_slot(self) -> None:
+        readable = b"quoted-readable-image"
+        event = InboundEvent([
+            Reply("msg_quoted", [
+                FailingInboundImage(),
+                InboundImage(readable, sub_type=0),
+            ]),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_quoted": 2})
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["message_id"], "msg_quoted")
+            self.assertEqual(attachments[0]["image_indices"], [1])
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), readable)
+
+    def test_payload_exports_original_image_slot_counts(self) -> None:
+        first = b"same-image"
+        second = b"different-image"
+        event = InboundEvent([
+            InboundImage(first, sub_type=0),
+            InboundImage(first, sub_type=0),
+            InboundImage(second, sub_type=0),
+        ])
+        event.message_id = "msg_current"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["image_slot_counts"], {"msg_current": 3})
+            self.assertEqual(payload["attachments"][0]["image_indices"], [0, 1])
+            self.assertEqual(payload["attachments"][1]["image_indices"], [2])
+
+    def test_payload_counts_unreadable_image_slot(self) -> None:
+        readable = b"readable-image"
+        event = InboundEvent([
+            FailingInboundImage(),
+            InboundImage(readable, sub_type=0),
+        ])
+        event.message_id = "msg_current"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["image_slot_counts"], {"msg_current": 2})
+            self.assertEqual(len(payload["attachments"]), 1)
+            self.assertEqual(payload["attachments"][0]["image_indices"], [1])
 
     def test_raw_image_sticker_sub_type_is_preserved_without_downloadable_source(self) -> None:
         image_data = b"custom-sticker"

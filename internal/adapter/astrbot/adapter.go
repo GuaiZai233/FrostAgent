@@ -113,6 +113,64 @@ func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, er
 	return sticker.LoadImageSource(ctx, att.URL)
 }
 
+// loadObservedImageFromEvent resolves any image attachment that the adapter
+// received for the selected message. Only the current event message and quoted
+// IDs that passed the adapter's same-session quote validation are authorized;
+// the model only chooses an opaque message ID and image index.
+func loadObservedImageFromEvent(ctx context.Context, event Event, trustedMessageIDs map[string]struct{}, messageID string, imageIndex int) ([]byte, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" || imageIndex < 0 {
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+	if _, authorized := trustedMessageIDs[messageID]; !authorized {
+		return nil, fmt.Errorf("message %s is not authorized for image inspection", messageID)
+	}
+
+	// The plugin deduplicates identical attachment bytes and carries the
+	// original image-segment ordinals in image_indices. Prefer those explicit
+	// ordinals so repeated identical images keep their model-visible positions.
+	indexed := false
+	for _, att := range event.Attachments {
+		if attachmentMessageID(event, att) == messageID && att.Type == core.AttachmentTypeImage && len(att.ImageIndices) > 0 {
+			indexed = true
+			break
+		}
+	}
+	if indexed {
+		for _, att := range event.Attachments {
+			if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
+				continue
+			}
+			for _, index := range att.ImageIndices {
+				if index == imageIndex {
+					return loadStickerAttachment(ctx, att)
+				}
+			}
+		}
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+
+	// Compatibility path for plugin versions that do not send image_indices.
+	matchedIndex := 0
+	for _, att := range event.Attachments {
+		if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
+			continue
+		}
+		if matchedIndex == imageIndex {
+			return loadStickerAttachment(ctx, att)
+		}
+		matchedIndex++
+	}
+	return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+}
+
+func attachmentMessageID(event Event, att core.Attachment) string {
+	if id := strings.TrimSpace(att.MessageID); id != "" {
+		return id
+	}
+	return event.MessageID
+}
+
 // ID 返回平台唯一标识 "astrbot"
 func (a *Adapter) ID() string {
 	return "astrbot"

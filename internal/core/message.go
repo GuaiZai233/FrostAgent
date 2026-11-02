@@ -48,6 +48,10 @@ type Attachment struct {
 	MimeType  string         `json:"mime_type,omitempty"`
 	URL       string         `json:"url,omitempty"`
 	Name      string         `json:"name,omitempty"`
+	// ImageIndices preserves the original image-segment ordinals represented by
+	// this attachment. Adapters may deduplicate identical image bytes; keeping
+	// every ordinal lets tools resolve the model-visible [图片] position.
+	ImageIndices []int `json:"image_indices,omitempty"`
 }
 
 // IncomingMessage 平台上游入站消息（含会话、用户、平台、附件等元数据）。

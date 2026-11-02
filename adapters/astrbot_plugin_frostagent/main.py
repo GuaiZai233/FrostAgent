@@ -377,7 +377,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.5",
+    "0.1.6",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -586,7 +586,12 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     )
     # A diagnostic command does not need quoted history or media. In particular,
     # do not download/forward images from a Reply component's nested chain.
-    attachments = [] if is_runtime_info else await extract_attachments(event, msg_id)
+    image_slot_counts: dict[str, int] = {}
+    attachments = (
+        []
+        if is_runtime_info
+        else await extract_attachments(event, msg_id, image_slot_counts)
+    )
     reply_message_id = "" if is_runtime_info else extract_reply_message_id(event)
     platform = _extract_platform_name(event)
 
@@ -627,6 +632,8 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "is_at": is_at,
         "timestamp": int(time.time()),
     }
+    if image_slot_counts:
+        payload["image_slot_counts"] = image_slot_counts
     metadata: dict[str, Any] = {
         "runtime_info_command": is_runtime_info,
         "has_other_mention": has_other_mention,
@@ -1164,22 +1171,39 @@ async def sticker_attachments_from_segments(
 def append_unique_attachment(
     attachments: list[dict[str, Any]],
     attachment: dict[str, Any] | None,
+    message_id: str,
+    image_indexes: dict[str, int],
 ) -> None:
+    # Consume the original image-segment ordinal before conversion/dedup so
+    # unreadable slots and repeated identical images keep their model-visible
+    # positions.
+    message_id = str(message_id or "")
+    image_index = image_indexes.get(message_id, 0)
+    image_indexes[message_id] = image_index + 1
     if attachment is None:
         return
+    attachment["image_indices"] = [image_index]
     for existing in attachments:
         if (
             existing.get("message_id") == attachment.get("message_id")
             and existing.get("content") == attachment.get("content")
         ):
+            indices = existing.setdefault("image_indices", [])
+            if image_index not in indices:
+                indices.append(image_index)
             if attachment.get("sub_type") == 1:
                 existing["sub_type"] = 1
             return
     attachments.append(attachment)
 
 
-async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
+async def extract_attachments(
+    event: AstrMessageEvent,
+    message_id: str,
+    image_slot_counts: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     attachments = []
+    image_indexes: dict[str, int] = {}
     handled_sticker_sources: set[str] = set()
     reply_image_components: dict[str, list[Any]] = {}
     unmatched_raw_segments = list(raw_onebot_segments(event))
@@ -1194,7 +1218,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                     comp_type,
                 )
                 attachment = await image_attachment(comp, message_id, raw_segment)
-                append_unique_attachment(attachments, attachment)
+                append_unique_attachment(attachments, attachment, message_id, image_indexes)
                 if attachment and attachment.get("sub_type") == 1:
                     source = image_source_from_data(component_image_data(comp))
                     if source:
@@ -1217,7 +1241,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
         message_id,
         handled_sticker_sources,
     ):
-        append_unique_attachment(attachments, attachment)
+        append_unique_attachment(attachments, attachment, message_id, image_indexes)
     for reply_id, quoted_images in reply_image_components.items():
         unmatched_reply_segments = await lookup_reply_onebot_segments(event, reply_id)
         handled_sources: set[str] = set()
@@ -1228,7 +1252,7 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                 quoted_type,
             )
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
-            append_unique_attachment(attachments, attachment)
+            append_unique_attachment(attachments, attachment, reply_id, image_indexes)
             if attachment and attachment.get("sub_type") == 1:
                 source = image_source_from_data(component_image_data(quoted_comp))
                 if source:
@@ -1238,7 +1262,9 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
             reply_id,
             handled_sources,
         ):
-            append_unique_attachment(attachments, attachment)
+            append_unique_attachment(attachments, attachment, reply_id, image_indexes)
+    if image_slot_counts is not None:
+        image_slot_counts.update(image_indexes)
     return attachments
 
 

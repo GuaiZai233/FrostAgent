@@ -961,6 +961,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
 			},
+			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
+				return conn.loadObservedImage(ctx, event, replyContext, segments, messageID, imageIndex)
+			},
 			Billing:        billingState,
 			RouteScope:     routeScope,
 			RouteSnapshot:  routeSnapshot,
