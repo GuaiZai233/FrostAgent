@@ -73,6 +73,24 @@ func (d *DB) validateCoreConstraints(ctx context.Context, q schemaReader, table 
 		if column.primary != position || column.notNull != notNull {
 			return fmt.Errorf("table %s has unrecognized primary key or nullability", table)
 		}
+		// WriteExamplesTx omits these retired columns. A NULL/missing default
+		// breaks INSERT; a nonempty default changes the saved row's meaning.
+		// Other core columns are explicitly supplied by their normal writers.
+		if table == "dialogues" && (column.name == "scene" || column.name == "relation") {
+			expression := strings.TrimSpace(column.defaultSQL.String)
+			for strings.HasPrefix(expression, "(") && strings.HasSuffix(expression, ")") {
+				expression = strings.TrimSpace(expression[1 : len(expression)-1])
+			}
+			expected := "''"
+			if d.Backend == Postgres {
+				expected = "''::text"
+			}
+			// Recognize the native literal without evaluating unknown SQL,
+			// which could have side effects even if its result is empty text.
+			if !column.defaultSQL.Valid || expression != expected {
+				return fmt.Errorf("table %s column %s has an unrecognized default; empty text is required", table, column.name)
+			}
+		}
 	}
 	if d.Backend == Postgres {
 		// Matching key columns are insufficient: PostgreSQL cannot use a

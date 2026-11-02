@@ -157,15 +157,17 @@ type schemaColumn struct {
 	name, kind string
 	notNull    bool
 	primary    int
+	defaultSQL sql.NullString
 }
 
 func (d *DB) tableColumns(ctx context.Context, q schemaReader, table string) ([]schemaColumn, error) {
-	query := `SELECT name, lower(type), "notnull", pk FROM pragma_table_info(?) ORDER BY cid`
+	query := `SELECT name, lower(type), "notnull", pk, dflt_value FROM pragma_table_info(?) ORDER BY cid`
 	if d.Backend == Postgres {
 		query = `SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
-			COALESCE(array_position(c.conkey, a.attnum), 0)
+			COALESCE(array_position(c.conkey, a.attnum), 0), pg_catalog.pg_get_expr(d.adbin, d.adrelid)
 			FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_constraint c
 			ON c.conrelid = a.attrelid AND c.contype = 'p'
+			LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 			WHERE a.attrelid = pg_catalog.to_regclass($1) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`
 	}
 	rows, err := q.QueryContext(ctx, query, table)
@@ -176,7 +178,7 @@ func (d *DB) tableColumns(ctx context.Context, q schemaReader, table string) ([]
 	var columns []schemaColumn
 	for rows.Next() {
 		var column schemaColumn
-		if err := rows.Scan(&column.name, &column.kind, &column.notNull, &column.primary); err != nil {
+		if err := rows.Scan(&column.name, &column.kind, &column.notNull, &column.primary, &column.defaultSQL); err != nil {
 			return nil, err
 		}
 		columns = append(columns, column)
@@ -314,6 +316,19 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		references, args := postgresRelationReferences(targets)
 		triggerArgs = args
 		relationScope := `(n.nspname = current_schema() OR c.oid IN (` + references + `))`
+		// RLS can hide existing rows and silently suppress DELETEs as well as
+		// reject writes. Do not infer safety from the startup role bypassing it.
+		rowSecurityQuery := `SELECT pg_catalog.format('%I.%I', n.nspname, c.relname)
+			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relrowsecurity AND ` + relationScope + ` ORDER BY n.nspname, c.relname LIMIT 1`
+		var protectedTable string
+		err := q.QueryRowContext(ctx, rowSecurityQuery, args...).Scan(&protectedTable)
+		if err == nil {
+			return fmt.Errorf("table %s has enabled row-level security; a newer program is required", protectedTable)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
 		triggerQuery = `SELECT count(*) FROM pg_catalog.pg_trigger t
 			JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
 			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

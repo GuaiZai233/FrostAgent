@@ -48,6 +48,10 @@ jobs:
         run: |
           go install github.com/bufbuild/buf/cmd/buf@v1.75.0
           make proto-generate-go
+      - name: Test PostgreSQL dialogue compatibility defaults
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/service/dialogue -run '^TestPostgresDialogueCompatibilityDefaults$' -count=1 -v
       - name: Test PostgreSQL restore rollback
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable

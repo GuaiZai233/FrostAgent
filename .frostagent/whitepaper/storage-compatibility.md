@@ -26,6 +26,8 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 - PostgreSQL 核心表也不能增加未知排斥约束（`EXCLUDE`）。其索引不一定标记为唯一，不能依赖普通唯一索引检查；启动读取 `pg_constraint.contype = 'x'` 拒绝这类变化，包括延迟到事务提交时才检查的约束。例如按 `enabled` 区间排斥重复值会阻止正常创建实例。独立扩展表的排斥约束不受此限制。
 - PostgreSQL 触发器检查除保留当前 schema 的检查外，也按关系 OID 覆盖 `search_path` 实际解析到的核心表、兼容元数据表和两张 Embedding 缓存表。位于后续 schema 的写入目标也不能带未知触发器，否则普通记忆导入的缓存清理可能被阻断或改写新版模块数据。其他 schema 中被前置同名表遮蔽、或根本不在写入路径上的独立表不会仅因同名而被拒绝。检查不执行、禁用或删除触发器；未标记历史 v15 必须先通过检查才能回填。
 - PostgreSQL rewrite rule 同样属于写入契约，但存储在 `pg_rewrite`，不能由触发器检查代替。对当前 schema 及上述实际写入目标，启动拒绝非 `_RETURN` 规则：`DO ALSO` 可以附加删除或改写新版模块数据，`DO INSTEAD` 可以静默替代原操作。检查与触发器共用关系 OID 范围，保留普通视图的内建 `_RETURN` 规则；不执行、禁用或重建规则，历史 v15 也须先通过检查再回填元数据。
+- PostgreSQL 对当前 schema 表及上述实际写入目标启用 Row-Level Security（`pg_class.relrowsecurity`）时，也拒绝兼容启动。RLS 不仅会拒绝写入，还可能隐藏已有实例或静默过滤 scope 删除；不能因为检查账号是 superuser、拥有 `BYPASSRLS` 或暂时绕过策略就认定安全。检查只读取目录，不禁用 RLS 或重写 policy。仅保留但未启用的 policy、单独设置而未启用 RLS 的 `FORCE` 标志，以及后续 schema 中被实际写入目标遮蔽的同名表，不会被此检查误拒。
+- 旧写入器省略的列必须保留兼容的默认值。当前正常写入路径中，`WriteExamplesTx` 省略已退役的 `dialogues.scene` 和 `dialogues.relation`，依赖它们的空字符串默认值。启动通过 PostgreSQL `pg_attrdef` / `pg_get_expr` 或 SQLite `pragma_table_info.dflt_value` 读取默认值；拒绝缺失、`NULL`、非空字面量及无法识别的表达式。保守识别原生空字符串字面量（允许外围括号和空白；PostgreSQL 为 `''::text`），不执行未知默认表达式以免产生副作用。其他由正常写入器显式提供的列和独立扩展表不受此默认值限制。检查不修改默认值、业务字段或版本号，未标记 v15 也须先通过再回填。
 - 独立扩展表不能通过外键依赖会被旧代码重建的核心行；否则一次普通保存就可能级联删除新版数据。只依赖 `instances` 的扩展表可保留，但完整实例生命周期受下节保护。
 - PostgreSQL 的外键检查包含其他 schema 对当前写入器可变表的入站依赖，不限于当前 schema 的表清单。被引用表按写入器实际解析到的关系 OID 匹配，其他 schema 中的同名独立表不会被误拒；外部同名 `memory_embeddings` 也不能冒用原生缓存关联豁免。检查包含当前 schema 引用 `search_path` 后续 schema 中可变缓存的反向情形，不能假设写入目标总在第一个 schema。无论外键使用级联、置空还是限制删除，均可能改变未知数据或阻断旧写入器，必须拒绝。该检查不枚举或重写外部业务数据，不扩大历史 v15 的表白名单；未标记 v15 也必须先通过检查才能回填兼容字段。
 - 已有列的含义、合法枚举和 JSON 结构也属于契约。例如新增全局设置键或模型路由 workload 可能被旧校验拒绝；给记忆目录或合并归档的固定结构 JSON 增加字段，可能在旧程序反序列化后重写时丢失。此类变更必须提高下限，或先发布能保留未知字段的旧写入器。
@@ -59,6 +61,10 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 `internal/storage/compatibility_trigger_test.go` 使用带特殊字符的独立 schema，覆盖后续 schema 的缓存、核心和元数据写入目标，以及历史 v15、同名遮蔽、无关 schema、无触发器的安全回退布局。回滚事务中的 SQL 写入探针分别证明行级触发器阻断操作、语句级触发器改写扩展数据（scope 删除探针对应记忆导入的 SQL，不宣称执行完整导入 API）。拒绝启动前后比较两个 schema 的数据、列、约束、触发器启用状态和函数定义。
 
 `internal/storage/compatibility_rule_test.go` 先在回滚事务内证明 rewrite rule 附加删除、附加更新或静默跳过删除，确认这些规则没有对应的用户触发器，再验证启动拒绝。覆盖当前 schema、`search_path` 后续 schema 的缓存/元数据目标、核心表更新、历史 v15 不回填，以及普通视图、同名遮蔽和无关外部表不误拒。前后快照包含两个 schema 的数据、列、约束、触发器以及 rewrite rule 的启用状态和定义。scope SQL 探针对应记忆导入的删除操作，不宣称执行完整导入 API。
+
+`internal/storage/compatibility_rls_test.go` 使用独立 `NOSUPERUSER NOBYPASSRLS` 登录角色，覆盖非 owner 与受 `FORCE ROW LEVEL SECURITY` 约束的 owner。真实 `LoadInstances` / `CreateInstance` 先证明实例被隐藏、创建被拒，scope SQL 探针证明删除静默影响零行；再验证当前 schema 和后续 `search_path` 写入目标被拒、历史 v15 不回填，并覆盖同名遮蔽、已禁用 policy 和未启用 RLS 的 `FORCE` 标志。管理员快照比较两个 schema 的数据、默认值、RLS 标志和 policy 定义，避免因测试账号绕过或看不到数据而误判。
+
+`internal/storage/compatibility_defaults_test.go` 同时覆盖 SQLite 与 PostgreSQL 中两个省略列的 `NULL` / 缺失默认值、非空默认值和历史 v15 不回填；原生/带括号的空字符串、显式写入列的默认值变化与独立扩展表保持兼容。快照包含全部行和默认值定义，确认拒绝启动无副作用。`internal/service/dialogue/compatibility_postgres_test.go` 另通过真实 `SaveExamplesSQL` 复现两个列各自引发的 SQLSTATE `23502`，确认失败保存回滚并保留原有示例，再检查启动拒绝。PostgreSQL CI 显式执行该真实写入路径测试。
 
 PostgreSQL 迁移 CI 为真实数据库测试生成并上传独立覆盖率报告，与普通 Go 测试报告合并；否则只在 PostgreSQL 执行的兼容检查会被错误计为未覆盖。该报告不替代普通测试，也不降低覆盖率门槛。
 

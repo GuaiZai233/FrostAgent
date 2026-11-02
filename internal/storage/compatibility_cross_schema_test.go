@@ -315,5 +315,64 @@ func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]
 	if err := rules.Err(); err != nil {
 		t.Fatal(err)
 	}
+	rules.Close()
+	defaults, err := db.Query(`SELECT c.relname, a.attname, pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+		FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_class c ON c.oid = d.adrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.adnum
+		WHERE n.nspname = current_schema() ORDER BY c.relname, a.attnum`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer defaults.Close()
+	for defaults.Next() {
+		var table, column, expression string
+		if err := defaults.Scan(&table, &column, &expression); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":defaults"] = append(snapshot[table+":defaults"], column+":"+expression)
+	}
+	if err := defaults.Err(); err != nil {
+		t.Fatal(err)
+	}
+	defaults.Close()
+	security, err := db.Query(`SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+		FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer security.Close()
+	for security.Next() {
+		var table, enabled, forced string
+		if err := security.Scan(&table, &enabled, &forced); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":rls"] = []string{enabled, forced}
+	}
+	if err := security.Err(); err != nil {
+		t.Fatal(err)
+	}
+	security.Close()
+	policies, err := db.Query(`SELECT c.relname, p.polname, p.polcmd, p.polpermissive,
+		p.polroles::text, COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), ''),
+		COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '')
+		FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname, p.polname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer policies.Close()
+	for policies.Next() {
+		var table, name, command, permissive, roles, using, check string
+		if err := policies.Scan(&table, &name, &command, &permissive, &roles, &using, &check); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":policies"] = append(snapshot[table+":policies"], name+":"+command+":"+permissive+":"+roles+":"+using+":"+check)
+	}
+	if err := policies.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return snapshot
 }
