@@ -18,7 +18,7 @@ function fixture(withInstance = true) {
     catalog: catalogInitial, routes: configuration(3n),
     catalogDraft: structuredClone(catalogInitial), routeDraft: configuration(3n),
     exposeCatalogDraft: false, catalogSecretDirty: false,
-    failCatalog: false, failRoutes: false, failDiscardRoutes: false,
+    failCatalog: false, failRoutes: false, failDiscardRoutes: false, failResetCatalog: false,
     failCatalogPublishNumber: 0, catalogPublishes: 0, replaceRouteDraft: false,
   };
   const makeAPI = (scope: 'catalog' | 'routes') => ({
@@ -73,11 +73,14 @@ function fixture(withInstance = true) {
     async discardModelRouterDraft() {
       calls.push(`${scope}:discard`);
       if (scope === 'routes' && state.failDiscardRoutes) throw new Error('route discard unavailable');
+      if (scope === 'routes') state.routeDraft = structuredClone(state.routes);
       return structuredClone(state[scope]);
     },
     async resetSharedCatalogDraft() {
       calls.push(`${scope}:reset`);
+      if (state.failResetCatalog) throw new Error('catalog reset unavailable');
       state.catalogDraft = structuredClone(state.catalog);
+      state.catalogSecretDirty = false;
       return structuredClone(state.catalog);
     },
     async setDraftEndpointSecret() { calls.push(`${scope}:secret`); return { success: true, configured: true, error: '' }; },
@@ -165,7 +168,9 @@ function fixture(withInstance = true) {
   await assert.rejects(editor.saveModelRouterDraft(loaded.draft), /尚未成功加载/);
   await assert.rejects(editor.publishModelRouter(), /尚未成功加载/);
   assert.deepEqual(calls, ['catalog:load', 'routes:load']);
-  await editor.resetSharedCatalogDraft();
+  assert.match(loaded.loadError, /放弃改动/);
+  await editor.discardChanges(loaded.draft);
+  assert.deepEqual(calls.slice(2), ['catalog:reset', 'routes:discard']);
   const recovered = await editor.getModelRouterState();
   assert.equal(recovered.loadError, '');
   assert.equal(recovered.draft.endpoints[0].baseUrl, 'https://provider.invalid/v1');
@@ -230,15 +235,50 @@ function fixture(withInstance = true) {
   draft.endpoints[0].displayName = 'Unsaved';
   draft.globalBindings = [];
   state.failDiscardRoutes = true;
-  await assert.rejects(editor.discardModelRouterDraft(draft), (error: unknown) => {
+  await assert.rejects(editor.discardChanges(draft), (error: unknown) => {
     assert.ok(error instanceof ModelRouterEditorError);
     assert.equal(error.draft.endpoints[0].displayName, 'Shared');
     assert.deepEqual(error.draft.globalBindings, []);
+    assert.match(error.message, /共享供应商改动已放弃.*route discard unavailable/);
     return true;
   });
   state.failDiscardRoutes = false;
-  const restored = await editor.discardModelRouterDraft(draft);
+  const restored = await editor.discardChanges(draft);
   assert.equal(restored.globalBindings[0].modelId, 'shared-model');
+}
+
+{
+  const { editor, state, calls } = fixture();
+  const loaded = await editor.getModelRouterState();
+  const draft = structuredClone(loaded.draft);
+  draft.endpoints[0].displayName = 'Unsaved provider';
+  draft.globalBindings = [];
+  state.catalogDraft.endpoints[0].baseUrl = 'https://other-page.invalid/v1';
+  state.catalogSecretDirty = true;
+  state.routeDraft.globalBindings = [];
+  state.failResetCatalog = true;
+  await assert.rejects(editor.discardChanges(draft), (error: unknown) => {
+    assert.ok(error instanceof ModelRouterEditorError);
+    assert.equal(error.draft.endpoints[0].displayName, 'Unsaved provider');
+    assert.deepEqual(error.draft.globalBindings, []);
+    assert.match(error.message, /catalog reset unavailable/);
+    return true;
+  });
+  assert.deepEqual(calls.slice(2), ['catalog:reset'], 'failed catalog reset must not discard route edits');
+  state.failResetCatalog = false;
+  const restored = await editor.discardChanges(draft);
+  assert.equal(restored.endpoints[0].displayName, 'Shared');
+  assert.equal(restored.globalBindings[0].modelId, 'shared-model');
+  assert.deepEqual(state.catalogDraft, state.catalog, 'all shared catalog edits must be reset');
+  assert.deepEqual(state.routeDraft, state.routes, 'server-side instance draft must also be discarded');
+  assert.equal(state.catalogSecretDirty, false);
+}
+
+{
+  const { editor, calls } = fixture(false);
+  const loaded = await editor.getModelRouterState();
+  await editor.discardChanges(loaded.draft);
+  assert.deepEqual(calls, ['catalog:load', 'catalog:reset'], 'discard without an instance must stay catalog-only');
 }
 
 console.log('PASS: unified model editor preserves scope, publication order, and failed edits');

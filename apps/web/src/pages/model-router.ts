@@ -77,8 +77,7 @@ function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload
   return binding?.mode !== ModelBindingMode.MODEL;
 }
 
-export function mountModelRouterPage(container: HTMLElement): () => void {
-  const api = createModelRouterEditorAPI();
+export function mountModelRouterPage(container: HTMLElement, api = createModelRouterEditorAPI()): () => void {
   let unmounted = false;
   let loading = true;
   let busy = false;
@@ -88,6 +87,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   let loadError = '';
   let testingModelId = '';
   let hasDraftSecretChanges = false;
+  const lifecycle = new AbortController();
 
   async function load() {
     loading = true;
@@ -158,43 +158,29 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
     }
   }
 
-  async function discardDraft() {
+  async function discardChanges() {
+    if (busy || unmounted) return;
     busy = true;
     render();
     try {
-      const discarded = await api.discardModelRouterDraft(draft);
-      if (discarded) {
-        activeConfiguration = cloneConfiguration(discarded);
-        draft = cloneConfiguration(discarded);
-      } else {
-        draft = cloneConfiguration(activeConfiguration);
-      }
+      if (!await confirmDialog({
+        title: '放弃改动',
+        message: '这会丢弃所有页面尚未发布的共享供应商、模型与密钥修改，以及当前实例尚未发布的路由修改，恢复为已发布配置。确定继续吗？',
+        confirmLabel: '放弃改动',
+        destructive: true,
+        signal: lifecycle.signal,
+      }) || unmounted) return;
+      const discarded = await api.discardChanges(draft);
+      if (unmounted) return;
+      activeConfiguration = cloneConfiguration(discarded);
+      draft = cloneConfiguration(discarded);
       hasDraftSecretChanges = false;
-      toast.info('内存草稿已恢复为活动配置');
+      loadError = '';
+      toast.info('未发布的改动已放弃');
     } catch (err) {
+      if (unmounted) return;
       applyPartialResult(err);
-      toast.error('放弃草稿失败: ' + errorText(err));
-    } finally {
-      busy = false;
-      render();
-    }
-  }
-
-  async function resetSharedCatalogDraft() {
-    if (!await confirmDialog({
-      title: '重置共享草稿',
-      message: '这会丢弃所有页面尚未发布的共享供应商、模型与密钥修改，以及本页未发布的实例路由修改。确定继续吗？',
-      confirmLabel: '重置共享草稿',
-      destructive: true,
-    })) return;
-    busy = true;
-    render();
-    try {
-      await api.resetSharedCatalogDraft();
-      await load();
-      toast.info('共享供应商草稿已重置');
-    } catch (err) {
-      toast.error('重置共享草稿失败: ' + errorText(err));
+      toast.error('放弃改动失败: ' + errorText(err));
     } finally {
       busy = false;
       render();
@@ -225,8 +211,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
             <p class="text-xs text-muted">供应商、密钥和模型由所有实例共享，发布后立即作用于所有实例；默认路由与群覆盖仅作用于当前实例。${api.hasInstance ? '' : '请先选择实例以配置路由。'}</p>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
-            <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃草稿</button>
-            <button class="btn btn-outline btn-sm" id="router-reset-shared" ${busy ? 'disabled' : ''}>重置共享草稿</button>
+            <button class="btn btn-outline btn-sm" id="router-discard" ${busy ? 'disabled' : ''}>放弃改动</button>
             <button class="btn btn-primary btn-sm" id="router-publish" ${busy ? 'disabled' : ''}>${icon('play', 'w-3.5 h-3.5')} 发布配置</button>
           </div>
         </header>
@@ -386,8 +371,7 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
       });
     });
     container.querySelector('#router-publish')?.addEventListener('click', () => void publish());
-    container.querySelector('#router-discard')?.addEventListener('click', () => void discardDraft());
-    container.querySelector('#router-reset-shared')?.addEventListener('click', () => void resetSharedCatalogDraft());
+    container.querySelector('#router-discard')?.addEventListener('click', () => void discardChanges());
     container.querySelector('#add-endpoint')?.addEventListener('click', () => editEndpoint());
     container.querySelector('#add-model')?.addEventListener('click', () => editModel());
     container.querySelector('#add-group')?.addEventListener('click', () => editGroup());
@@ -805,5 +789,6 @@ export function mountModelRouterPage(container: HTMLElement): () => void {
   void load();
   return () => {
     unmounted = true;
+    lifecycle.abort();
   };
 }

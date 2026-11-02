@@ -44,7 +44,11 @@ export const instanceState = {
     if (selected && selected.id === selectedAtStart) {
       const next = result.instances.find((item) => item.id === selected?.id);
       if (!next) this.select(null);
-      else selected = next;
+      else {
+        const labelChanged = selected.name !== next.name || selected.enabled !== next.enabled;
+        selected = next;
+        if (labelChanged) window.dispatchEvent(new Event('instance-updated'));
+      }
     }
     return result;
   },

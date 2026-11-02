@@ -17,8 +17,7 @@ import {
   formatHeadersMap,
 } from './mcp-config';
 
-export function mountMCPPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountMCPPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
   let loading = false;
   let servers: MCPServerInfo[] = [];
@@ -531,8 +530,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                           <thead>
                             <tr>
                               <th style="width: 5rem;">状态</th>
-                              <th style="width: 14rem;">工具名称</th>
-                              <th>描述</th>
+                              <th>工具名称</th>
                               <th style="width: 8.5rem; text-align: right;">操作</th>
                             </tr>
                           </thead>
@@ -571,20 +569,17 @@ export function mountMCPPage(container: HTMLElement): () => void {
                                     </div>
                                   </div>
                                 </td>
-                                <td class="text-muted-foreground leading-relaxed">
-                                  ${escapeHtml(tool.description || '无描述')}
-                                </td>
                                 <td style="text-align: right;">
                                   <button
                                     class="btn btn-outline btn-sm"
-                                    data-action="view-schema"
+                                    data-action="view-details"
                                     data-server-id="${escapeHtml(srv.id)}"
                                     data-tool-name="${escapeHtml(tool.name)}"
-                                    title="查看参数规范 (JSON Schema)"
+                                    title="查看工具详情"
                                     style="height: 1.625rem; padding: 0 0.5rem; font-size: 0.75rem;"
                                   >
                                     ${icon('file_code', 'size-3')}
-                                    <span>Schema</span>
+                                    <span>详情</span>
                                   </button>
                                 </td>
                               </tr>
@@ -764,8 +759,8 @@ export function mountMCPPage(container: HTMLElement): () => void {
       });
     });
 
-    // View tool schema
-    serversContainer.querySelectorAll('[data-action="view-schema"]').forEach((btn) => {
+    // View tool details
+    serversContainer.querySelectorAll('[data-action="view-details"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
         const serverId = target.dataset.serverId;
@@ -775,13 +770,13 @@ export function mountMCPPage(container: HTMLElement): () => void {
         const srv = servers.find((s) => s.id === serverId);
         const tool = srv?.tools.find((t) => t.name === toolName);
         if (tool) {
-          openToolSchemaDialog(tool, serverId);
+          openToolDetailsDialog(tool, serverId);
         }
       });
     });
   }
 
-  function openToolSchemaDialog(tool: MCPToolInfo, serverId: string): void {
+  function openToolDetailsDialog(tool: MCPToolInfo, serverId: string): void {
     let prettyJSON = '{}';
     try {
       if (tool.parametersJson) {
@@ -793,14 +788,14 @@ export function mountMCPPage(container: HTMLElement): () => void {
     }
 
     openDialog({
-      title: `工具参数: ${tool.name}`,
+      title: `工具详情: ${tool.name}`,
       description: `完整名称: ${tool.fullName} (由 ${serverId} 提供)`,
       maxWidth: '38rem',
       bodyHtml: `
         <div class="flex flex-col gap-3">
           <div>
             <label class="text-xs font-semibold text-foreground mb-1 block">功能描述</label>
-            <p class="text-xs text-muted leading-relaxed">${escapeHtml(tool.description || '无描述')}</p>
+            <div class="mcp-tool-description rounded-md border border-border bg-muted/50 p-3 text-xs text-muted leading-relaxed whitespace-pre-wrap break-words" style="max-height: 15rem; overflow: auto; overscroll-behavior: contain;" tabindex="0" role="region" aria-label="工具功能描述">${escapeHtml(tool.description || '无描述')}</div>
           </div>
           <div>
             <div class="flex items-center justify-between mb-1">
