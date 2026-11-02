@@ -301,6 +301,7 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		}
 	}
 	triggerQuery := `SELECT count(*) FROM sqlite_master WHERE type = 'trigger'`
+	var ruleQuery string
 	var triggerArgs []any
 	if d.Backend == Postgres {
 		// Preserve the active-schema guard, and also inspect actual writer
@@ -312,11 +313,18 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		}
 		references, args := postgresRelationReferences(targets)
 		triggerArgs = args
+		relationScope := `(n.nspname = current_schema() OR c.oid IN (` + references + `))`
 		triggerQuery = `SELECT count(*) FROM pg_catalog.pg_trigger t
 			JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
 			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			WHERE NOT t.tgisinternal AND (n.nspname = current_schema()
-			OR t.tgrelid IN (` + references + `))`
+			WHERE NOT t.tgisinternal AND ` + relationScope
+		// Table rewrite rules can add writes or suppress the writer's action
+		// without appearing in pg_trigger. A view's built-in SELECT rule is
+		// not a write hook, so preserve ordinary _RETURN rules.
+		ruleQuery = `SELECT count(*) FROM pg_catalog.pg_rewrite r
+			JOIN pg_catalog.pg_class c ON c.oid = r.ev_class
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE r.rulename <> '_RETURN' AND ` + relationScope
 	}
 	var triggers int
 	if err := q.QueryRowContext(ctx, triggerQuery, triggerArgs...).Scan(&triggers); err != nil {
@@ -326,6 +334,13 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		return fmt.Errorf("unrecognized database triggers require a newer program")
 	}
 	if d.Backend == Postgres {
+		var rules int
+		if err := q.QueryRowContext(ctx, ruleQuery, triggerArgs...).Scan(&rules); err != nil {
+			return err
+		}
+		if rules != 0 {
+			return fmt.Errorf("unrecognized database rewrite rules require a newer program")
+		}
 		if err := validatePostgresCrossSchemaReferences(ctx, q); err != nil {
 			return err
 		}

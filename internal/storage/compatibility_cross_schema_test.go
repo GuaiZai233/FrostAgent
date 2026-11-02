@@ -296,5 +296,24 @@ func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]
 	if err := triggers.Err(); err != nil {
 		t.Fatal(err)
 	}
+	triggers.Close()
+	rules, err := db.Query(`SELECT c.relname, r.rulename, r.ev_enabled, pg_catalog.pg_get_ruledef(r.oid)
+		FROM pg_catalog.pg_rewrite r JOIN pg_catalog.pg_class c ON c.oid = r.ev_class
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname, r.rulename`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rules.Close()
+	for rules.Next() {
+		var table, name, enabled, definition string
+		if err := rules.Scan(&table, &name, &enabled, &definition); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":rules"] = append(snapshot[table+":rules"], name+":"+enabled+":"+definition)
+	}
+	if err := rules.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return snapshot
 }
