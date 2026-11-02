@@ -400,10 +400,8 @@ func astrBotVisibleText(event Event) string {
 	if text := strings.TrimSpace(event.Content); text != "" {
 		parts = append(parts, text)
 	}
-	for _, att := range event.Attachments {
-		if att.Type == core.AttachmentTypeImage && (att.MessageID == "" || att.MessageID == event.MessageID) {
-			parts = append(parts, "[图片]")
-		}
+	for range astrBotImageSlotCount(event) {
+		parts = append(parts, "[图片]")
 	}
 	if event.Metadata != nil {
 		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
@@ -411,6 +409,31 @@ func astrBotVisibleText(event Event) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// astrBotImageSlotCount returns the number of model-visible image slots for the
+// current message. The plugin reports the original count (including unreadable
+// and deduplicated slots); older plugins fall back to attachment ordinals.
+func astrBotImageSlotCount(event Event) int {
+	if count := event.ImageSlotCounts[event.MessageID]; count > 0 {
+		return count
+	}
+	slots := 0
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
+			continue
+		}
+		if len(att.ImageIndices) > 0 {
+			for _, index := range att.ImageIndices {
+				if index+1 > slots {
+					slots = index + 1
+				}
+			}
+			continue
+		}
+		slots++
+	}
+	return slots
 }
 
 func astrBotLogText(event Event) (string, []logs.InlineImage) {

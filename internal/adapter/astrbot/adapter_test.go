@@ -2,12 +2,14 @@ package astrbot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +181,92 @@ func TestLoadObservedImageFromEventUsesExplicitImageIndices(t *testing.T) {
 
 	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 3); err == nil {
 		t.Fatal("expected out-of-range image index error")
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForRepeatedImages(t *testing.T) {
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 3},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 3 {
+		t.Fatalf("visible text has %d placeholders, want 3: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil || string(data) != string(sameImage) {
+			t.Fatalf("image index %d = %q, err=%v; want same image", imageIndex, data, err)
+		}
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil || string(data) != string(otherImage) {
+		t.Fatalf("image index 2 = %q, err=%v; want other image", data, err)
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 2},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, ImageIndices: []int{1}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 2 {
+		t.Fatalf("visible text has %d placeholders, want 2: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 0); err == nil {
+		t.Fatal("unreadable first image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("image index 1 = %q, err=%v; want readable image", data, err)
+	}
+}
+
+func TestAstrBotQuotedImagePromptAndLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "101",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, MessageID: "44", ImageIndices: []int{1}},
+		},
+	}
+	raw := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"101","user_id":1,"message":[{"type":"image","data":{}},{"type":"image","data":{"url":"https://example.com/readable"}}]}`)
+	node, ok := parseAstrBotQuote(event, "44", raw)
+	if !ok {
+		t.Fatal("quote should pass same-session validation")
+	}
+	if prompt := astrBotQuotePrompt([]astrBotQuoteNode{node}); strings.Count(prompt, "[图片]") != 2 {
+		t.Fatalf("quoted prompt has %d placeholders, want 2: %q", strings.Count(prompt, "[图片]"), prompt)
+	}
+
+	trusted := trustedQuotedMessageIDs([]astrBotQuoteNode{node}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 0); err == nil {
+		t.Fatal("unreadable quoted image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("quoted image index 1 = %q, err=%v; want readable image", data, err)
 	}
 }
 
