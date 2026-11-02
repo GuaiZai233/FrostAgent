@@ -144,7 +144,7 @@ func MemberContextPrompt(m *MemberProfile) string {
 
 	card := EscapeXML(SanitizeProfileText(m.Card))
 	if card != "" && card != callingName {
-		fmt.Fprintf(&sb, "（群名片：%q，仅作身份消歧识别，严禁直接作为称呼）", card)
+		fmt.Fprintf(&sb, "（群名片：%q，仅作身份消歧识别，谨慎直接作为称呼）", card)
 	}
 	if len(m.Aliases) > 0 {
 		var sanitizedAliases []string
