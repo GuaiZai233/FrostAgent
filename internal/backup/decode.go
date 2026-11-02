@@ -13,13 +13,14 @@ import (
 const MaxInstanceZIPBytes = 512 << 20
 
 type DecodedInstance struct {
-	Manifest  Manifest
-	Settings  Settings
-	Memories  Memories
-	Summaries Summaries
-	Stickers  Stickers
-	Images    map[string][]byte
-	Skills    []skills.Package
+	Manifest    Manifest
+	Settings    Settings
+	Memories    Memories
+	Summaries   Summaries
+	Stickers    Stickers
+	Images      map[string][]byte
+	Skills      []skills.Package
+	ComputerUse *ComputerUse
 }
 
 // DecodeInstanceZIP accepts only the documented archive members and checks
@@ -41,7 +42,8 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, fmt.Errorf("duplicate or invalid ZIP member %q", name)
 		}
 		if name != "manifest.json" && name != "setting.json" && name != "memory.json" &&
-			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" {
+			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" &&
+			name != "computer_use.json" {
 			if !strings.HasPrefix(name, "sticker/files/") || !validStickerFilename(strings.TrimPrefix(name, "sticker/files/")) {
 				return decoded, fmt.Errorf("unexpected ZIP member %q", name)
 			}
@@ -94,6 +96,21 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, err
 		}
 		decoded.Skills = validated
+	}
+	if data, ok := files["computer_use.json"]; ok {
+		var metadata ComputerUse
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&metadata); err != nil {
+			return decoded, fmt.Errorf("decode computer_use.json: %w", err)
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return decoded, fmt.Errorf("computer_use.json contains trailing content")
+		}
+		if err := ValidateComputerUse(metadata); err != nil {
+			return decoded, err
+		}
+		decoded.ComputerUse = &metadata
 	}
 	if decoded.Manifest.Kind != "instance" {
 		return decoded, fmt.Errorf("ZIP is not an instance backup")

@@ -662,6 +662,7 @@ class RuntimeInfoCommandTest(unittest.IsolatedAsyncioTestCase):
         adapter.settings = SimpleNamespace(
             forward_all_group_messages=False,
             http_base_url="http://127.0.0.1:8080",
+            computer_use_adapter_token="",
         )
         adapter.client = FakeClient(actions)
         return adapter
@@ -827,6 +828,23 @@ class RuntimeInfoCommandTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.forward(adapter, event), [])
                 self.assertEqual(event.should_call_llm_calls, [True])
                 self.assertIsNone(adapter.client.queue)
+
+    async def test_authenticated_diagnostic_send_failure_hides_transport_details(self):
+        adapter = self.make_adapter()
+        adapter.settings.computer_use_adapter_token = "synthetic-adapter-token"
+        event = FakeEvent(group_id="group_test", content="#fa")
+
+        async def fail_send(_payload):
+            raise RuntimeError("synthetic-private-transport-detail")
+
+        adapter.client.send_event = fail_send
+        with patch.object(adapter_module.logger, "warning") as warning:
+            self.assertEqual(await self.forward(adapter, event), [])
+        warning.assert_called_once()
+        self.assertNotIn("synthetic-private-transport-detail", str(warning.call_args))
+        self.assertIn("详细信息已隐藏", str(warning.call_args))
+        self.assertEqual(event.should_call_llm_calls, [True])
+        self.assertIsNone(adapter.client.queue)
 
     async def test_wait_timeout_keeps_local_llm_suppressed(self):
         adapter = self.make_adapter()

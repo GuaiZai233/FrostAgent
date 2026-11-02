@@ -63,6 +63,13 @@ func fixtureSecretInsert(db *DB) string {
 // Only used on fresh disposable test databases to reconstruct historical schemas.
 func prepareOldSchema(t *testing.T, db *DB, version int) {
 	t.Helper()
+	if version < 15 {
+		for _, table := range []string{"computer_use_tasks", "computer_use_projects", "computer_use_config"} {
+			if _, err := db.SQL.Exec(`DROP TABLE ` + table); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if version < 14 {
 		if _, err := db.SQL.Exec(`DROP TABLE skills`); err != nil {
 			t.Fatal(err)
@@ -116,7 +123,7 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 
 func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13} {
+	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13, 14} {
 		t.Run(strconv.Itoa(previous), func(t *testing.T) {
 			root := t.TempDir()
 			db, err := Open(ctx, root)

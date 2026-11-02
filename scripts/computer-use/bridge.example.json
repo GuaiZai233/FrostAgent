@@ -1,0 +1,13 @@
+{
+  "instance_id": "replace-with-bot-instance-id",
+  "listen": "192.168.50.20:9443",
+  "token": "<GENERATE_RANDOM_BASE64URL_TOKEN_LOCALLY>",
+  "certificate": "C:\\FrostBridge\\secrets\\bridge.crt",
+  "key": "C:\\FrostBridge\\secrets\\bridge.key",
+  "state_dir": "C:\\FrostBridge\\state",
+  "audit_dir": "C:\\FrostBridge\\audit",
+  "project_root": "C:\\Projects",
+  "git": "C:\\Program Files\\Git\\cmd\\git.exe",
+  "max_concurrent": 8,
+  "audit_retention_days": 7
+}

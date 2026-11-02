@@ -44,6 +44,9 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	for _, statement := range []string{
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,
+		`DROP TABLE computer_use_tasks`,
+		`DROP TABLE computer_use_projects`,
+		`DROP TABLE computer_use_config`,
 		`UPDATE schema_meta SET version=12 WHERE id=1`,
 	} {
 		if _, err := db.SQL.Exec(statement); err != nil {

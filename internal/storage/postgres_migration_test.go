@@ -61,7 +61,7 @@ func TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage(t *testing.T) {
 
 func TestPostgresMigrationPreservesData(t *testing.T) {
 	ctx := context.Background()
-	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13} {
+	for _, previous := range []int{7, 8, 9, 10, 11, 12, 13, 14} {
 		t.Run(fmt.Sprint(previous), func(t *testing.T) {
 			config := postgresMigrationConfig(t)
 			db, err := OpenWithConfig(ctx, t.TempDir(), config)

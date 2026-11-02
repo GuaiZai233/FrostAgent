@@ -191,6 +191,22 @@ var migrations = []migration{
 		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
 		size_bytes INTEGER NOT NULL, PRIMARY KEY (instance_id, name)
 	)`}},
+	{15, []string{
+		`CREATE TABLE computer_use_config (
+			instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+			config_json TEXT NOT NULL
+		)`,
+		`CREATE TABLE computer_use_projects (
+			instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+			id TEXT NOT NULL, metadata_json TEXT NOT NULL,
+			PRIMARY KEY (instance_id, id)
+		)`,
+		`CREATE TABLE computer_use_tasks (
+			instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+			id TEXT NOT NULL, generation BIGINT NOT NULL, metadata_json TEXT NOT NULL,
+			PRIMARY KEY (instance_id, id)
+		)`,
+	}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

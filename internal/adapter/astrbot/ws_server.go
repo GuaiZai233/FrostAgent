@@ -95,6 +95,7 @@ type wsConn struct {
 	cancel            context.CancelFunc
 	writeMu           sync.Mutex
 	mock              bool
+	computerProof     string
 	mockSessions      sync.Map
 	pendingDeliveries sync.Map
 	pendingQuotes     sync.Map

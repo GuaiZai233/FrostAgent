@@ -274,6 +274,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			wsConn = newWSConnection(conn)
 		}
 		wsConn.stealer = a.stealer
+		if a.engine != nil && a.engine.ComputerUse != nil && core.ComputerUseSecureTransport(r) {
+			wsConn.computerProof = a.engine.ComputerUse.AuthenticateTransport(r.Header.Get("Authorization"))
+		}
 		wsConn.llmErrorReplies = &a.llmErrorReplies
 		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
 			wsConn.mock = true
@@ -339,6 +342,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			}
 
 			if event.MetaEventType == "heartbeat" {
+				continue
+			}
+			if handleComputerUseCommand(wsConn, event, a.engine) {
 				continue
 			}
 

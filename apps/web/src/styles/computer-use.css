@@ -1,0 +1,74 @@
+.computer-use-page {
+  min-width: 0;
+}
+
+.computer-use-page .cu-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+}
+
+.computer-use-page .cu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.computer-use-page .cu-wide {
+  grid-column: 1 / -1;
+}
+
+.computer-use-page .cu-notice {
+  border-inline-start: 3px solid var(--primary);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.computer-use-page .cu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.computer-use-page .cu-item {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.9rem;
+}
+
+.computer-use-page .cu-workspace {
+  margin: 0.75rem 0 0 0.75rem;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 2px solid var(--border);
+}
+
+.computer-use-page .cu-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  user-select: text;
+}
+
+.computer-use-page .cu-screenshot {
+  max-width: 100%;
+  max-height: 36rem;
+  object-fit: contain;
+}
+
+.computer-use-page [hidden] {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  .computer-use-page .cu-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
