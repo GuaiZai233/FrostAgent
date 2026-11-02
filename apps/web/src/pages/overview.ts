@@ -93,7 +93,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               </span>
               <span class="badge badge-outline">
                 ${icon('code', 'w-3 h-3')}
-                v${escapeHtml(version)}
+                ${escapeHtml(version)}
               </span>
             </div>
           </div>

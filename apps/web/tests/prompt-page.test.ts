@@ -14,6 +14,7 @@ class MockElement {
   private children = new Map<string, MockElement>();
   private cardsHtml = '';
   private cards: MockElement[] = [];
+  private tabs: MockElement[] = [];
   constructor(private attributes: Record<string, string> = {}) {}
 
   addEventListener(event: string, listener: (event?: Event) => unknown) {
@@ -28,6 +29,13 @@ class MockElement {
     return this.children.get(selector)!;
   }
   querySelectorAll(selector: string): MockElement[] {
+    if (selector === '[data-filter]') {
+      if (this.tabs.length === 0) {
+        this.tabs = ['all', 'all-groups', 'all-private', 'aiohttp', 'onebot']
+          .map((filter) => new MockElement({ 'data-filter': filter }));
+      }
+      return this.tabs;
+    }
     if (selector !== '.prompt-session-card') return [];
     if (this.cardsHtml !== this.innerHTML) {
       this.cardsHtml = this.innerHTML;
@@ -176,3 +184,53 @@ assert.equal(pendingConfirmation.closed, true);
 assert.equal(deleteCalls, 2, 'unmounted page deleted a summary through a stale dialog');
 
 process.stdout.write('PASS: merged page pagination, group actions, and deletion failure\n');
+
+const privateSession = {
+  ...session, sessionId: 'astrbot:private:test_user', platform: 'astrbot', groupSummary: 'stale private summary',
+};
+const privateRoot = new MockElement();
+const privateCalls: string[] = [];
+const privateAPI = {
+  ...api,
+  async getSessions() {
+    return { sessions: [session, privateSession], pagination: { total: 2, pageToken: '' } };
+  },
+  async getSessionContext(id: string) {
+    privateCalls.push(id);
+    return {
+      sessionId: id, platform: 'astrbot', runningSummary: 'fresh private compact',
+      promptText: '{"messages":[]}',
+      recentStructuredMessages: [{
+        role: 'assistant', content: 'private reply', sender: '', senderId: '', messageId: '', time: '',
+      }],
+      summaryGroups: [{ summary: 'fresh private compact', messages: ['[user] User: private input'] }],
+    };
+  },
+} as unknown as ReturnType<typeof createInstanceAPI>;
+const cleanupPrivate = mountPromptPage(privateRoot as unknown as HTMLElement, privateAPI);
+await Promise.resolve();
+assert.match(privateRoot.innerHTML, /data-filter="all-private">全部私聊/);
+const privateTabs = privateRoot.querySelector('#prompt-platform-filter-tabs').querySelectorAll('[data-filter]');
+privateTabs.find((tab) => tab.getAttribute('data-filter') === 'all-private')!.click();
+await Promise.resolve();
+const privateList = privateRoot.querySelector('#prompt-session-list');
+assert.match(privateList.innerHTML, /astrbot:private:test_user/);
+assert.doesNotMatch(privateList.innerHTML, /onebot:group:123/);
+privateList.querySelectorAll('.prompt-session-card')[0].click();
+await Promise.resolve();
+assert.deepEqual(privateCalls, [privateSession.sessionId]);
+const privateInspector = privateRoot.querySelector('#prompt-inspector-mount');
+assert.match(privateInspector.innerHTML, /当前私聊 compact 内容|private reply/);
+assert.match(privateInspector.innerHTML, /href="#\/model-router"/);
+assert.doesNotMatch(privateInspector.innerHTML, /id="pi-model-config-btn"/);
+privateInspector.querySelector('#pi-view-summary-btn').click();
+const privateDialog = dialogs.at(-1)!;
+assert.match(privateDialog.innerHTML, /私聊总结/);
+assert.match(privateDialog.innerHTML, /fresh private compact/);
+assert.doesNotMatch(privateDialog.innerHTML, /prompt-delete-summary-btn/);
+assert.equal(deleteCalls, 2, 'private summary viewing must not call the group delete API');
+privateTabs.find((tab) => tab.getAttribute('data-filter') === 'all-groups')!.click();
+assert.doesNotMatch(privateList.innerHTML, /astrbot:private:test_user/);
+assert.match(privateList.innerHTML, /onebot:group:123/);
+cleanupPrivate();
+process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');

@@ -1,4 +1,4 @@
-﻿package eval
+package eval
 
 import "github.com/GuaiZai233/FrostAgent/internal/security"
 
