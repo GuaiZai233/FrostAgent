@@ -207,7 +207,7 @@ func parseAstrBotQuote(event Event, requestedID string, raw json.RawMessage) (as
 		switch segment.Type {
 		case "text":
 			visible.WriteString(fmt.Sprint(segment.Data["text"]))
-		case "image":
+		case "image", "mface":
 			visible.WriteString("[图片]")
 		}
 	}
