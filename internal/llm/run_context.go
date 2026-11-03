@@ -56,6 +56,7 @@ type RunContext struct {
 	SecurityNotice       string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
 	Mock                 bool   // Mock / ephemeral session: do not write to persistent memory or group summary
 	Proactive            bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
+	ProactiveStickerOnly bool   // Adapter-classified current message; backend supplies stay_silent only when Proactive is also true.
 	Epoch                uint64
 }
 

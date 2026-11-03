@@ -377,7 +377,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.6",
+    "0.1.7",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -447,7 +447,11 @@ class FrostAgentAdapter(Star):
                     # A poke is owned by FrostAgent even when routing rejects it,
                     # transport fails, or the response times out.
                     event.should_call_llm(True)
-                if not is_poke and not payload.get("content") and not payload.get("attachments"):
+                unreadable_group_sticker = (
+                    payload.get("message_type") == "group"
+                    and payload.get("metadata", {}).get("sticker_only") is True
+                )
+                if not is_poke and not payload.get("content") and not payload.get("attachments") and not unreadable_group_sticker:
                     is_group_interaction = payload.get("message_type") == "group" and (
                         payload.get("is_wake") or payload.get("is_at")
                     )
@@ -587,6 +591,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     # A diagnostic command does not need quoted history or media. In particular,
     # do not download/forward images from a Reply component's nested chain.
     image_slot_counts: dict[str, int] = {}
+    sticker_only = is_sticker_only_message(event)
     attachments = (
         []
         if is_runtime_info
@@ -636,6 +641,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         payload["image_slot_counts"] = image_slot_counts
     metadata: dict[str, Any] = {
         "runtime_info_command": is_runtime_info,
+        "sticker_only": sticker_only,
         "has_other_mention": has_other_mention,
         "has_other_content": has_other_content,
         "has_media_content": has_media_content,
@@ -884,6 +890,68 @@ def is_runtime_info_command(event: AstrMessageEvent) -> bool:
                 return False
         texts.append("".join(text_parts))
     return bool(texts) and all(text.strip() == "#fa" for text in texts)
+
+
+def is_sticker_only_message(event: AstrMessageEvent) -> bool:
+    """Classify the current chain before media loss/deduplication, not quoted chains.
+
+    Raw OneBot segments retain subtype markers that normalized Image components
+    can lose. No content, filename, GIF, or rendered-placeholder guessing is used.
+    """
+    def marked_subtype(value: Any) -> bool:
+        # Unlike int(value), this cannot turn an unknown fractional subtype
+        # into a positive sticker marker.
+        return (type(value) in (int, float) and value == 1) or (
+            isinstance(value, str) and value.strip() == "1"
+        )
+
+    segments = raw_onebot_segments(event)
+    if segments:
+        found = False
+        for segment in segments:
+            kind = str(segment.get("type") or "").lower()
+            data = segment.get("data") or {}
+            if not isinstance(data, dict):
+                return False
+            if kind == "text":
+                value = data.get("text")
+                if not isinstance(value, str) or value.strip():
+                    return False
+            elif kind == "reply":
+                continue
+            elif kind in ("mface", "sticker") or (
+                kind == "image" and (
+                    data.get("is_sticker") is True
+                    or any(marked_subtype(data.get(key)) for key in ("sub_type", "subType", "subtype"))
+                    or is_market_face_data(data)
+                )
+            ):
+                found = True
+            else:
+                return False
+        return found
+
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if not isinstance(components, list):
+        return False
+    found = False
+    for component in components:
+        kind = type(component).__name__.lower()
+        if "plain" in kind:
+            value = first_attr(component, "text")
+            if not isinstance(value, str) or value.strip():
+                return False
+        elif kind == "reply":
+            continue
+        elif kind in ("mface", "sticker") or ("image" in kind and (
+            first_attr(component, "is_sticker") is True
+            or any(marked_subtype(first_attr(component, key)) for key in ("sub_type", "subType", "subtype"))
+            or is_market_face_data(component_image_data(component))
+        )):
+            found = True
+        else:
+            return False
+    return found
 
 
 def extract_reply_message_id(event: AstrMessageEvent) -> str:
