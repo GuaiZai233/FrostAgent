@@ -26,13 +26,17 @@ func isStickerOnlyEvent(event model.OneBotEvent) bool {
 				}
 			case "reply":
 				// A quote marker is not the content being reacted to.
-			default:
+			case "mface", "sticker":
+				found = true
+			case "image":
 				flag, _ := segment.Data["is_sticker"].(bool)
 				if !sticker.IsMessage(segment.Type, flag, segment.Data["sub_type"], segment.Data["subType"]) &&
 					!content.IsMarketFaceSegment(segment) {
 					return false
 				}
 				found = true
+			default:
+				return false
 			}
 		}
 	}

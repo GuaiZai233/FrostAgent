@@ -43,10 +43,11 @@ func TestInboundStickerOnlyClassification(t *testing.T) {
 
 func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) {
 	for _, tc := range []struct {
-		name                                                       string
-		stickerOnly, mixed, explicit, private, disabled, whitelist bool
+		name                                                                   string
+		stickerOnly, unreadable, mixed, explicit, private, disabled, whitelist bool
 	}{
 		{name: "sticker", stickerOnly: true},
+		{name: "unreadable sticker", stickerOnly: true, unreadable: true},
 		{name: "ordinary image"},
 		{name: "mixed", mixed: true},
 		{name: "explicit sticker", stickerOnly: true, explicit: true},
@@ -93,6 +94,10 @@ func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T)
 				extra := att
 				extra.SubType = 1
 				event.Attachments = append(event.Attachments, extra)
+			}
+			if tc.unreadable {
+				event.Attachments = nil
+				event.Metadata = map[string]any{"sticker_only": true}
 			}
 			if tc.private {
 				event.MessageType = "private"

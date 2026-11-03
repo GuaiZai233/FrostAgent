@@ -30,6 +30,8 @@ func TestInboundStickerOnlyClassification(t *testing.T) {
 		{"mixed image", `[{"type":"image","data":{}},{"type":"mface"}]`, false},
 		{"emoji", `[{"type":"face","data":{"id":"synthetic"}}]`, false},
 		{"unknown", `[{"type":"mface"},{"type":"unknown"}]`, false},
+		{"flagged unknown", `[{"type":"mface"},{"type":"unknown","data":{"is_sticker":true}}]`, false},
+		{"flagged video", `[{"type":"video","data":{"is_sticker":true}}]`, false},
 		{"mention", `[{"type":"at","data":{"qq":"12"}},{"type":"mface"}]`, false},
 		{"quoted sticker only", `[{"type":"reply","data":{"message":[{"type":"mface"}]}}]`, false},
 		{"literal placeholder", `"[图片]"`, false},
@@ -55,6 +57,7 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 		{name: "ordinary gif", message: `[{"type":"image","data":{"file":"base64://R0lGODlh","sub_type":0}}]`},
 		{name: "mixed image", message: `[{"type":"mface","data":{}},{"type":"image","data":{"file":"base64://cGhvdG8="}}]`},
 		{name: "mixed text", message: `[{"type":"mface","data":{}},{"type":"text","data":{"text":"hello"}}]`},
+		{name: "flagged unknown", message: `[{"type":"mface","data":{}},{"type":"unknown","data":{"is_sticker":true}}]`},
 		{name: "explicit", message: `[{"type":"at","data":{"qq":"11"}},{"type":"image","data":{"sub_type":1}}]`},
 		{name: "private", message: `[{"type":"image","data":{"sub_type":1}}]`, private: true},
 	} {
