@@ -29,7 +29,7 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 - PostgreSQL rewrite rule 同样属于写入契约，但存储在 `pg_rewrite`，不能由触发器检查代替。对当前 schema 及上述实际写入目标，启动拒绝非 `_RETURN` 规则：`DO ALSO` 可以附加删除或改写新版模块数据，`DO INSTEAD` 可以静默替代原操作。检查与触发器共用关系 OID 范围，保留普通视图的内建 `_RETURN` 规则；不执行、禁用或重建规则，历史 v15 也须先通过检查再回填元数据。
 - PostgreSQL 对当前 schema 表及上述实际写入目标启用 Row-Level Security（`pg_class.relrowsecurity`）时，也拒绝兼容启动。RLS 不仅会拒绝写入，还可能隐藏已有实例或静默过滤 scope 删除；不能因为检查账号是 superuser、拥有 `BYPASSRLS` 或暂时绕过策略就认定安全。检查只读取目录，不禁用 RLS 或重写 policy。仅保留但未启用的 policy、单独设置而未启用 RLS 的 `FORCE` 标志，以及后续 schema 中被实际写入目标遮蔽的同名表，不会被此检查误拒。
 - 旧写入器省略的列必须保留兼容的默认值。当前正常写入路径中，`WriteExamplesTx` 省略已退役的 `dialogues.scene` 和 `dialogues.relation`，依赖它们的空字符串默认值。启动通过 PostgreSQL `pg_attrdef` / `pg_get_expr` 或 SQLite `pragma_table_info.dflt_value` 读取默认值；拒绝缺失、`NULL`、非空字面量及无法识别的表达式。保守识别原生空字符串字面量（允许外围括号和空白；PostgreSQL 为 `''::text`），不执行未知默认表达式以免产生副作用。其他由正常写入器显式提供的列和独立扩展表不受此默认值限制。检查不修改默认值、业务字段或版本号，未标记 v15 也须先通过再回填。
-- 独立扩展表不能通过外键依赖会被旧代码重建的核心行；否则一次普通保存就可能级联删除新版数据。只依赖 `instances` 的扩展表可保留，但完整实例生命周期受下节保护。
+- 独立扩展表不能通过外键依赖会被旧代码重建的核心行；否则一次普通保存就可能级联删除新版数据。仅引用不可变的 `instances(id)` 的扩展表可保留，但完整实例生命周期受下节保护。`instances(name)` 虽然唯一，却会被正常实例改名更新；无论更新动作是级联、置空还是限制，都可能改变模块数据或阻断改名，因此必须拒绝，不能按整张实例表豁免。
 - PostgreSQL 的外键检查包含其他 schema 对当前写入器可变表的入站依赖，不限于当前 schema 的表清单。被引用表按写入器实际解析到的关系 OID 匹配，其他 schema 中的同名独立表不会被误拒；外部同名 `memory_embeddings` 也不能冒用原生缓存关联豁免。检查包含当前 schema 引用 `search_path` 后续 schema 中可变缓存的反向情形，不能假设写入目标总在第一个 schema。无论外键使用级联、置空还是限制删除，均可能改变未知数据或阻断旧写入器，必须拒绝。该检查不枚举或重写外部业务数据，不扩大历史 v15 的表白名单；未标记 v15 也必须先通过检查才能回填兼容字段。
 - 已有列的含义、合法枚举和 JSON 结构也属于契约。例如新增全局设置键或模型路由 workload 可能被旧校验拒绝；给记忆目录或合并归档的固定结构 JSON 增加字段，可能在旧程序反序列化后重写时丢失。此类变更必须提高下限，或先发布能保留未知字段的旧写入器。
 - 可重建的 Embedding 派生缓存仍遵循其原有失效与重建规则，不能将新的不可丢失数据放进旧程序会清理的缓存或写入域。`memory_embedding_scopes` 与 `memory_embeddings` 同样属于可变外键目标，兼容检查拒绝扩展表对它们的依赖；仅保留向量表到 scope 表原有的五列 `ON DELETE CASCADE`、`ON UPDATE NO ACTION` 关联，避免记忆导入或保存时连带删除新版模块数据。
@@ -54,7 +54,9 @@ SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独
 
 `internal/storage/compatibility_embedding_test.go` 独立构造缓存表的真实复合主键和外键；PostgreSQL 使用预先启用的真实 pgvector 类型，SQLite 仅使用文本载荷测试扩展关系。它先在回滚事务内证明缓存删除会级联删除扩展数据，再验证拒绝启动且全库元数据和行值不变；正常 v15/v16 缓存布局仍可打开，大小写外键名称也不能绕过检查。PostgreSQL CI 在启用 pgvector 前先验证原生和声明兼容的未来库均能在无缓存时启动。
 
-`internal/storage/compatibility_cross_schema_test.go` 使用独立 PostgreSQL schema 覆盖跨 schema 的核心表与缓存外键、外部同名缓存表、`search_path` 后续 schema 中的缓存目标、原始 v15 回填保护，以及无关同名表和仅引用实例的合法布局；快照同时检查当前 schema 与外部 schema 的行值和约束，确认拒绝打开不修改任何一侧。
+`internal/storage/compatibility_cross_schema_test.go` 使用独立 PostgreSQL schema 覆盖跨 schema 的核心表与缓存外键、外部同名缓存表、`search_path` 后续 schema 中的缓存目标、原始 v15 回填保护，以及无关同名表和仅引用实例 ID 的合法布局；快照同时检查当前 schema 与外部 schema 的行值和约束，确认拒绝打开不修改任何一侧。
+
+`internal/storage/compatibility_instance_key_test.go` 通过真实 `LoadInstances` / `UpdateInstance` 证明名称外键的 CASCADE、SET NULL、NO ACTION 和 RESTRICT 会改写模块引用或阻断改名；随后验证 SQLite/PostgreSQL 在兼容启动时拒绝这些布局，且数据、约束和版本元数据不变。覆盖外部 schema 子表、历史 v15 不回填、不可变 ID 的合法引用及无关同名实例表；PostgreSQL 按实际目标 OID 与被引用的 ID 属性编号豁免，而非表名或子表列名。
 
 `internal/storage/compatibility_deferrable_test.go` 覆盖主键、非主键唯一约束的 `INITIALLY DEFERRED` / `INITIALLY IMMEDIATE` 变化，以及原始 v15 拒绝后不回填。主键场景通过真实 `CreateInstance` 复现失败并验证整个事务回滚；非主键场景通过直接 UPSERT 探针验证约束限制。拒绝启动前后比较行、列类型和约束定义；普通不可延迟约束与独立扩展表保持可用。
 

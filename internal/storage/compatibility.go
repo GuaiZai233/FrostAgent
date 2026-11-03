@@ -396,7 +396,11 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 				continue
 			}
 			_, core := compatibleCoreColumns[key.parent]
-			if (core && key.parent != "instances") || key.parent == "memory_embedding_scopes" || key.parent == "memory_embeddings" {
+			// Only the instance ID is immutable: normal instance renames update
+			// the unique name and can cascade into, or be blocked by, module rows.
+			instanceID := key.parent == "instances" && (key.parentColumn == "id" ||
+				(d.Backend == SQLite && strings.EqualFold(key.parentColumn, "id")))
+			if (core && !instanceID) || key.parent == "memory_embedding_scopes" || key.parent == "memory_embeddings" {
 				return fmt.Errorf("extension table %s references mutable table %s; a newer program is required", table, key.parent)
 			}
 		}
@@ -410,9 +414,7 @@ func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) 
 	// by OID so unrelated schemas with identically named tables are not rejected.
 	targets := []string{"memory_embedding_scopes", "memory_embeddings"}
 	for table := range compatibleCoreColumns {
-		if table != "instances" {
-			targets = append(targets, table)
-		}
+		targets = append(targets, table)
 	}
 	references, args := postgresRelationReferences(targets)
 	// Do not filter by FK action: cascades can mutate unknown data, while
@@ -428,6 +430,14 @@ func validatePostgresCrossSchemaReferences(ctx context.Context, q schemaReader) 
 		WHERE c.contype = 'f'
 		AND (child_ns.nspname <> current_schema() OR parent_ns.nspname <> current_schema())
 		AND c.confrelid IN (` + references + `)
+		AND NOT (
+			c.confrelid = pg_catalog.to_regclass('instances')
+			AND EXISTS (
+				SELECT 1 FROM pg_catalog.pg_attribute a
+				WHERE a.attrelid = c.confrelid AND a.attname = 'id' AND NOT a.attisdropped
+				AND c.confkey = ARRAY[a.attnum]
+			)
+		)
 		ORDER BY child_ns.nspname, child.relname, c.conname LIMIT 1`
 	var child, parent string
 	err := q.QueryRowContext(ctx, query, args...).Scan(&child, &parent)
