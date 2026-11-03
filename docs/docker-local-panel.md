@@ -6,6 +6,14 @@ is **not** installed in that image. Windows Docker Desktop must use **Linux
 containers**. No Desktop host-networking option, Windows bind mount, Cloudflare
 Tunnel, administrator account, or application authentication change is required.
 
+> **Windows isolation validation is blocked.** On 2026-11-03, the live smoke on
+> Docker Desktop 4.55.0, Engine 29.1.3 and WSL 2 reproduced access from an ordinary
+> adapter-network container to the management API (HTTP 200), both via the panel
+> container's IP and via `host.docker.internal` at the published host port.
+> The dedicated bridge did have `enable_icc=false`. Do not rely on this overlay
+> to isolate management from other containers on Windows; that acceptance gate
+> remains open. Host loopback publication alone is not proof of this isolation.
+
 ## Prerequisites
 
 - Docker Engine **28 or newer**. Older versions have a known localhost port
@@ -38,9 +46,10 @@ docker compose -f compose.yaml -f compose.local.yaml config --quiet
 docker compose -f compose.yaml -f compose.local.yaml up -d --build
 ```
 
-Open **http://127.0.0.1:8088** on the Docker host. Use HTTP, not HTTPS. The adapter
-port remains `127.0.0.1:1234` on the host; same-default-network OneBot/AstrBot
-clients still use `frostagent:1234`. The panel port is not the adapter port.
+Open **http://127.0.0.1:8088** on the Docker host. Use HTTP, not HTTPS. The adapter's
+host mapping and container port remain those in your base Compose file;
+same-default-network OneBot/AstrBot clients use `frostagent:<adapter target port>`.
+The panel port is not the adapter port.
 
 The commands build the existing local FA image when needed and pull the pinned
 socat image. They reuse `frostagent-data:/app/data`; there is no data migration.
@@ -184,5 +193,6 @@ python scripts/docker_local_panel_smoke.py
 The full smoke requires a running Linux-container engine and a built
 `frostagent:local` image. Linux CI exercises real networking, APIs, adapter
 handshakes, isolation and lifecycle. Run the same smoke on Windows Docker Desktop
-to validate that version's host forwarding; Linux CI alone does not establish
-Windows Desktop reachability. No public Tunnel or real IM account is used.
+to validate that version's host forwarding and isolation; Linux CI cannot replace
+that check. See the failed Windows isolation validation above. No public Tunnel
+or real IM account is used.

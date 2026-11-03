@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from docker_local_panel_smoke import (TOKEN, enable_local_token, exercise, http_request, prepare_test_config,
+from docker_local_panel_smoke import (TOKEN, adapter_target_port, enable_local_token, exercise, http_request, prepare_test_config,
                                      published_ports, validate_config, wait_ready, wait_websocket)
 
 
@@ -207,8 +207,34 @@ class LocalPanelGuardTests(unittest.TestCase):
         with patch('docker_local_panel_smoke.command', side_effect=[
             '127.0.0.1:31001', '127.0.0.1:31002', '127.0.0.1:32001', '127.0.0.1:31002',
         ]), patch('builtins.print'):
-            self.assertEqual(published_ports(('docker', 'compose')), (31001, 31002))
-            self.assertEqual(published_ports(('docker', 'compose')), (32001, 31002))
+            self.assertEqual(published_ports(('docker', 'compose'), 1234), (31001, 31002))
+            self.assertEqual(published_ports(('docker', 'compose'), 1234), (32001, 31002))
+
+    def test_adapter_target_follows_base_compose_without_rewriting_it(self):
+        for target in (1234, 11023):
+            _, local = topology()
+            local['services']['frostagent']['ports'][0]['target'] = target
+            prepared = prepare_test_config(local, PROJECT)
+            self.assertEqual(adapter_target_port(prepared), target)
+            self.assertEqual(prepared['services']['frostagent']['ports'][0]['target'], target)
+
+    def test_published_lookup_uses_configured_adapter_target(self):
+        with patch('docker_local_panel_smoke.command', side_effect=[
+            '127.0.0.1:31001', '127.0.0.1:31002',
+        ]) as docker, patch('builtins.print'):
+            self.assertEqual(published_ports(('docker', 'compose'), 11023), (31001, 31002))
+            self.assertEqual(docker.call_args_list, [
+                call('docker', 'compose', 'port', 'local-panel', '8080'),
+                call('docker', 'compose', 'port', 'frostagent', '11023'),
+            ])
+
+    def test_ambiguous_or_invalid_adapter_ports_are_rejected(self):
+        for ports in ([], [{'target': 1234}, {'target': 11023}],
+                      [{'target': 11023, 'protocol': 'udp'}], [{'target': 0}]):
+            _, local = topology()
+            local['services']['frostagent']['ports'] = ports
+            with self.subTest(ports=ports), self.assertRaises(ValueError):
+                adapter_target_port(local)
 
     def test_ready_timeout_reports_last_http_status(self):
         with patch('docker_local_panel_smoke.time.monotonic', side_effect=[0, 0, 61]), \

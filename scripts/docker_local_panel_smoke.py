@@ -197,10 +197,20 @@ def wait_websocket(read):
     raise AssertionError(f'adapter did not become ready (last HTTP status: {last_status})')
 
 
-def published_ports(compose):
+def adapter_target_port(config):
+    ports = config['services']['frostagent'].get('ports', [])
+    if len(ports) != 1 or ports[0].get('protocol', 'tcp') != 'tcp':
+        raise ValueError('smoke requires exactly one published TCP adapter port')
+    target = int(ports[0]['target'])
+    if not 1 <= target <= 65535:
+        raise ValueError('adapter target must be a valid TCP port')
+    return target
+
+
+def published_ports(compose, adapter_port):
     # Docker may allocate a different ephemeral host port when a container restarts.
     ports = []
-    for service, target in (('local-panel', 8080), ('frostagent', 1234)):
+    for service, target in (('local-panel', 8080), ('frostagent', adapter_port)):
         address = command(*compose, 'port', service, str(target))
         assert address.startswith('127.0.0.1:'), address
         ports.append(int(address.rsplit(':', 1)[1]))
@@ -240,6 +250,7 @@ def exercise(root):
         raise RuntimeError('Live smoke requires Python assertions; run without -O or PYTHONOPTIMIZE')
     project = 'frostagent-local-smoke-' + uuid.uuid4().hex[:12]
     config = prepare_test_config(render(root, project), project)
+    adapter_port = adapter_target_port(config)
     operating_system = command('docker', 'info', '--format', '{{.OperatingSystem}}')
     desktop = 'docker desktop' in operating_system.lower()
     command('docker', 'image', 'inspect', 'frostagent:local')
@@ -263,7 +274,7 @@ def exercise(root):
 
         try:
             command(*compose, 'up', '--detach', '--no-build')
-            panel_port, ws_port = published_ports(compose)
+            panel_port, ws_port = published_ports(compose, adapter_port)
 
             def read(endpoint='/', payload=None, headers=None):
                 return http_request('127.0.0.1', panel_port, endpoint, payload, headers)
@@ -326,8 +337,8 @@ def exercise(root):
                 endpoint = f'/instances/{instance_id}/ws/{adapter}?mock=true'
                 assert read(endpoint, headers=UPGRADE)['status'] == 101
                 assert http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE)['status'] == 101
-                assert peer_request(peer, 'frostagent', 1234, endpoint, UPGRADE) == 101
-            assert peer_request(peer, 'frostagent', 1234, '/api/storage') == 404
+                assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
+            assert peer_request(peer, 'frostagent', adapter_port, '/api/storage') == 404
             print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and network isolation')
 
             enable_local_token(api, instance_id)
@@ -343,13 +354,13 @@ def exercise(root):
             assert container('local-panel'), 'ingress should remain running for the failure-path check'
             assert read('/api/instances', headers=BEARER)['status'] == 0
             command(*compose, 'start', 'local-panel-origin')
-            panel_port, ws_port = published_ports(compose)
+            panel_port, ws_port = published_ports(compose, adapter_port)
             wait_ready(read)
             assert api('/api/instances/global/backup/settings', headers=BEARER) == before
             print('PASS: origin-only stop fails closed and restarts without changing settings')
 
             command(*compose, 'restart', 'local-panel-origin', 'local-panel')
-            panel_port, ws_port = published_ports(compose)
+            panel_port, ws_port = published_ports(compose, adapter_port)
             wait_ready(read)
             old_app = container('frostagent')
             # Preserve actual allocated host ports across full recreation.
@@ -357,7 +368,7 @@ def exercise(root):
                 config['services'][service]['ports'][0]['published'] = str(port)
             path.write_text(json.dumps(config), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)
-            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on recreation'
+            assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert container('frostagent') != old_app
             check_isolation()
@@ -372,19 +383,19 @@ def exercise(root):
             previous_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
             command('docker', 'restart', app)
             assert container('frostagent') == app, 'docker restart unexpectedly replaced the app container'
-            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on app restart'
+            assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on app restart'
             endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
             wait_websocket(lambda: http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE))
             for adapter in ('onebot', 'astrbot'):
                 endpoint = f'/instances/{instance_id}/ws/{adapter}?mock=true'
-                assert peer_request(peer, 'frostagent', 1234, endpoint, UPGRADE) == 101
+                assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
             current_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
             pending_status = read('/api/instances')['status']
             print(f'Out-of-band app restart: namespace {previous_namespace} -> {current_namespace}; '
                   f'panel unauthenticated HTTP status before relay recovery={pending_status}', flush=True)
             assert pending_status in (0, 401), 'app restart bypassed local token enforcement'
             command(*compose, 'restart', 'local-panel-origin', 'local-panel')
-            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on relay recovery'
+            assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on relay recovery'
             wait_ready(read)
             assert container('frostagent') == app
             check_isolation()
@@ -404,9 +415,10 @@ def exercise(root):
             assert result['status'] in (0, 200), result
             custom = prepare_test_config(render(root, project, target_port=8081), project,
                                          {'local-panel': panel_port, 'frostagent': ws_port})
+            assert adapter_target_port(custom) == adapter_port, 'management target changed adapter port'
             path.write_text(json.dumps(custom), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)
-            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on recreation'
+            assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert api('/api/instances/global/backup/settings', headers=BEARER) == updated
             check_isolation(target_port=8081)
@@ -415,9 +427,9 @@ def exercise(root):
             command(*compose, 'stop', 'local-panel', 'local-panel-origin')
             assert read('/api/instances', headers=BEARER)['status'] == 0
             endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
-            assert peer_request(peer, 'frostagent', 1234, endpoint, UPGRADE) == 101
+            assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
             command(*compose, 'up', '--detach', '--no-build', 'local-panel-origin', 'local-panel')
-            assert published_ports(compose) == (panel_port, ws_port), 'explicit ports changed on start'
+            assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on start'
             wait_ready(read)
             assert api('/api/instances', headers=BEARER)['instances'][0]['id'] == instance_id
             print('PASS: disabling/re-enabling the panel leaves the application and data intact')
