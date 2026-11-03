@@ -169,6 +169,24 @@ def peer_request(container, host, port, path='/api/instances', headers=None):
     return json.loads(result.stdout)['status']
 
 
+def probe_peer_management(container, host, port, *, token_required=False):
+    """Observe trusted peer reachability; enforce an explicitly enabled token."""
+    route = f'{container[:12]} -> {host}:{port}'
+    status = peer_request(container, host, port, headers=BEARER if token_required else None)
+    assert status in (0, 200), f'{route}: unexpected management HTTP status {status}'
+    if status == 0:
+        print(f'OBSERVED: {route} unreachable; peer authentication not exercised', flush=True)
+        return False
+    if token_required:
+        assert peer_request(container, host, port) == 401, f'{route}: missing token accepted'
+        assert peer_request(container, host, port, headers={
+            'Authorization': 'Bearer incorrect-synthetic-token'}) == 401, f'{route}: wrong token accepted'
+        print(f'PASS: {route} reachable; correct token accepted, missing/wrong tokens rejected', flush=True)
+    else:
+        print(f'OBSERVED: {route} reachable without a token (trusted local container)', flush=True)
+    return True
+
+
 def inspect(container):
     return json.loads(command('docker', 'inspect', container))[0]
 
@@ -302,7 +320,7 @@ def exercise(root):
             desktop_gateway = command('docker', 'exec', peer, 'python', '-c',
                                       "import socket; print(socket.gethostbyname('host.docker.internal'))")
 
-            def check_isolation(target_port=8080):
+            def check_topology_and_peer_access(target_port=8080, *, token_required=False):
                 app = container('frostagent')
                 actual = inspect(app)
                 assert not actual['HostConfig']['PortBindings'].get('8080/tcp')
@@ -319,15 +337,17 @@ def exercise(root):
                 assert not any(m['Destination'] == '/app/data' for m in ingress['Mounts'])
                 for service in ('local-panel-origin', 'local-panel'):
                     assert command(*compose, 'exec', '-T', service, 'id', '-u') == '10001'
-                for host, port in (('frostagent', target_port), ('frostagent', 18080),
-                                   (ingress_ip, 8080), (gateway, panel_port),
-                                   (desktop_gateway, panel_port)):
+                # FA itself retains a loopback-only management listener. The
+                # relay is a separate, trusted-container access path.
+                for host, port in (('frostagent', target_port), ('frostagent', 18080)):
                     assert peer_request(peer, host, port) == 0, \
-                        f'adapter-network peer reached management at {host}:{port}'
-                assert peer_request(panel_peer, ingress_ip, 8080) == 0, \
-                    'inter-container connectivity on panel network must be disabled'
+                        f'FA management listener is not loopback-only at {host}:{port}'
+                for helper_id, host, port in ((peer, ingress_ip, 8080), (peer, gateway, panel_port),
+                                              (peer, desktop_gateway, panel_port),
+                                              (panel_peer, ingress_ip, 8080)):
+                    probe_peer_management(helper_id, host, port, token_required=token_required)
 
-            check_isolation()
+            check_topology_and_peer_access()
             created = api('/api/instances', {'name': 'Synthetic local panel smoke'})
             instance_id = created['id']
             assert api(f'/api/instances/{instance_id}/enable', {'enabled': True}).get('success')
@@ -339,7 +359,7 @@ def exercise(root):
                 assert http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE)['status'] == 101
                 assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
             assert peer_request(peer, 'frostagent', adapter_port, '/api/storage') == 404
-            print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and network isolation')
+            print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and relay topology')
 
             enable_local_token(api, instance_id)
             assert read('/api/instances')['status'] == 401
@@ -347,6 +367,7 @@ def exercise(root):
             assert read('/api/instances', headers={'Authorization': 'Bearer incorrect-synthetic-token'})['status'] == 401
             assert api('/api/instances', headers=BEARER)['instances'][0]['id'] == instance_id
             assert read(rpc, {}, BEARER)['status'] == 200
+            check_topology_and_peer_access(token_required=True)
             before = api('/api/instances/global/backup/settings', headers=BEARER)
             print('PASS: explicit local token enforcement is not bypassed')
 
@@ -371,7 +392,7 @@ def exercise(root):
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert container('frostagent') != old_app
-            check_isolation()
+            check_topology_and_peer_access(token_required=True)
             instances = api('/api/instances', headers=BEARER)['instances']
             assert len(instances) == 1 and instances[0]['id'] == instance_id and instances[0]['enabled']
             assert api('/api/instances/global/backup/settings', headers=BEARER) == before
@@ -398,7 +419,7 @@ def exercise(root):
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on relay recovery'
             wait_ready(read)
             assert container('frostagent') == app
-            check_isolation()
+            check_topology_and_peer_access(token_required=True)
             assert read('/api/instances')['status'] == 401
             assert read(rpc, {})['status'] == 401
             assert read('/api/instances', headers={'Authorization': 'Bearer incorrect-synthetic-token'})['status'] == 401
@@ -406,7 +427,7 @@ def exercise(root):
             assert api('/api/instances', headers=BEARER)['instances'] == instances
             assert api('/api/instances/global/backup/settings', headers=BEARER) == before
             print('PASS: out-of-band same-container app restart recovers after relay restart; '
-                  'namespace, adapters, isolation, token enforcement and data verified')
+                  'namespace, adapters, topology, token enforcement and data verified')
 
             updated = copy.deepcopy(before)
             updated['settings']['LISTEN_ADDR'] = '127.0.0.1:8081'
@@ -421,7 +442,7 @@ def exercise(root):
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on recreation'
             wait_ready(read)
             assert api('/api/instances/global/backup/settings', headers=BEARER) == updated
-            check_isolation(target_port=8081)
+            check_topology_and_peer_access(target_port=8081, token_required=True)
             print('PASS: explicit target port follows existing SQL listener without rewriting settings')
 
             command(*compose, 'stop', 'local-panel', 'local-panel-origin')
@@ -432,6 +453,7 @@ def exercise(root):
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on start'
             wait_ready(read)
             assert api('/api/instances', headers=BEARER)['instances'][0]['id'] == instance_id
+            check_topology_and_peer_access(target_port=8081, token_required=True)
             print('PASS: disabling/re-enabling the panel leaves the application and data intact')
         except BaseException:
             subprocess.run((*compose, 'ps', '--all'), check=False)

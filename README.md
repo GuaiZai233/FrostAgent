@@ -79,7 +79,9 @@ socket; the FA image does not contain socat and no management port is added to
 the adapter network. Preserve the existing project name, environment files and
 data volume. See [Local Docker panel](docs/docker-local-panel.md) for ports,
 trust boundaries, upgrades and disabling the entry point. Use this mode only on
-a trusted local host; remote access still requires Cloudflare Access.
+a trusted local host where **all Docker containers are trusted**: localhost
+publication does not isolate management from other containers. Remote access
+still requires Cloudflare Access.
 
 GHCR retains all versioned releases, the current `main` / `latest` image, and
 the 10 most recent SHA-tagged commit images. Older historical commit images are

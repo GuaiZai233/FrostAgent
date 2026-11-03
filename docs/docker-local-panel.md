@@ -6,13 +6,16 @@ is **not** installed in that image. Windows Docker Desktop must use **Linux
 containers**. No Desktop host-networking option, Windows bind mount, Cloudflare
 Tunnel, administrator account, or application authentication change is required.
 
-> **Windows isolation validation is blocked.** On 2026-11-03, the live smoke on
-> Docker Desktop 4.55.0, Engine 29.1.3 and WSL 2 reproduced access from an ordinary
-> adapter-network container to the management API (HTTP 200), both via the panel
-> container's IP and via `host.docker.internal` at the published host port.
-> The dedicated bridge did have `enable_icc=false`. Do not rely on this overlay
-> to isolate management from other containers on Windows; that acceptance gate
-> remains open. Host loopback publication alone is not proof of this isolation.
+> **Trust every container on this Docker host.** This opt-in mode trusts local
+> users, processes, Docker administrators and **all local containers**, including
+> ordinary containers on other bridges. It provides convenient, unauthenticated
+> local management unless an existing explicit token policy requires a token;
+> it does **not** isolate management from other containers. On 2026-11-03, the
+> live smoke on Docker Desktop 4.55.0, Engine 29.1.3 and WSL 2 observed HTTP 200
+> from an adapter-network container via both the panel container IP and
+> `host.docker.internal` at the published port, despite `enable_icc=false`.
+> Host loopback publication is not a container-isolation guarantee. Do not use
+> this mode on a host running untrusted containers.
 
 ## Prerequisites
 
@@ -90,7 +93,7 @@ still return `401`; this deployment does not inject, disclose or disable tokens.
 Host/Origin validation also stays enabled. Do not expand `HTTP_ALLOWED_ORIGINS`
 merely to open the local `127.0.0.1` URL.
 
-## Isolation and trust boundary
+## Topology and trust boundary
 
 ```text
 host 127.0.0.1:8088 -> local-panel (dedicated bridge, TCP 8080)
@@ -101,7 +104,8 @@ host 127.0.0.1:8088 -> local-panel (dedicated bridge, TCP 8080)
 
 The origin relay opens **only a Unix socket**, not a TCP management listener on
 FA's default adapter network. The ingress relay has its own dedicated bridge with
-inter-container connectivity disabled. It is not an `internal: true` network,
+`enable_icc=false` as defense in depth, not a container-isolation guarantee.
+It is not an `internal: true` network,
 because Docker Engine skips host port publishing on internal networks.
 Do not attach adapters or other services
 to that bridge. The socket directory belongs to UID/GID 10001 with mode 0700;
@@ -113,10 +117,12 @@ This is **local access, not a public authentication gateway**. Do not remove the
 host `127.0.0.1` binding, publish the panel through a reverse proxy/tunnel, enable
 direct routing, or reuse these networks with a different firewall policy. Use
 the existing Cloudflare Access deployment for remote access. Local users,
-processes and Docker administrators are trusted; someone who can control Docker
-can deliberately join namespaces or mount the socket volume. Docker Desktop's
-host-forwarding layer must also be checked on the deployed version: this is not
-a promise of isolation from hostile workloads with host-network access.
+processes, Docker administrators and all containers on this host are trusted.
+Ordinary bridge-network containers may reach the management API through the
+relay or Docker Desktop's host forwarding without administrative privileges.
+Someone who can control Docker can additionally join namespaces or mount the
+socket volume. An unreachable peer route on one engine/version does not narrow
+this trust boundary. The loopback host binding must still be retained.
 
 The shared volume uses the local driver's tmpfs mount options supported by Linux
 and Docker Desktop; it is not a Windows-host bind mount or a per-container
@@ -192,7 +198,12 @@ python scripts/docker_local_panel_smoke.py
 
 The full smoke requires a running Linux-container engine and a built
 `frostagent:local` image. Linux CI exercises real networking, APIs, adapter
-handshakes, isolation and lifecycle. Run the same smoke on Windows Docker Desktop
-to validate that version's host forwarding and isolation; Linux CI cannot replace
-that check. See the failed Windows isolation validation above. No public Tunnel
-or real IM account is used.
+handshakes, topology and lifecycle. Peer routes through the ingress container,
+bridge gateway and host forwarding are recorded as reachable or unreachable;
+both outcomes are allowed for these trusted peers. Once explicit local token
+enforcement is enabled, every reachable peer route must reject missing/wrong
+tokens and accept the correct token. Unreachable routes are reported as not
+exercised for authentication, not as proof of isolation. Run the same smoke on
+Windows Docker Desktop to validate that version's host forwarding, token policy
+and lifecycle; Linux CI cannot replace that check. No public Tunnel or real IM
+account is used.

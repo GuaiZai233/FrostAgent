@@ -1,5 +1,6 @@
 # Opt-in local panel for Docker Desktop (Linux containers) and Linux Engine.
 # Keep compose.yaml first and preserve the existing Compose project name.
+# All containers on this host must be trusted; localhost binding is not isolation.
 # Do not attach adapters to local-panel or publish the origin's management port.
 services:
   local-panel-origin:
@@ -65,7 +66,7 @@ services:
 networks:
   local-panel:
     # Internal networks suppress host port publishing on Docker Engine.
-    # Keep a dedicated bridge with peer forwarding disabled instead.
+    # ICC restriction is defense in depth, not a container-isolation guarantee.
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_icc: "false"

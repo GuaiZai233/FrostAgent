@@ -76,7 +76,8 @@ docker compose -f compose.yaml -f compose.local.yaml up -d --build
 Unix socket 连接管理回环，适配器网络不新增管理端口。已有部署须保留原目录、
 项目名、环境文件和数据卷；关闭入口需停止两个转发容器，不能只省略覆盖文件。
 端口配置、信任边界、升级与回退见[本地 Docker 面板说明](docs/docker-local-panel.md)。
-此模式仅用于可信本机，公网访问仍使用 Cloudflare Access。
+此模式仅用于**所有 Docker 容器也都可信**的本机；回环发布不保证其他容器无法访问管理面。
+公网访问仍使用 Cloudflare Access。
 
 GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
 更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。

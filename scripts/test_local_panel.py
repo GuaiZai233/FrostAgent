@@ -1,4 +1,4 @@
-"""Unit checks for the local-panel smoke's isolation and cleanup guardrails."""
+"""Unit checks for the local-panel smoke's topology, token and cleanup guardrails."""
 
 import copy
 import subprocess
@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from docker_local_panel_smoke import (TOKEN, adapter_target_port, enable_local_token, exercise, http_request, prepare_test_config,
+from docker_local_panel_smoke import (BEARER, TOKEN, adapter_target_port, enable_local_token, exercise, http_request, prepare_test_config,
+                                     probe_peer_management,
                                      published_ports, validate_config, wait_ready, wait_websocket)
 
 
@@ -55,6 +56,58 @@ def topology():
 
 
 class LocalPanelGuardTests(unittest.TestCase):
+    def test_trusted_peer_may_be_reachable_or_unreachable_without_token(self):
+        for status in (0, 200):
+            with self.subTest(status=status), \
+                    patch('docker_local_panel_smoke.peer_request', return_value=status) as request, \
+                    patch('builtins.print'):
+                self.assertEqual(probe_peer_management('synthetic-peer', 'panel', 8080), status == 200)
+                request.assert_called_once_with('synthetic-peer', 'panel', 8080, headers=None)
+
+    def test_unexpected_peer_http_status_fails_even_for_trusted_peers(self):
+        for status in (401, 403, 500):
+            with self.subTest(status=status), \
+                    patch('docker_local_panel_smoke.peer_request', return_value=status), \
+                    self.assertRaisesRegex(AssertionError, 'unexpected management HTTP status'):
+                probe_peer_management('synthetic-peer', 'panel', 8080)
+
+    def test_reachable_peer_must_enforce_explicit_token(self):
+        with patch('docker_local_panel_smoke.peer_request', side_effect=[200, 401, 401]) as request, \
+                patch('builtins.print'):
+            self.assertTrue(probe_peer_management('synthetic-peer', 'panel', 8080, token_required=True))
+            self.assertEqual(request.call_args_list, [
+                call('synthetic-peer', 'panel', 8080, headers=BEARER),
+                call('synthetic-peer', 'panel', 8080),
+                call('synthetic-peer', 'panel', 8080, headers={
+                    'Authorization': 'Bearer incorrect-synthetic-token'}),
+            ])
+
+    def test_unreachable_peer_does_not_claim_token_verification(self):
+        with patch('docker_local_panel_smoke.peer_request', return_value=0) as request, \
+                patch('builtins.print') as output:
+            self.assertFalse(probe_peer_management('synthetic-peer', 'panel', 8080, token_required=True))
+            request.assert_called_once_with('synthetic-peer', 'panel', 8080, headers=BEARER)
+            self.assertIn('peer authentication not exercised', output.call_args.args[0])
+
+    def test_reachable_peer_rejecting_correct_token_fails(self):
+        with patch('docker_local_panel_smoke.peer_request', return_value=401), \
+                self.assertRaisesRegex(AssertionError, 'unexpected management HTTP status 401'):
+            probe_peer_management('synthetic-peer', 'panel', 8080, token_required=True)
+
+    def test_missing_token_bypass_or_transport_failure_fails(self):
+        for status in (200, 0):
+            with self.subTest(status=status), \
+                    patch('docker_local_panel_smoke.peer_request', side_effect=[200, status]), \
+                    self.assertRaisesRegex(AssertionError, 'missing token accepted'):
+                probe_peer_management('synthetic-peer', 'panel', 8080, token_required=True)
+
+    def test_wrong_token_bypass_or_transport_failure_fails(self):
+        for status in (200, 0):
+            with self.subTest(status=status), \
+                    patch('docker_local_panel_smoke.peer_request', side_effect=[200, 401, status]), \
+                    self.assertRaisesRegex(AssertionError, 'wrong token accepted'):
+                probe_peer_management('synthetic-peer', 'panel', 8080, token_required=True)
+
     def test_live_smoke_refuses_optimized_python_before_accessing_docker(self):
         result = subprocess.run(
             [sys.executable, '-B', '-O', '-c',
