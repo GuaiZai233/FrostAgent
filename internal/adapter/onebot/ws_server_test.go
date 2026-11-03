@@ -5520,8 +5520,12 @@ func TestOneBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
 }
 
 func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testing.T) {
-	chatStarted := make(chan struct{})
+	// Keep the notification even if Chat starts before the test begins waiting.
+	chatStarted := make(chan struct{}, 1)
 	finishChat := make(chan struct{})
+	var finishOnce sync.Once
+	finish := func() { finishOnce.Do(func() { close(finishChat) }) }
+	defer finish()
 
 	mockLLM := &mockLLMProvider{
 		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -5602,15 +5606,16 @@ func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testi
 		t.Fatalf("发送背景事件失败: %v", err)
 	}
 
-	// 稍作等待确保背景消息进入 WebSocket read loop
-	time.Sleep(50 * time.Millisecond)
-
 	sessionKey := fmt.Sprintf("group:%d", groupID)
 	sessCore, ok := engine.SessionManager.Get(sessionKey)
 	if !ok {
 		t.Fatalf("session %q not found", sessionKey)
 	}
 	sess := sessCore.(*llm.SessionContext)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(sess.GroupCompactBufferMessages()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 
 	// 验证在途状态下的 groupCompactBuffer：
 	// 顺序必须保持 Alice(wake) -> Bob(bg)
@@ -5639,9 +5644,12 @@ func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testi
 	}
 
 	// 3. 释放 LLM Chat 完成本轮
-	close(finishChat)
+	finish()
 
 	// 读取出站消息（可能先收到 get_group_info，然后收到 send_group_msg 回复）
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	for {
 		_, respBytes, err := conn.ReadMessage()
 		if err != nil {
@@ -5678,7 +5686,19 @@ func TestOneBot_GroupCompact_IngressChronology_BackgroundDuringWakeTurn(t *testi
 		break
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// The platform ACK is processed asynchronously; wait for delivery cleanup.
+	barrier := sess.ReserveSequenceTurn(fmt.Sprintf("sender:%d", wakeUserID), false, false)
+	completed := make(chan struct{})
+	go func() {
+		barrier.Wait()
+		barrier.Done()
+		close(completed)
+	}()
+	select {
+	case <-completed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("reply turn did not finish after platform ACK")
+	}
 
 	// 4. 验证轮次成功完成后：
 	// 顺序必须保持严格时间顺序：Alice(wake) -> Bob(bg) -> Assistant(reply)

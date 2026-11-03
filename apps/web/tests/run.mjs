@@ -8,6 +8,7 @@ const esbuildPath = require.resolve('esbuild', {
 const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
+  'chat-navigation.test.ts',
   'overview-enhancements.test.ts',
   'overview-page.test.ts',
   'stickers-page.test.ts',

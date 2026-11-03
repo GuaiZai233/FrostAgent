@@ -146,7 +146,7 @@ func TestSQLExtraEnvRouteRejectsManagedSettingKeys(t *testing.T) {
 	}
 }
 
-func TestSQLActionsCatDraftSwitchKeepsRunningRuntime(t *testing.T) {
+func TestSQLActionsCatDraftVisibilityKeepsRunningRuntime(t *testing.T) {
 	m, err := NewDatabase(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -161,13 +161,18 @@ func TestSQLActionsCatDraftSwitchKeepsRunningRuntime(t *testing.T) {
 	}
 	runtime := m.instances[info.ID].runtime
 	for _, step := range []struct {
-		body    string
-		enabled bool
+		body       string
+		enabled    bool
+		configured bool
 	}{
-		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false},
-		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"true"}]}`, true},
-		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false},
-		{`{"clearKeys":["ACTIONSCAT_ENABLED"]}`, true},
+		{`{"clearKeys":["ACTIONSCAT_ENDPOINT","ACTIONSCAT_ENABLED"]}`, true, false},
+		{`{"updates":[{"key":"ACTIONSCAT_ENDPOINT","value":"http://actionscat.example"}]}`, true, true},
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false, true},
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"true"}]}`, true, true},
+		{`{"clearKeys":["ACTIONSCAT_ENDPOINT"]}`, true, false},
+		{`{"updates":[{"key":"ACTIONSCAT_ENDPOINT","value":"http://actionscat.example"}]}`, true, true},
+		{`{"updates":[{"key":"ACTIONSCAT_ENABLED","value":"false"}]}`, false, true},
+		{`{"clearKeys":["ACTIONSCAT_ENABLED"]}`, true, true},
 	} {
 		response := applySettingsDraft(m, info.ID, step.body)
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"success":true`) {
@@ -182,8 +187,12 @@ func TestSQLActionsCatDraftSwitchKeepsRunningRuntime(t *testing.T) {
 				count++
 			}
 		}
-		if (step.enabled && count != 16) || (!step.enabled && count != 0) {
-			t.Fatalf("enabled=%v exposes %d ActionsCat tools", step.enabled, count)
+		want := 0
+		if step.enabled && step.configured {
+			want = 16
+		}
+		if count != want {
+			t.Fatalf("enabled=%v configured=%v exposes %d ActionsCat tools, want %d", step.enabled, step.configured, count, want)
 		}
 		if !step.enabled {
 			_, err := runtime.Engine.ToolRegistry["actionscat_list_actions"].Execute("{}")

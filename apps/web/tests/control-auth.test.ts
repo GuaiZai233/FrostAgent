@@ -47,7 +47,7 @@ directChatWebSocket(mockURL);
 assert.deepEqual(sockets.at(-1)?.protocols, ['frostagent.direct-chat']);
 setControlToken('synthetic-control-token');
 const chatSource = readFileSync('src/pages/chat.ts', 'utf8');
-assert.match(chatSource, /ws = directChatWebSocket\(url\)/, 'Direct Chat must use the authenticated handshake');
+assert.match(chatSource, /socket = directChatWebSocket\(url\)/, 'Direct Chat must use the authenticated handshake');
 assert.doesNotMatch(chatSource, /new WebSocket\(/, 'Direct Chat bypasses the control-token helper');
 await instanceRequest('');
 await instanceRequest('/global/import/security', {});
