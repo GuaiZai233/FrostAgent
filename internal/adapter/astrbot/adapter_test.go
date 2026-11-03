@@ -2,12 +2,14 @@ package astrbot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +74,199 @@ func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
 	}
 	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0, loader); !errors.Is(err, sticker.ErrStickerNotInScope) {
 		t.Fatalf("cross-session error = %v, want ErrStickerNotInScope", err)
+	}
+}
+
+func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
+	firstImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	secondImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	quotedImage := []byte("GIF89a quoted")
+	event := Event{
+		MessageID: "msg_current",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: firstImage},
+			{Type: core.AttachmentTypeFile, Content: []byte("not an image")},
+			{Type: core.AttachmentTypeImage, Content: secondImage},
+			{Type: core.AttachmentTypeImage, Content: quotedImage, MessageID: "msg_quoted"},
+		},
+	}
+	trusted := map[string]struct{}{"msg_current": {}, "msg_quoted": {}}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
+	if err != nil {
+		t.Fatalf("load second image: %v", err)
+	}
+	if string(data) != string(secondImage) {
+		t.Fatalf("image index 1 loaded %q, want %q", data, secondImage)
+	}
+
+	data, err = loadObservedImageFromEvent(context.Background(), event, trusted, "msg_quoted", 0)
+	if err != nil {
+		t.Fatalf("load quoted image: %v", err)
+	}
+	if string(data) != string(quotedImage) {
+		t.Fatalf("quoted image loaded %q, want %q", data, quotedImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_unknown", 0); err == nil {
+		t.Fatal("expected unknown message error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "", 0); err == nil {
+		t.Fatal("expected empty message_id error")
+	}
+}
+
+func TestLoadObservedImageFromEventRejectsUnvalidatedQuotedAttachment(t *testing.T) {
+	// The plugin may forward a Reply.chain image under a quoted message ID even
+	// when the quote belongs to another group. Only IDs produced by the
+	// adapter's same-session quote validation are authorized.
+	foreignImage := []byte("GIF89a foreign")
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: foreignImage, MessageID: "msg_foreign"},
+		},
+	}
+	onlyCurrent := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, onlyCurrent, "msg_foreign", 0); err == nil {
+		t.Fatal("unvalidated quoted attachment must not be exposed to the image tool")
+	}
+
+	validated := trustedQuotedMessageIDs([]astrBotQuoteNode{{
+		Context: map[string]any{"message_id": "msg_foreign"},
+	}}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, validated, "msg_foreign", 0); err != nil {
+		t.Fatalf("validated quoted attachment should be readable: %v", err)
+	}
+}
+
+func TestLoadObservedImageFromEventUsesExplicitImageIndices(t *testing.T) {
+	// The plugin deduplicates identical image bytes. For [A, A, B] it keeps
+	// A with image_indices [0, 1] and B with [2]; both A slots must resolve to A.
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+	trusted := map[string]struct{}{"msg_current": {}}
+
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil {
+			t.Fatalf("load deduplicated image index %d: %v", imageIndex, err)
+		}
+		if string(data) != string(sameImage) {
+			t.Fatalf("image index %d loaded %q, want %q", imageIndex, data, sameImage)
+		}
+	}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil {
+		t.Fatalf("load third image: %v", err)
+	}
+	if string(data) != string(otherImage) {
+		t.Fatalf("image index 2 loaded %q, want %q", data, otherImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 3); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForRepeatedImages(t *testing.T) {
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 3},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 3 {
+		t.Fatalf("visible text has %d placeholders, want 3: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil || string(data) != string(sameImage) {
+			t.Fatalf("image index %d = %q, err=%v; want same image", imageIndex, data, err)
+		}
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil || string(data) != string(otherImage) {
+		t.Fatalf("image index 2 = %q, err=%v; want other image", data, err)
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 2},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, ImageIndices: []int{1}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 2 {
+		t.Fatalf("visible text has %d placeholders, want 2: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 0); err == nil {
+		t.Fatal("unreadable first image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("image index 1 = %q, err=%v; want readable image", data, err)
+	}
+}
+
+func TestAstrBotQuotedImagePromptAndLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "101",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, MessageID: "44", ImageIndices: []int{1}},
+		},
+	}
+	raw := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"101","user_id":1,"message":[{"type":"image","data":{}},{"type":"image","data":{"url":"https://example.com/readable"}}]}`)
+	node, ok := parseAstrBotQuote(event, "44", raw)
+	if !ok {
+		t.Fatal("quote should pass same-session validation")
+	}
+	if prompt := astrBotQuotePrompt([]astrBotQuoteNode{node}); strings.Count(prompt, "[图片]") != 2 {
+		t.Fatalf("quoted prompt has %d placeholders, want 2: %q", strings.Count(prompt, "[图片]"), prompt)
+	}
+
+	trusted := trustedQuotedMessageIDs([]astrBotQuoteNode{node}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 0); err == nil {
+		t.Fatal("unreadable quoted image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("quoted image index 1 = %q, err=%v; want readable image", data, err)
 	}
 }
 

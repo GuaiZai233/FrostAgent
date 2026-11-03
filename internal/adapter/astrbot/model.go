@@ -30,6 +30,7 @@ type Event struct {
 	Content                string            `json:"content,omitempty"`              // 文本内容
 	Messages               []string          `json:"messages,omitempty"`             // 连续上下文消息 (可选)
 	Attachments            []core.Attachment `json:"attachments,omitempty"`          // 多媒体附件
+	ImageSlotCounts        map[string]int    `json:"image_slot_counts,omitempty"`    // Original image-slot counts per message ID, including unreadable slots
 	IsWake                 bool              `json:"is_wake,omitempty"`              // 是否触发唤醒 (At, 唤醒词, 引用等)
 	IsAt                   bool              `json:"is_at,omitempty"`                // 是否 @ 了机器人
 	BotLoopInterrupted     bool              `json:"bot_loop_interrupted,omitempty"` // 旧插件字段；不再用于恢复 Bot 额度

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +120,153 @@ func TestParseAstrBotQuoteRejectsOtherGroup(t *testing.T) {
 	data := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"202","message":[{"type":"text","data":{"text":"private"}}]}`)
 	if _, ok := parseAstrBotQuote(event, "44", data); ok {
 		t.Fatal("cross-group quote was accepted")
+	}
+}
+
+func TestParseAstrBotQuotePreservesMFacePlaceholders(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{"native_mface", `[{"type":"mface","data":{"emoji_id":"synthetic-emoji"}}]`, "[图片]"},
+		{"unreadable_mface", `[{"type":"mface","data":{}}]`, "[图片]"},
+		{"mixed_images", `[{"type":"text","data":{"text":"before"}},{"type":"mface","data":{}},{"type":"image","data":{}},{"type":"text","data":{"text":"between"}},{"type":"mface","data":{"emoji_id":"synthetic-emoji"}},{"type":"text","data":{"text":"after"}}]`, "before[图片][图片]between[图片]after"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := Event{MessageType: "group", GroupID: "synthetic-group"}
+			raw, err := json.Marshal(map[string]any{
+				"message_id": "synthetic-quote", "message_type": "group", "group_id": event.GroupID,
+				"message": json.RawMessage(tc.message),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			node, ok := parseAstrBotQuote(event, "synthetic-quote", raw)
+			if !ok {
+				t.Fatal("same-session quote was rejected")
+			}
+			if got := node.Context["message"]; got != tc.want {
+				t.Fatalf("visible quote = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAstrBotMFaceQuoteVisibleWithoutAutomaticVision(t *testing.T) {
+	for _, mode := range []string{"unavailable", "disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("ENABLE_QUOTE_TRACE", "true")
+			t.Setenv("QUOTE_TRACE_DEPTH", "1")
+			dialogue := &mockLLMProvider{}
+			vision := &mockLLMProvider{}
+			engine := newTestEngine(dialogue)
+			if mode == "disabled" {
+				engine.VisionProvider = vision
+				engine.ModelRouter = modelrouter.New(filepath.Join(t.TempDir(), "router.json"))
+				cfg := engine.ModelRouter.Draft()
+				cfg.Endpoints = []modelrouter.Endpoint{{
+					ID: "synthetic-endpoint", DisplayName: "Test endpoint", BaseURL: "https://example.com/v1",
+					APIKeySource: modelrouter.APIKeyStorageEnv, APIKeyRef: "TEST_API_KEY", Enabled: true,
+				}}
+				cfg.Models = []modelrouter.Model{{
+					ID: "synthetic-model", DisplayName: "Test model", EndpointID: "synthetic-endpoint",
+					UpstreamModel: "test-model", Enabled: true,
+				}}
+				cfg.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "synthetic-model"}
+				cfg.GlobalBindings[modelrouter.WorkloadVision] = modelrouter.Binding{Mode: modelrouter.BindingDisabled}
+				if err := engine.ModelRouter.SaveDraft(cfg); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := engine.ModelRouter.Publish(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv, _, wsURL := startWSTestServer(engine)
+			defer srv.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			event := Event{
+				Type: "event", EventType: "message", Platform: "aiocqhttp",
+				MessageType: "group", GroupID: "synthetic-group", UserID: "synthetic-user",
+				MessageID: "synthetic-current", Content: "这张图片是什么？", IsAt: true,
+				Metadata: map[string]any{"reply_message_id": "synthetic-quote", "quote_lookup_supported": true},
+			}
+			if err := conn.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			var lookup map[string]any
+			if err := conn.ReadJSON(&lookup); err != nil {
+				t.Fatal(err)
+			}
+			if lookup["type"] != "quote_lookup" || lookup["message_id"] != "synthetic-quote" {
+				t.Fatalf("lookup = %+v", lookup)
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "quote_lookup_result", "echo": lookup["echo"],
+				"data": map[string]any{
+					"message_id": "synthetic-quote", "message_type": "group", "group_id": event.GroupID,
+					"message": []map[string]any{{"type": "mface", "data": map[string]any{
+						"emoji_id": "synthetic-emoji",
+						"base64":   base64.StdEncoding.EncodeToString([]byte{0xff, 0xd8, 0xff, 0xd9}),
+					}}},
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var action Action
+			if err := conn.ReadJSON(&action); err != nil {
+				t.Fatal(err)
+			}
+			if action.Action != "send_message" {
+				t.Fatalf("final action = %+v", action)
+			}
+			vision.mu.Lock()
+			defer vision.mu.Unlock()
+			if len(vision.requests) != 0 {
+				t.Fatalf("%s vision received %d requests", mode, len(vision.requests))
+			}
+			dialogue.mu.Lock()
+			defer dialogue.mu.Unlock()
+			if len(dialogue.requests) != 1 {
+				t.Fatalf("dialogue calls = %d", len(dialogue.requests))
+			}
+			for _, message := range dialogue.requests[0].Messages {
+				prompt, ok := message.Content.(string)
+				if !ok || !strings.Contains(prompt, "<reply_context>") {
+					continue
+				}
+				if !strings.Contains(prompt, `"message_id":"synthetic-quote"`) ||
+					!strings.Contains(prompt, `"message":"[图片]"`) ||
+					strings.Contains(prompt, `"image_description"`) {
+					t.Fatalf("mface quote missing or unexpectedly described: %s", prompt)
+				}
+				return
+			}
+			t.Fatal("reply_context missing")
+		})
+	}
+}
+
+func TestTrustedQuotedMessageIDsExcludesRejectedCrossGroupQuote(t *testing.T) {
+	event := Event{MessageID: "msg_current", MessageType: "group", GroupID: "101"}
+	data := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"202","user_id":1,"message":[{"type":"image","data":{}}]}`)
+	if _, ok := parseAstrBotQuote(event, "44", data); ok {
+		t.Fatal("cross-group quote was accepted")
+	}
+
+	trusted := trustedQuotedMessageIDs(nil, event)
+	if _, ok := trusted["44"]; ok {
+		t.Fatal("rejected cross-group quote ID was authorized for image inspection")
+	}
+	if _, ok := trusted["msg_current"]; !ok {
+		t.Fatal("current event message ID must always be authorized")
 	}
 }
 

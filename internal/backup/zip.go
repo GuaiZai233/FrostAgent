@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
@@ -18,6 +19,9 @@ import (
 // BuildInstanceZIP returns a self-contained backup without creating a server
 // side archive. Sticker bytes are separate members, never embedded in JSON.
 func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+	if err := db.RequireNativeSchema(context.Background(), "export a complete instance backup"); err != nil {
+		return nil, err
+	}
 	var instanceName string
 	if err := db.SQL.QueryRow(db.Bind(`SELECT name FROM instances WHERE id = ?`), instanceID).Scan(&instanceName); err != nil {
 		return nil, err

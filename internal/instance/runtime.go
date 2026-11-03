@@ -392,6 +392,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Register memory tool (must be after engine assignment)
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
+	// Register the context-image inspection tool after the engine so it can use
+	// the routed vision/dialogue providers and the shared security controller.
+	inspectImageTool := tools.InspectMessageImageTool(engine)
+	engine.ToolRegistry[inspectImageTool.Name()] = inspectImageTool
 	mux := http.NewServeMux()
 	if skillStore != nil {
 		mux.Handle("/api/skills", skillservice.New(skillStore, mcpGetenv))

@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test local panel smoke guardrails
+        run: python3 -m unittest discover -s scripts -p 'test_local_panel.py' -v
       - name: Test build metadata
         run: python3 -m unittest discover -s scripts -p 'test_build_metadata.py' -v
       - name: Resolve build metadata
@@ -62,6 +64,8 @@ jobs:
         env:
           FROSTAGENT_EXPECTED_VERSION: ${{ steps.build.outputs.display_version }}
         run: python3 scripts/docker-smoke.py --host-network
+      - name: Test opt-in local panel deployment
+        run: python3 scripts/docker_local_panel_smoke.py
 
   publish:
     name: Publish to GHCR

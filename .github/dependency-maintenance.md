@@ -18,6 +18,10 @@ reproducible (for example, Debian packages are still installed from apt).
   intentional build-time compatibility change; default image versions and
   distributions are unchanged. `DOCKER_WS_LISTEN_ADDR` remains configurable.
 - The PostgreSQL CI service is also pinned to its current `pg17` index digest.
+- Both optional local-panel relays in `compose.local.yaml` use the same tagged
+  socat multi-platform index digest. Update them together and rerun the local
+  panel smoke. The dedicated `docker-compose` Dependabot entry tracks only
+  `alpine/socat`, without changing the existing application/connector image policy.
 - `.github/dependabot.yml` schedules weekly PRs for Actions and Docker base images.
   Review and merge these regularly: a frozen but unmaintained
   dependency is still a security risk. Updates are not automatically merged.

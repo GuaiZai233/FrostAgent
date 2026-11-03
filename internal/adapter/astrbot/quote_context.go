@@ -207,7 +207,7 @@ func parseAstrBotQuote(event Event, requestedID string, raw json.RawMessage) (as
 		switch segment.Type {
 		case "text":
 			visible.WriteString(fmt.Sprint(segment.Data["text"]))
-		case "image":
+		case "image", "mface":
 			visible.WriteString("[图片]")
 		}
 	}
@@ -237,4 +237,22 @@ func astrBotQuotePrompt(chain []astrBotQuoteNode) string {
 		return ""
 	}
 	return string(prompt)
+}
+
+// trustedQuotedMessageIDs returns the message IDs that passed
+// parseAstrBotQuote's same-session checks. Attachments carrying any other
+// quoted ID must not be exposed to tools, even though the Python plugin may
+// forward them.
+func trustedQuotedMessageIDs(chain []astrBotQuoteNode, event Event) map[string]struct{} {
+	ids := make(map[string]struct{}, len(chain)+1)
+	if eventID := strings.TrimSpace(event.MessageID); eventID != "" {
+		ids[eventID] = struct{}{}
+	}
+	for _, node := range chain {
+		id, _ := node.Context["message_id"].(string)
+		if id = strings.TrimSpace(id); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
 }
