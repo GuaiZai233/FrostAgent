@@ -254,7 +254,7 @@ func TestSendMsgToolMentionExampleReachesNativeOneBotChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(chain) != 2 || chain[0].Type != "at" || chain[0].Data["qq"] != "10001" ||
-		chain[1].Type != "text" || chain[1].Data["text"] != "  你好" {
+		chain[1].Type != "text" || chain[1].Data["text"] != " 你好" {
 		t.Fatalf("documented example must yield a native mention followed by text: %+v", chain)
 	}
 }
@@ -279,7 +279,7 @@ func TestSendMsgToolKeepsMentionSyntaxLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chain) != 1 || chain[0].Type != "text" || chain[0].Data["text"] != " "+text {
+	if len(chain) != 1 || chain[0].Type != "text" || chain[0].Data["text"] != text {
 		t.Fatalf("literal syntax must stay text: %+v", chain)
 	}
 }

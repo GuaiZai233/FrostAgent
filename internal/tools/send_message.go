@@ -143,7 +143,7 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 		case "plain":
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": " " + Msg.Text},
+				Data: map[string]interface{}{"text": Msg.Text},
 			})
 
 		case "mention_user":

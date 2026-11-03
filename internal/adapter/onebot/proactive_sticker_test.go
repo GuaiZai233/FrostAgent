@@ -104,7 +104,7 @@ func TestOneBotProactiveReplyKeepsImagesWithoutStickers(t *testing.T) {
 				if err := json.Unmarshal(data, &segments); err != nil {
 					t.Fatal(err)
 				}
-				if len(segments) != 2 || parity.ContainsStickerOneBot(segments) || segments[0].Type != "text" || segments[0].Data["text"] != " hello" || segments[1].Type != "image" || segments[1].Data["file"] != "https://example.invalid/photo.gif" {
+				if len(segments) != 2 || parity.ContainsStickerOneBot(segments) || segments[0].Type != "text" || segments[0].Data["text"] != "hello" || segments[1].Type != "image" || segments[1].Data["file"] != "https://example.invalid/photo.gif" {
 					t.Fatalf("text/image lost or sticker delivered: %+v", segments)
 				}
 			} else if params["message"] != tc.wantText {
