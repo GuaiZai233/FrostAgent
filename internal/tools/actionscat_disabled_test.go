@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -57,9 +58,13 @@ func TestActionsCatDisabledToolsHideAndRejectAllEntryPoints(t *testing.T) {
 					t.Fatalf("overview tool count: response=%v, error=%v, want=%d", res, err, want)
 				}
 			}
-			checkOverviewCount(17)
-			if got := len(engine.ModelTools()); got != 17 {
-				t.Fatalf("default enabled tools = %d, want 17", got)
+			wantEnabled := 1
+			if endpoint != "" {
+				wantEnabled += 16
+			}
+			checkOverviewCount(wantEnabled)
+			if got := len(engine.ModelTools()); got != wantEnabled {
+				t.Fatalf("default enabled tools = %d, want %d", got, wantEnabled)
 			}
 			if err := scope.Config.Update("ACTIONSCAT_ENABLED", "false", false); err != nil {
 				t.Fatal(err)
@@ -94,17 +99,17 @@ func TestActionsCatDisabledToolsHideAndRejectAllEntryPoints(t *testing.T) {
 			if got := requests.Load(); got != 0 {
 				t.Fatalf("disabled tools made %d requests", got)
 			}
-			other := actionscat.New(newTestScope(t, nil).Getenv)
+			other := actionscat.New(newTestScope(t, map[string]string{"ACTIONSCAT_ENDPOINT": server.URL}).Getenv)
 			if !ActionsCatListActionsTool(other).IsEnabled() {
 				t.Fatal("disabling one instance affected another")
 			}
 			if err := scope.Config.Update("ACTIONSCAT_ENABLED", "true", false); err != nil {
 				t.Fatal(err)
 			}
-			if got := len(engine.ModelTools()); got != 17 {
-				t.Fatalf("re-enabled model tools = %d, want 17", got)
+			if got := len(engine.ModelTools()); got != wantEnabled {
+				t.Fatalf("re-enabled model tools = %d, want %d", got, wantEnabled)
 			}
-			checkOverviewCount(17)
+			checkOverviewCount(wantEnabled)
 		})
 	}
 }
@@ -146,7 +151,7 @@ func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatReq
 }
 
 func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
-	scope := newTestScope(t, nil)
+	scope := newTestScope(t, map[string]string{"ACTIONSCAT_ENDPOINT": "http://actionscat.example"})
 	tool := ActionsCatListActionsTool(actionscat.New(scope.Getenv))
 	provider := &disablingActionsCatProvider{t: t, scope: scope}
 	engine := &llm.Engine{
@@ -155,5 +160,90 @@ func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
 	}
 	if got := engine.Run("list actions"); got != "disabled" || provider.round != 2 {
 		t.Fatalf("agent result = %q, rounds = %d", got, provider.round)
+	}
+}
+
+// Check the actual request to the model, including hot endpoint changes.
+type actionsCatVisibilityProvider struct {
+	t     *testing.T
+	want  int
+	calls int
+}
+
+func (p *actionsCatVisibilityProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	p.calls++
+	count := 0
+	for _, tool := range req.Tools {
+		if strings.HasPrefix(tool.Name, "actionscat_") {
+			count++
+		}
+	}
+	if count != p.want || len(req.Tools) != p.want+1 {
+		p.t.Errorf("model request exposes %d ActionsCat tools and %d total, want %d and %d", count, len(req.Tools), p.want, p.want+1)
+	}
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "checked"}}, nil
+}
+
+func TestActionsCatToolVisibilityFollowsConfiguration(t *testing.T) {
+	scope := newTestScope(t, nil)
+	client := actionscat.New(scope.Getenv)
+	provider := &actionsCatVisibilityProvider{t: t}
+	ordinary := StaySilentTool()
+	engine := &llm.Engine{
+		Scope: scope, MaxIterations: 1, Provider: provider,
+		ToolRegistry: map[string]llm.ToolExecutor{ordinary.Name(): ordinary},
+	}
+	registry := NewRegistry()
+	for _, tool := range actionsCatTestTools(client, scope) {
+		engine.ToolRegistry[tool.Name()] = tool
+		registry.Register(tool)
+	}
+	for _, step := range []struct {
+		name     string
+		endpoint string
+		enabled  string
+		want     int
+	}{
+		{"missing endpoint", "", "", 0},
+		{"whitespace endpoint", "  ", "true", 0},
+		{"slash-only endpoint", "///", "true", 0},
+		{"configured with default switch", "http://actionscat.example", "", 16},
+		{"disabled", "http://actionscat.example", "false", 0},
+		{"re-enabled", "http://actionscat.example", "true", 16},
+		{"endpoint removed", "", "true", 0},
+		{"endpoint restored", "http://actionscat.example/", "true", 16},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			for key, value := range map[string]string{"ACTIONSCAT_ENDPOINT": step.endpoint, "ACTIONSCAT_ENABLED": step.enabled} {
+				if err := scope.Config.Update(key, value, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			provider.t, provider.want = t, step.want
+			before := provider.calls
+			if got := engine.Run("check tools"); got != "checked" {
+				t.Fatalf("model result = %q", got)
+			}
+			if provider.calls != before+1 {
+				t.Fatalf("model calls = %d, want %d", provider.calls, before+1)
+			}
+			if got := len(registry.ListTools()); got != step.want {
+				t.Fatalf("registry exposes %d tools, want %d", got, step.want)
+			}
+		})
+	}
+}
+
+func TestActionsCatNilClientToolsHidden(t *testing.T) {
+	scope := newTestScope(t, map[string]string{"ADMIN_QQ_IDS": "synthetic-admin"})
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{ActorUserID: "synthetic-admin"})
+	for _, tool := range actionsCatTestTools(nil, scope) {
+		if tool.IsEnabled() {
+			t.Errorf("%s exposed with nil client", tool.Name())
+		}
+		out, err := tool.ExecuteContext(ctx, "{}")
+		if err != nil || !strings.Contains(out, "尚未配置") {
+			t.Errorf("%s unconfigured result = %q, %v", tool.Name(), out, err)
+		}
 	}
 }

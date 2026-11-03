@@ -15,6 +15,8 @@ type Tool struct {
 	executeResult  func(ctx context.Context, args string) (core.ToolExecutionResult, error)
 	enabled        func() bool
 	disabledError  error
+	// configured gates model discovery; stale calls retain executor-specific feedback.
+	configured func() bool
 	// proactiveAllowed marks side-effect-free tools that may run during an
 	// unaddressed proactive turn.
 	proactiveAllowed bool
@@ -22,7 +24,7 @@ type Tool struct {
 
 // IsEnabled reports whether this tool is currently available to the model.
 func (t Tool) IsEnabled() bool {
-	return t.enabled == nil || t.enabled()
+	return (t.enabled == nil || t.enabled()) && (t.configured == nil || t.configured())
 }
 
 // IsProactiveAllowed reports whether the tool is safe to call during an
@@ -52,7 +54,7 @@ func (t Tool) Execute(args string) (string, error) {
 
 // ExecuteContext supplies request-local values to tools that need them.
 func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	if !t.IsEnabled() {
+	if t.enabled != nil && !t.enabled() {
 		return "", t.disabledError
 	}
 	if t.executeResult != nil {
@@ -70,7 +72,7 @@ func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
 
 // ExecuteResult returns execution metadata without changing the legacy API.
 func (t Tool) ExecuteResult(ctx context.Context, args string) (core.ToolExecutionResult, error) {
-	if !t.IsEnabled() {
+	if t.enabled != nil && !t.enabled() {
 		return core.ToolExecutionResult{}, t.disabledError
 	}
 	if t.executeResult != nil {
