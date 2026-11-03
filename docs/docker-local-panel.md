@@ -6,6 +6,25 @@ is **not** installed in that image. Windows Docker Desktop must use **Linux
 containers**. No Desktop host-networking option, Windows bind mount, Cloudflare
 Tunnel, administrator account, or application authentication change is required.
 
+## Prerequisites
+
+- Docker Engine **28 or newer**. Older versions have a known localhost port
+  publishing issue affecting peers on the same L2 network. See
+  [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/).
+- Docker Compose CLI/plugin **2.17.0 or newer** (`docker compose`). The overlay
+  uses `depends_on.<service>.restart: true` for Compose-managed restart
+  propagation, which was introduced in
+  [Compose 2.17.0](https://docs.docker.com/reference/compose-file/services/#depends_on).
+  The Compose plugin version is independent of the Engine version; Engine 28+
+  alone does not satisfy both requirements.
+
+Check both versions before enabling the overlay:
+
+```powershell
+docker version --format '{{.Server.Version}}'
+docker compose version --short
+```
+
 ## Enable
 
 Run these commands from the **existing deployment directory**. Keep its original
@@ -90,9 +109,6 @@ can deliberately join namespaces or mount the socket volume. Docker Desktop's
 host-forwarding layer must also be checked on the deployed version: this is not
 a promise of isolation from hostile workloads with host-network access.
 
-Use Docker Engine 28 or newer: older versions have a known localhost port
-publishing issue affecting peers on the same L2 network. See
-[Docker port publishing](https://docs.docker.com/engine/network/port-publishing/).
 The shared volume uses the local driver's tmpfs mount options supported by Linux
 and Docker Desktop; it is not a Windows-host bind mount or a per-container
 `tmpfs:` mount. See [Docker volume options](https://docs.docker.com/reference/cli/docker/volume/create/).
