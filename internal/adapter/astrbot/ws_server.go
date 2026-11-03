@@ -535,13 +535,7 @@ func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	if text == "" {
 		return false
 	}
-	names := configuredBotNames(scopes...)
-	for _, name := range names {
-		if strings.Contains(text, name) {
-			return true
-		}
-	}
-	return false
+	return parity.ContainsBotName(text, configuredBotNames(scopes...))
 }
 
 func configuredBotNames(scopes ...*runtimescope.Scope) []string {
@@ -1114,6 +1108,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
+	if event.MessageType == "group" {
+		requestPrompt += "\n\n<outbound_message_guidance>\n" + tools.NativeMentionGuidance + "\n</outbound_message_guidance>"
+	}
 	if session != nil {
 		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
 			deliveryTag := deliveryFailure.FormatDeliveryContext()

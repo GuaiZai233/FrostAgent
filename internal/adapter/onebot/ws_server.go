@@ -625,6 +625,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	durablePrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
+	if event.MessageType == "group" {
+		requestPrompt += "\n\n<outbound_message_guidance>\n" + tools.NativeMentionGuidance + "\n</outbound_message_guidance>"
+	}
 	if session != nil {
 		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
 			deliveryTag := deliveryFailure.FormatDeliveryContext()

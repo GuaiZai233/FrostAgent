@@ -45,7 +45,7 @@ var knownEnvVars = map[string]envEntry{
 	"POKE_CUSTOM_TEXT":                     {"一旦Bot被戳，发送给LLM的附加消息。", false, false, false},
 	"POKE_COOLDOWN_SECONDS":                {"戳一戳冷却时间（秒），每个群/私聊独立，同群所有人共享；默认 30 秒", false, false, false},
 	"BOT_NAME":                             {"机器人主名称，用于群聊文本唤醒", false, false, false},
-	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔", false, false, false},
+	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔；含英文时忽略大小写和空格", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_RUNTIME_STATUS_COMMAND":        {"输出 FrostAgent 默认运行信息（#fa，默认开启）", false, false, false},

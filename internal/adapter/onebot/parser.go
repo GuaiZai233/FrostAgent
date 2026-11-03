@@ -3,6 +3,7 @@ package onebot
 import (
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
@@ -149,10 +150,8 @@ func rawMessageMentionsBot(raw json.RawMessage, names []string) bool {
 		if !ok {
 			continue
 		}
-		for _, name := range names {
-			if strings.Contains(text, name) {
-				return true
-			}
+		if parity.ContainsBotName(text, names) {
+			return true
 		}
 	}
 	return false
