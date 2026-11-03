@@ -766,6 +766,8 @@ func TestAstrBotStickerActionDoesNotExposeLocalPath(t *testing.T) {
 }
 
 func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
+	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "false")
+	t.Setenv("ENABLE_REPLY_IN_GROUP_MSG", "false")
 	toolProvider := &mockLLMProvider{
 		responses: []*core.ChatResponse{
 			{
@@ -777,7 +779,7 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 							Type: "function",
 							Function: core.ToolCallFunction{
 								Name:      "send_message",
-								Arguments: `{"messages":[{"type":"mention_user","mention_user_id":"114514"},{"type":"plain","text":" 一起来聊天吧"}]}`,
+								Arguments: `{"messages":[{"type":"mention_user","mention_user_id":"10002"},{"type":"plain","text":" 一起来聊天吧"}]}`,
 							},
 						},
 					},
@@ -811,7 +813,7 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 		SenderName:  "测试用户",
 		GroupID:     "grp_mention_user",
 		GroupName:   "工具调用测试群",
-		Content:     "艾特对方聊聊天",
+		Content:     "请艾特 [@10002] 聊聊天",
 		Platform:    "astrbot",
 		MessageType: "group",
 		IsWake:      true,
@@ -833,7 +835,7 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 	if len(hookAction.Messages) != 2 {
 		t.Fatalf("期望一个 action 保留两段有序消息，实际=%+v", hookAction.Messages)
 	}
-	if hookAction.Messages[0].Type != "mention_user" || hookAction.Messages[0].MentionUserID != "114514" {
+	if hookAction.Messages[0].Type != "mention_user" || hookAction.Messages[0].MentionUserID != "10002" {
 		t.Fatalf("第一段应为 mention_user，实际=%+v", hookAction.Messages[0])
 	}
 	if hookAction.Messages[1].Type != "plain" || hookAction.Messages[1].Text != " 一起来聊天吧" {
@@ -856,6 +858,28 @@ func TestAstrBotSendHookPreservesMentionMessageOrder(t *testing.T) {
 	}
 	if finalAction.Content != "已邀请对方。" {
 		t.Fatalf("最终回复内容不正确，实际=%q", finalAction.Content)
+	}
+
+	for _, msg := range engine.SessionManager.GetOrCreate(sessionKey(event)).Snapshot() {
+		if msg.Role == "user" && strings.Contains(fmt.Sprint(msg.Content), "outbound_message_guidance") {
+			t.Fatal("request-local guidance must not accumulate in durable history")
+		}
+	}
+
+	toolProvider.mu.Lock()
+	defer toolProvider.mu.Unlock()
+	if len(toolProvider.requests) == 0 {
+		t.Fatal("missing model request")
+	}
+	var requestText string
+	for _, msg := range toolProvider.requests[0].Messages {
+		if msg.Role == core.RoleUser {
+			requestText += fmt.Sprint(msg.Content)
+		}
+	}
+	if !strings.Contains(requestText, "[@10002]") || !strings.Contains(requestText, "outbound_message_guidance") ||
+		!strings.Contains(requestText, tools.NativeMentionGuidance) {
+		t.Fatalf("model request must explain inbound mention display tokens: %s", requestText)
 	}
 }
 
