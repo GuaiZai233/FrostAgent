@@ -172,15 +172,19 @@ def peer_request(container, host, port, path='/api/instances', headers=None):
 def probe_peer_management(container, host, port, *, token_required=False):
     """Observe trusted peer reachability; enforce an explicitly enabled token."""
     route = f'{container[:12]} -> {host}:{port}'
-    status = peer_request(container, host, port, headers=BEARER if token_required else None)
-    assert status in (0, 200), f'{route}: unexpected management HTTP status {status}'
+    status = peer_request(container, host, port, headers=None)
     if status == 0:
         print(f'OBSERVED: {route} unreachable; peer authentication not exercised', flush=True)
         return False
+    expected = 401 if token_required else 200
+    assert status == expected, \
+        f'{route}: unexpected management HTTP status {status} without a token (expected {expected})'
     if token_required:
-        assert peer_request(container, host, port) == 401, f'{route}: missing token accepted'
-        assert peer_request(container, host, port, headers={
-            'Authorization': 'Bearer incorrect-synthetic-token'}) == 401, f'{route}: wrong token accepted'
+        status = peer_request(container, host, port, headers=BEARER)
+        assert status == 200, f'{route}: correct token returned HTTP {status}, expected 200'
+        status = peer_request(container, host, port, headers={
+            'Authorization': 'Bearer incorrect-synthetic-token'})
+        assert status == 401, f'{route}: wrong token returned HTTP {status}, expected 401'
         print(f'PASS: {route} reachable; correct token accepted, missing/wrong tokens rejected', flush=True)
     else:
         print(f'OBSERVED: {route} reachable without a token (trusted local container)', flush=True)

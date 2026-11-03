@@ -202,8 +202,13 @@ handshakes, topology and lifecycle. Peer routes through the ingress container,
 bridge gateway and host forwarding are recorded as reachable or unreachable;
 both outcomes are allowed for these trusted peers. Once explicit local token
 enforcement is enabled, every reachable peer route must reject missing/wrong
-tokens and accept the correct token. Unreachable routes are reported as not
-exercised for authentication, not as proof of isolation. Run the same smoke on
+tokens and accept the correct token. The probe first sends no token: `401`
+establishes reachability and protection, `200` fails as a token bypass, and only
+transport status `0` is classified as unreachable. After `401`, a correct-token
+request must return `200` and a wrong-token request must return `401`; transport
+failure on either request fails the smoke instead of skipping the route.
+Unreachable routes are reported as not exercised for authentication, not as
+proof of isolation. Run the same smoke on
 Windows Docker Desktop to validate that version's host forwarding, token policy
 and lifecycle; Linux CI cannot replace that check. No public Tunnel or real IM
 account is used.
