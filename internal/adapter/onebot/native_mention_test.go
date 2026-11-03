@@ -86,9 +86,9 @@ func TestOneBotSendHookPreservesNativeMention(t *testing.T) {
 				}
 				chain = chain[1:]
 			}
-			if len(chain) != 3 || chain[0].Type != "text" || chain[0].Data["text"] != " 请 " ||
+			if len(chain) != 3 || chain[0].Type != "text" || chain[0].Data["text"] != "请 " ||
 				chain[1].Type != "at" || chain[1].Data["qq"] != "10002" ||
-				chain[2].Type != "text" || chain[2].Data["text"] != "  看一下" {
+				chain[2].Type != "text" || chain[2].Data["text"] != " 看一下" {
 				t.Fatalf("tool chain lost its native mention or ordering: %+v", chain)
 			}
 			if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo}); err != nil {

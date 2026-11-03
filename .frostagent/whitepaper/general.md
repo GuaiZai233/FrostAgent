@@ -257,7 +257,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
-  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.1.7 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
+  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.2.1 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
   - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
   - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
   - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
@@ -398,7 +398,10 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - General 日志通过根级 `LogService` 访问，不依赖当前选中实例的 Runtime、启用状态或操作锁；关闭 Control Plane 时会主动终止 General 与所有实例日志流，并拒绝已排队但尚未取得操作锁的生命周期写入；
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
-  - 概览分别展示实例管理名称与实例 `BOT_NAME`，并由 Control Plane 下发本次启动实际采用的 `WS_LISTEN_ADDR` 来生成实例专属适配器地址；设置页修改后的待重启值不会提前污染概览。AstrBot 插件要求显式配置该地址，不再回退到无实例路径。
+  - 概览分别展示实例管理名称与实例 `BOT_NAME`；侧边栏概览下方的「连接」页使用 Control Plane 下发的本次启动实际采用的 `WS_LISTEN_ADDR` 生成实例专属适配器地址并提供复制入口。设置页修改后的待重启值不会提前污染地址。
+  - OneBot 与 AstrBot 分别使用 `ONEBOT_WS_ENABLED` / `ASTRBOT_WS_ENABLED` 控制真实上游连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后各自使用实例设置 `ONEBOT_WS_MODE` / `ASTRBOT_WS_MODE` 二选一：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
+  - 设置批量保存前校验最终的模式／URL／Token 组合，保存后重建该实例连接，停用及换库会取消拨号、重连等待和已建立连接。客户端在 runtime 发布后才启动，带有界握手超时、退避重试和原有 Ping/Pong 心跳；不关闭 TLS 证书校验，不在连接日志中输出凭证。
+  - AstrBot 插件默认仍作为客户端连接实例专属地址；0.2.0 起可设置 `ws_mode=forward` 作为配套服务端（默认回环 `127.0.0.1:1244`，非回环必须设置访问令牌，仅一个活跃 FA 连接）。此模式不改变 HTTP 管理面板的回环及认证边界。
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
@@ -574,6 +577,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
   - **切页与会话生命周期**：同一浏览器页面、同一选中实例内，控制台切页只卸下对话视图，保留配置、输入草稿、屏幕记录与原 WebSocket；离页期间继续接收回复与 OneBot ACK，因此真实模型上下文可连续。清屏只清除屏幕记录；手动断开结束连接上下文；重新连接保留屏幕记录但开始新的模型上下文；重置会话同时清屏并重新连接。切换模拟协议清屏并创建新连接；切换实例（包括在其他页面操作）销毁旧视图与连接，不保留供切回恢复的会话。刷新、关闭浏览器页面或服务重启后不恢复模型上下文，未新增浏览器存储或服务端持久化；后端仍按原有连接级清理规则取消在途任务并释放临时资源；
   - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
+  - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循现有敏感管理接口鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。远程访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），`ALLOW_REMOTE_MCP_MANAGEMENT` 不免除此校验；可信本地回环、容器 connector 和显式 `MCP_ENFORCE_LOCAL_TOKEN` 保持原有策略。浏览器从「前端设置」的访问凭据读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
 
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/frontend"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -167,10 +168,11 @@ func managementMux(manager http.Handler) http.Handler {
 func managementAuthMiddleware(next http.Handler, getenv func(string) string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		mock := isAdapterWebSocketPath(path) && directchat.IsRequest(r)
 		management := strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/instances/") ||
 			strings.HasPrefix(path, "/frostagent.v1.")
 		if !management || path == "/api/v1/messages/send" || strings.HasPrefix(path, "/frostagent.v1.MCPService/") ||
-			isAdapterOrMessagePath(path) {
+			(isAdapterOrMessagePath(path) && !mock) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -182,7 +184,16 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 			peer = "remote-management"
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(peer, r.Header, getenv); err != nil {
+		header := r.Header
+		if mock {
+			var err error
+			header, err = directChatAuthHeaders(r)
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(peer, header, getenv); err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -207,12 +218,23 @@ func isAdapterOrMessagePath(path string) bool {
 	return parts[1] == "ws/onebot" || parts[1] == "ws/astrbot" || parts[1] == "api/v1/messages/send"
 }
 
+func isAdapterWebSocketPath(path string) bool {
+	parts := strings.Split(strings.TrimPrefix(path, "/instances/"), "/")
+	return strings.HasPrefix(path, "/instances/") && len(parts) == 3 && parts[1] == "ws" &&
+		(parts[2] == "onebot" || parts[2] == "astrbot")
+}
+
 // Keep the adapter listener separate from the HTTP management surface.
 func instanceWebSocketHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/instances/"), "/")
-		if len(parts) != 3 || parts[1] != "ws" || (parts[2] != "onebot" && parts[2] != "astrbot") {
+		if !isAdapterWebSocketPath(r.URL.Path) {
 			http.NotFound(w, r)
+			return
+		}
+		// Mock connections belong to Direct Chat on the management listener, not
+		// the unauthenticated adapter ingress, even when they omit Origin.
+		if directchat.IsRequest(r) {
+			http.Error(w, "mock connections require the management listener", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

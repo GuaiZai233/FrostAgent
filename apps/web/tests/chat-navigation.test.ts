@@ -11,8 +11,11 @@ const dom = new JSDOM('<body><main></main></body>', { url: 'http://panel.example
 const originals = {
   window: globalThis.window, document: globalThis.document, Event: globalThis.Event,
   WebSocket: globalThis.WebSocket, fetch: globalThis.fetch,
+  localStorage: globalThis.localStorage,
 };
-Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event });
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event,
+  localStorage: dom.window.localStorage });
+localStorage.setItem('frostagent_control_token', 'synthetic-navigation-token');
 
 class Socket {
   static OPEN = 1;
@@ -24,7 +27,11 @@ class Socket {
   onclose: ((event: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  constructor(readonly url: string) { Socket.all.push(this); }
+  constructor(readonly url: string, readonly protocols: string[]) {
+    assert.deepEqual(protocols, ['frostagent.direct-chat',
+      `frostagent.control-token.${Buffer.from('synthetic-navigation-token').toString('base64url')}`]);
+    Socket.all.push(this);
+  }
   open() { this.readyState = 1; this.onopen?.(); }
   send(data: string) { assert.equal(this.readyState, 1); this.sent.push(JSON.parse(data)); }
   receive(frame: unknown) { this.onmessage?.({ data: JSON.stringify(frame) }); }

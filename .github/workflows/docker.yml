@@ -31,6 +31,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test local panel smoke guardrails
         run: python3 -m unittest discover -s scripts -p 'test_local_panel.py' -v
+      - name: Test WebSocket smoke assertions
+        run: python3 -m unittest discover -s scripts -p 'test_docker_ws_smoke.py' -v
       - name: Test build metadata
         run: python3 -m unittest discover -s scripts -p 'test_build_metadata.py' -v
       - name: Resolve build metadata

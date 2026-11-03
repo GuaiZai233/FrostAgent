@@ -5,8 +5,6 @@ import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
-import { instanceWebSocketURL } from '../utils/websocket-url';
-import { copyToClipboard } from '../utils/clipboard';
 import { renderOverviewTools } from './overview-tools';
 import '../styles/overview.css';
 
@@ -59,18 +57,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
       const botName = data.botName || 'FrostAgent';
       const version = data.version || '-';
-      const oneBotURL = instanceWebSocketURL(
-        data.wsListenAddr,
-        instance?.id || '',
-        'onebot',
-        window.location.origin,
-      );
-      const astrBotURL = instanceWebSocketURL(
-        data.wsListenAddr,
-        instance?.id || '',
-        'astrbot',
-        window.location.origin,
-      );
 
       const toolsScroll = contentEl.querySelector<HTMLElement>('#overview-tools-strip')?.scrollLeft || 0;
       const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
@@ -98,7 +84,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             </div>
           </div>
           <p class="text-xs text-muted">实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span></p>
-          <p class="text-xs text-muted font-mono break-all">OneBot: ${escapeHtml(oneBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(oneBotURL)}">复制</a><br>AstrBot: ${escapeHtml(astrBotURL)} <a href="#" role="button" class="text-primary hover:underline ml-1.5 cursor-pointer font-sans select-none" data-copy-url="${escapeHtml(astrBotURL)}">复制</a></p>
         </header>
 
         <!-- KPI Summary Cards -->
@@ -174,19 +159,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           bodyHtml: `<div class="overview-all-tools">${renderOverviewTools(data.tools, false)}</div>`,
           onMount: (_dialog, close) => { closeToolsDialog = close; },
           onClose: () => { closeToolsDialog = undefined; },
-        });
-      });
-      contentEl.querySelectorAll<HTMLAnchorElement>('[data-copy-url]').forEach((el) => {
-        el.addEventListener('click', async (e) => {
-          e.preventDefault();
-          const target = el.dataset.copyUrl;
-          if (!target) return;
-          const ok = await copyToClipboard(target);
-          if (ok) {
-            toast.success('已复制到剪贴板');
-          } else {
-            toast.error('复制失败');
-          }
         });
       });
       contentEl.querySelector<HTMLInputElement>("#instance-enabled")!.onchange = async (event) => {

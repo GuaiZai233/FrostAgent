@@ -1239,7 +1239,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if enableAt || enableReply {
 					textSeg := tools.OneBotSegment{
 						Type: "text",
-						Data: map[string]any{"text": " " + displayText},
+						Data: map[string]any{"text": displayText},
 					}
 					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
 				} else {
@@ -1331,7 +1331,7 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 		if enableAt || enableReply {
 			textSeg := tools.OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": " " + text},
+				Data: map[string]interface{}{"text": text},
 			}
 			finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, conn.Scope)
 		} else {

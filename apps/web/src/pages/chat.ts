@@ -1,4 +1,5 @@
 import { createInstanceAPI } from '../api/client';
+import { directChatWebSocket } from '../api/control-auth';
 import { instanceState } from '../instance-state';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
@@ -412,7 +413,7 @@ function createChatPage(container: HTMLElement): () => void {
 
     let socket: WebSocket;
     try {
-      socket = new WebSocket(url);
+      socket = directChatWebSocket(url);
       ws = socket;
     } catch (err) {
       updateStatus('error');

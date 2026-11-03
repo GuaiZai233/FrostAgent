@@ -34,6 +34,9 @@ try {
   instanceState.select(instance);
   let cleanup = mountOverviewPage(root);
   await flush();
+  assert.equal(root.querySelectorAll('[data-copy-url]').length, 0, 'adapter address copies must stay on Connections after the overview redesign');
+  assert.equal(root.querySelector('#quick-config'), null, 'quick configuration must stay in Settings');
+  assert.equal(root.querySelector<HTMLElement>('#overview-error')!.style.display, 'none', 'merged overview must load without stale event handlers');
   assert.equal(root.querySelectorAll('#overview-tools-strip article').length, 10);
   assert.equal(root.querySelectorAll('#overview-tools-strip img').length, 0, 'tool descriptions must remain escaped');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
