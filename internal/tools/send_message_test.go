@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
@@ -29,6 +30,9 @@ func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
 		"mention_user",
 		"plain",
 		"user ID",
+		"[@ID]",
+		"[CQ:at,qq=ID]",
+		nativeMentionExample,
 	} {
 		if !strings.Contains(tool.Description(), keyword) {
 			t.Fatalf("send_message description is missing mention guidance keyword %q: %s", keyword, tool.Description())
@@ -76,6 +80,8 @@ func TestSendMsgToolExecuteRejectsInvalidPayload(t *testing.T) {
 		`{"messages":[{"type":"plain"}]}`,
 		`{"messages":[{"type":"image"}]}`,
 		`{"messages":[{"type":"unknown"}]}`,
+		`{"messages":[{"type":"mention_user"}]}`,
+		`{"messages":[{"type":"mention_user","mention_user_id":"  "}]}`,
 	}
 	for _, tc := range cases {
 		if got, err := tool.Execute(tc); err == nil || strings.TrimSpace(got) != "" {
@@ -229,5 +235,51 @@ func TestBuildOneBotMessage_SparseLargeFileDoesNotExhaustMemory(t *testing.T) {
 	}
 	if len(segments) != 1 || segments[0].Data["file"] != "file://"+path {
 		t.Fatalf("unexpected segments for 1GB sparse file: %+v", segments)
+	}
+}
+
+func TestSendMsgToolMentionExampleReachesNativeOneBotChain(t *testing.T) {
+	result, err := SendMsgTool().ExecuteResult(context.Background(), nativeMentionExample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Messages []Msg `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(result.MessagePayload), &payload); err != nil {
+		t.Fatalf("missing delivery payload: %v", err)
+	}
+	chain, err := BuildOneBotMessage(payload.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 2 || chain[0].Type != "at" || chain[0].Data["qq"] != "10001" ||
+		chain[1].Type != "text" || chain[1].Data["text"] != "  你好" {
+		t.Fatalf("documented example must yield a native mention followed by text: %+v", chain)
+	}
+}
+
+func TestSendMsgToolKeepsMentionSyntaxLiteral(t *testing.T) {
+	const text = "语法示例：[@10001] @Example [CQ:at,qq=10001]"
+	args, err := json.Marshal(map[string]any{"messages": []Msg{{Type: "plain", Text: text}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SendMsgTool().Execute(string(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Messages []Msg `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	chain, err := BuildOneBotMessage(payload.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 1 || chain[0].Type != "text" || chain[0].Data["text"] != " "+text {
+		t.Fatalf("literal syntax must stay text: %+v", chain)
 	}
 }
