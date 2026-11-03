@@ -17,12 +17,12 @@ import time
 import uuid
 from pathlib import Path
 
+from docker_ws_smoke import UPGRADE, check_adapter_websocket, check_management_websocket
+
 
 SOCKET_PATH = '/run/frostagent-panel/management.sock'
 HELPER_IMAGE = 'python:3.13-alpine'
 SERVICES = ('frostagent', 'local-panel-origin', 'local-panel')
-UPGRADE = {'Connection': 'Upgrade', 'Upgrade': 'websocket',
-           'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='}
 TOKEN = 'synthetic-local-panel-token'
 BEARER = {'Authorization': 'Bearer ' + TOKEN}
 
@@ -358,10 +358,10 @@ def exercise(root):
             rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars'
             assert read(rpc, {})['status'] == 200
             for adapter in ('onebot', 'astrbot'):
-                endpoint = f'/instances/{instance_id}/ws/{adapter}?mock=true'
-                assert read(endpoint, headers=UPGRADE)['status'] == 101
-                assert http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE)['status'] == 101
-                assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
+                endpoint = f'/instances/{instance_id}/ws/{adapter}'
+                check_management_websocket(read, endpoint)
+                check_adapter_websocket(lambda path, headers: http_request('127.0.0.1', ws_port, path, headers=headers), endpoint)
+                check_adapter_websocket(lambda path, headers: {'status': peer_request(peer, 'frostagent', adapter_port, path, headers)}, endpoint)
             assert peer_request(peer, 'frostagent', adapter_port, '/api/storage') == 404
             print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and relay topology')
 
@@ -372,6 +372,8 @@ def exercise(root):
             assert api('/api/instances', headers=BEARER)['instances'][0]['id'] == instance_id
             assert read(rpc, {}, BEARER)['status'] == 200
             check_topology_and_peer_access(token_required=True)
+            for adapter in ('onebot', 'astrbot'):
+                check_management_websocket(read, f'/instances/{instance_id}/ws/{adapter}', token=TOKEN)
             before = api('/api/instances/global/backup/settings', headers=BEARER)
             print('PASS: explicit local token enforcement is not bypassed')
 
@@ -409,11 +411,11 @@ def exercise(root):
             command('docker', 'restart', app)
             assert container('frostagent') == app, 'docker restart unexpectedly replaced the app container'
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on app restart'
-            endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
+            endpoint = f'/instances/{instance_id}/ws/onebot'
             wait_websocket(lambda: http_request('127.0.0.1', ws_port, endpoint, headers=UPGRADE))
             for adapter in ('onebot', 'astrbot'):
-                endpoint = f'/instances/{instance_id}/ws/{adapter}?mock=true'
-                assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
+                endpoint = f'/instances/{instance_id}/ws/{adapter}'
+                check_adapter_websocket(lambda path, headers: {'status': peer_request(peer, 'frostagent', adapter_port, path, headers)}, endpoint)
             current_namespace = command('docker', 'exec', app, 'readlink', '/proc/self/ns/net')
             pending_status = read('/api/instances')['status']
             print(f'Out-of-band app restart: namespace {previous_namespace} -> {current_namespace}; '
@@ -451,8 +453,8 @@ def exercise(root):
 
             command(*compose, 'stop', 'local-panel', 'local-panel-origin')
             assert read('/api/instances', headers=BEARER)['status'] == 0
-            endpoint = f'/instances/{instance_id}/ws/onebot?mock=true'
-            assert peer_request(peer, 'frostagent', adapter_port, endpoint, UPGRADE) == 101
+            endpoint = f'/instances/{instance_id}/ws/onebot'
+            check_adapter_websocket(lambda path, headers: {'status': peer_request(peer, 'frostagent', adapter_port, path, headers)}, endpoint)
             command(*compose, 'up', '--detach', '--no-build', 'local-panel-origin', 'local-panel')
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on start'
             wait_ready(read)

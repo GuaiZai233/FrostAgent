@@ -1,16 +1,20 @@
 """Verify origin isolation locally; never open a tunnel or contact an Access app."""
 
 import argparse
+import http.client
 import json
 import os
 import re
 import sqlite3
+import socket
 import subprocess
 import tempfile
 import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+
+from docker_ws_smoke import UPGRADE, check_adapter_websocket, check_management_websocket
 
 
 CLIENT = r"""
@@ -34,8 +38,6 @@ data = '' if response.status == 101 else response.read().decode()
 print(json.dumps({'status': response.status, 'body': data}))
 connection.close()
 """
-UPGRADE = {'Connection': 'Upgrade', 'Upgrade': 'websocket',
-           'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='}
 PUBLIC_ORIGIN = 'https://frostagent.example.com'
 FORWARDED = {'Host': 'frostagent.example.com', 'Origin': PUBLIC_ORIGIN,
              'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '198.51.100.20',
@@ -69,6 +71,15 @@ def client(container, host, port, path='/', payload=None, headers=None, method=N
 def helper(name, network):
     return command('docker', 'run', '--detach', '--name', name, '--network', network,
                    'python:3.13-alpine', 'sleep', '1800')
+
+
+def published_websocket(port, path, headers):
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as connection:
+        connection.sendall(f'GET {path} HTTP/1.1\r\nHost: localhost\r\n'.encode() +
+                           ''.join(f'{k}: {v}\r\n' for k, v in headers.items()).encode() + b'\r\n')
+        response = http.client.HTTPResponse(connection)
+        response.begin()
+        return {'status': response.status}
 
 
 def remove(container):
@@ -184,21 +195,19 @@ def exercise(root, temporary, host_mode=False):
                 assert client(peer, remote_host, 11023, path, payload, method=method)['status'] == 404, path
         assert len(api('/api/instances')['instances']) == 1
         for adapter in ('onebot', 'astrbot'):
-            ws = f'/instances/{instance_id}/ws/{adapter}?mock=true'
-            assert read(ws, headers={**FORWARDED, **UPGRADE})['status'] == 101
-            assert client(origin, '127.0.0.1', 11023, ws, headers=UPGRADE)['status'] == 101
+            ws = f'/instances/{instance_id}/ws/{adapter}'
+            check_management_websocket(read, ws)
+            check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws)
+            check_adapter_websocket(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws)
             if host_mode:
                 assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 0
+                assert client(peer, remote_host, 11023, ws + '?mock=true', headers=UPGRADE)['status'] == 0
             else:
-                assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 101
+                check_adapter_websocket(lambda path, headers: client(peer, remote_host, 11023, path, headers=headers), ws)
                 published = int(command(*compose, 'port', 'frostagent', '11023').rsplit(':', 1)[1])
                 assert client(origin, '127.0.0.1', 11023, rpc, {}, UPGRADE)['status'] == 404
                 # Verify the host's published adapter port as well as direct bridge traffic.
-                import socket
-                with socket.create_connection(('127.0.0.1', published), timeout=5) as connection:
-                    connection.sendall(f'GET {ws} HTTP/1.1\r\nHost: localhost\r\n'.encode() +
-                                       ''.join(f'{k}: {v}\r\n' for k, v in UPGRADE.items()).encode() + b'\r\n')
-                    assert connection.recv(4096).startswith(b'HTTP/1.1 101 ')
+                check_adapter_websocket(lambda path, headers: published_websocket(published, path, headers), ws)
         if host_mode:
             print('PASS: host topology, double loopback, public Host/Origin, OneBot/AstrBot')
             return
@@ -211,8 +220,10 @@ def exercise(root, temporary, host_mode=False):
             assert read('/api/instances/global/import/settings', unsafe)['status'] == 400, address
             assert 'LISTEN_ADDR' not in api('/api/instances/global/backup/settings')['settings']
         for adapter in ('onebot', 'astrbot'):
-            ws = f'/instances/{instance_id}/ws/{adapter}?mock=true'
-            assert client(peer, remote_host, 1235, ws, headers=UPGRADE)['status'] == 101
+            ws = f'/instances/{instance_id}/ws/{adapter}'
+            check_adapter_websocket(lambda path, headers: client(peer, remote_host, 1235, path, headers=headers), ws)
+            published = int(command(*compose, 'port', 'frostagent', '1235').rsplit(':', 1)[1])
+            check_adapter_websocket(lambda path, headers: published_websocket(published, path, headers), ws)
 
         # Preserve explicit local-token enforcement; Access adds no mandatory local token.
         settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'true'
@@ -220,6 +231,8 @@ def exercise(root, temporary, host_mode=False):
         assert read('/api/instances', headers=FORWARDED)['status'] == 401
         bearer = {**FORWARDED, 'Authorization': 'Bearer synthetic-control-token'}
         assert read('/api/instances', headers=bearer)['status'] == 200
+        for adapter in ('onebot', 'astrbot'):
+            check_management_websocket(read, f'/instances/{instance_id}/ws/{adapter}', token='synthetic-control-token')
         # The former README bootstrap flow uses these two management endpoints.
         # Test their auth and settings semantics directly rather than executing docs.
         before = api('/api/instances/global/backup/settings', headers=bearer)
