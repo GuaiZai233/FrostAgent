@@ -118,7 +118,7 @@ assert.match(
 
 assert.match(
   chat,
-  /<h1 class="page-title">直接对话<\/h1>[\s\S]*?<p class="text-xs text-muted mt-1">此模式通信断电全丢，无持久化<\/p>/,
+  /<h1 class="page-title">直接对话<\/h1>[\s\S]*?<p class="text-xs text-muted mt-1">同一实例切页保留对话；切换实例、刷新或关闭页面后清除，不写入历史记录。<\/p>/,
   'direct chat must show the ephemeral-mode subtitle below its title',
 );
 assert.equal(

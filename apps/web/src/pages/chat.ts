@@ -54,9 +54,43 @@ interface AstrBotActionFrame {
   [key: string]: unknown;
 }
 
+interface RetainedChat {
+  element: HTMLElement;
+  dispose: () => void;
+}
+
+let retainedChat: RetainedChat | null = null;
+
 export function mountChatPage(container: HTMLElement): () => void {
+  if (!retainedChat) {
+    const element = document.createElement('div');
+    const signal = instanceState.signal;
+    const destroy = createChatPage(element);
+    const session: RetainedChat = {
+      element,
+      dispose: () => {
+        signal.removeEventListener('abort', session.dispose);
+        destroy();
+        element.remove();
+        if (retainedChat === session) retainedChat = null;
+      },
+    };
+    retainedChat = session;
+    // Selection changes also dispose a chat while another route is visible.
+    signal.addEventListener('abort', session.dispose, { once: true });
+  }
+
+  const session = retainedChat;
+  container.appendChild(session.element);
+  // Keep the live socket (including action ACKs) and page state across routes.
+  return () => session.element.remove();
+}
+
+function createChatPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
+  const instanceId = instanceState.selected?.id;
   let isUnmounted = false;
+  let connectionManaged = false;
   let ws: WebSocket | null = null;
   let msgSeq = 0;
 
@@ -89,10 +123,10 @@ export function mountChatPage(container: HTMLElement): () => void {
               <span id="connection-status-text">${getStatusText(connectionStatus)}</span>
             </span>
           </div>
-          <p class="text-xs text-muted mt-1">此模式通信断电全丢，无持久化</p>
+          <p class="text-xs text-muted mt-1">同一实例切页保留对话；切换实例、刷新或关闭页面后清除，不写入历史记录。</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <button class="btn btn-outline btn-sm" id="btn-reconnect">
+          <button class="btn btn-outline btn-sm" id="btn-reconnect" title="重新连接会重置模型上下文，保留屏幕记录">
             ${icon('refresh', 'w-3.5 h-3.5')}
             <span>重新连接</span>
           </button>
@@ -100,9 +134,13 @@ export function mountChatPage(container: HTMLElement): () => void {
             ${icon('circle_stop', 'w-3.5 h-3.5')}
             <span>断开连接</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="btn-clear-chat">
+          <button class="btn btn-outline btn-sm" id="btn-clear-chat" title="仅清除屏幕记录，保留模型上下文">
             ${icon('trash', 'w-3.5 h-3.5')}
             <span>清屏</span>
+          </button>
+          <button class="btn btn-outline btn-sm" id="btn-reset-session" title="清除屏幕记录并重新连接，开始新的模型上下文">
+            ${icon('refresh', 'w-3.5 h-3.5')}
+            <span>重置会话</span>
           </button>
         </div>
       </header>
@@ -228,6 +266,7 @@ export function mountChatPage(container: HTMLElement): () => void {
   const btnReconnect = container.querySelector<HTMLButtonElement>('#btn-reconnect')!;
   const btnDisconnect = container.querySelector<HTMLButtonElement>('#btn-disconnect')!;
   const btnClearChat = container.querySelector<HTMLButtonElement>('#btn-clear-chat')!;
+  const btnResetSession = container.querySelector<HTMLButtonElement>('#btn-reset-session')!;
 
   const adapterSelect = container.querySelector<HTMLSelectElement>('#chat-adapter-select')!;
   const astrbotConfigRow = container.querySelector<HTMLElement>('#astrbot-config-row')!;
@@ -331,11 +370,10 @@ export function mountChatPage(container: HTMLElement): () => void {
   }
 
   function computeWSURL(): string {
-    const inst = instanceState.selected;
-    if (!inst) return '';
+    if (!instanceId) return '';
     return dashboardWebSocketURL(
       window.location.origin,
-      inst.id,
+      instanceId,
       adapter,
       'mock=true',
     );
@@ -350,8 +388,7 @@ export function mountChatPage(container: HTMLElement): () => void {
 
   function connect() {
     if (isUnmounted) return;
-    const inst = instanceState.selected;
-    if (!inst) {
+    if (!instanceId) {
       toast.warning('请先在左侧选择一个实例');
       return;
     }
@@ -373,8 +410,10 @@ export function mountChatPage(container: HTMLElement): () => void {
       time: new Date().toLocaleTimeString(),
     });
 
+    let socket: WebSocket;
     try {
-      ws = new WebSocket(url);
+      socket = new WebSocket(url);
+      ws = socket;
     } catch (err) {
       updateStatus('error');
       appendMessage({
@@ -387,8 +426,8 @@ export function mountChatPage(container: HTMLElement): () => void {
       return;
     }
 
-    ws.onopen = () => {
-      if (isUnmounted) return;
+    socket.onopen = () => {
+      if (isUnmounted || ws !== socket) return;
       updateStatus('connected');
       appendMessage({
         id: `sys_${Date.now()}`,
@@ -399,8 +438,8 @@ export function mountChatPage(container: HTMLElement): () => void {
       });
     };
 
-    ws.onclose = (ev) => {
-      if (isUnmounted) return;
+    socket.onclose = (ev) => {
+      if (isUnmounted || ws !== socket) return;
       updateStatus('disconnected');
       appendMessage({
         id: `sys_${Date.now()}`,
@@ -411,8 +450,8 @@ export function mountChatPage(container: HTMLElement): () => void {
       });
     };
 
-    ws.onerror = () => {
-      if (isUnmounted) return;
+    socket.onerror = () => {
+      if (isUnmounted || ws !== socket) return;
       updateStatus('error');
       appendMessage({
         id: `sys_${Date.now()}`,
@@ -423,13 +462,14 @@ export function mountChatPage(container: HTMLElement): () => void {
       });
     };
 
-    ws.onmessage = (event) => {
-      if (isUnmounted) return;
+    socket.onmessage = (event) => {
+      if (isUnmounted || ws !== socket) return;
       handleIncomingFrame(event.data);
     };
   }
 
   function disconnect() {
+    connectionManaged = true;
     if (ws) {
       ws.onopen = null;
       ws.onclose = null;
@@ -443,6 +483,12 @@ export function mountChatPage(container: HTMLElement): () => void {
       ws = null;
     }
     updateStatus('disconnected');
+  }
+
+  function clearMessages() {
+    messages.length = 0;
+    messagesContainer.replaceChildren(emptyState);
+    emptyState.style.display = 'flex';
   }
 
   function handleIncomingFrame(rawData: string) {
@@ -673,21 +719,22 @@ export function mountChatPage(container: HTMLElement): () => void {
       id: `sys_${Date.now()}`,
       role: 'system',
       sender: '系统',
-      content: '已手动断开连接',
+      content: '已手动断开连接，模型上下文已结束；重新连接后开始新会话',
       time: new Date().toLocaleTimeString(),
     });
   });
 
   btnClearChat.addEventListener('click', () => {
-    messages.length = 0;
-    messagesContainer.innerHTML = '';
-    if (emptyState) {
-      emptyState.style.display = 'flex';
-      messagesContainer.appendChild(emptyState);
-    }
+    clearMessages();
+  });
+
+  btnResetSession.addEventListener('click', () => {
+    clearMessages();
+    connect();
   });
 
   adapterSelect.addEventListener('change', () => {
+    clearMessages();
     adapter = adapterSelect.value as 'onebot' | 'astrbot';
     if (astrbotConfigRow) {
       astrbotConfigRow.style.display = adapter === 'astrbot' ? 'grid' : 'none';
@@ -749,12 +796,12 @@ export function mountChatPage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       botName = overview.botName || 'FrostAgent';
       updateEndpointDisplay();
-      connect();
+      if (!connectionManaged) connect();
     } catch (err) {
-      console.error('DirectChat: Failed to load overview:', err);
       if (isUnmounted) return;
+      console.error('DirectChat: Failed to load overview:', err);
       updateEndpointDisplay();
-      connect();
+      if (!connectionManaged) connect();
     }
   }
 
