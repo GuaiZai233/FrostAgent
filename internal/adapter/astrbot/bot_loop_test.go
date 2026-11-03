@@ -42,38 +42,44 @@ func TestAstrBotBotLoopHardDropAndHumanInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	send := func(id, user string, wake bool) {
+	send := func(id, user string, wake bool) Event {
 		t.Helper()
 		event := Event{Type: "event", EventType: "message", Platform: "astrbot", MessageType: "group",
 			GroupID: "room-a", UserID: user, MessageID: id, Content: id, IsAt: wake}
 		if err := conn.WriteJSON(event); err != nil {
 			t.Fatal(err)
 		}
+		return event
 	}
-	send("first", "bot-a", true)
-	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+	first := send("first", "bot-a", true)
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_first" {
 		t.Fatalf("first turn: %+v", action)
 	}
+	// A terminal write precedes deferred turn cleanup. These are sequential
+	// budget checks, so do not accidentally inject into the previous turn.
+	waitAstrBotTurnCompletion(t, engine, first)
 	send("blocked", "bot-a", true)
 	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM || action.Echo != "reply_blocked" {
 		t.Fatalf("hard drop must suppress downstream LLM: %+v", action)
 	}
 	send("interrupt", "human-a", false)
-	if action := readBotLoopAction(t, conn); action.Action != "noop" {
+	if action := readBotLoopAction(t, conn); action.Action != "noop" || action.Echo != "reply_interrupt" {
 		t.Fatalf("unwoken human turn: %+v", action)
 	}
 	send("still-blocked", "bot-a", true)
-	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM {
+	if action := readBotLoopAction(t, conn); action.Action != "noop" || !action.SuppressLLM || action.Echo != "reply_still-blocked" {
 		t.Fatalf("ordinary human chatter must not restore Bot budgets: %+v", action)
 	}
-	send("explicit-wake", "human-a", true)
-	if action := readBotLoopAction(t, conn); action.Action != "send_message" {
+	wake := send("explicit-wake", "human-a", true)
+	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_explicit-wake" {
 		t.Fatalf("explicit human wake: %+v", action)
 	}
-	send("resumed", "bot-a", true)
+	waitAstrBotTurnCompletion(t, engine, wake)
+	resumed := send("resumed", "bot-a", true)
 	if action := readBotLoopAction(t, conn); action.Action != "send_message" || action.Echo != "reply_resumed" {
 		t.Fatalf("bot turn after interruption: %+v", action)
 	}
+	waitAstrBotTurnCompletion(t, engine, resumed)
 	provider.mu.Lock()
 	count := len(provider.requests)
 	provider.mu.Unlock()
