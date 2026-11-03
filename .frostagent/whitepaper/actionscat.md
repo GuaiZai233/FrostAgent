@@ -364,6 +364,8 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 所有 ActionsCat 相关配置项统一纳入 FrostAgent Settings 体系管理：
 
+仅当 `ACTIONSCAT_ENDPOINT` 已配置且 `ACTIONSCAT_ENABLED` 开启时，16 个 ActionsCat 工具才会向 LLM 暴露。未设置、全空白或移除端点时隐藏全部工具；配置端点、清空端点与切换开关均在下一次模型请求时生效，无需重建实例运行时。此处沿用客户端的端点配置判定，不额外探测健康状态或要求管理 Token 非空；旧工具调用仍保留既有的未配置、权限或禁用反馈。
+
 | 环境变量配置名 | 说明 | 默认值 | 作用域 | 敏感度 |
 | :--- | :--- | :--- | :--- | :--- |
 | `ACTIONSCAT_ENABLED` | 是否启用 ActionsCat；关闭后隐藏工具并拒绝调用，保存后立即生效 | `true`（旧实例未设置时也开启） | 实例级 | 否 |
