@@ -23,7 +23,7 @@ func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 		`INSERT INTO skills VALUES ('synthetic-instance','synthetic-skill',1,'{}','preserved body','{}',14)`,
 		`UPDATE provider_models SET max_input_tokens=4096`,
 		`UPDATE memory_entries SET summary_dirty=1`,
-		`UPDATE schema_meta SET version=12 WHERE id=1`,
+		`UPDATE schema_meta SET version=12, min_compatible_version=12 WHERE id=1`,
 	} {
 		if _, err := db.SQL.Exec(statement); err != nil {
 			t.Fatal(err)

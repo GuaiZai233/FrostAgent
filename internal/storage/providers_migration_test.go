@@ -100,7 +100,7 @@ func TestProviderMigrationFailureIsAtomic(t *testing.T) {
 				if _, err := db.SQL.Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				err = db.applyMigration(context.Background(), migration{11, providerSchema})
+				err = db.applyMigration(context.Background(), migration{version: 11, statements: providerSchema})
 				if err == nil {
 					t.Fatal("invalid source unexpectedly migrated")
 				}

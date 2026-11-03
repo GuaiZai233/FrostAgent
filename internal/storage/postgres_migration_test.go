@@ -52,6 +52,14 @@ func TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage(t *testing.T) {
 		err = db.SQL.QueryRow(`SELECT pg_catalog.to_regclass('memory_embeddings') IS NOT NULL
 			OR pg_catalog.to_regclass('memory_embedding_scopes') IS NOT NULL`).Scan(&exists)
 		ready := db.EmbeddingStorageReady.Load()
+		if startup == 0 {
+			// The second open also checks a declared future layout without
+			// caches. CI runs this before enabling the vector extension.
+			if _, updateErr := db.SQL.Exec(`UPDATE schema_meta SET version = 16, min_compatible_version = 14 WHERE id = 1`); updateErr != nil {
+				db.Close()
+				t.Fatal(updateErr)
+			}
+		}
 		closeErr := db.Close()
 		if err != nil || closeErr != nil || exists || ready {
 			t.Fatalf("ordinary startup created embedding storage: exists=%v ready=%v query=%v close=%v", exists, ready, err, closeErr)
@@ -105,7 +113,7 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 	}
 	prepareOldSchema(t, db, 7)
 	populateMigrationFixture(t, db)
-	if err := db.applyMigration(ctx, migration{8, []string{
+	if err := db.applyMigration(ctx, migration{version: 8, statements: []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, source_message_id)`,
 		`THIS IS NOT SQL`,
 	}}); err == nil {
@@ -124,7 +132,7 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 		t.Fatalf("retry PostgreSQL migration: %v", err)
 	}
 	assertMigrationFixture(t, db)
-	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), SchemaVersion+1); err != nil {
+	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), SchemaVersion+1, SchemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

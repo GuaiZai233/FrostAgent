@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,6 +52,11 @@ func (m *Manager) recoverDeletionStages() error {
 		rest := strings.TrimPrefix(name, deletionStagePrefix)
 		if len(rest) < 10 || rest[8] != '-' || !idPattern.MatchString(rest[:8]) {
 			continue
+		}
+		if m.db != nil {
+			if err := m.db.RequireNativeSchema(context.Background(), "recover instance deletion"); err != nil {
+				return err
+			}
 		}
 		id := rest[:8]
 		stage := filepath.Join(m.root, name)

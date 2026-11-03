@@ -1,0 +1,399 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"net/url"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+func TestPostgresMigrationSchemaCompatibilityCrossSchemaReferences(t *testing.T) {
+	for _, test := range []struct {
+		name, parent, child, action string
+		legacy, unrelated, accept   bool
+	}{
+		{name: "scope-cascade", parent: "memory_embedding_scopes"},
+		{name: "vector-cascade", parent: "memory_embeddings"},
+		{name: "settings-cascade", parent: "settings"},
+		{name: "same-name-native-cache", parent: "memory_embedding_scopes", child: "memory_embeddings"},
+		{name: "same-name-core-table", parent: "memory_embedding_scopes", child: "settings"},
+		{name: "legacy-v15-no-backfill", parent: "memory_embedding_scopes", legacy: true},
+		{name: "scope-no-action", parent: "memory_embedding_scopes", action: "NO ACTION"},
+		{name: "instance-only-reference", parent: "instances", accept: true},
+		{name: "unrelated-same-name-parent", parent: "memory_embedding_scopes", unrelated: true, accept: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, config, db := compatibilityDatabase(t, Postgres)
+			compatibilitySeedComputerUse(t, db)
+			seedCompatibilityEmbeddingCaches(t, db, false)
+			version := 16
+			if test.legacy {
+				version = 15
+			}
+			compatibilityMetadata(t, db, version, !test.legacy, 14)
+			var activeSchema string
+			if err := db.SQL.QueryRow(`SELECT current_schema()`).Scan(&activeSchema); err != nil {
+				t.Fatal(err)
+			}
+			// Punctuation and quoting must not change which relation a foreign
+			// key points to, or make the catalog scan miss the external table.
+			moduleSchema, moduleDB := compatibilityModuleSchema(t, config, activeSchema+`.module"Data`)
+			parent := compatibilityQualifiedTable(activeSchema, test.parent)
+			columns := "instance_id,scope_type,platform,group_id,owner"
+			definitions := "instance_id TEXT NOT NULL, scope_type TEXT NOT NULL, platform TEXT NOT NULL, group_id TEXT NOT NULL, owner TEXT NOT NULL"
+			switch test.parent {
+			case "memory_embeddings":
+				columns += ",memory_id"
+				definitions += ", memory_id TEXT NOT NULL"
+			case "settings":
+				columns = "scope,instance_id,key"
+				definitions = "scope TEXT NOT NULL, instance_id TEXT NOT NULL, key TEXT NOT NULL"
+			case "instances":
+				columns = "id"
+				definitions = "id TEXT NOT NULL"
+			}
+			if test.unrelated {
+				unrelatedParent := compatibilityQualifiedTable(moduleSchema, test.parent)
+				compatibilityExec(t, db, `CREATE TABLE `+unrelatedParent+` (`+definitions+`, PRIMARY KEY (`+columns+`))`)
+				compatibilityExec(t, db, `INSERT INTO `+unrelatedParent+` SELECT `+columns+` FROM `+parent)
+				parent = unrelatedParent
+			}
+			childName := test.child
+			if childName == "" {
+				childName = "future_extension"
+			}
+			child := compatibilityQualifiedTable(moduleSchema, childName)
+			action := test.action
+			if action == "" {
+				action = "CASCADE"
+			}
+			compatibilityExec(t, db, `CREATE TABLE `+child+` (`+definitions+`, payload TEXT NOT NULL,
+				FOREIGN KEY (`+columns+`) REFERENCES `+parent+` (`+columns+`) ON DELETE `+action+`)`)
+			compatibilityExec(t, db, `INSERT INTO `+child+` SELECT `+columns+`, 'synthetic-unknown-module-data' FROM `+parent)
+			before := compatibilityPostgresSchemaSnapshot(t, db.SQL)
+			moduleBefore := compatibilityPostgresSchemaSnapshot(t, moduleDB)
+			if !test.accept {
+				proveCompatibilityCrossSchemaEffect(t, db, parent, child, action)
+				if after := compatibilityPostgresSchemaSnapshot(t, db.SQL); !reflect.DeepEqual(before, after) {
+					t.Fatal("rolled-back fixture changed active-schema data or constraints")
+				}
+				if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+					t.Fatal("rolled-back fixture changed external-schema data or constraints")
+				}
+			}
+			compatibilityClose(t, db)
+			opened, err := OpenWithConfig(context.Background(), root, config)
+			if test.accept {
+				if err != nil {
+					t.Fatalf("safe cross-schema relationship was rejected: %v", err)
+				}
+				defer opened.Close()
+				assertCompatibilityVersions(t, opened, version, 14)
+				if after := compatibilityPostgresSchemaSnapshot(t, opened.SQL); !reflect.DeepEqual(before, after) {
+					t.Fatal("compatible startup changed active-schema data or constraints")
+				}
+				compatibilityUpdateInstance(t, opened)
+				assertCompatibilityJSON(t, opened)
+				if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+					t.Fatal("compatible startup or instance update changed external-schema data or constraints")
+				}
+				return
+			}
+			if err == nil {
+				opened.Close()
+				t.Fatal("cross-schema dependency on a mutable table was accepted")
+			}
+			if !strings.Contains(err.Error(), childName) || !strings.Contains(err.Error(), test.parent) {
+				t.Fatalf("startup did not identify the unsafe cross-schema dependency: %v", err)
+			}
+			probe, err := sql.Open("pgx", config.DSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer probe.Close()
+			if after := compatibilityPostgresSchemaSnapshot(t, probe); !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected startup changed active-schema data, constraints or compatibility metadata")
+			}
+			if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+				t.Fatal("rejected startup changed external-schema data or constraints")
+			}
+		})
+	}
+}
+
+func TestPostgresMigrationSchemaCompatibilitySearchPathReference(t *testing.T) {
+	root, config, db := compatibilityDatabase(t, Postgres)
+	compatibilitySeedComputerUse(t, db)
+	seedCompatibilityEmbeddingCaches(t, db, false)
+	compatibilityMetadata(t, db, 16, true, 14)
+	var activeSchema string
+	if err := db.SQL.QueryRow(`SELECT current_schema()`).Scan(&activeSchema); err != nil {
+		t.Fatal(err)
+	}
+	moduleSchema, moduleDB := compatibilityModuleSchema(t, config, activeSchema+`.module"Data`)
+	parent := compatibilityQualifiedTable(moduleSchema, "memory_embedding_scopes")
+	child := compatibilityQualifiedTable(activeSchema, "future_extension")
+	compatibilityExec(t, db, `ALTER TABLE `+compatibilityQualifiedTable(activeSchema, "memory_embedding_scopes")+
+		` SET SCHEMA "`+strings.ReplaceAll(moduleSchema, `"`, `""`)+`"`)
+	compatibilityExec(t, db, `CREATE TABLE `+child+` (
+		instance_id TEXT NOT NULL, scope_type TEXT NOT NULL, platform TEXT NOT NULL,
+		group_id TEXT NOT NULL, owner TEXT NOT NULL, payload TEXT NOT NULL,
+		FOREIGN KEY (instance_id,scope_type,platform,group_id,owner)
+			REFERENCES `+parent+` (instance_id,scope_type,platform,group_id,owner) ON DELETE CASCADE)`)
+	compatibilityExec(t, db, `INSERT INTO `+child+`
+		SELECT instance_id,scope_type,platform,group_id,owner, 'synthetic-search-path-data' FROM `+parent)
+	before := compatibilityPostgresSchemaSnapshot(t, db.SQL)
+	moduleBefore := compatibilityPostgresSchemaSnapshot(t, moduleDB)
+	proveCompatibilityCrossSchemaEffect(t, db, parent, child, "CASCADE")
+	if after := compatibilityPostgresSchemaSnapshot(t, db.SQL); !reflect.DeepEqual(before, after) {
+		t.Fatal("rolled-back search-path fixture changed active-schema data or constraints")
+	}
+	if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+		t.Fatal("rolled-back search-path fixture changed external-schema data or constraints")
+	}
+	compatibilityClose(t, db)
+
+	// The v14 writer resolves scopes through its fallback search path, while
+	// both dependent tables remain in current_schema(). Check relation identity
+	// rather than assuming every dangerous dependency has an external child.
+	parsed, err := url.Parse(config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", `"`+strings.ReplaceAll(activeSchema, `"`, `""`)+`","`+strings.ReplaceAll(moduleSchema, `"`, `""`)+`"`)
+	parsed.RawQuery = query.Encode()
+	reopenedConfig := Config{Backend: Postgres, DSN: parsed.String()}
+	opened, err := OpenWithConfig(context.Background(), root, reopenedConfig)
+	if err == nil {
+		opened.Close()
+		t.Fatal("active-schema dependency on a mutable search-path target was accepted")
+	}
+	if !strings.Contains(err.Error(), "memory_embedding_scopes") ||
+		(!strings.Contains(err.Error(), "future_extension") && !strings.Contains(err.Error(), "memory_embeddings")) {
+		t.Fatalf("startup did not identify the unsafe search-path dependency: %v", err)
+	}
+	// Keep the original search path for snapshots so PostgreSQL renders
+	// constraint definitions identically before and after the rejected startup.
+	probe, err := sql.Open("pgx", config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	if after := compatibilityPostgresSchemaSnapshot(t, probe); !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected startup changed active-schema data, constraints or compatibility metadata")
+	}
+	if after := compatibilityPostgresSchemaSnapshot(t, moduleDB); !reflect.DeepEqual(moduleBefore, after) {
+		t.Fatal("rejected startup changed external-schema data or constraints")
+	}
+}
+
+func compatibilityQualifiedTable(schema, table string) string {
+	return `"` + strings.ReplaceAll(schema, `"`, `""`) + `"."` + strings.ReplaceAll(table, `"`, `""`) + `"`
+}
+
+func compatibilityModuleSchema(t *testing.T, config Config, schema string) (string, *sql.DB) {
+	t.Helper()
+	parsed, err := url.Parse(config.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := `"` + strings.ReplaceAll(schema, `"`, `""`) + `"`
+	query := parsed.Query()
+	query.Set("search_path", quoted)
+	parsed.RawQuery = query.Encode()
+	probe, err := sql.Open("pgx", parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec(`CREATE SCHEMA ` + quoted); err != nil {
+		probe.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := probe.Exec(`DROP SCHEMA ` + quoted + ` CASCADE`); err != nil {
+			t.Errorf("remove disposable module schema: %v", err)
+		}
+		probe.Close()
+	})
+	return schema, probe
+}
+
+func proveCompatibilityCrossSchemaEffect(t *testing.T, db *DB, parent, child, action string) {
+	t.Helper()
+	var before int
+	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM ` + child).Scan(&before); err != nil || before == 0 {
+		t.Fatalf("cross-schema fixture has no dependent rows: count=%d err=%v", before, err)
+	}
+	tx, err := db.SQL.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`DELETE FROM ` + parent)
+	if action == "NO ACTION" {
+		var pgError *pgconn.PgError
+		if !errors.As(err, &pgError) || pgError.Code != "23503" {
+			t.Fatalf("fixture did not block old writer through foreign key: %v", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var after int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM ` + child).Scan(&after); err != nil || after != 0 {
+			t.Fatalf("fixture did not cascade-delete external data: count=%d err=%v", after, err)
+		}
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]string {
+	t.Helper()
+	snapshot := compatibilitySnapshot(t, db, Postgres)
+	rows, err := db.Query(`SELECT r.relname, c.conname, pg_catalog.pg_get_constraintdef(c.oid)
+		FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class r ON r.oid = c.conrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY r.relname, c.conname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, name, definition string
+		if err := rows.Scan(&table, &name, &definition); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":constraints"] = append(snapshot[table+":constraints"], name+":"+definition)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	triggers, err := db.Query(`SELECT r.relname, t.tgname, t.tgenabled,
+		pg_catalog.pg_get_triggerdef(t.oid), pg_catalog.pg_get_functiondef(t.tgfoid)
+		FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class r ON r.oid = t.tgrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+		WHERE n.nspname = current_schema() AND NOT t.tgisinternal ORDER BY r.relname, t.tgname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer triggers.Close()
+	for triggers.Next() {
+		var table, name, enabled, definition, function string
+		if err := triggers.Scan(&table, &name, &enabled, &definition, &function); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":triggers"] = append(snapshot[table+":triggers"], name+":"+enabled+":"+definition+":"+function)
+	}
+	if err := triggers.Err(); err != nil {
+		t.Fatal(err)
+	}
+	triggers.Close()
+	rules, err := db.Query(`SELECT c.relname, r.rulename, r.ev_enabled, pg_catalog.pg_get_ruledef(r.oid)
+		FROM pg_catalog.pg_rewrite r JOIN pg_catalog.pg_class c ON c.oid = r.ev_class
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname, r.rulename`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rules.Close()
+	for rules.Next() {
+		var table, name, enabled, definition string
+		if err := rules.Scan(&table, &name, &enabled, &definition); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":rules"] = append(snapshot[table+":rules"], name+":"+enabled+":"+definition)
+	}
+	if err := rules.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rules.Close()
+	defaults, err := db.Query(`SELECT c.relname, a.attname, pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+		FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_class c ON c.oid = d.adrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.adnum
+		WHERE n.nspname = current_schema() ORDER BY c.relname, a.attnum`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer defaults.Close()
+	for defaults.Next() {
+		var table, column, expression string
+		if err := defaults.Scan(&table, &column, &expression); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":defaults"] = append(snapshot[table+":defaults"], column+":"+expression)
+	}
+	if err := defaults.Err(); err != nil {
+		t.Fatal(err)
+	}
+	defaults.Close()
+	attributes, err := db.Query(`SELECT c.relname, a.attname, a.attgenerated, a.attidentity,
+		pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull
+		FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND a.attnum > 0 AND NOT a.attisdropped
+		ORDER BY c.relname, a.attnum`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attributes.Close()
+	for attributes.Next() {
+		var table, column, generated, identity, kind, notNull string
+		if err := attributes.Scan(&table, &column, &generated, &identity, &kind, &notNull); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":attributes"] = append(snapshot[table+":attributes"], column+":"+generated+":"+identity+":"+kind+":"+notNull)
+	}
+	if err := attributes.Err(); err != nil {
+		t.Fatal(err)
+	}
+	attributes.Close()
+	security, err := db.Query(`SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+		FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer security.Close()
+	for security.Next() {
+		var table, enabled, forced string
+		if err := security.Scan(&table, &enabled, &forced); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":rls"] = []string{enabled, forced}
+	}
+	if err := security.Err(); err != nil {
+		t.Fatal(err)
+	}
+	security.Close()
+	policies, err := db.Query(`SELECT c.relname, p.polname, p.polcmd, p.polpermissive,
+		p.polroles::text, COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), ''),
+		COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '')
+		FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() ORDER BY c.relname, p.polname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer policies.Close()
+	for policies.Next() {
+		var table, name, command, permissive, roles, using, check string
+		if err := policies.Scan(&table, &name, &command, &permissive, &roles, &using, &check); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table+":policies"] = append(snapshot[table+":policies"], name+":"+command+":"+permissive+":"+roles+":"+using+":"+check)
+	}
+	if err := policies.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
