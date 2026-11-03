@@ -215,6 +215,12 @@ func instanceWebSocketHandler(next http.Handler) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		// Mock connections belong to Direct Chat on the management listener, not
+		// the unauthenticated adapter ingress, even when they omit Origin.
+		if r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true" {
+			http.Error(w, "mock connections require the management listener", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
