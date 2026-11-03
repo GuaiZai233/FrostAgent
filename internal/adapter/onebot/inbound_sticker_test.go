@@ -2,11 +2,13 @@ package onebot
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
 )
@@ -47,13 +49,15 @@ func TestInboundStickerOnlyClassification(t *testing.T) {
 
 func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) {
 	for _, tc := range []struct {
-		name, message   string
-		silent, private bool
+		name, message             string
+		silent, private, noVision bool
 	}{
 		{name: "sticker", message: `[{"type":"image","data":{"subType":1,"file":"base64://c3RpY2tlcg=="}}]`, silent: true},
 		{name: "mface", message: `[{"type":"mface","data":{}}]`, silent: true},
+		{name: "sticker without vision", message: `[{"type":"image","data":{"sub_type":1}}]`, silent: true, noVision: true},
 		{name: "quote and sticker", message: `[{"type":"reply","data":{"id":"91"}},{"type":"sticker","data":{}}]`, silent: true},
 		{name: "ordinary image", message: `[{"type":"image","data":{"file":"base64://cGhvdG8="}}]`},
+		{name: "ordinary image without vision", message: `[{"type":"image","data":{"file":"base64://cGhvdG8="}}]`, noVision: true},
 		{name: "ordinary gif", message: `[{"type":"image","data":{"file":"base64://R0lGODlh","sub_type":0}}]`},
 		{name: "mixed image", message: `[{"type":"mface","data":{}},{"type":"image","data":{"file":"base64://cGhvdG8="}}]`},
 		{name: "mixed text", message: `[{"type":"mface","data":{}},{"type":"text","data":{"text":"hello"}}]`},
@@ -66,7 +70,14 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 			vision := &mockLLMProvider{}
 			engine := newTestEngine(provider)
 			engine.VisionProvider = vision
-			engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1", "ENABLE_PROACTIVE_REPLY_WHITELIST": "false", "BOT_NAME": "synthetic-bot", "BOT_ALIASES": "", "ENABLE_AT_IN_GROUP_MSG": "false", "ENABLE_REPLY_IN_GROUP_MSG": "false"})
+			if tc.noVision {
+				engine.VisionProvider = nil
+			}
+			if tc.silent {
+				// Buffer only: no store or extraction provider is needed for this assertion.
+				engine.MemoryWriter = memory.NewWriter(nil)
+			}
+			engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1", "ENABLE_PROACTIVE_REPLY_WHITELIST": "false", "BOT_NAME": "synthetic-bot", "BOT_ALIASES": "", "ENABLE_AT_IN_GROUP_MSG": "false", "ENABLE_REPLY_IN_GROUP_MSG": "false", "MEMORY_EXTRACT_BATCH_MIN": "100", "MEMORY_EXTRACT_BATCH_MAX": "100"})
 			srv, url := startWSTestServer(engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -104,9 +115,22 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 				case <-time.After(3 * time.Second):
 					t.Fatal("backend silence did not complete")
 				}
-				history := engine.SessionManager.GetOrCreate("group:13").Snapshot()
+				session := engine.SessionManager.GetOrCreate("group:13")
+				history := session.Snapshot()
 				if len(history) != 1 || history[0].Role != "user" {
 					t.Fatalf("silence history=%+v", history)
+				}
+				original := extractUserText(ParseMessageSegments(event.Message), event.Message, engine.Scope)
+				historyText, _ := history[0].Content.(string)
+				if !strings.HasPrefix(historyText, "User Message: "+original+"\n\n") {
+					t.Fatalf("silent turn lost original message %q: %s", original, historyText)
+				}
+				if count := session.PendingTurnCount(); count != 1 {
+					t.Fatalf("pending silent turns=%d want=1", count)
+				}
+				batch, ready := session.EnqueuePendingTurn([]memory.PendingExtractionItem{{MessageID: "synthetic-barrier"}}, 1, 1)
+				if !ready || len(batch.Items) != 3 || batch.Items[0].Message.Content != original || batch.Items[1].Message.Content != "[stay_silent]" {
+					t.Fatalf("silent extraction batch=%+v ready=%v", batch, ready)
 				}
 				next := event
 				next.MessageID = 2
@@ -132,14 +156,22 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 			}
 			provider.mu.Lock()
 			calls := len(provider.requests)
+			requests := append([]core.ChatRequest(nil), provider.requests...)
 			provider.mu.Unlock()
 			if calls != 1 {
 				t.Fatalf("dialogue calls=%d want=1", calls)
 			}
+			if tc.noVision && !tc.silent {
+				messages := requests[0].Messages
+				prompt, _ := messages[len(messages)-1].Content.(string)
+				if !strings.Contains(prompt, "\n\nUser Message: \n\n") {
+					t.Fatalf("ordinary vision-disabled behavior changed: %s", prompt)
+				}
+			}
 			vision.mu.Lock()
 			visionCalls := len(vision.requests)
 			vision.mu.Unlock()
-			if tc.silent && visionCalls != 0 {
+			if (tc.silent || tc.noVision) && visionCalls != 0 {
 				t.Fatalf("silent sticker called vision %d times", visionCalls)
 			}
 		})

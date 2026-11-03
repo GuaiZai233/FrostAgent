@@ -81,3 +81,17 @@ func TestProactiveInboundStickerCanceledOrStale(t *testing.T) {
 		t.Fatalf("stale result=%+v", result)
 	}
 }
+
+func TestProactiveInboundStickerWithoutTurn(t *testing.T) {
+	provider := &stickerActivityProvider{}
+	engine := &Engine{Provider: provider}
+	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "[图片]"}}, RunContext{
+		Proactive: true, ProactiveStickerOnly: true,
+	})
+	if !result.Silent || !result.StaySilentCalled || result.Error != nil || result.MemoryWritten || result.SilenceReason != "stay_silent" {
+		t.Fatalf("nil-turn result=%+v", result)
+	}
+	if len(provider.requests) != 0 || len(result.Transcript) != 3 || result.Transcript[2].Role != "tool" {
+		t.Fatalf("nil-turn silence requests=%d transcript=%+v", len(provider.requests), result.Transcript)
+	}
+}

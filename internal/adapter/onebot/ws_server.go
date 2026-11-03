@@ -370,7 +370,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			break
 		}
 	}
-	visionEnabled := engine != nil && engine.VisionProvider != nil && !(wakeSignals.Proactive && wakeSignals.StickerOnly)
+	forceStickerSilence := wakeSignals.Proactive && wakeSignals.StickerOnly
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
@@ -405,7 +406,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	if currentHasImage {
+	// Backend silence keeps the original marker for history and memory buffering.
+	if currentHasImage && !forceStickerSilence {
 		if !visionEnabled {
 			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
 		} else {
