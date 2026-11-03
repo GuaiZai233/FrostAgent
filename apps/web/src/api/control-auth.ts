@@ -18,6 +18,26 @@ export function setControlToken(token: string): void {
   }
 }
 
+export function directChatWebSocket(url: string): WebSocket {
+  const endpoint = new URL(url);
+  const origin = new URL(window.location.origin);
+  origin.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (endpoint.origin !== origin.origin || endpoint.username || endpoint.password) {
+    throw new Error('直接对话必须使用同源 WebSocket 地址');
+  }
+  const protocols = ['frostagent.direct-chat'];
+  const token = getControlToken();
+  if (token) {
+    const bytes = new TextEncoder().encode(token);
+    const encoded = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    // Keep the control credential out of URLs and endpoint displays. The server
+    // selects only frostagent.direct-chat, never the credential-bearing offer.
+    protocols.push(`frostagent.control-token.${encoded}`);
+  }
+  return new WebSocket(url, protocols);
+}
+
 export async function controlPlaneFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
   if (url.origin !== window.location.origin) throw new Error('管理请求必须使用同源地址');

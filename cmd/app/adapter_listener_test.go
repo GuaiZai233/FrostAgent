@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,6 +96,16 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 			if err := manager.Enable(info.ID, true); err != nil {
 				t.Fatal(err)
 			}
+			const controlToken = "synthetic-listener-control-token"
+			if err := manager.GlobalConfig().Update("MCP_CONTROL_TOKEN", controlToken, false); err != nil {
+				t.Fatal(err)
+			}
+			remoteManagement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Exercise the real management/gateway chain with an untrusted peer.
+				r.RemoteAddr = "198.51.100.10:12345"
+				managementMux(gateway).ServeHTTP(w, r)
+			}))
+			defer remoteManagement.Close()
 			adapterMux := http.NewServeMux()
 			adapterMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 			adapterListener := httptest.NewServer(adapterMux)
@@ -112,6 +124,12 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 				if response.StatusCode != want || (err == nil) != (want == http.StatusSwitchingProtocols) {
 					t.Fatalf("%s%s: status=%d want=%d err=%v", base, path, response.StatusCode, want, err)
 				}
+				if strings.Contains(fmt.Sprint(response.Header), controlToken) || strings.Contains(fmt.Sprint(response.Header), base64.RawURLEncoding.EncodeToString([]byte(controlToken))) {
+					t.Fatal("handshake response disclosed control credentials")
+				}
+				if want == http.StatusSwitchingProtocols && header.Get("Sec-WebSocket-Protocol") != "" && response.Header.Get("Sec-WebSocket-Protocol") != "frostagent.direct-chat" {
+					t.Fatal("browser handshake did not select the credential-free Direct Chat protocol")
+				}
 			}
 			for _, adapter := range []string{"onebot", "astrbot"} {
 				path := "/instances/" + info.ID + "/ws/" + adapter
@@ -125,6 +143,34 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 					assertHandshake(adapterListener.URL, path+attempt.query, headers, http.StatusForbidden)
 					headers.Set("Origin", management.URL)
 					assertHandshake(management.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Del("Origin")
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusUnauthorized)
+					headers.Set("Origin", remoteManagement.URL)
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusUnauthorized)
+					headers.Set("Authorization", "Bearer incorrect-token")
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusUnauthorized)
+					headers.Set("Authorization", "Bearer "+controlToken)
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Del("Origin")
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Del("Authorization")
+					headers.Set("Sec-WebSocket-Protocol", "frostagent.direct-chat, frostagent.control-token."+base64.RawURLEncoding.EncodeToString([]byte(controlToken)))
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Set("Origin", remoteManagement.URL)
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					assertHandshake(adapterListener.URL, path+attempt.query, headers, http.StatusForbidden)
+					headers.Set("Origin", "https://untrusted.example")
+					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusForbidden)
+					if err := manager.GlobalConfig().Update("MCP_ENFORCE_LOCAL_TOKEN", "true", false); err != nil {
+						t.Fatal(err)
+					}
+					headers.Set("Origin", management.URL)
+					assertHandshake(management.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Del("Sec-WebSocket-Protocol")
+					assertHandshake(management.URL, path+attempt.query, headers, http.StatusUnauthorized)
+					if err := manager.GlobalConfig().Update("MCP_ENFORCE_LOCAL_TOKEN", "false", false); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 		})

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -311,7 +312,7 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler。
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		mock := r.URL.Query().Get("mock") == "true" || r.Header.Get("X-Mock-Adapter") == "true"
+		mock := directchat.IsRequest(r)
 		if a.connectionConfig.Disabled && !mock {
 			http.Error(w, "当前适配器连接未启用", http.StatusServiceUnavailable)
 			return
@@ -329,6 +330,9 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			defer done()
 		}
 		localUpgrader := upgrader
+		if mock {
+			localUpgrader.Subprotocols = []string{directchat.Subprotocol}
+		}
 		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}

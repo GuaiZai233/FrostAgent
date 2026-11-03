@@ -575,6 +575,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
   - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
+  - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循现有敏感管理接口鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。远程访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），`ALLOW_REMOTE_MCP_MANAGEMENT` 不免除此校验；可信本地回环、容器 connector 和显式 `MCP_ENFORCE_LOCAL_TOKEN` 保持原有策略。浏览器从「前端设置」的访问凭据读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
 
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)
