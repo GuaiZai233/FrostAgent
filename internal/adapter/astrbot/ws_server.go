@@ -535,13 +535,7 @@ func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	if text == "" {
 		return false
 	}
-	names := configuredBotNames(scopes...)
-	for _, name := range names {
-		if strings.Contains(text, name) {
-			return true
-		}
-	}
-	return false
+	return parity.ContainsBotName(text, configuredBotNames(scopes...))
 }
 
 func configuredBotNames(scopes ...*runtimescope.Scope) []string {
