@@ -17,6 +17,38 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
+func TestDockerStartupRejectsUnsafeConfiguration(t *testing.T) {
+	previousContainer, previousLoopback := instanceconfig.ContainerManagement, instanceconfig.ManagementLoopbackOnly
+	previousListen, previousWSListen := instanceconfig.DefaultListenAddr, instanceconfig.DefaultWSListenAddr
+	instanceconfig.ContainerManagement, instanceconfig.ManagementLoopbackOnly = "true", "false"
+	t.Cleanup(func() {
+		instanceconfig.ContainerManagement, instanceconfig.ManagementLoopbackOnly = previousContainer, previousLoopback
+		instanceconfig.DefaultListenAddr, instanceconfig.DefaultWSListenAddr = previousListen, previousWSListen
+	})
+	for _, tc := range []struct {
+		name, token, management, adapter, wantError string
+	}{
+		{
+			name: "missing credential", management: "127.0.0.1:0", adapter: "127.0.0.1:1",
+			wantError: dockerBootstrapTokenKey,
+		},
+		{
+			name: "shared listener port", token: "synthetic-startup-control-token-with-32-bytes",
+			management: "127.0.0.1:0", adapter: "0.0.0.0:0",
+			wantError: "management and adapter listeners must use different ports",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv(dockerBootstrapTokenKey, tc.token)
+			instanceconfig.DefaultListenAddr, instanceconfig.DefaultWSListenAddr = tc.management, tc.adapter
+			if err := run(); err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("startup error=%v, want error containing %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestDockerControlTokenBootstrap(t *testing.T) {
 	previousContainer, previousLoopback := instanceconfig.ContainerManagement, instanceconfig.ManagementLoopbackOnly
 	t.Cleanup(func() {

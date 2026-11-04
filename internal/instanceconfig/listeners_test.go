@@ -64,6 +64,7 @@ func TestValidateContainerListeners(t *testing.T) {
 			{"127.0.0.1:8081", "0.0.0.0:11023", false},
 			{"0.0.0.0:8080", "127.0.0.1:8080", true},
 			{"127.0.0.1:8080", ":08080", true},
+			{"127.0.0.1", ":11023", true},
 			{"127.0.0.1:8080", "invalid", true},
 		} {
 			if err := ValidateContainerListeners(tc.management, tc.adapter); (err != nil) != tc.wantError {
