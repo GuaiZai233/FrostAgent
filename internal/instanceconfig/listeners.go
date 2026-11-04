@@ -10,20 +10,39 @@ import (
 var (
 	DefaultListenAddr   = "127.0.0.1:8080"
 	DefaultWSListenAddr = "127.0.0.1:11023"
-	// Container builds require a loopback management listener in the connector's network namespace.
+	// ContainerManagement enables the Docker host publication auth policy.
+	ContainerManagement = "false"
+	// Host-network builds retain the connector's loopback-only listener policy.
 	ManagementLoopbackOnly = "false"
 )
+
+// ValidateContainerListeners keeps management separate from adapter ingress.
+// Bridge builds allow wildcard or loopback listeners; host builds require loopback.
+func ValidateContainerListeners(listenAddr, wsListenAddr string) error {
+	if ManagementLoopbackOnly == "true" {
+		return ValidateListenerIsolation(listenAddr, wsListenAddr)
+	}
+	return validateListenerPorts(listenAddr, wsListenAddr)
+}
 
 // ValidateListenerIsolation prevents SQL settings from exposing management routes
 // outside the connector's shared network namespace, including through a shared port.
 func ValidateListenerIsolation(listenAddr, wsListenAddr string) error {
-	host, port, err := net.SplitHostPort(listenAddr)
+	host, _, err := net.SplitHostPort(listenAddr)
 	if err != nil {
 		return fmt.Errorf("invalid management listener: %w", err)
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("container management listener must use a loopback IP address")
+	}
+	return validateListenerPorts(listenAddr, wsListenAddr)
+}
+
+func validateListenerPorts(listenAddr, wsListenAddr string) error {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid management listener: %w", err)
 	}
 	managementPort, err := net.LookupPort("tcp", port)
 	if err != nil {

@@ -61,23 +61,22 @@ Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再�
 
 ## Docker 部署
 
+首次部署先复制 `docker.env.example` 为 `.env`，将其中
+`FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 填为至少 32 位的随机 ASCII 令牌，再启动：
+
 ```
 docker compose up -d --build
 ```
 
-默认部署不会发布管理面板。Windows Docker Desktop（Linux 容器）或 Linux
-宿主机需要本地访问时，显式加入可选配置：
+打开 **http://127.0.0.1:8080/#/settings/frontend**，在「API / 控制平面访问凭据」中
+填写同一令牌并保存，刷新页面后创建或选择实例。镜像默认监听容器内
+`0.0.0.0:8080`，Compose 仅发布宿主机 `127.0.0.1:8080`，无需 socat。
+经端口映射或网桥访问管理 API 必须提供正确令牌，伪造本地 Host 不能跳过认证。
 
-```powershell
-docker compose -f compose.yaml -f compose.local.yaml up -d --build
-```
-
-打开 **http://127.0.0.1:8088**。FA 镜像不内置 socat；两个独立转发容器通过专用
-Unix socket 连接管理回环，适配器网络不新增管理端口。已有部署须保留原目录、
-项目名、环境文件和数据卷；关闭入口需停止两个转发容器，不能只省略覆盖文件。
-端口配置、信任边界、升级与回退见[本地 Docker 面板说明](docs/docker-local-panel.md)。
-此模式仅用于**所有 Docker 容器也都可信**的本机；回环发布不保证其他容器无法访问管理面。
-公网访问仍使用 Cloudflare Access。
+首次输入只在 SQL 中没有管理令牌时初始化，已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN`
+优先，更新不会被环境变量覆盖。首次成功后可移除该初始化输入。更新时保留原项目名、
+数据卷和必要覆盖文件。旧 SQL 回环监听、旧 socat 入口退役、`docker run` 和镜像更新命令见
+[Docker 部署与更新](docs/docker.md)。公网访问仍使用 Cloudflare Access。
 
 GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
 更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。

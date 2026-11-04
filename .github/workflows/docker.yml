@@ -33,6 +33,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_local_panel.py' -v
       - name: Test WebSocket smoke assertions
         run: python3 -m unittest discover -s scripts -p 'test_docker_ws_smoke.py' -v
+      - name: Test deployment smoke guardrails
+        run: python3 -m unittest discover -s scripts -p 'test_docker_deployment_smoke.py' -v
       - name: Test build metadata
         run: python3 -m unittest discover -s scripts -p 'test_build_metadata.py' -v
       - name: Resolve build metadata
@@ -58,6 +60,8 @@ jobs:
           load: true
           tags: frostagent:host
           build-args: |
+            DOCKER_LISTEN_ADDR=127.0.0.1:8080
+            DOCKER_MANAGEMENT_LOOPBACK_ONLY=true
             DOCKER_WS_LISTEN_ADDR=127.0.0.1:11023
             FROSTAGENT_VERSION=${{ steps.build.outputs.version }}
             FROSTAGENT_COMMIT=${{ steps.build.outputs.commit }}

@@ -49,3 +49,26 @@ func TestValidateListenerIsolation(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateContainerListeners(t *testing.T) {
+	previous := ManagementLoopbackOnly
+	t.Cleanup(func() { ManagementLoopbackOnly = previous })
+	for _, loopbackOnly := range []string{"false", "true"} {
+		ManagementLoopbackOnly = loopbackOnly
+		for _, tc := range []struct {
+			management, adapter string
+			wantError           bool
+		}{
+			{"0.0.0.0:8080", "0.0.0.0:11023", loopbackOnly == "true"},
+			{"[::]:8080", ":11023", loopbackOnly == "true"},
+			{"127.0.0.1:8081", "0.0.0.0:11023", false},
+			{"0.0.0.0:8080", "127.0.0.1:8080", true},
+			{"127.0.0.1:8080", ":08080", true},
+			{"127.0.0.1:8080", "invalid", true},
+		} {
+			if err := ValidateContainerListeners(tc.management, tc.adapter); (err != nil) != tc.wantError {
+				t.Fatalf("loopbackOnly=%s management=%s adapter=%s: %v", loopbackOnly, tc.management, tc.adapter, err)
+			}
+		}
+	}
+}

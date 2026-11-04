@@ -1,4 +1,4 @@
-"""Verify origin isolation locally; never open a tunnel or contact an Access app."""
+"""Verify Docker management publication and authentication with isolated data."""
 
 import argparse
 import http.client
@@ -15,6 +15,7 @@ from contextlib import closing
 from pathlib import Path
 
 from docker_ws_smoke import UPGRADE, check_adapter_websocket, check_management_websocket
+from docker_local_panel_smoke import http_request, validate_test_data_mount
 
 
 CLIENT = r"""
@@ -42,6 +43,8 @@ PUBLIC_ORIGIN = 'https://frostagent.example.com'
 FORWARDED = {'Host': 'frostagent.example.com', 'Origin': PUBLIC_ORIGIN,
              'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '198.51.100.20',
              'Cf-Access-Authenticated-User-Email': 'synthetic@example.invalid'}
+BOOTSTRAP_TOKEN = 'synthetic-docker-bootstrap-control-token'
+IMAGE = os.environ.get('FROSTAGENT_SMOKE_IMAGE', 'frostagent:local')
 
 
 def command(*args, env=None):
@@ -98,6 +101,52 @@ def wait_ready(read):
     raise AssertionError('origin did not become ready')
 
 
+def exercise_image_run():
+    """Verify the image's defaults without Compose or a shared namespace relay."""
+    missing = subprocess.run(('docker', 'run', '--rm', '--network', 'none', IMAGE),
+                             capture_output=True, text=True, encoding='utf-8', timeout=30)
+    assert missing.returncode == 1, 'a fresh bridge deployment started without a token'
+    assert 'FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN' in missing.stderr
+    project = 'frostagent-run-smoke-' + uuid.uuid4().hex[:12]
+    volume = project + '-data'
+    app = None
+    command('docker', 'volume', 'create', volume)
+    try:
+        def start(token):
+            return command('docker', 'run', '--detach', '--name', project,
+                           '--publish', '127.0.0.1::8080', '--volume', volume + ':/app/data',
+                           '--env', 'FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN=' + token, IMAGE)
+
+        app = start(BOOTSTRAP_TOKEN)
+
+        def read(path='/', payload=None, headers=None):
+            port = int(command('docker', 'port', app, '8080/tcp').rsplit(':', 1)[1])
+            return http_request('127.0.0.1', port, path, payload, headers)
+
+        wait_ready(read)
+        bearer = {'Authorization': 'Bearer ' + BOOTSTRAP_TOKEN}
+        assert read('/api/instances')['status'] == 401
+        assert read('/api/instances', headers={'Authorization': 'Bearer incorrect'})['status'] == 401
+        created = read('/api/instances', {'name': 'Synthetic image run'}, bearer)
+        assert created['status'] == 200, created
+        instance_id = json.loads(created['body'])['id']
+        command('docker', 'stop', app)
+        assert inspect(app)['State']['ExitCode'] == 0
+        remove(app)
+        app = None
+        app = start('synthetic-replacement-bootstrap-token')
+        wait_ready(read)
+        instances = read('/api/instances', headers=bearer)
+        assert instances['status'] == 200, instances
+        assert json.loads(instances['body'])['instances'][0]['id'] == instance_id
+        assert read('/api/instances', headers={
+            'Authorization': 'Bearer synthetic-replacement-bootstrap-token'})['status'] == 401
+        print('PASS: docker run default port, required initialization, token auth and persisted SQL credential')
+    finally:
+        remove(app)
+        command('docker', 'volume', 'rm', volume)
+
+
 
 
 def exercise(root, temporary, host_mode=False):
@@ -105,19 +154,28 @@ def exercise(root, temporary, host_mode=False):
     env = {**os.environ, 'TUNNEL_TOKEN': 'synthetic-unusable-test-token'}
     source = ('compose.host.yaml',) if host_mode else ('compose.yaml', 'compose.cloudflare.yaml')
     config = render(root, project, *source, env=env)
+    validate_test_data_mount(config)
+    for kind in ('volumes', 'networks'):
+        for resource in config.get(kind, {}).values():
+            if resource.get('external') or not resource['name'].startswith(project + '_'):
+                raise ValueError('smoke requires project-scoped resources')
     service = config['services']['frostagent']
+    service['image'] = os.environ.get('FROSTAGENT_HOST_SMOKE_IMAGE', 'frostagent:host') if host_mode else IMAGE
     service['restart'] = 'no'
     # Legacy application environment variables must not override SQL/default listeners.
-    service['environment'] = {'LISTEN_ADDR': '0.0.0.0:9999', 'WS_LISTEN_ADDR': '0.0.0.0:9998'}
+    service['environment'] = {'LISTEN_ADDR': '0.0.0.0:9999', 'WS_LISTEN_ADDR': '0.0.0.0:9998',
+                              'FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN': BOOTSTRAP_TOKEN}
     if host_mode:
         assert not service.get('ports'), 'host mode must not pretend to publish ports'
         assert service['network_mode'] == 'host'
         assert service['build']['args']['DOCKER_WS_LISTEN_ADDR'] == '127.0.0.1:11023'
+        assert service['build']['args']['DOCKER_LISTEN_ADDR'] == '127.0.0.1:8080'
+        assert service['build']['args']['DOCKER_MANAGEMENT_LOOPBACK_ONLY'] == 'true'
     else:
-        assert {int(p['target']) for p in service['ports']} == {11023}
+        assert {int(p['target']) for p in service['ports']} == {8080, 11023}
         assert all(p['host_ip'] == '127.0.0.1' for p in service['ports'])
         service['ports'] = [{'target': p, 'published': '0', 'host_ip': '127.0.0.1',
-                             'protocol': 'tcp'} for p in (11023, 1235)]
+                             'protocol': 'tcp'} for p in (8080, 11023, 1235)]
         connector = config['services']['cloudflared']
         assert connector['network_mode'] == 'service:frostagent'
         assert connector['depends_on']['frostagent']['restart']
@@ -141,7 +199,7 @@ def exercise(root, temporary, host_mode=False):
             peer = helper(project + '-peer', project + '_default')
             remote_host = 'frostagent'
             actual = inspect(app)
-            assert not actual['HostConfig']['PortBindings'].get('8080/tcp')
+            assert actual['HostConfig']['PortBindings']['8080/tcp'][0]['HostIp'] == '127.0.0.1'
             connector_id = command(*compose, 'ps', '--all', '--quiet', 'cloudflared')
             assert inspect(connector_id)['HostConfig']['NetworkMode'] == 'container:' + app
 
@@ -154,6 +212,18 @@ def exercise(root, temporary, host_mode=False):
             return json.loads(result['body'])
 
         html = wait_ready(read)
+        if not host_mode:
+            management_port = int(command(*compose, 'port', 'frostagent', '8080').rsplit(':', 1)[1])
+
+            def published_read(path='/', payload=None, headers=None):
+                return http_request('127.0.0.1', management_port, path, payload, headers)
+
+            wait_ready(published_read)
+            for credentials in ({}, {'Authorization': 'Bearer incorrect'}):
+                assert published_read('/api/instances', headers=credentials)['status'] == 401
+                assert published_read('/api/storage', headers=credentials)['status'] == 401
+            assert published_read('/api/instances', headers={
+                'Authorization': 'Bearer ' + BOOTSTRAP_TOKEN})['status'] == 200
         asset = re.search(r'<script[^>]+src="([^"]+)"', html)
         assert asset and read(asset.group(1))['status'] == 200
         assert read('/api/instances', headers=FORWARDED)['status'] == 403
@@ -173,6 +243,15 @@ def exercise(root, temporary, host_mode=False):
         assert api(f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVar',
                    {'key': 'MCP_CONTROL_TOKEN', 'value': 'synthetic-control-token'}, FORWARDED).get('success')
         assert read('/api/instances', headers=FORWARDED)['status'] == 200
+        if not host_mode:
+            for endpoint in ('/api/instances/global/backup/settings', '/api/storage',
+                             f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars',
+                             f'/instances/{instance_id}/frostagent.v1.MCPService/ListMCPServers'):
+                payload = {} if '/frostagent.v1.' in endpoint else None
+                assert published_read(endpoint, payload, {
+                    'Authorization': 'Bearer synthetic-control-token'})['status'] == 200, endpoint
+            assert published_read('/api/instances', headers={
+                'Authorization': 'Bearer ' + BOOTSTRAP_TOKEN})['status'] == 401
         assert api(f'/api/instances/{instance_id}/enable', {'enabled': True}, FORWARDED).get('success')
         expected_version = os.environ.get('FROSTAGENT_EXPECTED_VERSION')
         if expected_version:
@@ -188,9 +267,13 @@ def exercise(root, temporary, host_mode=False):
                       (rpc, 'POST', {}), ('/frostagent.v1.ModelRouterService/GetState', 'POST', {}),
                       ('/api/security/locked', 'GET', None), ('/api/actionscat/status', 'GET', None)]
         for path, method, payload in management:
-            # No Origin and a spoofed local Host cannot bypass network isolation.
-            assert client(peer, remote_host, 8080, path, payload, method=method)['status'] == 0, path
-            assert client(peer, remote_host, 8080, path, payload, FORWARDED, method)['status'] == 0, path
+            if host_mode:
+                assert client(peer, remote_host, 8080, path, payload, method=method)['status'] == 0, path
+                assert client(peer, remote_host, 8080, path, payload, FORWARDED, method)['status'] == 0, path
+            elif path != '/':
+                # Private peers cannot use a spoofed local Host or proxy headers to skip auth.
+                assert client(peer, remote_host, 8080, path, payload, method=method)['status'] == 401, path
+                assert client(peer, remote_host, 8080, path, payload, FORWARDED, method)['status'] == 401, path
             if not host_mode:
                 assert client(peer, remote_host, 11023, path, payload, method=method)['status'] == 404, path
         assert len(api('/api/instances')['instances']) == 1
@@ -198,6 +281,8 @@ def exercise(root, temporary, host_mode=False):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_management_websocket(read, ws)
             check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws)
+            if not host_mode:
+                check_management_websocket(published_read, ws, token='synthetic-control-token')
             check_adapter_websocket(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws)
             if host_mode:
                 assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 0
@@ -214,11 +299,16 @@ def exercise(root, temporary, host_mode=False):
 
         settings['settings']['WS_LISTEN_ADDR'] = '0.0.0.0:1235'
         assert api('/api/instances/global/import/settings', settings).get('success')
-        for address in ('0.0.0.0:8080', '[::]:8080', ':8080', '127.0.0.1:1235'):
+        for address in ('127.0.0.1:1235', '0.0.0.0:1235', '[::]:1235'):
             unsafe = json.loads(json.dumps(settings))
             unsafe['settings']['LISTEN_ADDR'] = address
             assert read('/api/instances/global/import/settings', unsafe)['status'] == 400, address
             assert 'LISTEN_ADDR' not in api('/api/instances/global/backup/settings')['settings']
+        for address in ('127.0.0.1:8080', '0.0.0.0:8080'):
+            settings['settings']['LISTEN_ADDR'] = address
+            assert api('/api/instances/global/import/settings', settings).get('success')
+            expected = 0 if address.startswith('127.') else 401
+            assert client(peer, remote_host, 8080, '/api/storage')['status'] == expected
         for adapter in ('onebot', 'astrbot'):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_adapter_websocket(lambda path, headers: client(peer, remote_host, 1235, path, headers=headers), ws)
@@ -270,21 +360,21 @@ def exercise(root, temporary, host_mode=False):
         persisted = api('/api/instances', headers=FORWARDED)['instances']
         assert len(persisted) == 1 and persisted[0]['id'] == instance_id and persisted[0]['enabled'], persisted
         assert command(*compose, 'exec', '-T', 'frostagent', 'cat', '/app/data/docker-smoke-marker') == 'synthetic-sticker-bytes'
-        assert client(peer, remote_host, 8080, '/api/storage')['status'] == 0
+        assert client(peer, remote_host, 8080, '/api/storage')['status'] == 401
 
-        # An unsafe saved SQL listener fails before any port is bound.
+        # A shared management/adapter port fails before any listener is bound.
         command(*compose, 'stop', 'frostagent')
         database_path = Path(temporary) / 'frostagent.db'
         command('docker', 'cp', app + ':/app/data/frostagent.db', str(database_path))
         with closing(sqlite3.connect(database_path)) as database:
             database.execute("INSERT INTO settings(scope, instance_id, key, value) "
-                             "VALUES ('global', '', 'LISTEN_ADDR', '0.0.0.0:8080') "
+                             "VALUES ('global', '', 'LISTEN_ADDR', '0.0.0.0:1235') "
                              "ON CONFLICT(scope, instance_id, key) DO UPDATE SET value=excluded.value")
             database.commit()
         command('docker', 'cp', str(database_path), app + ':/app/data/frostagent.db')
         volume = config['volumes']['frostagent-data']['name']
         command('docker', 'run', '--rm', '--user', '0', '--entrypoint', 'chown',
-                '-v', volume + ':/app/data', 'frostagent:local', '10001:10001', '/app/data/frostagent.db')
+                '-v', volume + ':/app/data', IMAGE, '10001:10001', '/app/data/frostagent.db')
         command(*compose, 'start', 'frostagent')
         deadline = time.monotonic() + 15
         while inspect(app)['State']['Status'] != 'exited' and time.monotonic() < deadline:
@@ -292,9 +382,9 @@ def exercise(root, temporary, host_mode=False):
         assert inspect(app)['State']['ExitCode'] == 1
         logs = subprocess.run(('docker', 'logs', app), capture_output=True, text=True,
                               encoding='utf-8', check=True)
-        assert 'management listener must use a loopback IP' in logs.stdout + logs.stderr
+        assert 'management and adapter listeners must use different ports' in logs.stdout + logs.stderr
         assert read('/api/instances')['status'] == 0
-        print('PASS: connector namespace, bridge isolation, public Host/Origin, API/RPC, '
+        print('PASS: connector namespace, published management token auth, public Host/Origin, API/RPC, '
               'OneBot/AstrBot, SQL guards, non-root, graceful shutdown and persistence')
     except BaseException:
         subprocess.run((*compose, 'logs', '--no-color'), check=False)
@@ -308,6 +398,8 @@ def exercise(root, temporary, host_mode=False):
 
 
 def main():
+    if not __debug__:
+        raise RuntimeError('Live smoke requires Python assertions; run without -O or PYTHONOPTIMIZE')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host-network', action='store_true',
                         help='also test the Linux Engine host namespace; no Desktop forwarding check')
@@ -316,6 +408,9 @@ def main():
     default = render(root, 'frostagent-config-smoke', 'compose.yaml')
     assert set(default['services']) == {'frostagent'}, 'default deployment added another component'
     assert set(default['volumes']) == {'frostagent-data'}
+    assert {(int(port['target']), int(port['published']), port['host_ip'])
+            for port in default['services']['frostagent']['ports']} == {
+                (8080, 8080, '127.0.0.1'), (11023, 11023, '127.0.0.1')}
     no_token = {key: value for key, value in os.environ.items() if key != 'TUNNEL_TOKEN'}
     missing = subprocess.run(('docker', 'compose', '--env-file', os.devnull,
                               '-f', str(root / 'compose.yaml'), '-f', str(root / 'compose.cloudflare.yaml'),
@@ -323,6 +418,7 @@ def main():
     assert missing.returncode != 0, 'optional connector accepted an empty token'
     command('docker', 'pull', 'python:3.13-alpine')
     command('docker', 'pull', 'cloudflare/cloudflared:latest')
+    exercise_image_run()
     with tempfile.TemporaryDirectory(prefix='frostagent-smoke-') as temporary:
         exercise(root, temporary)
         if args.host_network:
@@ -330,7 +426,7 @@ def main():
         else:
             print('NOT EXECUTED: opt-in Linux host topology (pass --host-network to include it)')
     print('NOT EXECUTED: live Cloudflare Access authentication, public Tunnel, real IM platforms, '
-          'or Docker Desktop host forwarding')
+          'or Docker Desktop host networking')
 
 
 if __name__ == '__main__':

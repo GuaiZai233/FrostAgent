@@ -35,17 +35,17 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:11023`，宿主机仅发布到 `127.0.0.1:11023`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
+默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot/AstrBot WebSocket。
 
-Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
+Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；只有这个真实回环连接沿用原 Access 信任策略，普通网桥来源仍需令牌。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，构建时将管理与适配器默认都绑定宿主回环，并保留管理回环限制；host 模式无端口映射。标准桥接镜像不应直接用于 host 网络。
 
-可信单机的 Windows Docker Desktop（Linux 容器）与 Linux Engine 可显式叠加 `compose.local.yaml`，不需要 host 网络或公网 Tunnel。两个固定摘要的独立 socat 容器通过权限受限的 Unix socket 卷连接：origin 与 FA 共享网络命名空间且仅监听 socket；入口容器位于配置 `enable_icc=false` 的专用 bridge，仅发布宿主机 `127.0.0.1:8088`。ICC 配置只是纵深防护，不承诺容器隔离；普通容器仍可能通过入口 IP 或 Desktop 宿主转发访问管理 API。该 bridge 不使用 `internal: true`，避免 Docker Engine 跳过宿主端口发布。FA 镜像、默认桥接网络、适配器监听、SQL 配置和现有令牌策略不变，同适配器网络不新增管理 TCP 监听。该模式不增加管理员账号，也不提供公网认证；默认保留免认证本地入口，已有显式强制令牌策略仍有效。本地用户、进程、Docker 管理员以及同机所有容器均属于可信范围，不适用于运行不可信容器的主机。重建 FA 时需同时重建两个转发容器；停止入口不能只省略覆盖文件。部署与验证限制见 [本地 Docker 面板](../../docs/docker-local-panel.md)。
+`compose.local.yaml` 保留为旧 SQL 回环部署的显式兼容入口：两个固定摘要的 socat 容器通过 Unix socket 将宿主 `127.0.0.1:8088` 转为真实回环连接。它仍使用此前同机所有容器可信的边界，不能宣称自动获得直连入口的网桥令牌保护。切换到要求网桥认证的默认入口后，必须显式停止并删除两个旧 relay，再省略覆盖文件；不能只省略文件而留下运行中的免认证路径。旧模式与恢复说明见 [legacy socat 入口](../../docs/docker-local-panel.md)。
 
 生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
 
-SQL 保持优先；Docker 镜像在启动、热更新和换库前强制管理数值回环与独立端口，拒绝不安全配置且不迁移数据。旧 `127.0.0.1:8081` 设置仍有效，Tunnel 使用其实际端口；新库默认 8080。host 镜像的回环适配器默认值不覆盖已有 SQL 通配监听，切换模式前须检查。UID/GID `10001:10001` 与 `/app/data` 持久卷保留；不自动删除旧代理证书卷或应用数据。
+SQL 保持优先；标准镜像允许管理通配或回环监听，但在启动、热更新和换库前都强制管理与适配器端口分离；host 镜像还强制管理数值回环。旧 `127.0.0.1:8081` 等设置原样保留，直接端口映射需要用户通过原入口显式改成 `0.0.0.0:8080`。无 SQL 令牌的旧部署也需提供一次初始化输入。UID/GID `10001:10001` 与 `/app/data` 持久卷保留，不改 schema 或自动删除旧资源。完整首次配置、更新及退役步骤见 [Docker 部署与更新](../../docs/docker.md)。
 
-Docker CI 分别构建桥接/host 镜像，以临时数据运行真实网络回归：共享命名空间回源、公共 Host/Origin 正反例、恶意同网络容器不可达、适配器管理路由拒绝、OneBot/AstrBot 握手、SQL 不安全监听启动/热更拒绝、非 root、退出与重建持久化。真实 cloudflared 镜像只执行 version，合成客户端验证其网络路径，不打开公网 Tunnel。Cloudflare Access 云端鉴权、真实 IM 与 Desktop 宿主机转发仍须由部署用户实测。步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+Docker CI 分别构建桥接/host 镜像，以临时数据验证独立 `docker run`、首次令牌初始化、宿主端口映射及网桥鉴权、共享命名空间回源、公共 Host/Origin 正反例、API/RPC/mock WebSocket、适配器握手、管理/适配器端口冲突拒绝、非 root 和重建持久化。真实 cloudflared 镜像只执行 version，不打开公网 Tunnel；旧 relay 兼容 smoke 独立保留。Cloudflare Access 云端鉴权与真实 IM 不由这些 smoke 覆盖。
 
 ### 戳一戳唤醒
 
@@ -419,7 +419,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
   - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:11023`；
-  - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
+  - Docker 标准镜像允许通配管理监听，默认只发布宿主回环且网桥来源需控制令牌；host 镜像保留强制回环，适配器使用独立端口，具体边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；

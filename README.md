@@ -63,25 +63,26 @@ Start the service using `./bin/app` instead of `go run ./cmd/app`. This capabili
 
 ## Docker Deployment
 
+For the first deployment, copy `docker.env.example` to `.env` and set
+`FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` to a random ASCII token of at least 32 characters:
+
 ```bash
 docker compose up -d --build
 ```
 
-The default deployment does not publish the management panel. For local access
-on Windows Docker Desktop (Linux containers) or Linux Engine, explicitly add:
+Open **http://127.0.0.1:8080/#/settings/frontend**, save the same token under API /
+control-plane credentials, then refresh and create or select an instance. The
+image listens on container `0.0.0.0:8080`; Compose publishes host
+`127.0.0.1:8080` directly, without socat. Management APIs require a valid token
+over published ports or bridge networks, even with a spoofed localhost Host.
 
-```powershell
-docker compose -f compose.yaml -f compose.local.yaml up -d --build
-```
-
-Open **http://127.0.0.1:8088**. Two separate relays connect through a private Unix
-socket; the FA image does not contain socat and no management port is added to
-the adapter network. Preserve the existing project name, environment files and
-data volume. See [Local Docker panel](docs/docker-local-panel.md) for ports,
-trust boundaries, upgrades and disabling the entry point. Use this mode only on
-a trusted local host where **all Docker containers are trusted**: localhost
-publication does not isolate management from other containers. Remote access
-still requires Cloudflare Access.
+The bootstrap input only initializes SQL when no control token exists. Existing
+`MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` credentials win and are never overwritten by
+the environment. Remove the bootstrap input after initialization. Preserve the
+project name, data volume and required overrides during updates. See
+[Docker deployment and updates](docs/docker.md) for existing loopback settings,
+retiring old relays, `docker run`, and image updates. Remote access still uses
+Cloudflare Access.
 
 GHCR retains all versioned releases, the current `main` / `latest` image, and
 the 10 most recent SHA-tagged commit images. Older historical commit images are

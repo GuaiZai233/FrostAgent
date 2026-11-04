@@ -25,6 +25,7 @@ type storageGateway struct {
 	security   http.Handler
 	config     storage.Config
 	generation uint64
+	prepare    func(*instance.Manager) error
 	apply      func(*instance.Manager) error
 }
 
@@ -197,6 +198,11 @@ func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.C
 	old.Close()
 	previousInjection := envinject.Suspend()
 	manager, err := openSelectedManager(ctx, g.root, config, false)
+	// Check credentials before changing listeners or saving the selected database.
+	// This hook runs only for a newly selected manager, never for settings edits.
+	if err == nil && g.prepare != nil {
+		err = g.prepare(manager)
+	}
 	if err == nil && g.apply != nil {
 		manager.SetGlobalApplyHook(func() error { return g.apply(manager) })
 	}
