@@ -25,6 +25,11 @@ func ExportSettings(db *storage.DB, instanceID string) (Settings, error) {
 	for key := range result.Values {
 		if !exportableSettingValues[key] {
 			result.Values[key] = ""
+			continue
+		}
+		switch key {
+		case "ONEBOT_WS_URL", "ASTRBOT_WS_URL":
+			result.Values[key] = publicURL(result.Values[key])
 		}
 	}
 

@@ -8,6 +8,7 @@ const esbuildPath = require.resolve('esbuild', {
 const { build } = require(esbuildPath);
 for (const testFile of [
   'instance-api.test.ts',
+  'chat-navigation.test.ts',
   'overview-enhancements.test.ts',
   'overview-page.test.ts',
   'stickers-page.test.ts',
@@ -22,6 +23,7 @@ for (const testFile of [
   'dialogue-page.test.ts',
   'skills.test.ts',
   'backend-settings-page.test.ts',
+  'connections-page.test.ts',
   'command-settings-page.test.ts',
   'bot-user-id-list.test.ts',
   'control-auth.test.ts',

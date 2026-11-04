@@ -336,7 +336,7 @@ func (c *Client) DispatchToken() string {
 
 // IsConfigured returns true if an endpoint has been specified.
 func (c *Client) IsConfigured() bool {
-	return c.Endpoint() != ""
+	return c != nil && c.Endpoint() != ""
 }
 
 // IsEnabled reads the instance switch on every use. Missing settings preserve

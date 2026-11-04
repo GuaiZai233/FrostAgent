@@ -16,6 +16,10 @@ const overview = await readFile(
   new URL('../src/pages/overview.ts', import.meta.url),
   'utf8',
 );
+const connections = await readFile(
+  new URL('../src/pages/connections.ts', import.meta.url),
+  'utf8',
+);
 assert.doesNotMatch(overview, /v\$\{escapeHtml\(version\)\}/, 'source revisions must not get a version prefix');
 assert.match(overview, /\$\{escapeHtml\(version\)\}/, 'overview must render the backend build identity');
 const chat = await readFile(
@@ -100,25 +104,18 @@ assert.match(
   /\.instance-selected-label\s*{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/,
 );
 
-assert.match(
-  overview,
-  /OneBot:\s*\$\{escapeHtml\(oneBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(oneBotURL\)\}"[^>]*>复制<\/a>/,
-  'OneBot WebSocket URL is missing the copy link',
-);
-assert.match(
-  overview,
-  /AstrBot:\s*\$\{escapeHtml\(astrBotURL\)\}\s*<a\s[^>]*data-copy-url="\$\{escapeHtml\(astrBotURL\)\}"[^>]*>复制<\/a>/,
-  'AstrBot WebSocket URL is missing the copy link',
-);
-assert.match(
-  overview,
-  /copyToClipboard\(target\)/,
-  'overview copy action does not call copyToClipboard',
-);
+assert.doesNotMatch(overview, /instanceWebSocketURL|copyToClipboard|data-copy-url/, 'connection addresses belong on the connection page');
+assert.match(main, /path: '\/overview'[^\n]+\n\s*\{ path: '\/connections', label: '连接'/, 'connection navigation must immediately follow overview');
+assert.match(main, /const guardedPaths = \[\s*'\/overview',\s*'\/connections'/, 'connections must require a selected instance');
+assert.match(main, /const mounts = \[\s*mountOverviewPage,\s*mountConnectionsPage/);
+assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
+assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
+assert.match(connections, /id="\$\{adapter.id\}-enabled" type="checkbox"/, 'each adapter needs its own enable checkbox');
+assert.match(connections, /copyToClipboard\(address\)/, 'connection addresses must be copyable');
 
 assert.match(
   chat,
-  /<h1 class="page-title">直接对话<\/h1>[\s\S]*?<p class="text-xs text-muted mt-1">此模式通信断电全丢，无持久化<\/p>/,
+  /<h1 class="page-title">直接对话<\/h1>[\s\S]*?<p class="text-xs text-muted mt-1">同一实例切页保留对话；切换实例、刷新或关闭页面后清除，不写入历史记录。<\/p>/,
   'direct chat must show the ephemeral-mode subtitle below its title',
 );
 assert.equal(

@@ -277,8 +277,8 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
               <span>0 · 禁用</span><span>10 · 每 5 轮</span>
             </div>
             <div class="mt-4 pt-3 border-t border-border/60">
-              <label class="card p-3 flex items-center justify-between cursor-pointer hover-bg transition-colors">
-                <div>
+              <label class="card p-3 flex items-center justify-between cursor-pointer hover-bg transition-colors" style="flex-direction: row; text-align: left;">
+                <div class="min-w-0">
                   <span class="text-xs font-semibold text-foreground">表情包确认</span>
                   <p class="text-[11px] text-muted mt-0.5">返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。</p>
                 </div>

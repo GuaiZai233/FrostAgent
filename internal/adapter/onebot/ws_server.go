@@ -625,6 +625,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	durablePrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
+	if event.MessageType == "group" {
+		requestPrompt += "\n\n<outbound_message_guidance>\n" + tools.NativeMentionGuidance + "\n</outbound_message_guidance>"
+	}
 	if session != nil {
 		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
 			deliveryTag := deliveryFailure.FormatDeliveryContext()
@@ -1241,7 +1244,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if enableAt || enableReply {
 					textSeg := tools.OneBotSegment{
 						Type: "text",
-						Data: map[string]any{"text": " " + displayText},
+						Data: map[string]any{"text": displayText},
 					}
 					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
 				} else {
@@ -1333,7 +1336,7 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 		if enableAt || enableReply {
 			textSeg := tools.OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": " " + text},
+				Data: map[string]interface{}{"text": text},
 			}
 			finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, conn.Scope)
 		} else {

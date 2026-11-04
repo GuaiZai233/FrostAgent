@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { setImmediate } from 'node:timers/promises';
-import { controlPlaneFetch, downloadControlPlaneFile, setControlToken } from '../src/api/control-auth';
+import { controlPlaneFetch, directChatWebSocket, downloadControlPlaneFile, setControlToken } from '../src/api/control-auth';
 import { instanceRequest, restoreInstanceZIP } from '../src/instance-state';
 import { extraEnvAPI, globalSettingsAPI } from '../src/api/client';
 
@@ -19,6 +20,35 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   return new Response(JSON.stringify({ success: true, entries: [] }));
 };
 setControlToken(' synthetic-control-token ');
+const sockets: { url: string; protocols: string[] }[] = [];
+Object.assign(globalThis, {
+  WebSocket: class {
+    constructor(url: string, protocols: string[]) { sockets.push({ url, protocols }); }
+  },
+});
+const mockURL = 'wss://panel.example/instances/synthetic-instance/ws/onebot?mock=true';
+directChatWebSocket(mockURL);
+assert.deepEqual(sockets[0], {
+  url: mockURL,
+  protocols: ['frostagent.direct-chat', `frostagent.control-token.${Buffer.from('synthetic-control-token').toString('base64url')}`],
+});
+for (const url of [
+  'wss://external.example/instances/synthetic-instance/ws/onebot?mock=true',
+  'ws://panel.example/instances/synthetic-instance/ws/onebot?mock=true',
+  'wss://panel.example:8443/instances/synthetic-instance/ws/onebot?mock=true',
+  'wss://user:pass@panel.example/instances/synthetic-instance/ws/onebot?mock=true',
+]) assert.throws(() => directChatWebSocket(url), /同源/);
+assert.equal(sockets.length, 1, 'WebSocket credentials leaked to another origin');
+setControlToken('synthetic-unicode-令牌');
+directChatWebSocket(mockURL);
+assert.equal(sockets.at(-1)?.protocols[1], `frostagent.control-token.${Buffer.from('synthetic-unicode-令牌').toString('base64url')}`);
+setControlToken('');
+directChatWebSocket(mockURL);
+assert.deepEqual(sockets.at(-1)?.protocols, ['frostagent.direct-chat']);
+setControlToken('synthetic-control-token');
+const chatSource = readFileSync('src/pages/chat.ts', 'utf8');
+assert.match(chatSource, /socket = directChatWebSocket\(url\)/, 'Direct Chat must use the authenticated handshake');
+assert.doesNotMatch(chatSource, /new WebSocket\(/, 'Direct Chat bypasses the control-token helper');
 await instanceRequest('');
 await instanceRequest('/global/import/security', {});
 await controlPlaneFetch('/api/storage');

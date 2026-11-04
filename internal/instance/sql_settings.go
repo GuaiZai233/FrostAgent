@@ -169,7 +169,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 		}
 		i.mu.Lock()
 		i.runtime, i.config = r, c
-		r.StartEmbeddings()
+		r.StartBackground()
 		i.mu.Unlock()
 		return nil
 	}
@@ -203,7 +203,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	}
 	i.mu.Lock()
 	i.runtime, i.config = fallback, fallbackConfig
-	fallback.StartEmbeddings()
+	fallback.StartBackground()
 	i.mu.Unlock()
 	if fallbackErr != nil {
 		applyErr = errors.Join(applyErr, fallbackErr)

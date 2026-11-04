@@ -544,6 +544,28 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
 
+    def test_text_mention_text_chain_uses_native_at(self) -> None:
+        action = {"messages": [
+            {"type": "plain", "text": "请 "},
+            {"type": "mention_user", "mention_user_id": "10002"},
+            {"type": "plain", "text": " 看一下"},
+        ]}
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+        self.assertEqual([type(part) for part in parts], [FakePlain, FakeAt, FakePlain])
+        self.assertEqual(parts[0].text, "请 ")
+        self.assertEqual(parts[1].qq, "10002")
+        self.assertEqual(parts[2].text, " 看一下")
+
+    def test_mention_display_token_stays_literal_text(self) -> None:
+        text = "语法示例：[@10002] [CQ:at,qq=10002]"
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components({
+                "messages": [{"type": "plain", "text": text}],
+            })
+        self.assertEqual([type(part) for part in parts], [FakePlain])
+        self.assertEqual(parts[0].text, text)
+
     def test_quote_and_plain_build_ordered_chain(self) -> None:
         action = {
             "messages": [

@@ -31,10 +31,16 @@ type OneBotSegment struct {
 	Data map[string]interface{} `json:"data"` // Data 字段的内容是动态的，所以用 map
 }
 
+// NativeMentionGuidance explains how context display tokens differ from outbound mentions.
+// Both adapters include it in group context as well as the tool definition.
+const NativeMentionGuidance = "需要真正艾特用户时，必须调用 send_message，将 type=mention_user、mention_user_id=目标用户 ID 的组件与 plain 正文按顺序放入 messages。上下文中的 [@ID] 只是入站艾特的展示标记；直接回复或 plain.text 中的 [@ID]、@昵称、@ID、[CQ:at,qq=ID] 都是普通文本，不能产生艾特。mention_user_id 使用上下文中已知目标用户的精确平台 ID（字符串），不要填昵称、整个 [@ID] 标记或猜测 ID；不知道目标 ID 时先询问。引用消息或自动艾特当前发言者不能代替对其他目标用户的显式艾特。仅讨论艾特语法时可以保留这些字面文本。"
+
+const nativeMentionExample = `{"messages":[{"type":"mention_user","mention_user_id":"10001"},{"type":"plain","text":" 你好"}]}`
+
 func SendMsgTool() Tool {
 	return Tool{
 		name:             "send_message",
-		description:      "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Omit session for mention_specific. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool, except for specific replies or when text should accompany a sticker. " + stickerDeliveryGuidance,
+		description:      "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Omit session for mention_specific. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
 		proactiveAllowed: true,
 		//json schema
 		parameter: map[string]any{
@@ -54,7 +60,7 @@ func SendMsgTool() Tool {
 							},
 							"text": map[string]any{
 								"type":        "string",
-								"description": "The string content when type is `plain`.",
+								"description": "The literal text when type is `plain`. Text such as [@ID], @name or CQ codes does not create a mention; use a separate mention_user component.",
 							},
 							"path": map[string]any{
 								"type":        "string",
@@ -66,7 +72,7 @@ func SendMsgTool() Tool {
 							},
 							"mention_user_id": map[string]any{
 								"type":        "string",
-								"description": "The exact platform user ID to mention when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name or invent an ID.",
+								"description": "The exact platform user ID to mention when type is `mention_user`. Use a trusted ID from the conversation context; never use a display name, a full [@ID] token, or invent an ID. For context token [@10001], use the string 10001 as mention_user_id.",
 							},
 							"message_id": map[string]any{
 								"type":        "string",
@@ -160,7 +166,7 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 		case "plain":
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": " " + Msg.Text},
+				Data: map[string]interface{}{"text": Msg.Text},
 			})
 
 		case "mention_user":
