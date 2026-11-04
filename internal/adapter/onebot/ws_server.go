@@ -760,7 +760,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		defer func() { deliveries.Finish(turn.Interrupted()) }()
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -778,7 +779,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("消息内容为空")
 			}
 			if event.MessageType == "group" {
-				oneBotSegments = wrapGroupReply(oneBotSegments, event, engine.Scope)
+				decorationEvent := event
+				if toolOutput.SuppressAutoMention {
+					decorationEvent.UserID = 0
+				}
+				oneBotSegments = wrapGroupReply(oneBotSegments, decorationEvent, engine.Scope)
 			}
 			botAction := model.OneBotAction{
 				Action: action,
@@ -953,10 +958,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
-			ActorPlatform:    securityPlatform,
-			AdapterID:        "onebot",
-			InstanceID:       engine.InstanceID,
-			SendHook:         sendHook,
+			ActorPlatform: securityPlatform,
+			AdapterID:     "onebot",
+			InstanceID:    engine.InstanceID,
+			SendHook:      sendHook,
+			CanReplyToMessage: func(messageID string) bool {
+				mid, ok := numericMessageID(messageID)
+				return ok && conn.messageSessionMatches(mid, conn.historyKey(event))
+			},
 			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)

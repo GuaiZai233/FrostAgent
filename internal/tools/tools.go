@@ -15,8 +15,8 @@ type Tool struct {
 	executeResult  func(ctx context.Context, args string) (core.ToolExecutionResult, error)
 	enabled        func() bool
 	disabledError  error
-	// proactiveAllowed marks side-effect-free tools that may run during an
-	// unaddressed proactive turn.
+	// proactiveAllowed marks tools permitted during an unaddressed proactive
+	// turn. send_message additionally requires the engine's narrow reply gate.
 	proactiveAllowed bool
 }
 

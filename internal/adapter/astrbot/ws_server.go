@@ -98,6 +98,10 @@ type wsConn struct {
 	mockSessions      sync.Map
 	pendingDeliveries sync.Map
 	pendingQuotes     sync.Map
+
+	replyTargetsMu   sync.Mutex
+	replyTargets     map[replyTargetKey]struct{}
+	replyTargetOrder []replyTargetKey
 }
 
 func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
@@ -1238,9 +1242,25 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			targetID = event.GroupID
 		}
 
+		// Only adapter-owned IDs from this session can be selected. Do not parse
+		// IDs out of user text or forwarded, unverified reply metadata.
+		replyTargets := make(map[string]struct{}, len(trustedQuoteIDs)+len(groupSnapshot.RecentStructuredMessages))
+		for messageID := range trustedQuoteIDs {
+			replyTargets[messageID] = struct{}{}
+		}
+		for _, message := range groupSnapshot.RecentStructuredMessages {
+			if message.Role == "user" && conn.observedReplyTarget(event, message.MessageID) {
+				replyTargets[message.MessageID] = struct{}{}
+			}
+		}
+		canReplyToMessage := func(messageID string) bool {
+			_, ok := replyTargets[messageID]
+			return ok
+		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
@@ -1250,6 +1270,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			var plainTexts []string
 			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
+				if toolOutput.SuppressAutoMention && m.Type == "quote" && !canReplyToMessage(m.MessageID) {
+					return fmt.Errorf("引用消息不在当前会话的可信消息上下文中")
+				}
 				actionMessages = append(actionMessages, actionMessageFromToolMessage(m))
 				switch m.Type {
 				case "plain":
@@ -1288,20 +1311,21 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			action := Action{
-				Type:           "action",
-				Action:         "send_message",
-				Platform:       platform,
-				SessionID:      conn.sessionKey(event),
-				TargetID:       targetID,
-				MessageType:    event.MessageType,
-				GroupID:        event.GroupID,
-				UserID:         event.UserID,
-				Content:        strings.Join(plainTexts, ""),
-				Messages:       actionMessages,
-				Attachments:    attachments,
-				IsIntermediate: true,
-				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
-				ReplyMessageID: event.replyMessageID(),
+				Type:                "action",
+				Action:              "send_message",
+				Platform:            platform,
+				SessionID:           conn.sessionKey(event),
+				TargetID:            targetID,
+				MessageType:         event.MessageType,
+				GroupID:             event.GroupID,
+				UserID:              event.UserID,
+				Content:             strings.Join(plainTexts, ""),
+				Messages:            actionMessages,
+				Attachments:         attachments,
+				IsIntermediate:      true,
+				Echo:                fmt.Sprintf("hook_%s", event.MessageID),
+				ReplyMessageID:      event.replyMessageID(),
+				suppressAutoMention: toolOutput.SuppressAutoMention,
 			}
 			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
@@ -1350,11 +1374,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			ActorUserID: event.UserID,
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: event.MessageID, SenderID: event.UserID},
-			ActorPlatform:  securityPlatform,
-			AdapterID:      "astrbot",
-			InstanceID:     engine.InstanceID,
-			SendHook:       sendHook,
-			SecurityNotice: notice,
+			ActorPlatform:     securityPlatform,
+			AdapterID:         "astrbot",
+			InstanceID:        engine.InstanceID,
+			SendHook:          sendHook,
+			CanReplyToMessage: canReplyToMessage,
+			SecurityNotice:    notice,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},

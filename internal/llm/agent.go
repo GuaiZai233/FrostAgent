@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/poke"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
@@ -869,6 +870,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			var proactiveTools []core.Tool
 			for _, t := range modelTools {
 				if e.isToolAllowedForProactive(t.Name) {
+					if t.Name == "send_message" {
+						t.Description = proactive.SpecificReplyDescription
+						t.Parameters = proactive.SpecificReplyParameters()
+					}
 					proactiveTools = append(proactiveTools, t)
 				}
 			}
@@ -1194,7 +1199,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
 			}
-			if hasRunCtx && runCtx.Proactive && !e.isToolAllowedForProactive(tc.Function.Name) {
+			if hasRunCtx && runCtx.Proactive && (!e.isToolAllowedForProactive(tc.Function.Name) ||
+				(tc.Function.Name == "send_message" && !proactive.IsSpecificReply(tc.Function.Arguments))) {
 				e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复轮次禁止调用副作用工具 [%s]", tc.Function.Name), "主动回复禁止副作用工具")
 				return AgentRunResult{
 					MemoryWritten: memoryWritten,

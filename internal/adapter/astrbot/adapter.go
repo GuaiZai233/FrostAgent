@@ -589,6 +589,7 @@ func (a *Adapter) Handler() http.HandlerFunc {
 			if c.isClosed() {
 				continue
 			}
+			c.rememberReplyTarget(event)
 			var turn *llm.SessionTurn
 			if a.engine != nil && a.engine.SessionManager != nil &&
 				(event.MessageType == "group" || event.MessageType == "private") {

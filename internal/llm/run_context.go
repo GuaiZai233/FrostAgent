@@ -55,8 +55,12 @@ type RunContext struct {
 	RouteSnapshot        *modelrouter.Snapshot
 	SecurityNotice       string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
 	Mock                 bool   // Mock / ephemeral session: do not write to persistent memory or group summary
-	Proactive            bool   // Trusted flag indicating unaddressed proactive turn: disallows side-effecting tools and suppresses unsolicited group errors.
+	Proactive            bool   // Trusted unaddressed turn: only narrow current-session text replies may send; unsolicited errors remain suppressed.
 	Epoch                uint64
+
+	// CanReplyToMessage validates an opaque message ID against trusted,
+	// adapter-owned current-session observations, never model-supplied text.
+	CanReplyToMessage func(messageID string) bool
 }
 
 type runContextKey struct{}

@@ -71,6 +71,8 @@ type Action struct {
 	Echo           string            `json:"echo,omitempty"`            // 回显标识
 	DeliveryID     string            `json:"delivery_id,omitempty"`
 	ReplyMessageID string            `json:"-"` // 当前回复对应的入站消息 ID，仅用于出站规范化
+
+	suppressAutoMention bool // A specific reply must not automatically mention the triggering sender.
 }
 
 // MarshalJSON preserves the legacy process-env normalization path for callers
@@ -120,6 +122,9 @@ func (a Action) withConfiguredGroupMention() Action {
 }
 
 func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Action {
+	if a.suppressAutoMention {
+		return a
+	}
 	enableAt := scope.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
 	isGroup := a.Action == "send_message" && a.MessageType == "group"
 	plan := parity.PlanGroupDecoration(
