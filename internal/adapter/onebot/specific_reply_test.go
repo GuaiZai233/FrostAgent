@@ -17,6 +17,12 @@ import (
 )
 
 func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
+	for _, final := range []string{"", "reply about earlier topic", " \nreply about earlier topic\n", "different follow-up"} {
+		t.Run("final="+final, func(t *testing.T) { testOneBotProactiveSpecificReply(t, final) })
+	}
+}
+
+func testOneBotProactiveSpecificReply(t *testing.T, final string) {
 	firstCalled, replyCompleted := make(chan struct{}), make(chan struct{})
 	calls := 0
 	provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -35,6 +41,7 @@ func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 				Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"101"},{"type":"plain","text":"reply about earlier topic"}]}`,
 			}}}
 		case 3:
+			message.Content = final
 			result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 			if result != "消息已发送" {
 				t.Errorf("delivery did not wait for ACK: %s", result)
@@ -131,9 +138,45 @@ func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("tool did not receive delivery ACK")
 	}
+	if final == "different follow-up" {
+		select {
+		case action := <-actions:
+			data, _ := json.Marshal(action.Params)
+			if !strings.Contains(string(data), final) {
+				t.Fatalf("different final reply was lost: %s", data)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("different final reply was suppressed")
+		}
+	}
+	session := engine.SessionManager.GetOrCreate("group:10")
+	barrier := session.ReserveSequenceTurn("proactive", false, true)
+	completed := make(chan struct{})
+	go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reply turn did not finish")
+	}
 	select {
 	case duplicate := <-actions:
 		t.Fatalf("unexpected duplicate/empty reply: %+v", duplicate)
-	case <-time.After(100 * time.Millisecond):
+	default:
+	}
+	if final != "different follow-up" {
+		historyCopies, compactCopies := 0, 0
+		for _, message := range session.Snapshot() {
+			if message.Role == "assistant" && message.Content == "reply about earlier topic" {
+				historyCopies++
+			}
+		}
+		for _, message := range session.GroupCompactBufferMessages() {
+			if message.Role == "assistant" && message.Content == "reply about earlier topic" {
+				compactCopies++
+			}
+		}
+		if historyCopies != 1 || compactCopies != 1 {
+			t.Fatalf("confirmed reply history copies=%d compact copies=%d, want 1 each", historyCopies, compactCopies)
+		}
 	}
 }

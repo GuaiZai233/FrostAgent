@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -14,8 +15,19 @@ import (
 )
 
 func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
-	for _, sameGroup := range []bool{true, false} {
-		t.Run(fmt.Sprintf("same_group_%v", sameGroup), func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sameGroup bool
+		final     string
+	}{
+		{"empty final", true, ""},
+		{"duplicate final", true, "reply about earlier topic"},
+		{"whitespace duplicate", true, " \nreply about earlier topic\n"},
+		{"different final", true, "different follow-up"},
+		{"foreign target", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sameGroup := tc.sameGroup
 			calls := 0
 			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 				calls++
@@ -35,6 +47,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 						Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"msg_earlier"},{"type":"plain","text":"reply about earlier topic"}]}`,
 					}}}
 				case 3:
+					message.Content = tc.final
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					if (result == "消息已发送") != sameGroup {
 						t.Errorf("incorrect tool confirmation: %s", result)
@@ -72,8 +85,37 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 				}
 			}
 			terminal := readAutoDecorationAction(t, conn, "terminal noop")
-			if terminal.Action != "noop" || !terminal.SuppressLLM {
+			if tc.final == "different follow-up" {
+				if terminal.Action != "send_message" || terminal.Content != tc.final {
+					t.Fatalf("different final reply was lost: %+v", terminal)
+				}
+			} else if terminal.Action != "noop" || !terminal.SuppressLLM {
 				t.Fatalf("duplicate or visible error instead of terminal noop: %+v", terminal)
+			}
+			session := engine.SessionManager.GetOrCreate(sessionKey(trigger))
+			barrier := session.ReserveSequenceTurn("proactive:"+trigger.Platform, false, true)
+			completed := make(chan struct{})
+			go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+			select {
+			case <-completed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("reply turn did not finish")
+			}
+			if sameGroup && tc.final != "different follow-up" {
+				historyCopies, compactCopies := 0, 0
+				for _, message := range session.Snapshot() {
+					if message.Role == "assistant" && message.Content == "reply about earlier topic" {
+						historyCopies++
+					}
+				}
+				for _, message := range session.GroupCompactBufferMessages() {
+					if message.Role == "assistant" && message.Content == "reply about earlier topic" {
+						compactCopies++
+					}
+				}
+				if historyCopies != 1 || compactCopies != 1 {
+					t.Fatalf("confirmed reply history copies=%d compact copies=%d, want 1 each", historyCopies, compactCopies)
+				}
 			}
 			provider.mu.Lock()
 			defer provider.mu.Unlock()
