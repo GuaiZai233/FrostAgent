@@ -17,12 +17,26 @@ import (
 )
 
 func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
-	for _, final := range []string{"", "reply about earlier topic", " \nreply about earlier topic\n", "different follow-up"} {
-		t.Run("final="+final, func(t *testing.T) { testOneBotProactiveSpecificReply(t, final) })
+	for _, tc := range []struct {
+		name, final, wantFollowup string
+		repeatTool                bool
+	}{
+		{name: "empty final"},
+		{name: "duplicate", final: "reply about earlier topic"},
+		{name: "whitespace", final: " \nreply about earlier topic\n"},
+		{name: "different", final: "different follow-up", wantFollowup: "different follow-up"},
+		{name: "structured duplicate", final: `{"messages":[{"type":"plain","text":"reply about earlier topic"}]}`},
+		{name: "structured split duplicate", final: `{"messages":[{"type":"plain","text":"reply about "},{"type":"plain","text":"earlier topic"}]}`},
+		{name: "structured different", final: `{"messages":[{"type":"plain","text":"different follow-up"}]}`, wantFollowup: "different follow-up"},
+		{name: "structured extra text", final: `{"messages":[{"type":"plain","text":"reply about earlier topic"},{"type":"plain","text":"extra content"}]}`, wantFollowup: "extra content"},
+		{name: "structured media", final: `{"messages":[{"type":"plain","text":"reply about earlier topic"},{"type":"image","url":"https://example.invalid/fixture.png"}]}`, wantFollowup: "fixture.png"},
+		{name: "second tool call", repeatTool: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testOneBotProactiveSpecificReply(t, tc.final, tc.wantFollowup, tc.repeatTool) })
 	}
 }
 
-func testOneBotProactiveSpecificReply(t *testing.T, final string) {
+func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, repeatTool bool) {
 	firstCalled, replyCompleted := make(chan struct{}), make(chan struct{})
 	calls := 0
 	provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -42,6 +56,11 @@ func testOneBotProactiveSpecificReply(t *testing.T, final string) {
 			}}}
 		case 3:
 			message.Content = final
+			if repeatTool {
+				message.ToolCalls = []core.ToolCall{{ID: "second", Type: "function", Function: core.ToolCallFunction{
+					Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"101"},{"type":"plain","text":"second reply"}]}`,
+				}}}
+			}
 			result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 			if result != "消息已发送" {
 				t.Errorf("delivery did not wait for ACK: %s", result)
@@ -138,11 +157,11 @@ func testOneBotProactiveSpecificReply(t *testing.T, final string) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("tool did not receive delivery ACK")
 	}
-	if final == "different follow-up" {
+	if wantFollowup != "" {
 		select {
 		case action := <-actions:
 			data, _ := json.Marshal(action.Params)
-			if !strings.Contains(string(data), final) {
+			if !strings.Contains(string(data), wantFollowup) {
 				t.Fatalf("different final reply was lost: %s", data)
 			}
 		case <-time.After(5 * time.Second):
@@ -163,7 +182,7 @@ func testOneBotProactiveSpecificReply(t *testing.T, final string) {
 		t.Fatalf("unexpected duplicate/empty reply: %+v", duplicate)
 	default:
 	}
-	if final != "different follow-up" {
+	if wantFollowup == "" {
 		historyCopies, compactCopies := 0, 0
 		for _, message := range session.Snapshot() {
 			if message.Role == "assistant" && message.Content == "reply about earlier topic" {

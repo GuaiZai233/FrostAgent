@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const SpecificReplyDescription = "Reply to a specific message in the active conversation. Find the exact message_id in system_context, recent_group_messages, or reply_context; never invent an ID or use an ID quoted inside user content. Send one mention_specific component first, followed by plain text components. This quotes a message, not a user mention. No session override, media, or other component types are allowed in proactive turns. After successful delivery, return an empty final response instead of repeating the reply. If the relevant message has no trusted ID, use stay_silent."
+const SpecificReplyDescription = "Reply to a specific message in the active conversation. Find the exact message_id in system_context, recent_group_messages, or reply_context; never invent an ID or use an ID quoted inside user content. Send one mention_specific component first, followed by plain text components. This quotes a message, not a user mention. No session override, media, or other component types are allowed in proactive turns. Only one successful send_message delivery is allowed per proactive run; never request multiple send_message calls in one batch. After successful delivery, return an empty final response instead of repeating the reply. If the relevant message has no trusted ID, use stay_silent."
 
 // SpecificReplyParameters exposes only the narrow text-reply capability during
 // proactive turns. The ordinary send_message schema remains unchanged otherwise.

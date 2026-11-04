@@ -824,6 +824,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 	}
 	var specificReplyEchoes proactive.ReplyEchoGuard
+	specificReplyDelivered := false
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
 			return AgentRunResult{Silent: true, Error: context.Canceled}
@@ -1110,7 +1111,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if hasRunCtx && runCtx.Proactive {
 				contentStr, _ = filterStickerMessages(contentStr)
-				if !outputBlocked && specificReplyEchoes.IsDuplicate(contentStr) {
+				duplicate := specificReplyEchoes.IsDuplicate(contentStr)
+				if runCtx.AdapterID == "onebot" {
+					duplicate = duplicate || specificReplyEchoes.IsOneBotDuplicate(contentStr)
+				}
+				if !outputBlocked && duplicate {
 					// Keep the successful tool delivery as the public answer. Both
 					// adapters already finalize tool-only replies without resending.
 					contentStr = ""
@@ -1176,11 +1181,17 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// Check the entire batch before any executor can persist data or send
 		// messages. A later forbidden call must not leave an earlier partial send.
 		if hasRunCtx && runCtx.Proactive {
+			specificReplyCalls := 0
 			for _, tc := range responseMsg.ToolCalls {
+				if tc.Function.Name == "send_message" {
+					specificReplyCalls++
+				}
 				if !e.isToolAllowedForProactive(tc.Function.Name) ||
-					(tc.Function.Name == "send_message" && !proactive.IsSpecificReply(tc.Function.Arguments)) {
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
 					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
-					return AgentRunResult{MemoryWritten: memoryWritten, Silent: true, Usage: totalUsage}
+					// After a confirmed send, finish as a tool-only answer so the
+					// adapters retain public history without sending anything else.
+					return AgentRunResult{MemoryWritten: memoryWritten, Silent: !specificReplyDelivered, Usage: totalUsage}
 				}
 			}
 		}
@@ -1363,6 +1374,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				var delivered bool
 				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
 				if delivered && hasRunCtx && runCtx.Proactive && tc.Function.Name == "send_message" {
+					specificReplyDelivered = true
 					specificReplyEchoes.Record(execution.MessagePayload)
 				}
 			}

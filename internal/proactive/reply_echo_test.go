@@ -32,3 +32,34 @@ func TestReplyEchoGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestReplyEchoGuardOneBotStructuredFinal(t *testing.T) {
+	var guard ReplyEchoGuard
+	const duplicate = `{"messages":[{"type":"plain","text":"hello world"}]}`
+	if guard.IsOneBotDuplicate(duplicate) {
+		t.Fatal("unconfirmed delivery suppressed")
+	}
+	guard.Record(`{"suppress_auto_mention":true,"messages":[{"type":"quote"},{"type":"plain","text":"hello world"}]}`)
+	for _, final := range []string{
+		duplicate,
+		`{"messages":[{"type":"plain","text":"hello"},{"type":"plain","text":" world"}]}`,
+		`{"messages":[{"type":"plain","text":" \nhello world\n"}]}`,
+	} {
+		if !guard.IsOneBotDuplicate(final) || guard.IsDuplicate(final) {
+			t.Errorf("structured duplicate not restricted to OneBot: %s", final)
+		}
+	}
+	for _, final := range []string{
+		`not-json`, `{}`, `{"messages":[]}`, duplicate + ` {}`,
+		`{"messages":[{"type":"plain","text":42}]}`,
+		`{"messages":[{"type":"plain","text":"hello world!"}]}`,
+		`{"messages":[{"type":"plain","text":"hello world"},{"type":"plain","text":"extra"}]}`,
+		`{"messages":[{"type":"plain","text":"hello world"},{"type":"image","url":"fixture"}]}`,
+		`{"messages":[{"type":"plain","text":"hello world","unknown":"extra"}]}`,
+		`{"messages":[{"type":"quote","message_id":"fixture"},{"type":"plain","text":"hello world"}]}`,
+	} {
+		if guard.IsOneBotDuplicate(final) {
+			t.Errorf("different or unsupported content suppressed: %s", final)
+		}
+	}
+}

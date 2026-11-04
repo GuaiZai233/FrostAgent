@@ -24,6 +24,8 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 		{"duplicate final", true, "reply about earlier topic"},
 		{"whitespace duplicate", true, " \nreply about earlier topic\n"},
 		{"different final", true, "different follow-up"},
+		{"second tool call", true, ""},
+		{"structured text stays literal", true, `{"messages":[{"type":"plain","text":"reply about earlier topic"}]}`},
 		{"foreign target", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,6 +50,11 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 					}}}
 				case 3:
 					message.Content = tc.final
+					if tc.name == "second tool call" {
+						message.ToolCalls = []core.ToolCall{{ID: "second", Type: "function", Function: core.ToolCallFunction{
+							Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"msg_earlier"},{"type":"plain","text":"second reply"}]}`,
+						}}}
+					}
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					if (result == "消息已发送") != sameGroup {
 						t.Errorf("incorrect tool confirmation: %s", result)
@@ -85,7 +92,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 				}
 			}
 			terminal := readAutoDecorationAction(t, conn, "terminal noop")
-			if tc.final == "different follow-up" {
+			if tc.final == "different follow-up" || tc.name == "structured text stays literal" {
 				if terminal.Action != "send_message" || terminal.Content != tc.final {
 					t.Fatalf("different final reply was lost: %+v", terminal)
 				}
@@ -101,7 +108,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("reply turn did not finish")
 			}
-			if sameGroup && tc.final != "different follow-up" {
+			if sameGroup && tc.final != "different follow-up" && tc.name != "structured text stays literal" {
 				historyCopies, compactCopies := 0, 0
 				for _, message := range session.Snapshot() {
 					if message.Role == "assistant" && message.Content == "reply about earlier topic" {

@@ -155,6 +155,8 @@ func TestProactiveSpecificReplyBatchPreflight(t *testing.T) {
 		{"send then forbidden", []core.ToolCall{valid, forbidden}},
 		{"forbidden then send", []core.ToolCall{forbidden, valid}},
 		{"send then malformed send", []core.ToolCall{valid, malformed}},
+		{"two valid sends", []core.ToolCall{valid, call("reply2", "send_message", specificReplyArgs)}},
+		{"memory then two valid sends", []core.ToolCall{memoryCall, valid, call("reply2", "send_message", specificReplyArgs)}},
 		{"memory then send then forbidden", []core.ToolCall{memoryCall, valid, forbidden}},
 		{"silence conflict with forbidden", []core.ToolCall{valid, call("silent", "stay_silent", `{}`), forbidden}},
 	} {
@@ -239,6 +241,53 @@ func TestProactiveSpecificReplyEchoStateIsRunLocal(t *testing.T) {
 	}
 	if calls != 3 || deliveries != 1 {
 		t.Fatalf("calls=%d sends=%d", calls, deliveries)
+	}
+}
+
+func TestProactiveSpecificReplyRunLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		proactive, failFirst bool
+		wantSends, wantCalls int
+	}{
+		{"successful reply closes budget", true, false, 1, 2},
+		{"failed delivery permits retry", true, true, 2, 3},
+		{"explicit wake unchanged", false, false, 2, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, deliveries, executions := 0, 0, 0
+			send := SendMsgTool()
+			execute := send.executeResult
+			send.executeResult = func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
+				executions++
+				return execute(ctx, args)
+			}
+			engine := &llm.Engine{MaxIterations: 3, ToolRegistry: map[string]llm.ToolExecutor{"send_message": send},
+				Provider: specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
+					calls++
+					if calls < 3 {
+						return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "reply", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}}}}
+					}
+					return core.ChatMessage{Role: core.RoleAssistant, Content: ""}
+				}},
+			}
+			run := specificReplyContext(tc.proactive)
+			run.SendHook = func(string) error {
+				deliveries++
+				if tc.failFirst && deliveries == 1 {
+					return errors.New("fixture failed delivery")
+				}
+				return nil
+			}
+			// Reuse the engine to prove the successful-delivery budget is run-local.
+			for attempt := 0; attempt < 2; attempt++ {
+				calls, deliveries, executions = 0, 0, 0
+				result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "unaddressed"}}, run)
+				if deliveries != tc.wantSends || executions != tc.wantSends || calls != tc.wantCalls || result.Content != "" || result.Error != nil || result.Silent {
+					t.Fatalf("run %d: calls=%d executors=%d sends=%d result=%+v", attempt, calls, executions, deliveries, result)
+				}
+			}
+		})
 	}
 }
 
