@@ -1188,22 +1188,16 @@ def onebot_segment_is_sticker(segment: dict[str, Any] | None) -> bool:
 
 
 def pop_matching_onebot_segment(
-    segments: list[dict[str, Any]],
-    component_type: str,
+    slots: list[tuple[int, dict[str, Any]]],
     component_source: str = "",
-) -> dict[str, Any] | None:
-    # AstrBot can normalize a raw mface/sticker into an Image. Match its source
-    # before type so a failed conversion cannot count both representations.
+) -> tuple[int, dict[str, Any]] | None:
+    # A normalized Image can represent any raw image-like type. Prefer source
+    # identity when available, otherwise pair in the original visual order.
     if component_source:
-        for index, segment in enumerate(segments):
-            kind = str(first_attr(segment, "type") or "").lower()
-            if kind in ("image", "mface", "sticker") and image_source_from_data(first_attr(segment, "data") or {}) == component_source:
-                return segments.pop(index)
-    expected_type = component_type if component_type in ("mface", "sticker") else "image"
-    for index, segment in enumerate(segments):
-        if str(first_attr(segment, "type") or "").lower() == expected_type:
-            return segments.pop(index)
-    return None
+        for index, (_, segment) in enumerate(slots):
+            if image_source_from_data(first_attr(segment, "data") or {}) == component_source:
+                return slots.pop(index)
+    return slots.pop(0) if slots else None
 
 
 async def source_image_attachment(
@@ -1386,19 +1380,14 @@ async def lookup_reply_onebot_segments(
     )
 
 async def append_sticker_attachments_from_segments(
-    segments: list[dict[str, Any]],
+    slots: list[tuple[int, dict[str, Any]]],
     message_id: str,
-    handled_sources: set[str],
     attachments: list[dict[str, Any]],
-    image_indexes: dict[str, int],
 ) -> None:
-    for segment in segments:
+    for image_index, segment in slots:
         if not onebot_segment_is_sticker(segment):
             continue
         source = image_source_from_data(first_attr(segment, "data") or {})
-        if source and source in handled_sources:
-            continue
-        image_index = reserve_image_slot(message_id, image_indexes)
         if not source:
             logger.warning("[frostagent-adapter] 表情包消息缺少可读取的数据，保留图片槽位")
             continue
@@ -1423,6 +1412,20 @@ def reserve_image_slot(
     return image_index
 
 
+def reserve_raw_image_slots(
+    segments: list[dict[str, Any]],
+    message_id: str,
+    image_indexes: dict[str, int],
+) -> list[tuple[int, dict[str, Any]]]:
+    # Raw ordinals are allocated once, before normalized components are matched.
+    # Unmatched/failed slots must not disappear or move behind readable images.
+    return [
+        (reserve_image_slot(message_id, image_indexes), segment)
+        for segment in segments
+        if str(first_attr(segment, "type") or "").lower() in ("image", "mface", "sticker")
+    ]
+
+
 def append_unique_attachment(
     attachments: list[dict[str, Any]],
     attachment: dict[str, Any] | None,
@@ -1439,6 +1442,7 @@ def append_unique_attachment(
             indices = existing.setdefault("image_indices", [])
             if image_index not in indices:
                 indices.append(image_index)
+                indices.sort()
             if attachment.get("sub_type") == 1:
                 existing["sub_type"] = 1
             return
@@ -1452,27 +1456,21 @@ async def extract_attachments(
 ) -> list[dict[str, Any]]:
     attachments = []
     image_indexes: dict[str, int] = {}
-    handled_sticker_sources: set[str] = set()
     reply_image_components: dict[str, list[Any]] = {}
-    unmatched_raw_segments = list(raw_onebot_segments(event))
+    unmatched_raw_segments = reserve_raw_image_slots(raw_onebot_segments(event), message_id, image_indexes)
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
             if "image" in comp_type or comp_type in ("mface", "sticker"):
-                raw_segment = pop_matching_onebot_segment(
+                slot = pop_matching_onebot_segment(
                     unmatched_raw_segments,
-                    comp_type,
                     image_source_from_data(component_image_data(comp)),
                 )
-                image_index = reserve_image_slot(message_id, image_indexes)
+                image_index, raw_segment = slot if slot is not None else (reserve_image_slot(message_id, image_indexes), None)
                 attachment = await image_attachment(comp, message_id, raw_segment)
                 append_unique_attachment(attachments, attachment, image_index)
-                if attachment and attachment.get("sub_type") == 1:
-                    source = image_source_from_data(component_image_data(comp))
-                    if source:
-                        handled_sticker_sources.add(source)
             elif comp_type == "reply":
                 reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
                 if not reply_id:
@@ -1489,34 +1487,29 @@ async def extract_attachments(
     await append_sticker_attachments_from_segments(
         unmatched_raw_segments,
         message_id,
-        handled_sticker_sources,
         attachments,
-        image_indexes,
     )
     for reply_id, quoted_images in reply_image_components.items():
-        unmatched_reply_segments = await lookup_reply_onebot_segments(event, reply_id)
-        handled_sources: set[str] = set()
+        unmatched_reply_segments = reserve_raw_image_slots(
+            await lookup_reply_onebot_segments(event, reply_id), reply_id, image_indexes,
+        )
         for quoted_comp in quoted_images:
-            quoted_type = type(quoted_comp).__name__.lower()
-            raw_segment = pop_matching_onebot_segment(
+            slot = pop_matching_onebot_segment(
                 unmatched_reply_segments,
-                quoted_type,
                 image_source_from_data(component_image_data(quoted_comp)),
             )
-            image_index = reserve_image_slot(reply_id, image_indexes)
+            image_index, raw_segment = slot if slot is not None else (reserve_image_slot(reply_id, image_indexes), None)
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
             append_unique_attachment(attachments, attachment, image_index)
-            if attachment and attachment.get("sub_type") == 1:
-                source = image_source_from_data(component_image_data(quoted_comp))
-                if source:
-                    handled_sources.add(source)
         await append_sticker_attachments_from_segments(
             unmatched_reply_segments,
             reply_id,
-            handled_sources,
             attachments,
-            image_indexes,
         )
+    message_order = {message_id: index for index, message_id in enumerate(image_indexes)}
+    attachments.sort(key=lambda attachment: (
+        message_order[str(attachment.get("message_id") or "")], attachment["image_indices"][0],
+    ))
     if image_slot_counts is not None:
         image_slot_counts.update(image_indexes)
     return attachments

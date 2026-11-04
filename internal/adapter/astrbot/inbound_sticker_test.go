@@ -153,8 +153,12 @@ func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T)
 					t.Fatalf("silence history=%+v", history)
 				}
 				historyText, _ := history[0].Content.(string)
-				if !strings.HasPrefix(historyText, "User Message: [图片]") {
+				if !strings.HasPrefix(historyText, "User Message: [图片]") || strings.Count(historyText, "[图片]") != 1 {
 					t.Fatalf("silent turn lost sticker marker: %s", historyText)
+				}
+				compact := session.GroupCompactBufferMessages()
+				if len(compact) != 1 || compact[0].MessageID != event.MessageID || strings.Count(compact[0].Content, "[图片]") != 1 {
+					t.Fatalf("silent compact duplicated or lost sticker: %+v", compact)
 				}
 				if count := session.PendingTurnCount(); count != 1 {
 					t.Fatalf("pending silent turns=%d want=1", count)

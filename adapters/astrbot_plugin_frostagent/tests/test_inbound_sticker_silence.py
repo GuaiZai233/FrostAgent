@@ -22,10 +22,13 @@ class InboundStickerSilenceTests(unittest.TestCase):
             {"type": "image", "data": {"is_sticker": True}},
             {"type": "image", "data": {"sub_type": 1, "file": "base64://invalid"}},
         ]
+        cases = [(segment, components) for segment in cases for components in (
+            [], [FailingInboundImage()],
+        )]
         with load_plugin_module() as module:
-            for segment in cases:
-                with self.subTest(segment=segment):
-                    event = InboundEvent([], raw_segments=[segment])
+            for segment, components in cases:
+                with self.subTest(segment=segment, normalized=bool(components)):
+                    event = InboundEvent(components, raw_segments=[segment])
                     event.platform = expected["platform"]
                     event.message_obj.message_id = expected["message_id"]
                     event.get_group_id = lambda: expected["group_id"]
@@ -58,22 +61,77 @@ class InboundStickerSilenceTests(unittest.TestCase):
                 self.assertEqual(attachment["image_indices"], [2, 3])
 
     def test_failed_normalized_sticker_consumes_only_one_original_slot(self):
-        source = "https://example.invalid/sticker.gif"
-        component = FailingInboundImage()
-        component.url = source
-        segment = {"type": "mface", "data": {"url": source}}
-        event = InboundEvent(
-            [component, Reply("quoted", [component])],
-            raw_segments=[segment],
-            bot=FakeBot({"message": [segment]}),
-        )
+        with load_plugin_module() as module:
+            for kind in ("mface", "sticker"):
+                for raw_source, component_source in (
+                    ("https://example.invalid/sticker.gif", "https://example.invalid/sticker.gif"),
+                    ("", ""),
+                    ("https://example.invalid/sticker.gif", ""),
+                    ("https://example.invalid/sticker.gif", "https://example.invalid/rewritten.gif"),
+                ):
+                    with self.subTest(kind=kind, raw_source=raw_source, component_source=component_source):
+                        component = FailingInboundImage()
+                        component.url = component_source
+                        segment = {"type": kind, "data": {"url": raw_source}}
+                        event = InboundEvent(
+                            [component, Reply("quoted", [component])],
+                            raw_segments=[segment],
+                            bot=FakeBot({"message": [segment]}),
+                        )
+                        counts = {}
+                        with patch.object(module, "download_sticker_as_base64", side_effect=RuntimeError("synthetic download failure")) as download:
+                            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+                        self.assertEqual(attachments, [])
+                        self.assertEqual(counts, {"current": 1, "quoted": 1})
+                        download.assert_not_called()
+
+    def test_normalized_images_follow_raw_order_without_sources(self):
+        segments = [
+            {"type": "text", "data": {"text": "caption"}},
+            {"type": "mface", "data": {}},
+            {"type": "image", "data": {"sub_type": 0}},
+            {"type": "sticker", "data": {}},
+        ]
+        components = [FailingInboundImage(), InboundImage(b"photo", 0), InboundImage(b"sticker", 0)]
+        event = InboundEvent(components + [Reply("quoted", components)], raw_segments=segments, bot=FakeBot({"message": segments}))
         with load_plugin_module() as module:
             counts = {}
-            with patch.object(module, "download_sticker_as_base64", side_effect=RuntimeError("synthetic download failure")) as download:
-                attachments = asyncio.run(module.extract_attachments(event, "current", counts))
-            self.assertEqual(attachments, [])
-            self.assertEqual(counts, {"current": 1, "quoted": 1})
-            download.assert_not_called()
+            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+            self.assertEqual(counts, {"current": 3, "quoted": 3})
+            for message_id in ("current", "quoted"):
+                actual = [att for att in attachments if att["message_id"] == message_id]
+                self.assertEqual([att["image_indices"] for att in actual], [[1], [2]])
+                self.assertEqual([att["sub_type"] for att in actual], [0, 1])
+            self.assertFalse(module.is_sticker_only_message(event))
+
+    def test_raw_only_slots_and_repeated_sources_keep_original_ordinals(self):
+        source = "base64://c3RpY2tlcg=="
+        cases = [
+            ([{"type": "mface", "data": {}}, {"type": "mface", "data": {"file": source}}], [1]),
+            ([{"type": "mface", "data": {"file": source}}, {"type": "mface", "data": {"file": source}}], [0, 1]),
+            ([{"type": "mface", "data": {"file": "data:image/png;base64,c3RpY2tlcg=="}}, {"type": "mface", "data": {"file": source}}], [0, 1]),
+        ]
+        with load_plugin_module() as module:
+            for segments, indices in cases:
+                with self.subTest(segments=segments):
+                    event = InboundEvent([InboundImage(b"sticker", 1, source)], raw_segments=segments)
+                    counts = {}
+                    attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+                    self.assertEqual(counts, {"current": 2})
+                    self.assertEqual(len(attachments), 1)
+                    self.assertEqual(attachments[0]["image_indices"], indices)
+
+    def test_partial_normalization_keeps_attachment_order(self):
+        event = InboundEvent([InboundImage(b"b", 1, "base64://Yg==")], raw_segments=[
+            {"type": "mface", "data": {"file": "base64://YQ=="}},
+            {"type": "mface", "data": {"file": "base64://Yg=="}},
+        ])
+        with load_plugin_module() as module:
+            counts = {}
+            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+            self.assertEqual(counts, {"current": 2})
+            self.assertEqual([att["image_indices"] for att in attachments], [[0], [1]])
+            self.assertEqual([att["content"] for att in attachments], ["YQ==", "Yg=="])
 
     def test_classification_uses_current_raw_chain(self):
         cases = [
