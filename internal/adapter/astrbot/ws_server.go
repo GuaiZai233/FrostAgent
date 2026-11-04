@@ -1232,7 +1232,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
-		defer func() { deliveries.Finish(turn.Interrupted()) }()
+		defer func() {
+			if isProactiveReply(&event) {
+				deliveries.CommitDelivered()
+			}
+			deliveries.Finish(turn.Interrupted())
+		}()
 
 		targetID := event.UserID
 		if event.MessageType == "group" {
@@ -1347,7 +1352,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				deliveries.Record(deliveredReply, func(live bool) {
 					if event.MessageType == "group" && !conn.mock {
 						ownerTurn := turn
-						if !live {
+						if !live || isProactiveReply(&event) {
 							ownerTurn = nil
 						}
 						stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, ownerTurn)
@@ -1456,7 +1461,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			if runResult.StaySilentCalled && (!isProactiveReply(&event) || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					speakerName := senderDisplayName(event)
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{

@@ -66,6 +66,23 @@ func (p *PublicReplyLog) Text() string {
 func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.commitFinalLocked(text, interrupted)
+}
+
+// CommitDelivered finalizes confirmed tool-only output on every proactive exit,
+// including silence and errors. A previously committed final answer wins; an
+// old epoch must never restore history after a session reset.
+func (p *PublicReplyLog) CommitDelivered() {
+	p.session.WithEpochCommit(p.epoch, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if !p.closed && len(p.texts) > 0 {
+			p.commitFinalLocked(strings.Join(p.texts, "\n"), false)
+		}
+	})
+}
+
+func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) {
 	p.session.mu.Lock()
 	defer p.session.mu.Unlock()
 	if p.epoch != 0 && p.session.epoch != p.epoch {

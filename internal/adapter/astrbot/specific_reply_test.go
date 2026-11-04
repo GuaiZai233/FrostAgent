@@ -3,6 +3,7 @@ package astrbot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
 
@@ -25,6 +27,10 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 		{"whitespace duplicate", true, " \nreply about earlier topic\n"},
 		{"different final", true, "different follow-up"},
 		{"second tool call", true, ""},
+		{"stay silent after delivery", true, ""},
+		{"provider error after delivery", true, ""},
+		{"security block after delivery", true, "blocked final"},
+		{"iteration limit after delivery", true, ""},
 		{"structured text stays literal", true, `{"messages":[{"type":"plain","text":"reply about earlier topic"}]}`},
 		{"foreign target", false, ""},
 	} {
@@ -59,6 +65,12 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 					if (result == "消息已发送") != sameGroup {
 						t.Errorf("incorrect tool confirmation: %s", result)
 					}
+					if tc.name == "provider error after delivery" {
+						return nil, errors.New("fixture provider failure")
+					}
+					if tc.name == "stay silent after delivery" {
+						message.ToolCalls = []core.ToolCall{{ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: "stay_silent", Arguments: `{}`}}}
+					}
 				default:
 					t.Errorf("unexpected model round %d", calls)
 				}
@@ -71,6 +83,19 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			})
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 			engine.ToolRegistry["stay_silent"] = tools.StaySilentTool()
+			if tc.name == "iteration limit after delivery" {
+				engine.MaxIterations = 1
+			}
+			if tc.name == "security block after delivery" {
+				engine.Security = security.NewController(t.TempDir())
+				engine.Security.SetMode(security.ControlModeAggressive)
+				engine.Security.Watchdog.SetClassifier(&mockClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+					if input.Stage == security.StageModelOutput {
+						return security.ClassificationResult{Category: security.RiskCategoryViolenceTerrorism, RiskLevel: security.RiskLevelCritical}, nil
+					}
+					return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+				}})
+			}
 			srv, _, url := startWSTestServer(engine)
 			defer srv.Close()
 			conn := dialAutoDecorationTest(t, url)
@@ -126,7 +151,11 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			}
 			provider.mu.Lock()
 			defer provider.mu.Unlock()
-			if calls != 3 {
+			wantCalls := 3
+			if tc.name == "iteration limit after delivery" {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
 				t.Fatalf("model calls = %d", calls)
 			}
 		})

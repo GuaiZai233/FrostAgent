@@ -2,7 +2,6 @@ package proactive
 
 import (
 	"encoding/json"
-	"io"
 	"strings"
 )
 
@@ -48,33 +47,4 @@ func (g *ReplyEchoGuard) IsDuplicate(final string) bool {
 		}
 	}
 	return len(g.texts) > 1 && final == strings.Join(g.texts, "\n")
-}
-
-// IsOneBotDuplicate compares the text rendered by OneBot's structured final
-// output path. Other adapters treat JSON as literal text and must not use this.
-// Keep non-plain components and unknown fields rather than discard extra content.
-func (g *ReplyEchoGuard) IsOneBotDuplicate(final string) bool {
-	if len(g.texts) == 0 {
-		return false
-	}
-	var payload struct {
-		Messages []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"messages"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(final))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&payload) != nil || len(payload.Messages) == 0 || decoder.Decode(new(any)) != io.EOF {
-		return false
-	}
-	var body strings.Builder
-	for _, component := range payload.Messages {
-		if component.Type != "plain" {
-			return false
-		}
-		// BuildOneBotMessage preserves each plain segment exactly, without separators.
-		body.WriteString(component.Text)
-	}
-	return g.IsDuplicate(body.String())
 }

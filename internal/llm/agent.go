@@ -1111,11 +1111,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if hasRunCtx && runCtx.Proactive {
 				contentStr, _ = filterStickerMessages(contentStr)
-				duplicate := specificReplyEchoes.IsDuplicate(contentStr)
-				if runCtx.AdapterID == "onebot" {
-					duplicate = duplicate || specificReplyEchoes.IsOneBotDuplicate(contentStr)
+				comparisonText, comparable := contentStr, true
+				if runCtx.FinalReplyText != nil {
+					comparisonText, comparable = runCtx.FinalReplyText(contentStr)
 				}
-				if !outputBlocked && duplicate {
+				if !outputBlocked && comparable && specificReplyEchoes.IsDuplicate(comparisonText) {
 					// Keep the successful tool delivery as the public answer. Both
 					// adapters already finalize tool-only replies without resending.
 					contentStr = ""

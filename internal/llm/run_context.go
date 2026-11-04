@@ -61,6 +61,10 @@ type RunContext struct {
 	// CanReplyToMessage validates an opaque message ID against trusted,
 	// adapter-owned current-session observations, never model-supplied text.
 	CanReplyToMessage func(messageID string) bool
+
+	// FinalReplyText returns the adapter's rendered text for a text-only final
+	// message. False retains the original output, including media and rich content.
+	FinalReplyText func(string) (string, bool)
 }
 
 type runContextKey struct{}

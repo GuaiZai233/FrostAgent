@@ -3,6 +3,7 @@ package onebot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
@@ -19,7 +21,7 @@ import (
 func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 	for _, tc := range []struct {
 		name, final, wantFollowup string
-		repeatTool                bool
+		terminal                  string
 	}{
 		{name: "empty final"},
 		{name: "duplicate", final: "reply about earlier topic"},
@@ -30,13 +32,21 @@ func TestOneBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 		{name: "structured different", final: `{"messages":[{"type":"plain","text":"different follow-up"}]}`, wantFollowup: "different follow-up"},
 		{name: "structured extra text", final: `{"messages":[{"type":"plain","text":"reply about earlier topic"},{"type":"plain","text":"extra content"}]}`, wantFollowup: "extra content"},
 		{name: "structured media", final: `{"messages":[{"type":"plain","text":"reply about earlier topic"},{"type":"image","url":"https://example.invalid/fixture.png"}]}`, wantFollowup: "fixture.png"},
-		{name: "second tool call", repeatTool: true},
+		{name: "ignored sticker flag", final: `{"messages":[{"type":"plain","text":"reply about earlier topic","is_sticker":false}]}`},
+		{name: "ignored fields", final: `{"extra":"ignored","messages":[{"type":"plain","text":"reply about earlier topic","url":"ignored","path":"ignored","mention_user_id":"fixture-user","custom":{"text":"ignored"}}]}`},
+		{name: "second tool call", terminal: "repeat"},
+		{name: "stay silent after delivery", terminal: "silent"},
+		{name: "provider error after delivery", terminal: "error"},
+		{name: "security block after delivery", terminal: "blocked", final: "blocked final"},
+		{name: "iteration limit after delivery", terminal: "limit"},
+		{name: "render failure after delivery", final: `{"messages":[{"type":"quote","message_id":"999999"},{"type":"plain","text":"untrusted target"}]}`},
+		{name: "final delivery failed", final: "failed follow-up", wantFollowup: "failed follow-up", terminal: "failed final"},
 	} {
-		t.Run(tc.name, func(t *testing.T) { testOneBotProactiveSpecificReply(t, tc.final, tc.wantFollowup, tc.repeatTool) })
+		t.Run(tc.name, func(t *testing.T) { testOneBotProactiveSpecificReply(t, tc.final, tc.wantFollowup, tc.terminal) })
 	}
 }
 
-func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, repeatTool bool) {
+func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup, terminal string) {
 	firstCalled, replyCompleted := make(chan struct{}), make(chan struct{})
 	calls := 0
 	provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -54,9 +64,12 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 			message.ToolCalls = []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{
 				Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"101"},{"type":"plain","text":"reply about earlier topic"}]}`,
 			}}}
+			if terminal == "limit" {
+				close(replyCompleted)
+			}
 		case 3:
 			message.Content = final
-			if repeatTool {
+			if terminal == "repeat" {
 				message.ToolCalls = []core.ToolCall{{ID: "second", Type: "function", Function: core.ToolCallFunction{
 					Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"101"},{"type":"plain","text":"second reply"}]}`,
 				}}}
@@ -66,6 +79,12 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 				t.Errorf("delivery did not wait for ACK: %s", result)
 			}
 			close(replyCompleted)
+			if terminal == "error" {
+				return nil, errors.New("fixture provider failure")
+			}
+			if terminal == "silent" {
+				message.ToolCalls = []core.ToolCall{{ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: "stay_silent", Arguments: `{}`}}}
+			}
 		default:
 			t.Errorf("unexpected model round %d", calls)
 		}
@@ -78,6 +97,19 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 	})
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 	engine.ToolRegistry["stay_silent"] = tools.StaySilentTool()
+	if terminal == "limit" {
+		engine.MaxIterations = 1
+	}
+	if terminal == "blocked" {
+		engine.Security = security.NewController(t.TempDir())
+		engine.Security.SetMode(security.ControlModeAggressive)
+		engine.Security.Watchdog.SetClassifier(&mockClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+			if input.Stage == security.StageModelOutput {
+				return security.ClassificationResult{Category: security.RiskCategoryViolenceTerrorism, RiskLevel: security.RiskLevelCritical}, nil
+			}
+			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+		}})
+	}
 	srv, url := startWSTestServer(engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -94,6 +126,7 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 	actions := make(chan model.OneBotAction, 8)
 	readErrors := make(chan error, 1)
 	go func() {
+		sends := 0
 		for {
 			var action model.OneBotAction
 			if err := conn.ReadJSON(&action); err != nil {
@@ -104,9 +137,14 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 			if action.Action == "get_group_info" {
 				data = map[string]any{"group_id": 10, "group_name": "fixture-group"}
 			} else {
+				sends++
 				actions <- action
 			}
-			if err := write(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": data}); err != nil {
+			response := map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": data}
+			if terminal == "failed final" && sends == 2 {
+				response["status"], response["retcode"] = "failed", 100
+			}
+			if err := write(response); err != nil {
 				readErrors <- err
 				return
 			}
@@ -182,9 +220,12 @@ func testOneBotProactiveSpecificReply(t *testing.T, final, wantFollowup string, 
 		t.Fatalf("unexpected duplicate/empty reply: %+v", duplicate)
 	default:
 	}
-	if wantFollowup == "" {
+	if wantFollowup == "" || terminal == "failed final" {
 		historyCopies, compactCopies := 0, 0
 		for _, message := range session.Snapshot() {
+			if terminal == "failed final" && message.Role == "assistant" && message.Content == final {
+				t.Fatal("failed final reply committed as public history")
+			}
 			if message.Role == "assistant" && message.Content == "reply about earlier topic" {
 				historyCopies++
 			}
