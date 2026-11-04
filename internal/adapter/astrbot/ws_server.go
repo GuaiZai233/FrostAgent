@@ -1567,6 +1567,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			return
 		}
 		session.WithEpochCommit(startEpoch, func() {
+			// A noop adds no public message: replace provisional tool history even
+			// if canceled, or reuse CommitDelivered's fallback if it won the race.
+			interruptedFinal := turn.Interrupted() && strings.TrimSpace(sentReplyText) != ""
+			if strings.TrimSpace(historyReplyText) != "" && !deliveries.CommitFinal(historyReplyText, interruptedFinal) {
+				return
+			}
 
 			if event.MessageType == "group" && !runResult.Banned {
 				if session != nil {
@@ -1576,9 +1582,6 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 						session.PromoteGroupCompactMessage(event.MessageID)
 					}
 				}
-			}
-			if strings.TrimSpace(historyReplyText) != "" {
-				deliveries.CommitFinal(historyReplyText, turn.Interrupted())
 			}
 			engine.TrimSession(session)
 

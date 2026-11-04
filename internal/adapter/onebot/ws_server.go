@@ -856,7 +856,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					return
 				}
 
-				deliveries.CommitFinal(replyText, turn.Interrupted())
+				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
+					return
+				}
 				engine.TrimSession(session)
 
 				if event.MessageType == "group" {

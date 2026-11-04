@@ -16,6 +16,10 @@ type PublicReplyLog struct {
 	closed  bool
 	ids     []uint64
 	texts   []string
+	// Fallback history and final-callback side effects have separate ownership:
+	// CommitDelivered records history but does not enqueue automatic extraction.
+	fallbackText  string
+	finalAccepted bool
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
@@ -63,10 +67,17 @@ func (p *PublicReplyLog) Text() string {
 
 // CommitFinal replaces provisional replies atomically so concurrent readers
 // never observe both the provisional and final copies of a tool-only answer.
-func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) {
+// True admits the final callback's compaction/extraction exactly once, even if
+// CommitDelivered already archived the same text. A distinct late final remains
+// a new public delivery and is appended without removing fallback history.
+func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.commitFinalLocked(text, interrupted)
+	if p.finalAccepted || !p.commitFinalLocked(text, interrupted) {
+		return false
+	}
+	p.finalAccepted = true
+	return true
 }
 
 // CommitDelivered finalizes confirmed tool-only output on every proactive exit,
@@ -77,16 +88,22 @@ func (p *PublicReplyLog) CommitDelivered() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if !p.closed && len(p.texts) > 0 {
-			p.commitFinalLocked(strings.Join(p.texts, "\n"), false)
+			text := strings.Join(p.texts, "\n")
+			if p.commitFinalLocked(text, false) {
+				p.fallbackText = text
+			}
 		}
 	})
 }
 
-func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) {
+func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	p.session.mu.Lock()
 	defer p.session.mu.Unlock()
 	if p.epoch != 0 && p.session.epoch != p.epoch {
-		return
+		return false
+	}
+	if p.fallbackText != "" && p.fallbackText == text {
+		return true
 	}
 	if !interrupted {
 		for _, id := range p.ids {
@@ -102,6 +119,7 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) {
 	p.ids = nil
 	p.closed = true
 	p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
+	return true
 }
 
 // Completed attempts preserve the existing final-answer history policy.

@@ -5,15 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
+	"github.com/gorilla/websocket"
 )
 
 func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
@@ -157,6 +162,136 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			}
 			if calls != wantCalls {
 				t.Fatalf("model calls = %d", calls)
+			}
+		})
+	}
+}
+
+func TestAstrBotProactiveSpecificReplyLateTerminal(t *testing.T) {
+	for _, final := range []string{"", "different final"} {
+		t.Run("final="+final, func(t *testing.T) {
+			gate := &injectionWriteGate{started: make(chan struct{}), release: make(chan struct{})}
+			var releaseOnce sync.Once
+			var calls atomic.Int32
+			engine := newTestEngine(runtimeInjectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+				message := core.ChatMessage{Role: core.RoleAssistant}
+				switch calls.Add(1) {
+				case 1:
+					message.ToolCalls = []core.ToolCall{{ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: "stay_silent", Arguments: `{}`}}}
+				case 2:
+					message.ToolCalls = []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"fixture-old"},{"type":"plain","text":"confirmed reply"}]}`}}}
+				case 3:
+					// The tool write has returned successfully. Only the terminal
+					// operation is now held inside the real WebSocket transport.
+					gate.enabled.Store(true)
+					message.Content = final
+				default:
+					t.Error("unexpected model round")
+				}
+				return &core.ChatResponse{Message: message}, nil
+			}))
+			engine.Scope = newTestScopeWithEnv(t, map[string]string{
+				"PROACTIVE_REPLY_PROBABILITY": "1.00", "MEMORY_EXTRACT_BATCH_MIN": "100", "MEMORY_EXTRACT_BATCH_MAX": "100",
+			})
+			engine.MemoryWriter = memory.NewWriter(nil)
+			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+			engine.ToolRegistry["stay_silent"] = tools.StaySilentTool()
+			srv := httptest.NewUnstartedServer(NewAdapter(engine).Handler())
+			srv.Listener = injectionGatedListener{srv.Listener, gate}
+			srv.Start()
+			defer srv.Close()
+			defer releaseOnce.Do(func() { close(gate.release) })
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			event := Event{Type: "event", EventType: "message", MessageType: "group", Platform: "fixture-platform", GroupID: "fixture-group", UserID: "fixture-user", MessageID: "fixture-old", Content: "earlier topic"}
+			sendAutoDecorationEvent(t, conn, event)
+			if action := readAutoDecorationAction(t, conn, "first silence"); action.Action != "noop" {
+				t.Fatalf("expected noop: %+v", action)
+			}
+			session := engine.SessionManager.GetOrCreate(sessionKey(event))
+			waitTurn := func(turn *llm.SessionTurn) {
+				t.Helper()
+				done := make(chan struct{})
+				go func() { turn.Wait(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(3 * time.Second):
+					t.Fatal("turn did not finish")
+				}
+			}
+			lane := "proactive:" + event.Platform
+			barrier := session.ReserveSequenceTurn(lane, false, true)
+			waitTurn(barrier)
+			barrier.Done()
+			initialPending := session.PendingTurnCount()
+			event.MessageID, event.Content = "fixture-trigger", "later trigger"
+			sendAutoDecorationEvent(t, conn, event)
+			if action := readAutoDecorationAction(t, conn, "specific reply"); action.Action != "send_message" || action.Content != "confirmed reply" {
+				t.Fatalf("missing confirmed reply: %+v", action)
+			}
+			select {
+			case <-gate.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("terminal write not blocked")
+			}
+			// Interrupt without resetting the epoch. Waiting for this turn proves
+			// the previous reply's deferred CommitDelivered ran before release.
+			next := session.ReserveSequenceTurn(lane, true, true)
+			defer next.Done()
+			waitTurn(next)
+			countReply := func() (int, int) {
+				history, compact := 0, 0
+				for _, message := range session.Snapshot() {
+					if message.Role == "assistant" && message.Content == "confirmed reply" {
+						history++
+					}
+				}
+				for _, message := range session.GroupCompactBufferMessages() {
+					if message.Role == "assistant" && message.Content == "confirmed reply" {
+						compact++
+					}
+				}
+				return history, compact
+			}
+			if history, compact := countReply(); history != 1 || compact != 1 {
+				t.Fatalf("fallback history=%d compact=%d", history, compact)
+			}
+			releaseOnce.Do(func() { close(gate.release) })
+			terminal := readAutoDecorationAction(t, conn, "late terminal")
+			if final == "" && terminal.Action != "noop" || final != "" && terminal.Content != final {
+				t.Fatalf("late terminal lost: %+v", terminal)
+			}
+			// The terminal frame precedes history/automatic extraction. Wait for
+			// the callback's queue admission, then synchronize its epoch commit.
+			deadline := time.Now().Add(3 * time.Second)
+			for session.PendingTurnCount() == initialPending && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			session.WithEpochCommit(session.Epoch(), func() {})
+			if history, compact := countReply(); history != 1 || compact != 1 {
+				t.Fatalf("late callback duplicated reply: history=%d compact=%d", history, compact)
+			}
+			if got := session.PendingTurnCount() - initialPending; got != 1 {
+				t.Fatalf("automatic extraction queued %d times, want 1", got)
+			}
+			if final != "" {
+				history, compact := 0, 0
+				for _, message := range session.Snapshot() {
+					if message.Role == "assistant" && message.Content == final {
+						history++
+					}
+				}
+				for _, message := range session.GroupCompactBufferMessages() {
+					if message.Role == "assistant" && message.Content == final {
+						compact++
+					}
+				}
+				if history != 1 || compact != 1 {
+					t.Fatalf("different delivered final lost: history=%d compact=%d", history, compact)
+				}
 			}
 		})
 	}
