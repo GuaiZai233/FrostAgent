@@ -1078,13 +1078,6 @@ def is_sticker_only_message(event: AstrMessageEvent) -> bool:
     Raw OneBot segments retain subtype markers that normalized Image components
     can lose. No content, filename, GIF, or rendered-placeholder guessing is used.
     """
-    def marked_subtype(value: Any) -> bool:
-        # Unlike int(value), this cannot turn an unknown fractional subtype
-        # into a positive sticker marker.
-        return (type(value) in (int, float) and value == 1) or (
-            isinstance(value, str) and value.strip() == "1"
-        )
-
     segments = raw_onebot_segments(event)
     if segments:
         found = False
@@ -1099,13 +1092,7 @@ def is_sticker_only_message(event: AstrMessageEvent) -> bool:
                     return False
             elif kind == "reply":
                 continue
-            elif kind in ("mface", "sticker") or (
-                kind == "image" and (
-                    data.get("is_sticker") is True
-                    or any(marked_subtype(data.get(key)) for key in ("sub_type", "subType", "subtype"))
-                    or is_market_face_data(data)
-                )
-            ):
+            elif onebot_segment_is_sticker(segment):
                 found = True
             else:
                 return False
@@ -1125,7 +1112,7 @@ def is_sticker_only_message(event: AstrMessageEvent) -> bool:
             continue
         elif kind in ("mface", "sticker") or ("image" in kind and (
             first_attr(component, "is_sticker") is True
-            or any(marked_subtype(first_attr(component, key)) for key in ("sub_type", "subType", "subtype"))
+            or any(is_sticker_sub_type(first_attr(component, key)) for key in ("sub_type", "subType", "subtype"))
             or is_market_face_data(component_image_data(component))
         )):
             found = True
@@ -1177,23 +1164,24 @@ def is_market_face_data(data: Any, segment_type: str = "image") -> bool:
 
 
 def is_sticker_sub_type(value: Any) -> bool:
-    try:
-        return int(value) == 1
-    except (TypeError, ValueError):
-        return False
+    # Do not coerce booleans or fractional unknown subtypes into sticker markers.
+    return (type(value) in (int, float) and value == 1) or (
+        isinstance(value, str) and value.strip() == "1"
+    )
 
 
 def onebot_segment_is_sticker(segment: dict[str, Any] | None) -> bool:
     if not isinstance(segment, dict):
         return False
     segment_type = str(first_attr(segment, "type") or "").lower()
-    data = first_attr(segment, "data")
+    data = first_attr(segment, "data") or {}
     if not isinstance(data, dict):
         return False
-    return segment_type == "mface" or (
+    return segment_type in ("mface", "sticker") or (
         segment_type == "image"
         and (
-            is_sticker_sub_type(first_attr(data, "sub_type", "subtype", "subType"))
+            data.get("is_sticker") is True
+            or any(is_sticker_sub_type(data.get(key)) for key in ("sub_type", "subtype", "subType"))
             or is_market_face_data(data, segment_type)
         )
     )
@@ -1202,8 +1190,16 @@ def onebot_segment_is_sticker(segment: dict[str, Any] | None) -> bool:
 def pop_matching_onebot_segment(
     segments: list[dict[str, Any]],
     component_type: str,
+    component_source: str = "",
 ) -> dict[str, Any] | None:
-    expected_type = "mface" if component_type == "mface" else "image"
+    # AstrBot can normalize a raw mface/sticker into an Image. Match its source
+    # before type so a failed conversion cannot count both representations.
+    if component_source:
+        for index, segment in enumerate(segments):
+            kind = str(first_attr(segment, "type") or "").lower()
+            if kind in ("image", "mface", "sticker") and image_source_from_data(first_attr(segment, "data") or {}) == component_source:
+                return segments.pop(index)
+    expected_type = component_type if component_type in ("mface", "sticker") else "image"
     for index, segment in enumerate(segments):
         if str(first_attr(segment, "type") or "").lower() == expected_type:
             return segments.pop(index)
@@ -1286,6 +1282,7 @@ async def image_attachment(
     comp_type = type(comp).__name__.lower()
     if (
         onebot_segment_is_sticker(raw_segment)
+        or comp_type in ("mface", "sticker")
         or is_market_face_data(data, "mface" if comp_type == "mface" else "image")
     ):
         sub_type = 1
@@ -1388,46 +1385,49 @@ async def lookup_reply_onebot_segments(
         await lookup_reply_onebot_message(event, message_id)
     )
 
-async def sticker_attachments_from_segments(
+async def append_sticker_attachments_from_segments(
     segments: list[dict[str, Any]],
     message_id: str,
     handled_sources: set[str],
-) -> list[dict[str, Any]]:
-    attachments = []
+    attachments: list[dict[str, Any]],
+    image_indexes: dict[str, int],
+) -> None:
     for segment in segments:
-        data = first_attr(segment, "data")
-        if not isinstance(data, dict):
-            continue
         if not onebot_segment_is_sticker(segment):
             continue
-        source = image_source_from_data(data)
-        if not source:
-            logger.warning("[frostagent-adapter] 表情包消息缺少可读取的数据，已忽略")
+        source = image_source_from_data(first_attr(segment, "data") or {})
+        if source and source in handled_sources:
             continue
-        if source in handled_sources:
+        image_index = reserve_image_slot(message_id, image_indexes)
+        if not source:
+            logger.warning("[frostagent-adapter] 表情包消息缺少可读取的数据，保留图片槽位")
             continue
         try:
             attachment = await source_image_attachment(source, message_id, 1)
         except Exception as exc:
             logger.warning(f"[frostagent-adapter] 表情包转换 Base64 失败: {exc}")
             continue
-        if attachment:
-            attachments.append(attachment)
-    return attachments
+        append_unique_attachment(attachments, attachment, image_index)
 
 
-def append_unique_attachment(
-    attachments: list[dict[str, Any]],
-    attachment: dict[str, Any] | None,
+def reserve_image_slot(
     message_id: str,
     image_indexes: dict[str, int],
-) -> None:
+) -> int:
     # Consume the original image-segment ordinal before conversion/dedup so
     # unreadable slots and repeated identical images keep their model-visible
     # positions.
     message_id = str(message_id or "")
     image_index = image_indexes.get(message_id, 0)
     image_indexes[message_id] = image_index + 1
+    return image_index
+
+
+def append_unique_attachment(
+    attachments: list[dict[str, Any]],
+    attachment: dict[str, Any] | None,
+    image_index: int,
+) -> None:
     if attachment is None:
         return
     attachment["image_indices"] = [image_index]
@@ -1460,13 +1460,15 @@ async def extract_attachments(
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
-            if "image" in comp_type or comp_type == "mface":
+            if "image" in comp_type or comp_type in ("mface", "sticker"):
                 raw_segment = pop_matching_onebot_segment(
                     unmatched_raw_segments,
                     comp_type,
+                    image_source_from_data(component_image_data(comp)),
                 )
+                image_index = reserve_image_slot(message_id, image_indexes)
                 attachment = await image_attachment(comp, message_id, raw_segment)
-                append_unique_attachment(attachments, attachment, message_id, image_indexes)
+                append_unique_attachment(attachments, attachment, image_index)
                 if attachment and attachment.get("sub_type") == 1:
                     source = image_source_from_data(component_image_data(comp))
                     if source:
@@ -1481,15 +1483,16 @@ async def extract_attachments(
                     continue
                 for quoted_comp in chain:
                     quoted_type = type(quoted_comp).__name__.lower()
-                    if "image" not in quoted_type and quoted_type != "mface":
+                    if "image" not in quoted_type and quoted_type not in ("mface", "sticker"):
                         continue
                     quoted_images.append(quoted_comp)
-    for attachment in await sticker_attachments_from_segments(
+    await append_sticker_attachments_from_segments(
         unmatched_raw_segments,
         message_id,
         handled_sticker_sources,
-    ):
-        append_unique_attachment(attachments, attachment, message_id, image_indexes)
+        attachments,
+        image_indexes,
+    )
     for reply_id, quoted_images in reply_image_components.items():
         unmatched_reply_segments = await lookup_reply_onebot_segments(event, reply_id)
         handled_sources: set[str] = set()
@@ -1498,19 +1501,22 @@ async def extract_attachments(
             raw_segment = pop_matching_onebot_segment(
                 unmatched_reply_segments,
                 quoted_type,
+                image_source_from_data(component_image_data(quoted_comp)),
             )
+            image_index = reserve_image_slot(reply_id, image_indexes)
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
-            append_unique_attachment(attachments, attachment, reply_id, image_indexes)
+            append_unique_attachment(attachments, attachment, image_index)
             if attachment and attachment.get("sub_type") == 1:
                 source = image_source_from_data(component_image_data(quoted_comp))
                 if source:
                     handled_sources.add(source)
-        for attachment in await sticker_attachments_from_segments(
+        await append_sticker_attachments_from_segments(
             unmatched_reply_segments,
             reply_id,
             handled_sources,
-        ):
-            append_unique_attachment(attachments, attachment, reply_id, image_indexes)
+            attachments,
+            image_indexes,
+        )
     if image_slot_counts is not None:
         image_slot_counts.update(image_indexes)
     return attachments

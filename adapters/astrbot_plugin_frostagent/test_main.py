@@ -324,6 +324,7 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(payload["content"])
                     self.assertEqual(payload["attachments"], [])
                     self.assertTrue(payload["metadata"]["sticker_only"])
+                    self.assertEqual(payload["image_slot_counts"], {"msg_test": 1})
 
     async def test_disconnection_releases_the_waiting_event(self):
         adapter = object.__new__(FrostAgentAdapter)

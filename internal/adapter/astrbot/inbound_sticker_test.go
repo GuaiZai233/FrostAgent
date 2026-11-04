@@ -1,10 +1,14 @@
 package astrbot
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/gorilla/websocket"
 )
 
@@ -60,7 +64,10 @@ func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T)
 			vision := &mockLLMProvider{}
 			engine := newTestEngine(provider)
 			engine.VisionProvider = vision
-			settings := map[string]string{"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1", "ENABLE_PROACTIVE_REPLY_WHITELIST": "false", "BOT_NAME": "synthetic-bot", "BOT_ALIASES": "", "ENABLE_AT_IN_GROUP_MSG": "false", "ENABLE_REPLY_IN_GROUP_MSG": "false"}
+			if tc.stickerOnly && !tc.explicit && !tc.private {
+				engine.MemoryWriter = memory.NewWriter(nil)
+			}
+			settings := map[string]string{"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1", "ENABLE_PROACTIVE_REPLY_WHITELIST": "false", "BOT_NAME": "synthetic-bot", "BOT_ALIASES": "", "ENABLE_AT_IN_GROUP_MSG": "false", "ENABLE_REPLY_IN_GROUP_MSG": "false", "MEMORY_EXTRACT_BATCH_MIN": "100", "MEMORY_EXTRACT_BATCH_MAX": "100"}
 			if tc.disabled {
 				settings["ENABLE_PROACTIVE_REPLY"] = "false"
 			}
@@ -96,8 +103,15 @@ func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T)
 				event.Attachments = append(event.Attachments, extra)
 			}
 			if tc.unreadable {
-				event.Attachments = nil
-				event.Metadata = map[string]any{"sticker_only": true}
+				// The plugin's download-failure test validates this same wire payload.
+				payload, err := os.ReadFile("testdata/proactive_unreadable_sticker.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				event = Event{}
+				if err := json.Unmarshal(payload, &event); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tc.private {
 				event.MessageType = "private"
@@ -133,9 +147,21 @@ func TestAstrBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T)
 				t.Fatalf("dialogue=%d vision=%d want=%d", calls, visionCalls, want)
 			}
 			if forced {
-				history := engine.SessionManager.GetOrCreate(sessionKey(event)).Snapshot()
+				session := engine.SessionManager.GetOrCreate(sessionKey(event))
+				history := session.Snapshot()
 				if len(history) != 1 || history[0].Role != "user" {
 					t.Fatalf("silence history=%+v", history)
+				}
+				historyText, _ := history[0].Content.(string)
+				if !strings.HasPrefix(historyText, "User Message: [图片]") {
+					t.Fatalf("silent turn lost sticker marker: %s", historyText)
+				}
+				if count := session.PendingTurnCount(); count != 1 {
+					t.Fatalf("pending silent turns=%d want=1", count)
+				}
+				batch, ready := session.EnqueuePendingTurn([]memory.PendingExtractionItem{{MessageID: "synthetic-barrier"}}, 1, 1)
+				if !ready || len(batch.Items) != 3 || batch.Items[0].Message.Content != astrBotVisibleText(event) || batch.Items[1].Message.Content != "[stay_silent]" {
+					t.Fatalf("silent extraction batch=%+v ready=%v", batch, ready)
 				}
 				// The next explicit turn must see no duplicate terminal noop.
 				event.MessageID = "next"
