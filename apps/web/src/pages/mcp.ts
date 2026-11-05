@@ -320,7 +320,7 @@ export function mountMCPPage(container: HTMLElement, api = createInstanceAPI()):
             <button class="btn btn-outline btn-sm" id="mcp-retry-load">重试</button>
             ${
               isAuthError
-                ? `<a href="#/settings/frontend" class="btn btn-primary btn-sm" style="text-decoration: none;">前往设置配置 Token</a>`
+                ? `<a href="#/settings/credentials" class="btn btn-primary btn-sm" style="text-decoration: none;">前往访问凭据</a>`
                 : ''
             }
           </div>

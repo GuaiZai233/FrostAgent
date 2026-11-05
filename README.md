@@ -70,7 +70,7 @@ For the first deployment, copy `docker.env.example` to `.env` and set
 docker compose up -d --build
 ```
 
-Open **http://127.0.0.1:8080/#/settings/frontend**, save the same token under API /
+Open **http://127.0.0.1:8080/#/settings/credentials** (Settings → Access credentials), save the same token under API /
 control-plane credentials, then refresh and create or select an instance. The
 image listens on container `0.0.0.0:8080`; Compose publishes host
 `127.0.0.1:8080` directly, without socat. Management APIs require a valid token

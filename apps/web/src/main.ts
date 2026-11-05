@@ -26,6 +26,7 @@ import { mountStorageSettingsPage } from './pages/storage-settings';
 import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
+import { mountAccessCredentialsPage } from './pages/access-credentials';
 import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
@@ -280,6 +281,7 @@ function initAppShell(): void {
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
   router.register('/settings/storage', '数据库设置', mountStorageSettingsPage);
+  router.register('/settings/credentials', '访问凭据', mountAccessCredentialsPage);
   router.register(
     '/settings/backend',
     'Bot 服务端设置',

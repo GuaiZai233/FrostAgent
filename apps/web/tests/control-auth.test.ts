@@ -131,5 +131,5 @@ await assert.rejects(downloadControlPlaneFile('/api/instances/a1b2c3d4/backup', 
 assert.equal(clicked, false, 'interrupted response was saved as a backup');
 
 globalThis.fetch = async () => new Response('unauthorized', { status: 401 });
-await assert.rejects(instanceRequest(''), /前端设置/);
+await assert.rejects(instanceRequest(''), /设置 → 访问凭据/);
 console.log('PASS: remote management requests and backup downloads carry the token without external disclosure');
