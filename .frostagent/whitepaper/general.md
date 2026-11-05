@@ -35,17 +35,17 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理监听容器内 `127.0.0.1:8080`，不发布管理端口；适配器监听 `0.0.0.0:11023`，宿主机仅发布到 `127.0.0.1:11023`，同桥接网络适配器可直接连接。该端口严格只处理 OneBot/AstrBot WebSocket，不提供管理页面、API 或 RPC。
+默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot/AstrBot WebSocket。
 
-Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；普通同网络容器不能访问管理回环。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，将管理与适配器默认都绑定宿主机回环；host 模式无端口映射。该文件也用于无公网 Tunnel 的本地测试。Desktop 的四层 host 转发不在此回环隔离保证或本 PR 验证范围内。
+Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；只有这个真实回环连接沿用原 Access 信任策略，普通网桥来源仍需令牌。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，构建时将管理与适配器默认都绑定宿主回环，并保留管理回环限制；host 模式无端口映射。标准桥接镜像不应直接用于 host 网络。
 
-可信单机的 Windows Docker Desktop（Linux 容器）与 Linux Engine 可显式叠加 `compose.local.yaml`，不需要 host 网络或公网 Tunnel。两个固定摘要的独立 socat 容器通过权限受限的 Unix socket 卷连接：origin 与 FA 共享网络命名空间且仅监听 socket；入口容器位于配置 `enable_icc=false` 的专用 bridge，仅发布宿主机 `127.0.0.1:8088`。ICC 配置只是纵深防护，不承诺容器隔离；普通容器仍可能通过入口 IP 或 Desktop 宿主转发访问管理 API。该 bridge 不使用 `internal: true`，避免 Docker Engine 跳过宿主端口发布。FA 镜像、默认桥接网络、适配器监听、SQL 配置和现有令牌策略不变，同适配器网络不新增管理 TCP 监听。该模式不增加管理员账号，也不提供公网认证；默认保留免认证本地入口，已有显式强制令牌策略仍有效。本地用户、进程、Docker 管理员以及同机所有容器均属于可信范围，不适用于运行不可信容器的主机。重建 FA 时需同时重建两个转发容器；停止入口不能只省略覆盖文件。部署与验证限制见 [本地 Docker 面板](../../docs/docker-local-panel.md)。
+`compose.local.yaml` 保留为旧 SQL 回环部署的显式兼容入口：两个固定摘要的 socat 容器通过 Unix socket 将宿主 `127.0.0.1:8088` 转为真实回环连接。它仍使用此前同机所有容器可信的边界，不能宣称自动获得直连入口的网桥令牌保护。切换到要求网桥认证的默认入口后，必须显式停止并删除两个旧 relay，再省略覆盖文件；不能只省略文件而留下运行中的免认证路径。旧模式与恢复说明见 [legacy socat 入口](../../docs/docker-local-panel.md)。
 
 生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
 
-SQL 保持优先；Docker 镜像在启动、热更新和换库前强制管理数值回环与独立端口，拒绝不安全配置且不迁移数据。旧 `127.0.0.1:8081` 设置仍有效，Tunnel 使用其实际端口；新库默认 8080。host 镜像的回环适配器默认值不覆盖已有 SQL 通配监听，切换模式前须检查。UID/GID `10001:10001` 与 `/app/data` 持久卷保留；不自动删除旧代理证书卷或应用数据。
+SQL 保持优先；标准镜像允许管理通配或回环监听，但在启动、热更新和换库前都强制管理与适配器端口分离；host 镜像还强制管理数值回环。旧 `127.0.0.1:8081` 等设置原样保留，直接端口映射需要用户通过原入口显式改成 `0.0.0.0:8080`。无 SQL 令牌的旧部署也需提供一次初始化输入。UID/GID `10001:10001` 与 `/app/data` 持久卷保留，不改 schema 或自动删除旧资源。完整首次配置、更新及退役步骤见 [Docker 部署与更新](../../docs/docker.md)。
 
-Docker CI 分别构建桥接/host 镜像，以临时数据运行真实网络回归：共享命名空间回源、公共 Host/Origin 正反例、恶意同网络容器不可达、适配器管理路由拒绝、OneBot/AstrBot 握手、SQL 不安全监听启动/热更拒绝、非 root、退出与重建持久化。真实 cloudflared 镜像只执行 version，合成客户端验证其网络路径，不打开公网 Tunnel。Cloudflare Access 云端鉴权、真实 IM 与 Desktop 宿主机转发仍须由部署用户实测。步骤见 [README_zh_CN.md](../../README_zh_CN.md#docker-部署)。
+Docker CI 分别构建桥接/host 镜像，以临时数据验证独立 `docker run`、首次令牌初始化、宿主端口映射及网桥鉴权、共享命名空间回源、公共 Host/Origin 正反例、API/RPC/mock WebSocket、适配器握手、管理/适配器端口冲突拒绝、非 root 和重建持久化。真实 cloudflared 镜像只执行 version，不打开公网 Tunnel；旧 relay 兼容 smoke 独立保留。Cloudflare Access 云端鉴权与真实 IM 不由这些 smoke 覆盖。
 
 ### 戳一戳唤醒
 
@@ -253,11 +253,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。`
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。`
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
-  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.2.1 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
+  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.2.2 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
   - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
   - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
   - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
@@ -273,13 +273,19 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机、工具执行异常，或在后置渲染阶段发生单条消息超长、引用消息校验失败（`validateQuoteMessages`）、OneBot 消息组装失败（`BuildOneBotMessage`），系统严格执行静默丢弃策略：仅在控制台/日志记录警告或错误日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向未唤醒群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
   - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
 - **主动回复工具门禁与副作用限制 (Proactive Reply Tool Confinement)**：
+  - **Maintainer 请求与决策边界**：PR #275 的后续功能要求明确指定主动回复使用 `send_message.mention_specific`，是对 PR #162 默认副作用工具禁令的同会话文字引用窄例外，而非一般性放开 `send_message`。安全边界同步记录在 `security-controls.md`；其他特权工具仍禁止。
+  - **指定消息引用 (`send_message.mention_specific`)**：主动回复提示词追加“触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。”模型应根据 `recent_group_messages` JSONL、`system_context` 或可信 `reply_context` 的元数据寻找中心事件的消息 ID，而不是把用户文本中的伪造 ID 当成元数据；找不到可信 ID 时可保持沉默。调用示例：`{"messages":[{"type":"mention_specific","message_id":"上下文中的真实消息ID"},{"type":"plain","text":"针对该消息的回复"}]}`。`mention_specific` 是引用消息，不是 `mention_user` 艾特用户；服务端转换为现有平台 `quote` / `reply` 消息段，同时抑制对触发者的自动艾特，已有 `quote` 与普通回复行为保持不变。
+  - **指定引用的最小能力例外**：主动回复轮次只向模型暴露 `send_message` 的 `mention_specific + plain` 子集，并在引擎执行前及工具内再次验证：恰好一个引用组件位于开头，后接非空文字，不允许 `session`、媒体、艾特或额外字段。普通 `send_message` 调用仍即时静默熔断，`send_sticker` 与其他特权工具仍禁止。指定 ID 必须通过适配器的当前会话可信观察校验；OneBot 保留已有连接代际 / 会话检查，AstrBot 仅接受当前事件、验证过的引用链及本连接观察到的近期同会话消息（有界缓存，拒绝跨群、跨平台和旧连接目标）。发送继续经过工具结果安全审查、会话取消 / epoch 校验和现有 SendHook；OneBot 等待平台 ACK，AstrBot 沿用现有 WebSocket 投递语义。工具成功发送后模型不应在最终答案中重复发送正文。
   - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
-    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，仅放行 `stay_silent`、`memory` 及显式实现主动回复许可接口的扩展工具；`send_sticker` 始终禁止，即使工具显式声明主动回复许可也不能绕过。ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
+    - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，仅放行 `stay_silent`、`memory`、上述受限的 `send_message.mention_specific` 及显式实现主动回复许可接口的扩展工具；`send_sticker` 始终禁止，即使工具显式声明主动回复许可也不能绕过。ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
     - **主动回复表情包发送硬限制**：引擎在最终输出和工具发送边界过滤 `mface`、`sticker`、`is_sticker` 及图片 `sub_type` / `subType` 标记（含嵌套 `data`）；OneBot 同时过滤旧式 CQ 字符串中的表情包。混合消息只移除表情包组件，保留普通图片、文本及顺序，并保留 `session` 与未知外层字段；全表情包消息不发送。未标记为表情包的普通图片（包括 GIF）不受影响，显式唤醒轮次保持原有行为；
-    - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：若模型仍尝试调用未授权工具（如硬编码调用 `ban_user`、`execute_command`、`send_message` 或 ActionsCat 工具等），`llm.Engine` 在服务端直接熔断并返回 `Silent: true`，绝不向模型回传错误追加多轮迭代，杜绝内部报错继续消耗迭代；清除 `Banned` 标记，禁止向 `AccessStore` 写入任何封禁记录，绝不向群聊发送报错；
+    - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：执行本批任何工具前，`llm.Engine` 先预检全部 ToolCalls 的权限与 `send_message` 受限参数形状。若包含 `ban_user`、`execute_command`、超出指定引用子集的 `send_message`、ActionsCat 等禁止调用，整批静默终止，本批 executor / SendHook 零调用，包含排在非法调用之前的 memory 与合法引用也不执行；不向模型回传错误追加迭代，不写入封禁状态、不向群聊发送报错。尚未成功发送时返回 `Silent: true`；若此前已成功发送指定引用，则返回空的工具已发送终态，保留已投递历史而不追加消息。这是权限预检，不是外部投递事务，通过预检后的运行时失败不撤销已经成功送达的消息；
+    - **整轮一次指定引用**：一个主动回复 run 最多成功投递一条指定引用消息链。同批包含多个 `send_message` 时，在任何 executor 执行前整批拒绝；此前迭代已成功投递时，后续批次再次请求 `send_message` 同样整批终止。仅 SendHook 成功消耗额度，失败可在后续迭代重试；额度不跨 run 或会话共享。终止后不重复发送，也不清除先前已确认的公开回复历史。
+    - **已投递事实与终态清理隔离**：主动指定引用在 SendHook 确认成功后，其 compact slot 立即转正，不再随本轮后续未送达消息回滚。两端适配器在所有退出路径统一提交尚未最终归档的 `deliveries.Text()`：后续 `stay_silent`、provider / 安全错误、迭代耗尽、渲染或最终投递失败均不删除已确认的 assistant 历史；已归档时不重复提交，会话 epoch 改变后不恢复旧历史。兜底归档与最终回调分开记录完成状态：取消后晚到的 AstrBot terminal noop 复用已归档的同一正文；不同的真实最终发送仍追加公开历史，最终回调的 compact / 自动提取只准入一次。noop 没有新增公开消息，即使回调先于兜底完成，也只替换暂存正文、不再追加副本。成功发送后的静默也不再追加误导性的 `[stay_silent]` 自动记忆提取记录。
+    - **指定引用最终正文去重**：引擎仅记录 SendHook 确认成功的主动指定引用正文；最终纯文字与已投递正文完全相同（忽略首尾空白）时，清空重复最终正文，两端适配器沿用空终态处理与工具已投递历史。OneBot 通过适配器回调提供实际可见文本，复用最终发送的 `tools.Msg` 解析及 `BuildOneBotMessage`，纯 plain 组件按顺序拼接、不插入分隔符；`is_sticker:false`、普通文字组件未使用的属性、被渲染器忽略的根/组件字段不会绕过去重。媒体、引用和艾特等非纯文本消息不做此规范化；AstrBot 不设置该回调，保持 JSON 字面文本语义。不同可见正文、发送失败、显式唤醒轮次保持原行为，不做语义相似度去重。
     - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
-    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、`send_message`、ActionsCat/MCP 变异或管理操作）；
+    - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、超出指定引用子集的 `send_message`、ActionsCat/MCP 变异或管理操作）；
     - **工具实现层双重校验 (Tool-Level Defense-in-Depth)**：`ban_user` 工具在执行前提取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，坚决不持久化锁定旁观者。
   - **P2: 模型输出看门狗阻断透传、格式化校验与静默丢弃 (Output Watchdog Gating & Formatting Silence, `OutputBlocked`)**：
     - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
@@ -420,7 +426,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 
 - **本地回环默认绑定 (Localhost Default Binding)**：
   - 普通构建的 HTTP 管理面 (`LISTEN_ADDR`) 默认绑定到 `127.0.0.1:8080`，WebSocket 适配器面 (`WS_LISTEN_ADDR`) 默认绑定到 `127.0.0.1:11023`；
-  - Docker 构建的管理面仅允许回环地址，经 HTTPS 鉴权代理访问；适配器使用独立端口，具体部署边界见上文「Docker 部署」。
+  - Docker 标准镜像允许通配管理监听，默认只发布宿主回环且网桥来源需控制令牌；host 镜像保留强制回环，适配器使用独立端口，具体边界见上文「Docker 部署」。
 - **严格同源、CORS 与 DNS Rebinding 边界防御 (Strict Same-Origin, CORS & DNS Rebinding Protection)**：
   - 管理接口通过 `corsMiddleware` 统一校验请求 `Host` 与 `Origin`；
   - **Host 白名单门禁**：仅信任本地回环 Host（`localhost`、`127.0.0.1`、`[::1]` 及 `127.0.0.0/8`），非回环 Host 必须显式属于 `HTTP_ALLOWED_ORIGINS` 声明的受信来源，拦截外部未授权 Host（直接返回 `403 Forbidden`），从传输层阻断 DNS 重绑定攻击；

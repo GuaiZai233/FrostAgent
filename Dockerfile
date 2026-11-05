@@ -40,11 +40,13 @@ COPY internal ./internal
 COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
 ARG DOCKER_WS_LISTEN_ADDR=0.0.0.0:11023
+ARG DOCKER_LISTEN_ADDR=0.0.0.0:8080
+ARG DOCKER_MANAGEMENT_LOOPBACK_ONLY=false
 ARG FROSTAGENT_VERSION
 ARG FROSTAGENT_COMMIT
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Version=${FROSTAGENT_VERSION} -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=${FROSTAGENT_COMMIT} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=127.0.0.1:8080 -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=true" \
+    -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Version=${FROSTAGENT_VERSION} -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=${FROSTAGENT_COMMIT} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=${DOCKER_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ContainerManagement=true -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=${DOCKER_MANAGEMENT_LOOPBACK_ONLY}" \
     -o /out/frostagent ./cmd/app
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
@@ -57,6 +59,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
 USER 10001:10001
-EXPOSE 11023
+EXPOSE 8080 11023
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/frostagent"]

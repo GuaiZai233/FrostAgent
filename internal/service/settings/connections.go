@@ -13,7 +13,7 @@ import (
 func (s *Service) validateConnectionChanges(changes map[string]*string) error {
 	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
 		affected := false
-		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN"} {
+		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN", "_WS_INBOUND_TOKEN"} {
 			if _, ok := changes[adapter+suffix]; ok {
 				affected = true
 			}

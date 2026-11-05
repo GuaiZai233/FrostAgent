@@ -12,7 +12,7 @@ const adapters = [
   { id: 'astrbot', name: 'AstrBot', prefix: 'ASTRBOT', upstream: '需要更新配套 FrostAgent 插件，并在 AstrBot 插件中启用 WebSocket 服务端。' },
 ] as const;
 
-const fields = ['ENABLED', 'MODE', 'URL', 'TOKEN'] as const;
+const fields = ['ENABLED', 'MODE', 'URL', 'TOKEN', 'INBOUND_TOKEN'] as const;
 
 export function mountConnectionsPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   const instanceID = instanceState.selected?.id;
@@ -68,6 +68,10 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
                 <button type="button" id="${adapter.id}-copy" class="btn btn-outline btn-sm" aria-label="复制 ${adapter.name} 地址" disabled>${icon('copy', 'w-3.5 h-3.5')}复制</button>
               </div>
               <p class="text-xs text-muted">地址根据实际 WS 监听地址生成；跨主机或 Docker 端口映射时，请按上游可达的地址调整。</p>
+              <label class="text-xs font-medium" for="${adapter.id}-inbound_token">入站认证令牌（可选）</label>
+              <input id="${adapter.id}-inbound_token" class="input font-mono w-full" type="password" autocomplete="off" spellcheck="false" disabled>
+              <p class="text-xs text-muted">配置后，上游每次连接都必须发送 Authorization: Bearer &lt;令牌&gt;。此令牌独立于正向连接令牌和管理令牌，不要放入 URL；非受信网络请使用 wss://。</p>
+              <p class="text-xs text-muted">留空保留专用 WS 端口的无令牌兼容行为，但 Docker 网桥管理端口（默认 8080）拒绝真实适配器连接；配置后管理端口也仅接受正确入站令牌。网页直接对话仍使用管理凭据。</p>
             </div>
             <div id="${adapter.id}-forward" class="flex flex-col gap-2" hidden>
               <p class="text-xs text-muted">${adapter.upstream} FA 将主动连接，断线后自动重连；实例停用时停止连接。</p>
@@ -113,6 +117,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
       el<HTMLElement>(`${adapter.id}-forward`).hidden = !forward;
       el<HTMLInputElement>(`${adapter.id}-url`).disabled = locked || !enabled || !forward;
       el<HTMLInputElement>(`${adapter.id}-token`).disabled = locked || !enabled || !forward;
+      el<HTMLInputElement>(`${adapter.id}-inbound_token`).disabled = locked || !enabled || forward;
       el<HTMLButtonElement>(`${adapter.id}-copy`).disabled = locked || !enabled || forward || !addresses.get(adapter.id);
     }
   }
@@ -123,6 +128,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
       el<HTMLSelectElement>(`${adapter.id}-mode`).value = draft?.get(`${adapter.prefix}_WS_MODE`) || 'reverse';
       el<HTMLInputElement>(`${adapter.id}-url`).value = draft?.get(`${adapter.prefix}_WS_URL`) || '';
       el<HTMLInputElement>(`${adapter.id}-token`).value = draft?.get(`${adapter.prefix}_WS_TOKEN`) || '';
+      el<HTMLInputElement>(`${adapter.id}-inbound_token`).value = draft?.get(`${adapter.prefix}_WS_INBOUND_TOKEN`) || '';
       el<HTMLElement>(`${adapter.id}-address`).textContent = addresses.get(adapter.id) || '';
     }
     updateState();
@@ -142,7 +148,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
         const key = `${adapter.prefix}_WS_${field}`;
         const value = values.find((entry) => entry.key === key)?.value || '';
         const fallback = field === 'MODE' ? 'reverse' : field === 'ENABLED' ? 'true' : '';
-        return { key, value: value || fallback, isSecret: field === 'TOKEN' };
+        return { key, value: value || fallback, isSecret: field === 'TOKEN' || field === 'INBOUND_TOKEN' };
       }));
       for (const adapter of adapters) {
         addresses.set(adapter.id, instanceWebSocketURL(overview.wsListenAddr, instanceID!, adapter.id, window.location.origin));
@@ -185,6 +191,10 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
       }
       if (/[\r\n]/.test(token)) {
         toast.error(`${adapter.name} 访问令牌不能包含换行`);
+        return false;
+      }
+      if (/[^\x21-\x7e]/.test(draft!.get(`${adapter.prefix}_WS_INBOUND_TOKEN`))) {
+        toast.error(`${adapter.name} 入站认证令牌仅支持不含空格的可打印 ASCII 字符`);
         return false;
       }
     }
@@ -251,7 +261,10 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
     unmounted = true;
     controller.abort();
     signal.removeEventListener('abort', abort);
-    for (const adapter of adapters) el<HTMLInputElement>(`${adapter.id}-token`).value = '';
+    for (const adapter of adapters) {
+      el<HTMLInputElement>(`${adapter.id}-token`).value = '';
+      el<HTMLInputElement>(`${adapter.id}-inbound_token`).value = '';
+    }
     draft = null;
   };
 }

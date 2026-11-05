@@ -150,6 +150,34 @@ class ForwardTransportTest(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(connect is None, "install the plugin websockets dependency for transport tests")
 class ReverseTransportTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reverse_credentials_use_header_only_and_survive_reconnect(self):
+        for token in ("", TOKEN):
+            with self.subTest(configured=bool(token)):
+                accepted = asyncio.Queue()
+
+                async def handle(ws):
+                    await accepted.put(ws)
+                    await ws.wait_closed()
+
+                async with serve(handle, "127.0.0.1", 0) as server:
+                    port = server.sockets[0].getsockname()[1]
+                    path = "/instances/a1b2c3d4/ws/astrbot"
+                    client = FrostAgentWSClient(load_settings({
+                        "ws_url": f"ws://127.0.0.1:{port}{path}",
+                        "ws_reverse_token": token, "ws_access_token": "synthetic-other-direction",
+                        "reconnect_interval": 1,
+                    }), FakeContext())
+                    try:
+                        await client.start()
+                        for _ in range(2):
+                            ws = await asyncio.wait_for(accepted.get(), 3)
+                            self.assertEqual(ws.path, path)
+                            self.assertEqual(ws.request_headers.get_all("Authorization"),
+                                             ["Bearer " + token] if token else [])
+                            await ws.close()
+                    finally:
+                        await client.stop()
+
     async def test_default_reverse_round_trip_reconnect_and_stop(self):
         accepted = asyncio.Queue()
         received = asyncio.Queue()

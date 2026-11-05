@@ -1,5 +1,12 @@
 # Local Docker panel
 
+> **Legacy socat deployment.** New deployments use the direct, token-authenticated
+> localhost port 8080 described in [Docker deployment and updates](docker.md).
+> This optional relay still converts connections to trusted loopback; it does
+> not inherit bridge-token protection. Stop and remove both relays when migrating
+> to the direct entry point. Existing SQL tokens win; a deployment without one
+> must supply the one-time bootstrap input before using the new bridge image.
+
 Use `compose.local.yaml` explicitly to open the management panel on a trusted
 single-user Docker host. It uses the normal bridge-network FA image; socat
 is **not** installed in that image. Windows Docker Desktop must use **Linux
@@ -85,7 +92,9 @@ Alternatively, put these two variables in the deployment's existing Compose
 environment file. Continue using the same values/files for subsequent commands.
 The target must be a numeric TCP port from 1 to 65535. This overlay never edits
 SQL, does not override a saved `LISTEN_ADDR`, and only connects to `127.0.0.1`.
-Do not change FA to `0.0.0.0` or disable `ManagementLoopbackOnly`.
+Keep this target aligned with saved SQL settings when retaining the legacy
+relay. The current standard image also supports `0.0.0.0`; direct publication
+uses that default and does not require this overlay.
 
 Existing `MCP_ENFORCE_LOCAL_TOKEN` settings remain enforced. If explicitly enabled
 with a control token, management API calls without the appropriate Bearer token
@@ -111,7 +120,8 @@ Do not attach adapters or other services
 to that bridge. The socket directory belongs to UID/GID 10001 with mode 0700;
 the socket is mode 0600. Only the two non-root, capability-dropped relays mount
 this tmpfs-backed named volume; the ingress mount is read-only. Neither relay
-mounts FA's data or the Docker socket. The default `compose.yaml` is unchanged.
+mounts FA's data or the Docker socket. The overlay leaves the base Compose
+application configuration in place.
 
 This is **local access, not a public authentication gateway**. Do not remove the
 host `127.0.0.1` binding, publish the panel through a reverse proxy/tunnel, enable

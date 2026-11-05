@@ -295,6 +295,19 @@ class LocalPanelGuardTests(unittest.TestCase):
                 call('docker', 'compose', 'port', 'frostagent', '11023'),
             ])
 
+    def test_published_management_port_is_not_an_adapter(self):
+        _, local = topology()
+        local['services']['frostagent']['ports'].insert(0, {
+            'host_ip': '127.0.0.1', 'published': '8080', 'target': 8080, 'protocol': 'tcp'})
+        self.assertEqual(adapter_target_port(local), 1234)
+
+    def test_restoring_adapter_port_keeps_direct_management_ephemeral(self):
+        _, local = topology()
+        local['services']['frostagent']['ports'].insert(0, {
+            'host_ip': '127.0.0.1', 'published': '8080', 'target': 8080, 'protocol': 'tcp'})
+        prepared = prepare_test_config(local, PROJECT, ports={'frostagent': 31002, 'local-panel': 31001})
+        self.assertEqual([port['published'] for port in prepared['services']['frostagent']['ports']], ['0', '31002'])
+
     def test_ambiguous_or_invalid_adapter_ports_are_rejected(self):
         for ports in ([], [{'target': 1234}, {'target': 11023}],
                       [{'target': 11023, 'protocol': 'udp'}], [{'target': 0}]):

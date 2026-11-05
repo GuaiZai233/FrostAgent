@@ -8,20 +8,37 @@ import (
 func TestLoadConnectionConfigDefaultsAndIsolation(t *testing.T) {
 	values := map[string]string{
 		"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://bot.example/ws?route=synthetic",
-		"ONEBOT_WS_TOKEN": "synthetic-client-token",
+		"ONEBOT_WS_TOKEN":         "synthetic-client-token",
+		"ONEBOT_WS_INBOUND_TOKEN": "synthetic-inbound-token",
 	}
 	getenv := func(key string) string { return values[key] }
 	onebot, err := Load(getenv, "ONEBOT")
-	if err != nil || onebot.Disabled || onebot.Mode != Forward || onebot.URL != values["ONEBOT_WS_URL"] || onebot.Token != values["ONEBOT_WS_TOKEN"] {
+	if err != nil || onebot.Disabled || onebot.Mode != Forward || onebot.URL != values["ONEBOT_WS_URL"] || onebot.Token != values["ONEBOT_WS_TOKEN"] || onebot.InboundToken != values["ONEBOT_WS_INBOUND_TOKEN"] {
 		t.Fatalf("forward config did not round trip: %v", err)
 	}
 	astrbot, err := Load(getenv, "ASTRBOT")
-	if err != nil || astrbot.Disabled || astrbot.Mode != Reverse || astrbot.URL != "" || astrbot.Token != "" {
+	if err != nil || astrbot.Disabled || astrbot.Mode != Reverse || astrbot.URL != "" || astrbot.Token != "" || astrbot.InboundToken != "" {
 		t.Fatalf("adapter config leaked: %#v %v", astrbot, err)
 	}
 	defaults, err := Load(nil, "ONEBOT")
 	if err != nil || defaults.Disabled || defaults.Mode != Reverse {
 		t.Fatalf("nil getter defaults: %#v %v", defaults, err)
+	}
+}
+
+func TestInboundTokenValidation(t *testing.T) {
+	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+		for _, invalid := range []string{"synthetic-secret\n", "synthetic-secret\t", "synthetic-secret ", "\x00synthetic-secret", "synthetic-secret\u00a0"} {
+			_, err := Load(func(key string) string {
+				if key == adapter+"_WS_INBOUND_TOKEN" {
+					return invalid
+				}
+				return ""
+			}, adapter)
+			if err == nil || strings.Contains(err.Error(), "synthetic-secret") {
+				t.Fatal("invalid inbound credential accepted or disclosed")
+			}
+		}
 	}
 }
 

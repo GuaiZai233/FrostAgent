@@ -10,6 +10,8 @@
 
 保持插件 `ws_mode=reverse`，从 FA 的“连接”页复制 AstrBot WebSocket 地址到 `ws_url`（例如 `ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot`）。实例 ID 必须替换为实际值；缺失或填写旧版 `/ws/astrbot` 地址时插件保持加载，但暂停连接并提示修正。插件负责断线重连，已有配置无需迁移。
 
+插件 0.2.1 起支持可选 `ws_reverse_token`，与 FA「连接」页的 AstrBot「入站认证令牌」一致。插件在首次连接和重连时通过 `Authorization: Bearer <令牌>` 发送，不要放在 `ws_url` 中。该值独立于正向模式的 `ws_access_token`；仅接受无空白的可打印 ASCII。FA 入站令牌留空时，专用 WS 端口保留旧版兼容行为，但 Docker 网桥镜像的管理端口（默认 8080）拒绝匿名真实连接，使用管理端口时必须配置入站令牌。跨非可信网络请使用 `wss://`。
+
 ### 正向 WebSocket（FA 作为客户端）
 
 1. 插件设置 `ws_mode=forward`，配置监听 IP、端口和可选的 `ws_access_token`，保存后重新加载插件。此模式不需要 `ws_url`。
@@ -26,6 +28,7 @@
 | :--- | :--- | :--- |
 | `ws_mode` | `reverse`：反向（FA 服务端）；`forward`：正向（FA 客户端） | `reverse` |
 | `ws_url` | 仅反向模式必填：FrostAgent 实例专属 WebSocket 地址 | 无 |
+| `ws_reverse_token` | 仅反向模式：与 FA AstrBot 入站认证令牌一致的 Bearer 令牌 | 无 |
 | `ws_listen_host` | 仅正向模式：插件监听 IP，非回环必须配置令牌 | `127.0.0.1` |
 | `ws_listen_port` | 仅正向模式：插件监听端口 | `1244` |
 | `ws_access_token` | 仅正向模式：与 FA AstrBot 连接配置一致的 Bearer 令牌 | 无 |
@@ -52,7 +55,7 @@ AstrBot 自身的唤醒词、命令前缀（如 `/help`）不作为 FrostAgent �
 
 ## 纯表情包主动静默
 
-同步升级后端与插件 0.2.1 后，纯表情包群消息命中主动回复时由后端代行一次 `stay_silent`，不请求对话或视觉模型；插件收到 `suppress_llm: true` 的终态 `noop` 后结束等待，不触发 AstrBot 原生 LLM。
+同步升级后端与插件 0.2.2 后，纯表情包群消息命中主动回复时由后端代行一次 `stay_silent`，不请求对话或视觉模型；插件收到 `suppress_llm: true` 的终态 `noop` 后结束等待，不触发 AstrBot 原生 LLM。
 
 仅依据当前消息的协议标记识别表情包，不把普通图片或 GIF 当成表情包。文字＋表情包、普通图片＋表情包等混合消息仍走原有路径；引用内容不参与判定，显式唤醒与私聊不受影响。插件在下载和附件去重前上报 `metadata.sticker_only`，避免图片下载失败或去重导致误判。旧版插件只在空文本、附件和完整原始图片槽位计数能明确证明是纯表情包时拦截，不能保证所有情况都能识别，请同步更新。
 

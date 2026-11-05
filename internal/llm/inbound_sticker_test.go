@@ -22,6 +22,14 @@ func TestProactiveInboundStickerBackendSilence(t *testing.T) {
 		result := engine.RunMessagesWithContext(messages, RunContext{
 			Turn: turn, SessionID: "synthetic-group", Epoch: turn.Epoch(), Proactive: true, ProactiveStickerOnly: true, Mock: mock,
 			SendHook: func(string) error { t.Fatal("backend silence delivered a message"); return nil },
+			CanReplyToMessage: func(string) bool {
+				t.Fatal("backend silence selected a reply target")
+				return false
+			},
+			FinalReplyText: func(string) (string, bool) {
+				t.Fatal("backend silence rendered a final reply")
+				return "", false
+			},
 		})
 		turn.Done()
 		if !result.Silent || !result.StaySilentCalled || result.SilenceReason != "stay_silent" || result.Error != nil || result.Content != "" || result.Usage != (core.Usage{}) {

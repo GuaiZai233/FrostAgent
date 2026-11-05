@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
 	"github.com/GuaiZai233/FrostAgent/internal/frontend"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -26,6 +27,12 @@ func run() error {
 	defer gateway.Close()
 	manager, _, generation := gateway.snapshot()
 	global := manager.GlobalConfig()
+	gateway.prepare = func(next *instance.Manager) error {
+		return initializeDockerControlToken(next.GlobalConfig(), os.Getenv)
+	}
+	if err := gateway.prepare(manager); err != nil {
+		return err
+	}
 	mux := managementMux(gateway)
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
@@ -39,8 +46,8 @@ func run() error {
 		if wsListen == "" {
 			wsListen = instanceconfig.DefaultWSListenAddr
 		}
-		if instanceconfig.ManagementLoopbackOnly == "true" {
-			if err := instanceconfig.ValidateListenerIsolation(listen, wsListen); err != nil {
+		if instanceconfig.ContainerManagement == "true" || instanceconfig.ManagementLoopbackOnly == "true" {
+			if err := instanceconfig.ValidateContainerListeners(listen, wsListen); err != nil {
 				return err
 			}
 		}
@@ -150,7 +157,15 @@ func managementMux(manager http.Handler) http.Handler {
 		mux.Handle("/api/security/", securityHandlerFor(registry))
 	}
 	mux.Handle("/api/instances/", manager)
-	mux.Handle("/instances/", manager)
+	mux.Handle("/instances/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAdapterWebSocketPath(r.URL.Path) && !directchat.IsRequest(r) && instanceconfig.ContainerManagement == "true" && instanceconfig.ManagementLoopbackOnly != "true" {
+			// Bridge images expose management independently of WS_LISTEN_ADDR.
+			// Apply this policy at the listener boundary, not inside the shared
+			// gateway, which also dispatches the dedicated adapter listener.
+			r = wsauth.RequireToken(r)
+		}
+		manager.ServeHTTP(w, r)
+	}))
 	mux.Handle("/api/actionscat/", manager)
 	mux.Handle("/api/v1/actionscat/", manager)
 	mux.Handle("/api/v1/messages/send", manager)
@@ -177,9 +192,10 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 			return
 		}
 		peer := r.RemoteAddr
-		// Container builds isolate this listener on loopback shared with the connector.
-		// Authentication belongs to the deployment's Cloudflare Access policy.
-		trustedLocalConnector := instanceconfig.ManagementLoopbackOnly == "true" && isLoopbackHost(peer)
+		// Only an actual loopback connector retains the deployment's Access policy.
+		// Docker bridge and host-published requests always require a control token.
+		container := instanceconfig.ContainerManagement == "true" || instanceconfig.ManagementLoopbackOnly == "true"
+		trustedLocalConnector := container && isLoopbackHost(peer)
 		if !trustedLocalConnector && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
 			peer = "remote-management"
 		}
@@ -232,7 +248,7 @@ func instanceWebSocketHandler(next http.Handler) http.Handler {
 			return
 		}
 		// Mock connections belong to Direct Chat on the management listener, not
-		// the unauthenticated adapter ingress, even when they omit Origin.
+		// the adapter ingress, even when they omit Origin.
 		if directchat.IsRequest(r) {
 			http.Error(w, "mock connections require the management listener", http.StatusForbidden)
 			return

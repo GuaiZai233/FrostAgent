@@ -17,8 +17,8 @@ type Tool struct {
 	disabledError  error
 	// configured gates model discovery; stale calls retain executor-specific feedback.
 	configured func() bool
-	// proactiveAllowed marks side-effect-free tools that may run during an
-	// unaddressed proactive turn.
+	// proactiveAllowed marks tools permitted during an unaddressed proactive
+	// turn. send_message additionally requires the engine's narrow reply gate.
 	proactiveAllowed bool
 }
 
