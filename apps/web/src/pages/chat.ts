@@ -1,6 +1,7 @@
 import { createInstanceAPI } from '../api/client';
 import { directChatWebSocket } from '../api/control-auth';
 import { instanceState } from '../instance-state';
+import { disableInstanceControls } from '../components/instance-required';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
@@ -260,6 +261,13 @@ function createChatPage(container: HTMLElement): () => void {
       </div>
     </div>
   `;
+
+  if (!instanceId) {
+    container.querySelector<HTMLElement>('#chat-empty-state')!.textContent = '暂无对话，创建或选择实例后即可开始。';
+    container.querySelector<HTMLElement>('#chat-ws-endpoint-text')!.textContent = '端点：—';
+    disableInstanceControls(container);
+    return () => { isUnmounted = true; };
+  }
 
   // Elements
   const statusBadge = container.querySelector<HTMLElement>('#connection-status-badge')!;

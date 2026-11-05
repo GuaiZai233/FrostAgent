@@ -6,6 +6,8 @@ import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { renderOverviewTools } from './overview-tools';
+import { mountVersionPanel } from '../components/version-panel';
+import { mountInstanceRequired } from '../components/instance-required';
 import '../styles/overview.css';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
@@ -17,6 +19,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
+      <div id="overview-version"></div>
       <div id="overview-loading" class="flex items-center gap-2 text-xs text-muted">
         <span class="spinner"></span>
         <span>加载概览数据...</span>
@@ -25,6 +28,15 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       <div id="overview-content" style="display: none;" class="flex flex-col gap-5"></div>
     </div>
   `;
+
+  const cleanupVersion = mountVersionPanel(container.querySelector<HTMLElement>('#overview-version')!);
+  if (!instanceState.selected) {
+    container.querySelector<HTMLElement>('#overview-loading')!.style.display = 'none';
+    const content = container.querySelector<HTMLElement>('#overview-content')!;
+    content.style.display = 'flex';
+    mountInstanceRequired(content);
+    return cleanupVersion;
+  }
 
   const loadingEl = container.querySelector<HTMLElement>('#overview-loading')!;
   const errorEl = container.querySelector<HTMLElement>('#overview-error')!;
@@ -188,6 +200,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    cleanupVersion();
     closeToolsDialog?.();
     if (timerId !== null) {
       clearInterval(timerId);

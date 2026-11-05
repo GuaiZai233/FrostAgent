@@ -106,8 +106,14 @@ assert.match(
 
 assert.doesNotMatch(overview, /instanceWebSocketURL|copyToClipboard|data-copy-url/, 'connection addresses belong on the connection page');
 assert.match(main, /path: '\/overview'[^\n]+\n\s*\{ path: '\/connections', label: '连接'/, 'connection navigation must immediately follow overview');
-assert.match(main, /const guardedPaths = \[\s*'\/overview',\s*'\/connections'/, 'connections must require a selected instance');
-assert.match(main, /const mounts = \[\s*mountOverviewPage,\s*mountConnectionsPage/);
+const guardedPaths = main.match(/const guardedPaths = \[([\s\S]*?)\];/)?.[1] || '';
+for (const path of ['/connections', '/dialogue', '/mcp', '/actionscat', '/settings/backend', '/settings/behavior', '/settings/backup', '/settings/commands']) {
+  assert.ok(guardedPaths.includes(`'${path}'`), `${path} must require a selected instance`);
+}
+for (const path of ['/overview', '/prompt', '/sessions', '/memory', '/stickers', '/chat']) {
+  assert.ok(!guardedPaths.includes(`'${path}'`), `${path} must retain its framework without an instance`);
+}
+assert.match(overview, /mountInstanceRequired\(content\)/, 'overview must keep instance selection guidance alongside the version panel');
 assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
 assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
 assert.match(connections, /id="\$\{adapter.id\}-enabled" type="checkbox"/, 'each adapter needs its own enable checkbox');

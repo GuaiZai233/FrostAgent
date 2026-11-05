@@ -22,6 +22,7 @@ let deferOverview = false;
 let overviewLoads = 0;
 globalThis.fetch = async (input) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
+  if (path === '/api/version') return Response.json({ display: 'synthetic-version', version: '', commit: '' });
   if (path === '/api/instances') return Response.json({ instances: [instance, source], next_name: 'Example' });
   assert.ok(path.endsWith('/GetOverview'), path);
   overviewLoads++;

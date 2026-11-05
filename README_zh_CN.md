@@ -57,6 +57,12 @@ go run ./cmd/app
 
 打开 `http://localhost:8080`。首次启动不创建实例，需手动创建。
 
+没有实例时，会话、记忆、表情包与直接对话页面保留空框架，不发送实例请求；
+实例配置页仍提示选择实例。概览保留实例提示，版本卡片与「检查更新」独立可用：
+Stable 查看 GitHub 仓库最新正式 Release 的 tag，Latest 查看默认分支最新提交的完整
+hash。仅手动查询，不自动升级；没有 Release、查询失败或缺少构建元数据会明确提示。
+比较和缓存规则见[构建版本信息](.github/build-version.md)。
+
 Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再执行 `sudo setcap cap_net_bind_service=+ep ./bin/app`，使用 `./bin/app` 代替 `go run ./cmd/app` 启动。重新构建后需重新授权；Docker 镜像已配置此能力，仍以非 root 用户运行。
 
 ## Docker 部署
