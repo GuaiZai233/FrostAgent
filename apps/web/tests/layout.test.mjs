@@ -23,6 +23,7 @@ const connections = await readFile(
 const versionControl = await readFile(new URL('../src/components/version-panel.ts', import.meta.url), 'utf8');
 assert.match(versionControl, /version.textContent = build.display \|\| 'unknown'/, 'version control must render the backend build identity without adding a version prefix');
 assert.doesNotMatch(versionControl, /仅查询 GitHub 仓库|检查结果缓存/, 'update dialog must not include the removed explanatory copy');
+assert.doesNotMatch(versionControl, /icon\('refresh|animate-spin|spinner/, 'update control must not use a circular refresh or spinning icon');
 const chat = await readFile(
   new URL('../src/pages/chat.ts', import.meta.url),
   'utf8',

@@ -96,6 +96,11 @@ try {
   const versionBadge = root.querySelector('#build-version')!.parentElement!;
   assert.equal(versionBadge.nextElementSibling?.id, 'check-updates', 'check button must sit immediately to the right of the version badge');
   assert.ok(versionBadge.querySelector('svg'), 'version badge must retain its code icon');
+  const checkButton = root.querySelector<HTMLButtonElement>('#check-updates')!;
+  assert.equal(checkButton.textContent?.trim(), '检查更新', 'update button must have a visible text label');
+  assert.ok(checkButton.classList.contains('btn-outline'), 'update button must have its own outlined box');
+  assert.ok(!checkButton.classList.contains('btn-icon-sm'), 'update button must not be an icon-only control');
+  assert.ok(checkButton.querySelector('svg'), 'update button must retain a static update icon');
   assert.equal(root.querySelector('#overview-version .card'), null, 'version must not have a standalone card');
   assert.equal(root.querySelector('#update-results'), null, 'results must not be embedded in the overview');
   assert.doesNotMatch(root.textContent || '', /仅查询 GitHub 仓库|检查结果缓存/);

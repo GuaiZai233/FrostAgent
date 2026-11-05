@@ -13,7 +13,7 @@ export function mountVersionControl(container: HTMLElement): () => void {
         ${icon('code', 'w-3 h-3')}
         <span id="build-version" role="status">…</span>
       </span>
-      <button type="button" class="btn btn-ghost btn-icon-sm" id="check-updates" aria-label="检查更新" title="检查更新" aria-haspopup="dialog">${icon('refresh', 'w-3.5 h-3.5')}</button>
+      <button type="button" class="btn btn-outline btn-sm" id="check-updates" aria-haspopup="dialog">${icon('download', 'w-3.5 h-3.5')}检查更新</button>
     </div>`;
   const version = container.querySelector<HTMLElement>('#build-version')!;
   const button = container.querySelector<HTMLButtonElement>('#check-updates')!;
