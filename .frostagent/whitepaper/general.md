@@ -33,7 +33,7 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 ### Docker 部署
 
-管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
+公网入口认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担；默认桥接入口同时要求管理控制令牌。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证组件。应用系统 CA 信任包仅用于出站 TLS。
 
 默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot/AstrBot WebSocket。
 
@@ -428,9 +428,9 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
   - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
-  - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
+  - **当前真实边界**：当前版本核心安全边界为「默认回环绑定或发布 + 管理控制令牌 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；非回环管理请求（包括 Docker 默认桥接入口）要求有效控制令牌，可信回环连接默认免令牌，开启 `MCP_ENFORCE_LOCAL_TOKEN` 后也需认证；当前未提供应用账号或密码登录系统；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
-  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；远程管理使用前置 Cloudflare Access，并按部署说明隔离回源监听，不把 Host/Origin 检查作为用户认证。
+  - **网络暴露风险警示**：若显式将 `LISTEN_ADDR` 或 Docker 发布地址开放至局域网或公网，须配置管理控制令牌与相应网络访问限制；公网管理使用前置 Cloudflare Access，并按部署说明配置回源与允许来源，不把 Host/Origin 检查或 Cloudflare 请求头作为用户认证。
 - **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
   - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：

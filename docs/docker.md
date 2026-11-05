@@ -10,6 +10,11 @@
 本地 Host、私有来源 IP、Cloudflare/代理请求头都不能替代令牌认证。
 Host/Origin 检查仍然生效，适配器端口 `11023` 仍不提供管理路由。
 
+OneBot / AstrBot 反向连接使用当前实例的 `ONEBOT_WS_INBOUND_TOKEN` /
+`ASTRBOT_WS_INBOUND_TOKEN`，与管理令牌、正向连接令牌各自独立。配置后，上游须通过
+`Authorization: Bearer <令牌>` 发送相同值，不放入 URL。专用 `11023` 端口未配置时
+保留免令牌兼容；默认桥接管理端口上的真实适配器连接必须配置并提供入站令牌。
+
 1. 复制 `docker.env.example` 为部署目录的 `.env`，保留已有环境文件内容。
 2. 将 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 设置为随机令牌：32–4096 个可打印
    ASCII 字符，无内部空格。可用 `openssl rand -hex 32` 生成并妥善保存。
