@@ -307,6 +307,38 @@ class QuoteLookupRoutingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unreadable_group_sticker_reaches_backend_silence(self):
+        for group_id, forward_all, forwarded in (
+            ("synthetic-group", True, True),
+            ("synthetic-group", False, False),
+            ("", True, False),
+        ):
+            with self.subTest(group_id=group_id, forward_all=forward_all):
+                adapter = object.__new__(FrostAgentAdapter)
+                adapter._configuration_error = None
+                adapter.settings = SimpleNamespace(
+                    forward_all_group_messages=forward_all,
+                    http_base_url="http://frostagent:8080",
+                )
+                adapter.client = FakeClient([{"action": "noop", "suppress_llm": True}])
+                event = FakeEvent(group_id=group_id)
+                event.message_obj.raw_message = {"message": [
+                    {"type": "mface", "data": {"url": "https://example.invalid/sticker.gif"}},
+                ]}
+                with patch.object(adapter_module, "download_sticker_as_base64", side_effect=RuntimeError("synthetic download failure")):
+                    results = [result async for result in adapter.forward_to_frostagent(event)]
+                self.assertEqual(results, [])
+                self.assertEqual(event.sent_chains, [])
+                self.assertIsNone(adapter.client.queue)
+                self.assertEqual(len(adapter.client.sent_events), int(forwarded))
+                self.assertEqual(event.should_call_llm_calls, [True] if forwarded else [])
+                if forwarded:
+                    payload = adapter.client.sent_events[0]
+                    self.assertFalse(payload["content"])
+                    self.assertEqual(payload["attachments"], [])
+                    self.assertTrue(payload["metadata"]["sticker_only"])
+                    self.assertEqual(payload["image_slot_counts"], {"msg_test": 1})
+
     async def test_disconnection_releases_the_waiting_event(self):
         adapter = object.__new__(FrostAgentAdapter)
         adapter._configuration_error = None

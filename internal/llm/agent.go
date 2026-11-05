@@ -331,6 +331,9 @@ func (e *Engine) RunMessagesWithContext(
 		ctx = e.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
 	}
 	ctx = withRunContext(ctx, runContext)
+	if runContext.Proactive && runContext.ProactiveStickerOnly {
+		return e.staySilentForInboundSticker(ctx, messages, runContext)
+	}
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue(), time.Now())

@@ -38,6 +38,7 @@ type Event struct {
 	Metadata               map[string]any    `json:"metadata,omitempty"`             // 扩展元数据
 	StickerDeliveryReceipt bool              `json:"sticker_delivery_receipt,omitempty"`
 	botLoopSoft            bool
+	proactiveStickerOnly   bool
 }
 
 // ActionMessage represents one ordered component in an outbound AstrBot message chain.

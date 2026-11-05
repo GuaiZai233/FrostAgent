@@ -641,6 +641,7 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 				event.Metadata = make(map[string]any)
 			}
 			event.Metadata["_frostagent_proactive_reply"] = true
+			event.proactiveStickerOnly = isStickerOnlyEvent(*event)
 			return true
 		}
 		return false
@@ -867,7 +868,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	// Quote lookups occur only after ingress security and reply routing.
-	quoteChain, allowDirectFallback := conn.lookupQuoteChain(event)
+	forceStickerSilence := isProactiveReply(&event) && event.proactiveStickerOnly
+	var quoteChain []astrBotQuoteNode
+	var allowDirectFallback bool
+	if !forceStickerSilence {
+		quoteChain, allowDirectFallback = conn.lookupQuoteChain(event)
+	}
 	// Only IDs validated by parseAstrBotQuote may be inspected by tools. The
 	// direct fallback is deliberately excluded: it lacks group/peer validation.
 	trustedQuoteIDs := trustedQuotedMessageIDs(quoteChain, event)
@@ -903,7 +909,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	if (len(imageSegments) > 0 || quoteHasImage) && engine != nil {
-		visionEnabled := engine.VisionProvider != nil
+		visionEnabled := engine.VisionProvider != nil && !forceStickerSilence
 		if visionEnabled && routeSnapshot != nil {
 			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 		}
@@ -1388,11 +1394,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return loadObservedImageFromEvent(ctx, event, trustedQuoteIDs, messageID, imageIndex)
 			},
-			Billing:       billingState,
-			RouteScope:    routeScope,
-			RouteSnapshot: routeSnapshot,
-			Mock:          conn.mock,
-			Proactive:     isProactiveReply(&event),
+			Billing:              billingState,
+			RouteScope:           routeScope,
+			RouteSnapshot:        routeSnapshot,
+			Mock:                 conn.mock,
+			Proactive:            isProactiveReply(&event),
+			ProactiveStickerOnly: event.proactiveStickerOnly,
 		})
 		replyText = runResult.Content
 		if turn.Interrupted() {

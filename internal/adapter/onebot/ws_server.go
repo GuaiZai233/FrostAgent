@@ -272,7 +272,10 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if !wakeSignals.Any() {
 			return
 		}
-		replyContext := conn.lookupReplyContext(event)
+		var replyContext resolvedReplyContext
+		if !wakeSignals.Proactive || !wakeSignals.StickerOnly {
+			replyContext = conn.lookupReplyContext(event)
+		}
 		conn.observeResolvedReply(event, replyContext)
 		if engine != nil && engine.SessionManager != nil {
 			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
@@ -367,7 +370,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			break
 		}
 	}
-	visionEnabled := engine != nil && engine.VisionProvider != nil
+	forceStickerSilence := wakeSignals.Proactive && wakeSignals.StickerOnly
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
@@ -402,7 +406,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	if currentHasImage {
+	// Backend silence keeps the original marker for history and memory buffering.
+	if currentHasImage && !forceStickerSilence {
 		if !visionEnabled {
 			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
 		} else {
@@ -984,12 +989,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return conn.loadObservedImage(ctx, event, replyContext, segments, messageID, imageIndex)
 			},
-			Billing:        billingState,
-			RouteScope:     routeScope,
-			RouteSnapshot:  routeSnapshot,
-			SecurityNotice: notice,
-			Mock:           conn.mock,
-			Proactive:      wakeSignals.Proactive,
+			Billing:              billingState,
+			RouteScope:           routeScope,
+			RouteSnapshot:        routeSnapshot,
+			SecurityNotice:       notice,
+			Mock:                 conn.mock,
+			Proactive:            wakeSignals.Proactive,
+			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
 		replyText = runResult.Content
 		if wakeSignals.Proactive {
