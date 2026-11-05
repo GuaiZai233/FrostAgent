@@ -40,6 +40,15 @@ try {
   assert.equal(root.querySelector<HTMLElement>('#overview-error')!.style.display, 'none', 'merged overview must load without stale event handlers');
   assert.equal(root.querySelectorAll('#overview-tools-strip article').length, 10);
   assert.equal(root.querySelectorAll('#overview-tools-strip img').length, 0, 'tool descriptions must remain escaped');
+  const versionControl = root.querySelector<HTMLButtonElement>('#check-updates')!;
+  assert.equal(root.querySelectorAll('#build-version').length, 1, 'header must have a single version badge');
+  assert.equal(root.querySelector('#build-version')!.textContent, 'synthetic-version');
+  assert.ok(root.querySelector('header #check-updates'), 'updates must be integrated in the existing header');
+  versionControl.focus();
+  tick();
+  await flush();
+  assert.equal(root.querySelector('#check-updates'), versionControl, 'polling must not replace the version control');
+  assert.equal(document.activeElement, versionControl, 'polling must preserve keyboard focus on update control');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
   rail.scrollLeft = 512;
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.focus();

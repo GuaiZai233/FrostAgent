@@ -1,61 +1,73 @@
 import { fetchBuildVersion, fetchUpdateCheck, type BuildVersion, type UpdateChannel } from '../api/update-check';
 import { escapeHtml } from '../utils/formatters';
 import { icon } from './icons';
+import { openDialog } from './dialog';
 
-export function mountVersionPanel(container: HTMLElement): () => void {
+export function mountVersionControl(container: HTMLElement): () => void {
   const lifecycle = new AbortController();
-  let checking = false;
   let versionRequest = 0;
+  let closeDialog: (() => void) | undefined;
   container.innerHTML = `
-    <section class="card p-4 flex flex-col gap-3" aria-label="版本与更新">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
-        <div class="min-w-0">
-          <h2 class="text-sm font-semibold">FrostAgent 版本</h2>
-          <p id="build-version" class="text-xs text-muted mt-1 break-all" role="status">正在读取版本…</p>
-        </div>
-        <button type="button" class="btn btn-outline btn-sm" id="check-updates">${icon('refresh', 'w-3.5 h-3.5')}检查更新</button>
-      </div>
-      <p class="text-xs text-muted">仅查询 GitHub 仓库：Stable 为最新正式 Release tag，Latest 为默认分支最新提交。不会自动升级；检查结果缓存 1 分钟。</p>
-      <div id="update-results" class="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-live="polite"></div>
-      <p id="update-checked-at" class="text-xs text-muted"></p>
-    </section>`;
+    <div class="flex items-center gap-1.5" aria-label="版本与更新">
+      <span class="badge badge-outline">
+        ${icon('code', 'w-3 h-3')}
+        <span id="build-version" role="status">…</span>
+      </span>
+      <button type="button" class="btn btn-ghost btn-icon-sm" id="check-updates" aria-label="检查更新" title="检查更新" aria-haspopup="dialog">${icon('refresh', 'w-3.5 h-3.5')}</button>
+    </div>`;
   const version = container.querySelector<HTMLElement>('#build-version')!;
   const button = container.querySelector<HTMLButtonElement>('#check-updates')!;
-  const results = container.querySelector<HTMLElement>('#update-results')!;
-  const checkedAt = container.querySelector<HTMLElement>('#update-checked-at')!;
 
   function showVersion(build: BuildVersion) {
-    version.textContent = `当前：${build.display || 'unknown'}${build.commit ? ` · ${build.commit}` : ''}`;
+    version.textContent = build.display || 'unknown';
+    version.title = build.commit || build.display || 'unknown';
   }
 
   const initialRequest = ++versionRequest;
   void fetchBuildVersion(lifecycle.signal).then((build) => {
     if (!lifecycle.signal.aborted && initialRequest === versionRequest) showVersion(build);
   }).catch((error) => {
-    if (!lifecycle.signal.aborted && initialRequest === versionRequest) version.textContent = String(error);
-  });
-
-  button.addEventListener('click', async () => {
-    if (checking || lifecycle.signal.aborted) return;
-    checking = true;
-    button.disabled = true;
-    results.textContent = '正在检查 GitHub…';
-    checkedAt.textContent = '';
-    try {
-      const result = await fetchUpdateCheck(lifecycle.signal);
-      if (lifecycle.signal.aborted) return;
-      versionRequest++;
-      showVersion(result.current);
-      results.innerHTML = renderChannel('Stable', result.stable) + renderChannel('Latest', result.latest);
-      checkedAt.textContent = `检查时间：${new Date(result.checked_at).toLocaleString()}`;
-    } catch (error) {
-      if (!lifecycle.signal.aborted) results.textContent = String(error);
-    } finally {
-      checking = false;
-      if (!lifecycle.signal.aborted) button.disabled = false;
+    if (!lifecycle.signal.aborted && initialRequest === versionRequest) {
+      version.textContent = 'unknown';
+      version.title = String(error);
     }
   });
-  return () => lifecycle.abort();
+
+  button.addEventListener('click', () => {
+    if (closeDialog || lifecycle.signal.aborted) return;
+    const request = new AbortController();
+    void openDialog({
+      title: '检查更新',
+      maxWidth: '40rem',
+      bodyHtml: `<div class="flex flex-col gap-3">
+        <p id="update-current-version" class="text-xs text-muted break-all">当前：${escapeHtml(version.textContent || 'unknown')}</p>
+        <div id="update-results" class="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-live="polite">正在检查 GitHub…</div>
+        <p id="update-checked-at" class="text-xs text-muted"></p>
+      </div>`,
+      onMount(dialog, close) {
+        closeDialog = close;
+        const results = dialog.querySelector<HTMLElement>('#update-results')!;
+        void fetchUpdateCheck(request.signal).then((result) => {
+          if (request.signal.aborted) return;
+          versionRequest++;
+          showVersion(result.current);
+          dialog.querySelector<HTMLElement>('#update-current-version')!.textContent = `当前：${result.current.display || 'unknown'}${result.current.commit ? ` · ${result.current.commit}` : ''}`;
+          results.innerHTML = renderChannel('Stable', result.stable) + renderChannel('Latest', result.latest);
+          dialog.querySelector<HTMLElement>('#update-checked-at')!.textContent = `检查时间：${new Date(result.checked_at).toLocaleString()}`;
+        }).catch((error) => {
+          if (!request.signal.aborted) results.textContent = String(error);
+        });
+      },
+      onClose() {
+        request.abort();
+        closeDialog = undefined;
+      },
+    });
+  });
+  return () => {
+    lifecycle.abort();
+    closeDialog?.();
+  };
 }
 
 function renderChannel(name: 'Stable' | 'Latest', channel: UpdateChannel): string {

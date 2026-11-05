@@ -6,7 +6,7 @@ import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { renderOverviewTools } from './overview-tools';
-import { mountVersionPanel } from '../components/version-panel';
+import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
 import '../styles/overview.css';
 
@@ -19,7 +19,16 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
   container.innerHTML = `
     <div class="page-container fade-in">
-      <div id="overview-version"></div>
+      <header class="flex flex-col gap-2 pb-1">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h1 id="overview-greeting" class="page-title text-xl font-bold" hidden></h1>
+          <div class="flex flex-wrap gap-1.5 items-center">
+            <span id="overview-runtime" class="contents"></span>
+            <div id="overview-version"></div>
+          </div>
+        </div>
+        <p id="overview-instance" class="text-xs text-muted" hidden></p>
+      </header>
       <div id="overview-loading" class="flex items-center gap-2 text-xs text-muted">
         <span class="spinner"></span>
         <span>加载概览数据...</span>
@@ -29,7 +38,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     </div>
   `;
 
-  const cleanupVersion = mountVersionPanel(container.querySelector<HTMLElement>('#overview-version')!);
+  const cleanupVersion = mountVersionControl(container.querySelector<HTMLElement>('#overview-version')!);
   if (!instanceState.selected) {
     container.querySelector<HTMLElement>('#overview-loading')!.style.display = 'none';
     const content = container.querySelector<HTMLElement>('#overview-content')!;
@@ -68,36 +77,27 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           : 'badge-outline';
 
       const botName = data.botName || 'FrostAgent';
-      const version = data.version || '-';
+      const greeting = container.querySelector<HTMLElement>('#overview-greeting')!;
+      greeting.textContent = `你好👋！我是 ${botName}`;
+      greeting.hidden = false;
+      const instanceLabel = container.querySelector<HTMLElement>('#overview-instance')!;
+      instanceLabel.innerHTML = `实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span>`;
+      instanceLabel.hidden = false;
+      container.querySelector<HTMLElement>('#overview-runtime')!.innerHTML = `
+        <span class="badge ${statusBadgeClass}">
+          ${icon('activity', 'w-3 h-3')}
+          ${escapeHtml(formatStatus(data.status))}
+        </span>
+        <span class="badge badge-outline">
+          ${icon('clock', 'w-3 h-3')}
+          ${escapeHtml(formatUptime(data.uptimeSeconds))}
+        </span>`;
 
       const toolsScroll = contentEl.querySelector<HTMLElement>('#overview-tools-strip')?.scrollLeft || 0;
       const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
       const focusedToolID = toolsHadFocus ? (document.activeElement as HTMLElement)?.id : '';
 
       contentEl.innerHTML = `
-        <header class="flex flex-col gap-2 pb-1">
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <h1 class="page-title text-xl font-bold">
-              你好👋！我是 ${escapeHtml(botName)}
-            </h1>
-            <div class="flex flex-wrap gap-1.5 items-center">
-              <span class="badge ${statusBadgeClass}">
-                ${icon('activity', 'w-3 h-3')}
-                ${escapeHtml(formatStatus(data.status))}
-              </span>
-              <span class="badge badge-outline">
-                ${icon('clock', 'w-3 h-3')}
-                ${escapeHtml(formatUptime(data.uptimeSeconds))}
-              </span>
-              <span class="badge badge-outline">
-                ${icon('code', 'w-3 h-3')}
-                ${escapeHtml(version)}
-              </span>
-            </div>
-          </div>
-          <p class="text-xs text-muted">实例：${escapeHtml(instance?.name || '-')} <span class="font-mono">(${escapeHtml(instance?.id || '-')})</span></p>
-        </header>
-
         <!-- KPI Summary Cards -->
         <section class="grid grid-cols-1 instance-kpis gap-3.5" aria-label="Bot statistics">
           <article class="card p-3.5 flex items-center gap-3.5">
