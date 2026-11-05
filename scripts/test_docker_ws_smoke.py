@@ -3,10 +3,27 @@
 import unittest
 from unittest.mock import Mock
 
-from docker_ws_smoke import check_adapter_websocket, check_management_websocket
+from docker_ws_smoke import check_adapter_websocket, check_management_websocket, check_real_websocket_auth
 
 
 class WebSocketSmokeTests(unittest.TestCase):
+    def test_real_inbound_auth_matrix_and_required_unset_policy(self):
+        for token, required, statuses in ((None, False, [101]), (None, True, [401, 401, 401]),
+                                          ('synthetic-inbound', False, [401, 401, 401, 101])):
+            read = Mock(side_effect=[{'status': status} for status in statuses])
+            check_real_websocket_auth(read, '/ws', token, required)
+            self.assertEqual(read.call_count, len(statuses))
+            for call in read.call_args_list:
+                self.assertEqual(call.args, ('/ws',))
+                self.assertNotIn('Origin', call.kwargs['headers'])
+            if token:
+                self.assertEqual(read.call_args.kwargs['headers']['Authorization'], 'Bearer ' + token)
+            for position, status in enumerate(statuses):
+                broken = statuses.copy()
+                broken[position] = 101 if status == 401 else 401
+                with self.subTest(position=position, required=required), self.assertRaises(AssertionError):
+                    check_real_websocket_auth(Mock(side_effect=[{'status': code} for code in broken]), '/ws', token, required)
+
     def test_adapter_accepts_real_connection_and_rejects_both_mock_markers(self):
         for adapter in ('onebot', 'astrbot'):
             endpoint = '/instances/synthetic-instance/ws/' + adapter

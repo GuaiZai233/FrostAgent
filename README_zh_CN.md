@@ -61,23 +61,22 @@ Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再�
 
 ## Docker 部署
 
+首次部署先复制 `docker.env.example` 为 `.env`，将其中
+`FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 填为至少 32 位的随机 ASCII 令牌，再启动：
+
 ```
 docker compose up -d --build
 ```
 
-默认部署不会发布管理面板。Windows Docker Desktop（Linux 容器）或 Linux
-宿主机需要本地访问时，显式加入可选配置：
+打开 **http://127.0.0.1:8080/#/settings/frontend**，在「API / 控制平面访问凭据」中
+填写同一令牌并保存，刷新页面后创建或选择实例。镜像默认监听容器内
+`0.0.0.0:8080`，Compose 仅发布宿主机 `127.0.0.1:8080`，无需 socat。
+经端口映射或网桥访问管理 API 必须提供正确令牌，伪造本地 Host 不能跳过认证。
 
-```powershell
-docker compose -f compose.yaml -f compose.local.yaml up -d --build
-```
-
-打开 **http://127.0.0.1:8088**。FA 镜像不内置 socat；两个独立转发容器通过专用
-Unix socket 连接管理回环，适配器网络不新增管理端口。已有部署须保留原目录、
-项目名、环境文件和数据卷；关闭入口需停止两个转发容器，不能只省略覆盖文件。
-端口配置、信任边界、升级与回退见[本地 Docker 面板说明](docs/docker-local-panel.md)。
-此模式仅用于**所有 Docker 容器也都可信**的本机；回环发布不保证其他容器无法访问管理面。
-公网访问仍使用 Cloudflare Access。
+首次输入只在 SQL 中没有管理令牌时初始化，已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN`
+优先，更新不会被环境变量覆盖。首次成功后可移除该初始化输入。更新时保留原项目名、
+数据卷和必要覆盖文件。旧 SQL 回环监听、旧 socat 入口退役、`docker run` 和镜像更新命令见
+[Docker 部署与更新](docs/docker.md)。公网访问仍使用 Cloudflare Access。
 
 GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
 更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。
@@ -92,11 +91,17 @@ GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最�
 - **反向 WebSocket（FA 作为服务端）**：上游主动连接 FA。在 NapCat 等 OneBot 实现中启用反向 WebSocket 客户端，将「连接」页复制的 OneBot 地址填入，例如 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`。地址使用实际适配器监听端口，容器部署时需根据端口映射调整可达主机和端口。
 - **正向 WebSocket（FA 作为客户端）**：上游提供 WebSocket 服务端。在 FA「连接」页填写上游的 `ws://` 或 `wss://` 地址及可选访问令牌；FA 通过 `Authorization: Bearer <令牌>` 发起连接，并在断线后自动重试。不要在 URL 中填写用户名、密码或令牌。
 
+反向模式可分别设置每个适配器的「入站认证令牌」（`ONEBOT_WS_INBOUND_TOKEN` / `ASTRBOT_WS_INBOUND_TOKEN`，保存在当前实例的 SQL 设置中）。配置后，专用 WS 端口和管理端口上的每次真实握手均须发送 `Authorization: Bearer <令牌>`，不接受 URL／查询参数里的令牌。请使用不含空格的可打印 ASCII 强随机令牌，在上游客户端设置相同值，跨非受信网络使用 `wss://`。入站令牌与正向 `ONEBOT_WS_TOKEN` / `ASTRBOT_WS_TOKEN`、管理控制令牌各自独立。
+
+留空时，专用 `WS_LISTEN_ADDR` 监听保留无令牌兼容行为；**Docker 网桥镜像的管理端口（默认 8080）始终拒绝匿名真实适配器连接**，经回环连接器访问或 `WS_LISTEN_ADDR` 仅监听回环也不例外，必须设置入站令牌才能使用该入口。强制回环的 Linux host 镜像和原生构建在未设置入站令牌时保留原有行为。网页「直接对话」仍使用管理认证，不接受入站令牌代替管理凭据。默认 Compose 的两个端口仍仅发布至宿主机 `127.0.0.1`；手动对外开放适配器端口前，应先设置入站令牌并配置网络／TLS 防护。
+
 保存仅影响当前实例，自动应用并断开旧连接；停用实例会停止拨号和重连。取消某个适配器的「启用」勾选并保存，会关闭它的真实上游连接、停止拨号和重连，并拒绝新的普通反向连接，但保留方向、地址和令牌，网页「直接对话」仍可使用。两项可全部取消，已有配置缺少 `ONEBOT_WS_ENABLED` / `ASTRBOT_WS_ENABLED` 时仍按启用处理。正向模式不会同时接受该适配器的普通反向连接。两种模式建立连接后均为双向收发；不要将同一上游重复接入多个实例，否则可能重复回复。
 
 Docker 内的 `127.0.0.1` 指容器自身，不是 Windows 宿主机。正向连接宿主机服务时，Docker Desktop 可使用 `host.docker.internal`，但上游监听与防火墙仍必须允许容器访问；同一 Compose 网络中的服务可使用服务名。远程连接应使用 `wss://` 和访问令牌；正向／反向只改变适配器的连接方向，**不会改变 HTTP 管理面板的监听与认证设置**。
 
 ### 接入 AstrBot 等框架
+
+插件 0.2.1 起，反向模式可设置 `ws_reverse_token`，值与 FA 的 AstrBot 入站认证令牌一致；首次连接和重连均仅通过 Authorization 请求头发送。它与插件正向模式的 `ws_access_token` 独立。
 
 在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
 

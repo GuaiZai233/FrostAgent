@@ -1,4 +1,4 @@
-// Package wsclient owns outbound WebSocket connection configuration and retries.
+// Package wsclient owns adapter WebSocket configuration and outbound retries.
 package wsclient
 
 import (
@@ -22,6 +22,9 @@ type Config struct {
 	Mode     string
 	URL      string
 	Token    string
+	// InboundToken authenticates real upstreams connecting to FA, independently
+	// of Token, which is sent only by the outbound client.
+	InboundToken string
 }
 
 // Load preserves the existing inbound listener when no mode was configured.
@@ -45,6 +48,7 @@ func Load(getenv func(string) string, adapter string) (Config, error) {
 		config.Mode = strings.TrimSpace(rawMode)
 		config.URL = strings.TrimSpace(rawURL)
 		config.Token = getenv(adapter + "_WS_TOKEN")
+		config.InboundToken = getenv(adapter + "_WS_INBOUND_TOKEN")
 	}
 	if config.Mode == "" {
 		config.Mode = Reverse
@@ -62,6 +66,9 @@ func (c Config) Validate() error {
 	}
 	if strings.IndexFunc(c.Token, unicode.IsControl) >= 0 {
 		return fmt.Errorf("WS_TOKEN must not contain control characters")
+	}
+	if strings.IndexFunc(c.InboundToken, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
+		return fmt.Errorf("WS_INBOUND_TOKEN must contain printable ASCII without spaces")
 	}
 	if c.URL == "" {
 		if !c.Disabled && c.Mode == Forward {

@@ -220,7 +220,8 @@ def wait_websocket(read):
 
 
 def adapter_target_port(config):
-    ports = config['services']['frostagent'].get('ports', [])
+    ports = [port for port in config['services']['frostagent'].get('ports', [])
+             if int(port['target']) != 8080]
     if len(ports) != 1 or ports[0].get('protocol', 'tcp') != 'tcp':
         raise ValueError('smoke requires exactly one published TCP adapter port')
     target = int(ports[0]['target'])
@@ -253,7 +254,10 @@ def prepare_test_config(config, project, ports=None):
         assert not service.get('container_name')
         service['restart'] = 'no'
         for port in service.get('ports', []):
-            port['published'] = str((ports or {}).get(name, 0))
+            # Keep the independent direct-management mapping ephemeral when
+            # restoring the adapter's previous host port after a restart.
+            port['published'] = '0' if name == 'frostagent' and int(port['target']) == 8080 \
+                else str((ports or {}).get(name, 0))
     return config
 
 
@@ -272,10 +276,13 @@ def exercise(root):
         raise RuntimeError('Live smoke requires Python assertions; run without -O or PYTHONOPTIMIZE')
     project = 'frostagent-local-smoke-' + uuid.uuid4().hex[:12]
     config = prepare_test_config(render(root, project), project)
+    config['services']['frostagent']['image'] = os.environ.get('FROSTAGENT_SMOKE_IMAGE', 'frostagent:local')
+    config['services']['frostagent'].setdefault('environment', {})['FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN'] = \
+        'synthetic-local-panel-bootstrap-token'
     adapter_port = adapter_target_port(config)
     operating_system = command('docker', 'info', '--format', '{{.OperatingSystem}}')
     desktop = 'docker desktop' in operating_system.lower()
-    command('docker', 'image', 'inspect', 'frostagent:local')
+    command('docker', 'image', 'inspect', config['services']['frostagent']['image'])
     helpers = []
     with tempfile.TemporaryDirectory(prefix=project + '-') as temporary:
         path = Path(temporary) / 'compose.json'
@@ -311,6 +318,13 @@ def exercise(root):
             assert asset and read(asset.group(1))['status'] == 200
             assert api('/api/instances')['instances'] == []
             assert read('/api/storage')['status'] == 200
+            # Exercise the legacy saved-loopback layout. The default wildcard
+            # listener and direct published-token path have their own smoke.
+            saved = api('/api/instances/global/backup/settings')
+            saved['settings']['LISTEN_ADDR'] = '127.0.0.1:8080'
+            result = read('/api/instances/global/import/settings', saved)
+            assert result['status'] in (0, 200), result
+            wait_ready(read)
             for endpoint in ('/', '/api/instances', '/api/storage'):
                 assert read(endpoint, headers={'Host': 'attacker.example'})['status'] == 403
                 assert read(endpoint, headers={'Origin': 'https://attacker.example'})['status'] == 403
@@ -327,7 +341,7 @@ def exercise(root):
             def check_topology_and_peer_access(target_port=8080, *, token_required=False):
                 app = container('frostagent')
                 actual = inspect(app)
-                assert not actual['HostConfig']['PortBindings'].get('8080/tcp')
+                assert actual['HostConfig']['PortBindings']['8080/tcp'][0]['HostIp'] == '127.0.0.1'
                 assert not actual['HostConfig']['PortBindings'].get('18080/tcp')
                 origin = inspect(container('local-panel-origin'))
                 assert origin['HostConfig']['NetworkMode'] == 'container:' + app
@@ -392,7 +406,9 @@ def exercise(root):
             old_app = container('frostagent')
             # Preserve actual allocated host ports across full recreation.
             for service, port in (('local-panel', panel_port), ('frostagent', ws_port)):
-                config['services'][service]['ports'][0]['published'] = str(port)
+                target = 8080 if service == 'local-panel' else adapter_port
+                mapping = next(p for p in config['services'][service]['ports'] if int(p['target']) == target)
+                mapping['published'] = str(port)
             path.write_text(json.dumps(config), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)
             assert published_ports(compose, adapter_port) == (panel_port, ws_port), 'explicit ports changed on recreation'
@@ -442,6 +458,7 @@ def exercise(root):
             assert result['status'] in (0, 200), result
             custom = prepare_test_config(render(root, project, target_port=8081), project,
                                          {'local-panel': panel_port, 'frostagent': ws_port})
+            custom['services']['frostagent']['image'] = config['services']['frostagent']['image']
             assert adapter_target_port(custom) == adapter_port, 'management target changed adapter port'
             path.write_text(json.dumps(custom), encoding='utf-8')
             command(*compose, 'up', '--detach', '--no-build', '--force-recreate', *SERVICES)

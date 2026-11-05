@@ -38,6 +38,7 @@ class Settings:
     ws_listen_host: str = "127.0.0.1"
     ws_listen_port: int = 1244
     ws_access_token: str = ""
+    ws_reverse_token: str = ""
 
 
 class WSURLConfigurationError(ValueError):
@@ -80,6 +81,9 @@ def load_settings(config: dict = None) -> Settings:
     host = str(config.get("ws_listen_host") or "127.0.0.1").strip()
     port = 1244
     token = str(config.get("ws_access_token") or "")
+    reverse_token = str(config.get("ws_reverse_token") or "")
+    if any(ord(char) < 33 or ord(char) > 126 for char in reverse_token):
+        raise WSURLConfigurationError("ws_reverse_token must contain printable ASCII without spaces")
     if mode == "forward":
         try:
             address = ipaddress.ip_address(host)
@@ -110,6 +114,7 @@ def load_settings(config: dict = None) -> Settings:
         ws_listen_host=host,
         ws_listen_port=port,
         ws_access_token=token,
+        ws_reverse_token=reverse_token,
     )
 
 
@@ -414,7 +419,10 @@ class FrostAgentWSClient:
         while self._running:
             try:
                 logger.info("[frostagent-adapter] 正在建立反向 WebSocket 连接（FA 作为服务端）")
-                async with websockets.connect(self.settings.ws_url, open_timeout=10, close_timeout=3) as ws:
+                headers = {"Authorization": "Bearer " + self.settings.ws_reverse_token} if self.settings.ws_reverse_token else {}
+                # websockets 14+ renamed extra_headers on the default client.
+                header_arg = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+                async with websockets.connect(self.settings.ws_url, open_timeout=10, close_timeout=3, **{header_arg: headers}) as ws:
                     self.ws = ws
                     logger.info("[frostagent-adapter] 已成功建立与 FrostAgent 的 WebSocket 连接")
                     try:
@@ -545,7 +553,7 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.2.0",
+    "0.2.1",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):

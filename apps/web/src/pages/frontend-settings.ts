@@ -79,7 +79,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
         <section class="card p-4 flex flex-col gap-4 mt-1" style="max-width: 42rem;">
           <div>
             <h2 class="text-sm font-semibold text-foreground">API / 控制平面访问凭据</h2>
-            <p class="text-xs text-muted mt-0.5">远程管理需要控制令牌。在本机的 Bot 服务端设置中配置管理 Token，再在这里填写相同值。</p>
+            <p class="text-xs text-muted mt-0.5">Docker 端口映射和远程管理需要控制令牌。Docker 首次部署请填写初始化时设置的令牌；已有部署填写服务端的管理控制令牌。</p>
           </div>
 
           <div class="flex flex-col gap-2.5">
@@ -97,7 +97,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
             </div>
             <div class="flex items-center justify-between pt-1">
               <span class="text-xs text-muted">
-                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token (本地同源访问将使用默认安全边界)'}
+                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token；Docker 端口映射访问仍需填写凭据'}
               </span>
               <div class="flex gap-2">
                 ${currentToken ? `<button id="clear-token-btn" class="btn btn-ghost btn-sm text-destructive text-xs">清除</button>` : ''}
