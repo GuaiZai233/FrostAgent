@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { SquarePen } from 'lucide';
 import { mountOverviewPage } from '../src/pages/overview';
 import { mountPromptPage } from '../src/pages/prompt';
 import { mountMemoryPage } from '../src/pages/memory';
 import { mountStickersPage } from '../src/pages/stickers';
 import { mountChatPage } from '../src/pages/chat';
 import { mountVersionControl } from '../src/components/version-panel';
+import { renderLucideIcon } from '../src/components/icons';
 import { instanceState } from '../src/instance-state';
 
 const { JSDOM } = createRequire(resolve('package.json'))('jsdom');
@@ -100,7 +102,7 @@ try {
   assert.equal(checkButton.textContent?.trim(), '检查更新', 'update button must have a visible text label');
   assert.ok(checkButton.classList.contains('btn-outline'), 'update button must have its own outlined box');
   assert.ok(!checkButton.classList.contains('btn-icon-sm'), 'update button must not be an icon-only control');
-  assert.ok(checkButton.querySelector('svg'), 'update button must retain a static update icon');
+  assert.equal(checkButton.querySelector('svg')?.outerHTML, renderLucideIcon(SquarePen, 'w-3.5 h-3.5'), 'update button must use the library SquarePen icon');
   assert.equal(root.querySelector('#overview-version .card'), null, 'version must not have a standalone card');
   assert.equal(root.querySelector('#update-results'), null, 'results must not be embedded in the overview');
   assert.doesNotMatch(root.textContent || '', /仅查询 GitHub 仓库|检查结果缓存/);
