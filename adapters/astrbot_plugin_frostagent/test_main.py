@@ -107,6 +107,19 @@ load_settings = adapter_module.load_settings
 
 
 class SettingsTest(unittest.TestCase):
+    def test_reverse_token_is_distinct_and_validated_without_disclosure(self):
+        settings = load_settings({
+            "ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",
+            "ws_reverse_token": "synthetic-inbound-token",
+            "ws_access_token": "synthetic-forward-token",
+        })
+        self.assertEqual(settings.ws_reverse_token, "synthetic-inbound-token")
+        self.assertEqual(settings.ws_access_token, "synthetic-forward-token")
+        for invalid in ["synthetic secret", "synthetic\r\nsecret", "synthetic\x00secret"]:
+            with self.assertRaises(ValueError) as raised:
+                load_settings({"ws_mode": "forward", "ws_reverse_token": invalid})
+            self.assertNotIn("synthetic", str(raised.exception))
+
     def test_reverse_is_default_and_ignores_forward_listen_settings(self):
         settings = load_settings({
             "ws_url": "ws://127.0.0.1:1234/instances/a1b2c3d4/ws/astrbot",

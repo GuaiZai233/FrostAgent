@@ -54,8 +54,8 @@ toast.success = (value) => { successes.push(value); };
 type Setting = { key: string; value: string; isSecret: boolean };
 type Change = { key: string; value: string | null; isSecret: boolean };
 const prefixes = ['ONEBOT', 'ASTRBOT'];
-let values: Setting[] = prefixes.flatMap((prefix) => ['ENABLED', 'MODE', 'URL', 'TOKEN'].map((field) => ({
-  key: `${prefix}_WS_${field}`, value: '', isSecret: field === 'TOKEN',
+let values: Setting[] = prefixes.flatMap((prefix) => ['ENABLED', 'MODE', 'URL', 'TOKEN', 'INBOUND_TOKEN'].map((field) => ({
+  key: `${prefix}_WS_${field}`, value: '', isSecret: field.endsWith('TOKEN'),
 })));
 let failLoad = false;
 let failSave = false;
@@ -108,6 +108,8 @@ assert.equal(el('astrbot-mode').value, 'reverse');
 assert.equal(el('onebot-enabled').checked, true, 'missing enable flag preserves existing connections');
 assert.equal(el('astrbot-enabled').checked, true);
 assert.equal(el('onebot-enabled').type, 'checkbox');
+assert.equal(el('onebot-inbound_token').type, 'password');
+assert.equal(el('onebot-inbound_token').disabled, false);
 assert.equal(el('onebot-forward').hidden, true);
 assert.equal(el('connections-save').disabled, true);
 assert.equal(el('connections-restore').disabled, true);
@@ -123,6 +125,7 @@ edit('onebot-mode', 'forward');
 assert.equal(el('onebot-forward').hidden, false);
 assert.equal(el('onebot-reverse').hidden, true);
 assert.equal(el('onebot-copy').disabled, true, 'forward mode must not offer an inbound address');
+assert.equal(el('onebot-inbound_token').disabled, true);
 assert.equal(el('onebot-token').type, 'password');
 assert.equal(writes.length, 0, 'mode changes must stay local until saved');
 el('connections-save').click();
@@ -298,7 +301,38 @@ el('connections-retry').click();
 await setImmediate();
 assert.equal(el('connections-error').hidden, true);
 assert.equal(el('onebot-mode').disabled, false);
+for (const adapter of ['onebot', 'astrbot']) {
+  edit(`${adapter}-mode`, 'reverse');
+  edit(`${adapter}-inbound_token`, `synthetic-${adapter}-inbound`);
+}
+assert.ok(!root.innerHTML.includes('synthetic-onebot-inbound'));
+el('connections-save').click();
+await setImmediate();
+for (const prefix of prefixes) {
+  assert.deepEqual(writes.at(-1)?.find((entry) => entry.key === `${prefix}_WS_INBOUND_TOKEN`), {
+    key: `${prefix}_WS_INBOUND_TOKEN`, value: `synthetic-${prefix.toLowerCase()}-inbound`, isSecret: true,
+  });
+}
+edit('onebot-mode', 'forward');
+assert.equal(el('onebot-inbound_token').disabled, true);
+assert.equal(el('onebot-inbound_token').value, 'synthetic-onebot-inbound', 'changing direction retains inbound credentials');
+el('connections-restore').click();
+enable('onebot', false);
+assert.equal(el('onebot-inbound_token').disabled, true);
+el('connections-restore').click();
+const writesBeforeInvalidInbound = writes.length;
+edit('onebot-inbound_token', 'synthetic secret');
+el('connections-save').click();
+await setImmediate();
+assert.equal(writes.length, writesBeforeInvalidInbound);
+assert.ok(!errors.at(-1)!.includes('synthetic secret'));
+edit('onebot-inbound_token', '');
+el('connections-save').click();
+await setImmediate();
+assert.deepEqual(writes.at(-1), [{ key: 'ONEBOT_WS_INBOUND_TOKEN', value: null, isSecret: true }]);
+assert.equal(values.find((setting) => setting.key === 'ONEBOT_WS_TOKEN')?.value, 'synthetic-onebot-token', 'clearing inbound token does not alter outbound credential');
 cleanup();
+assert.equal(el('astrbot-inbound_token').value, '', 'unmount clears inbound credentials');
 
 instanceState.select(null);
 root = new Element();

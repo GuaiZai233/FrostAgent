@@ -10,6 +10,11 @@
         "type": "string",
         "default": ""
     },
+    "ws_reverse_token": {
+        "description": "仅反向模式：与 FA 连接页 AstrBot 入站认证令牌一致，以 Authorization: Bearer 发送；独立于正向 ws_access_token，不要放在 URL 中",
+        "type": "string",
+        "default": ""
+    },
     "ws_listen_host": {
         "description": "仅正向模式：插件监听 IP（默认仅本机；跨容器可填 0.0.0.0，但必须配置 ws_access_token 并限制网络访问）",
         "type": "string",

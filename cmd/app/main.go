@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
 	"github.com/GuaiZai233/FrostAgent/internal/frontend"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -156,7 +157,15 @@ func managementMux(manager http.Handler) http.Handler {
 		mux.Handle("/api/security/", securityHandlerFor(registry))
 	}
 	mux.Handle("/api/instances/", manager)
-	mux.Handle("/instances/", manager)
+	mux.Handle("/instances/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAdapterWebSocketPath(r.URL.Path) && !directchat.IsRequest(r) && instanceconfig.ContainerManagement == "true" && instanceconfig.ManagementLoopbackOnly != "true" {
+			// Bridge images expose management independently of WS_LISTEN_ADDR.
+			// Apply this policy at the listener boundary, not inside the shared
+			// gateway, which also dispatches the dedicated adapter listener.
+			r = wsauth.RequireToken(r)
+		}
+		manager.ServeHTTP(w, r)
+	}))
 	mux.Handle("/api/actionscat/", manager)
 	mux.Handle("/api/v1/actionscat/", manager)
 	mux.Handle("/api/v1/messages/send", manager)
@@ -239,7 +248,7 @@ func instanceWebSocketHandler(next http.Handler) http.Handler {
 			return
 		}
 		// Mock connections belong to Direct Chat on the management listener, not
-		// the unauthenticated adapter ingress, even when they omit Origin.
+		// the adapter ingress, even when they omit Origin.
 		if directchat.IsRequest(r) {
 			http.Error(w, "mock connections require the management listener", http.StatusForbidden)
 			return

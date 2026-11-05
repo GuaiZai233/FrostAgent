@@ -10,6 +10,20 @@ def mock_requests(endpoint):
             (endpoint, {**UPGRADE, 'X-Mock-Adapter': 'true'}))
 
 
+def check_real_websocket_auth(read, endpoint, token=None, required=False):
+    """Check real ingress without Origin; only inbound Bearer credentials count."""
+    status = 401 if token is not None or required else 101
+    result = read(endpoint, headers=UPGRADE)
+    assert result['status'] == status, (endpoint, 'real adapter missing token', result['status'])
+    if token is not None or required:
+        for value in ('synthetic-wrong-token', 'synthetic-control-token'):
+            result = read(endpoint, headers={**UPGRADE, 'Authorization': 'Bearer ' + value})
+            assert result['status'] == 401, (endpoint, 'real adapter incorrect token', result['status'])
+    if token is not None:
+        result = read(endpoint, headers={**UPGRADE, 'Authorization': 'Bearer ' + token})
+        assert result['status'] == 101, (endpoint, 'real adapter valid token', result['status'])
+
+
 def check_adapter_websocket(read, endpoint):
     """Require a working real adapter, but reject both mock markers."""
     result = read(endpoint, headers=UPGRADE)

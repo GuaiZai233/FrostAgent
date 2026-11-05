@@ -9,6 +9,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -256,6 +257,9 @@ func ToIncomingMessage(event model.OneBotEvent) core.IncomingMessage {
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mock := directchat.IsRequest(r)
+		if !mock && !wsauth.Authorize(w, r, a.connectionConfig.InboundToken) {
+			return
+		}
 		if a.connectionConfig.Disabled && !mock {
 			http.Error(w, "当前适配器连接未启用", http.StatusServiceUnavailable)
 			return

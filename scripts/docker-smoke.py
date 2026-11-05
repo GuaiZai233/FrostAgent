@@ -14,7 +14,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-from docker_ws_smoke import UPGRADE, check_adapter_websocket, check_management_websocket
+from docker_ws_smoke import UPGRADE, check_adapter_websocket, check_management_websocket, check_real_websocket_auth
 from docker_local_panel_smoke import http_request, validate_test_data_mount
 
 
@@ -293,6 +293,47 @@ def exercise(root, temporary, host_mode=False):
                 assert client(origin, '127.0.0.1', 11023, rpc, {}, UPGRADE)['status'] == 404
                 # Verify the host's published adapter port as well as direct bridge traffic.
                 check_adapter_websocket(lambda path, headers: published_websocket(published, path, headers), ws)
+        # Both protocols have independent inbound credentials on every ingress.
+        # The bridge management listener must not inherit anonymous WS behavior.
+        for adapter in ('onebot', 'astrbot'):
+            ws = f'/instances/{instance_id}/ws/{adapter}'
+            check_real_websocket_auth(read, ws, required=not host_mode)
+            if not host_mode:
+                check_real_websocket_auth(published_read, ws, required=True)
+                check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, required=True)
+        updates = [{'key': adapter.upper() + '_WS_INBOUND_TOKEN', 'value': 'synthetic-inbound-' + adapter}
+                   for adapter in ('onebot', 'astrbot')]
+        update_rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVars'
+        assert api(update_rpc, {'updates': updates}, FORWARDED).get('success')
+        for adapter in ('onebot', 'astrbot'):
+            ws = f'/instances/{instance_id}/ws/{adapter}'
+            token = 'synthetic-inbound-' + adapter
+            check_real_websocket_auth(read, ws, token)
+            check_management_websocket(read, ws)
+            check_real_websocket_auth(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws, token)
+            if not host_mode:
+                check_real_websocket_auth(published_read, ws, token)
+                check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, token)
+                check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 11023, path, headers=headers), ws, token)
+                check_real_websocket_auth(lambda path, headers: published_websocket(published, path, headers), ws, token)
+                assert published_read(ws + '?mock=true', headers={**UPGRADE, 'Authorization': 'Bearer ' + token})['status'] == 401
+                check_management_websocket(published_read, ws, token='synthetic-control-token')
+        if not host_mode:
+            settings['settings']['WS_LISTEN_ADDR'] = '127.0.0.1:11023'
+            assert api('/api/instances/global/import/settings', settings).get('success')
+            for adapter in ('onebot', 'astrbot'):
+                ws = f'/instances/{instance_id}/ws/{adapter}'
+                assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 0
+                check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, 'synthetic-inbound-' + adapter)
+        assert api(update_rpc, {'clearKeys': [entry['key'] for entry in updates]}, FORWARDED).get('success')
+        for adapter in ('onebot', 'astrbot'):
+            ws = f'/instances/{instance_id}/ws/{adapter}'
+            check_adapter_websocket(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws)
+            check_real_websocket_auth(read, ws, required=not host_mode)
+            if not host_mode:
+                check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, required=True)
+                assert published_read(ws, headers={**UPGRADE, 'Authorization': 'Bearer synthetic-inbound-' + adapter})['status'] == 401
+        print('PASS: inbound adapter tokens, no-token compatibility, management isolation, loopback WS listener')
         if host_mode:
             print('PASS: host topology, double loopback, public Host/Origin, OneBot/AstrBot')
             return

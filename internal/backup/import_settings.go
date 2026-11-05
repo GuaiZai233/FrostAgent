@@ -24,7 +24,7 @@ func ValidateConnectionSettingsImport(db *storage.DB, instanceID string, data Se
 		return err
 	}
 	get := func(key string) string {
-		if strings.HasSuffix(key, "_WS_TOKEN") {
+		if strings.HasSuffix(key, "_WS_TOKEN") || strings.HasSuffix(key, "_WS_INBOUND_TOKEN") {
 			return current.Get(key)
 		}
 		return data.Values[key]

@@ -24,6 +24,15 @@ func TestConnectionSettingsValidateFinalDraftBeforeWriting(t *testing.T) {
 				t.Fatal(err)
 			}
 			svc := NewScoped(config, nil, nil)
+			inbound := adapter + "_WS_INBOUND_TOKEN"
+			for _, value := range []string{"synthetic secret", "synthetic\tsecret", "synthetic\r\nsecret"} {
+				res, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{
+					Updates: []*v1.EnvVar{{Key: inbound, Value: value}, {Key: "BOT_NAME", Value: "must-not-save"}},
+				}))
+				if err != nil || res.Msg.Success || strings.Contains(res.Msg.Error, "synthetic") || config.Get(inbound) != "" || config.Get("BOT_NAME") != "" {
+					t.Fatal("invalid inbound credential was accepted, disclosed or partially saved")
+				}
+			}
 			mode, url, token, enabled := adapter+"_WS_MODE", adapter+"_WS_URL", adapter+"_WS_TOKEN", adapter+"_WS_ENABLED"
 			for _, value := range []string{"invalid", "forward"} {
 				response, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{
@@ -115,10 +124,11 @@ func TestConnectionSettingMetadataAndIsolation(t *testing.T) {
 		entries[entry.Key] = entry
 	}
 	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
-		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN"} {
+		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN", "_WS_INBOUND_TOKEN"} {
 			key := adapter + suffix
 			entry := entries[key]
-			if entry == nil || entry.IsSecret != (suffix == "_WS_TOKEN") || instanceconfig.GlobalKeys[key] {
+			secret := suffix == "_WS_TOKEN" || suffix == "_WS_INBOUND_TOKEN"
+			if entry == nil || entry.IsSecret != secret || instanceconfig.GlobalKeys[key] {
 				t.Fatalf("incorrect connection metadata for %s", key)
 			}
 			if suffix == "_WS_MODE" && entry.ResetHint != "reverse" {
@@ -130,7 +140,7 @@ func TestConnectionSettingMetadataAndIsolation(t *testing.T) {
 			if !instanceconfig.InstanceRestartKeys[key] {
 				t.Fatalf("legacy lifecycle missing connection key %s", key)
 			}
-			if suffix == "_WS_TOKEN" && ExportableValueKeys()[key] {
+			if secret && ExportableValueKeys()[key] {
 				t.Fatal("connection credential included in non-secret settings export")
 			}
 		}
