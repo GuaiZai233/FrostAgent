@@ -760,10 +760,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
 
 		deliveries := llm.NewPublicReplyLog(session, startEpoch)
-		defer func() { deliveries.Finish(turn.Interrupted()) }()
+		defer func() {
+			if wakeSignals.Proactive {
+				deliveries.CommitDelivered()
+			}
+			deliveries.Finish(turn.Interrupted())
+		}()
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -781,7 +787,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("消息内容为空")
 			}
 			if event.MessageType == "group" {
-				oneBotSegments = wrapGroupReply(oneBotSegments, event, engine.Scope)
+				decorationEvent := event
+				if toolOutput.SuppressAutoMention {
+					decorationEvent.UserID = 0
+				}
+				oneBotSegments = wrapGroupReply(oneBotSegments, decorationEvent, engine.Scope)
 			}
 			botAction := model.OneBotAction{
 				Action: action,
@@ -825,7 +835,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 						}
 						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
-						if live && turn != nil && turn.StagedGuard() != nil {
+						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
 							turn.StagedGuard().AddSequence(seq)
 						} else {
 							session.PromoteGroupCompactSlot(seq, "")
@@ -846,7 +856,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					return
 				}
 
-				deliveries.CommitFinal(replyText, turn.Interrupted())
+				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
+					return
+				}
 				engine.TrimSession(session)
 
 				if event.MessageType == "group" {
@@ -956,10 +968,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
-			ActorPlatform:    securityPlatform,
-			AdapterID:        "onebot",
-			InstanceID:       engine.InstanceID,
-			SendHook:         sendHook,
+			ActorPlatform:  securityPlatform,
+			AdapterID:      "onebot",
+			InstanceID:     engine.InstanceID,
+			SendHook:       sendHook,
+			FinalReplyText: plainFinalReplyText,
+			CanReplyToMessage: func(messageID string) bool {
+				mid, ok := numericMessageID(messageID)
+				return ok && conn.messageSessionMatches(mid, conn.historyKey(event))
+			},
 			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
@@ -1063,7 +1080,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			if runResult.StaySilentCalled && (!wakeSignals.Proactive || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
@@ -1157,14 +1174,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// (Note: Terminal model output security inspection is centrally owned by llm.Engine at StageModelOutput).
 	var finalMessage any
 
-	var toolOutput struct {
-		Messages []tools.Msg `json:"messages"`
-	}
-	if json.Unmarshal([]byte(replyText), &toolOutput) == nil {
-		for _, message := range toolOutput.Messages {
+	finalMessages, parseErr := parseFinalMessages(replyText)
+	if parseErr == nil {
+		for _, message := range finalMessages {
 			if message.IsSticker && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
 				replyText = "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"
-				toolOutput.Messages = nil
+				finalMessages = nil
 				break
 			}
 			if message.Type == "image" && message.IsSticker {
@@ -1173,10 +1188,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	if len(toolOutput.Messages) > 0 {
+	if len(finalMessages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
+		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
@@ -1185,7 +1200,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
 			return
 		}
-		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
+		oneBotSegments, buildErr := tools.BuildOneBotMessage(finalMessages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
 			if wakeSignals.Proactive {
