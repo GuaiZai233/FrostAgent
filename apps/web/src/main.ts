@@ -24,12 +24,20 @@ import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountStorageSettingsPage } from './pages/storage-settings';
 import { mountBackupRestorePage } from './pages/backup-restore';
-import { mountBackendSettingsPage } from './pages/backend-settings';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountCommandSettingsPage } from './pages/command-settings';
-import { mountModelRouterPage } from './pages/model-router';
 import { mountSecurityPage } from './pages/security';
 
+const mountBackendSettingsPage = lazyMount(() =>
+  import('./pages/backend-settings').then(
+    ({ mountBackendSettingsPage }) => mountBackendSettingsPage,
+  ),
+);
+const mountModelRouterPage = lazyMount(() =>
+  import('./pages/model-router').then(
+    ({ mountModelRouterPage }) => mountModelRouterPage,
+  ),
+);
 const mountMemoryPage = lazyMount(() =>
   import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
 );

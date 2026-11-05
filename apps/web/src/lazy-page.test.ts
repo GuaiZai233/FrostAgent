@@ -53,3 +53,32 @@ test('lazy page reports a failed import', async () => {
     errorLog.mock.restore();
   }
 });
+
+test('lazy page remount only mounts the current visit and cleans it up', async () => {
+  let resolveLoad!: (mount: PageMountFn) => void;
+  const loading = new Promise<PageMountFn>((resolve) => {
+    resolveLoad = resolve;
+  });
+  const mount = lazyMount(() => loading);
+  const container = { innerHTML: '' } as HTMLElement;
+  let mounts = 0;
+  let cleanups = 0;
+
+  const firstCleanup = mount(container);
+  if (typeof firstCleanup === 'function') firstCleanup();
+  const currentCleanup = mount(container);
+  resolveLoad((page) => {
+    mounts++;
+    page.innerHTML = 'current visit';
+    return () => {
+      cleanups++;
+    };
+  });
+
+  await nextTurn();
+  assert.equal(mounts, 1);
+  assert.equal(container.innerHTML, 'current visit');
+  assert.equal(cleanups, 0);
+  if (typeof currentCleanup === 'function') currentCleanup();
+  assert.equal(cleanups, 1);
+});
