@@ -121,6 +121,103 @@ class InboundStickerSilenceTests(unittest.TestCase):
                     self.assertEqual(len(attachments), 1)
                     self.assertEqual(attachments[0]["image_indices"], indices)
 
+    def test_partial_normalization_keeps_ambiguous_photo_separate(self):
+        raw_photo_source = "https://example.invalid/photo.png"
+        with load_plugin_module() as module:
+            for kind in ("mface", "sticker", "image"):
+                for sticker_source in ("", "base64://c3RpY2tlcg=="):
+                    for photo_source in ("", "https://example.invalid/rewritten.png"):
+                        with self.subTest(kind=kind, sticker_source=sticker_source, photo_source=photo_source):
+                            sticker_data = {"file": sticker_source} if sticker_source else {}
+                            if kind == "image":
+                                sticker_data["sub_type"] = 1
+                            segments = [
+                                {"type": kind, "data": sticker_data},
+                                {"type": "image", "data": {"sub_type": 0, "url": raw_photo_source}},
+                            ]
+                            photo = InboundImage(b"photo", 0, photo_source)
+                            event = InboundEvent(
+                                [photo, Reply("quoted", [photo])],
+                                raw_segments=segments, bot=FakeBot({"message": segments}),
+                            )
+                            event.message_obj.message_id = "current"
+                            event.message_str = ""
+                            payload = asyncio.run(module.build_frostagent_payload(event))
+                            self.assertFalse(payload["metadata"]["sticker_only"])
+                            for message_id in ("current", "quoted"):
+                                actual = [att for att in payload["attachments"] if att["message_id"] == message_id]
+                                photo_attachment = next(att for att in actual if att["content"] == "cGhvdG8=")
+                                self.assertEqual(photo_attachment["sub_type"], 0)
+                                # Neither raw ordinal is identifiable: retain both and
+                                # allocate a separate slot instead of guessing identity.
+                                self.assertEqual(photo_attachment["image_indices"], [2])
+                                self.assertEqual(payload["image_slot_counts"][message_id], 3)
+                                if sticker_source:
+                                    self.assertEqual(actual[0]["image_indices"], [0])
+                                    self.assertEqual(actual[0]["sub_type"], 1)
+                                    self.assertEqual(actual[0]["content"], "c3RpY2tlcg==")
+
+    def test_omitted_leading_sticker_and_sourceless_raw_photo(self):
+        segments = [
+            {"type": "sticker", "data": {}},
+            {"type": "image", "data": {"sub_type": 0}},
+        ]
+        photo = InboundImage(b"photo", 0)
+        event = InboundEvent(
+            [photo, Reply("quoted", [photo])],
+            raw_segments=segments, bot=FakeBot({"message": segments}),
+        )
+        with load_plugin_module() as module:
+            counts = {}
+            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+            self.assertFalse(module.is_sticker_only_message(event))
+            self.assertEqual(counts, {"current": 3, "quoted": 3})
+            self.assertEqual([att["message_id"] for att in attachments], ["current", "quoted"])
+            for attachment in attachments:
+                self.assertEqual(attachment["sub_type"], 0)
+                self.assertEqual(attachment["image_indices"], [2])
+
+    def test_source_matches_are_reserved_before_positional_matching(self):
+        source = "base64://c3RpY2tlcg=="
+        segments = [
+            {"type": "sticker", "data": {"file": source}},
+            {"type": "image", "data": {"sub_type": 0}},
+        ]
+        components = [InboundImage(b"photo", 0), InboundImage(b"sticker", 0, source)]
+        event = InboundEvent(
+            components + [Reply("quoted", components)],
+            raw_segments=segments, bot=FakeBot({"message": segments}),
+        )
+        with load_plugin_module() as module:
+            counts = {}
+            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+            self.assertEqual(counts, {"current": 3, "quoted": 3})
+            for message_id in ("current", "quoted"):
+                actual = [att for att in attachments if att["message_id"] == message_id]
+                self.assertEqual([att["content"] for att in actual], ["c3RpY2tlcg==", "cGhvdG8="])
+                self.assertEqual([att["image_indices"] for att in actual], [[0], [2]])
+                self.assertEqual([att["sub_type"] for att in actual], [1, 0])
+
+    def test_partial_normalization_with_source_keeps_photo_original_slot(self):
+        source = "https://example.invalid/photo.png"
+        segments = [
+            {"type": "sticker", "data": {}},
+            {"type": "image", "data": {"sub_type": 0, "url": source}},
+        ]
+        photo = InboundImage(b"photo", 0, source)
+        event = InboundEvent(
+            [photo, Reply("quoted", [photo])],
+            raw_segments=segments, bot=FakeBot({"message": segments}),
+        )
+        with load_plugin_module() as module:
+            counts = {}
+            attachments = asyncio.run(module.extract_attachments(event, "current", counts))
+            self.assertEqual(counts, {"current": 2, "quoted": 2})
+            self.assertEqual([att["message_id"] for att in attachments], ["current", "quoted"])
+            for attachment in attachments:
+                self.assertEqual(attachment["sub_type"], 0)
+                self.assertEqual(attachment["image_indices"], [1])
+
     def test_partial_normalization_keeps_attachment_order(self):
         event = InboundEvent([InboundImage(b"b", 1, "base64://Yg==")], raw_segments=[
             {"type": "mface", "data": {"file": "base64://YQ=="}},

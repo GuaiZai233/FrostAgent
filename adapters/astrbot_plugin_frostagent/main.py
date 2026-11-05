@@ -1187,17 +1187,35 @@ def onebot_segment_is_sticker(segment: dict[str, Any] | None) -> bool:
     )
 
 
-def pop_matching_onebot_segment(
+def match_onebot_image_slots(
     slots: list[tuple[int, dict[str, Any]]],
-    component_source: str = "",
-) -> tuple[int, dict[str, Any]] | None:
-    # A normalized Image can represent any raw image-like type. Prefer source
-    # identity when available, otherwise pair in the original visual order.
-    if component_source:
+    components: list[Any],
+) -> list[tuple[int, dict[str, Any]] | None]:
+    """Match the whole image sequence, leaving unidentifiable raw slots intact."""
+    original_slots = list(slots)
+    matches: list[tuple[int, dict[str, Any]] | None] = [None] * len(components)
+    # Resolve every source match before any positional fallback can consume a
+    # later component's raw slot.
+    for component_index, comp in enumerate(components):
+        source = image_source_from_data(component_image_data(comp))
+        if not source:
+            continue
         for index, (_, segment) in enumerate(slots):
-            if image_source_from_data(first_attr(segment, "data") or {}) == component_source:
-                return slots.pop(index)
-    return slots.pop(0) if slots else None
+            if image_source_from_data(first_attr(segment, "data") or {}) == source:
+                matches[component_index] = slots.pop(index)
+                break
+    # Source-less/rewritten components can reuse positional slots only for a
+    # complete sequence whose known identities agree with the original order.
+    # With partial normalization, even the first raw sticker may have no Image
+    # component. Leave ambiguous components unmatched rather than inherit that
+    # sticker's subtype; the caller allocates separate slots for them.
+    if len(components) == len(original_slots) and all(
+        slot is None or slot[0] == original_slots[index][0]
+        for index, slot in enumerate(matches)
+    ):
+        slots.clear()
+        return original_slots
+    return matches
 
 
 async def source_image_attachment(
@@ -1456,6 +1474,7 @@ async def extract_attachments(
 ) -> list[dict[str, Any]]:
     attachments = []
     image_indexes: dict[str, int] = {}
+    current_images: list[Any] = []
     reply_image_components: dict[str, list[Any]] = {}
     unmatched_raw_segments = reserve_raw_image_slots(raw_onebot_segments(event), message_id, image_indexes)
     message_obj = getattr_chain(event, "message_obj")
@@ -1464,13 +1483,7 @@ async def extract_attachments(
         for comp in components:
             comp_type = type(comp).__name__.lower()
             if "image" in comp_type or comp_type in ("mface", "sticker"):
-                slot = pop_matching_onebot_segment(
-                    unmatched_raw_segments,
-                    image_source_from_data(component_image_data(comp)),
-                )
-                image_index, raw_segment = slot if slot is not None else (reserve_image_slot(message_id, image_indexes), None)
-                attachment = await image_attachment(comp, message_id, raw_segment)
-                append_unique_attachment(attachments, attachment, image_index)
+                current_images.append(comp)
             elif comp_type == "reply":
                 reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
                 if not reply_id:
@@ -1484,6 +1497,11 @@ async def extract_attachments(
                     if "image" not in quoted_type and quoted_type not in ("mface", "sticker"):
                         continue
                     quoted_images.append(quoted_comp)
+    current_slots = match_onebot_image_slots(unmatched_raw_segments, current_images)
+    for comp, slot in zip(current_images, current_slots):
+        image_index, raw_segment = slot if slot is not None else (reserve_image_slot(message_id, image_indexes), None)
+        attachment = await image_attachment(comp, message_id, raw_segment)
+        append_unique_attachment(attachments, attachment, image_index)
     await append_sticker_attachments_from_segments(
         unmatched_raw_segments,
         message_id,
@@ -1493,11 +1511,8 @@ async def extract_attachments(
         unmatched_reply_segments = reserve_raw_image_slots(
             await lookup_reply_onebot_segments(event, reply_id), reply_id, image_indexes,
         )
-        for quoted_comp in quoted_images:
-            slot = pop_matching_onebot_segment(
-                unmatched_reply_segments,
-                image_source_from_data(component_image_data(quoted_comp)),
-            )
+        quoted_slots = match_onebot_image_slots(unmatched_reply_segments, quoted_images)
+        for quoted_comp, slot in zip(quoted_images, quoted_slots):
             image_index, raw_segment = slot if slot is not None else (reserve_image_slot(reply_id, image_indexes), None)
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
             append_unique_attachment(attachments, attachment, image_index)
