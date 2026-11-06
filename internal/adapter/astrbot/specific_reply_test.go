@@ -42,7 +42,11 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sameGroup := tc.sameGroup
 			calls := 0
-			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			var providerErrors []string
+			provider := &mockLLMProvider{customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				calls++
 				message := core.ChatMessage{Role: core.RoleAssistant}
 				switch calls {
@@ -51,10 +55,10 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 				case 2:
 					prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					if !strings.Contains(prompt, proactive.PromptPrefix) {
-						t.Error("missing proactive guidance")
+						providerErrors = append(providerErrors, "missing proactive guidance")
 					}
 					if sameGroup && (!strings.Contains(prompt, `"message_id":"msg_earlier"`) || !strings.Contains(prompt, "earlier central topic")) {
-						t.Errorf("earlier message is not searchable in model context: %s", prompt)
+						providerErrors = append(providerErrors, fmt.Sprintf("earlier message is not searchable in model context: %s", prompt))
 					}
 					message.ToolCalls = []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{
 						Name: "send_message", Arguments: `{"messages":[{"type":"mention_specific","message_id":"msg_earlier"},{"type":"plain","text":"reply about earlier topic"}]}`,
@@ -68,7 +72,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 					}
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					if (result == "消息已发送") != sameGroup {
-						t.Errorf("incorrect tool confirmation: %s", result)
+						providerErrors = append(providerErrors, fmt.Sprintf("incorrect tool confirmation: %s", result))
 					}
 					if tc.name == "provider error after delivery" {
 						return nil, errors.New("fixture provider failure")
@@ -77,7 +81,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 						message.ToolCalls = []core.ToolCall{{ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: "stay_silent", Arguments: `{}`}}}
 					}
 				default:
-					t.Errorf("unexpected model round %d", calls)
+					providerErrors = append(providerErrors, fmt.Sprintf("unexpected model round %d", calls))
 				}
 				return &core.ChatResponse{Message: message}, nil
 			}}
@@ -101,14 +105,40 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 					return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 				}})
 			}
-			srv, _, url := startWSTestServer(engine)
-			defer srv.Close()
+			srv, adapter, url := startWSTestServer(engine)
+			t.Cleanup(srv.Close)
 			conn := dialAutoDecorationTest(t, url)
+			t.Cleanup(func() {
+				adapter.CloseConnections()
+				engine.Scope.Cancel()
+				engine.Scope.Wait()
+				provider.mu.Lock()
+				defer provider.mu.Unlock()
+				for _, err := range providerErrors {
+					t.Error(err)
+				}
+			})
+			waitTurn := func(event Event) *llm.SessionContext {
+				t.Helper()
+				session := engine.SessionManager.GetOrCreate(sessionKey(event))
+				barrier := session.ReserveSequenceTurn("proactive:"+event.Platform, false, true)
+				completed := make(chan struct{})
+				go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+				select {
+				case <-completed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("reply turn did not finish")
+				}
+				return session
+			}
 			older := Event{Type: "event", EventType: "message", MessageType: "group", Platform: "fixture-platform", GroupID: "fixture-group", UserID: "fixture-author", MessageID: "msg_earlier", Content: "earlier central topic"}
 			sendAutoDecorationEvent(t, conn, older)
-			if action := readAutoDecorationAction(t, conn, "first silence"); action.Action != "noop" {
+			if action := readAutoDecorationAction(t, conn, "first silence"); action.Action != "noop" || action.Echo != "reply_"+older.MessageID {
 				t.Fatalf("expected initial silence, got %+v", action)
 			}
+			// The terminal frame is written before the turn's deferred cleanup.
+			// Finish that turn before another proactive input can interrupt it.
+			waitTurn(older)
 			trigger := older
 			trigger.MessageID, trigger.UserID, trigger.Content = "msg_trigger", "fixture-other-author", "later unrelated trigger"
 			if !sameGroup {
@@ -117,11 +147,14 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			sendAutoDecorationEvent(t, conn, trigger)
 			if sameGroup {
 				action := readAutoDecorationAction(t, conn, "specific reply")
-				if action.Action != "send_message" || len(action.Messages) != 2 || action.Messages[0].Type != "quote" || action.Messages[0].MessageID != older.MessageID || action.Messages[1].Type != "plain" || action.Messages[1].Text != "reply about earlier topic" {
+				if action.Action != "send_message" || action.Echo != "hook_"+trigger.MessageID || !action.IsIntermediate || len(action.Messages) != 2 || action.Messages[0].Type != "quote" || action.Messages[0].MessageID != older.MessageID || action.Messages[1].Type != "plain" || action.Messages[1].Text != "reply about earlier topic" {
 					t.Fatalf("wrong quote, trigger mention, or lost text: %+v", action)
 				}
 			}
 			terminal := readAutoDecorationAction(t, conn, "terminal noop")
+			if terminal.Echo != "reply_"+trigger.MessageID {
+				t.Fatalf("terminal belongs to another event: %+v", terminal)
+			}
 			if tc.final == "different follow-up" || tc.name == "structured text stays literal" {
 				if terminal.Action != "send_message" || terminal.Content != tc.final {
 					t.Fatalf("different final reply was lost: %+v", terminal)
@@ -129,15 +162,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			} else if terminal.Action != "noop" || !terminal.SuppressLLM {
 				t.Fatalf("duplicate or visible error instead of terminal noop: %+v", terminal)
 			}
-			session := engine.SessionManager.GetOrCreate(sessionKey(trigger))
-			barrier := session.ReserveSequenceTurn("proactive:"+trigger.Platform, false, true)
-			completed := make(chan struct{})
-			go func() { barrier.Wait(); barrier.Done(); close(completed) }()
-			select {
-			case <-completed:
-			case <-time.After(5 * time.Second):
-				t.Fatal("reply turn did not finish")
-			}
+			session := waitTurn(trigger)
 			if sameGroup && tc.final != "different follow-up" && tc.name != "structured text stays literal" {
 				historyCopies, compactCopies := 0, 0
 				for _, message := range session.Snapshot() {
