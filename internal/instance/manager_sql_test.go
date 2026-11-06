@@ -553,8 +553,18 @@ func TestSQLQuickBackupHTTP(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/instances/"+info.ID+"/backup/"+part.path, nil)
 		response := httptest.NewRecorder()
 		m.ServeHTTP(response, request)
-		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), part.mediaType) || response.Body.Len() == 0 {
+		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), part.mediaType) || response.Header().Get("Content-Disposition") == "" || response.Body.Len() == 0 {
 			t.Fatalf("quick backup %s: code=%d type=%s body=%s", part.path, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+	}
+
+	for _, path := range []string{"/api/instances/" + info.ID + "/backup", "/api/instances/" + info.ID + "/backup/settings"} {
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		request.Header.Set(blobDownloadHeader, "blob")
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Disposition") != "" || response.Body.Len() == 0 {
+			t.Fatalf("blob backup %s: code=%d disposition=%q body=%s", path, response.Code, response.Header().Get("Content-Disposition"), response.Body.String())
 		}
 	}
 }

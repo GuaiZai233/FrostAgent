@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/poke"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
@@ -330,6 +331,9 @@ func (e *Engine) RunMessagesWithContext(
 		ctx = e.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
 	}
 	ctx = withRunContext(ctx, runContext)
+	if runContext.Proactive && runContext.ProactiveStickerOnly {
+		return e.staySilentForInboundSticker(ctx, messages, runContext)
+	}
 
 	if len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue(), time.Now())
@@ -822,6 +826,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		stickerEnforcing = true
 		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 	}
+	var specificReplyEchoes proactive.ReplyEchoGuard
+	specificReplyDelivered := false
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
 			return AgentRunResult{Silent: true, Error: context.Canceled}
@@ -869,6 +875,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			var proactiveTools []core.Tool
 			for _, t := range modelTools {
 				if e.isToolAllowedForProactive(t.Name) {
+					if t.Name == "send_message" {
+						t.Description = proactive.SpecificReplyDescription
+						t.Parameters = proactive.SpecificReplyParameters()
+					}
 					proactiveTools = append(proactiveTools, t)
 				}
 			}
@@ -1104,6 +1114,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if hasRunCtx && runCtx.Proactive {
 				contentStr, _ = filterStickerMessages(contentStr)
+				comparisonText, comparable := contentStr, true
+				if runCtx.FinalReplyText != nil {
+					comparisonText, comparable = runCtx.FinalReplyText(contentStr)
+				}
+				if !outputBlocked && comparable && specificReplyEchoes.IsDuplicate(comparisonText) {
+					// Keep the successful tool delivery as the public answer. Both
+					// adapters already finalize tool-only replies without resending.
+					contentStr = ""
+				}
 			}
 			messages[len(messages)-1].Content = contentStr
 			if runCanceled(ctx) {
@@ -1162,6 +1181,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 		}
 
+		// Check the entire batch before any executor can persist data or send
+		// messages. A later forbidden call must not leave an earlier partial send.
+		if hasRunCtx && runCtx.Proactive {
+			specificReplyCalls := 0
+			for _, tc := range responseMsg.ToolCalls {
+				if tc.Function.Name == "send_message" {
+					specificReplyCalls++
+				}
+				if !e.isToolAllowedForProactive(tc.Function.Name) ||
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
+					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
+					// After a confirmed send, finish as a tool-only answer so the
+					// adapters retain public history without sending anything else.
+					return AgentRunResult{MemoryWritten: memoryWritten, Silent: !specificReplyDelivered, Usage: totalUsage}
+				}
+			}
+		}
+
 		if conflict := staySilentConflict(responseMsg.ToolCalls); conflict != "" {
 			e.Log().WarnWithConsoleSummary(logs.TOOL, conflict, "工具调用冲突")
 			for _, tc := range responseMsg.ToolCalls {
@@ -1193,14 +1230,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if err := ctx.Err(); err != nil {
 				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
-			}
-			if hasRunCtx && runCtx.Proactive && !e.isToolAllowedForProactive(tc.Function.Name) {
-				e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复轮次禁止调用副作用工具 [%s]", tc.Function.Name), "主动回复禁止副作用工具")
-				return AgentRunResult{
-					MemoryWritten: memoryWritten,
-					Silent:        true,
-					Usage:         totalUsage,
-				}
 			}
 			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
@@ -1345,7 +1374,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						continue
 					}
 				}
-				toolResult, _ = e.deliverToolResult(ctx, execution, toolResult)
+				var delivered bool
+				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
+				if delivered && hasRunCtx && runCtx.Proactive && tc.Function.Name == "send_message" {
+					specificReplyDelivered = true
+					specificReplyEchoes.Record(execution.MessagePayload)
+				}
 			}
 
 			if runCanceled(ctx) {

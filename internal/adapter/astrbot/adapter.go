@@ -624,6 +624,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if c.isClosed() {
 			continue
 		}
+		c.rememberReplyTarget(event)
 		var turn *llm.SessionTurn
 		if a.engine != nil && a.engine.SessionManager != nil &&
 			(event.MessageType == "group" || event.MessageType == "private") {

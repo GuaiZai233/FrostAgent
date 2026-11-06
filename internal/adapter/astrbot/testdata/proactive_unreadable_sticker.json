@@ -1,0 +1,13 @@
+{
+  "type": "event",
+  "event_type": "message",
+  "message_type": "group",
+  "platform": "astrbot",
+  "user_id": "synthetic-user",
+  "group_id": "synthetic-group",
+  "message_id": "current",
+  "content": "",
+  "attachments": [],
+  "image_slot_counts": {"current": 1},
+  "metadata": {"sticker_only": true}
+}
