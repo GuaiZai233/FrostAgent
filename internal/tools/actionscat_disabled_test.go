@@ -62,7 +62,7 @@ func TestActionsCatDisabledToolsHideAndRejectAllEntryPoints(t *testing.T) {
 			if endpoint != "" {
 				wantEnabled += 16
 			}
-			checkOverviewCount(wantEnabled)
+			checkOverviewCount(17)
 			if got := len(engine.ModelTools()); got != wantEnabled {
 				t.Fatalf("default enabled tools = %d, want %d", got, wantEnabled)
 			}
@@ -75,7 +75,7 @@ func TestActionsCatDisabledToolsHideAndRejectAllEntryPoints(t *testing.T) {
 			if got := registry.ListTools(); len(got) != 0 {
 				t.Fatalf("disabled registry still exposes tools: %v", got)
 			}
-			checkOverviewCount(1)
+			checkOverviewCount(17)
 			contexts := []context.Context{
 				context.Background(),
 				llm.WithRunContext(context.Background(), llm.RunContext{Mock: true}),
@@ -109,7 +109,7 @@ func TestActionsCatDisabledToolsHideAndRejectAllEntryPoints(t *testing.T) {
 			if got := len(engine.ModelTools()); got != wantEnabled {
 				t.Fatalf("re-enabled model tools = %d, want %d", got, wantEnabled)
 			}
-			checkOverviewCount(wantEnabled)
+			checkOverviewCount(17)
 		})
 	}
 }

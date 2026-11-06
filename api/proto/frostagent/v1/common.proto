@@ -13,6 +13,9 @@ message Pagination {
 message ToolInfo {
   string name = 1;
   string description = 2;
+  bool enabled = 3;
+  bool available = 4;
+  bool configurable = 5;
 }
 
 // SessionInfo describes a current session or a persisted group summary.

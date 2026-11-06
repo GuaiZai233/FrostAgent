@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
@@ -23,6 +24,7 @@ type Service struct {
 	engine       *llm.Engine
 	version      string
 	wsListenAddr string
+	settingsMu   sync.Mutex
 }
 
 // New creates a new BotStatusService.
@@ -60,12 +62,15 @@ func (s *Service) GetOverview(
 	// Build tool list
 	var toolInfos []*v1.ToolInfo
 	for _, t := range s.engine.ToolRegistry {
-		if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
-			continue
+		available := true
+		if availability, ok := t.(interface{ IsEnabled() bool }); ok {
+			available = availability.IsEnabled()
 		}
 		toolInfos = append(toolInfos, &v1.ToolInfo{
 			Name:        t.Name(),
 			Description: t.Description(),
+			Enabled:     s.engine.ToolEnabled(t.Name()),
+			Available:   available,
 		})
 	}
 

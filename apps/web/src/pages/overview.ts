@@ -5,7 +5,7 @@ import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
-import { renderOverviewTools } from './overview-tools';
+import { renderOverviewTools, type ToolCapability } from './overview-tools';
 import '../styles/overview.css';
 
 export function mountOverviewPage(container: HTMLElement): () => void {
@@ -13,6 +13,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   let timerId: number | null = null;
   let isUnmounted = false;
   let loading = false;
+  let toolUpdates = 0;
+  let toolRevision = 0;
   let closeToolsDialog: (() => void) | undefined;
 
   container.innerHTML = `
@@ -31,8 +33,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   const contentEl = container.querySelector<HTMLElement>('#overview-content')!;
 
   async function loadData(showLoading = false) {
-    if (isUnmounted || loading) return;
+    if (isUnmounted || loading || toolUpdates > 0 || closeToolsDialog) return;
     loading = true;
+    const revision = toolRevision;
     if (showLoading && contentEl.children.length === 0) {
       loadingEl.style.display = 'flex';
     }
@@ -40,7 +43,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     try {
       const [data] = await Promise.all([api.getOverview(),instanceState.refresh()]);
  const instance = instanceState.selected;
-      if (isUnmounted) return;
+      if (isUnmounted || revision !== toolRevision) return;
 
       loadingEl.style.display = 'none';
       errorEl.style.display = 'none';
@@ -149,6 +152,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         </section>
       `;
       contentEl.querySelector<HTMLElement>('#overview-tools-strip')!.scrollLeft = toolsScroll;
+      bindToolControls(contentEl, data.tools);
       if (focusedToolID) contentEl.querySelector<HTMLElement>(`#${focusedToolID}`)?.focus({ preventScroll: true });
       contentEl.querySelector('#overview-all-tools')?.addEventListener('click', () => {
         if (closeToolsDialog) return;
@@ -157,8 +161,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           description: `共 ${data.tools.length} 个工具`,
           maxWidth: '64rem',
           bodyHtml: `<div class="overview-all-tools">${renderOverviewTools(data.tools, false)}</div>`,
-          onMount: (_dialog, close) => { closeToolsDialog = close; },
-          onClose: () => { closeToolsDialog = undefined; },
+          onMount: (dialog, close) => {
+            closeToolsDialog = close;
+            bindToolControls(dialog, data.tools);
+          },
+          onClose: () => { closeToolsDialog = undefined; void loadData(); },
         });
       });
       contentEl.querySelector<HTMLInputElement>("#instance-enabled")!.onchange = async (event) => {
@@ -179,6 +186,33 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     } finally {
       loading = false;
     }
+  }
+
+  function bindToolControls(root: HTMLElement, tools: ToolCapability[]) {
+    root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((toggle) => {
+      toggle.addEventListener('change', async () => {
+        const enabled = toggle.checked;
+        toolRevision++;
+        toolUpdates++;
+        root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((other) => { other.disabled = true; });
+        try {
+          await api.setToolEnabled(toggle.dataset.toolToggle!, enabled);
+          const tool = tools.find((item) => item.name === toggle.dataset.toolToggle);
+          if (tool) tool.enabled = enabled;
+          if (!isUnmounted) {
+            container.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((other) => {
+              if (other.dataset.toolToggle === toggle.dataset.toolToggle) other.checked = enabled;
+            });
+          }
+        } catch (err) {
+          toggle.checked = !enabled;
+          if (!isUnmounted) toast.error(String(err));
+        } finally {
+          toolUpdates--;
+          root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((other) => { other.disabled = false; });
+        }
+      });
+    });
   }
 
   void loadData(true);

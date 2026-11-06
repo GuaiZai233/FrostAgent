@@ -674,6 +674,10 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getOverview({});
     },
 
+    setToolEnabled(name: string, enabled: boolean) {
+      return botClient.setToolEnabled({ name, enabled });
+    },
+
     getSessions(
       pageSize: number,
       pageToken = '',

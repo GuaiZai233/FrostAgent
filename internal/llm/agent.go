@@ -1499,6 +1499,9 @@ func (e *Engine) findToolExecutor(name string) (ToolExecutor, bool) {
 		return nil, false
 	}
 	if tool, exists := e.ToolRegistry[name]; exists {
+		if !e.ToolEnabled(name) {
+			return nil, false
+		}
 		return tool, true
 	}
 	if e.MCPManager != nil {
@@ -1517,6 +1520,9 @@ func (e *Engine) EffectiveTools() []core.Tool {
 	var modelTools []core.Tool
 	if len(e.ToolRegistry) > 0 {
 		for _, t := range e.ToolRegistry {
+			if !e.ToolEnabled(t.Name()) {
+				continue
+			}
 			if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
 				continue
 			}

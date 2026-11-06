@@ -12,8 +12,40 @@
 }
 
 .overview-tool-card {
+  position: relative;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.overview-tool-heading {
+  position: relative;
+}
+
+.overview-tool-heading h3 {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-tool-toggle {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+}
+
+.overview-tool-config {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.overview-tool-config:hover {
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+
+.overview-tool-config:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .overview-tool-card > p {
