@@ -109,6 +109,22 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			if action := readAutoDecorationAction(t, conn, "first silence"); action.Action != "noop" {
 				t.Fatalf("expected initial silence, got %+v", action)
 			}
+			waitForTurn := func(event Event) *llm.SessionContext {
+				t.Helper()
+				session := engine.SessionManager.GetOrCreate(sessionKey(event))
+				barrier := session.ReserveSequenceTurn("proactive:"+event.Platform, false, true)
+				completed := make(chan struct{})
+				go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+				select {
+				case <-completed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("reply turn did not finish")
+				}
+				return session
+			}
+			// The terminal frame precedes turn cleanup. Wait before the next
+			// proactive event can cancel this turn and emit another noop.
+			waitForTurn(older)
 			trigger := older
 			trigger.MessageID, trigger.UserID, trigger.Content = "msg_trigger", "fixture-other-author", "later unrelated trigger"
 			if !sameGroup {
@@ -129,15 +145,7 @@ func TestAstrBotProactiveSpecificReplyEarlierMessage(t *testing.T) {
 			} else if terminal.Action != "noop" || !terminal.SuppressLLM {
 				t.Fatalf("duplicate or visible error instead of terminal noop: %+v", terminal)
 			}
-			session := engine.SessionManager.GetOrCreate(sessionKey(trigger))
-			barrier := session.ReserveSequenceTurn("proactive:"+trigger.Platform, false, true)
-			completed := make(chan struct{})
-			go func() { barrier.Wait(); barrier.Done(); close(completed) }()
-			select {
-			case <-completed:
-			case <-time.After(5 * time.Second):
-				t.Fatal("reply turn did not finish")
-			}
+			session := waitForTurn(trigger)
 			if sameGroup && tc.final != "different follow-up" && tc.name != "structured text stays literal" {
 				historyCopies, compactCopies := 0, 0
 				for _, message := range session.Snapshot() {
