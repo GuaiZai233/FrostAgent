@@ -8,6 +8,8 @@ import "frostagent/v1/common.proto";
 service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
   rpc SetToolEnabled(SetToolEnabledRequest) returns (SetToolEnabledResponse);
+  rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
+  rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
@@ -29,6 +31,20 @@ message SetToolEnabledRequest {
 }
 
 message SetToolEnabledResponse {}
+
+message GetBalanceQueryConfigRequest {}
+
+message SaveBalanceQueryConfigRequest {
+  string curl = 1;
+  // Write-only. Empty preserves the existing key unless clear_api_key is set.
+  string api_key = 2;
+  bool clear_api_key = 3;
+}
+
+message BalanceQueryConfigResponse {
+  string curl = 1;
+  bool api_key_configured = 2;
+}
 
 message GetOverviewResponse {
   string bot_name = 1;

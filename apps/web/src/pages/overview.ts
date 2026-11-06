@@ -16,6 +16,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   let toolUpdates = 0;
   let toolRevision = 0;
   let closeToolsDialog: (() => void) | undefined;
+  let closeConfigDialog: (() => void) | undefined;
+  let configOpening = false;
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -33,7 +35,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   const contentEl = container.querySelector<HTMLElement>('#overview-content')!;
 
   async function loadData(showLoading = false) {
-    if (isUnmounted || loading || toolUpdates > 0 || closeToolsDialog) return;
+    if (isUnmounted || loading || toolUpdates > 0 || closeToolsDialog || configOpening) return;
     loading = true;
     const revision = toolRevision;
     if (showLoading && contentEl.children.length === 0) {
@@ -64,6 +66,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       const toolsScroll = contentEl.querySelector<HTMLElement>('#overview-tools-strip')?.scrollLeft || 0;
       const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
       const focusedToolID = toolsHadFocus ? (document.activeElement as HTMLElement)?.id : '';
+      const focusedToolToggle = toolsHadFocus ? (document.activeElement as HTMLElement)?.dataset.toolToggle : undefined;
+      const focusedToolConfig = toolsHadFocus ? (document.activeElement as HTMLElement)?.dataset.toolConfig : undefined;
 
       contentEl.innerHTML = `
         <header class="flex flex-col gap-2 pb-1">
@@ -154,6 +158,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       contentEl.querySelector<HTMLElement>('#overview-tools-strip')!.scrollLeft = toolsScroll;
       bindToolControls(contentEl, data.tools);
       if (focusedToolID) contentEl.querySelector<HTMLElement>(`#${focusedToolID}`)?.focus({ preventScroll: true });
+      contentEl.querySelectorAll<HTMLElement>('[data-tool-toggle], [data-tool-config]').forEach((control) => {
+        if ((focusedToolToggle && control.dataset.toolToggle === focusedToolToggle) || (focusedToolConfig && control.dataset.toolConfig === focusedToolConfig)) control.focus({ preventScroll: true });
+      });
       contentEl.querySelector('#overview-all-tools')?.addEventListener('click', () => {
         if (closeToolsDialog) return;
         void openDialog({
@@ -189,6 +196,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
   }
 
   function bindToolControls(root: HTMLElement, tools: ToolCapability[]) {
+    root.querySelectorAll<HTMLButtonElement>('[data-tool-config]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (button.dataset.toolConfig === 'balance_query') void openBalanceConfig();
+      });
+    });
     root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((toggle) => {
       toggle.addEventListener('change', async () => {
         const enabled = toggle.checked;
@@ -215,6 +227,60 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     });
   }
 
+  async function openBalanceConfig() {
+    if (isUnmounted || configOpening || toolUpdates > 0) return;
+    configOpening = true;
+    try {
+      const cfg = await api.getBalanceQueryConfig();
+      if (isUnmounted) return;
+      await openDialog({
+        title: '配置 balance_query',
+        description: 'FrostAgent 使用已保存的请求查询额度，模型不能传入或修改请求参数。',
+        maxWidth: '42rem',
+        bodyHtml: `<form id="balance-query-form" class="flex flex-col gap-4">
+          <label class="form-group"><span class="form-label">curl 请求模板</span><textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></label>
+          <p class="text-xs text-muted">用 {{API_KEY}} 代替密钥，支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。不会执行 shell、读取文件或跟随重定向。</p>
+          <label class="form-group"><span class="form-label">API key</span><input id="balance-query-key" class="input" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured ? '已配置；留空保留原密钥' : '填写查询接口的 API key'}"></label>
+          <label class="flex items-center gap-2 text-sm"><input id="balance-query-clear-key" type="checkbox" class="checkbox">清除已保存的 API key</label>
+          <p class="text-xs text-muted">凭据只用于后端请求，不加入模型工具定义和调用参数。模型收到接口的原始响应正文；包含密钥的响应会被拦截。</p>
+          <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
+        </form>`,
+        footerHtml: '<button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>',
+        onMount: (dialog, close) => {
+          closeConfigDialog = close;
+          const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+          const clearKey = dialog.querySelector<HTMLInputElement>('#balance-query-clear-key')!;
+          clearKey.onchange = () => { key.disabled = clearKey.checked; if (clearKey.checked) key.value = ''; };
+          dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
+            event.preventDefault();
+            const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
+            if (save.disabled) return;
+            save.disabled = true;
+            const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
+            error.textContent = '';
+            try {
+              await api.saveBalanceQueryConfig(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, key.value, clearKey.checked);
+              if (isUnmounted || !dialog.isConnected) return;
+              toolRevision++;
+              key.value = '';
+              close();
+              closeToolsDialog?.();
+              toast.success('额度查询配置已保存');
+            } catch (err) {
+              if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
+            } finally { save.disabled = false; }
+          };
+        },
+        onClose: () => { closeConfigDialog = undefined; },
+      });
+    } catch (err) {
+      if (!isUnmounted) toast.error(String(err));
+    } finally {
+      configOpening = false;
+      if (!isUnmounted) void loadData();
+    }
+  }
+
   void loadData(true);
   timerId = window.setInterval(() => {
     void loadData(false);
@@ -222,6 +288,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
 
   return () => {
     isUnmounted = true;
+    closeConfigDialog?.();
     closeToolsDialog?.();
     if (timerId !== null) {
       clearInterval(timerId);

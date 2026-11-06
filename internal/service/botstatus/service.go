@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -67,10 +68,11 @@ func (s *Service) GetOverview(
 			available = availability.IsEnabled()
 		}
 		toolInfos = append(toolInfos, &v1.ToolInfo{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Enabled:     s.engine.ToolEnabled(t.Name()),
-			Available:   available,
+			Name:         t.Name(),
+			Description:  t.Description(),
+			Enabled:      s.engine.ToolEnabled(t.Name()),
+			Available:    available,
+			Configurable: t.Name() == balancequery.ToolName,
 		})
 	}
 

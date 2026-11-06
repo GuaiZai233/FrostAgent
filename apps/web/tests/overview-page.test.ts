@@ -64,6 +64,10 @@ try {
   await flush();
   assert.equal(toggle.checked, false, 'failed save must restore the prior switch state');
   rejectToggle = false;
+  toggle.focus();
+  tick();
+  await flush();
+  assert.equal((document.activeElement as HTMLElement)?.dataset.toolToggle, 'tool-0', 'polling must preserve switch keyboard focus');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
   rail.scrollLeft = 512;
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.focus();

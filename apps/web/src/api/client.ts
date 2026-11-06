@@ -678,6 +678,14 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.setToolEnabled({ name, enabled });
     },
 
+    getBalanceQueryConfig() {
+      return botClient.getBalanceQueryConfig({});
+    },
+
+    saveBalanceQueryConfig(curl: string, apiKey: string, clearApiKey = false) {
+      return botClient.saveBalanceQueryConfig({ curl, apiKey, clearApiKey });
+    },
+
     getSessions(
       pageSize: number,
       pageToken = '',

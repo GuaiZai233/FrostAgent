@@ -35,6 +35,9 @@
 .overview-tool-config {
   position: absolute;
   inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
   border-radius: inherit;
   cursor: pointer;
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 )
 
 func TestToolSwitchPersistsAndKeepsRegisteredCard(t *testing.T) {
@@ -67,6 +69,12 @@ func TestToolSwitchSurvivesDatabaseReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	i := create(t, m, "persistent-tools")
+	configBody, _ := json.Marshal(map[string]any{"curl": balancequery.DefaultCurl, "apiKey": "synthetic-persistent-balance-key"})
+	configured := rpc(t, m, i.ID, "BotStatusService/SaveBalanceQueryConfig", string(configBody), false)
+	if configured.Code != http.StatusOK {
+		m.Close()
+		t.Fatalf("configure balance: %d %s", configured.Code, configured.Body.String())
+	}
 	w := rpc(t, m, i.ID, "BotStatusService/SetToolEnabled", `{"name":"stay_silent","enabled":false}`, false)
 	if w.Code != http.StatusOK {
 		m.Close()
@@ -80,5 +88,8 @@ func TestToolSwitchSurvivesDatabaseReopen(t *testing.T) {
 	defer reopened.Close()
 	if reopened.instances[i.ID].runtime.Engine.ToolEnabled("stay_silent") {
 		t.Fatal("database reopen lost tool switch")
+	}
+	if !balancequery.Configured(reopened.instances[i.ID].runtime.Engine.Config.Get) {
+		t.Fatal("database reopen lost balance configuration")
 	}
 }
