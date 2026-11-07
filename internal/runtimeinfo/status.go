@@ -21,7 +21,7 @@ func architecture(goos, goarch string, docker bool) string {
 		goarch = "Unknown"
 	}
 	platform := map[string]string{
-		"darwin":  "Darwin",
+		"darwin":  "macOS",
 		"freebsd": "FreeBSD",
 		"linux":   "Linux",
 		"openbsd": "OpenBSD",

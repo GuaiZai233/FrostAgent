@@ -42,7 +42,7 @@ func TestArchitecture(t *testing.T) {
 	}{
 		{"linux", "amd64", false, "amd64-Linux"},
 		{"windows", "arm64", false, "arm64-Windows"},
-		{"darwin", "arm64", false, "arm64-Darwin"},
+		{"darwin", "arm64", false, "arm64-macOS"},
 		{"plan9", "wasm", false, "wasm-Unknown"},
 		{"linux", "amd64", true, "amd64-Docker"},
 		{"", "", false, "Unknown-Unknown"},
