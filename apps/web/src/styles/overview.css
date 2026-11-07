@@ -70,15 +70,6 @@
   max-height: 6rem;
 }
 
-.overview-tools-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 1.25rem;
-  cursor: pointer;
-}
-
 .overview-all-tools {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));

@@ -20,10 +20,13 @@ function renderTool(tool: ToolCapability, preview: boolean): string {
 export function renderOverviewTools(tools: readonly ToolCapability[], preview = true): string {
   if (!tools.length) return '<p class="text-xs text-muted p-4">暂无已注册工具。</p>';
   const visible = preview ? tools.slice(0, previewLimit) : tools;
-  return visible.map((tool) => renderTool(tool, preview)).join('') +
-    (preview && tools.length > previewLimit
-      ? `<button type="button" id="overview-all-tools" class="card overview-tool-card overview-tools-more text-primary">
-          ${icon('grid', 'w-5 h-5')}<span>展示所有</span><span class="text-xs text-muted">共 ${tools.length} 个工具</span>
-        </button>`
-      : '');
+  return visible.map((tool) => renderTool(tool, preview)).join('');
+}
+
+export function renderOverviewToolsAction(toolCount: number): string {
+  return toolCount > previewLimit
+    ? `<button type="button" id="overview-all-tools" class="btn btn-outline btn-sm shrink-0" aria-haspopup="dialog">
+        ${icon('grid', 'w-3.5 h-3.5')}<span>展示所有</span>
+      </button>`
+    : '';
 }

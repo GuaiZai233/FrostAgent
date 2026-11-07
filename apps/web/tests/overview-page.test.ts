@@ -79,6 +79,8 @@ try {
   assert.equal(root.querySelector('#check-updates'), versionControl, 'polling must not replace the version control');
   assert.equal(document.activeElement, versionControl, 'polling must preserve keyboard focus on update control');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
+  assert.equal(rail.querySelector('#overview-all-tools'), null, 'show all must not require scrolling through the tool cards');
+  assert.ok(root.querySelector('#overview-tools > div:first-child > #overview-all-tools:last-child'), 'show all must be at the right end of the tools heading');
   rail.scrollLeft = 512;
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.focus();
   tick();

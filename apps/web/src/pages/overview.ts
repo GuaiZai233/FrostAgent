@@ -5,7 +5,7 @@ import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
-import { renderOverviewTools, type ToolCapability } from './overview-tools';
+import { renderOverviewTools, renderOverviewToolsAction, type ToolCapability } from './overview-tools';
 import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
 import '../styles/overview.css';
@@ -99,7 +99,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         </span>`;
 
       const toolsScroll = contentEl.querySelector<HTMLElement>('#overview-tools-strip')?.scrollLeft || 0;
-      const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
+      const toolsHadFocus = contentEl.querySelector('#overview-tools')?.contains(document.activeElement);
       const focusedToolID = toolsHadFocus ? (document.activeElement as HTMLElement)?.id : '';
       const focusedToolToggle = toolsHadFocus ? (document.activeElement as HTMLElement)?.dataset.toolToggle : undefined;
       const focusedToolConfig = toolsHadFocus ? (document.activeElement as HTMLElement)?.dataset.toolConfig : undefined;
@@ -143,12 +143,13 @@ export function mountOverviewPage(container: HTMLElement): () => void {
  ${instance?.error ? `<p class="text-sm text-destructive">${escapeHtml(instance.error)}</p>` : ""}
 
         <!-- Tools Capability Section -->
-        <section class="flex flex-col gap-3">
-          <div class="flex items-center justify-between">
+        <section id="overview-tools" class="flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-3">
             <h2 class="text-sm font-semibold text-foreground flex items-center gap-1.5">
               <span>已注册工具能力</span>
               <span class="badge badge-outline text-xs">${data.tools.length}</span>
             </h2>
+            ${renderOverviewToolsAction(data.tools.length)}
           </div>
           <div id="overview-tools-strip" class="overview-tools-strip" tabindex="0" role="region" aria-label="已注册工具能力，横向滚动查看">
             ${renderOverviewTools(data.tools)}
