@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"io"
 	"io/fs"
 	"net/http"
@@ -280,6 +281,12 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	}
 	if _, err := backup.ImportMemories(m.db, info.ID, decoded.Memories, false); err != nil {
 		return Info{}, err
+	}
+	if decoded.TokenUsage != nil {
+		usageStore, _ := tokenusage.New(m.db, info.ID, "")
+		if err := usageStore.Restore(context.Background(), *decoded.TokenUsage); err != nil {
+			return Info{}, err
+		}
 	}
 	if err := skills.NewStore(m.db, info.ID).ImportPackages(decoded.Skills); err != nil {
 		return Info{}, err

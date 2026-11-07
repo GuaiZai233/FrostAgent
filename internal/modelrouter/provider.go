@@ -84,6 +84,11 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	req.Model = target.UpstreamModel
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
 	client.Logger = p.manager.Log()
+	module := string(p.workload)
+	if req.UsageModule != "" {
+		module = req.UsageModule
+	}
+	client.ObserveUsage = p.manager.usageObserver(module)
 	return client.Chat(ctx, req)
 }
 

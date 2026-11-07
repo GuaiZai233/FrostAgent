@@ -52,6 +52,10 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether|TestRoutePublicationGuardKeepsScopesIsolated)$' -count=1 -v
+      - name: Test PostgreSQL token usage accounting
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/tokenusage -run '^TestPostgresTokenUsagePersistence$' -count=1 -v
       - name: Generate Go proto for restore test
         run: |
           go install github.com/bufbuild/buf/cmd/buf@v1.75.0

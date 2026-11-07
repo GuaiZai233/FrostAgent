@@ -15,6 +15,8 @@ type ChatRequest struct {
 	Temperature float64
 	Route       RouteContext
 	TraceID     string
+	// UsageModule is local accounting metadata and is never sent upstream.
+	UsageModule string
 }
 
 type EmbeddingRequest struct {
@@ -93,4 +95,14 @@ type Usage struct {
 	PromptTokens     int // 输入消耗
 	CompletionTokens int // 输出消耗
 	TotalTokens      int
+	// Reported preserves field presence, including an explicitly reported zero.
+	// Nil keeps manually constructed Usage values compatible with older callers.
+	Reported           *UsageReported
+	CachedPromptTokens *int
+}
+
+type UsageReported struct {
+	Prompt     bool
+	Completion bool
+	Total      bool
 }

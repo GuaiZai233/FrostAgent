@@ -57,3 +57,19 @@
 .overview-resource > svg:last-child {
   margin-left: auto;
 }
+
+.token-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0.75rem;
+}
+
+.token-usage-value { font-size: 1.2rem; overflow-wrap: anywhere; }
+.token-usage-unknown { color: var(--muted-foreground); font-size: 0.75rem; font-weight: 500; }
+.token-usage-table-wrap { overflow-x: auto; }
+.token-usage-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.token-usage-table th, .token-usage-table td { padding: 0.65rem 0.85rem; text-align: right; white-space: nowrap; }
+.token-usage-table th:first-child { text-align: left; }
+.token-usage-table thead { color: var(--muted-foreground); }
+.token-usage-table tbody tr { border-top: 1px solid var(--border); }
+.token-usage-table tbody th { font-weight: 500; }

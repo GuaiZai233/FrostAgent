@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/bot.proto.
  */
 export const file_frostagent_v1_bot: GenFile = /*@__PURE__*/
-  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3QijAIKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvEhYKDndzX2xpc3Rlbl9hZGRyGAkgASgJIkMKEkdldFNlc3Npb25zUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uInIKE0dldFNlc3Npb25zUmVzcG9uc2USLAoIc2Vzc2lvbnMYASADKAsyGi5mcm9zdGFnZW50LnYxLlNlc3Npb25JbmZvEi0KCnBhZ2luYXRpb24YAiABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24iLwoZRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJIjwKGkRlbGV0ZUdyb3VwU3VtbWFyeVJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiRAoYR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSFAoMcmVjZW50X2xpbWl0GAIgASgFIuwBChVTdW1tYXJ5R3JvdXBJbmZvUHJvdG8SDwoHc3VtbWFyeRgBIAEoCRITCgttZXNzYWdlX2lkcxgCIAMoCRIYChBzdGFydF9tZXNzYWdlX2lkGAMgASgJEhYKDmVuZF9tZXNzYWdlX2lkGAQgASgJEhMKC3N0YXJ0X2luZGV4GAUgASgFEhEKCWVuZF9pbmRleBgGIAEoBRIQCghtZXNzYWdlcxgHIAMoCRJBChNzdHJ1Y3R1cmVkX21lc3NhZ2VzGAggAygLMiQuZnJvc3RhZ2VudC52MS5Hcm91cE1lc3NhZ2VJbmZvUHJvdG8iewoVR3JvdXBNZXNzYWdlSW5mb1Byb3RvEgwKBHJvbGUYASABKAkSDgoGc2VuZGVyGAIgASgJEhEKCXNlbmRlcl9pZBgDIAEoCRIPCgdjb250ZW50GAQgASgJEhIKCm1lc3NhZ2VfaWQYBSABKAkSDAoEdGltZRgGIAEoCSI7ChpTZXNzaW9uSGlzdG9yeU1lc3NhZ2VQcm90bxIMCgRyb2xlGAEgASgJEg8KB2NvbnRlbnQYAiABKAki8gIKGUdldFNlc3Npb25Db250ZXh0UmVzcG9uc2USEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIXCg9ydW5uaW5nX3N1bW1hcnkYAyABKAkSFwoPcmVjZW50X21lc3NhZ2VzGAQgAygJEjwKDnN1bW1hcnlfZ3JvdXBzGAUgAygLMiQuZnJvc3RhZ2VudC52MS5TdW1tYXJ5R3JvdXBJbmZvUHJvdG8SOgoHaGlzdG9yeRgGIAMoCzIpLmZyb3N0YWdlbnQudjEuU2Vzc2lvbkhpc3RvcnlNZXNzYWdlUHJvdG8SEwoLcHJvbXB0X3RleHQYByABKAkSFQoNc3lzdGVtX3Byb21wdBgIIAEoCRINCgVtb2RlbBgJIAEoCRJIChpyZWNlbnRfc3RydWN0dXJlZF9tZXNzYWdlcxgKIAMoCzIkLmZyb3N0YWdlbnQudjEuR3JvdXBNZXNzYWdlSW5mb1Byb3RvKooBCglCb3RTdGF0dXMSGgoWQk9UX1NUQVRVU19VTlNQRUNJRklFRBAAEhsKF0JPVF9TVEFUVVNfSU5JVElBTElaSU5HEAESFgoSQk9UX1NUQVRVU19SVU5OSU5HEAISFAoQQk9UX1NUQVRVU19FUlJPUhADEhYKEkJPVF9TVEFUVVNfU1RPUFBFRBAEMpEDChBCb3RTdGF0dXNTZXJ2aWNlElQKC0dldE92ZXJ2aWV3EiEuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldE92ZXJ2aWV3UmVzcG9uc2USVAoLR2V0U2Vzc2lvbnMSIS5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbnNSZXNwb25zZRJmChFHZXRTZXNzaW9uQ29udGV4dBInLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0GiguZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uQ29udGV4dFJlc3BvbnNlEmkKEkRlbGV0ZUdyb3VwU3VtbWFyeRIoLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBopLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
+  fileDesc("Chdmcm9zdGFnZW50L3YxL2JvdC5wcm90bxINZnJvc3RhZ2VudC52MSIUChJHZXRPdmVydmlld1JlcXVlc3QixAIKE0dldE92ZXJ2aWV3UmVzcG9uc2USEAoIYm90X25hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIWCg51cHRpbWVfc2Vjb25kcxgDIAEoAxIgChh0b3RhbF9tZXNzYWdlc19wcm9jZXNzZWQYBCABKAMSFwoPYWN0aXZlX3Nlc3Npb25zGAUgASgFEhUKDWN1cnJlbnRfbW9kZWwYBiABKAkSKAoGc3RhdHVzGAcgASgOMhguZnJvc3RhZ2VudC52MS5Cb3RTdGF0dXMSJgoFdG9vbHMYCCADKAsyFy5mcm9zdGFnZW50LnYxLlRvb2xJbmZvEhYKDndzX2xpc3Rlbl9hZGRyGAkgASgJEjYKC3Rva2VuX3VzYWdlGAogASgLMiEuZnJvc3RhZ2VudC52MS5Ub2tlblVzYWdlT3ZlcnZpZXciQwoSR2V0U2Vzc2lvbnNSZXF1ZXN0Ei0KCnBhZ2luYXRpb24YASABKAsyGS5mcm9zdGFnZW50LnYxLlBhZ2luYXRpb24icgoTR2V0U2Vzc2lvbnNSZXNwb25zZRIsCghzZXNzaW9ucxgBIAMoCzIaLmZyb3N0YWdlbnQudjEuU2Vzc2lvbkluZm8SLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiIvChlEZWxldGVHcm91cFN1bW1hcnlSZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkiPAoaRGVsZXRlR3JvdXBTdW1tYXJ5UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJEChhHZXRTZXNzaW9uQ29udGV4dFJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIUCgxyZWNlbnRfbGltaXQYAiABKAUi7AEKFVN1bW1hcnlHcm91cEluZm9Qcm90bxIPCgdzdW1tYXJ5GAEgASgJEhMKC21lc3NhZ2VfaWRzGAIgAygJEhgKEHN0YXJ0X21lc3NhZ2VfaWQYAyABKAkSFgoOZW5kX21lc3NhZ2VfaWQYBCABKAkSEwoLc3RhcnRfaW5kZXgYBSABKAUSEQoJZW5kX2luZGV4GAYgASgFEhAKCG1lc3NhZ2VzGAcgAygJEkEKE3N0cnVjdHVyZWRfbWVzc2FnZXMYCCADKAsyJC5mcm9zdGFnZW50LnYxLkdyb3VwTWVzc2FnZUluZm9Qcm90byJ7ChVHcm91cE1lc3NhZ2VJbmZvUHJvdG8SDAoEcm9sZRgBIAEoCRIOCgZzZW5kZXIYAiABKAkSEQoJc2VuZGVyX2lkGAMgASgJEg8KB2NvbnRlbnQYBCABKAkSEgoKbWVzc2FnZV9pZBgFIAEoCRIMCgR0aW1lGAYgASgJIjsKGlNlc3Npb25IaXN0b3J5TWVzc2FnZVByb3RvEgwKBHJvbGUYASABKAkSDwoHY29udGVudBgCIAEoCSLyAgoZR2V0U2Vzc2lvbkNvbnRleHRSZXNwb25zZRISCgpzZXNzaW9uX2lkGAEgASgJEhAKCHBsYXRmb3JtGAIgASgJEhcKD3J1bm5pbmdfc3VtbWFyeRgDIAEoCRIXCg9yZWNlbnRfbWVzc2FnZXMYBCADKAkSPAoOc3VtbWFyeV9ncm91cHMYBSADKAsyJC5mcm9zdGFnZW50LnYxLlN1bW1hcnlHcm91cEluZm9Qcm90bxI6CgdoaXN0b3J5GAYgAygLMikuZnJvc3RhZ2VudC52MS5TZXNzaW9uSGlzdG9yeU1lc3NhZ2VQcm90bxITCgtwcm9tcHRfdGV4dBgHIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAggASgJEg0KBW1vZGVsGAkgASgJEkgKGnJlY2VudF9zdHJ1Y3R1cmVkX21lc3NhZ2VzGAogAygLMiQuZnJvc3RhZ2VudC52MS5Hcm91cE1lc3NhZ2VJbmZvUHJvdG8iQAoRVG9rZW5Vc2FnZUNvdW50ZXISDQoFdmFsdWUYASABKAMSHAoUdW5lc3RpbWF0ZWRfcmVxdWVzdHMYAiABKAMisAIKEFRva2VuVXNhZ2VNb2R1bGUSDgoGbW9kdWxlGAEgASgJEhAKCHJlcXVlc3RzGAIgASgDEi8KBWlucHV0GAMgASgLMiAuZnJvc3RhZ2VudC52MS5Ub2tlblVzYWdlQ291bnRlchIwCgZvdXRwdXQYBCABKAsyIC5mcm9zdGFnZW50LnYxLlRva2VuVXNhZ2VDb3VudGVyEi8KBXRvdGFsGAUgASgLMiAuZnJvc3RhZ2VudC52MS5Ub2tlblVzYWdlQ291bnRlchIwCgZjYWNoZWQYBiABKAsyIC5mcm9zdGFnZW50LnYxLlRva2VuVXNhZ2VDb3VudGVyEjQKCmNhY2hlX2hpdHMYByABKAsyIC5mcm9zdGFnZW50LnYxLlRva2VuVXNhZ2VDb3VudGVyIm0KElRva2VuVXNhZ2VPdmVydmlldxIwCgdtb2R1bGVzGAEgAygLMh8uZnJvc3RhZ2VudC52MS5Ub2tlblVzYWdlTW9kdWxlEhIKCmluY29tcGxldGUYAiABKAgSEQoJYXZhaWxhYmxlGAMgASgIKooBCglCb3RTdGF0dXMSGgoWQk9UX1NUQVRVU19VTlNQRUNJRklFRBAAEhsKF0JPVF9TVEFUVVNfSU5JVElBTElaSU5HEAESFgoSQk9UX1NUQVRVU19SVU5OSU5HEAISFAoQQk9UX1NUQVRVU19FUlJPUhADEhYKEkJPVF9TVEFUVVNfU1RPUFBFRBAEMpEDChBCb3RTdGF0dXNTZXJ2aWNlElQKC0dldE92ZXJ2aWV3EiEuZnJvc3RhZ2VudC52MS5HZXRPdmVydmlld1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkdldE92ZXJ2aWV3UmVzcG9uc2USVAoLR2V0U2Vzc2lvbnMSIS5mcm9zdGFnZW50LnYxLkdldFNlc3Npb25zUmVxdWVzdBoiLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbnNSZXNwb25zZRJmChFHZXRTZXNzaW9uQ29udGV4dBInLmZyb3N0YWdlbnQudjEuR2V0U2Vzc2lvbkNvbnRleHRSZXF1ZXN0GiguZnJvc3RhZ2VudC52MS5HZXRTZXNzaW9uQ29udGV4dFJlc3BvbnNlEmkKEkRlbGV0ZUdyb3VwU3VtbWFyeRIoLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVxdWVzdBopLmZyb3N0YWdlbnQudjEuRGVsZXRlR3JvdXBTdW1tYXJ5UmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.GetOverviewRequest
@@ -75,6 +75,11 @@ export type GetOverviewResponse = Message<"frostagent.v1.GetOverviewResponse"> &
    * @generated from field: string ws_listen_addr = 9;
    */
   wsListenAddr: string;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageOverview token_usage = 10;
+   */
+  tokenUsage?: TokenUsageOverview | undefined;
 };
 
 /**
@@ -364,6 +369,104 @@ export type GetSessionContextResponse = Message<"frostagent.v1.GetSessionContext
  */
 export const GetSessionContextResponseSchema: GenMessage<GetSessionContextResponse> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_bot, 10);
+
+/**
+ * Known provider values are retained alongside calls whose value was omitted.
+ *
+ * @generated from message frostagent.v1.TokenUsageCounter
+ */
+export type TokenUsageCounter = Message<"frostagent.v1.TokenUsageCounter"> & {
+  /**
+   * @generated from field: int64 value = 1;
+   */
+  value: bigint;
+
+  /**
+   * @generated from field: int64 unestimated_requests = 2;
+   */
+  unestimatedRequests: bigint;
+};
+
+/**
+ * Describes the message frostagent.v1.TokenUsageCounter.
+ * Use `create(TokenUsageCounterSchema)` to create a new message.
+ */
+export const TokenUsageCounterSchema: GenMessage<TokenUsageCounter> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 11);
+
+/**
+ * @generated from message frostagent.v1.TokenUsageModule
+ */
+export type TokenUsageModule = Message<"frostagent.v1.TokenUsageModule"> & {
+  /**
+   * @generated from field: string module = 1;
+   */
+  module: string;
+
+  /**
+   * @generated from field: int64 requests = 2;
+   */
+  requests: bigint;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageCounter input = 3;
+   */
+  input?: TokenUsageCounter | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageCounter output = 4;
+   */
+  output?: TokenUsageCounter | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageCounter total = 5;
+   */
+  total?: TokenUsageCounter | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageCounter cached = 6;
+   */
+  cached?: TokenUsageCounter | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.TokenUsageCounter cache_hits = 7;
+   */
+  cacheHits?: TokenUsageCounter | undefined;
+};
+
+/**
+ * Describes the message frostagent.v1.TokenUsageModule.
+ * Use `create(TokenUsageModuleSchema)` to create a new message.
+ */
+export const TokenUsageModuleSchema: GenMessage<TokenUsageModule> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 12);
+
+/**
+ * @generated from message frostagent.v1.TokenUsageOverview
+ */
+export type TokenUsageOverview = Message<"frostagent.v1.TokenUsageOverview"> & {
+  /**
+   * @generated from field: repeated frostagent.v1.TokenUsageModule modules = 1;
+   */
+  modules: TokenUsageModule[];
+
+  /**
+   * @generated from field: bool incomplete = 2;
+   */
+  incomplete: boolean;
+
+  /**
+   * @generated from field: bool available = 3;
+   */
+  available: boolean;
+};
+
+/**
+ * Describes the message frostagent.v1.TokenUsageOverview.
+ * Use `create(TokenUsageOverviewSchema)` to create a new message.
+ */
+export const TokenUsageOverviewSchema: GenMessage<TokenUsageOverview> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_bot, 13);
 
 /**
  * @generated from enum frostagent.v1.BotStatus

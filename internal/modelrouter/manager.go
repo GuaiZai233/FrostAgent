@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ type Manager struct {
 	draft            Configuration
 	secrets          *SecretBackend
 	loadErr          error
+	usage            *tokenusage.Store
 	ReserveEndpoints func([]Endpoint) error
 	db               *storage.DB
 	instanceID       string

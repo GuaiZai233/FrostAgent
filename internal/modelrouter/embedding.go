@@ -61,6 +61,7 @@ func (m *Manager) EmbeddingSession(ctx context.Context, scope Scope) (Target, co
 	}
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, 120*time.Second)
 	client.Logger = m.Log()
+	client.ObserveUsage = m.usageObserver("embedding")
 	return target, client, nil
 }
 
