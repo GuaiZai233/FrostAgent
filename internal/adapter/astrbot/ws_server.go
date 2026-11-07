@@ -1140,7 +1140,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	contextBytes, _ := json.Marshal(contextData)
 
-	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
+	responseContext, _ := json.Marshal(map[string]string{"guidance": parity.CurrentTimeGuidance(time.Now())})
+	responseTag := fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
+	durablePrompt := fmt.Sprintf("User Message: %s%s\n\n<system_context>\n%s\n</system_context>", userText, responseTag, string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
 	if event.MessageType == "group" {
@@ -1239,6 +1241,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 		}
 	}
+	requestPrompt += responseTag
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	if isProactiveReply(&event) {

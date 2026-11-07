@@ -2,6 +2,8 @@ package onebot
 
 import (
 	"encoding/json"
+	"time"
+
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 )
@@ -43,7 +45,7 @@ func buildResponseContext(
 		"mode":              event.MessageType,
 		"triggers":          triggers,
 		"silence_available": true,
-		"guidance":          guidance,
+		"guidance":          guidance + parity.CurrentTimeGuidance(time.Now()),
 	}
 	encoded, _ := json.Marshal(context)
 	return string(encoded)

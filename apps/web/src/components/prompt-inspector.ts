@@ -14,6 +14,7 @@ export interface GroupMessageItem {
   content: string;
   rawText: string;
   isSummarized?: boolean;
+  promptContexts?: Array<{ name: string; content: string }>;
 }
 
 export interface SummaryGroupInfo {
@@ -245,6 +246,48 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
   };
 }
 
+function trailingJSONContext(text: string, name: string): {
+  before: string;
+  value: Record<string, unknown>;
+} | null {
+  const opening = `\n\n<${name}>\n`;
+  const closing = `\n</${name}>`;
+  if (!text.endsWith(closing)) return null;
+  const start = text.lastIndexOf(opening);
+  if (start < 0) return null;
+  try {
+    const value: unknown = JSON.parse(text.slice(start + opening.length, -closing.length));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return { before: text.slice(0, start), value: value as Record<string, unknown> };
+  } catch {
+    return null;
+  }
+}
+
+// Peel only the adapter envelope at the end of a private user message. Searching
+// arbitrary tags in the body would truncate quoted examples and forged markers.
+function privateHistoryMessage(item: GroupMessageItem): GroupMessageItem {
+  const prefix = 'User Message: ';
+  if (item.role !== 'user' || !item.content.startsWith(prefix)) return item;
+  const system = trailingJSONContext(item.content, 'system_context');
+  if (!system || !('message_id' in system.value) ||
+    !('user_id' in system.value || 'sender_id' in system.value)) return item;
+
+  let body = system.before;
+  const promptContexts = [{ name: 'system_context', content: JSON.stringify(system.value, null, 2) }];
+  const response = trailingJSONContext(body, 'response_context');
+  const guidance = response?.value.guidance;
+  const oneBotResponse = response?.value.mode === 'private' && response.value.silence_available === true &&
+    Array.isArray(response.value.triggers) && response.value.triggers.includes('private_message');
+  const timeResponse = response && Object.keys(response.value).length === 1 && typeof guidance === 'string' &&
+    /^当前系统时间：\d{4}-\d{1,2}-\d{1,2} \d{2}:\d{2}\(UTC\+8\)。$/.test(guidance);
+  if (response && typeof guidance === 'string' && (oneBotResponse || timeResponse)) {
+    body = response.before;
+    promptContexts.unshift({ name: 'response_context', content: JSON.stringify(response.value, null, 2) });
+  }
+  return { ...item, content: body.slice(prefix.length), promptContexts };
+}
+
 /**
  * Builds a structured ParsedPrompt from backend GetSessionContext response.
  */
@@ -305,6 +348,13 @@ export function buildInspectorDataFromSessionContext(context: {
       rawText: message.content,
       isSummarized: false,
     }));
+  }
+
+  if (privateSession) {
+    recentMessages = recentMessages.map(privateHistoryMessage);
+    for (const group of summaryGroups) {
+      group.parsedMessages = group.parsedMessages?.map(privateHistoryMessage);
+    }
   }
 
   return {
@@ -956,6 +1006,15 @@ function renderSingleMessageRow(
         ${msg.id ? `<span class="msg-id">#${escapeHtml(msg.id)}</span>` : ''}
       </div>
       <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${escapeHtml(msg.content)}</div>
+      ${msg.promptContexts?.length ? `
+        <details class="mt-2 text-xs">
+          <summary class="cursor-pointer text-muted select-none">附加上下文</summary>
+          ${msg.promptContexts.map((context) => `
+            <div class="mt-2 text-muted">${escapeHtml(context.name)}</div>
+            <pre class="mt-1 whitespace-pre-wrap break-all select-text">${escapeHtml(context.content)}</pre>
+          `).join('')}
+        </details>
+      ` : ''}
     </div>
   `;
 }

@@ -271,9 +271,9 @@ func (e *Engine) RunMessagesWithUser(
 	})
 }
 
-// buildContextSystemPrompt keeps stable instructions before request-local data
-// so minute-level time changes do not invalidate their prompt-cache prefix.
-func buildContextSystemPrompt(systemPrompt, dialoguePrompt string, now time.Time) string {
+// buildContextSystemPrompt combines stable instructions. Adapters put the
+// current time in their per-turn response guidance.
+func buildContextSystemPrompt(systemPrompt, dialoguePrompt string) string {
 	var parts []string
 	if systemPrompt != "" {
 		parts = append(parts, systemPrompt)
@@ -281,8 +281,6 @@ func buildContextSystemPrompt(systemPrompt, dialoguePrompt string, now time.Time
 	if dialoguePrompt != "" {
 		parts = append(parts, dialoguePrompt)
 	}
-	// Keep the current time available for relative dates (today/tomorrow/this week).
-	parts = append(parts, "当前系统时间："+memory.CurrentTimeLabel(now))
 	return strings.Join(parts, "\n\n")
 }
 
@@ -338,7 +336,7 @@ func (e *Engine) RunMessagesWithContext(
 	}
 
 	if len(messages) == 0 || messages[0].Role != "system" {
-		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue(), time.Now())
+		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
 		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
 		if isGroupChat {
@@ -458,7 +456,7 @@ func (e *Engine) RunMessagesWithContext(
 	}
 
 	// Persist the assembled system prompt so Session Context Inspector can show
-	// the real dynamically-built prompt (instructions + dialogue + time + memory) rather than a
+	// the real dynamically-built prompt (instructions + dialogue + memory) rather than a
 	// static reconstruction. SessionID is intentionally separate from the memory
 	// owner namespace (for example private:123 versus owner 123).
 	sessionID := strings.TrimSpace(runContext.SessionID)
