@@ -1,6 +1,7 @@
 package astrbot
 
 import (
+	"context"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -11,9 +12,140 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type segmentHandoffGate struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+type segmentHandoffConn struct {
+	net.Conn
+	gate *segmentHandoffGate
+}
+
+func (c *segmentHandoffConn) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), `"content":"second"`) {
+		c.gate.once.Do(func() { close(c.gate.started) })
+		<-c.gate.release
+	}
+	return c.Conn.Write(data)
+}
+
+type segmentHandoffListener struct {
+	net.Listener
+	gate *segmentHandoffGate
+}
+
+func (l segmentHandoffListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &segmentHandoffConn{Conn: conn, gate: l.gate}, nil
+}
+
+func TestSegmentedReplySuccessorGetsOnlyConfirmedPrefix(t *testing.T) {
+	requests := make(chan core.ChatRequest, 1)
+	var calls atomic.Int32
+	engine := newTestEngine(runtimeInjectionProvider(func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		text := "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third"
+		if calls.Add(1) > 1 {
+			requests <- req
+			text = "new-answer"
+		}
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: text}}, nil
+	}))
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{replyformat.EnvKey: "true", "STICKER_ACTIVITY": "0"})
+	gate := &segmentHandoffGate{started: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	server := httptest.NewUnstartedServer(NewAdapter(engine).Handler())
+	server.Listener = segmentHandoffListener{Listener: server.Listener, gate: gate}
+	server.Start()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release.Do(func() { close(gate.release) })
+		conn.Close()
+		engine.Scope.Cancel()
+		engine.Scope.Wait()
+		server.Close()
+	})
+	event := Event{Type: "event", EventType: "message", Platform: "synthetic", MessageType: "private", UserID: "synthetic-user", MessageID: "synthetic-old", Content: "old-input"}
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gate.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second write was not reached")
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var first Action
+	if err := conn.ReadJSON(&first); err != nil || first.Content != "first" {
+		t.Fatalf("missing confirmed prefix: %+v / %v", first, err)
+	}
+	event.MessageID, event.Content = "synthetic-next", "next-input"
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case req := <-requests:
+		var dialogue []core.ChatMessage
+		for _, message := range req.Messages {
+			if message.Role != core.RoleSystem {
+				dialogue = append(dialogue, message)
+			}
+		}
+		if len(dialogue) != 3 || dialogue[0].Role != core.RoleUser || !strings.Contains(fmt.Sprint(dialogue[0].Content), "old-input") || dialogue[1].Role != core.RoleAssistant || dialogue[1].Content != "first" || !strings.Contains(fmt.Sprint(dialogue[2].Content), "next-input") {
+			t.Fatalf("successor inherited unsent, duplicate or misordered text: %+v", dialogue)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("successor waited for blocked transport")
+	}
+	release.Do(func() { close(gate.release) })
+	// The admitted second write may complete late; third must never be sent.
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		var action Action
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action == "noop" {
+			seen["terminal"] = true
+		} else {
+			seen[action.Content] = true
+		}
+	}
+	if !seen["second"] || !seen["new-answer"] || !seen["terminal"] || seen["third"] {
+		t.Fatalf("unexpected late deliveries: %v", seen)
+	}
+	waitAstrBotTurnCompletion(t, engine, event)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var answers []string
+		for _, message := range engine.SessionManager.GetOrCreate(sessionKey(event)).Snapshot() {
+			if message.Role == "assistant" {
+				answers = append(answers, fmt.Sprint(message.Content))
+			}
+		}
+		if len(answers) == 2 && answers[0] == "first\n\nsecond" && answers[1] == "new-answer" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("duplicate or unconfirmed public replies: %q", answers)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 // Only the second reply frame fails; the HTTP upgrade is left untouched.
 type segmentFailureConn struct {

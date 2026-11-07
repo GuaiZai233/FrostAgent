@@ -1565,6 +1565,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 				if index < len(replyParts) {
 					delivered = append(delivered, replyParts[index])
+					deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
 				}
 				if !conn.mock {
 					engine.RecordBotMessage(false)

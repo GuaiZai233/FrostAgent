@@ -5,14 +5,13 @@ import (
 	"time"
 )
 
-// Preserve only acknowledged segments if a later segment fails or the turn is
-// interrupted. This is a delivery fact, not a completed extraction turn.
+// Final progress already owns public history and the live transcript. Preserve
+// its group-context projection on failure without automatic memory extraction.
 func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch uint64, group bool, text string) {
 	if session == nil || engine == nil {
 		return
 	}
-	log := llm.NewPublicReplyLog(session, epoch)
-	log.Record(text, func(bool) {
+	session.WithEpochCommit(epoch, func() {
 		if !group {
 			return
 		}
@@ -26,6 +25,5 @@ func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch u
 		}
 		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: time.Now().Format("15:04:05")}, maxBuffer)
 	})
-	log.Finish(true)
 	engine.TrimSession(session)
 }

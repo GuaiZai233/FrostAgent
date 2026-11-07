@@ -45,6 +45,40 @@ func TestReceiptIsNotSegmented(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSplitFencedCodeBoundaries(t *testing.T) {
+	for _, tc := range []struct{ name, code string }{
+		{"backticks in code line", "```go\nfmt.Println(\"```\")\n\n" + SegmentMark + "\n```"},
+		{"longer closing fence", "```text\na\n\n" + SegmentMark + "\n`````"},
+		{"shorter inner fence", "````text\n```\n\n" + SegmentMark + "\n````"},
+		{"closing fence with text", "```text\n``` not a close\n\n" + SegmentMark + "\n```"},
+		{"indented closing fence", "```text\na\n\n" + SegmentMark + "\n   ```` \t"},
+		{"four-space inner delimiter", "```text\n    ```\n\n" + SegmentMark + "\n```"},
+		{"crlf fence", "```text\r\na\r\n\r\n" + SegmentMark + "\r\n````"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := tc.code + "\n\nafter" + SegmentMark + "tail"
+			if got := Split(input, true); !reflect.DeepEqual(got, []string{strings.TrimSpace(tc.code), "after", "tail"}) {
+				t.Fatalf("split code fence: %q", got)
+			}
+			if got := Split(input, false); !reflect.DeepEqual(got, []string{tc.code + "\n\naftertail"}) {
+				t.Fatalf("filtered protected fence content: %q", got)
+			}
+		})
+	}
+	// Inline spans cannot consume a fence delimiter, and a fence extends to EOF
+	// when the model omits its closing line.
+	input := "before ` unmatched\n\n```text\na\n\n" + SegmentMark
+	if got := Split(input, true); !reflect.DeepEqual(got, []string{"before ` unmatched", "```text\na\n\n" + SegmentMark}) {
+		t.Fatalf("unclosed fence lost: %q", got)
+	}
+	if got := Split("```"+SegmentMark+"```", false); !reflect.DeepEqual(got, []string{"```" + SegmentMark + "```"}) {
+		t.Fatalf("inline triple backticks misread as a fence: %q", got)
+	}
+	if got := Split("```text\r\na\r\n```\r\n\r\nafter", true); !reflect.DeepEqual(got, []string{"```text\r\na\r\n```", "after"}) {
+		t.Fatalf("CRLF separator after fence lost: %q", got)
+	}
+}
 func FuzzSplit(f *testing.F) {
 	for _, value := range []string{"", SegmentMark, "`" + SegmentMark + "`", "a\n\nb"} {
 		f.Add(value, true)

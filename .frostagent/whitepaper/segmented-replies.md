@@ -9,11 +9,16 @@ When enabled, the runtime injects `<frostagent_msg_guidance>` immediately before
 the generated `<frostagent_skills>` system message, after the primary system
 message. It refreshes every model iteration and appears in Prompt Inspector,
 not persistent conversation history.
+The guidance starts with “为保证拟真的对话效果，你被允许且被鼓励多段回复用户消息。”;
+the marker and literal-backtick instructions follow unchanged.
 
 Ordinary final text is split on bare `<FROSTAGENT_SEGMENT_MARK>` and blank
 paragraph separators (LF or CRLF double newlines). Single newlines stay intact.
-Matched backtick spans and fences preserve their content, including literal
-markers and blank lines. Empty segments are skipped. When disabled, bare
+Matched inline backtick spans and line-based backtick fences preserve their
+content, including literal markers and blank lines. A fence closes only on a
+delimiter-only line with up to three leading spaces and at least as many
+backticks as its opener; an unclosed fence extends to the end of the response.
+Empty segments are skipped. When disabled, bare
 markers are removed but paragraph breaks and backtick-protected markers remain.
 The existing structured tool message chain is not segmented; disabled-mode
 filtering also covers its plain text components.
@@ -30,3 +35,11 @@ stops the unsent suffix. History and group context retain only the confirmed
 prefix; incomplete turns do not enqueue automatic memory extraction. Successful
 replies are recorded once, with paragraph separators instead of bare markers.
 A session reset prevents old-epoch delivery callbacks from restoring history.
+
+Generated final text is excluded from the private execution transcript until
+confirmed. Each confirmed segment updates one cumulative public-history entry
+and the originating live turn's transcript atomically. The public entry is
+marked as already represented in that transcript so an interrupted successor
+inherits only the confirmed prefix, once and after the original input/tool
+trajectory. Late confirmations update public history without rewriting a
+successor's already-running private transcript.

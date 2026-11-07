@@ -20,10 +20,61 @@ type PublicReplyLog struct {
 	// CommitDelivered records history but does not enqueue automatic extraction.
 	fallbackText  string
 	finalAccepted bool
+	finalID       uint64
+	finalIndex    int
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
-	return &PublicReplyLog{session: session, epoch: epoch}
+	return &PublicReplyLog{session: session, epoch: epoch, finalIndex: -1}
+}
+
+// RecordFinalProgress publishes the cumulative confirmed prefix as one history
+// entry and checkpoints it in the originating live turn. Both projections are
+// atomic with PrepareTurnMessages, so a successor sees it once, after the
+// originating input and before the successor's input.
+// Late confirmations update public history only, never a successor's transcript.
+func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
+	if p.session == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	p.session.WithEpochCommit(p.epoch, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.finalAccepted {
+			return
+		}
+		p.session.mu.Lock()
+		defer p.session.mu.Unlock()
+		p.updateFinalLocked(text)
+		if turn == nil || turn.lane == nil {
+			return
+		}
+		lane := turn.lane
+		lane.mu.Lock()
+		defer lane.mu.Unlock()
+		if lane.active != turn || !lane.messageIDs[turn.messageSeq] {
+			return
+		}
+		message := ChatMessage{Role: "assistant", Content: text}
+		if p.finalIndex < 0 {
+			p.finalIndex = len(lane.transcript)
+			lane.transcript = append(lane.transcript, message)
+		} else {
+			lane.transcript[p.finalIndex] = message
+		}
+		lane.messageIDs[p.finalID] = true
+	})
+}
+
+// The caller holds both the reply-log and session mutexes.
+func (p *PublicReplyLog) updateFinalLocked(text string) {
+	for i, id := range p.session.historySeq {
+		if p.finalID != 0 && id == p.finalID {
+			p.session.History[i].Content = text
+			return
+		}
+	}
+	p.finalID = p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
 }
 
 func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
@@ -87,7 +138,7 @@ func (p *PublicReplyLog) CommitDelivered() {
 	p.session.WithEpochCommit(p.epoch, func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		if !p.closed && len(p.texts) > 0 {
+		if !p.closed && p.finalID == 0 && len(p.texts) > 0 {
 			text := strings.Join(p.texts, "\n")
 			if p.commitFinalLocked(text, false) {
 				p.fallbackText = text
@@ -118,7 +169,11 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	}
 	p.ids = nil
 	p.closed = true
-	p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
+	if p.finalID != 0 {
+		p.updateFinalLocked(text)
+	} else {
+		p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
+	}
 	return true
 }
 

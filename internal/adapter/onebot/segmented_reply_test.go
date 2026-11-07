@@ -203,10 +203,21 @@ func TestSegmentedReplyStopsAfterInterruption(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			completed := make(chan struct{})
-			go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+			completed := make(chan []llm.ChatMessage, 1)
+			go func() {
+				barrier.Wait()
+				var inherited []llm.ChatMessage
+				if !reset {
+					inherited, _, _ = session.PrepareTurnMessages(barrier, "successor-input", "successor-input", nil)
+				}
+				barrier.Done()
+				completed <- inherited
+			}()
 			select {
-			case <-completed:
+			case inherited := <-completed:
+				if !reset && (len(inherited) != 3 || inherited[0].Role != "user" || inherited[1].Role != "assistant" || inherited[1].Content != "first" || inherited[2].Content != "successor-input") {
+					t.Fatalf("wrong successor transcript: %+v", inherited)
+				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("interrupted turn did not finish")
 			}

@@ -740,6 +740,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		receiptText  string
 		runResult    llm.AgentRunResult
 		finalSticker bool
+		deliveries   *llm.PublicReplyLog
 	)
 	commitAssistantHistory := func(string, bool) {}
 
@@ -766,7 +767,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
 
-		deliveries := llm.NewPublicReplyLog(session, startEpoch)
+		deliveries = llm.NewPublicReplyLog(session, startEpoch)
 		defer func() {
 			if wakeSignals.Proactive {
 				deliveries.CommitDelivered()
@@ -1300,6 +1301,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
 			if index < len(replyParts) {
 				delivered = append(delivered, replyParts[index])
+				deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
 			}
 			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
 				engine.RecordBotMessage(finalSticker)

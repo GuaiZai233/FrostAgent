@@ -201,6 +201,12 @@ func (t *SessionTurn) saveTranscript(messages []ChatMessage) {
 			transcript = append(transcript, msg)
 		}
 	}
+	// A generated terminal answer is not a delivery fact. Adapters checkpoint
+	// confirmed text separately; an interrupted successor must not inherit an
+	// unsent answer (or a suffix of a segmented answer).
+	if n := len(transcript); n > 0 && transcript[n-1].Role == "assistant" && len(transcript[n-1].ToolCalls) == 0 {
+		transcript = transcript[:n-1]
+	}
 	if t.inputIndex < len(transcript) {
 		transcript[t.inputIndex].Content = t.durable
 	}
