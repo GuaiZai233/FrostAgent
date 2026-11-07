@@ -26,8 +26,8 @@ func TestAstrBotGroupReplyHonorsAutoMention(t *testing.T) {
 	if action.Messages[0].Type != "mention_user" || action.Messages[0].MentionUserID != event.UserID {
 		t.Fatalf("第一段应自动艾特触发用户，实际=%+v", action.Messages[0])
 	}
-	if action.Messages[1].Type != "plain" || action.Messages[1].Text != action.Content {
-		t.Fatalf("第二段应保留原回复文本，实际=%+v", action.Messages[1])
+	if action.Messages[1].Type != "plain" || action.Messages[1].Text != " "+action.Content {
+		t.Fatalf("第二段应在自动艾特后添加分隔空格，实际=%+v", action.Messages[1])
 	}
 }
 
@@ -50,7 +50,7 @@ func TestAstrBotGroupSendHookHonorsAutoMention(t *testing.T) {
 		hookAction.Messages[0].Type != "mention_user" ||
 		hookAction.Messages[0].MentionUserID != event.UserID ||
 		hookAction.Messages[1].Type != "plain" ||
-		hookAction.Messages[1].Text != "处理中" {
+		hookAction.Messages[1].Text != " 处理中" {
 		t.Fatalf("SendHook 应前置触发用户 mention 并保留原组件顺序，实际=%+v", hookAction.Messages)
 	}
 

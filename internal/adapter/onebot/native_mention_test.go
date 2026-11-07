@@ -81,12 +81,16 @@ func TestOneBotSendHookPreservesNativeMention(t *testing.T) {
 				t.Fatal(err)
 			}
 			if autoMention == "true" {
-				if len(chain) != 4 || chain[0].Type != "at" || chain[0].Data["qq"] != "10003" {
+				if len(chain) != 4 || chain[0].Type != "at" || chain[0].Data["qq"] != "10003" || chain[1].Data["text"] != " 请 " {
 					t.Fatalf("automatic sender mention must coexist with explicit recipient: %+v", chain)
 				}
 				chain = chain[1:]
 			}
-			if len(chain) != 3 || chain[0].Type != "text" || chain[0].Data["text"] != "请 " ||
+			wantFirstText := "请 "
+			if autoMention == "true" {
+				wantFirstText = " 请 "
+			}
+			if len(chain) != 3 || chain[0].Type != "text" || chain[0].Data["text"] != wantFirstText ||
 				chain[1].Type != "at" || chain[1].Data["qq"] != "10002" ||
 				chain[2].Type != "text" || chain[2].Data["text"] != " 看一下" {
 				t.Fatalf("tool chain lost its native mention or ordering: %+v", chain)
