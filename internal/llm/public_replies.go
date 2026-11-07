@@ -21,18 +21,18 @@ type PublicReplyLog struct {
 	fallbackText  string
 	finalAccepted bool
 	finalID       uint64
-	finalIndex    int
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
-	return &PublicReplyLog{session: session, epoch: epoch, finalIndex: -1}
+	return &PublicReplyLog{session: session, epoch: epoch}
 }
 
 // RecordFinalProgress publishes the cumulative confirmed prefix as one history
 // entry and checkpoints it in the originating live turn. Both projections are
 // atomic with PrepareTurnMessages, so a successor sees it once, after the
 // originating input and before the successor's input.
-// Late confirmations update public history only, never a successor's transcript.
+// Late confirmations are queued for the next preparation boundary; they never
+// rewrite a successor's already-running transcript.
 func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
 	if p.session == nil || strings.TrimSpace(text) == "" {
 		return
@@ -52,17 +52,7 @@ func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
 		lane := turn.lane
 		lane.mu.Lock()
 		defer lane.mu.Unlock()
-		if lane.active != turn || !lane.messageIDs[turn.messageSeq] {
-			return
-		}
-		message := ChatMessage{Role: "assistant", Content: text}
-		if p.finalIndex < 0 {
-			p.finalIndex = len(lane.transcript)
-			lane.transcript = append(lane.transcript, message)
-		} else {
-			lane.transcript[p.finalIndex] = message
-		}
-		lane.messageIDs[p.finalID] = true
+		lane.recordFinalProgress(turn, p.finalID, text)
 	})
 }
 

@@ -22,6 +22,7 @@ type segmentHandoffGate struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	content string
 }
 
 type segmentHandoffConn struct {
@@ -30,11 +31,136 @@ type segmentHandoffConn struct {
 }
 
 func (c *segmentHandoffConn) Write(data []byte) (int, error) {
-	if strings.Contains(string(data), `"content":"second"`) {
+	content := c.gate.content
+	if content == "" {
+		content = "second"
+	}
+	if strings.Contains(string(data), `"content":"`+content+`"`) {
 		c.gate.once.Do(func() { close(c.gate.started) })
 		<-c.gate.release
 	}
 	return c.Conn.Write(data)
+}
+
+func TestSegmentedReplyLateFirstConfirmationAcrossTwoInterruptions(t *testing.T) {
+	requests := make(chan core.ChatRequest, 2)
+	var calls atomic.Int32
+	engine := newTestEngine(runtimeInjectionProvider(func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		switch calls.Add(1) {
+		case 1:
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "first" + replyformat.SegmentMark + "unsent"}}, nil
+		case 2:
+			requests <- req
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			requests <- req
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "third-answer"}}, nil
+		}
+	}))
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{replyformat.EnvKey: "true", "STICKER_ACTIVITY": "0"})
+	gate := &segmentHandoffGate{started: make(chan struct{}), release: make(chan struct{}), content: "first"}
+	var release sync.Once
+	server := httptest.NewUnstartedServer(NewAdapter(engine).Handler())
+	server.Listener = segmentHandoffListener{Listener: server.Listener, gate: gate}
+	server.Start()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release.Do(func() { close(gate.release) })
+		conn.Close()
+		engine.Scope.Cancel()
+		engine.Scope.Wait()
+		server.Close()
+	})
+	event := Event{Type: "event", EventType: "message", Platform: "synthetic", MessageType: "private", UserID: "synthetic-user", MessageID: "synthetic-old", Content: "old-input"}
+	send := func(id, input string) {
+		t.Helper()
+		event.MessageID, event.Content = id, input
+		if err := conn.WriteJSON(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readRequest := func() []core.ChatMessage {
+		t.Helper()
+		select {
+		case req := <-requests:
+			var messages []core.ChatMessage
+			for _, message := range req.Messages {
+				if message.Role != core.RoleSystem {
+					messages = append(messages, message)
+				}
+			}
+			return messages
+		case <-time.After(3 * time.Second):
+			t.Fatal("successor did not reach the model")
+			return nil
+		}
+	}
+	send("synthetic-old", "old-input")
+	select {
+	case <-gate.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first write was not blocked")
+	}
+	send("synthetic-next", "next-input")
+	second := readRequest()
+	if len(second) != 2 || second[0].Role != core.RoleUser || second[1].Role != core.RoleUser {
+		t.Fatalf("successor saw an unconfirmed first segment: %+v", second)
+	}
+	release.Do(func() { close(gate.release) })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		var action Action
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action == "noop" {
+			seen["old-terminal"] = true
+		} else {
+			seen[action.Content] = true
+		}
+	}
+	if !seen["first"] || !seen["old-terminal"] {
+		t.Fatalf("unexpected old delivery: %v", seen)
+	}
+	// A socket read can precede the server's confirmation callback. Observe its
+	// public commit before issuing the second interruption, avoiding timing luck.
+	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(fmt.Sprint(session.Snapshot()), "first") {
+		if time.Now().After(deadline) {
+			t.Fatal("late first segment was not recorded")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	send("synthetic-third", "third-input")
+	third := readRequest()
+	if len(third) != 4 || third[0].Role != core.RoleUser || !strings.Contains(fmt.Sprint(third[0].Content), "old-input") || third[1].Role != core.RoleAssistant || third[1].Content != "first" || third[2].Role != core.RoleUser || !strings.Contains(fmt.Sprint(third[2].Content), "next-input") || third[3].Role != core.RoleUser || !strings.Contains(fmt.Sprint(third[3].Content), "third-input") {
+		t.Fatalf("late first segment lost, duplicated or before its input: %+v", third)
+	}
+	if len(second) != 2 || second[0].Role != core.RoleUser || second[1].Role != core.RoleUser {
+		t.Fatal("late confirmation mutated an already-issued model request")
+	}
+	for i := 0; i < 2; i++ {
+		var action Action
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action == "noop" {
+			seen["next-terminal"] = true
+		} else {
+			seen[action.Content] = true
+		}
+	}
+	if !seen["third-answer"] || !seen["next-terminal"] || seen["unsent"] {
+		t.Fatalf("unexpected successor delivery: %v", seen)
+	}
+	waitAstrBotTurnCompletion(t, engine, event)
 }
 
 type segmentHandoffListener struct {

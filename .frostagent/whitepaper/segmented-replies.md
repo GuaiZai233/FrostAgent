@@ -42,4 +42,10 @@ and the originating live turn's transcript atomically. The public entry is
 marked as already represented in that transcript so an interrupted successor
 inherits only the confirmed prefix, once and after the original input/tool
 trajectory. Late confirmations update public history without rewriting a
-successor's already-running private transcript.
+successor's already-running private transcript. They are immediately associated
+with their originating turn and queued in that lane. At the next preparation
+boundary, the latest confirmed prefix is inserted after that turn's input/tool
+trajectory (or replaces its earlier prefix), before shared-history filtering.
+This also handles a late first segment and out-of-order confirmations from
+multiple interrupted turns. The per-turn checkpoints are cleared when the task
+ends; session resets continue to reject old-epoch callbacks.
