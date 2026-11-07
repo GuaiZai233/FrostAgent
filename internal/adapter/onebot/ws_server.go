@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
@@ -313,9 +314,9 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 
 // reply records terminal silence without sending or batching memory.
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, warningNotice ...string) {
-	billingReported := false
+	var billingReported atomic.Bool
 	defer func() {
-		if engine == nil || conn == nil || billingReported {
+		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
 		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
@@ -748,9 +749,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 4. Call the agent engine with history
 	var (
 		replyText    string
+		replyParts   []string
 		receiptText  string
 		runResult    llm.AgentRunResult
 		finalSticker bool
+		deliveries   *llm.PublicReplyLog
 	)
 	commitAssistantHistory := func(string, bool) {}
 
@@ -780,7 +783,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
 
-		deliveries := llm.NewPublicReplyLog(session, startEpoch)
+		deliveries = llm.NewPublicReplyLog(session, startEpoch)
 		defer func() {
 			if wakeSignals.Proactive {
 				deliveries.CommitDelivered()
@@ -1014,8 +1017,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
 		replyText = runResult.Content
+		if engine.Getenv(replyformat.EnvKey) != "true" {
+			replyText = filterStructuredSegmentMarks(replyText)
+		}
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
+		}
+		if structured, _ := parseFinalMessages(replyText); len(structured) == 0 {
+			replyParts = replyformat.Split(replyText, engine.Getenv(replyformat.EnvKey) == "true")
+			replyText = strings.Join(replyParts, "\n\n")
 		}
 		if turn.Interrupted() {
 			return
@@ -1081,6 +1091,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			// Suppress only the LLM error body; settled usage still needs a receipt.
 			replyText = ""
+			replyParts = nil
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It
@@ -1250,40 +1261,6 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			finalMessage = displayText
 		}
-	} else {
-		// B. It's plain text
-		displayText := replyText
-		if receiptText != "" {
-			if strings.TrimSpace(displayText) == "" {
-				displayText = receiptText
-			} else {
-				displayText = displayText + "\n\n" + receiptText
-			}
-		}
-
-		if event.MessageType == "group" {
-			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段。
-			// 计费回执可能是空最终回复的唯一正文，不应因此 @ 用户。
-			if strings.TrimSpace(replyText) == "" {
-				finalMessage = displayText
-			} else {
-				enableAt := engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
-				enableReply := engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
-				if enableAt || enableReply {
-					textSeg := tools.OneBotSegment{
-						Type: "text",
-						Data: map[string]any{"text": displayText},
-					}
-					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
-				} else {
-					finalMessage = displayText
-				}
-			}
-
-		} else {
-			// Just plain text for private messages
-			finalMessage = displayText
-		}
 	}
 
 	// 6. Build and send the final OneBot Action, waiting for platform ACK response
@@ -1299,22 +1276,64 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	billingReported = receiptText != ""
 	turn.AwaitDelivery(func() {
-		ackResp, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+		actions := []model.OneBotAction{botAction}
+		if len(finalMessages) == 0 {
+			if replyParts == nil && strings.TrimSpace(replyText) != "" {
+				replyParts = []string{replyText}
+			}
+			actions = nil
+			for _, part := range replyformat.WithReceipt(replyParts, receiptText) {
+				var body any = part
+				if event.MessageType == "group" && strings.TrimSpace(replyText) != "" {
+					base := []tools.OneBotSegment{{Type: "text", Data: map[string]any{"text": part}}}
+					if engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" || engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true" {
+						body = wrapGroupReply(base, event, engine.Scope)
+					}
+				}
+				actions = append(actions, model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": body}, Echo: echo})
+			}
+		}
+		var delivered []string
+		completed := false
+		defer func() {
+			if !completed && len(delivered) > 0 {
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", strings.Join(delivered, "\n\n"))
+			}
+		}()
+		var ackResp oneBotAPIResponse
+		var err error
+		for index, partAction := range actions {
+			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+				return
+			}
+			if index == len(actions)-1 {
+				billingReported.Store(receiptText != "")
+			}
+			ackResp, err = conn.sendActionAndWaitTurn(partAction, actionACKTimeout(conn.Scope), turn)
+			if err != nil {
+				break
+			}
+			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			if index < len(replyParts) {
+				delivered = append(delivered, replyParts[index])
+				deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
+			}
+			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
+				engine.RecordBotMessage(finalSticker)
+			}
+		}
 		if (err != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 		if err == nil {
-			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
-			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
-				engine.RecordBotMessage(finalSticker)
-			}
+			completed = true
 			// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 			commitAssistantHistory(replyText, false)
 		} else {
-			// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
-			if event.MessageType == "group" && session != nil {
+			// Do not record the failed suffix. The deferred callback preserves
+			// any acknowledged prefix without automatic memory extraction.
+			if event.MessageType == "group" && session != nil && len(delivered) == 0 {
 				var msgID string
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)

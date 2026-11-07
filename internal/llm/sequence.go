@@ -11,16 +11,17 @@ import (
 // executionSequence owns private, in-memory task state. Conversation history,
 // memory ownership and the sandbox namespace remain on the parent session.
 type executionSequence struct {
-	mu            sync.Mutex
-	tail          *SessionTurn
-	active        *SessionTurn
-	transcript    []ChatMessage
-	billing       *BillingRunState
-	skills        *SessionContext
-	proactive     bool
-	messageIDs    map[uint64]bool
-	memoryWritten bool
-	skillInputs   []string
+	mu              sync.Mutex
+	tail            *SessionTurn
+	active          *SessionTurn
+	transcript      []ChatMessage
+	transcriptTurns []sequenceTranscriptTurn
+	billing         *BillingRunState
+	skills          *SessionContext
+	proactive       bool
+	messageIDs      map[uint64]bool
+	memoryWritten   bool
+	skillInputs     []string
 }
 
 // ReserveSequenceTurn reserves arrival order without serializing other senders.
@@ -147,6 +148,9 @@ func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt str
 	lane := t.lane
 	lane.mu.Lock()
 	defer lane.mu.Unlock()
+	// The predecessor has finished and no new model request exists yet. Apply
+	// late delivery facts before filtering shared history or computing indices.
+	lane.applyPendingFinalProgress()
 	lane.active = t
 	t.skillState = &SessionContext{epoch: s.epoch, activeSkills: lane.skills.skillSnapshot()}
 	if lane.proactive {
@@ -183,6 +187,11 @@ func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt str
 		start = len(messages) - 1
 	}
 	lane.transcript = cloneMessages(messages[start:])
+	if !lane.proactive {
+		lane.transcriptTurns = append(lane.transcriptTurns, sequenceTranscriptTurn{
+			inputID: id, inputIndex: len(lane.transcript) - 1, finalIndex: -1,
+		})
+	}
 	messages[len(messages)-1].Content = prompt
 	if lane.billing == nil {
 		lane.billing = billing
@@ -200,6 +209,12 @@ func (t *SessionTurn) saveTranscript(messages []ChatMessage) {
 		if msg.Role != "system" {
 			transcript = append(transcript, msg)
 		}
+	}
+	// A generated terminal answer is not a delivery fact. Adapters checkpoint
+	// confirmed text separately; an interrupted successor must not inherit an
+	// unsent answer (or a suffix of a segmented answer).
+	if n := len(transcript); n > 0 && transcript[n-1].Role == "assistant" && len(transcript[n-1].ToolCalls) == 0 {
+		transcript = transcript[:n-1]
 	}
 	if t.inputIndex < len(transcript) {
 		transcript[t.inputIndex].Content = t.durable
@@ -227,6 +242,7 @@ func (t *SessionTurn) finishSequence() {
 	// retaining that ledger would report completed charges a second time.
 	if lane.tail == t || !t.Interrupted() {
 		lane.transcript = nil
+		lane.transcriptTurns = nil
 		lane.billing = nil
 		lane.messageIDs = make(map[uint64]bool)
 		lane.memoryWritten = false

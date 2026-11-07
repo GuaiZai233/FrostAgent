@@ -853,17 +853,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
 			}
 			messages = skillMessages
-			if sess := e.promptTraceSession(ctx); sess != nil {
-				var system []string
-				for _, message := range messages {
-					if message.Role == "system" {
-						if content, ok := message.Content.(string); ok {
-							system = append(system, content)
-						}
+		}
+		messages = e.messageGuidanceMessages(messages)
+		if sess := e.promptTraceSession(ctx); sess != nil {
+			var system []string
+			for _, message := range messages {
+				if message.Role == "system" {
+					if content, ok := message.Content.(string); ok {
+						system = append(system, content)
 					}
 				}
-				sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
 			}
+			sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
 		}
 		modelTools := e.EffectiveTools()
 		if hasRunCtx && runCtx.Proactive {

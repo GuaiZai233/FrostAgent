@@ -16,6 +16,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
@@ -832,9 +833,9 @@ func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...strin
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
-	billingReported := false
+	var billingReported atomic.Bool
 	defer func() {
-		if engine == nil || conn == nil || billingReported {
+		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
 		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
@@ -1568,6 +1569,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		replyText = "智能体引擎未就绪"
 	}
 
+	replyParts := replyformat.Split(replyText, engine != nil && engine.Getenv(replyformat.EnvKey) == "true")
+	replyText = strings.Join(replyParts, "\n\n")
 	historyReplyText := replyText
 	if strings.TrimSpace(historyReplyText) == "" {
 		historyReplyText = deliveries.Text()
@@ -1579,20 +1582,46 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	billingReported = receiptText != ""
 	turn.AwaitDelivery(func() {
 		var sendErr error
+		var delivered []string
+		completed := false
+		defer func() {
+			if !completed && len(delivered) > 0 {
+				recordPartialReply(session, engine, startEpoch, event, strings.Join(delivered, "\n\n"))
+			}
+		}()
 		if strings.TrimSpace(sentReplyText) == "" {
 			sendErr = sendTerminalNoop(event, conn)
 		} else {
-			sendErr = sendDirectReply(event, conn, sentReplyText, turn)
+			parts := replyformat.WithReceipt(replyParts, receiptText)
+			for index, part := range parts {
+				if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+					return
+				}
+				last := index == len(parts)-1
+				if last {
+					billingReported.Store(receiptText != "")
+				}
+				sendErr = sendReplyPart(event, conn, part, !last, turn)
+				if sendErr != nil {
+					break
+				}
+				if index < len(replyParts) {
+					delivered = append(delivered, replyParts[index])
+					deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
+				}
+				if !conn.mock {
+					engine.RecordBotMessage(false)
+				}
+			}
 		}
 		if (sendErr != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 		if sendErr != nil {
 			if session != nil {
-				if event.MessageType == "group" {
+				if event.MessageType == "group" && len(delivered) == 0 {
 					var guard *llm.StagedGroupCompactGuard
 					if turn != nil {
 						guard = turn.StagedGuard()
@@ -1610,9 +1639,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 			return
 		}
-		if !conn.mock && strings.TrimSpace(sentReplyText) != "" {
-			engine.RecordBotMessage(false)
-		}
+		completed = true
 
 		if engine == nil || session == nil {
 			return
@@ -1812,6 +1839,10 @@ func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) er
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
 func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.SessionTurn) error {
+	return sendReplyPart(event, conn, text, false, turns...)
+}
+
+func sendReplyPart(event Event, conn *wsConn, text string, intermediate bool, turns ...*llm.SessionTurn) error {
 	var turn *llm.SessionTurn
 	if len(turns) > 0 {
 		turn = turns[0]
@@ -1840,7 +1871,7 @@ func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.Sessi
 		GroupID:        event.GroupID,
 		UserID:         event.UserID,
 		Content:        text,
-		IsIntermediate: false,
+		IsIntermediate: intermediate,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
 		ReplyMessageID: event.replyMessageID(),
 	}
