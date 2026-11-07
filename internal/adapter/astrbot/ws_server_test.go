@@ -587,6 +587,7 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 
 	engine := newTestEngine(toolProvider)
+	engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 	sendTool := tools.SendMsgTool()
 	engine.ToolRegistry[sendTool.Name()] = sendTool
 
@@ -676,6 +677,7 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 			}}
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 			engine.RecordBotTurn()
 			engine.RecordBotTurn()
 			srv, _, wsURL := startWSTestServer(engine)

@@ -5,6 +5,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 	"strings"
 	"testing"
@@ -34,6 +35,7 @@ func TestOneBotStickerCountModesAtIngress(t *testing.T) {
 			}
 			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "done"}}}}
 			engine := newTestEngine(provider)
+			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 			enabled := "false"
 			if tc.proactive {
 				enabled = "true"
