@@ -1,6 +1,11 @@
 package content
 
-import "testing"
+import (
+	"context"
+	"encoding/base64"
+	"strings"
+	"testing"
+)
 
 func TestMarketFaceSegmentSource(t *testing.T) {
 	tests := []struct {
@@ -76,5 +81,19 @@ func TestTrustedQQImageURL(t *testing.T) {
 func TestImageSourceToBase64RejectsUntrustedURL(t *testing.T) {
 	if _, err := imageSourceToBase64("http://127.0.0.1/private"); err == nil {
 		t.Fatal("expected untrusted image URL to be rejected")
+	}
+}
+
+func TestImageContentPartsPreserveBase64Image(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("GIF89a image"))
+	parts := ImageContentParts(context.Background(), []MessageSegment{{
+		Type: "image",
+		Data: map[string]any{"file": "base64://" + encoded},
+	}})
+	if len(parts) != 1 || parts[0].ImageURL == nil {
+		t.Fatalf("expected one image content part, got %+v", parts)
+	}
+	if !strings.HasPrefix(parts[0].ImageURL.URL, "data:image/") || !strings.HasSuffix(parts[0].ImageURL.URL, encoded) {
+		t.Fatalf("unexpected image URL: %q", parts[0].ImageURL.URL)
 	}
 }

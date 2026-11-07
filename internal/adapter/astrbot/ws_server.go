@@ -488,7 +488,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 	// 处理图片等多模态内容描述
 	var imageSegments []content.MessageSegment
+	hasImageAttachment := false
 	for _, att := range event.Attachments {
+		if att.Type == core.AttachmentTypeImage {
+			hasImageAttachment = true
+		}
 		if att.Type == core.AttachmentTypeImage && (len(att.Content) > 0 || att.URL != "") {
 			data := make(map[string]any)
 			if len(att.Content) > 0 {
@@ -503,56 +507,59 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
-	if len(imageSegments) > 0 && engine != nil {
-		visionEnabled := engine.VisionProvider != nil
-		if visionEnabled && routeSnapshot != nil {
-			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
-		}
-		if !visionEnabled {
-			imageSegments = nil
-		} else {
-			// 计费检查 (视觉处理前检查)
-			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
-			if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
-				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
-				bCancel()
-				if err != nil {
-					if errors.Is(err, billing.ErrInsufficientFunds) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
-						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
-						return
-					}
-					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
-					return
-				}
-				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
+	visionEnabled := len(imageSegments) > 0 && engine != nil && engine.VisionProvider != nil
+	if visionEnabled && routeSnapshot != nil {
+		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	directImageParts := makeAstrBotImageContentParts(event.Attachments)
+	if !(!visionEnabled && dialogueSupportsVision) {
+		directImageParts = nil
+	}
+	noVisionGuidance := hasImageAttachment && !visionEnabled && !dialogueSupportsVision
+
+	if len(imageSegments) > 0 && engine != nil && visionEnabled {
+		// 计费检查 (视觉处理前检查)
+		billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+			bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
+			bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
+			bCancel()
+			if err != nil {
+				if errors.Is(err, billing.ErrInsufficientFunds) {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
 					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
 					return
 				}
+				engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+				sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
+				return
 			}
+			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
+				sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
+				return
+			}
+		}
 
-			imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
-			if imageDesc != "" {
-				if engine != nil && engine.Security != nil {
-					principal, pErr := security.NewPrincipal(platform, event.UserID)
-					if pErr == nil {
-						decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
-							Instance: engine.InstanceID,
-							Session:  sessionKey(event),
-						})
-						if security.Blocks(decision.Action) {
-							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
-							imageDesc = ""
-						}
+		imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+		if imageDesc != "" {
+			if engine != nil && engine.Security != nil {
+				principal, pErr := security.NewPrincipal(platform, event.UserID)
+				if pErr == nil {
+					decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						Instance: engine.InstanceID,
+						Session:  sessionKey(event),
+					})
+					if security.Blocks(decision.Action) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
+						imageDesc = ""
 					}
 				}
 			}
-			if imageDesc != "" {
-				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
-			}
+		}
+		if imageDesc != "" {
+			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
 		}
 	}
 
@@ -630,6 +637,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if mentionOnly {
 			contextData["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
+	}
+	if noVisionGuidance {
+		contextData["interaction_guidance"] = parity.NoVisionGuidance
 	}
 	contextBytes, _ := json.Marshal(contextData)
 
@@ -712,7 +722,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: durablePrompt})
 		messages := session.Snapshot()
 		if len(messages) > 0 {
-			messages[len(messages)-1].Content = requestPrompt
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
 
 		targetID := event.UserID
@@ -932,6 +942,55 @@ func astrBotRouteScope(event Event) modelrouter.Scope {
 		scope.GroupID = event.GroupID
 	}
 	return scope
+}
+
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func makeAstrBotImageContentParts(attachments []core.Attachment) []core.ContentPart {
+	parts := make([]core.ContentPart, 0, len(attachments))
+	for _, att := range attachments {
+		if att.Type != core.AttachmentTypeImage {
+			continue
+		}
+		source := strings.TrimSpace(att.URL)
+		if len(att.Content) > 0 {
+			mimeType := strings.TrimSpace(att.MimeType)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = http.DetectContentType(att.Content)
+			}
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = "image/jpeg"
+			}
+			source = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(att.Content)
+		}
+		if source == "" {
+			continue
+		}
+		parts = append(parts, core.ContentPart{
+			Type:     string(core.ContentPartTypeImage),
+			ImageURL: &core.ImageURL{URL: source},
+		})
+	}
+	return parts
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
 }
 
 func sendTerminalNoop(event Event, conn *wsConn) error {

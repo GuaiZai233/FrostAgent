@@ -215,6 +215,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	var directImageParts []core.ContentPart
+	if !visionEnabled && dialogueSupportsVision {
+		directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, segments)...)
+		directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, replyContext.Segments)...)
+	}
+	noVisionGuidance := (currentHasImage || replyHasImage) && !visionEnabled && !dialogueSupportsVision
 
 	// Fast-fail once before downloading or processing either current or quoted images.
 	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled {
@@ -240,7 +247,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	if currentHasImage {
 		if !visionEnabled {
-			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
+			// Keep the [图片] placeholder. A vision-capable dialogue model may
+			// receive the image directly below; other models need the placeholder
+			// and the explicit guidance injected into system_context.
 		} else {
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
@@ -301,6 +310,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if event.MetaEventType != "" {
 		contextMap["meta_event_type"] = event.MetaEventType
+	}
+	if noVisionGuidance {
+		contextMap["interaction_guidance"] = parity.NoVisionGuidance
 	}
 	if event.MessageType != "" {
 		contextMap["message_type"] = event.MessageType
@@ -515,7 +527,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// 动态生成的群聊摘要与最近原始消息仅作为本轮瞬时上下文附加在 messages 快照中，
 		// 不写入持久化的 session history，防止多轮对话中历史不断重复膨胀。
 		if len(messages) > 0 {
-			messages[len(messages)-1].Content = requestPrompt
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
 
 		var deliveredToolReplies []string
@@ -823,6 +835,27 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 	}
+}
+
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
 }
 
 func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string) {

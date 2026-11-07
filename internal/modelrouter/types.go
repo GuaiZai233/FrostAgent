@@ -106,6 +106,23 @@ type Target struct {
 	ModelDisplayName    string
 	BaseURL             string
 	UpstreamModel       string
+	Capabilities        []string
+}
+
+// HasCapability reports whether the resolved model advertises a capability.
+// Capability labels are metadata entered by administrators, so matching is
+// deliberately case-insensitive and ignores surrounding whitespace.
+func (t Target) HasCapability(capability string) bool {
+	want := strings.ToLower(strings.TrimSpace(capability))
+	if want == "" {
+		return false
+	}
+	for _, value := range t.Capabilities {
+		if strings.ToLower(strings.TrimSpace(value)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 type EffectiveBinding struct {

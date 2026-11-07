@@ -87,6 +87,37 @@ func ProcessImage(ctx context.Context, segments []MessageSegment, provider core.
 	return combinedText
 }
 
+// ImageContentParts converts trusted inbound image segments into OpenAI
+// compatible content parts for a vision-capable dialogue model. Failed image
+// loads are skipped so the caller can retain the textual [图片] placeholder.
+func ImageContentParts(ctx context.Context, segments []MessageSegment) []core.ContentPart {
+	parts := make([]core.ContentPart, 0)
+	for _, seg := range segments {
+		if seg.Type != "image" && seg.Type != "mface" {
+			continue
+		}
+		source := SegmentImageSource(seg)
+		if strings.TrimSpace(source) == "" {
+			continue
+		}
+		encoded, err := imageSourceToBase64(source, ctx)
+		if err != nil || strings.TrimSpace(encoded) == "" {
+			continue
+		}
+		mimeType := "image/jpeg"
+		if data, decodeErr := base64.StdEncoding.DecodeString(encoded); decodeErr == nil {
+			if detected := http.DetectContentType(data); strings.HasPrefix(detected, "image/") {
+				mimeType = detected
+			}
+		}
+		parts = append(parts, core.ContentPart{
+			Type:     string(core.ContentPartTypeImage),
+			ImageURL: &core.ImageURL{URL: "data:" + mimeType + ";base64," + encoded},
+		})
+	}
+	return parts
+}
+
 // IsMarketFaceSegment reports whether a OneBot segment represents a QQ
 // marketplace sticker. NapCat currently receives these as image segments with
 // emoji metadata, while some implementations expose the native mface type.

@@ -12,6 +12,10 @@ import (
 // a group interaction consists solely of an @Bot mention without text or image attachments.
 const MentionOnlyGuidance = "This is an explicit mention-only invitation to respond. Infer the relevant preceding discussion from group_running_summary and recent_group_messages; if no useful context exists, acknowledge naturally and ask what the sender needs."
 
+// NoVisionGuidance explains why an image remains a placeholder when neither
+// the dedicated vision route nor the dialogue model can inspect it.
+const NoVisionGuidance = "你不具备多模态的能力，因此图片无法查看，需要管理员在 FrostAgent 后端配置或模型能力支持。"
+
 var mentionTokenRegex = regexp.MustCompile(`\[@\d+\]`)
 
 // StripBotSelfMentionTokens strips only the bot's own [@<selfID>] token from the text.

@@ -347,6 +347,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
 		UpstreamModel:       model.UpstreamModel,
+		Capabilities:        append([]string(nil), model.Capabilities...),
 	}, nil
 }
 
