@@ -152,6 +152,9 @@ func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Actio
 		messages = append(messages, a.Messages[:insertAt]...)
 		messages = append(messages, mention)
 		messages = append(messages, a.Messages[insertAt:]...)
+		if next := insertAt + 1; next < len(messages) && (messages[next].Type == "plain" || messages[next].Type == "text") {
+			messages[next].Text = parity.SeparateMentionText(messages[next].Text)
+		}
 		a.Messages = messages
 		return a
 	}
@@ -162,7 +165,7 @@ func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Actio
 	if strings.TrimSpace(a.Content) != "" {
 		a.Messages = []ActionMessage{
 			mention,
-			{Type: "plain", Text: a.Content},
+			{Type: "plain", Text: parity.SeparateMentionText(a.Content)},
 		}
 	}
 	return a

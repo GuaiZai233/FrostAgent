@@ -107,7 +107,7 @@ func TestAstrBotConfiguredGroupReplyPrecedesMention(t *testing.T) {
 		normalized.Messages[1].Type != "mention_user" ||
 		normalized.Messages[1].MentionUserID != action.UserID ||
 		normalized.Messages[2].Type != "plain" ||
-		normalized.Messages[2].Text != action.Content {
+		normalized.Messages[2].Text != " "+action.Content {
 		t.Fatalf("群聊回复消息段顺序应为 quote+mention+plain，实际=%+v", normalized.Messages)
 	}
 }
