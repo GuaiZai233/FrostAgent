@@ -52,7 +52,6 @@ func TestRuntimeStatusRecognizesOnlyCurrentCommand(t *testing.T) {
 		})
 	}
 	for _, change := range []func(*model.OneBotEvent){
-		func(e *model.OneBotEvent) { e.MessageType = "private" },
 		func(e *model.OneBotEvent) { e.PostType = "notice" },
 		func(e *model.OneBotEvent) { e.PokeID = "synthetic-poke" },
 	} {
@@ -61,6 +60,12 @@ func TestRuntimeStatusRecognizesOnlyCurrentCommand(t *testing.T) {
 		if isRuntimeStatusCommand(e) {
 			t.Fatalf("non-message command accepted: %+v", e)
 		}
+	}
+	private := runtimeStatusEvent()
+	private.MessageType = "private"
+	private.GroupID = 0
+	if !isRuntimeStatusCommand(private) {
+		t.Fatal("private #fa command was not recognized")
 	}
 }
 
@@ -193,6 +198,62 @@ func TestWSRuntimeStatusRejectedIsConsumed(t *testing.T) {
 				t.Fatal("rejected command reached LLM")
 			}
 		})
+	}
+}
+
+func TestWSRuntimeStatusPrivateMessage(t *testing.T) {
+	provider := &mockLLMProvider{}
+	engine := newTestEngine(provider)
+	engine.Scope = newAdminTestScope(t, nil)
+	engine.Version = "private-status-test"
+	engine.Security = security.NewController(t.TempDir())
+	defer engine.Cancel()
+
+	adapter := NewAdapter(engine)
+	server, url, done := startPokeAdapterServer(adapter)
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	event := runtimeStatusEvent()
+	event.MessageType = "private"
+	event.GroupID = 0
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var got model.OneBotAction
+	if err := conn.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Action != "send_private_msg" {
+		t.Fatalf("unexpected action: %+v", got)
+	}
+	params, ok := got.Params.(map[string]any)
+	if !ok || params["user_id"] != float64(event.UserID) || params["group_id"] != nil {
+		t.Fatalf("private status routed incorrectly: %+v", got)
+	}
+	segments, ok := params["message"].([]any)
+	if !ok || len(segments) != 1 {
+		t.Fatalf("unexpected private status message: %+v", got)
+	}
+	segment, ok := segments[0].(map[string]any)
+	if !ok || segment["type"] != "text" {
+		t.Fatalf("unexpected private status segment: %+v", got)
+	}
+	data, ok := segment["data"].(map[string]any)
+	if !ok || data["text"] != runtimeinfo.Format(engine.Version, engine.StartedAt, time.Now()) {
+		t.Fatalf("unexpected private status text: %+v", got)
+	}
+
+	closeRuntimeStatusQuietly(t, conn, done)
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.requests) != 0 || engine.SessionManager.Count() != 0 {
+		t.Fatal("private diagnostic entered conversation pipeline")
 	}
 }
 
