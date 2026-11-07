@@ -2,8 +2,10 @@ package settings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
@@ -32,6 +34,8 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
+	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
 	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
@@ -260,6 +264,9 @@ func (s *Service) ListEnvVars(
 ) (*connect.Response[v1.ListEnvVarsResponse], error) {
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
+		if key == balancequery.ConfigKey {
+			continue
+		}
 		val := os.Getenv(key)
 		inherited := false
 		if s.config != nil {
@@ -703,6 +710,21 @@ func validateUpdate(key, value string) error {
 	}
 	if key == "ENABLE_EMBEDDING" && value != "true" && value != "false" {
 		return errors.New("启用 Embedding 必须为 true 或 false")
+	}
+	if key == "DISABLED_TOOLS" && value != "" {
+		var disabled []string
+		if json.Unmarshal([]byte(value), &disabled) != nil || strings.TrimSpace(value) == "null" {
+			return errors.New("工具开关必须是工具名称的 JSON 数组")
+		}
+	}
+	if key == balancequery.ConfigKey && value != "" {
+		var cfg balancequery.Config
+		if json.Unmarshal([]byte(value), &cfg) != nil {
+			return errors.New("额度查询配置无法解析")
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
 	}
 	if key == proactive.EnvGroupProbabilities {
 		if _, err := proactive.ParseGroupProbabilities(value); err != nil {

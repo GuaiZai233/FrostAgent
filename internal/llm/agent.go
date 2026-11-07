@@ -495,19 +495,6 @@ func (e *Engine) RunMessagesWithContext(
 		}
 	}
 
-	if !runContext.Mock && !runContext.Proactive {
-		if notice := e.stickerActivityPrompt(); notice != "" {
-			messages = append([]ChatMessage(nil), messages...)
-			for i := len(messages) - 1; i >= 0; i-- {
-				if messages[i].Role == "user" {
-					if content, ok := messages[i].Content.(string); ok {
-						messages[i].Content = notice + "\n\n" + content
-					}
-					break
-				}
-			}
-		}
-	}
 	return e.runLoopWithResult(ctx, messages)
 }
 
@@ -823,10 +810,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 	stickerEnforcing := false
 	stickerAttempts := 0
-	enforceStickerActivity := hasRunCtx && !runCtx.Mock && !runCtx.Proactive
-	if interval, remaining, grace := e.stickerActivitySnapshot(); enforceStickerActivity && interval > 0 && remaining == 0 && grace == 0 {
-		stickerEnforcing = true
-		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+	enforceStickerActivity := func() bool {
+		return hasRunCtx && !runCtx.Mock && !runCtx.Proactive && e.stickerToolAvailable()
 	}
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
@@ -887,7 +872,33 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			modelTools = proactiveTools
 		}
 
+		// Build transient constraints from current availability so a disabled
+		// tool cannot leave an impossible instruction in later model requests.
 		coreMsgs := convertToCoreMessages(messages)
+		if enforceStickerActivity() {
+			if notice := e.stickerActivityPrompt(); notice != "" {
+				for j := len(coreMsgs) - 1; j >= 0; j-- {
+					if coreMsgs[j].Role == core.RoleUser {
+						if content, ok := coreMsgs[j].Content.(string); ok {
+							coreMsgs[j].Content = notice + "\n\n" + content
+						}
+						break
+					}
+				}
+			}
+			if interval, remaining, grace := e.stickerActivitySnapshot(); interval == 0 || grace > 0 || remaining == interval {
+				stickerEnforcing = false
+				stickerAttempts = 0
+			} else if remaining == 0 {
+				stickerEnforcing = true
+			}
+			if stickerEnforcing {
+				coreMsgs = append(coreMsgs, core.ChatMessage{Role: core.RoleUser, Content: stickerEnforcementPrompt})
+			}
+		} else {
+			stickerEnforcing = false
+			stickerAttempts = 0
+		}
 		if hasRunCtx && runCtx.SecurityNotice != "" {
 			noticeMsg := core.ChatMessage{
 				Role:    core.RoleSystem,
@@ -1090,7 +1101,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		messages = append(messages, *responseMsg)
 		startedTools = make(map[string]bool)
 		if stickerEnforcing {
-			if interval, remaining, grace := e.stickerActivitySnapshot(); interval == 0 || grace > 0 || remaining == interval {
+			if interval, remaining, grace := e.stickerActivitySnapshot(); !enforceStickerActivity() || interval == 0 || grace > 0 || remaining == interval {
 				stickerEnforcing = false
 				stickerAttempts = 0
 			}
@@ -1132,7 +1143,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, Error: context.Canceled}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
-				if stickerEnforcing {
+				if stickerEnforcing && enforceStickerActivity() {
 					// Treat an internal silence marker like any other missed enforcement attempt.
 					contentStr = ""
 				} else {
@@ -1148,7 +1159,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
 			willSendFinalMessage := contentStr != "" || (hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive)
-			if enforceStickerActivity && !outputBlocked {
+			if enforceStickerActivity() && !outputBlocked {
 				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 					messages = messages[:len(messages)-1]
 					messages = appendStickerForgiveness(messages, i)
@@ -1167,8 +1178,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						e.grantStickerGrace()
 						stickerEnforcing = false
 						stickerAttempts = 0
-					} else {
-						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 					}
 					addStickerIteration()
 					continue
@@ -1210,15 +1219,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					ToolCallID: tc.ID,
 				})
 			}
-			if stickerEnforcing {
+			if stickerEnforcing && enforceStickerActivity() {
 				stickerAttempts++
 				if stickerAttempts >= 3 {
 					messages = appendStickerForgiveness(messages, i)
 					e.grantStickerGrace()
 					stickerEnforcing = false
 					stickerAttempts = 0
-				} else {
-					messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 				}
 				addStickerIteration()
 			}
@@ -1242,7 +1249,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
-			if enforceStickerActivity && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
+			if enforceStickerActivity() && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
 				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
 					startedTools[tc.ID], startedTools[stickerCall.ID] = true, true
@@ -1313,7 +1320,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					toolSucceeded = true
 					toolResult = execution.Content
 					if IsStaySilentTool(tc.Function.Name) {
-						if stickerEnforcing {
+						if stickerEnforcing && enforceStickerActivity() {
 							toolResult = stickerEnforcementPrompt
 						} else {
 							e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
@@ -1369,7 +1376,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 			if toolSucceeded {
 				deliverySticker := hasStickerImage(execution.MessagePayload)
-				if enforceStickerActivity && execution.MessagePayload != "" && !deliverySticker {
+				if enforceStickerActivity() && execution.MessagePayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
 						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
 						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
@@ -1394,7 +1401,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			messages = append(messages, toolMsg)
 		}
-		if enforceStickerActivity && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+		if enforceStickerActivity() && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
 				if remaining == interval {
 					// A sticker was sent in this batch; the quota is satisfied.
@@ -1408,8 +1415,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						e.grantStickerGrace()
 						stickerEnforcing = false
 						stickerAttempts = 0
-					} else {
-						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
 					}
 					addStickerIteration()
 				}
@@ -1501,6 +1506,9 @@ func (e *Engine) findToolExecutor(name string) (ToolExecutor, bool) {
 		return nil, false
 	}
 	if tool, exists := e.ToolRegistry[name]; exists {
+		if !e.ToolEnabled(name) {
+			return nil, false
+		}
 		return tool, true
 	}
 	if e.MCPManager != nil {
@@ -1519,6 +1527,9 @@ func (e *Engine) EffectiveTools() []core.Tool {
 	var modelTools []core.Tool
 	if len(e.ToolRegistry) > 0 {
 		for _, t := range e.ToolRegistry {
+			if !e.ToolEnabled(t.Name()) {
+				continue
+			}
 			if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
 				continue
 			}

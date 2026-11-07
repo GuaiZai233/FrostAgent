@@ -40,7 +40,7 @@ func TestStickerActivityIntervalsAndGrace(t *testing.T) {
 		}
 	}
 	t.Setenv(sticker.ActivityEnvKey, "10")
-	e := &Engine{}
+	e := &Engine{ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -70,7 +70,7 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 		{Role: core.RoleAssistant, Content: "third"},
 		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -92,7 +92,7 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 		t.Fatal("missing transient countdown")
 	}
 	last := p.requests[3]
-	if len(last.Tools) != 0 {
+	if len(last.Tools) != 1 || last.Tools[0].Name != "send_sticker" {
 		t.Fatal("internal forgiveness changed tool schemas")
 	}
 	var sawToolCall, sawReply bool
@@ -118,7 +118,7 @@ func TestStickerEnforcementMarkerForgivesImmediately(t *testing.T) {
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
 		{Role: core.RoleAssistant, Content: "ordinary reply"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -138,7 +138,7 @@ func TestStickerEnforcementConflictStillReachesForgiveness(t *testing.T) {
 		conflict, conflict, conflict,
 		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 5 {
 		e.RecordBotTurn()
 	}
@@ -415,7 +415,7 @@ func TestConcurrentStickerTurnsCountOnceEach(t *testing.T) {
 func TestStickerActivityCountModesAndReset(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	t.Setenv(sticker.ActivityModeEnvKey, "")
-	e := &Engine{}
+	e := &Engine{ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 3 {
 		e.RecordIncomingMessage()
 	}
@@ -479,7 +479,7 @@ func TestBillingReceiptOnlyFinalUsesStickerQuota(t *testing.T) {
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
 		{Role: core.RoleAssistant},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}

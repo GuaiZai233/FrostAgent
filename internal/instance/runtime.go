@@ -218,6 +218,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	// Register tools
 	registry := make(map[string]tools.Tool)
+	balanceTool := tools.BalanceQueryTool(config.Get, routerManager.EndpointAPIKey)
+	registry[balanceTool.Name()] = balanceTool
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
 	staySilentTool := tools.StaySilentTool()
