@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -145,6 +147,20 @@ func WrapGroupReplyOneBot(base []tools.OneBotSegment, messageID int64, userID in
 	plan := PlanGroupDecoration(true, hasSticker, enableReply, enableAt, messageIDStr, userIDStr, hasQuote, hasMention)
 	if !plan.ShouldQuote && !plan.ShouldMention {
 		return base
+	}
+	if plan.ShouldMention {
+		contentAt := 0
+		for contentAt < len(base) && IsQuoteType(base[contentAt].Type) {
+			contentAt++
+		}
+		if contentAt < len(base) && base[contentAt].Type == "text" {
+			text, ok := base[contentAt].Data["text"].(string)
+			if separated := SeparateMentionText(text); ok && separated != text {
+				base = slices.Clone(base)
+				base[contentAt].Data = maps.Clone(base[contentAt].Data)
+				base[contentAt].Data["text"] = separated
+			}
+		}
 	}
 
 	// Canonical decoration ordering: Quote first, then Mention, then original message content.

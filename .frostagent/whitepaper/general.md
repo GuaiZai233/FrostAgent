@@ -191,7 +191,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；
   - 支持群聊无感 running compact 实时摄入与记忆反思；
   - 支持 Agent 工具调用阶段的 `sendHook` 中间消息流式即时下发；
-  - 群聊回复统一在出站协议边界应用 `ENABLE_REPLY_IN_GROUP_MSG` 与 `ENABLE_AT_IN_GROUP_MSG`：自动引用当前入站消息并提及触发用户，显式 `quote` 组件优先且不会重复注入引用；AstrBot 插件将引用映射为平台原生 `Reply` 消息段；
+  - 群聊回复统一在出站协议边界应用 `ENABLE_REPLY_IN_GROUP_MSG` 与 `ENABLE_AT_IN_GROUP_MSG`：自动引用当前入站消息并提及触发用户，显式 `quote` 组件优先且不会重复注入引用；仅在自动插入 @ 且紧随其后的正文没有前导空白时补一个分隔空格，已有空白原样保留，纯引用不补空格；AstrBot 插件将引用映射为平台原生 `Reply` 消息段；
   - 包含客户端自动断线重连与周期心跳保活。
 - **AstrBot ↔ 原生 OneBot 语义对齐架构 (Semantic Parity Engine, `internal/adapter/parity`)**：
   - 为保障在切换或共存运行 AstrBot 与原生 OneBot (OneBot v11) 适配器时在已定义契约范围内保持行为语义一致与平滑迁移，系统在 8 大语义维度实现了双向对齐与规范化（Parity）：

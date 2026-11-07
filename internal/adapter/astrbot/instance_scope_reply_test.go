@@ -57,7 +57,7 @@ func TestAstrBotGroupDecorationsUseInstanceScope(t *testing.T) {
 		enabled.Messages[1].Type != "mention_user" ||
 		enabled.Messages[1].MentionUserID != action.UserID ||
 		enabled.Messages[2].Type != "plain" ||
-		enabled.Messages[2].Text != action.Content {
+		enabled.Messages[2].Text != " "+action.Content {
 		t.Fatalf("实例开启时应得到 quote+mention+plain，实际=%+v", enabled.Messages)
 	}
 

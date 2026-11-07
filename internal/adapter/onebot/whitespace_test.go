@@ -139,7 +139,11 @@ func TestOneBotOutboundPreservesText(t *testing.T) {
 					if route.mention {
 						want = append(want, tools.OneBotSegment{Type: "at", Data: map[string]any{"qq": "12"}})
 					}
-					want = append(want, tools.OneBotSegment{Type: "text", Data: map[string]any{"text": text}})
+					wantText := text
+					if route.mention && text == "正文" {
+						wantText = " 正文"
+					}
+					want = append(want, tools.OneBotSegment{Type: "text", Data: map[string]any{"text": wantText}})
 					data, err := json.Marshal(message)
 					if err != nil {
 						t.Fatal(err)
