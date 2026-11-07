@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/common.proto.
  */
 export const file_frostagent_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("Chpmcm9zdGFnZW50L3YxL2NvbW1vbi5wcm90bxINZnJvc3RhZ2VudC52MSJCCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJEg0KBXRvdGFsGAMgASgFIi0KCFRvb2xJbmZvEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkingEKC1Nlc3Npb25JbmZvEhIKCnNlc3Npb25faWQYASABKAkSEAoIcGxhdGZvcm0YAiABKAkSFQoNbWVzc2FnZV9jb3VudBgDIAEoBRISCgpjcmVhdGVkX2F0GAQgASgJEhMKC2xhc3RfYWN0aXZlGAUgASgJEhUKDWdyb3VwX3N1bW1hcnkYBiABKAkSEgoKZ3JvdXBfbmFtZRgHIAEoCWIGcHJvdG8z");
+  fileDesc("Chpmcm9zdGFnZW50L3YxL2NvbW1vbi5wcm90bxINZnJvc3RhZ2VudC52MSJCCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJEg0KBXRvdGFsGAMgASgFImcKCFRvb2xJbmZvEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkSDwoHZW5hYmxlZBgDIAEoCBIRCglhdmFpbGFibGUYBCABKAgSFAoMY29uZmlndXJhYmxlGAUgASgIIp4BCgtTZXNzaW9uSW5mbxISCgpzZXNzaW9uX2lkGAEgASgJEhAKCHBsYXRmb3JtGAIgASgJEhUKDW1lc3NhZ2VfY291bnQYAyABKAUSEgoKY3JlYXRlZF9hdBgEIAEoCRITCgtsYXN0X2FjdGl2ZRgFIAEoCRIVCg1ncm91cF9zdW1tYXJ5GAYgASgJEhIKCmdyb3VwX25hbWUYByABKAliBnByb3RvMw");
 
 /**
  * Pagination is used for list requests.
@@ -56,6 +56,21 @@ export type ToolInfo = Message<"frostagent.v1.ToolInfo"> & {
    * @generated from field: string description = 2;
    */
   description: string;
+
+  /**
+   * @generated from field: bool enabled = 3;
+   */
+  enabled: boolean;
+
+  /**
+   * @generated from field: bool available = 4;
+   */
+  available: boolean;
+
+  /**
+   * @generated from field: bool configurable = 5;
+   */
+  configurable: boolean;
 };
 
 /**

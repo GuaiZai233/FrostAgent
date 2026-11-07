@@ -102,6 +102,7 @@ func TestEngineMultimodalRecallAndStickerNotice(t *testing.T) {
 			}
 			provider := &mockTraceProvider{}
 			engine := &Engine{Provider: provider, MemoryReader: memory.NewReader(store, 5), MemoryGateway: memory.NewGateway(), MemoryEmbeddings: embeddings, GroupManager: groups}
+			engine.ToolRegistry = map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}
 			parts := []core.ContentPart{
 				{Type: "text", Text: "compare image"},
 				{Type: "image_url", ImageURL: &core.ImageURL{URL: "data:image/gif;base64,R0lGODlh"}},
