@@ -97,7 +97,7 @@ function createChatPage(container: HTMLElement): () => void {
   let msgSeq = 0;
 
   // Connection & overview state
-  let botName = 'FrostAgent';
+  let botName = '助手';
   let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
 
   // Config state
@@ -803,7 +803,7 @@ function createChatPage(container: HTMLElement): () => void {
     try {
       const overview = await api.getOverview();
       if (isUnmounted) return;
-      botName = overview.botName || 'FrostAgent';
+      botName = overview.botName || '助手';
       updateEndpointDisplay();
       if (!connectionManaged) connect();
     } catch (err) {

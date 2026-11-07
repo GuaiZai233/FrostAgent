@@ -31,7 +31,7 @@ func TestGetOverviewUsesEffectiveInstanceAndControlPlaneSettings(t *testing.T) {
 		},
 		{
 			name:        "fallbacks",
-			wantBotName: "FrostAgent",
+			wantBotName: "助手",
 		},
 	}
 	for _, tt := range tests {

@@ -20,6 +20,7 @@ import {
   attachPaginationEvents,
 } from '../components/pagination';
 import {
+  DEFAULT_BOT_NAME,
   openPromptInspectorDialog,
   renderLoggedImagesInText,
 } from '../components/prompt-inspector';
@@ -28,6 +29,16 @@ export function mountLogsPage(container: HTMLElement): () => void {
   if (!instanceState.selected) instanceState.logSource = 'control-plane';
   const api = createInstanceAPI();
   let isUnmounted = false;
+  let botName = DEFAULT_BOT_NAME;
+  const botNameReady = (async () => {
+    if (!instanceState.selected) return;
+    try {
+      const overview = await api.getOverview();
+      if (!isUnmounted) botName = overview.botName?.trim() || DEFAULT_BOT_NAME;
+    } catch {
+      // Bot name is display-only here; keep the neutral default on failure.
+    }
+  })();
   let loading = false;
   let streaming = false;
   let entries: LogEntry[] = [];
@@ -432,10 +443,13 @@ export function mountLogsPage(container: HTMLElement): () => void {
     const inspectBtn = detailContent.querySelector<HTMLButtonElement>(
       '#detail-inspect-prompt-btn',
     );
-    inspectBtn?.addEventListener('click', () => {
+    inspectBtn?.addEventListener('click', async () => {
+      await botNameReady;
+      if (isUnmounted) return;
       openPromptInspectorDialog(
         promptPayload,
         `LLM 请求检查 — ${selectedEntry?.source || 'LLM'} · ${formatDateTime(selectedEntry?.timestamp)}`,
+        botName,
       );
     });
   }
@@ -472,10 +486,13 @@ export function mountLogsPage(container: HTMLElement): () => void {
         const inspectBtn = dialogEl.querySelector<HTMLButtonElement>(
           '#log-summary-inspect-btn',
         );
-        inspectBtn?.addEventListener('click', () => {
+        inspectBtn?.addEventListener('click', async () => {
+          await botNameReady;
+          if (isUnmounted) return;
           openPromptInspectorDialog(
             promptPayload,
             `LLM 请求检查 — ${entry.source || 'LLM'} · ${formatDateTime(entry.timestamp)}`,
+            botName,
           );
         });
 
