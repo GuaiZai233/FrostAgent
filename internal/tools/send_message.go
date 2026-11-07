@@ -8,6 +8,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"os"
@@ -116,6 +117,10 @@ func SendMsgTool() Tool {
 				}
 				switch msg.Type {
 				case "plain":
+					if runtimescope.FromContext(ctx).Getenv(replyformat.EnvKey) != "true" {
+						msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
+						payload.Messages[i].Text = msg.Text
+					}
 					if strings.TrimSpace(msg.Text) == "" {
 						return textResult(""), fmt.Errorf("messages[%d].text 不能为空", i)
 					}
