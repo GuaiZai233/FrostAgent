@@ -61,8 +61,21 @@ func assertNoStickerConstraint(t *testing.T, req core.ChatRequest) {
 		}
 	}
 	for _, msg := range req.Messages {
-		if text, ok := msg.Content.(string); ok && (strings.Contains(text, "FrostAgent 强制") || text == stickerEnforcementPrompt || text == ignoreEnforceStickerReply) {
-			t.Error("unavailable sticker tool still constrained the model")
+		var texts []string
+		switch content := msg.Content.(type) {
+		case string:
+			texts = append(texts, content)
+		case []core.ContentPart:
+			for _, part := range content {
+				if part.Type == string(core.ContentPartTypeText) {
+					texts = append(texts, part.Text)
+				}
+			}
+		}
+		for _, text := range texts {
+			if strings.Contains(text, "FrostAgent 强制") || text == stickerEnforcementPrompt || text == ignoreEnforceStickerReply {
+				t.Error("unavailable sticker tool still constrained the model")
+			}
 		}
 	}
 }
@@ -110,54 +123,64 @@ func TestUnavailableStickerToolDoesNotEnforceDueQuota(t *testing.T) {
 }
 
 func TestStickerEnforcementStopsWhenToolBecomesUnavailable(t *testing.T) {
-	for _, disableDuring := range []string{"model response", "tool execution"} {
-		for _, prerequisite := range []bool{false, true} {
-			t.Run(disableDuring+fmt.Sprint("/prerequisite=", prerequisite), func(t *testing.T) {
-				e := newStickerSwitchEngine(t)
-				disable := func() {
-					if prerequisite {
-						e.ToolRegistry["send_sticker"].(*switchableStickerTool).available = false
-					} else if err := e.Config.Update(DisabledToolsKey, `["send_sticker"]`, false); err != nil {
-						t.Fatal(err)
+	image := core.ContentPart{Type: "image_url", ImageURL: &core.ImageURL{URL: "data:image/gif;base64,R0lGODlh"}}
+	for _, content := range []struct {
+		name  string
+		value any
+	}{
+		{"text", "hello"},
+		{"image with text", []core.ContentPart{image, {Type: "text", Text: "hello"}}},
+		{"image only", []core.ContentPart{image}},
+	} {
+		for _, disableDuring := range []string{"model response", "tool execution"} {
+			for _, prerequisite := range []bool{false, true} {
+				t.Run(content.name+"/"+disableDuring+fmt.Sprint("/prerequisite=", prerequisite), func(t *testing.T) {
+					e := newStickerSwitchEngine(t)
+					disable := func() {
+						if prerequisite {
+							e.ToolRegistry["send_sticker"].(*switchableStickerTool).available = false
+						} else if err := e.Config.Update(DisabledToolsKey, `["send_sticker"]`, false); err != nil {
+							t.Fatal(err)
+						}
 					}
-				}
-				e.ToolRegistry["fixture-disable"] = &injectionTool{name: "fixture-disable", execute: func() (string, error) { disable(); return "disabled", nil }}
-				calls := 0
-				e.Provider = injectionProvider(func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-					calls++
-					msg := core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary final"}
-					if calls == 1 {
-						sawEnforcement := false
-						for _, message := range req.Messages {
-							if message.Content == stickerEnforcementPrompt {
-								sawEnforcement = true
+					e.ToolRegistry["fixture-disable"] = &injectionTool{name: "fixture-disable", execute: func() (string, error) { disable(); return "disabled", nil }}
+					calls := 0
+					e.Provider = injectionProvider(func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+						calls++
+						msg := core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary final"}
+						if calls == 1 {
+							sawEnforcement := false
+							for _, message := range req.Messages {
+								if message.Content == stickerEnforcementPrompt {
+									sawEnforcement = true
+								}
 							}
-						}
-						if !sawEnforcement {
-							t.Error("enabled tool did not enforce due quota")
-						}
-						if disableDuring == "model response" {
-							disable()
+							if !sawEnforcement {
+								t.Error("enabled tool did not enforce due quota")
+							}
+							if disableDuring == "model response" {
+								disable()
+							} else {
+								msg.ToolCalls = []core.ToolCall{{ID: "fixture-disable", Type: "function", Function: core.ToolCallFunction{Name: "fixture-disable", Arguments: `{}`}}}
+							}
 						} else {
-							msg.ToolCalls = []core.ToolCall{{ID: "fixture-disable", Type: "function", Function: core.ToolCallFunction{Name: "fixture-disable", Arguments: `{}`}}}
+							assertNoStickerConstraint(t, req)
 						}
-					} else {
-						assertNoStickerConstraint(t, req)
+						return &core.ChatResponse{Message: msg}, nil
+					})
+					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: content.value}}, RunContext{})
+					wantCalls := 1
+					if disableDuring == "tool execution" {
+						wantCalls = 2
 					}
-					return &core.ChatResponse{Message: msg}, nil
+					if result.Content != "ordinary final" || calls != wantCalls {
+						t.Fatalf("content=%q calls=%d", result.Content, calls)
+					}
+					if _, _, grace := e.stickerActivitySnapshot(); grace != 0 {
+						t.Fatal("disabling tool granted automatic forgiveness")
+					}
 				})
-				result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
-				wantCalls := 1
-				if disableDuring == "tool execution" {
-					wantCalls = 2
-				}
-				if result.Content != "ordinary final" || calls != wantCalls {
-					t.Fatalf("content=%q calls=%d", result.Content, calls)
-				}
-				if _, _, grace := e.stickerActivitySnapshot(); grace != 0 {
-					t.Fatal("disabling tool granted automatic forgiveness")
-				}
-			})
+			}
 		}
 	}
 }

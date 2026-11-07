@@ -28,17 +28,23 @@ func TestStickerActivityNoticePreservesImageParts(t *testing.T) {
 		{"image before text", []core.ContentPart{image, {Type: "text", Text: "current text"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			provider := &stickerActivityProvider{}
-			engine := &Engine{Provider: provider}
+			provider := &stickerActivityProvider{responses: []core.ChatMessage{{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{ID: "synthetic-call", Type: "function", Function: core.ToolCallFunction{
+					Name: "fixture", Arguments: `{}`,
+				}}},
+			}}}
+			engine := &Engine{Provider: provider, ToolRegistry: map[string]ToolExecutor{
+				"send_sticker": &staticTool{name: "send_sticker"},
+				"fixture":      &staticTool{name: "fixture"},
+			}}
 			original := append([]core.ContentPart(nil), tc.parts...)
 			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: tc.parts}}, RunContext{})
 			if result.Error != nil {
 				t.Fatal(result.Error)
 			}
-			messages := provider.requests[0].Messages
-			parts, ok := messages[len(messages)-1].Content.([]core.ContentPart)
-			if !ok || len(parts) != 2 {
-				t.Fatalf("lost multimodal content: %+v", messages)
+			if len(provider.requests) != 2 {
+				t.Fatalf("requests=%d, want 2", len(provider.requests))
 			}
 			imageIndex, textIndex := 0, 1
 			wantText := engine.stickerActivityPrompt() + "\n\ncurrent text"
@@ -46,8 +52,19 @@ func TestStickerActivityNoticePreservesImageParts(t *testing.T) {
 				imageIndex, textIndex = 1, 0
 				wantText = engine.stickerActivityPrompt()
 			}
-			if parts[textIndex].Type != "text" || parts[textIndex].Text != wantText || !reflect.DeepEqual(parts[imageIndex], image) {
-				t.Fatalf("notice or image changed: %+v", parts)
+			for round, req := range provider.requests {
+				for _, message := range req.Messages {
+					if message.Role != core.RoleUser {
+						continue
+					}
+					parts, ok := message.Content.([]core.ContentPart)
+					if !ok || len(parts) != 2 {
+						t.Fatalf("round %d lost multimodal content: %+v", round, message)
+					}
+					if parts[textIndex].Type != "text" || parts[textIndex].Text != wantText || !reflect.DeepEqual(parts[imageIndex], image) {
+						t.Fatalf("round %d notice or image changed: %+v", round, parts)
+					}
+				}
 			}
 			if !reflect.DeepEqual(tc.parts, original) {
 				t.Fatalf("caller content mutated: %+v", tc.parts)
