@@ -44,8 +44,28 @@ export interface PromptImage {
   url: string;
 }
 
+/** Default display name when no instance BOT_NAME is available. */
+export const DEFAULT_BOT_NAME = '助手';
+/** Default aliases used to recognize bot-authored sender lines. */
+export const DEFAULT_BOT_ALIASES = ['Assistant', 'Bot'];
+
+function normalizeBotIdentity(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function looksLikeAssistantIdentity(value: string, botName?: string): boolean {
+  const normalized = normalizeBotIdentity(value.trim());
+  if (!normalized) return false;
+  const candidates = [botName, DEFAULT_BOT_NAME, ...DEFAULT_BOT_ALIASES]
+    .filter((candidate): candidate is string => typeof candidate === 'string')
+    .map(normalizeBotIdentity)
+    .filter(Boolean);
+  return candidates.some((candidate) => normalized.startsWith(candidate));
+}
+
 export interface ParsedPrompt {
   sessionKind?: 'group' | 'private';
+  botName?: string;
   model?: string;
   systemPrompt?: string;
   userMessage?: string;
@@ -64,7 +84,7 @@ export interface ParsedPrompt {
 /**
  * Parses a single message line into role, time, sender, id, and content.
  */
-export function parseMessageLine(line: string): GroupMessageItem {
+export function parseMessageLine(line: string, botName?: string): GroupMessageItem {
   if (!line || typeof line !== 'string') {
     return { content: '', rawText: '' };
   }
@@ -109,9 +129,9 @@ export function parseMessageLine(line: string): GroupMessageItem {
   // Sender / ID / Content extraction
   // Handles:
   // - 怪哉GuaiZai (3127306807): 笨笨
-  // - 霜降狐: 嗷呜主人...
+  // - 助手: 嗷呜主人...
   // - 张三 (123456) [msg_1]: 周末爬山路线定了吗？
-  // - 霜降 [msg_2]: 好的
+  // - 助手 [msg_2]: 好的
   const senderMatch = text.match(
     /^([^:\n]+?)(?:\s*\(([^)]+)\))?(?:\s*\[([a-zA-Z0-9_-]+)\])?\s*:\s*([\s\S]*)$/,
   );
@@ -134,11 +154,7 @@ export function parseMessageLine(line: string): GroupMessageItem {
 
     // Infer role if not explicitly tagged
     if (!role) {
-      if (/^(?:assistant|bot|霜降|frostagent)/i.test(sender)) {
-        role = 'assistant';
-      } else {
-        role = 'user';
-      }
+      role = looksLikeAssistantIdentity(sender, botName) ? 'assistant' : 'user';
     }
 
     return {
@@ -154,11 +170,7 @@ export function parseMessageLine(line: string): GroupMessageItem {
 
   // Fallback for plain message line
   if (!role) {
-    if (/^(?:assistant|bot|霜降|frostagent)/i.test(text)) {
-      role = 'assistant';
-    } else {
-      role = 'user';
-    }
+    role = looksLikeAssistantIdentity(text, botName) ? 'assistant' : 'user';
   }
 
   return {
@@ -208,6 +220,7 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
 export function buildInspectorDataFromSessionContext(context: {
   sessionId: string;
   platform?: string;
+  botName?: string;
   runningSummary?: string;
   recentMessages?: string[];
   summaryGroups?: Array<{
@@ -225,8 +238,10 @@ export function buildInspectorDataFromSessionContext(context: {
   model?: string;
   recentStructuredMessages?: StructuredGroupMessage[];
   history?: Array<{ role: string; content: string }>;
-}): ParsedPrompt {
+}, instanceBotName?: string): ParsedPrompt {
   const privateSession = isPrivateSession(context.sessionId);
+  const configuredBotName = (instanceBotName || context.botName || '').trim();
+  const roleBotName = configuredBotName || DEFAULT_BOT_NAME;
   const summaryGroups: SummaryGroupInfo[] = (context.summaryGroups || []).map((g) => {
     const rawMsgs = g.messages || [];
     return {
@@ -240,14 +255,14 @@ export function buildInspectorDataFromSessionContext(context: {
       structuredMessages: g.structuredMessages,
       parsedMessages: (g.structuredMessages?.length
         ? g.structuredMessages.map(groupMessageFromStructured)
-        : rawMsgs.map(parseMessageLine)
+        : rawMsgs.map((line) => parseMessageLine(line, roleBotName))
       ).map((item) => ({ ...item, isSummarized: true })),
     };
   });
 
   let recentMessages: GroupMessageItem[] = (context.recentStructuredMessages?.length
     ? context.recentStructuredMessages.map(groupMessageFromStructured)
-    : (context.recentMessages || []).map(parseMessageLine)
+    : (context.recentMessages || []).map((line) => parseMessageLine(line, roleBotName))
   ).map((item) => ({ ...item, isSummarized: false }));
 
   // Older servers expose private conversations only through history. Never
@@ -263,6 +278,7 @@ export function buildInspectorDataFromSessionContext(context: {
 
   return {
     sessionKind: privateSession ? 'private' : 'group',
+    botName: configuredBotName || undefined,
     raw: context.promptText || '',
     model: context.model,
     systemPrompt: context.systemPrompt,
@@ -279,9 +295,10 @@ export function buildInspectorDataFromSessionContext(context: {
  * Parses raw LLM prompt string (JSON chat request, raw text with XML tags, or prompt trace)
  * into a structured ParsedPrompt object.
  */
-export function parsePrompt(raw: string): ParsedPrompt {
+export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
   const result: ParsedPrompt = {
     raw,
+    botName: botName?.trim() || undefined,
     recentMessages: [],
     summaryGroups: [],
     images: [],
@@ -430,7 +447,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
         continue;
       }
 
-      const item = parseStructuredMessageJSONLine(line) || parseMessageLine(line);
+      const item = parseStructuredMessageJSONLine(line) || parseMessageLine(line, botName);
       item.isSummarized = false;
       parsedItems.push(item);
     }
@@ -443,7 +460,7 @@ export function parsePrompt(raw: string): ParsedPrompt {
     if (!group.parsedMessages) {
       if (group.messages && group.messages.length > 0) {
         group.parsedMessages = group.messages.map((line) => {
-          const item = parseMessageLine(line);
+          const item = parseMessageLine(line, botName);
           item.isSummarized = true;
           return item;
         });
@@ -463,12 +480,14 @@ export function renderPromptInspector(
   options: {
     showRawToggle?: boolean;
     title?: string;
+    botName?: string;
     onViewSummary?: () => void;
     onConfigureModel?: () => void;
     modelConfigHref?: string;
   } = {},
 ): () => void {
-  const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw) : dataOrRaw;
+  const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw, options.botName) : dataOrRaw;
+  const botName = (options.botName || parsed.botName || DEFAULT_BOT_NAME).trim() || DEFAULT_BOT_NAME;
   const privateSession = parsed.sessionKind === 'private';
   const chatLabel = privateSession ? '私聊' : '群聊';
   let viewMode: 'visual' | 'raw' = 'visual';
@@ -626,7 +645,7 @@ export function renderPromptInspector(
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${renderSummaryGroups(parsed.summaryGroups, parsed.model, chatLabel)}
+                ${renderSummaryGroups(parsed.summaryGroups, parsed.model, chatLabel, botName)}
               </div>
             </div>
           </div>
@@ -667,7 +686,7 @@ export function renderPromptInspector(
             </div>
             <div class="prompt-section-body">
               <div class="group-messages-container">
-                ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model)).join('')}
+                ${parsed.recentMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
               </div>
             </div>
           </div>
@@ -821,11 +840,16 @@ export function renderPromptInspector(
 /**
  * Renders all summary groups with their current compact content.
  */
-function renderSummaryGroups(summaryGroups: SummaryGroupInfo[], model?: string, chatLabel = '群聊'): string {
+function renderSummaryGroups(
+  summaryGroups: SummaryGroupInfo[],
+  model?: string,
+  chatLabel = '群聊',
+  botName = DEFAULT_BOT_NAME,
+): string {
   return summaryGroups
     .map((group, idx) => {
-      const messages = group.parsedMessages || (group.messages || []).map(parseMessageLine);
-      return renderSummaryGroupBlock(messages, group, idx, model, chatLabel);
+      const messages = group.parsedMessages || (group.messages || []).map((line) => parseMessageLine(line, botName));
+      return renderSummaryGroupBlock(messages, group, idx, model, chatLabel, botName);
     })
     .join('');
 }
@@ -839,8 +863,9 @@ function renderSummaryGroupBlock(
   groupIdx: number,
   model?: string,
   chatLabel = '群聊',
+  botName = DEFAULT_BOT_NAME,
 ): string {
-  const rowsHtml = messages.map((m) => renderSingleMessageRow(m, true, model)).join('');
+  const rowsHtml = messages.map((m) => renderSingleMessageRow(m, true, model, botName)).join('');
 
   return `
     <div class="summary-group-wrapper" data-group-index="${groupIdx}">
@@ -870,11 +895,16 @@ function renderSummaryGroupBlock(
 /**
  * Renders an individual message entry row.
  */
-function renderSingleMessageRow(msg: GroupMessageItem, isSummarized: boolean, model?: string): string {
+function renderSingleMessageRow(
+  msg: GroupMessageItem,
+  isSummarized: boolean,
+  model?: string,
+  botName = DEFAULT_BOT_NAME,
+): string {
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';
-  const defaultSender = isAssistant ? '霜降' : '用户';
+  const defaultSender = isAssistant ? botName : '用户';
   const displaySender = msg.sender || defaultSender;
 
   return `
@@ -990,7 +1020,11 @@ function formatImageSize(bytes: number): string {
 /**
  * Opens a full-featured modal dialog for Prompt inspection.
  */
-export function openPromptInspectorDialog(raw: string, title = 'Prompt Inspector'): void {
+export function openPromptInspectorDialog(
+  raw: string,
+  title = 'Prompt Inspector',
+  botName = DEFAULT_BOT_NAME,
+): void {
   openDialog({
     title,
     description: '查看发送给 LLM 的结构化上下文、群消息历史与摘要分组',
@@ -1004,7 +1038,7 @@ export function openPromptInspectorDialog(raw: string, title = 'Prompt Inspector
     onMount: (dialogEl, close) => {
       const mountEl = dialogEl.querySelector<HTMLElement>('#dialog-prompt-inspector-mount');
       if (mountEl) {
-        renderPromptInspector(mountEl, raw, { showRawToggle: true, title });
+        renderPromptInspector(mountEl, raw, { showRawToggle: true, title, botName });
       }
       dialogEl.querySelector('#pi-dialog-close-btn')?.addEventListener('click', close);
     },

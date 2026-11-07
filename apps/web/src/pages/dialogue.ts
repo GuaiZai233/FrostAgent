@@ -73,7 +73,7 @@ export function mountDialoguePage(container: HTMLElement, api = createInstanceAP
           </label>
           <label class="flex flex-col gap-1.5 text-xs font-semibold">唤醒别名
             <input id="persona-bot-aliases" class="input text-sm" type="text" placeholder="多个名称用英文逗号分隔" disabled />
-            <span class="text-xs font-normal text-muted-foreground">含英文的名称或别名忽略大小写和空格</span>
+            <span class="text-xs font-normal text-muted-foreground">名称或别名忽略英文字母大小写和空格；纯英文名称按整词匹配</span>
           </label>
         </div>
         <div class="flex justify-end"><button id="persona-identity-save" type="button" class="btn btn-primary btn-sm" disabled>保存名称与别名</button></div>

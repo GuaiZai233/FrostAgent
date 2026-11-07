@@ -375,7 +375,7 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 
 	botName := engine.Getenv("BOT_NAME")
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
@@ -473,7 +473,7 @@ func formatGroupSpeakerMessage(event Event, text string) string {
 
 func formatGroupAssistantMessage(botName, text string) string {
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	return fmt.Sprintf("[assistant] %s: %s", botName, strings.TrimSpace(text))
 }
@@ -505,7 +505,7 @@ func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine
 
 	botName := engine.Getenv("BOT_NAME")
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
@@ -546,11 +546,11 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	scope := runtimescope.First(scopes)
 	name, nameSet := scope.LookupEnv("BOT_NAME")
 	if !nameSet {
-		name = "霜降狐"
+		name = "助手"
 	}
 	aliases, aliasesSet := scope.LookupEnv("BOT_ALIASES")
 	if !aliasesSet {
-		aliases = "霜降,FrostAgent"
+		aliases = "Assistant,Bot"
 	}
 
 	values := append([]string{name}, strings.Split(aliases, ",")...)

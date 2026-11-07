@@ -17,7 +17,7 @@ func TestBotNameWakeMatching(t *testing.T) {
 		{name: "English alias", content: "hello f R o S t a G e N t", want: true},
 		{name: "mixed alias", content: "霜狐bOt你好", want: true},
 		{name: "Chinese alias", content: "霜降你好", want: true},
-		{name: "Chinese remains literal", content: "霜 降你好"},
+		{name: "Chinese spaces ignored", content: "霜 降你好", want: true},
 		{name: "regex remains literal", content: "普通聊天"},
 		{name: "multiple messages", messages: []string{"普通聊天", "frostagent你好"}, want: true},
 		{name: "separate messages", messages: []string{"Frost", "Agent"}},
@@ -55,6 +55,20 @@ func TestBotNameWakeMatching(t *testing.T) {
 			t.Fatal("alias bypassed group reply switch")
 		}
 	})
+}
+
+func TestBotNameWakeDefaults(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{})
+	for text, want := range map[string]bool{
+		"助手 你好":        true,
+		"ASSISTANT 你好": true,
+		"bot 你好":       true,
+		"霜降 你好":        false,
+	} {
+		if got := isBotNameMentioned(text, scope); got != want {
+			t.Fatalf("default wake matching for %q = %v, want %v", text, got, want)
+		}
+	}
 }
 
 func TestBotNameWakeUsesInstanceScope(t *testing.T) {

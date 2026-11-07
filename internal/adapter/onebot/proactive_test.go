@@ -113,7 +113,7 @@ func TestDetectGroupWakeSignalsProactive(t *testing.T) {
 			GroupID:     10001,
 			UserID:      20001,
 			SelfID:      30001,
-			Message:     json.RawMessage(`[{"type":"text","data":{"text":"霜降狐 你好呀"}}]`),
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"助手 你好呀"}}]`),
 		}
 		scope := newTestScopeWithEnv(t, map[string]string{
 			"PROACTIVE_REPLY_PROBABILITY": "1.00",
