@@ -33,28 +33,23 @@ export function renderTokenUsage(usage: TokenUsageOverview | undefined): string 
     </section>`;
   }
   const rows = usage.modules;
-  const requests = rows.reduce((value, row) => value + row.requests, 0n);
   const summaryRows = rows.filter((row) => ['group_compact', 'sticker_summary', 'memory_extract', 'reflection'].includes(row.module));
-  const cards: Array<{ label: string; rows: TokenUsageModule[]; key: CounterKey; hint: string }> = [
-    { label: '累计 Token', rows, key: 'total', hint: '输入与输出合计' },
-    { label: '对话', rows: rows.filter((row) => ['dialogue', 'subagent'].includes(row.module)), key: 'total', hint: '包含子智能体' },
-    { label: '多模态', rows: rows.filter((row) => row.module === 'vision'), key: 'total', hint: '多模态理解请求的完整用量' },
-    { label: '摘要（含表情包）', rows: summaryRows, key: 'total', hint: '包含群聊摘要、表情包与记忆整理' },
-    { label: '缓存命中 Token', rows, key: 'cached', hint: '已包含在输入中，不重复计入累计' },
-    { label: '缓存命中次数', rows, key: 'cacheHits', hint: 'API 返回缓存命中 Token > 0 的请求数' },
+  const cards: Array<{ label: string; rows: TokenUsageModule[]; key: CounterKey }> = [
+    { label: '累计 Token', rows, key: 'total' },
+    { label: '对话', rows: rows.filter((row) => ['dialogue', 'subagent'].includes(row.module)), key: 'total' },
+    { label: '多模态', rows: rows.filter((row) => row.module === 'vision'), key: 'total' },
+    { label: '摘要（含表情包）', rows: summaryRows, key: 'total' },
+    { label: '缓存命中 Token', rows, key: 'cached' },
+    { label: '缓存命中次数', rows, key: 'cacheHits' },
   ];
   return `<section class="flex flex-col gap-3" aria-labelledby="token-usage-title">
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <h2 id="token-usage-title" class="text-sm font-semibold text-foreground">Token 消耗一览</h2>
-      <span class="text-xs text-muted">自功能启用起累计 · 重启保留 · ${escapeHtml(formatCount(requests))} 次请求</span>
-    </div>
+    <h2 id="token-usage-title" class="text-sm font-semibold text-foreground">Token 消耗一览</h2>
     ${usage.incomplete ? '<p class="text-xs text-warning" role="status">部分用量未能保存，累计数据可能不完整。</p>' : ''}
     <div class="token-usage-grid">${cards.map((card) => {
       const count = card.rows.reduce((value, row) => value + row.requests, 0n);
       return `<article class="card p-3.5 flex flex-col gap-2">
         <h3 class="text-xs font-medium text-muted">${card.label}</h3>
         <p class="token-usage-value font-bold text-foreground">${renderCounter(sum(card.rows, card.key), count)}</p>
-        <p class="text-xs text-muted">${card.hint}</p>
       </article>`;
     }).join('')}</div>
     <div class="card token-usage-table-wrap" role="region" aria-label="各模块 Token 消耗" tabindex="0">
@@ -67,6 +62,5 @@ export function renderTokenUsage(usage: TokenUsageOverview | undefined): string 
         </tr>`).join('')}</tbody>
       </table>
     </div>
-    <p class="text-xs text-muted">依据 API 返回的 usage 统计；未返回的字段标记为 unestimated。存在缺失时保留已知数量，并显示缺失请求数；缓存命中属于输入 Token 的一部分。</p>
   </section>`;
 }
