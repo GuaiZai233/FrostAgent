@@ -908,14 +908,20 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
+	if visionEnabled && routeSnapshot != nil {
+		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	directVision := !visionEnabled && dialogueSupportsVision && !forceStickerSilence
+	var directImageParts []core.ContentPart
+	if directVision {
+		directImageParts = makeAstrBotImageContentParts(event)
+	}
+	noVisionGuidance := (astrBotImageSlotCount(event) > 0 || quoteHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
+
 	if (len(imageSegments) > 0 || quoteHasImage) && engine != nil {
-		visionEnabled := engine.VisionProvider != nil && !forceStickerSilence
-		if visionEnabled && routeSnapshot != nil {
-			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
-		}
-		if !visionEnabled {
-			imageSegments = nil
-		} else {
+		if visionEnabled {
 			// 计费检查 (视觉处理前检查)
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
@@ -1113,6 +1119,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			contextData["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
 	}
+	if noVisionGuidance {
+		contextData["interaction_guidance"] = parity.NoVisionGuidance
+	}
 	contextBytes, _ := json.Marshal(contextData)
 
 	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
@@ -1199,6 +1208,19 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		if quotePrompt != "" {
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", quotePrompt)
+			if directVision {
+				for _, quote := range quoteChain {
+					quoteSegments := append([]content.MessageSegment(nil), quote.ForwardedImages...)
+					quoteSegments = append(quoteSegments, quote.Segments...)
+					seen := make(map[string]bool)
+					for _, part := range content.ImageContentParts(routeCtx, quoteSegments) {
+						if part.ImageURL != nil && !seen[part.ImageURL.URL] {
+							seen[part.ImageURL.URL] = true
+							directImageParts = append(directImageParts, part)
+						}
+					}
+				}
+			}
 		}
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
@@ -1238,6 +1260,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+		if len(messages) > 0 {
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
+		}
 		defer func() {
 			if isProactiveReply(&event) {
 				deliveries.CommitDelivered()
@@ -1690,6 +1715,52 @@ func isProactiveReply(event *Event) bool {
 	}
 	v, ok := event.Metadata["_frostagent_proactive_reply"].(bool)
 	return ok && v
+}
+
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func makeAstrBotImageContentParts(event Event) []core.ContentPart {
+	parts := make([]core.ContentPart, 0, len(event.Attachments))
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
+			continue
+		}
+		source := strings.TrimSpace(att.URL)
+		if len(att.Content) > 0 {
+			mimeType := strings.TrimSpace(att.MimeType)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = http.DetectContentType(att.Content)
+			}
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = "image/jpeg"
+			}
+			source = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(att.Content)
+		}
+		if source == "" {
+			continue
+		}
+		parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeImage), ImageURL: &core.ImageURL{URL: source}})
+	}
+	return parts
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
 }
 
 func sendTerminalNoop(event Event, conn *wsConn) error {

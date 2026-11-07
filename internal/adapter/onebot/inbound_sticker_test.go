@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -164,8 +165,8 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 			if tc.noVision && !tc.silent {
 				messages := requests[0].Messages
 				prompt, _ := messages[len(messages)-1].Content.(string)
-				if !strings.Contains(prompt, "\n\nUser Message: \n\n") {
-					t.Fatalf("ordinary vision-disabled behavior changed: %s", prompt)
+				if !strings.Contains(prompt, "\n\nUser Message: [图片]\n\n") || !strings.Contains(prompt, parity.NoVisionGuidance) {
+					t.Fatalf("vision-disabled image lost placeholder or guidance: %s", prompt)
 				}
 			}
 			vision.mu.Lock()
