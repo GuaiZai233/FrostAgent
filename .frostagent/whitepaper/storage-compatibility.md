@@ -1,3 +1,5 @@
+> **长期设计决策：** [ADR-0001：无损数据库前向兼容](../../docs/adr/0001-lossless-database-forward-compatibility.md) 定义目标原则。本文以下内容记录当前实现及其历史兼容门禁；与 ADR 冲突时，以 ADR 为准。该 ADR 尚不代表相关实现已完成。
+
 # 数据库版本与兼容性
 
 SQLite 和 PostgreSQL 共用 SQL 迁移序列。`schema_meta` 中维护两个独立字段：
