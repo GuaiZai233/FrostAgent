@@ -495,6 +495,35 @@ func (e *Engine) RunMessagesWithContext(
 		}
 	}
 
+	if !runContext.Mock && !runContext.Proactive {
+		if notice := e.stickerActivityPrompt(); notice != "" {
+			messages = append([]ChatMessage(nil), messages...)
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					switch content := messages[i].Content.(type) {
+					case string:
+						messages[i].Content = notice + "\n\n" + content
+					case []core.ContentPart:
+						parts := append([]core.ContentPart(nil), content...)
+						textIndex := -1
+						for j, part := range parts {
+							if part.Type == string(core.ContentPartTypeText) {
+								textIndex = j
+								break
+							}
+						}
+						if textIndex >= 0 {
+							parts[textIndex].Text = notice + "\n\n" + parts[textIndex].Text
+						} else {
+							parts = append([]core.ContentPart{{Type: string(core.ContentPartTypeText), Text: notice}}, parts...)
+						}
+						messages[i].Content = parts
+					}
+					break
+				}
+			}
+		}
+	}
 	return e.runLoopWithResult(ctx, messages)
 }
 
@@ -646,9 +675,19 @@ func positiveIntEnv(name string, fallback int, scopes ...*runtimescope.Scope) in
 func extractLastUserMessage(messages []ChatMessage) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
-			if s, ok := messages[i].Content.(string); ok {
-				return s
+			switch content := messages[i].Content.(type) {
+			case string:
+				return content
+			case []core.ContentPart:
+				var texts []string
+				for _, part := range content {
+					if part.Type == string(core.ContentPartTypeText) && part.Text != "" {
+						texts = append(texts, part.Text)
+					}
+				}
+				return strings.Join(texts, "\n")
 			}
+			return ""
 		}
 	}
 	return ""

@@ -92,6 +92,9 @@ const contextCalls: string[] = [];
 let deleteCalls = 0;
 let modelStateCalls = 0;
 const api = {
+  async getOverview() {
+    return { botName: 'Configured Bot' };
+  },
   async getModelRouterState() {
     modelStateCalls++;
     return { active: create(ModelRouterConfigurationSchema, { version: 1 }), loadError: '' };
@@ -229,6 +232,7 @@ await Promise.resolve();
 assert.deepEqual(privateCalls, [privateSession.sessionId]);
 const privateInspector = privateRoot.querySelector('#prompt-inspector-mount');
 assert.match(privateInspector.innerHTML, /当前私聊 compact 内容|private reply/);
+assert.match(privateInspector.innerHTML, />Configured Bot</, 'assistant history must show the configured bot name');
 assert.match(privateInspector.innerHTML, /href="#\/model-router"/);
 assert.doesNotMatch(privateInspector.innerHTML, /id="pi-model-config-btn"/);
 privateInspector.querySelector('#pi-view-summary-btn').click();

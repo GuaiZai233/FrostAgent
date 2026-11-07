@@ -564,6 +564,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		BaseURL:             endpoint.BaseURL,
 		UpstreamModel:       model.UpstreamModel,
 		MaxInputTokens:      model.MaxInputTokens,
+		Capabilities:        append([]string(nil), model.Capabilities...),
 	}, nil
 }
 

@@ -24,7 +24,7 @@ func TestBotNameWakeMatching(t *testing.T) {
 		{name: "text segment", message: `[{"type":"text","data":{"text":"FROST AGENT 你好"}}]`, want: true},
 		{name: "mixed alias", message: `"霜狐bOt你好"`, want: true},
 		{name: "Chinese alias", message: `"霜降你好"`, want: true},
-		{name: "Chinese remains literal", message: `"霜 降你好"`},
+		{name: "Chinese spaces ignored", message: `"霜 降你好"`, want: true},
 		{name: "regex remains literal", message: `"普通聊天"`},
 		{name: "non text excluded", message: `[{"type":"image","data":{"file":"FROST AGENT.png"}}]`},
 		{name: "separate segments", message: `[{"type":"text","data":{"text":"Frost"}},{"type":"text","data":{"text":"Agent"}}]`},
@@ -56,6 +56,21 @@ func TestBotNameWakeMatching(t *testing.T) {
 				t.Fatal("wake matching changed the message")
 			}
 		})
+	}
+}
+
+func TestBotNameWakeDefaults(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{})
+	for text, want := range map[string]bool{
+		"助手 你好":        true,
+		"ASSISTANT 你好": true,
+		"bot 你好":       true,
+		"霜降 你好":        false,
+	} {
+		raw, _ := json.Marshal(text)
+		if got := IsBotNameMentioned(model.OneBotEvent{MessageType: "group", Message: raw}, scope); got != want {
+			t.Fatalf("default wake matching for %q = %v, want %v", text, got, want)
+		}
 	}
 }
 

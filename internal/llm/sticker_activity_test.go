@@ -5,6 +5,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,46 @@ import (
 type stickerActivityProvider struct {
 	responses []core.ChatMessage
 	requests  []core.ChatRequest
+}
+
+func TestStickerActivityNoticePreservesImageParts(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	t.Setenv(sticker.ActivityModeEnvKey, sticker.ActivityBotTurns)
+	image := core.ContentPart{Type: "image_url", ImageURL: &core.ImageURL{URL: "data:image/gif;base64,R0lGODlh"}}
+	for _, tc := range []struct {
+		name  string
+		parts []core.ContentPart
+	}{
+		{"image only", []core.ContentPart{image}},
+		{"image before text", []core.ContentPart{image, {Type: "text", Text: "current text"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &stickerActivityProvider{}
+			engine := &Engine{Provider: provider}
+			original := append([]core.ContentPart(nil), tc.parts...)
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: tc.parts}}, RunContext{})
+			if result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			messages := provider.requests[0].Messages
+			parts, ok := messages[len(messages)-1].Content.([]core.ContentPart)
+			if !ok || len(parts) != 2 {
+				t.Fatalf("lost multimodal content: %+v", messages)
+			}
+			imageIndex, textIndex := 0, 1
+			wantText := engine.stickerActivityPrompt() + "\n\ncurrent text"
+			if tc.name == "image only" {
+				imageIndex, textIndex = 1, 0
+				wantText = engine.stickerActivityPrompt()
+			}
+			if parts[textIndex].Type != "text" || parts[textIndex].Text != wantText || !reflect.DeepEqual(parts[imageIndex], image) {
+				t.Fatalf("notice or image changed: %+v", parts)
+			}
+			if !reflect.DeepEqual(tc.parts, original) {
+				t.Fatalf("caller content mutated: %+v", tc.parts)
+			}
+		})
+	}
 }
 
 func (p *stickerActivityProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {

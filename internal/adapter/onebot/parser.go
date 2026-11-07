@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	defaultBotName    = "霜降狐"
-	defaultBotAliases = "霜降,FrostAgent"
+	defaultBotName    = "助手"
+	defaultBotAliases = "Assistant,Bot"
 )
 
 // GroupWakeSignals records the equivalent observable reasons that caused a

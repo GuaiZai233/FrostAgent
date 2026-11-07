@@ -82,7 +82,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           ? 'badge-destructive'
           : 'badge-outline';
 
-      const botName = data.botName || 'FrostAgent';
+      const botName = data.botName || '助手';
       const greeting = container.querySelector<HTMLElement>('#overview-greeting')!;
       greeting.textContent = `你好👋！我是 ${botName}`;
       greeting.hidden = false;

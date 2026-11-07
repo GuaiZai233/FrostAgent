@@ -92,7 +92,7 @@ func (s *Service) GetOverview(
 	})
 
 	resp := &v1.GetOverviewResponse{
-		BotName:                envOrDefault(s.engine, "BOT_NAME", "FrostAgent"),
+		BotName:                envOrDefault(s.engine, "BOT_NAME", "助手"),
 		Version:                s.version,
 		UptimeSeconds:          uptime,
 		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
