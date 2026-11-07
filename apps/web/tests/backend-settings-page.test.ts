@@ -581,6 +581,33 @@ assert.equal(dialogs.length, dialogsBeforeMalformed, 'malformed stored config mu
 assert.match(errors.at(-1)!, /无法编辑群聊概率/);
 cleanup();
 
+values = values.filter((item) => item.key !== probabilitiesKey);
+values.push({ key: 'ENABLE_MULTI_SEGMENT_REPLY', value: '', isSecret: false });
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+const multiSegment = el('multi-segment-reply-cb');
+assert.equal(multiSegment.checked, false, 'multi-segment replies default off');
+const beforeMultiSegment = writes.length;
+multiSegment.checked = true;
+multiSegment.emit('change');
+assert.equal(writes.length, beforeMultiSegment, 'multi-segment toggle stages a draft');
+el('settings-draft-restore').click();
+assert.equal(multiSegment.checked, false);
+multiSegment.checked = true;
+multiSegment.emit('change');
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.at(-1)?.find((item) => item.key === 'ENABLE_MULTI_SEGMENT_REPLY')?.value, 'true');
+el('backend-refresh-btn').click();
+await settle();
+assert.equal(multiSegment.checked, true, 'saved multi-segment switch reloads');
+multiSegment.checked = false;
+multiSegment.emit('change');
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.at(-1)?.find((item) => item.key === 'ENABLE_MULTI_SEGMENT_REPLY')?.value, 'false');
+cleanup();
+
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);
 draft.set('BOT_NAME', '');
 assert.equal(draft.pending()[0].value, null);

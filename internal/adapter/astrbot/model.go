@@ -68,7 +68,7 @@ type Action struct {
 	Content        string            `json:"content,omitempty"`         // 回复文本内容
 	Messages       []ActionMessage   `json:"messages,omitempty"`        // 有序消息链（plain、mention_user、媒体等）
 	Attachments    []core.Attachment `json:"attachments,omitempty"`     // 附件列表 (图片等)
-	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 是否为工具调用产生的中间消息 (sendHook)
+	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 工具消息或尚有后续分段的消息
 	Echo           string            `json:"echo,omitempty"`            // 回显标识
 	DeliveryID     string            `json:"delivery_id,omitempty"`
 	ReplyMessageID string            `json:"-"` // 当前回复对应的入站消息 ID，仅用于出站规范化

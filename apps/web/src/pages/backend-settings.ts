@@ -96,6 +96,12 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             </div>
           </div>
 
+          <div class="mb-4 pb-4 border-b border-border">
+            <div class="flex items-center gap-2.5 mb-3">
+              <label class="toggle-switch"><input type="checkbox" id="multi-segment-reply-cb" role="switch" aria-label="允许多段回复" /><span aria-hidden="true"></span></label>
+              <label for="multi-segment-reply-cb" class="text-xs font-semibold text-foreground">允许多段回复</label>
+            </div>
+          </div>
           <div class="mb-4 pb-4 border-b border-border" id="poke-card">
             <div class="flex items-center gap-2.5 mb-3">
               <label class="toggle-switch"><input type="checkbox" id="poke-enabled" role="switch" aria-label="允许发送戳一戳行为" /><span aria-hidden="true"></span></label>
@@ -604,6 +610,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
       'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
       'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
+      'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
     };
     for (const [id, key] of Object.entries(toggles)) {
       element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
@@ -783,6 +790,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
     'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
     'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
+    'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
   };
   for (const [id, key] of Object.entries(binds)) {
     const input = element<HTMLInputElement>(id);

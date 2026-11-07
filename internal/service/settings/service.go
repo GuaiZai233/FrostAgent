@@ -32,6 +32,7 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
 	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
@@ -693,6 +694,9 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == "ENABLE_MULTI_SEGMENT_REPLY" && value != "" && value != "true" && value != "false" {
+		return errors.New("允许多段回复必须为 true 或 false")
+	}
 	if key == "" {
 		return errors.New("key is required")
 	}
